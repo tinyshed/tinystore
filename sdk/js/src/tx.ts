@@ -6,6 +6,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 
+import { type Channel, channelParts, type TxChannel, txChannel } from './channels.ts'
 import type { Link } from './connection.ts'
 import { ConflictError, InvalidError } from './errors.ts'
 import { handleOn } from './handles.ts'
@@ -89,6 +90,8 @@ export class Tx {
 	readonly #ops: Op[] = []
 	/** a queue's writes: a transaction takes the handles of one file, kv.db's or jobs.db's */
 	readonly #jobs: JobOp[] = []
+	/** messages published inside, handed over once the commit answered */
+	readonly #published: Uint8Array[] = []
 	#file: 'kv.db' | 'jobs.db' | undefined
 	#done = false
 
@@ -99,9 +102,18 @@ export class Tx {
 	with<T>(bucket: Bucket<T>): TxBucket<T>
 	with(counters: Counters): TxCounters
 	with<T>(queue: Queue<T>): StoreTxQueue<T>
+	with<T>(channel: Channel<T>): TxChannel<T>
 	with(
-		handle: Bucket<unknown> | Counters | Queue<unknown>,
-	): TxBucket<unknown> | TxCounters | StoreTxQueue<unknown> {
+		handle: Bucket<unknown> | Counters | Queue<unknown> | Channel<unknown>,
+	): TxBucket<unknown> | TxCounters | StoreTxQueue<unknown> | TxChannel<unknown> {
+		const channel = channelParts(handle)
+		if (channel !== undefined) {
+			// a store's transaction commits in one kv.tx, which carries no message:
+			// its messages leave once its commit answered
+			return txChannel(channel.name, channel.branch, async body => {
+				this.#published.push(body)
+			})
+		}
 		const queue = queueParts(handle)
 		if (queue !== undefined) {
 			const what = `jobs queue ${queue.name}`
@@ -178,8 +190,18 @@ export class Tx {
 	}
 
 	/** Sends the writes in one kv.tx, after a check of each key read: still at its version, or still absent. */
+	/** Commits the writes, then hands over the messages published inside. */
 	async commit(): Promise<void> {
 		this.#done = true
+		await this.#commitWrites()
+		for (const body of this.#published) {
+			await this.#link.run('write', connection =>
+				connection.session.call(methods['channels.publish'], body),
+			)
+		}
+	}
+
+	async #commitWrites(): Promise<void> {
 		if (this.#jobs.length > 0) {
 			return commitJobs(this.#link, this.#jobs)
 		}

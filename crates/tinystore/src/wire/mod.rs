@@ -6,6 +6,8 @@
 mod backup;
 #[cfg(feature = "blobs")]
 mod blobs;
+#[cfg(feature = "channels")]
+mod channels;
 pub(crate) mod codec;
 #[cfg(feature = "config")]
 mod config;
@@ -77,17 +79,34 @@ pub(crate) enum Route {
     /// A hold, answered once its key is given, by whichever thread lets it go.
     #[cfg(feature = "locks")]
     Hold,
+    /// A subscription's batches, within the client's credit, until it cancels.
+    #[cfg(feature = "channels")]
+    Subscribe,
     Worker,
 }
 
 /// Work on a session's workers, off the thread that asked.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
+#[cfg(any(
+    feature = "blobs",
+    feature = "records",
+    feature = "metrics",
+    feature = "config",
+    feature = "backup",
+    feature = "channels"
+))]
 pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
 
 /// What a stream whose DATA goes either way needs of its session: a file's
 /// bytes, a tail's batches, a writer's lines, a read's parts, the answers to
 /// a client's instruments, a config's values.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
+#[cfg(any(
+    feature = "blobs",
+    feature = "records",
+    feature = "metrics",
+    feature = "config",
+    feature = "backup",
+    feature = "channels"
+))]
 #[derive(Clone)]
 pub(crate) struct Link {
     /// A DATA on the stream.
@@ -95,10 +114,20 @@ pub(crate) struct Link {
     /// The stream's last frame.
     pub(crate) finish: std::sync::Arc<dyn Fn(Result<Vec<u8>, protocol::Failure>) + Send + Sync>,
     /// Credit given back to the client for DATA it sent on the stream.
+    #[cfg_attr(
+        not(any(feature = "blobs", feature = "records", feature = "metrics")),
+        expect(dead_code, reason = "only blobs', records' and metrics' streams take DATA from a client")
+    )]
     pub(crate) grant: std::sync::Arc<dyn Fn(u32) + Send + Sync>,
     /// Work on the session's workers, where a file is read or written.
     pub(crate) spawn: Spawn,
     /// The DATA bytes the client takes before it grants more.
     pub(crate) credit: u64,
     pub(crate) max_body: usize,
+    /// The bytes the connection owes its client, queued and not yet taken.
+    #[cfg(feature = "channels")]
+    pub(crate) owed: std::sync::Arc<dyn Fn() -> usize + Send + Sync>,
+    /// Runs a task once what the connection owes fell below its low mark.
+    #[cfg(feature = "channels")]
+    pub(crate) when_drained: Spawn,
 }

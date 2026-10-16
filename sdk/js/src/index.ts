@@ -13,6 +13,15 @@ export type {
 	Upload,
 } from './blobs.ts'
 export { withSignal } from './cancel.ts'
+export type {
+	Channel,
+	EachOptions,
+	Message as ChannelMessage,
+	Missed,
+	SubscribeOptions,
+	Subscription,
+	TxChannel,
+} from './channels.ts'
 export type { Clock } from './clock.ts'
 export {
 	type Bounds,

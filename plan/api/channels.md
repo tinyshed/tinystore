@@ -132,8 +132,10 @@ await store.tx(async tx => {
 - A message published in a transaction waits beside it and is released
   after its commit; a rollback, a failed call's savepoint or an error
   releases nothing. A channel keeps no file, so it joins any transaction:
-  `store.tx`, `db.tx`, and a transaction of the pipe, whose messages go with
-  its writes.
+  `store.tx` and `db.tx`. Over the wire, a database's transaction carries
+  its messages to the server, which releases them at its commit; a store's
+  transaction commits in one `kv.tx`, which carries none, so the SDK sends
+  its messages once that commit answered.
 - A message released after a commit is in memory: a process that dies
   between the commit and the release loses it. An event that must go out
   with its rows is a queue in the same database, `db.queue`, which commits
@@ -149,7 +151,8 @@ await store.tx(async tx => {
   batches within the client's credit, and a client that grants none falls
   behind and misses. A connection's pending output is bounded in bytes
   across its streams, which it drains in turn, so that one subscription
-  cannot starve the others of its connection.
+  cannot starve the others of its connection. A message larger than the
+  body its connection agreed to take is missed there, and counted.
 - A token that may write publishes and subscribes; a read token subscribes.
 
 ## Errors

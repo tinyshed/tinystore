@@ -20,6 +20,7 @@ mod mutex;
 mod prefix;
 mod readers;
 
+use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
 
@@ -41,11 +42,71 @@ pub(crate) use prefix::{TextBytes, prefix_end};
 /// and runs its statements on it as on any connection.
 pub(crate) struct Tx<'a> {
     connection: &'a Connection,
+    committed: &'a Committed,
 }
 
 impl<'a> Tx<'a> {
-    pub(crate) fn new(connection: &'a Connection) -> Self {
-        Self { connection }
+    pub(crate) fn new(connection: &'a Connection, committed: &'a Committed) -> Self {
+        Self { connection, committed }
+    }
+
+    /// Runs `hook` once the transaction's commit is in the file, while its
+    /// writer is still held, so that what two commits of a file hand over
+    /// comes in the order they committed: returning from them on two threads
+    /// could hand B's over before A's. A rollback runs nothing, and a call
+    /// whose savepoint rolled back takes back what it asked for. The hook
+    /// must not block: every commit after it waits.
+    #[cfg(feature = "channels")]
+    pub(crate) fn after_commit(&self, hook: Box<dyn FnOnce()>) {
+        self.committed.push(hook);
+    }
+
+    pub(crate) fn committed(&self) -> &Committed {
+        self.committed
+    }
+}
+
+/// What a transaction's calls asked to run once it commits, in their order.
+#[derive(Default)]
+pub(crate) struct Committed(RefCell<Vec<Box<dyn FnOnce()>>>);
+
+impl Committed {
+    #[cfg(feature = "channels")]
+    pub(crate) fn push(&self, hook: Box<dyn FnOnce()>) {
+        self.0.borrow_mut().push(hook);
+    }
+
+    /// The hooks asked for so far, taken out.
+    #[cfg(feature = "channels")]
+    pub(crate) fn take(&self) -> Committed {
+        Committed(RefCell::new(std::mem::take(&mut *self.0.borrow_mut())))
+    }
+
+    /// Where the next call's hooks begin, to take them back if it fails.
+    pub(crate) fn mark(&self) -> usize {
+        self.0.borrow().len()
+    }
+
+    /// Takes back the hooks asked for since `mark`: their call rolled back.
+    pub(crate) fn take_back(&self, mark: usize) {
+        self.0.borrow_mut().truncate(mark);
+    }
+
+    /// Adds the hooks of another, after its own: a transaction that began on a
+    /// file once calls before it had asked for some.
+    #[cfg(feature = "channels")]
+    pub(crate) fn append(&self, earlier: Committed) {
+        let mut hooks = earlier.0.into_inner();
+        hooks.append(&mut self.0.borrow_mut());
+        *self.0.borrow_mut() = hooks;
+    }
+
+    /// Runs the hooks, once the commit is in the file.
+    pub(crate) fn run(&self) {
+        let hooks = std::mem::take(&mut *self.0.borrow_mut());
+        for hook in hooks {
+            hook();
+        }
     }
 }
 

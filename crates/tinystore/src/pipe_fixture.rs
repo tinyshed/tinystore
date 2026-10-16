@@ -109,7 +109,7 @@ impl Client {
 
     /// Whether no frame of `stream` arrives within `wait`, the frames that do
     /// arrive kept for later.
-    #[cfg(any(feature = "jobs", feature = "sql", feature = "backup"))]
+    #[cfg(any(feature = "jobs", feature = "sql", feature = "backup", feature = "channels"))]
     pub(crate) fn silent_on(&mut self, stream: u32, wait: Duration) -> bool {
         let bytes = self.pipe.recv(wait);
         self.reader.push(&bytes);

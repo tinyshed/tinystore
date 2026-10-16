@@ -610,6 +610,115 @@
     },
     {
       "fields": {
+        "name": {
+          "str": "name"
+        },
+        "under": {
+          "list": [
+            {
+              "str": "under"
+            }
+          ]
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "8301a46e616d650291a5756e64657203a77b2261223a317d",
+      "message": "channels.Publish",
+      "name": "channels.Publish with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Publish",
+      "name": "channels.Publish with no field"
+    },
+    {
+      "fields": {
+        "name": {
+          "str": "name"
+        },
+        "recursive": {
+          "bool": true
+        },
+        "under": {
+          "list": [
+            {
+              "str": "under"
+            }
+          ]
+        }
+      },
+      "hex": "8301a46e616d650291a5756e64657203c3",
+      "message": "channels.Subscribe",
+      "name": "channels.Subscribe with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Subscribe",
+      "name": "channels.Subscribe with no field"
+    },
+    {
+      "fields": {
+        "messages": {
+          "list": [
+            {
+              "fields": {
+                "under": {
+                  "list": [
+                    {
+                      "str": "under"
+                    }
+                  ]
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          ]
+        },
+        "missed": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b0291820191a5756e64657202a77b2261223a317d",
+      "message": "channels.Batch",
+      "name": "channels.Batch with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Batch",
+      "name": "channels.Batch with no field"
+    },
+    {
+      "fields": {
+        "under": {
+          "list": [
+            {
+              "str": "under"
+            }
+          ]
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "820191a5756e64657202a77b2261223a317d",
+      "message": "channels.Message",
+      "name": "channels.Message with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "channels.Message",
+      "name": "channels.Message with no field"
+    },
+    {
+      "fields": {
         "declaration": {
           "str": "{\"a\":1}"
         },
@@ -5014,6 +5123,8 @@
     "blobs.rename": 1032,
     "blobs.upload": 1027,
     "blobs.usage": 1035,
+    "channels.publish": 2561,
+    "channels.subscribe": 2562,
     "config.follow": 1794,
     "config.open": 1793,
     "config.reset": 1796,

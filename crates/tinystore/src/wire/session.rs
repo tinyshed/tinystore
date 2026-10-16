@@ -10,6 +10,8 @@ use super::Route;
 use super::backup;
 #[cfg(feature = "blobs")]
 use super::blobs;
+#[cfg(feature = "channels")]
+use super::channels;
 use super::codec::Message;
 #[cfg(feature = "config")]
 use super::config;
@@ -55,6 +57,11 @@ const CHALLENGE: usize = 16;
 /// The room a session keeps for what it owes between two reads of it: a
 /// result of megabytes read once does not stay a session's for good.
 const KEPT: usize = 1 << 20;
+/// What a connection owes its client below which the subscriptions that
+/// stopped for its output go on.
+#[cfg(feature = "channels")]
+const OUTPUT_LOW: usize = 1 << 20;
+
 /// Requests read from a connection at once that send its point reads to the
 /// workers. Five in flight are answered as fast where they are read, on a
 /// host whose threads wake slowly; six are not.
@@ -80,6 +87,8 @@ struct Shared {
     config: config::Configs,
     #[cfg(feature = "locks")]
     locks: Arc<locks::Holds>,
+    #[cfg(feature = "channels")]
+    channels: channels::Subscriptions,
     #[cfg(feature = "jobs")]
     jobs: jobs::Handles,
     #[cfg(feature = "sql")]
@@ -106,6 +115,10 @@ struct Shared {
     reads_away: AtomicUsize,
     /// The connection's HELLO admitted it to read only.
     read_only: AtomicBool,
+    /// What waits for the output to drain: subscriptions that stopped while
+    /// the connection owed its client too much.
+    #[cfg(feature = "channels")]
+    waiting_output: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
     ready: Condvar,
     connect: Connect,
 }
@@ -191,6 +204,8 @@ impl Session {
             config: config::Configs::default(),
             #[cfg(feature = "locks")]
             locks: Arc::default(),
+            #[cfg(feature = "channels")]
+            channels: channels::Subscriptions::default(),
             #[cfg(feature = "jobs")]
             jobs: jobs::Handles::default(),
             #[cfg(feature = "sql")]
@@ -210,6 +225,8 @@ impl Session {
             in_flight: AtomicUsize::new(0),
             reads_away: AtomicUsize::new(0),
             read_only: AtomicBool::new(false),
+            #[cfg(feature = "channels")]
+            waiting_output: Mutex::new(Vec::new()),
             ready: Condvar::new(),
             connect,
         };
@@ -240,25 +257,33 @@ impl Session {
     /// read after a write, which a wake in flight answers anyway, so that a
     /// host writing often is not woken once a commit.
     pub(crate) fn take_ready(&self) -> Vec<u8> {
-        self.shared.lock_output().take_all()
+        let taken = self.shared.lock_output().take_all();
+        self.shared.drained();
+        taken
     }
 
     /// As `take_ready`, into the host's own bytes: as many as fit, and how
     /// many they were.
     pub(crate) fn take_ready_into(&self, into: &mut [u8]) -> usize {
-        self.shared.lock_output().take_into(into)
+        let taken = self.shared.lock_output().take_into(into);
+        self.shared.drained();
+        taken
     }
 
     /// The bytes the client is owed, waiting up to `wait` for the first; the
     /// next bytes ready wake the host again.
     pub(crate) fn take(&self, wait: Duration) -> Vec<u8> {
-        self.awaited(wait).take_all()
+        let taken = self.awaited(wait).take_all();
+        self.shared.drained();
+        taken
     }
 
     /// As `take`, into the host's own bytes: as many as fit, and how many
     /// they were. What did not fit stays for the next read, and wakes nobody.
     pub(crate) fn take_into(&self, wait: Duration, into: &mut [u8]) -> usize {
-        self.awaited(wait).take_into(into)
+        let taken = self.awaited(wait).take_into(into);
+        self.shared.drained();
+        taken
     }
 
     /// The output once it owes bytes or `wait` has passed, the host counted
@@ -300,6 +325,8 @@ impl Session {
         self.shared.records.go_away();
         #[cfg(feature = "config")]
         self.shared.config.go_away();
+        #[cfg(feature = "channels")]
+        self.shared.channels.go_away();
     }
 
     pub(crate) fn streams(&self) -> usize {
@@ -352,6 +379,8 @@ impl Session {
         self.shared.config.end();
         #[cfg(feature = "locks")]
         self.shared.locks.end();
+        #[cfg(feature = "channels")]
+        self.shared.channels.end();
         #[cfg(feature = "backup")]
         self.shared.backups.end_all("the connection is gone");
     }
@@ -517,6 +546,8 @@ impl Shared {
             Route::Backup => self.backup(input, stream, &body),
             #[cfg(feature = "locks")]
             Route::Hold => self.hold(stream, &body),
+            #[cfg(feature = "channels")]
+            Route::Subscribe => self.subscribe(input, stream, &body),
             Route::Worker => {
                 let shared = Arc::clone(self);
                 self.workers.run(Box::new(move || {
@@ -535,6 +566,20 @@ impl Shared {
             shared.reads_away.fetch_sub(1, Ordering::AcqRel);
             shared.answer(stream, answered);
         }));
+    }
+
+    /// Registers a subscription: the stream's RESPONSE once the store has it,
+    /// then its batches as DATA within the client's credit.
+    #[cfg(feature = "channels")]
+    fn subscribe(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| channels::subscribe(&self.store, &self.channels, stream, body, link)) {
+            Ok(subscribed) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                subscribed.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
     }
 
     /// Asks for the key a hold names; the stream's RESPONSE goes once the key
@@ -765,7 +810,14 @@ impl Shared {
     /// What a stream of a file's bytes, a tail's batches, a writer's lines, a
     /// read's parts, a client's instruments, a config's values or a backup's
     /// zip needs of the session.
-    #[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "config", feature = "backup"))]
+    #[cfg(any(
+        feature = "blobs",
+        feature = "records",
+        feature = "metrics",
+        feature = "config",
+        feature = "backup",
+        feature = "channels"
+    ))]
     fn stream_link(self: &Arc<Self>, input: &Input, stream: u32) -> super::Link {
         let (sending, finishing, granting, spawning) =
             (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
@@ -792,6 +844,20 @@ impl Shared {
             }),
             credit: input.stream_credit,
             max_body: input.max_body.unwrap_or(HELLO_MOST),
+            #[cfg(feature = "channels")]
+            owed: {
+                let owing = Arc::downgrade(self);
+                Arc::new(move || owing.upgrade().map_or(0, |shared| shared.owed()))
+            },
+            #[cfg(feature = "channels")]
+            when_drained: {
+                let draining = Arc::downgrade(self);
+                Arc::new(move |task| {
+                    if let Some(shared) = draining.upgrade() {
+                        shared.when_drained(task);
+                    }
+                })
+            },
         }
     }
 
@@ -949,11 +1015,12 @@ impl Shared {
             feature = "records",
             feature = "metrics",
             feature = "config",
-            feature = "backup"
+            feature = "backup",
+            feature = "channels"
         )),
         expect(
             unused_variables,
-            reason = "only jobs', sql's, blobs', records', metrics', config's and a backup's streams take credit"
+            reason = "only the streams of jobs, sql, blobs, records, metrics, config, backup and channels take credit"
         )
     )]
     fn credit(&self, frame: &Frame) {
@@ -975,6 +1042,8 @@ impl Shared {
         self.config.grant(frame.stream, granted);
         #[cfg(feature = "backup")]
         self.backups.grant(frame.stream, granted);
+        #[cfg(feature = "channels")]
+        self.channels.grant(frame.stream, granted);
     }
 
     /// Lets go of a client's run of once, answering `cancelled`; a call
@@ -1004,6 +1073,10 @@ impl Shared {
         }
         #[cfg(feature = "backup")]
         if self.backups.cancel(stream) {
+            return;
+        }
+        #[cfg(feature = "channels")]
+        if self.channels.cancel(stream) {
             return;
         }
         #[cfg(feature = "locks")]
@@ -1108,6 +1181,8 @@ impl Shared {
             0x07 => config::call(&self.store, &self.config, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "locks")]
             0x09 => locks::call(&self.store, method, body),
+            #[cfg(feature = "channels")]
+            0x0a => channels::call(&self.store, method, body),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }
@@ -1134,6 +1209,8 @@ impl Shared {
             0x01 => kv::call_in(&self.kv, tx, method, body, max_body),
             #[cfg(feature = "jobs")]
             0x02 => jobs::call_in(&self.jobs, tx, method, body, max_body),
+            #[cfg(feature = "channels")]
+            0x0a => channels::call_in(&self.store, tx, method, body),
             _ => Err(Failure::invalid(format!("method {method:#06x} does not run inside a transaction"))),
         }
     }
@@ -1162,6 +1239,34 @@ impl Shared {
 
     fn send(&self, frames: &[Frame]) {
         self.queue(frames, 0);
+    }
+
+    /// Runs what waited for the output once it owes less than its low mark.
+    fn drained(&self) {
+        #[cfg(feature = "channels")]
+        {
+            let mut waiting = self.waiting_output.lock().unwrap_or_else(PoisonError::into_inner);
+            if waiting.is_empty() || self.owed() > OUTPUT_LOW {
+                return;
+            }
+            for task in std::mem::take(&mut *waiting) {
+                self.workers.run(task);
+            }
+        }
+    }
+
+    /// The bytes queued for the client and not yet taken by the host.
+    #[cfg(feature = "channels")]
+    fn owed(&self) -> usize {
+        let output = self.lock_output();
+        output.bytes.len() - output.read
+    }
+
+    /// Runs `task` once the output drains; at once when it has already.
+    #[cfg(feature = "channels")]
+    fn when_drained(&self, task: Box<dyn FnOnce() + Send>) {
+        self.waiting_output.lock().unwrap_or_else(PoisonError::into_inner).push(task);
+        self.drained();
     }
 
     /// Sends a stream's last frame.
@@ -1237,6 +1342,8 @@ fn route(method: u16) -> Route {
         0x08 => Route::Backup,
         #[cfg(feature = "locks")]
         0x09 => locks::route(method),
+        #[cfg(feature = "channels")]
+        0x0a => channels::route(method),
         _ => Route::Worker,
     }
 }
@@ -1251,7 +1358,8 @@ fn engines() -> Vec<String> {
     let config = cfg!(feature = "config").then_some("config");
     let backup = cfg!(feature = "backup").then_some("backup");
     let locks = cfg!(feature = "locks").then_some("locks");
-    let engines = [Some("kv"), config, locks, jobs, sql, blobs, records, metrics, backup];
+    let channels = cfg!(feature = "channels").then_some("channels");
+    let engines = [Some("kv"), config, locks, channels, jobs, sql, blobs, records, metrics, backup];
     engines.into_iter().flatten().map(str::to_owned).collect()
 }
 

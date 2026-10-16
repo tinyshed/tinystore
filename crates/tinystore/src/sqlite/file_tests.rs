@@ -507,3 +507,69 @@ fn a_given_statement_that_starts_as_the_adapters_own_is_refused_unrun() {
     assert_eq!(ran.unwrap_err().kind(), ErrorKind::Invalid);
     assert_eq!(count(&file), 1);
 }
+
+/// A write that asks for `name` to be said once it commits, and fails after
+/// asking when `fails`.
+#[cfg(feature = "channels")]
+fn saying(said: &Arc<Mutex<Vec<String>>>, name: &str, fails: bool) -> Call<()> {
+    let (said, name) = (Arc::clone(said), name.to_owned());
+    Box::new(move |file: &File| {
+        file.write(1, move |tx| {
+            let inside = !tx.is_autocommit();
+            let said = Arc::clone(&said);
+            tx.after_commit(Box::new(move || {
+                said.lock().unwrap().push(format!("{name}, asked inside the transaction: {inside}"))
+            }));
+            if fails { Err(Error::invalid("a write that fails after asking")) } else { Ok(()) }
+        })
+    })
+}
+
+#[cfg(feature = "channels")]
+#[test]
+fn what_a_write_asks_to_run_after_its_commit_runs_in_commit_order_and_never_after_a_rollback() {
+    let (_dir, file) = open(Config::default());
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let calls = vec![saying(&said, "a", false), saying(&said, "b", true), saying(&said, "c", false)];
+    let answers = queue_behind_the_writer(&file, calls);
+    assert!(answers[0].is_ok() && answers[1].is_err() && answers[2].is_ok());
+    let mut grouped = said.lock().unwrap().clone();
+    grouped.sort();
+    let asked = ["a, asked inside the transaction: true", "c, asked inside the transaction: true"];
+    assert_eq!(grouped, asked, "b's savepoint took its back");
+
+    said.lock().unwrap().clear();
+    let seen = Arc::clone(&said);
+    let writer = Arc::clone(&file);
+    let rolled_back = file.transaction(|tx| -> Result<()> {
+        let seen = Arc::clone(&seen);
+        tx.after_commit(Box::new(move || seen.lock().unwrap().push("rolled back".to_owned())));
+        Err(Error::invalid("the transaction fails"))
+    });
+    assert!(rolled_back.is_err());
+    let held = Arc::clone(&said);
+    file.transaction(|tx| -> Result<()> {
+        let held = Arc::clone(&held);
+        let writer = Arc::clone(&writer);
+        tx.after_commit(Box::new(move || {
+            let locked = writer.writer.try_lock().is_err();
+            held.lock().unwrap().push(format!("committed, the writer held: {locked}"));
+        }));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(*said.lock().unwrap(), ["committed, the writer held: true"]);
+
+    said.lock().unwrap().clear();
+    let mark = file.mark().unwrap();
+    {
+        let begun = file.begin(&mark).unwrap();
+        let dropped = Arc::clone(&said);
+        begun.tx().after_commit(Box::new(move || dropped.lock().unwrap().push("dropped".to_owned())));
+    }
+    let begun = file.begin(&mark).unwrap();
+    let kept = Arc::clone(&said);
+    begun.tx().after_commit(Box::new(move || kept.lock().unwrap().push("begun".to_owned())));
+    begun.commit().unwrap();
+    assert_eq!(*said.lock().unwrap(), ["begun"], "a transaction dropped before its commit runs nothing");
+}

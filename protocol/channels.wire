@@ -1,0 +1,33 @@
+# A message published on a channel's branch, as plan/api/channels.md has
+# it: every subscription listening there now receives it.
+message channels.Publish {
+  1 name: str     # [a-z0-9][a-z0-9_-]{0,63}
+  2 under: [str]  # the branch's owners, 1 KiB together at most
+  3 value: json   # the message, 1 MiB at most
+}
+
+# A subscription of a branch, or of it and every branch below it.
+message channels.Subscribe {
+  1 name: str
+  2 under: [str]
+  3 recursive: bool
+}
+
+# What a subscription receives at once: how many it missed since its last
+# batch, then messages in the order they were released.
+message channels.Batch {
+  1 missed: uint  # lost because it fell behind its branch's log
+  2 messages: [channels.Message]
+}
+
+message channels.Message {
+  1 under: [str]  # the branch it was published under
+  2 value: json
+}
+
+# Answers once the store has the message, not once anyone handled it; in a
+# database's transaction, it is handed over once the transaction commits.
+write 0x0a01 channels.publish(channels.Publish)     -> Empty
+# Answers once the subscription is registered, then sends batches within the
+# client's credit until it cancels: a client that grants none falls behind.
+read  0x0a02 channels.subscribe(channels.Subscribe) -> download channels.Batch until Empty

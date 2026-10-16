@@ -8,6 +8,8 @@
 pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
+#[cfg(feature = "channels")]
+pub mod channels;
 mod clock;
 #[cfg(any(feature = "records", feature = "metrics", feature = "backup"))]
 mod compress;

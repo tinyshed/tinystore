@@ -1230,6 +1230,228 @@ impl Message for BlobsUsage {
     }
 }
 
+/// A message published on a channel's branch, as plan/api/channels.md has
+/// it: every subscription listening there now receives it.
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsPublish {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// The branch's owners, 1 KiB together at most.
+    pub(crate) under: Vec<String>,
+    /// The message, 1 MiB at most.
+    pub(crate) value: String,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsPublish {
+    const NAME: &'static str = "channels.Publish";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.under = codec::list(r, "under", codec::str)?,
+                3 => message.value = codec::str(r, "value")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.value);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + 1 + 5 + self.value.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.under.is_empty()
+            && self.value.is_empty()
+    }
+}
+
+/// A subscription of a branch, or of it and every branch below it.
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsSubscribe {
+    pub(crate) name: String,
+    pub(crate) under: Vec<String>,
+    pub(crate) recursive: bool,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsSubscribe {
+    const NAME: &'static str = "channels.Subscribe";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.under = codec::list(r, "under", codec::str)?,
+                3 => message.recursive = codec::bool(r, "recursive")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.under.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if self.recursive {
+            map.field(out, 3);
+            codec::write_bool(out, &self.recursive);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.under.is_empty()
+            && !self.recursive
+    }
+}
+
+/// What a subscription receives at once: how many it missed since its last
+/// batch, then messages in the order they were released.
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsBatch {
+    /// Lost because it fell behind its branch's log.
+    pub(crate) missed: u64,
+    pub(crate) messages: Vec<ChannelsMessage>,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsBatch {
+    const NAME: &'static str = "channels.Batch";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.missed = codec::uint(r, "missed")?,
+                2 => message.messages = codec::list(r, "messages", codec::message::<ChannelsMessage>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.missed != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.missed);
+        }
+        if !self.messages.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.messages, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.messages, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.missed == 0
+            && self.messages.is_empty()
+    }
+}
+
+#[cfg(feature = "channels")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ChannelsMessage {
+    /// The branch it was published under.
+    pub(crate) under: Vec<String>,
+    pub(crate) value: String,
+}
+
+#[cfg(feature = "channels")]
+impl Message for ChannelsMessage {
+    const NAME: &'static str = "channels.Message";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.under = codec::list(r, "under", codec::str)?,
+                2 => message.value = codec::str(r, "value")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.under.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.under, codec::write_str);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.value);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.under, |item| 5 + item.len())
+            + 1 + 5 + self.value.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.under.is_empty()
+            && self.value.is_empty()
+    }
+}
+
 /// A config a program opens: its declaration and its layers as data, as
 /// plan/api/config.md has them, with what the program read itself, a file's
 /// text and its variables, since those belong to it and not to the server.
@@ -9422,6 +9644,14 @@ pub(crate) mod method {
     pub(crate) const BLOBS_CLEAR: u16 = 0x040c;
     #[cfg(feature = "blobs")]
     pub(crate) const BLOBS_READ: u16 = 0x040d;
+    /// Answers once the store has the message, not once anyone handled it; in a
+    /// database's transaction, it is handed over once the transaction commits.
+    #[cfg(feature = "channels")]
+    pub(crate) const CHANNELS_PUBLISH: u16 = 0x0a01;
+    /// Answers once the subscription is registered, then sends batches within the
+    /// client's credit until it cancels: a client that grants none falls behind.
+    #[cfg(feature = "channels")]
+    pub(crate) const CHANNELS_SUBSCRIBE: u16 = 0x0a02;
     #[cfg(feature = "config")]
     pub(crate) const CONFIG_OPEN: u16 = 0x0701;
     /// The config's value now, then each time it changes, until the client
@@ -9630,6 +9860,10 @@ pub(crate) mod method {
             BLOBS_CLEAR => Some(Access::Write),
             #[cfg(feature = "blobs")]
             BLOBS_READ => Some(Access::Read),
+            #[cfg(feature = "channels")]
+            CHANNELS_PUBLISH => Some(Access::Write),
+            #[cfg(feature = "channels")]
+            CHANNELS_SUBSCRIBE => Some(Access::Read),
             #[cfg(feature = "config")]
             CONFIG_OPEN => Some(Access::Read),
             #[cfg(feature = "config")]
@@ -9827,6 +10061,10 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("blobs.clear", 0x040c, "call"),
     #[cfg(feature = "blobs")]
     ("blobs.read", 0x040d, "download"),
+    #[cfg(feature = "channels")]
+    ("channels.publish", 0x0a01, "call"),
+    #[cfg(feature = "channels")]
+    ("channels.subscribe", 0x0a02, "download"),
     #[cfg(feature = "config")]
     ("config.open", 0x0701, "call"),
     #[cfg(feature = "config")]
@@ -10035,6 +10273,14 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "blobs.Folder" => BlobsFolder::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "blobs")]
         "blobs.Usage" => BlobsUsage::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Publish" => ChannelsPublish::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Subscribe" => ChannelsSubscribe::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Batch" => ChannelsBatch::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "channels")]
+        "channels.Message" => ChannelsMessage::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]
         "config.Open" => ConfigOpen::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]

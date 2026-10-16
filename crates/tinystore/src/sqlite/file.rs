@@ -11,7 +11,7 @@ use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
-use super::{Config, Tx};
+use super::{Committed, Config, Tx};
 use crate::{Error, ErrorKind, Result};
 
 const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
@@ -135,9 +135,11 @@ impl File {
         execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
         let mut open = Open { connection, finished: false };
-        let value = work(&Tx::new(connection))?;
+        let committed = Committed::default();
+        let value = work(&Tx::new(connection, &committed))?;
         open.finished = true;
         self.commit(connection)?;
+        committed.run();
         Ok(value)
     }
 
@@ -168,7 +170,7 @@ impl File {
         self.refuse_when_closed("a transaction")?;
         let connection = lock(&self.writer);
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
-        Ok(Begun { file: self, connection, committed: false })
+        Ok(Begun { file: self, connection, hooks: Committed::default(), committed: false })
     }
 
     /// Whether this thread holds the file's writer in a transaction.
@@ -292,6 +294,7 @@ pub(crate) struct Mark(
 pub(crate) struct Begun<'f> {
     file: &'f File,
     connection: MutexGuard<'f, Connection>,
+    hooks: Committed,
     committed: bool,
 }
 
@@ -302,12 +305,16 @@ impl Begun<'_> {
 
     /// The writer inside the transaction.
     pub(crate) fn tx(&self) -> Tx<'_> {
-        Tx::new(&self.connection)
+        Tx::new(&self.connection, &self.hooks)
     }
 
+    /// Commits, then runs what the calls asked to run once it did, the
+    /// writer still held.
     pub(crate) fn commit(mut self) -> Result<()> {
         self.committed = true;
-        self.file.commit(&self.connection)
+        self.file.commit(&self.connection)?;
+        self.hooks.run();
+        Ok(())
     }
 }
 

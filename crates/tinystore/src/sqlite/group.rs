@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use super::connection::{execute, sql_error};
 use super::given::own;
-use super::{GroupLimits, Tx};
+use super::{Committed, GroupLimits, Tx};
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) type Work = Box<dyn FnOnce(&Tx<'_>) -> Result<()> + Send>;
@@ -354,7 +354,8 @@ fn answer_in_halves(mut callers: Vec<(Arc<Write>, Result<()>)>) {
 }
 
 /// Runs a batch in one transaction, each write in a savepoint, and says how
-/// each one ended.
+/// each one ended. What the writes that succeeded asked to run once they
+/// commit runs after the commit, in their order, the writer still held.
 fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
     if batch.is_empty() {
         return Vec::new();
@@ -363,8 +364,10 @@ fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
         let failure = sql_error("a grouped commit: its transaction", error);
         return batch.iter().map(|_| Err(failure.duplicate())).collect();
     }
-    let answers: Vec<Result<()>> = batch.iter().map(|write| run(connection, write.take_work())).collect();
+    let committed = Committed::default();
+    let answers: Vec<Result<()>> = batch.iter().map(|write| run(connection, write.take_work(), &committed)).collect();
     let Err(error) = execute(connection, COMMIT) else {
+        committed.run();
         return answers;
     };
     if !connection.is_autocommit() {
@@ -377,23 +380,26 @@ fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
 }
 
 /// Runs one write in a savepoint, which it keeps when the write succeeds and
-/// rolls back when it fails or panics.
-fn run(connection: &Connection, work: Option<Work>) -> Result<()> {
+/// rolls back when it fails or panics, its hooks with it.
+fn run(connection: &Connection, work: Option<Work>, committed: &Committed) -> Result<()> {
     let Some(work) = work else {
         return Err(Error::internal("a grouped write ran twice"));
     };
     execute(connection, SAVEPOINT).map_err(|error| sql_error("a grouped write: its savepoint", error))?;
-    let tx = Tx::new(connection);
+    let mark = committed.mark();
+    let tx = Tx::new(connection, committed);
     let outcome = catch_unwind(AssertUnwindSafe(|| work(&tx)))
         .unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
     if outcome.is_ok() {
         if let Err(error) = execute(connection, RELEASE) {
             undo(connection);
+            committed.take_back(mark);
             return Err(sql_error("a grouped write: its savepoint", error));
         }
         return Ok(());
     }
     undo(connection);
+    committed.take_back(mark);
     outcome
 }
 

@@ -233,6 +233,15 @@ target.
 ## 5. Channels and locks
 
 - [ ] Channels to their book ([api/channels.md](api/channels.md)), proposed on 16 October: publish and subscribe, after-commit delivery, missed messages said, through the server.
+  Built, slices 1 to 3: hooks a commit runs once it is in the file, the writer still held, in the SQLite adapter's
+  three commits and the store's transactions, a savepoint rolled back taking its back; the Rust core, `store.channel`,
+  branches and `recursive`, a log a branch listened to and each subscriber's place, missed messages counted,
+  `subscribe` on the store's delivery threads, `each`, `stop`, `on_missed` and `on_error`, the store's memory shed
+  oldest first, `tx.with(&channel)` in `store.tx` and `db.tx`; `protocol/channels.wire`, a publish in a database's
+  transaction handed over at its commit, a subscription's batches within the client's credit, a connection's output
+  bounded and its subscriptions drained in turn; the Bun SDK's `store.channel`, `publish`, `subscribe`, `each`,
+  `onMissed`, `onError`, a subscription made again after a lost connection, `tx.with(channel)` in both
+  transactions. Python and Go come with their bindings; the book waits for the owner.
 - [ ] Locks and semaphores to their book ([api/locks.md](api/locks.md)), proposed on 16 October: leases in memory, fences from an epoch kept in kv.db, the SDK's leases across connections.
   Built, slices 1 and 2: the Rust core, `store.lock` and `store.semaphore`, `hold` and `try_hold` waiting in line
   first come first served, `max_hold` revoking a lease at its time, `lost` and `in use`, a hold refused inside its

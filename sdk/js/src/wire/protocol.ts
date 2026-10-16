@@ -36,6 +36,16 @@ export const methods = {
 	'blobs.usage': 0x040b,
 	'blobs.clear': 0x040c,
 	'blobs.read': 0x040d,
+	/**
+	 * Answers once the store has the message, not once anyone handled it; in a
+	 * database's transaction, it is handed over once the transaction commits.
+	 */
+	'channels.publish': 0x0a01,
+	/**
+	 * Answers once the subscription is registered, then sends batches within the
+	 * client's credit until it cancels: a client that grants none falls behind.
+	 */
+	'channels.subscribe': 0x0a02,
 	'config.open': 0x0701,
 	/**
 	 * The config's value now, then each time it changes, until the client
@@ -1425,6 +1435,193 @@ export const BlobsUsage = message(
 			}
 			r.leave()
 			return { count: $count, size: $size }
+		},
+	},
+)
+
+/**
+ * A message published on a channel's branch, as plan/api/channels.md has
+ * it: every subscription listening there now receives it.
+ */
+export const ChannelsPublish = message(
+	'channels.Publish',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		name: [1, str],
+		/** the branch's owners, 1 KiB together at most */
+		under: [2, list(str)],
+		/** the message, 1 MiB at most */
+		value: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.under !== undefined) {
+				w.field(2)
+				w.array(v.under.length)
+				for (const item0 of v.under) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.str(v.value)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $under: string[] | undefined
+			let $value: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$under = items0
+						break
+					}
+					case 3:
+						$value = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, under: $under, value: $value }
+		},
+	},
+)
+
+/**
+ * A subscription of a branch, or of it and every branch below it.
+ */
+export const ChannelsSubscribe = message(
+	'channels.Subscribe',
+	{
+		name: [1, str],
+		under: [2, list(str)],
+		recursive: [3, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.under !== undefined) {
+				w.field(2)
+				w.array(v.under.length)
+				for (const item0 of v.under) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.recursive !== undefined) {
+				w.field(3)
+				w.bool(v.recursive)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $under: string[] | undefined
+			let $recursive: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$under = items0
+						break
+					}
+					case 3:
+						$recursive = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, under: $under, recursive: $recursive }
+		},
+	},
+)
+
+export const ChannelsMessage = message(
+	'channels.Message',
+	{
+		/** the branch it was published under */
+		under: [1, list(str)],
+		value: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.under !== undefined) {
+				w.field(1)
+				w.array(v.under.length)
+				for (const item0 of v.under) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $under: string[] | undefined
+			let $value: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$under = items0
+						break
+					}
+					case 2:
+						$value = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { under: $under, value: $value }
 		},
 	},
 )
@@ -9967,6 +10164,63 @@ export const SqlTxAnswer = message(
 			}
 			r.leave()
 			return { rows: $rows, done: $done, failure: $failure, body: $body }
+		},
+	},
+)
+
+/**
+ * What a subscription receives at once: how many it missed since its last
+ * batch, then messages in the order they were released.
+ */
+export const ChannelsBatch = message(
+	'channels.Batch',
+	{
+		/** lost because it fell behind its branch's log */
+		missed: [1, uint],
+		messages: [2, list(ChannelsMessage)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.missed !== undefined) {
+				w.field(1)
+				w.uint(v.missed)
+				n++
+			}
+			if (v.messages !== undefined) {
+				w.field(2)
+				w.array(v.messages.length)
+				for (const item0 of v.messages) {
+					ChannelsMessage.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $missed: number | undefined
+			let $messages: Read<typeof ChannelsMessage.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$missed = r.uint()
+						break
+					case 2: {
+						const items0: Read<typeof ChannelsMessage.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(ChannelsMessage.read(r))
+						}
+						r.leave()
+						$messages = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { missed: $missed, messages: $messages }
 		},
 	},
 )

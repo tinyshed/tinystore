@@ -1,5 +1,6 @@
 import { type Backup, type BackupOptions, backup } from './backup.ts'
 import { type Files, type FilesOptions, openFiles } from './blobs.ts'
+import { Channel } from './channels.ts'
 import { Clock } from './clock.ts'
 import { Config, type ConfigOptions, type Layer, type Value } from './config.ts'
 import {
@@ -221,6 +222,15 @@ export class Store implements AsyncDisposable {
 	 */
 	quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W> {
 		return new Quota<W>(this.#link, name, quotaOpen(name, windows), [])
+	}
+
+	/**
+	 * Messages of one type that every subscriber listening when one is
+	 * published receives, in memory and at most once:
+	 * `const chat = store.channel<Chat>('chat'); await chat.under(roomId).publish(message)`.
+	 */
+	channel<T = unknown>(name: string): Channel<T> {
+		return new Channel<T>(this.#link, name)
 	}
 
 	/**

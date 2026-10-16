@@ -118,6 +118,18 @@ struct Inner {
     /// transaction is a transaction of one of.
     #[cfg(any(feature = "kv", feature = "jobs"))]
     files: Mutex<Vec<Arc<EngineFile>>>,
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "backup"
+        )),
+        expect(dead_code, reason = "only an engine of files reads it, and channels keep none")
+    )]
     durability: Option<Durability>,
     keep_free: u64,
     #[cfg(feature = "kv")]
@@ -164,6 +176,18 @@ impl Store {
 
     /// What the store's options said of its files' commits, for an engine
     /// that opens one.
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "backup"
+        )),
+        expect(dead_code, reason = "only an engine of files reads it, and channels keep none")
+    )]
     pub(crate) fn durability(&self) -> Option<Durability> {
         self.inner.durability
     }
@@ -237,6 +261,18 @@ impl Store {
         self.inner.close()
     }
 
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "backup"
+        )),
+        expect(dead_code, reason = "only an engine of files reads the clock, and channels keep none")
+    )]
     pub(crate) fn clock(&self) -> Arc<dyn Clock> {
         Arc::clone(&self.inner.clock)
     }

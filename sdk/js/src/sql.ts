@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { type Channel, channelParts, type TxChannel, txChannel } from './channels.ts'
 import type { Connection, Durability, Idempotence, Link } from './connection.ts'
 import { checkDurability, download } from './connection.ts'
 import { errorOf, InvalidError } from './errors.ts'
@@ -1012,7 +1013,17 @@ export class SqlTx implements Runner {
 	 */
 	with<T>(bucket: Bucket<T>): Bucket<T>
 	with<T>(queue: Queue<T>): TxQueue<T>
-	with(handle: Bucket<unknown> | Queue<unknown>): Bucket<unknown> | TxQueue<unknown> {
+	with<T>(channel: Channel<T>): TxChannel<T>
+	with(
+		handle: Bucket<unknown> | Queue<unknown> | Channel<unknown>,
+	): Bucket<unknown> | TxQueue<unknown> | TxChannel<unknown> {
+		const channel = channelParts(handle)
+		if (channel !== undefined) {
+			// a message published here is handed over once the transaction commits, at the writer
+			return txChannel(channel.name, channel.branch, async body => {
+				await this.#nested(methods['channels.publish'], body)
+			})
+		}
 		const bucket = partsOf(handle)
 		if (bucket?.values !== undefined && bucket.openMethod === 'kv.bucket.open') {
 			this.#takes(bucket.home, bucket.open, `kv bucket ${bucket.name}`)

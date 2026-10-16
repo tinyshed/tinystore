@@ -29,7 +29,7 @@ use std::sync::Arc;
 #[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::Store;
 #[cfg(any(feature = "kv", feature = "jobs"))]
-use crate::sqlite::{Begun, Mark};
+use crate::sqlite::{Begun, Committed, Mark};
 use crate::sqlite::{File, Tx as SqlTx, sql_error};
 use crate::{Error, Result};
 
@@ -135,7 +135,7 @@ impl Transaction<'_> {
         let ended = Ended::default();
         let outcome = (|| {
             let marks = files.iter().map(|file| file.mark()).collect::<Result<Vec<_>>>()?;
-            let writer = OfStore { files, begun: RefCell::new(None), marks };
+            let writer = OfStore { files, begun: RefCell::new(None), marks, early: Committed::default() };
             let value = work(&Transaction { writer: &writer, bound: None, ended: &ended })?;
             writer.commit()?;
             Ok(value)
@@ -156,6 +156,16 @@ impl Transaction<'_> {
             Ok(())
         })?;
         value.ok_or_else(|| Error::internal("a transaction's call did not run"))
+    }
+
+    /// Runs `hook` once the transaction commits, while its writer is still
+    /// held, so that what commits of one file hand over comes in their order;
+    /// a rollback runs nothing. A transaction of the store that took no
+    /// handle in yet runs it at its commit, or when its function returns, if
+    /// it never began on a file.
+    #[cfg(feature = "channels")]
+    pub(crate) fn after_commit(&self, hook: Box<dyn FnOnce()>) {
+        self.writer.after_commit(hook);
     }
 
     /// Refuses a handle kept in another file than the transaction's, `place`:
@@ -191,6 +201,10 @@ trait Writer {
 
     /// Runs `work` on the writer the transaction holds.
     fn on(&self, work: &mut dyn FnMut(&SqlTx<'_>) -> Result<()>) -> Result<()>;
+
+    /// Keeps `hook` for after the commit.
+    #[cfg(feature = "channels")]
+    fn after_commit(&self, hook: Box<dyn FnOnce()>);
 }
 
 /// The writer of a transaction that began on its file before its function
@@ -224,6 +238,11 @@ impl Writer for OneFile<'_> {
     fn on(&self, work: &mut dyn FnMut(&SqlTx<'_>) -> Result<()>) -> Result<()> {
         work(self.raw)
     }
+
+    #[cfg(feature = "channels")]
+    fn after_commit(&self, hook: Box<dyn FnOnce()>) {
+        self.raw.after_commit(hook);
+    }
 }
 
 /// The writer of the store's transaction, which begins on the file of the
@@ -235,6 +254,8 @@ struct OfStore<'f> {
     begun: RefCell<Option<(Begun<'f>, String)>>,
     /// This thread marked inside a transaction of each file, in their order.
     marks: Vec<Mark>,
+    /// What asked to run after the commit before the transaction began.
+    early: Committed,
 }
 
 #[cfg(any(feature = "kv", feature = "jobs"))]
@@ -242,7 +263,10 @@ impl OfStore<'_> {
     fn commit(&self) -> Result<()> {
         match self.begun.borrow_mut().take() {
             Some((begun, _)) => begun.commit(),
-            None => Ok(()),
+            None => {
+                self.early.run();
+                Ok(())
+            }
         }
     }
 }
@@ -262,7 +286,10 @@ impl Writer for OfStore<'_> {
                 "kept in {place}, which this store's transaction does not hold: a database's handle joins its db.tx"
             )));
         };
-        *begun = Some((self.files[at].begin(&self.marks[at])?, place.to_owned()));
+        let began = self.files[at].begin(&self.marks[at])?;
+        #[cfg(feature = "channels")]
+        began.tx().committed().append(self.early.take());
+        *begun = Some((began, place.to_owned()));
         Ok(())
     }
 
@@ -273,6 +300,14 @@ impl Writer for OfStore<'_> {
         };
         work(&begun.tx())
     }
+
+    #[cfg(feature = "channels")]
+    fn after_commit(&self, hook: Box<dyn FnOnce()>) {
+        match self.begun.borrow().as_ref() {
+            Some((begun, _)) => begun.tx().after_commit(hook),
+            None => self.early.push(hook),
+        }
+    }
 }
 
 /// Runs `work` in a savepoint, kept when it succeeds and rolled back when it
@@ -280,9 +315,11 @@ impl Writer for OfStore<'_> {
 fn in_savepoint<T>(raw: &SqlTx<'_>, work: impl FnOnce() -> Result<T>) -> Result<T> {
     let failed = |error| sql_error("a call's savepoint", error);
     raw.execute_batch(SAVEPOINT).map_err(failed)?;
+    let mark = raw.committed().mark();
     match work() {
         Ok(value) => raw.execute_batch(RELEASE).map_err(failed).map(|()| value),
         Err(error) => {
+            raw.committed().take_back(mark);
             raw.execute_batch(ROLLBACK_TO).and_then(|()| raw.execute_batch(RELEASE)).map_err(failed)?;
             Err(error)
         }

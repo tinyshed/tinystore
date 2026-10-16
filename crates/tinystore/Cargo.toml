@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "config", "locks", "jobs", "sql", "blobs", "records", "metrics", "backup", "wire"]
+default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records", "metrics", "backup", "wire"]
 # Each engine is a feature: a program links the engines it opens. Every engine
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
@@ -19,6 +19,9 @@ config = ["kv", "dep:toml", "dep:yaml-rust2"]
 # locks and semaphores in the memory of the store's process, their fences
 # from an epoch kept in kv.db
 locks = ["kv"]
+# messages published to whoever listens now, in memory, those of a
+# transaction released at its commit
+channels = ["store"]
 jobs = ["store", "dep:jiff"]
 sql = ["store"]
 blobs = ["store", "dep:sha2", "dep:libc"]
