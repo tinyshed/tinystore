@@ -256,6 +256,9 @@ delivered; a subscriber that falls behind receives a gap event.
 
 ## 6. Indexes
 
+- [ ] Search, proposed in [its book](api/search.md): an index's words and vectors
+  in `search.db`, the typo corrector the command line and config share, and an
+  SQL table's index kept in step in its own file.
 - [ ] Full text and geo declared in sqldb's schema, rebuilt beside the old
   index and switched when ready.
 - [ ] Vectors, and compute operations, for real callers.
