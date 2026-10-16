@@ -12,7 +12,7 @@ use super::document::analyze;
 use super::engine::{OpenIndex, Search};
 use super::read::Query;
 use super::score::score;
-use super::settings::Wanted;
+use super::settings::{Settings, Wanted};
 use super::write::Prepared;
 use crate::{Error, Key, Result, Store};
 
@@ -27,6 +27,10 @@ const MOST_WORDS: usize = 32;
 const MOST_HITS: usize = 1000;
 /// The hits a search answers unless it says.
 const LIMIT: usize = 10;
+/// The documents a `set_many` takes at most, and their bytes as JSON, so
+/// that no import makes one commit and a write-ahead log of its size.
+const MOST_MANY: usize = 1000;
+const MOST_MANY_BYTES: usize = 16 << 20;
 
 /// What [`Store::index`] opens: an index's settings, given where it opens.
 #[must_use = "an index opens at `open`"]
@@ -112,12 +116,41 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         let id = id.text();
         let within = |error: Error| error.within(format!("index {}: id {id:?}", self.open.name));
         let index = self.open.id;
-        let document = |settings: &super::settings::Settings| {
-            let value = json(value)?;
-            let analyzed = analyze(&value.0, &settings.fields)?;
-            Ok(Prepared { index, id: checked(&id)?.to_owned(), value: value.1, analyzed })
-        };
+        let document = |settings: &Settings| Ok(vec![prepared(index, &id, value, settings)?]);
         self.search.set(&self.open, document).map_err(within)
+    }
+
+    /// Sets each document to its value, all of them in one commit or none:
+    /// a refused one names its place in the list and its id. A call holds
+    /// 1,000 documents and 16 MiB of them as JSON at most; a larger import
+    /// goes in calls of that size.
+    pub fn set_many<'v, K: Key>(&self, documents: impl IntoIterator<Item = (K, &'v T)>) -> Result<()>
+    where
+        T: 'v,
+    {
+        let within = |error: Error| error.within(format!("index {}", self.open.name));
+        let documents: Vec<(K, &T)> = documents.into_iter().collect();
+        if documents.len() > MOST_MANY {
+            let said = format!("a set_many of {} documents, past {MOST_MANY}", documents.len());
+            return Err(within(Error::limit(said)));
+        }
+        let index = self.open.id;
+        let all = |settings: &Settings| {
+            let mut prepared_all = Vec::with_capacity(documents.len());
+            let mut bytes = 0;
+            for (at, (id, value)) in documents.iter().enumerate() {
+                let id = id.text();
+                let place = |error: Error| error.within(format!("document {at}, id {id:?}"));
+                let document = prepared(index, &id, value, settings).map_err(place)?;
+                bytes += document.value.len();
+                if bytes > MOST_MANY_BYTES {
+                    return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
+                }
+                prepared_all.push(document);
+            }
+            Ok(prepared_all)
+        };
+        self.search.set(&self.open, all).map_err(within)
     }
 
     /// Deletes the document `id`; says whether there was one.
@@ -222,6 +255,14 @@ impl<T: Serialize + DeserializeOwned> SearchCall<'_, T> {
         words.truncate(MOST_WORDS);
         Ok(Query { normal, words, offset: self.offset, limit: self.limit })
     }
+}
+
+/// A document ready to set: its id checked, its value as JSON and its words
+/// as the index's fields read them.
+fn prepared<T: Serialize>(index: i64, id: &str, value: &T, settings: &Settings) -> Result<Prepared> {
+    let (tree, bytes) = json(value)?;
+    let analyzed = analyze(&tree, &settings.fields)?;
+    Ok(Prepared { index, id: checked(id)?.to_owned(), value: bytes, analyzed })
 }
 
 /// A document's value as JSON, and its bytes, within the bound.

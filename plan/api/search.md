@@ -156,12 +156,14 @@ await products.set('p-3', product, { vector: embedding })          // number[] o
 await products.set('p-4', draft, { vector: null })                 // found by its words alone
 await articles.delete('a-17')
 const article = await articles.get('a-17')                          // the value, or undefined
+await articles.setMany([{ id: 'a-1', value: first }, { id: 'a-2', value: second }])
 ```
 
 ```rust
 articles.set("a-17", &article)?;
 products.set("p-3", &product).vector(&embedding)?;
 articles.delete("a-17")?;
+articles.set_many([("a-1", &first), ("a-2", &second)])?;
 ```
 
 - A set replaces the document whole, its words and its vector; the next
@@ -173,6 +175,14 @@ articles.delete("a-17")?;
   `invalid`. A vector is kept as given, every bit, and compared by its
   cosine with the question's, from the lengths kept beside it.
 - Deleting an id that is not there does nothing.
+- `setMany` sets a list of documents in one commit, all of them or none: a
+  refused one names its place in the list and its id. A call holds 1,000
+  documents and 16 MiB at most, so that no import makes one commit and a
+  write-ahead log of its size; a larger import goes in calls of that size.
+- A set replaces a document whole, and there is no `patch` of some of its
+  fields: what a part of a document's nested values, lists and `null`
+  would mean, and whether a changed text leaves a vector that no longer
+  fits it, wait for a program that needs one (the owner's call below).
 
 ## Search
 
@@ -404,7 +414,7 @@ let articles = db
 | Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 |-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN or an infinity, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank` |
-| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `limit`   | a document, a field's text, a search or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
@@ -424,6 +434,7 @@ Proposed, to be measured before they are promised.
 | a field's weight   | above 0, at most 1,000    |
 | a filter's value   | 256 bytes                 |
 | a search's filter  | 8 fields, 100 values      |
+| a `setMany`        | 1,000 documents, 16 MiB   |
 
 ## Under the surface
 
@@ -454,6 +465,14 @@ Proposed, to be measured before they are promised.
   work in all; once the gone pass 0.5 % of the documents it purges them,
   rewriting only the blocks whose range holds one, in commits as short
   (search-wchurn). Every answer stayed exact throughout.
+- **Numbers** are given by every set, so they grow with the sets an index
+  has had, not the documents it holds, and a part's lengths are kept a row
+  a 65,536 numbers: a slice-1 mix that set 400 documents 20 times each left
+  a file 1.7 times a fresh build's. Slice 6's rebuild in the background
+  numbers the documents again from 1, the program's ids kept, and starts by
+  itself once the numbers given pass twice the documents held, and in any
+  case long before 2³², the most a number can be; the threshold is that
+  slice's measurement.
 - **Filters** are keys of the postings without frequencies, `category` and
   `shoes` beside a field's words, packed and purged with them, and the
   index knows each one's count of documents. A filter that passes few
@@ -491,9 +510,9 @@ Proposed, to be measured before they are promised.
 
 ## Slices
 
-1. The analyzer, words and postings in the Rust core: `set`, `delete`,
-   `get`, `search` by words, the head packed in steps, the gone purged,
-   and `corrected`: built 16 October, a field added to an index that
+1. The analyzer, words and postings in the Rust core: `set`, `setMany`,
+   `delete`, `get`, `search` by words, the head packed in steps, the gone
+   purged, and `corrected`: built 16 October, a field added to an index that
    holds documents refused until slice 6. Its tables are named
    `_tinystore_search_*`, as kv's are, so that slice 8 keeps the same ones
    in a database's file beside the program's.
@@ -505,7 +524,8 @@ Proposed, to be measured before they are promised.
 5. Vectors with `recall`: the clusters, their heads, packing and splits,
    the clusters read chosen from `recall`, and filters through them.
 6. Changes of an index in the background, `ready()`, `status()`,
-   `dropIndex` and `tinystore search`.
+   `dropIndex` and `tinystore search`, and the documents numbered again by
+   a rebuild that starts by itself.
 7. The wire and the Bun SDK.
 8. `db.searchIndex`: its triggers, the pending keys, and their indexing
    before the commit.
@@ -560,6 +580,8 @@ a newcomer check of what it made public.
 - A model in the binary, so that a program without one gets vectors.
 - Questions that are an identifier alone, a part number or an error code,
   which no round sampled apart.
+- `patch`, a document's fields set apart, once a program needs one and its
+  meaning for nested values, lists, `null` and vectors is decided.
 
 ## Names, 16 October
 
@@ -603,13 +625,13 @@ slice 1 made public: a newcomer's reading of thirteen bare lines, a free
 review by a developer who knows Meilisearch, Algolia and Tantivy, and a blind
 choice between three shapes of five calls.
 
-| It read                                                                                  | Change                                                                      |
-|------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| `.run()`, `found.hits`, `delete` answering a `bool`, `typo_tolerance`, `index::<String>` | none: the blind choice took each over its two others                        |
-| a second `open` with other settings as a handle of its own, both readers                 | none: an open changes the index, the owner's call; `open`'s comment says so |
-| whether a search needs every word                                                        | none: any word, said in `search`'s comment                                  |
-| pages of equal scores repeating or skipping a hit                                        | the document set first comes first, said in `search`'s comment              |
-| `total`, highlights, `set_many`, `patch`                                                 | `total` and highlights are in Later; `set_many` and `patch` for the owner   |
+| It read                                                                                  | Change                                                                                        |
+|------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| `.run()`, `found.hits`, `delete` answering a `bool`, `typo_tolerance`, `index::<String>` | none: the blind choice took each over its two others                                          |
+| a second `open` with other settings as a handle of its own, both readers                 | none: an open changes the index, the owner's call; `open`'s comment says so                   |
+| whether a search needs every word                                                        | none: any word, said in `search`'s comment                                                    |
+| pages of equal scores repeating or skipping a hit                                        | the document set first comes first, said in `search`'s comment                                |
+| `total`, highlights, `set_many`, `patch`                                                 | `total` and highlights are in Later; `set_many` built, `patch` later, the owner's calls below |
 
 ## The owner's calls, 16 October
 
@@ -632,3 +654,7 @@ accepted the book.
 | what the corrector answers                | the word and its edits, each caller its own rules                                                                                                                                             |
 | `db.searchIndex`'s shape                  | it follows a table, which owns the rows; no `set`; one commit with every change                                                                                                               |
 | vectors in a table's index                | a column the program fills; the store never runs a model in a write                                                                                                                           |
+| Russian's stems                           | rust-stemmers kept: 11.5 KiB of a binary, measured, against a stemmer of our own to keep (the outside reviewer's)                                                                             |
+| numbers that grow with every set          | numbered again by slice 6's rebuild, which starts by itself at a threshold that slice measures, long before 2³² (the outside reviewer's)                                                      |
+| a list of documents at once               | `setMany`: one commit, all or none, 1,000 documents and 16 MiB a call (the outside reviewer's)                                                                                                |
+| `patch`                                   | later: `set` replaces a document whole until a program needs a part set and what it means is decided (the outside reviewer's)                                                                 |

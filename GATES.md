@@ -604,6 +604,7 @@ module defines.
 - a block's bound is never below what a posting of it adds — `a_bound_from_a_blocks_largest_frequency_and_shortest_length_is_never_below_its_postings` in `search::score`
 - of equal scores the document set first comes first — `of_equal_scores_the_lower_document_comes_first` in `search::execute`
 - a set is seen by the next search; a deleted document never answers again — `a_set_is_seen_by_the_next_search_and_a_deleted_document_never_answers` in `search::index`
+- a `set_many` sets every document in one commit or none, a refused one naming its place and id, and one past 1,000 documents or 16 MiB is `limit` — `set_many_sets_every_document_in_one_commit_or_none`, `a_set_many_past_its_bound_is_a_limit_and_sets_nothing` in `search::index`, and among the writes of the mix above
 - a packing or a purge changes no answer, step by step — `packing_and_purging_change_no_answer` in `search::index`
 - searches and writes from many threads at once answer as one at a time would — `searches_and_writes_from_many_threads_answer_as_one_at_a_time_would` in `search::index`
 - a crash between the steps of a packing or a purge leaves the last commit, and both go on — `a_crash_between_steps_of_packing_or_purging_leaves_the_last_commit` in `search::index`

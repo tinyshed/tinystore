@@ -180,14 +180,23 @@ impl Search {
         Ok(())
     }
 
-    /// Sets the document `document` makes of the index's settings, which
-    /// hold still until it commits.
-    pub(crate) fn set(&self, open: &OpenIndex, document: impl FnOnce(&Settings) -> Result<Prepared>) -> Result<()> {
+    /// Sets the documents `documents` makes of the index's settings, which
+    /// hold still until they commit, all of them in one commit or none.
+    pub(crate) fn set(
+        &self,
+        open: &OpenIndex,
+        documents: impl FnOnce(&Settings) -> Result<Vec<Prepared>>,
+    ) -> Result<()> {
         let settings = open.settings_read();
-        let prepared = document(&settings)?;
-        self.file.write(prepared.bytes(), move |tx| write::set(tx, &prepared))?;
+        let prepared = documents(&settings)?;
+        let (bytes, count) = (prepared.iter().map(Prepared::bytes).sum(), prepared.len() as u64);
+        if count == 0 {
+            return Ok(());
+        }
+        self.file.write(bytes, move |tx| prepared.iter().try_for_each(|document| write::set(tx, document)))?;
         drop(settings);
-        if open.sets.fetch_add(1, Ordering::Relaxed) + 1 == PACK_AT {
+        let before = open.sets.fetch_add(count, Ordering::Relaxed);
+        if before < PACK_AT && before + count >= PACK_AT {
             self.wake();
         }
         Ok(())

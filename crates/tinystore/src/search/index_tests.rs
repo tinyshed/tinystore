@@ -92,6 +92,37 @@ fn get_answers_the_value_set_or_none() {
 }
 
 #[test]
+fn set_many_sets_every_document_in_one_commit_or_none() {
+    let fixture = fixture();
+    let articles = fixture.articles::<Article>("articles");
+    let (first, second) = (article("Rye bread", "flour"), article("Sourdough", "starter"));
+    articles.set_many([("a-1", &first), ("a-2", &second), ("a-1", &article("Baguette", "crust"))]).unwrap();
+    assert_eq!(articles.get("a-2").unwrap(), Some(second));
+    assert_eq!(articles.get("a-1").unwrap(), Some(article("Baguette", "crust")), "a later place wins");
+    assert!(search(&articles, "rye").hits.is_empty());
+    let notes = fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).open().unwrap();
+    let (good, bad) = (serde_json::json!({ "title": "kept" }), serde_json::json!({ "title": 7 }));
+    let refused = notes.set_many([("n-1", &good), ("n-2", &bad)]).unwrap_err();
+    let said = "index notes: document 1, id \"n-2\": field title holds a number, not text: invalid";
+    assert_eq!(refused.to_string(), said);
+    assert_eq!(notes.get("n-1").unwrap(), None, "none of the list is set");
+    assert!(checked(|| notes.search("kept").run()).unwrap().hits.is_empty());
+}
+
+#[test]
+fn a_set_many_past_its_bound_is_a_limit_and_sets_nothing() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<String>("notes").open().unwrap();
+    let short = "word".to_owned();
+    let many: Vec<(String, &String)> = (0..1001).map(|n| (format!("n-{n}"), &short)).collect();
+    assert_eq!(notes.set_many(many).unwrap_err().kind(), ErrorKind::Limit);
+    let large = "x".repeat(1_000_000);
+    let heavy: Vec<(String, &String)> = (0..17).map(|n| (format!("n-{n}"), &large)).collect();
+    assert_eq!(notes.set_many(heavy).unwrap_err().kind(), ErrorKind::Limit);
+    assert_eq!(notes.get("n-0").unwrap(), None);
+}
+
+#[test]
 fn pages_of_a_search_join_into_its_whole_ranking() {
     let fixture = fixture();
     let articles = fixture.articles::<Article>("articles");
@@ -393,7 +424,14 @@ fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packi
                     assert_eq!(index.delete(&id).unwrap(), model.docs.remove(&id).is_some());
                 }
                 82..84 => drop(maintain(&fixture.store).unwrap()),
-                84..88 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                84..86 => {
+                    let ids: Vec<String> =
+                        (0..1 + random.below(12)).map(|_| format!("d{}", random.below(500))).collect();
+                    let values: Vec<Article> = ids.iter().map(|_| random_article(&mut random)).collect();
+                    index.set_many(ids.iter().zip(&values)).unwrap();
+                    ids.into_iter().zip(values).for_each(|(id, value)| model.set(&settings, id, value));
+                }
+                86..88 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
                 88..89 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
                 _ => agrees(&index, &model, &mut random, seed),
             }
