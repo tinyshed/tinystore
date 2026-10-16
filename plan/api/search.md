@@ -890,7 +890,7 @@ between three shapes of four calls.
 | what has no value: no field, null, an empty list, an empty text                                      | no field, null and an empty list, said in `missing`'s comment and above; "" is a value |
 | a field misspelt, found only at `run`                                                                | the error names the nearest filter the index has                                       |
 | the case of a value, a document without a number in a range, a list field                            | said in `eq`'s and `range`'s comments and above                                        |
-| typed field references from a derive, `.filterable` for `.filters`                                   | left to the owner: sqldb names its columns by text too                                 |
+| typed field references from a derive, `.filterable` for `.filters`                                   | `.filters` kept by the owner, 17 October; sqldb names columns by text too              |
 | `&42` beside `"sale"`                                                                                | none: `sql::eq` takes its value so, and a `&str` is already one                        |
 | a listing by a filter alone, its order and `total`; facets; `not`                                    | Later                                                                                  |
 
@@ -952,7 +952,7 @@ database, Prisma, Drizzle and SQLite's FTS5 with triggers, read
 | `hit.value` the whole row, a vector column's 4 KiB a hit with it                                                                                          | Later: the columns a hit's row reads                                             |
 | `done: boolean` in TypeScript reading the 1 SQLite keeps                                                                                                  | said: a row as `db.all` reads it; a filter's `true` and `false` pass 1 and 0     |
 | one table an index, where Meilisearch's documents are any JSON                                                                                            | Later: an index of a view or of several tables                                   |
-| `filters` beside `.filter`, one letter apart                                                                                                              | left to the owner: `filterable` would rename `store.index`'s too                 |
+| `filters` beside `.filter`, one letter apart                                                                                                              | kept by the owner, 17 October: `filterable` reads badly                          |
 | what a row costs a commit, and a first read's time and size                                                                                               | Later: a round, with the owner's word                                            |
 
 ## The owner's calls, 16 October
