@@ -91,7 +91,7 @@ impl Engine {
             let claim = store.claim(FILE)?;
             // 'os' unless the store says: a sample a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
-            let file = File::open(claim.path(), Config::committing(durability))?;
+            let file = store.open_file(claim.name(), Config::committing(durability))?;
             file.migrate("metrics", MIGRATIONS)?;
             let engine = Arc::new(Engine {
                 names: Names::read(&file)?,

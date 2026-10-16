@@ -26,7 +26,7 @@ test:
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
 # hides one's code from another
-lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "search") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup")
+lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "search") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "kv,replication") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # run clippy on the library built with these features alone

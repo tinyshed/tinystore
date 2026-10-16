@@ -119,7 +119,7 @@ impl Search {
     pub(crate) fn of(store: &Store) -> Result<Arc<Search>> {
         store.engine(|store| {
             let claim = store.claim(FILE)?;
-            let file = Arc::new(File::open(claim.path(), Config::committing(store.durability()))?);
+            let file = Arc::new(store.open_file(claim.name(), Config::committing(store.durability()))?);
             Search::start(store, file, None, Some(claim))
         })
     }

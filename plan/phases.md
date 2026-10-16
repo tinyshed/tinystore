@@ -276,7 +276,15 @@ Taken before phase 4's command line and the SDKs at the owner's word on 17
 October: they wait for the system's full bounds. The model and its slices are
 in [scaling.md](scaling.md#order).
 
-- [ ] Capture: the after-commit seam in the adapter's three commits, checkpoints taken over, each file's log in segments, recovery at open.
+- [x] Capture: the after-commit seam in the adapter's three commits, checkpoints taken over, each file's log in segments, recovery at open.
+  Built: `Options::node` makes a store a node, a draft until the links; `store.open_file` opens every engine's file
+  with its log in `log/<file>/`. The writer's WAL hook says where the WAL ends after a commit, and the commit's
+  frames are read back while the writer is held; the hook turns SQLite's checkpoints off, and the capture's own
+  run every thousand frames once the log synced, so that the log needs no sync of its own a commit. An entry is a
+  commit's pages, each once, chained by SHA-256 to the one before, in segments of 16 MiB within 256 MiB a file. At
+  open a torn tail is cut and the WAL hands what the log lacks; a commit the log could not take answers
+  `OutcomeUnknown` and the file takes no write until it opens again; a WAL started over beside the store is logged
+  as a gap. Left: the log's bound by age and the disk the store keeps free, which the links' positions decide.
 - [ ] Apply: a copy's pages applied whole through `sqlite_dbpage`; engines on a copy with readers alone, background work following the file.
 - [ ] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
 - [ ] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.

@@ -94,7 +94,7 @@ impl Blobs {
             }
             let config = Config::committing(store.durability());
             let durable = config.durability == Durability::Full;
-            let file = File::open(dir.join(FILE), config)?;
+            let file = store.open_file(&format!("{DIR}/{FILE}"), config)?;
             file.migrate("blobs", MIGRATIONS)?;
             let blobs = Arc::new(Blobs {
                 file,

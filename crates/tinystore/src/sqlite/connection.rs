@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Once;
 
+use rusqlite::config::DbConfig;
 use rusqlite::limits::Limit;
 use rusqlite::{Connection, ErrorCode, OpenFlags};
 
@@ -105,6 +106,11 @@ fn configure_reader(connection: &Connection, config: &Config) -> rusqlite::Resul
 fn configure_shared(connection: &Connection, config: &Config) -> rusqlite::Result<()> {
     connection.pragma_update(None, "foreign_keys", true)?;
     connection.pragma_update(None, "trusted_schema", false)?;
+    if config.keep_wal {
+        // The last connection to close would checkpoint frames its log may
+        // not hold durably yet.
+        connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+    }
     // A negative cache_size is KiB rather than pages.
     connection.pragma_update(None, "cache_size", -i64::from(config.cache_kib))
 }

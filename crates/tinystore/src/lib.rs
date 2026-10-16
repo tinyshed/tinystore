@@ -15,7 +15,7 @@ mod clock;
 mod compress;
 #[cfg(feature = "console")]
 pub mod console;
-#[cfg(any(feature = "kv", feature = "blobs", feature = "backup"))]
+#[cfg(any(feature = "kv", feature = "blobs", feature = "backup", feature = "replication"))]
 mod durable;
 #[cfg(feature = "kv")]
 mod encryption;
@@ -43,6 +43,8 @@ pub mod metrics;
 pub mod pipe;
 #[cfg(feature = "records")]
 pub mod records;
+#[cfg(feature = "replication")]
+pub mod replication;
 #[cfg(feature = "store")]
 mod schedule;
 #[cfg(feature = "search")]

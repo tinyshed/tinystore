@@ -22,6 +22,9 @@ pub(crate) struct Config {
     /// How long a statement waits for another process's lock.
     pub(crate) busy_timeout: Duration,
     pub(crate) group: GroupLimits,
+    /// Whether closing a connection leaves the WAL as it is, for a file whose
+    /// capture alone checkpoints it.
+    pub(crate) keep_wal: bool,
 }
 
 impl Default for Config {
@@ -36,6 +39,7 @@ impl Default for Config {
             statements: 32,
             busy_timeout: Duration::from_secs(5),
             group: GroupLimits::default(),
+            keep_wal: false,
         }
     }
 }

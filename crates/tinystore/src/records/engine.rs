@@ -111,7 +111,7 @@ impl Records {
             // 'os' unless the store says: a log line a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
             let config = Config { page_size: 1024, ..Config::committing(durability) };
-            let file = File::open(claim.path(), config)?;
+            let file = store.open_file(claim.name(), config)?;
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {
                 store: store.downgrade(),

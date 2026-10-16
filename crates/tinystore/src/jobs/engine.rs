@@ -44,7 +44,7 @@ impl Jobs {
     pub(crate) fn of(store: &Store) -> Result<Arc<Jobs>> {
         store.engine(|store| {
             let claim = store.claim(FILE)?;
-            let file = Arc::new(File::open(claim.path(), Config::committing(store.durability()))?);
+            let file = Arc::new(store.open_file(claim.name(), Config::committing(store.durability()))?);
             store.keep_file(&file);
             Jobs::start(store, file, None, Some(claim))
         })

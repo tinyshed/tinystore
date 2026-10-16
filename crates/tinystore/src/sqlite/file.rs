@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use rusqlite::Connection;
 
+use super::capture::{Capture, Observe};
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
@@ -31,24 +32,37 @@ pub(crate) struct File {
     readers: Readers,
     closed: AtomicBool,
     settlers: Arc<Settlers>,
+    capture: Option<Arc<Capture>>,
 }
 
 impl File {
     pub(crate) fn open(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
+        Self::open_observed(path, config, None)
+    }
+
+    /// Opens the file with each commit handed to `observer`, which is first
+    /// handed what the WAL holds past the observer's last position.
+    pub(crate) fn open_observed(
+        path: impl Into<PathBuf>,
+        config: Config,
+        observer: Option<Arc<dyn Observe>>,
+    ) -> Result<Self> {
         let path = path.into();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| Error::io(path.display().to_string(), error))?;
         }
-        let config = Arc::new(config);
+        let config = Arc::new(Config { keep_wal: observer.is_some(), ..config });
         let writer = connection::open(&path, &config, Role::Writer)?;
+        let capture = observer.map(|observer| Capture::open(&path, &writer, observer).map(Arc::new)).transpose()?;
         let settlers = Arc::new(Settlers::default());
         Ok(Self {
-            group: Group::new(config.group, Arc::clone(&settlers)),
+            group: Group::new(config.group, Arc::clone(&settlers), capture.clone()),
             readers: Readers::new(path.clone(), Arc::clone(&config)),
             writer: Mutex::new(writer),
             path,
             closed: AtomicBool::new(false),
             settlers,
+            capture,
         })
     }
 
@@ -141,6 +155,7 @@ impl File {
         connection: &Connection,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
+        self.refuse_when_unlogged()?;
         execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
         let mut open = Open { connection, finished: false };
@@ -158,13 +173,28 @@ impl File {
     /// Commits the transaction on `connection`; a commit that fails may or may
     /// not be in the file.
     fn commit(&self, connection: &Connection) -> Result<()> {
+        if let Some(capture) = &self.capture {
+            capture.arm();
+        }
         execute(connection, COMMIT).map_err(|error| {
             if !connection.is_autocommit() {
                 let _ = execute(connection, ROLLBACK);
             }
             Error::new(ErrorKind::OutcomeUnknown, format!("{}: a transaction's commit", self.describe()))
                 .with_source(error)
-        })
+        })?;
+        match &self.capture {
+            Some(capture) => capture.committed(connection).map_err(|error| error.within(self.describe())),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuses a transaction once a commit of the file could not be logged.
+    fn refuse_when_unlogged(&self) -> Result<()> {
+        match &self.capture {
+            Some(capture) => capture.refuse_when_broken().map_err(|error| error.within(self.describe())),
+            None => Ok(()),
+        }
     }
 
     /// Marks this thread as inside a transaction of the file that has not
@@ -181,6 +211,7 @@ impl File {
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
         let connection = lock(&self.writer);
+        self.refuse_when_unlogged()?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let begun = Begun { file: self, connection, hooks: Committed::default(), committed: false };
         begun.tx().settle(Left::Before)?;
@@ -263,6 +294,9 @@ impl File {
         self.group.close();
         self.readers.close();
         let connection = lock(&self.writer);
+        if let Some(capture) = &self.capture {
+            capture.close().map_err(|error| error.within(format!("{}: its log", self.describe())))?;
+        }
         // A truncated WAL leaves the directory as small as its data.
         connection
             .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))

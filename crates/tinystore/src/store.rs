@@ -40,6 +40,10 @@ pub struct Options {
     /// store reads it and never makes it. `None` is `encryption.key` in the
     /// store's directory, which the store makes the first time it needs one.
     pub encryption_key_file: Option<PathBuf>,
+    /// Makes the store a node, which keeps a log of each file it writes for
+    /// other nodes to copy; `None` is a store alone.
+    #[cfg(feature = "replication")]
+    pub node: Option<crate::replication::Node>,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
@@ -54,20 +58,25 @@ impl Default for Options {
             durability: None,
             keep_free: KEEP_FREE,
             encryption_key_file: None,
+            #[cfg(feature = "replication")]
+            node: None,
         }
     }
 }
 
 impl fmt::Debug for Options {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Options")
+        let f = &mut f.debug_struct("Options");
+        let f = f
             .field("memory", &self.memory)
             .field("clock", &self.clock.as_ref().map(|_| "custom"))
             .field("background", &self.background)
             .field("durability", &self.durability)
             .field("keep_free", &self.keep_free)
-            .field("encryption_key_file", &self.encryption_key_file)
-            .finish()
+            .field("encryption_key_file", &self.encryption_key_file);
+        #[cfg(feature = "replication")]
+        let f = f.field("node", &self.node);
+        f.finish()
     }
 }
 
@@ -139,6 +148,9 @@ struct Inner {
     /// key and makes none.
     #[cfg(feature = "kv")]
     encryption_key: Mutex<Option<Arc<EncryptionKey>>>,
+    /// Where a node keeps its files' logs; `None` in a store alone.
+    #[cfg(feature = "replication")]
+    logs: Option<crate::replication::Logs>,
     closed: AtomicBool,
 }
 
@@ -165,6 +177,8 @@ impl Store {
             encryption_key_file: options.encryption_key_file,
             #[cfg(feature = "kv")]
             encryption_key: Mutex::new(None),
+            #[cfg(feature = "replication")]
+            logs: options.node.map(|_| crate::replication::Logs::of_store(&dir)),
             closed: AtomicBool::new(false),
             dir,
         };
@@ -173,6 +187,29 @@ impl Store {
 
     pub fn dir(&self) -> &Path {
         &self.inner.dir
+    }
+
+    /// Opens an engine's SQLite file, `name` inside the store's directory, its
+    /// commits logged when the store is a node.
+    #[cfg_attr(
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "sql",
+            feature = "blobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "search"
+        )),
+        expect(dead_code, reason = "only an engine of files opens one, and channels keep none")
+    )]
+    pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
+        let path = self.inner.dir.join(name);
+        #[cfg(feature = "replication")]
+        if let Some(logs) = &self.inner.logs {
+            return crate::sqlite::File::open_observed(path, config, Some(logs.open(name)?));
+        }
+        crate::sqlite::File::open(path, config)
     }
 
     /// What the store's options said of its files' commits, for an engine

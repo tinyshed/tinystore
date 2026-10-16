@@ -98,7 +98,7 @@ impl Databases {
         let claim = store.claim(&file_of(name))?;
         let config = config(durability.or(store.durability()));
         let durability = config.durability;
-        let file = File::open(claim.path(), config)?;
+        let file = store.open_file(claim.name(), config)?;
         if let Some(migrations) = migrations {
             file.migrate_checked(HISTORY, &migrations)?;
         }

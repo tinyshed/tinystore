@@ -8,6 +8,7 @@
 // are reached only from tests.
 #![allow(dead_code, unused_imports)]
 
+mod capture;
 mod config;
 mod connection;
 mod constraint;
@@ -27,6 +28,7 @@ use std::ops::Deref;
 
 use rusqlite::Connection;
 
+pub(crate) use capture::{Commit, Observe, Position};
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};
 pub(crate) use connection::{copy, execute, read_copy, sql_error};

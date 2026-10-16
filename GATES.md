@@ -671,6 +671,18 @@ module defines.
 - a restore writes into an empty directory and none other — `a_restore_writes_into_an_empty_directory_and_none_other` in `backup`
 - a backup that fails leaves no zip and no snapshot, and a closed store takes none — `a_backup_that_fails_leaves_no_zip`, `a_closed_store_takes_no_backup` in `backup`
 
+## Replication
+
+- every commit of a file, grouped, submitted, a transaction, a begun one and a migration, is handed to its log once, in the order they committed, and the pages handed rebuild the file byte for byte; a commit that wrote nothing hands nothing — `every_commit_of_every_kind_is_handed_once_and_rebuilds_the_file` in `sqlite::capture`
+- a node logs every engine's file, and each log rebuilds its file byte for byte across restarts, its entries counted from 1, chained by their checks and begun once — `a_node_logs_every_file_and_each_log_rebuilds_its_file_across_restarts` in `replication`
+- a store alone keeps no log — `a_store_alone_keeps_no_log` in `replication`
+- a commit its log could not take answers `OutcomeUnknown`, the file takes no write until it opens again, and the next open hands the log what it lacked — `a_commit_its_observer_refuses_is_outcome_unknown_and_the_next_open_hands_it` in `sqlite::capture`
+- a process that died loses no commit to its log: the next open hands the log what the WAL holds past its last entry, a log cut at any byte past its beginning mended, before and after the WAL started over — `a_process_that_died_leaves_the_commits_its_observer_lost_to_the_next_open` in `sqlite::capture`; `a_log_whose_tail_a_crash_took_is_mended_from_the_wal_at_any_byte`, `a_crash_after_the_wal_started_over_loses_nothing_its_log_had_not_synced` in `replication`
+- a file's WAL is checkpointed only once its log synced what it holds, starts over, and stays near the length SQLite's own checkpoint keeps — `the_wal_is_checkpointed_only_after_its_commits_are_synced_and_starts_over` in `sqlite::capture`
+- a WAL started over by a writer beside the store is logged as a gap — `a_wal_started_over_beside_the_store_is_a_gap` in `sqlite::capture`
+- a WAL's frames read as SQLite recovers them: a checksum that breaks ends them — `a_wal_header_and_frames_read_as_sqlite_recovers_them` in `sqlite::capture`
+- a log keeps within its bytes, its oldest segments removed, and counts on with no hole — `a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed` in `replication`
+
 ## The server and the wire
 
 - a config opens over the wire with what its program read, its files' text and its variables, and its value follows on one stream until the client cancels — `a_config_opened_over_the_wire_reads_the_layers_its_program_sent`, `a_follow_sends_the_value_now_then_each_change_until_cancelled` in `wire::config`
