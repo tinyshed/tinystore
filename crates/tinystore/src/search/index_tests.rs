@@ -229,18 +229,25 @@ fn a_changed_weight_rebuilds_nothing_and_the_next_search_reads_it() {
 }
 
 #[test]
-fn a_field_removed_leaves_searches_at_once_and_one_added_waits_for_an_empty_index() {
+fn a_field_removed_leaves_searches_at_once_and_one_added_is_read_beside_the_index_until_it_switches_in() {
     let fixture = fixture();
     let articles = fixture.articles::<Article>("articles");
     articles.set("a", &article("bread", "salt")).unwrap();
     let titles = fixture.store.index::<Article>("articles").field("title", 2.0).open().unwrap();
     assert!(search(&titles, "salt").hits.is_empty());
     assert_eq!(ids(&search(&titles, "bread")), ["a"]);
-    let added = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open();
-    assert_eq!(added.unwrap_err().kind(), ErrorKind::Invalid);
+    let added = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
+    assert_eq!(added.status().unwrap(), crate::search::Status::Rebuilding { done: 0.0 });
+    assert!(search(&added, "salt").hits.is_empty(), "the index answers as before until then");
+    maintain(&fixture.store).unwrap();
+    added.ready().unwrap();
+    assert_eq!(added.status().unwrap(), crate::search::Status::Ready);
+    assert_eq!(ids(&search(&added, "salt")), ["a"]);
+    assert_eq!(ids(&search(&titles, "salt")), ["a"], "every handle of the index reads it");
     let empty = fixture.store.index::<Article>("empty").field("title", 1.0).open().unwrap();
     drop(empty);
-    fixture.store.index::<Article>("empty").field("title", 1.0).field("body", 1.0).open().unwrap();
+    let empty = fixture.store.index::<Article>("empty").field("title", 1.0).field("body", 1.0).open().unwrap();
+    assert_eq!(empty.status().unwrap(), crate::search::Status::Ready, "an empty index takes a field at once");
 }
 
 #[test]
@@ -356,6 +363,22 @@ struct Doc {
 }
 
 impl Model {
+    /// The same documents as `settings` read them.
+    fn read_by(&self, settings: &Settings) -> Model {
+        let mut model = Model { next: self.next, prefix: self.prefix.clone(), ..Model::default() };
+        for (id, doc) in &self.docs {
+            let analyzed =
+                document::analyze(&serde_json::to_value(&doc.value).unwrap(), &settings.fields, &settings.filters)
+                    .unwrap();
+            let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
+            let value = doc.value.clone();
+            model
+                .docs
+                .insert(id.clone(), Doc { number: doc.number, value, terms, analyzed, vector: doc.vector.clone() });
+        }
+        model
+    }
+
     fn set(&mut self, settings: &Settings, id: String, value: Article) {
         self.set_with(settings, id, value, None);
     }
@@ -479,7 +502,7 @@ fn scaled(half: &[(String, f64)]) -> HashMap<String, f64> {
 
 /// Checks a search against the model, by every document it holds.
 fn agrees(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64) {
-    let settings = Settings::clone(&index.open.settings_read());
+    let settings = Settings::clone(&index.open.settings());
     let text = words(random, 4);
     let (offset, limit) = (random.below(15) as usize, 1 + random.below(25) as usize);
     let found = checked(|| index.search(&text).offset(offset).limit(limit).run()).unwrap();
@@ -500,7 +523,7 @@ fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packi
             fixture.store.index("mix").field("title", 2.0).field("body", 1.0).typo_tolerance(false).open().unwrap();
         let mut random = Random::new(seed);
         let mut model = Model::default();
-        let settings = Settings::clone(&index.open.settings_read());
+        let settings = Settings::clone(&index.open.settings());
         for _ in 0..2500 {
             match random.below(100) {
                 0..70 => {
@@ -595,7 +618,7 @@ fn searches_and_writes_from_many_threads_answer_as_one_at_a_time_would() {
                         } else {
                             let value = random_article(&mut random);
                             index.set(&id, &value).unwrap();
-                            model.set(&index.open.settings_read(), id, value);
+                            model.set(&index.open.settings(), id, value);
                         }
                     }
                     model
@@ -674,7 +697,7 @@ fn through_a_long_mix_the_file_stays_near_a_fresh_build_of_the_same_documents() 
     let articles = fixture.articles::<Article>("articles");
     let mut random = Random::new(13);
     let mut model = Model::default();
-    let settings = Settings::clone(&articles.open.settings_read());
+    let settings = Settings::clone(&articles.open.settings());
     for round in 0..8000 {
         let id = format!("d{}", random.below(400));
         if random.below(6) == 0 {
@@ -820,7 +843,7 @@ fn a_changed_vector_weight_rebuilds_nothing_and_the_next_search_reads_it() {
 
 /// Checks a search by a vector, or by words and a vector, against the model.
 fn agrees_by_vector(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64) {
-    let settings = Settings::clone(&index.open.settings_read());
+    let settings = Settings::clone(&index.open.settings());
     let (offset, limit) = (random.below(15) as usize, 1 + random.below(25) as usize);
     let (text, q) = (if random.below(4) == 0 { String::new() } else { words(random, 4) }, embedding(random));
     let call = index.search(&text).vector(&q).offset(offset).limit(limit);
@@ -857,7 +880,7 @@ fn searches_by_a_vector_and_by_both_answer_what_scoring_every_document_answers()
         let index = products(&fixture);
         let mut random = Random::new(seed);
         let mut model = Model::default();
-        let settings = Settings::clone(&index.open.settings_read());
+        let settings = Settings::clone(&index.open.settings());
         for _ in 0..1500 {
             match random.below(100) {
                 0..60 => {
@@ -1016,7 +1039,7 @@ fn shop(fixture: &Fixture) -> Index<Article> {
 /// Checks a filtered search, by words, by a vector or by both, against the
 /// model, which passes each document by the conditions itself.
 fn agrees_filtered(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64) {
-    let settings = Settings::clone(&index.open.settings_read());
+    let settings = Settings::clone(&index.open.settings());
     let tests: Vec<Test> = (0..1 + random.below(2)).map(|_| Test::random(random, 0)).collect();
     let keep = |article: &Article| tests.iter().all(|test| test.passes(article));
     let (offset, limit) = (random.below(10) as usize, 1 + random.below(20) as usize);
@@ -1044,7 +1067,7 @@ fn a_filtered_search_answers_what_scoring_every_document_it_passes_answers() {
         let index = shop(&fixture);
         let mut random = Random::new(seed);
         let mut model = Model::default();
-        let settings = Settings::clone(&index.open.settings_read());
+        let settings = Settings::clone(&index.open.settings());
         for _ in 0..1500 {
             match random.below(100) {
                 0..60 => {
@@ -1152,4 +1175,187 @@ fn where_a_filter_is_scored_alone_takes() {
         NARROW.set(None);
         eprintln!("1/{share:<6} {:>10.2} {:>14.2} {:>13.2} {:>15.2}", row[0], row[2], row[1], row[3]);
     }
+}
+
+/// Sets or deletes a random document of the mix, in the index and the model.
+fn mixed(index: &Index<Article>, model: &mut Model, random: &mut Random) {
+    let id = format!("d{}", random.below(300));
+    if random.below(5) == 0 {
+        assert_eq!(index.delete(&id).unwrap(), model.docs.remove(&id).is_some());
+    } else {
+        let value = random_article(random);
+        index.set(&id, &value).unwrap();
+        model.set(&index.open.settings(), id, value);
+    }
+}
+
+#[test]
+fn writes_while_an_index_is_read_again_reach_its_new_rows_and_it_answers_by_them_once_switched() {
+    for seed in 0..3 {
+        let fixture = fixture();
+        fn titles(store: &crate::Store) -> IndexBuilder<'_, Article> {
+            store.index::<Article>("mix").field("title", 2.0).typo_tolerance(false)
+        }
+        let index = titles(&fixture.store).open().unwrap();
+        let (mut random, mut model) = (Random::new(seed), Model::default());
+        for _ in 0..300 {
+            mixed(&index, &mut model, &mut random);
+        }
+        maintain(&fixture.store).unwrap();
+        let both = titles(&fixture.store).field("body", 1.0).open().unwrap();
+        for _ in 0..400 {
+            match random.below(10) {
+                0 => drop(both.search.copy_step(&both.open).unwrap()),
+                1 => agrees(&both, &model, &mut random, seed),
+                _ => mixed(&both, &mut model, &mut random),
+            }
+        }
+        assert!(matches!(both.status().unwrap(), crate::search::Status::Rebuilding { .. }));
+        maintain(&fixture.store).unwrap();
+        assert_eq!(both.status().unwrap(), crate::search::Status::Ready);
+        let model = model.read_by(&both.open.settings());
+        for _ in 0..40 {
+            agrees(&both, &model, &mut random, seed);
+        }
+        for (id, doc) in &model.docs {
+            assert_eq!(both.get(id).unwrap().as_ref(), Some(&doc.value), "seed {seed}: {id}");
+        }
+    }
+}
+
+#[test]
+fn an_index_rebuilt_by_hand_refuses_a_change_that_needs_it_until_reindex_asks() {
+    use crate::search::Rebuild;
+    let fixture = fixture();
+    fn manual(store: &crate::Store) -> IndexBuilder<'_, Article> {
+        store.index::<Article>("articles").field("title", 2.0).rebuild(Rebuild::Manual)
+    }
+    let articles = manual(&fixture.store).open().unwrap();
+    articles.set("a", &article("bread", "salt")).unwrap();
+    let refused = manual(&fixture.store).field("body", 1.0).open().unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid);
+    assert!(refused.to_string().contains("body added"), "{refused}");
+    let reindexed = manual(&fixture.store).field("body", 1.0).reindex().unwrap();
+    maintain(&fixture.store).unwrap();
+    reindexed.ready().unwrap();
+    assert_eq!(ids(&search(&reindexed, "salt")), ["a"]);
+}
+
+#[test]
+fn a_rebuild_that_cannot_read_a_document_fails_and_the_index_answers_as_before() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).open().unwrap();
+    notes.set("n", &serde_json::json!({ "title": "bread", "year": 2024 })).unwrap();
+    let years =
+        fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).field("year", 1.0).open().unwrap();
+    maintain(&fixture.store).unwrap();
+    let crate::search::Status::Failed { error } = years.status().unwrap() else { panic!("{:?}", years.status()) };
+    assert!(error.contains("field year holds a number"), "{error}");
+    assert_eq!(years.ready().unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(checked(|| years.search("bread").run()).unwrap().hits.len(), 1, "the index answers as before");
+    years.set("m", &serde_json::json!({ "title": "salt" })).unwrap();
+    let back = fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).open().unwrap();
+    assert_eq!(back.status().unwrap(), crate::search::Status::Failed { error }, "until another change asks");
+    let again = fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).reindex().unwrap();
+    maintain(&fixture.store).unwrap();
+    again.ready().unwrap();
+}
+
+/// How many numbers an index has given.
+fn numbers_given<T>(index: &Index<T>) -> i64 {
+    let id = index.open.id();
+    index
+        .search
+        .file_read(|connection| {
+            connection
+                .query_row("select next_doc - 1 from _tinystore_search_indexes where id = ?1", [id], |row| row.get(0))
+                .map_err(|error| crate::sqlite::sql_error("read numbers", error))
+        })
+        .unwrap()
+}
+
+#[test]
+fn an_index_whose_numbers_pass_twice_its_documents_is_numbered_again_and_answers_alike() {
+    let fixture = fixture();
+    let articles = fixture.articles::<Article>("articles");
+    let mut random = Random::new(21);
+    for n in 0..600 {
+        articles.set(n % 40, &random_article(&mut random)).unwrap();
+    }
+    let texts: Vec<String> = (0..20).map(|_| words(&mut random, 3)).collect();
+    let answers = |articles: &Index<Article>| -> Vec<Found<Article>> {
+        texts.iter().map(|text| checked(|| articles.search(text).limit(20).run()).unwrap()).collect()
+    };
+    let before = answers(&articles);
+    assert_eq!(numbers_given(&articles), 600);
+    maintain(&fixture.store).unwrap();
+    maintain(&fixture.store).unwrap();
+    assert_eq!(numbers_given(&articles), 40, "numbered again from 1");
+    assert_eq!(answers(&articles), before);
+}
+
+#[test]
+fn an_index_reopened_in_the_middle_of_a_rebuild_goes_on_from_where_it_stood() {
+    let fixture = fixture();
+    let articles = fixture.store.index::<Article>("articles").field("title", 2.0).open().unwrap();
+    let mut random = Random::new(22);
+    for n in 0..900 {
+        articles.set(n, &random_article(&mut random)).unwrap();
+    }
+    let both = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
+    both.search.copy_step(&both.open).unwrap();
+    let mut images = vec![crash_image(fixture.dir.path())];
+    while both.search.copy_step(&both.open).unwrap() {
+        images.push(crash_image(fixture.dir.path()));
+    }
+    let crate::search::Status::Rebuilding { done } = both.status().unwrap() else { panic!() };
+    assert!(done > 0.5, "{done}");
+    let text = words(&mut random, 3) + " bread";
+    maintain(&fixture.store).unwrap();
+    let answer = checked(|| both.search(&text).run()).unwrap();
+    for image in images {
+        let store = open(image.path());
+        let reopened = store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
+        assert!(matches!(reopened.status().unwrap(), crate::search::Status::Rebuilding { .. }));
+        maintain(&store).unwrap();
+        reopened.ready().unwrap();
+        assert_eq!(checked(|| reopened.search(&text).run()).unwrap(), answer);
+    }
+}
+
+#[test]
+fn a_dropped_index_refuses_its_handles_and_leaves_no_row() {
+    let fixture = fixture();
+    let articles = fixture.articles::<Article>("articles");
+    let kept = fixture.articles::<Article>("kept");
+    let mut random = Random::new(23);
+    for n in 0..200 {
+        articles.set(n, &random_article(&mut random)).unwrap();
+        kept.set(n, &random_article(&mut random)).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    assert!(fixture.store.drop_index("articles").unwrap());
+    assert!(!fixture.store.drop_index("articles").unwrap(), "dropping again finds none");
+    assert_eq!(articles.set("x", &article("a", "b")).unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(articles.search("bread").run().unwrap_err().kind(), ErrorKind::Invalid);
+    maintain(&fixture.store).unwrap();
+    let listed = crate::search::list(&fixture.store).unwrap();
+    assert_eq!(listed.iter().map(|index| index.name.as_str()).collect::<Vec<_>>(), ["kept"]);
+    assert_eq!(listed[0].documents, 200);
+    assert!(listed[0].opened.is_some());
+    let rows: i64 = kept
+        .search
+        .file_read(|connection| {
+            connection
+                .query_row(
+                    "select count(*) from _tinystore_search_docs where index_id != ?1",
+                    [kept.open.id()],
+                    |row| row.get(0),
+                )
+                .map_err(|error| crate::sqlite::sql_error("count", error))
+        })
+        .unwrap();
+    assert_eq!(rows, 0, "every row of the dropped index is gone");
+    let again = fixture.articles::<Article>("articles");
+    assert!(search(&again, "bread").hits.is_empty(), "the name opens a new index");
 }

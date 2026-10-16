@@ -2,7 +2,8 @@
 //! processes over the wire protocol: a private child's stdin and stdout, or a
 //! local socket or named pipe that `SERVE` names, for a sidecar or a person.
 //! `backup` writes a store's directory as one checked zip, and `restore` puts
-//! one back into an empty directory.
+//! one back into an empty directory. `search` lists a store's indexes and
+//! drops one.
 
 mod args;
 mod backup;
@@ -10,6 +11,7 @@ mod connection;
 mod lines;
 mod local;
 mod remote;
+mod search;
 mod serve;
 
 use std::process::ExitCode;
@@ -18,10 +20,12 @@ const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --s
                      [--clock <time>] [--listen tls://<host>:<port> --tls-cert <pem> --tls-key <pem> --tokens <file>] \
                      [--memory <size>]
        tinystore backup <dir> <file.zip> [--include <name>]... [--include-encryption-key]
-       tinystore restore <file.zip> <dir>";
+       tinystore restore <file.zip> <dir>
+       tinystore search list <dir>
+       tinystore search drop <dir> <name>";
 
 /// The commands, for a misspelt one's nearest.
-const COMMANDS: [&str; 4] = ["serve", "backup", "restore", "version"];
+const COMMANDS: [&str; 5] = ["serve", "backup", "restore", "search", "version"];
 
 /// What follows a refusal when a person may have misspelt a command or a
 /// flag: the nearest of `names`, one edit away for three to six letters and
@@ -43,6 +47,7 @@ fn main() -> ExitCode {
         Some("serve") => serve::run(&args[1..]),
         Some("backup") => backup::backup(&args[1..]),
         Some("restore") => backup::restore(&args[1..]),
+        Some("search") => search::run(&args[1..]),
         Some("version" | "--version") => {
             println!("tinystore {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

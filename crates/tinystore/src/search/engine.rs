@@ -1,7 +1,9 @@
 //! The search engine: `search.db` in the store's directory, the indexes it
-//! holds, and the work that keeps them fast: packing each head into blocks,
-//! purging the documents gone, and building again a dictionary of words
-//! that fell behind.
+//! holds, and the work that keeps them fast and their settings as asked:
+//! packing each head into blocks, purging the documents gone, building
+//! again a dictionary of words that fell behind, keeping the clusters of
+//! vectors, reading an index again beside itself and dropping what is
+//! dropped.
 //!
 //! ```text
 //! set ──► head, a grouped commit ── maintenance ──► blocks, a step a commit
@@ -9,22 +11,20 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use super::analyzer;
-use super::clusters::{self, HEAD, Phase};
-use super::correct::Corrector;
-use super::kept::{Kept, lock};
-use super::pack;
-use super::purge::{self, Purge};
+use super::kept::lock;
+use super::open::{Beside, Current, Data, OpenIndex};
 use super::read::{self, Answer, Asked, Query};
-use super::score::Part;
-use super::settings::{Settings, Wanted};
+use super::rebuild;
+use super::settings::{Changed, Settings, Wanted};
+use super::upkeep::PACK_AT;
 use super::write::{self, Prepared};
+use crate::clock::Clock;
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
 use crate::{Error, Memory, Result, Store};
@@ -35,54 +35,20 @@ const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_s
 const FILE: &str = "search.db";
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
-/// Documents set since a head was packed that make it due: search-compact
-/// packed every thousand writes, which kept `or`'s p99 at 14–16 ms through
-/// 15,000 writes where a head never packed reached 37.
-const PACK_AT: u64 = 1000;
-/// How long a dictionary of an index's words serves after they change
-/// before background work builds it again.
-const DICTIONARY_AGE: Duration = Duration::from_secs(60);
 
-const READ_INDEX: &str = "select id, settings from _tinystore_search_indexes where name = ?1";
-const ADD_INDEX: &str = "insert into _tinystore_search_indexes (name, settings) values (?1, ?2) returning id";
 const WRITE_SETTINGS: &str = "update _tinystore_search_indexes set settings = ?2 where id = ?1";
 const COUNT_DOCUMENTS: &str = "select documents from _tinystore_search_indexes where id = ?1";
-/// The documents set since packing last reached the head, and whether the
-/// head holds a posting.
-const READ_WAITING: &str = "select
-    (select count(*) from _tinystore_search_docs
-        where index_id = ?1 and doc >= (select normed from _tinystore_search_indexes where id = ?1)),
-    exists (select 1 from _tinystore_search_head where index_id = ?1)";
-const READ_WORDS_VERSION: &str = "select words_version from _tinystore_search_indexes where id = ?1";
 const READ_VALUE: &str = "select value from _tinystore_search_docs where index_id = ?1 and id = ?2";
 
 pub(crate) struct Search {
-    file: File,
+    pub(crate) file: File,
     memory: Arc<Memory>,
-    indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
     /// Held by a pass of maintenance, so that two never pack the same head.
     maintaining: Mutex<()>,
     wake: OnceLock<Wake>,
     _claim: Claim,
-}
-
-/// An index as the engine holds it while the store is open.
-pub(crate) struct OpenIndex {
-    pub(crate) id: i64,
-    pub(crate) name: String,
-    /// Read by a set from its analysis to its commit, so that a change of
-    /// fields never lands between them.
-    settings: RwLock<Arc<Settings>>,
-    kept: Kept,
-    /// Sets since its head was last packed whole.
-    sets: AtomicU64,
-    purge: Mutex<Option<Purge>>,
-}
-
-impl std::fmt::Debug for OpenIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenIndex").field("name", &self.name).finish_non_exhaustive()
-    }
 }
 
 /// What one pass of maintenance did.
@@ -115,6 +81,7 @@ impl Search {
             let search = Arc::new(Search {
                 file,
                 memory: Arc::clone(store.memory()),
+                clock: store.clock(),
                 indexes: Mutex::default(),
                 maintaining: Mutex::default(),
                 wake: OnceLock::new(),
@@ -130,72 +97,106 @@ impl Search {
     }
 
     /// Opens the index `name`, made the first time, with the settings
-    /// `wanted`; an index that holds others is changed to them.
-    pub(crate) fn open_index(&self, name: &str, wanted: &Wanted) -> Result<Arc<OpenIndex>> {
+    /// `wanted`; an index that holds others is changed to them, and read
+    /// again beside itself where they need it, or where `reindex` asks.
+    pub(crate) fn open_index(&self, name: &str, wanted: &Wanted, reindex: bool) -> Result<Arc<OpenIndex>> {
         check_name(name)?;
         wanted.check()?;
         let mut indexes = lock(&self.indexes);
-        if let Some(open) = indexes.get(name) {
-            self.change(open, wanted)?;
-            return Ok(Arc::clone(open));
-        }
-        let open = match self.file.read(|connection| read_index(connection, name))? {
-            Some((id, settings)) => {
-                let open = Arc::new(OpenIndex::new(id, name, settings));
-                self.change(&open, wanted)?;
+        let open = match indexes.get(name) {
+            Some(open) => Arc::clone(open),
+            None => {
+                let current = match self.file.read(|connection| rebuild::read_current(connection, name))? {
+                    Some(current) => current,
+                    None => {
+                        let settings = Settings::new(wanted);
+                        let id = self.file.transaction(|tx| rebuild::add_index(tx, name, &settings))?;
+                        Current { serving: Data::new(id, settings), beside: None }
+                    }
+                };
+                let open = Arc::new(OpenIndex::new(name, current));
+                indexes.insert(name.to_owned(), Arc::clone(&open));
                 open
             }
-            None => {
-                let settings = Settings::new(wanted);
-                let (named, json) = (name.to_owned(), settings.to_json());
-                let id = self.file.write(name.len() + json.len(), move |tx| {
-                    let added = tx.prepare_cached(ADD_INDEX);
-                    let id = added.and_then(|mut insert| insert.query_row((named, json), |row| row.get(0)));
-                    id.map_err(|error| sql_error("write an index", error))
-                })?;
-                Arc::new(OpenIndex::new(id, name, settings))
-            }
         };
-        indexes.insert(name.to_owned(), Arc::clone(&open));
+        drop(indexes);
+        open.manual.store(wanted.manual, Ordering::Relaxed);
+        self.change(&open, wanted, reindex)?;
+        self.opened(open.id())?;
         Ok(open)
     }
 
-    /// Changes an index's settings to `wanted`, and says each change in the log.
-    fn change(&self, open: &OpenIndex, wanted: &Wanted) -> Result<()> {
-        let mut settings = open.settings_to_change();
-        if settings.analysis != analyzer::VERSION {
-            return Err(Error::invalid("its words were read by another release: reading them again is not built yet"));
-        }
-        let id = open.id;
-        let documents = self.file.read(|connection| count(connection, COUNT_DOCUMENTS, id))?;
-        let (changed, said) = settings.change(wanted, documents)?;
-        if changed == **settings {
-            return Ok(());
-        }
-        let json = changed.to_json();
-        self.file.write(json.len(), move |tx| write::execute(tx, WRITE_SETTINGS, (id, json), "write settings"))?;
-        for line in said {
+    /// Changes an index to `wanted`: what applies at once to its serving
+    /// rows and to a rebuild's beside them, and a rebuild begun where the
+    /// change needs one that none under way gives; each said in the log.
+    fn change(&self, open: &OpenIndex, wanted: &Wanted, reindex: bool) -> Result<()> {
+        let mut current = open.change();
+        let documents = self.file.read(|connection| count(connection, COUNT_DOCUMENTS, current.serving.id))?;
+        let changed = current.serving.settings.change(wanted, documents)?;
+        let why = rebuild_asked(&changed, wanted, reindex)?;
+        let serving = self.changed_data(&current.serving, &changed)?;
+        let target = Settings::new(wanted);
+        let reads_as_asked = current.beside.as_ref().filter(|b| !b.failed && b.data.settings.reads_as(&target));
+        let beside = match (reads_as_asked, why) {
+            (Some(beside), _) => Some(self.change_beside(beside, wanted)?),
+            (None, Some(why)) => Some(self.begin_beside(open, &current, (target, why))?),
+            (None, None) => self.keep_beside(current.beside.as_ref(), wanted)?,
+        };
+        for line in &changed.said {
             tracing::info!(target: "tinystore", "search {}: {line}", open.name);
         }
-        *settings = Arc::new(changed);
+        *current = Arc::new(Current { serving, beside });
         Ok(())
     }
 
-    /// Sets the documents `documents` makes of the index's settings, which
-    /// hold still until they commit, all of them in one commit or none.
-    pub(crate) fn set(
-        &self,
-        open: &OpenIndex,
-        documents: impl FnOnce(&Settings) -> Result<Vec<Prepared>>,
-    ) -> Result<()> {
-        let settings = open.settings_read();
-        let prepared = documents(&settings)?;
-        let (bytes, count) = (prepared.iter().map(Prepared::bytes).sum(), prepared.len() as u64);
+    /// Rows read by changed settings, written to their row when they differ.
+    fn changed_data(&self, data: &Data, changed: &Changed) -> Result<Data> {
+        if changed.settings == *data.settings {
+            return Ok(data.clone());
+        }
+        let (id, json) = (data.id, changed.settings.to_json());
+        self.file.write(json.len(), move |tx| write::execute(tx, WRITE_SETTINGS, (id, json), "write settings"))?;
+        Ok(data.with(changed.settings.clone()))
+    }
+
+    /// A rebuild under way that no change asks again: a failed one kept to
+    /// say why, one that can take `wanted` at once changed, and one that
+    /// cannot dropped.
+    fn keep_beside(&self, beside: Option<&Beside>, wanted: &Wanted) -> Result<Option<Beside>> {
+        let Some(beside) = beside else { return Ok(None) };
+        if beside.failed {
+            return Ok(Some(beside.clone()));
+        }
+        match self.change_beside(beside, wanted) {
+            Ok(changed) => Ok(Some(changed)),
+            Err(_) => {
+                self.file.transaction(|tx| rebuild::mark_dropping(tx, beside.data.id))?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// A rebuild's rows with what of `wanted` applies at once.
+    fn change_beside(&self, beside: &Beside, wanted: &Wanted) -> Result<Beside> {
+        let documents = self.file.read(|connection| count(connection, COUNT_DOCUMENTS, beside.data.id))?;
+        let changed = beside.data.settings.change(wanted, documents)?;
+        Ok(Beside { data: self.changed_data(&beside.data, &changed)?, failed: beside.failed })
+    }
+
+    /// Sets the documents `documents` makes of the serving rows' settings,
+    /// which hold still until they commit, all of them in one commit or
+    /// none; a rebuild under way copies them in turn.
+    pub(crate) fn set(&self, open: &OpenIndex, documents: impl FnOnce(&Data) -> Result<Vec<Prepared>>) -> Result<()> {
+        let current = open.hold();
+        open.refuse_dropped()?;
+        let prepared = documents(&current.serving)?;
+        let count = prepared.len() as u64;
         if count == 0 {
             return Ok(());
         }
+        let bytes = prepared.iter().map(Prepared::bytes).sum();
         self.file.write(bytes, move |tx| prepared.iter().try_for_each(|document| write::set(tx, document)))?;
-        drop(settings);
+        drop(current);
         let before = open.sets.fetch_add(count, Ordering::Relaxed);
         if before < PACK_AT && before + count >= PACK_AT {
             self.wake();
@@ -203,23 +204,39 @@ impl Search {
         Ok(())
     }
 
+    /// Deletes the document `id` from the serving rows and a rebuild's beside
+    /// them, in one commit; says whether the serving rows held it.
     pub(crate) fn delete(&self, open: &OpenIndex, id: String) -> Result<bool> {
-        let index = open.id;
-        self.file.write(id.len(), move |tx| write::delete(tx, index, &id))
+        let current = open.hold();
+        open.refuse_dropped()?;
+        let indexes: Vec<i64> = current.written().map(|data| data.id).collect();
+        let deleted = self.file.write(id.len(), move |tx| {
+            let mut deleted = Vec::with_capacity(indexes.len());
+            for index in indexes {
+                deleted.push(write::delete(tx, index, &id)?);
+            }
+            Ok(deleted.first().copied().unwrap_or(false))
+        });
+        drop(current);
+        deleted
     }
 
     /// The value of the document `id`, as JSON.
     pub(crate) fn get(&self, open: &OpenIndex, id: &str) -> Result<Option<Vec<u8>>> {
+        open.refuse_dropped()?;
+        let index = open.id();
         self.file.read(|connection| {
             let failed = |error| sql_error("read a document", error);
             let mut select = connection.prepare_cached(READ_VALUE).map_err(failed)?;
-            select.query_row((open.id, id), |row| row.get(0)).optional().map_err(failed)
+            select.query_row((index, id), |row| row.get(0)).optional().map_err(failed)
         })
     }
 
     pub(crate) fn search(&self, open: &OpenIndex, query: Query) -> Result<Answer> {
-        let settings = Arc::clone(&open.settings_read());
-        let asked = Asked { index: open.id, settings: &settings, kept: &open.kept, memory: &self.memory, query };
+        open.refuse_dropped()?;
+        let serving = open.current().serving.clone();
+        let asked =
+            Asked { index: serving.id, settings: &serving.settings, kept: &serving.kept, memory: &self.memory, query };
         let answer = self.file.read(|connection| read::search(connection, asked))?;
         if answer.behind {
             self.wake();
@@ -227,194 +244,54 @@ impl Search {
         Ok(answer)
     }
 
-    fn wake(&self) {
+    pub(crate) fn wake(&self) {
         if let Some(wake) = self.wake.get() {
             wake.wake();
         }
     }
 
-    /// Packs each index's head, purges its documents gone and builds again
-    /// its dictionary of words when they are due; `everything` takes each
-    /// as due once it has any work, as a store without background work asks.
+    /// Packs each index's heads, purges their documents gone, builds again
+    /// their dictionaries of words and keeps their clusters when they are
+    /// due, for its serving rows and a rebuild's beside them; goes on with
+    /// each rebuild, and drops what is dropped. `everything` takes each as
+    /// due once it has any work, as a store without background work asks.
     pub(crate) fn maintain(&self, everything: bool) -> Result<Maintenance> {
         let _one = lock(&self.maintaining);
         let mut done = Maintenance::default();
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
         for open in indexes {
             let within = |error: Error| error.within(format!("index {}", open.name));
-            done.packed += self.pack(&open, everything).map_err(within)?;
-            done.purged += self.purge(&open, everything).map_err(within)?;
-            self.build_dictionary(&open, everything).map_err(within)?;
-            self.cluster(&open, everything).map_err(within)?;
+            let current = open.current();
+            for data in current.written() {
+                done.packed += self.pack(data, everything).map_err(within)?;
+                if data.id == current.serving.id {
+                    open.sets.store(0, Ordering::Relaxed);
+                }
+                done.purged += self.purge(data, everything).map_err(within)?;
+                self.build_dictionary(data, everything).map_err(within)?;
+                self.cluster(&open, data, everything).map_err(within)?;
+            }
+            self.rebuild(&open).map_err(within)?;
         }
+        self.drop_rows()?;
         Ok(done)
-    }
-
-    /// Packs an index's head whole, a step a commit, once it is due: a
-    /// thousand documents set since, or a pass that a failure stopped and
-    /// no set followed.
-    fn pack(&self, open: &OpenIndex, everything: bool) -> Result<u64> {
-        let id = open.id;
-        let (waiting, held) = self.file.read(|connection| {
-            let failed = |error| sql_error("read the head", error);
-            let mut select = connection.prepare_cached(READ_WAITING).map_err(failed)?;
-            select.query_row([id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))).map_err(failed)
-        })?;
-        if !held || !everything && waiting > 0 && waiting < PACK_AT as i64 {
-            return Ok(0);
-        }
-        open.sets.store(0, Ordering::Relaxed);
-        let mut packed = 0;
-        loop {
-            let step = self.file.transaction(|tx| pack::step(tx, id, pack::STEP_ROWS))?;
-            packed += step.postings;
-            if step.done {
-                return Ok(packed);
-            }
-        }
-    }
-
-    /// Takes an index's documents gone out of its blocks, a step a commit,
-    /// once they are due. A purge stopped by a failure goes on from where it
-    /// stood at the next pass; one stopped by a restart begins again.
-    fn purge(&self, open: &OpenIndex, everything: bool) -> Result<u64> {
-        let id = open.id;
-        let mut under_way = lock(&open.purge);
-        if under_way.is_none() {
-            if !self.file.read(|connection| purge::due(connection, id, everything))? {
-                return Ok(0);
-            }
-            *under_way = Some(self.file.read(|connection| purge::begin(connection, id))?);
-        }
-        let Some(purge) = under_way.as_mut() else { return Ok(0) };
-        loop {
-            let at = self.file.transaction(|tx| purge.step(tx, id, purge::STEP_KEYS))?;
-            if purge.advance(at) {
-                break;
-            }
-        }
-        let purged = purge.documents() as u64;
-        *under_way = None;
-        Ok(purged)
-    }
-
-    /// Builds again the dictionary of an index's words a search built, once
-    /// its words changed and it is old enough to.
-    fn build_dictionary(&self, open: &OpenIndex, everything: bool) -> Result<()> {
-        let Some(kept) = lock(&open.kept.corrector).clone() else { return Ok(()) };
-        if !everything && kept.built.elapsed() < DICTIONARY_AGE {
-            return Ok(());
-        }
-        let settings = Arc::clone(&open.settings_read());
-        let parts: Vec<Part> = settings.fields.iter().map(|field| Part::written(field.number)).collect();
-        let built = self.file.read(|connection| {
-            let version = count(connection, READ_WORDS_VERSION, open.id)? as i64;
-            if version == kept.version {
-                return Ok(None);
-            }
-            Corrector::build(connection, open.id, version, &parts).map(Some)
-        })?;
-        if let Some(built) = built {
-            *lock(&open.kept.corrector) = Some(Arc::new(built));
-        }
-        Ok(())
     }
 }
 
-impl Search {
-    /// Builds, keeps or drops an index's clusters of vectors, as its recall
-    /// asks: trained once it holds enough vectors, every vector assigned a
-    /// step a commit, the head assigned once due, a cluster grown too large
-    /// split, and how many a search reads chosen again as the index grows.
-    fn cluster(&self, open: &OpenIndex, everything: bool) -> Result<()> {
-        let settings = Arc::clone(&open.settings_read());
-        let Some(vectors) = settings.vectors else { return Ok(()) };
-        let id = open.id;
-        let state = self.file.read(|connection| clusters::state(connection, id))?;
-        let Some(recall) = vectors.recall.filter(|_| state.phase != Phase::Dropping) else {
-            while state.phase != Phase::None && !self.file.transaction(|tx| clusters::drop_step(tx, id))? {}
-            return Ok(());
-        };
-        if state.phase == Phase::None {
-            if state.vectors < clusters::BUILD_AT {
-                return Ok(());
-            }
-            let centroids =
-                self.file.read(|connection| clusters::trained(connection, id, &state, vectors.dimensions))?;
-            if centroids.is_empty() {
-                return Ok(());
-            }
-            self.file.transaction(|tx| clusters::begin(tx, id, state, &centroids))?;
-        }
-        self.assign(open, vectors.dimensions, everything)?;
-        self.calibrate(open, vectors.dimensions, recall)
-    }
-
-    /// Assigns what a build has not reached, or the head once it is due, a
-    /// step a commit, then splits each cluster it grew too large.
-    fn assign(&self, open: &OpenIndex, dimensions: usize, everything: bool) -> Result<()> {
-        let id = open.id;
-        let (mut touched, mut draining) = (Vec::new(), false);
-        loop {
-            let state = self.file.read(|connection| clusters::state(connection, id))?;
-            match state.phase {
-                Phase::Building => {}
-                Phase::Serving => {
-                    let head = self.file.read(|connection| clusters::members(connection, id, HEAD))?;
-                    if head == 0 || !(draining || everything || head >= clusters::HEAD_AT) {
-                        break;
-                    }
-                    draining = true;
-                }
-                Phase::None | Phase::Dropping => break,
-            }
-            let step = self.file.read(|connection| {
-                let kept = clusters::kept(&open.kept.clusters, connection, (id, state.version, dimensions))?;
-                clusters::assigned(connection, id, &kept, state)
-            })?;
-            match self.file.transaction(|tx| clusters::assign(tx, id, &step))? {
-                // A head whose members no longer have vectors would come back alike every time.
-                Some(added) if added.is_empty() && state.phase == Phase::Serving => break,
-                Some(added) => touched.extend(added),
-                None => {}
-            }
-        }
-        touched.sort_unstable();
-        touched.dedup();
-        for cluster in touched {
-            self.file.transaction(|tx| {
-                let state = clusters::state(tx, id)?;
-                let kept = clusters::kept(&open.kept.clusters, tx, (id, state.version, dimensions))?;
-                if clusters::too_large(tx, id, cluster)? { clusters::split(tx, id, &kept, cluster) } else { Ok(()) }
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Chooses again how many clusters a search reads, once none was chosen,
-    /// the recall asked for changed or the vectors doubled since.
-    fn calibrate(&self, open: &OpenIndex, dimensions: usize, recall: f64) -> Result<()> {
-        let id = open.id;
-        let state = self.file.read(|connection| clusters::state(connection, id))?;
-        let due = state.calibrated_vectors == 0
-            || state.calibrated_recall != recall
-            || state.vectors >= 2 * state.calibrated_vectors.max(1);
-        if state.phase != Phase::Serving || !due {
-            return Ok(());
-        }
-        let ((probes, rescored), count) = self.file.read(|connection| {
-            let kept = clusters::kept(&open.kept.clusters, connection, (id, state.version, dimensions))?;
-            Ok((clusters::calibrate(connection, id, &kept, recall)?, kept.len()))
-        })?;
-        let calibrated = ((probes, rescored), (state.vectors, recall));
-        self.file.transaction(|tx| clusters::calibrated(tx, id, calibrated.0, calibrated.1))?;
-        if probes == 0 {
-            tracing::info!(target: "tinystore", "search {}: no clusters reach recall {recall}; searches stay exact", open.name);
-        } else {
-            tracing::info!(target: "tinystore", "search {}: {count} clusters of vectors, {probes} read and {rescored} \
-                scored again a search for recall {recall}", open.name);
-        }
-        Ok(())
+/// Why a change needs an index read again, if it does: a change that needs
+/// it to serve what was asked, a field or a filter removed whose keys it
+/// drops, or `reindex`'s asking. An index rebuilt by hand refuses the first
+/// until `reindex`, and leaves the second for its next rebuild.
+fn rebuild_asked(changed: &Changed, wanted: &Wanted, reindex: bool) -> Result<Option<String>> {
+    match &changed.rebuild {
+        Some(asked) if wanted.manual && !reindex && asked.needed => Err(Error::invalid(format!(
+            "{}: the index needs reading again, which an index rebuilt by hand waits for reindex to ask",
+            asked.why
+        ))),
+        Some(_) if wanted.manual && !reindex => Ok(None),
+        Some(asked) => Ok(Some(asked.why.clone())),
+        None if reindex => Ok(Some("read again as reindex asked".to_owned())),
+        None => Ok(None),
     }
 }
 
@@ -431,16 +308,18 @@ impl Search {
     }
 
     /// One step of packing an index's head, as maintenance takes them.
-    pub(crate) fn pack_step(&self, open: &OpenIndex, most_rows: usize) -> Result<pack::Packed> {
-        self.file.transaction(|tx| pack::step(tx, open.id, most_rows))
+    pub(crate) fn pack_step(&self, open: &OpenIndex, most_rows: usize) -> Result<super::pack::Packed> {
+        let id = open.id();
+        self.file.transaction(|tx| super::pack::step(tx, id, most_rows))
     }
 
     /// Purges what an index has gone now, `most_keys` keys a step, calling
     /// `after` once each step commits.
     pub(crate) fn purge_in_steps(&self, open: &OpenIndex, most_keys: usize, mut after: impl FnMut()) -> Result<()> {
-        let mut purge = self.file.read(|connection| purge::begin(connection, open.id))?;
+        let id = open.id();
+        let mut purge = self.file.read(|connection| super::purge::begin(connection, id))?;
         loop {
-            let at = self.file.transaction(|tx| purge.step(tx, open.id, most_keys))?;
+            let at = self.file.transaction(|tx| purge.step(tx, id, most_keys))?;
             after();
             if purge.advance(at) {
                 return Ok(());
@@ -449,44 +328,15 @@ impl Search {
     }
 }
 
-impl OpenIndex {
-    fn new(id: i64, name: &str, settings: Settings) -> OpenIndex {
-        OpenIndex {
-            id,
-            name: name.to_owned(),
-            settings: RwLock::new(Arc::new(settings)),
-            kept: Kept::default(),
-            sets: AtomicU64::new(0),
-            purge: Mutex::default(),
-        }
-    }
-
-    pub(crate) fn settings_read(&self) -> RwLockReadGuard<'_, Arc<Settings>> {
-        self.settings.read().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn settings_to_change(&self) -> RwLockWriteGuard<'_, Arc<Settings>> {
-        self.settings.write().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-fn read_index(connection: &Connection, name: &str) -> Result<Option<(i64, Settings)>> {
-    let failed = |error| sql_error("read an index", error);
-    let mut select = connection.prepare_cached(READ_INDEX).map_err(failed)?;
-    let row: Option<(i64, String)> =
-        select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
-    row.map(|(id, json)| Ok((id, Settings::from_json(&json)?))).transpose()
-}
-
 /// A count an index's row or rows give.
-fn count(connection: &Connection, sql: &str, index: i64) -> Result<u64> {
+pub(crate) fn count(connection: &Connection, sql: &str, index: i64) -> Result<u64> {
     let failed = |error| sql_error("read an index", error);
     let mut select = connection.prepare_cached(sql).map_err(failed)?;
     let count: i64 = select.query_row([index], |row| row.get(0)).map_err(failed)?;
     Ok(count.max(0) as u64)
 }
 
-fn check_name(name: &str) -> Result<()> {
+pub(crate) fn check_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
     let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');

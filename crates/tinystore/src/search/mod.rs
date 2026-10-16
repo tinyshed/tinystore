@@ -43,19 +43,24 @@ mod fixture;
 mod hybrid;
 mod index;
 mod kept;
+mod open;
 mod pack;
 mod postings;
 mod purge;
 mod rabitq;
 mod read;
+mod rebuild;
 mod score;
 mod settings;
+mod upkeep;
 mod vectors;
 mod write;
 
 pub use engine::Maintenance;
 pub use filter::{Condition, and, eq, is_in, missing, or, range};
-pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, SearchCall};
+pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};
+pub use open::Status;
+pub use rebuild::Listed;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -68,6 +73,23 @@ impl Store {
     pub fn index<T: Serialize + DeserializeOwned>(&self, name: &str) -> IndexBuilder<'_, T> {
         IndexBuilder::new(self, name)
     }
+
+    /// Drops the index `name` and every document it holds, in the background,
+    /// and says whether there was one; a handle of it is refused from then
+    /// on, and opening the name again makes a new index. An index no program
+    /// opens any more is kept until it is dropped, since another version of
+    /// the program may open it again.
+    pub fn drop_index(&self, name: &str) -> Result<bool> {
+        let within = |error: crate::Error| error.within(format!("index {name}"));
+        engine::Search::of(self).and_then(|search| search.drop_index(name)).map_err(within)
+    }
+}
+
+/// Every index the store's `search.db` holds, by name: its documents and
+/// vectors, when a program last opened it, and whether a rebuild is under
+/// way.
+pub fn list(store: &Store) -> Result<Vec<Listed>> {
+    engine::Search::of(store)?.list()
 }
 
 /// Runs the store's search maintenance now, as a store opened without

@@ -19,7 +19,7 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
 
 use super::write::execute;
 use crate::sqlite::{Tx, sql_error};
@@ -329,6 +329,14 @@ fn scored(connection: &Connection, index: i64, question: &Question, doc: u32) ->
         return Err(Error::corrupt(said));
     }
     Ok(Some(question.cosine(bytes, length)))
+}
+
+/// Document `doc`'s vector as given, none when it has none.
+pub(crate) fn values(connection: &Connection, index: i64, doc: u32) -> Result<Option<Vec<f32>>> {
+    let failed = |error| sql_error(format!("read document {doc}'s vector"), error);
+    let mut select = connection.prepare_cached(READ_VECTOR).map_err(failed)?;
+    let bytes: Option<Vec<u8>> = select.query_row([key(index, doc)], |row| row.get(1)).optional().map_err(failed)?;
+    Ok(bytes.map(|bytes| bytes.as_chunks::<4>().0.iter().map(|float| f32::from_le_bytes(*float)).collect()))
 }
 
 /// A row of codes: its document and its code.

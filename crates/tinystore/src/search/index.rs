@@ -9,13 +9,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::analyzer;
-use super::document::analyze;
-use super::engine::{OpenIndex, Search};
+use super::engine::Search;
 use super::filter::{self, Condition};
+use super::open::{Data, OpenIndex, Status};
 use super::read::Query;
 use super::settings::{Settings, Wanted, check_hybrid};
-use super::vectors::{Question, Vector};
-use super::write::Prepared;
+use super::vectors::Question;
+use super::write::{Incoming, Prepared};
 use crate::{Error, Key, Result, Store};
 
 /// The largest document, as its JSON.
@@ -59,6 +59,7 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
             recall: None,
             vector_weight: None,
             rerank: false,
+            manual: false,
         };
         IndexBuilder { store, name: name.to_owned(), wanted, _value: PhantomData }
     }
@@ -126,18 +127,51 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         self
     }
 
+    /// Whether a change of settings that needs the index read again begins
+    /// by itself, as it does unless said, or waits for [`reindex`](Self::reindex),
+    /// for a program that schedules its own load.
+    pub fn rebuild(mut self, rebuild: Rebuild) -> Self {
+        self.wanted.manual = rebuild == Rebuild::Manual;
+        self
+    }
+
     /// Opens the index, made the first time. An index that holds other
-    /// settings is changed to these: a weight, a field removed, typo
-    /// tolerance, vectors added and how a search by both combines them at
-    /// once, and each change said in the log; vectors of other dimensions,
-    /// or none where it keeps some, are refused.
+    /// settings is changed to these, each change said in the log: a weight,
+    /// a field or a filter removed, typo tolerance, vectors added, recall
+    /// and how a search by both combines them at once; a field or a filter
+    /// added to an index that holds documents by reading them again beside
+    /// it, in the background, the index answering as before until then.
+    /// Vectors of other dimensions, or none where it keeps some, are
+    /// refused. Opening never waits for the work a change needs.
     pub fn open(self) -> Result<Index<T>> {
+        self.opened(false)
+    }
+
+    /// Opens the index as [`open`](Self::open) does, and reads it again
+    /// beside itself in the background: a change [`Rebuild::Manual`] left
+    /// waiting, or the documents numbered again.
+    pub fn reindex(self) -> Result<Index<T>> {
+        self.opened(true)
+    }
+
+    fn opened(self, reindex: bool) -> Result<Index<T>> {
         let within = |error: Error| error.within(format!("index {}", self.name));
         let search = Search::of(self.store).map_err(within)?;
-        let open = search.open_index(&self.name, &self.wanted).map_err(within)?;
+        let open = search.open_index(&self.name, &self.wanted, reindex).map_err(within)?;
         Ok(Index { search, open, _value: PhantomData })
     }
 }
+
+/// Whether a change of an index's settings that needs it read again begins
+/// by itself or waits for [`IndexBuilder::reindex`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rebuild {
+    #[default]
+    Automatic,
+    Manual,
+}
+
+impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {}
 
 /// Documents of type `T` by id in a named index, found again by their words,
 /// their vectors or both.
@@ -179,8 +213,7 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
 
     fn set_given(&self, given: Given<'_, T>) -> Result<()> {
         let within = |error: Error| error.within(format!("index {}: id {:?}", self.open.name, given.id));
-        let index = self.open.id;
-        let document = |settings: &Settings| Ok(vec![prepared(index, &given, settings)?]);
+        let document = |data: &Data| Ok(vec![prepared(data.id, &given, &data.settings)?]);
         self.search.set(&self.open, document).map_err(within)
     }
 
@@ -200,13 +233,12 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
             let said = format!("a set_many of {} documents, past {MOST_MANY}", documents.len());
             return Err(within(Error::limit(said)));
         }
-        let index = self.open.id;
-        let all = |settings: &Settings| {
+        let all = |data: &Data| {
             let mut prepared_all = Vec::with_capacity(documents.len());
             let mut bytes = 0;
             for (at, given) in documents.iter().enumerate() {
                 let place = |error: Error| error.within(format!("document {at}, id {:?}", given.id));
-                let document = prepared(index, given, settings).map_err(place)?;
+                let document = prepared(data.id, given, &data.settings).map_err(place)?;
                 bytes += document.value.len();
                 if bytes > MOST_MANY_BYTES {
                     return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
@@ -224,6 +256,21 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         let within = |error: Error| error.within(format!("index {}: id {id:?}", self.open.name));
         let checked = checked(&id).map_err(within)?.to_owned();
         self.search.delete(&self.open, checked).map_err(within)
+    }
+
+    /// Where the index stands: serving the settings it was opened with, read
+    /// again beside them and how far, or a rebuild that failed and why. A
+    /// search never waits: it answers by the settings the index serves.
+    pub fn status(&self) -> Result<Status> {
+        self.search.status(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
+    }
+
+    /// Waits until the index serves the settings it was opened with: at once
+    /// when no rebuild is under way, and an error naming why when one failed.
+    /// A store opened without background work runs [`maintain`](super::maintain)
+    /// itself meanwhile.
+    pub fn ready(&self) -> Result<()> {
+        self.search.ready(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
     }
 
     /// The document `id`, or none.
@@ -492,24 +539,8 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
 /// the index's fields read them and its vector.
 fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings) -> Result<Prepared> {
     let (tree, bytes) = json(given.value)?;
-    let analyzed = analyze(&tree, &settings.fields, &settings.filters)?;
-    let vector = vector(given.vector, settings)?;
-    let clustered = settings.vectors.is_some_and(|vectors| vectors.recall.is_some());
-    Ok(Prepared { index, id: checked(&given.id)?.to_owned(), value: bytes, analyzed, vector, clustered })
-}
-
-/// A document's vector as the index keeps it: required on an index with
-/// vectors, so that a set never drops one by leaving it out.
-fn vector(given: Option<Option<&[f32]>>, settings: &Settings) -> Result<Option<Vector>> {
-    match (settings.vectors, given) {
-        (None, Some(Some(_))) => Err(Error::invalid("a vector for an index without vectors")),
-        (None, _) | (Some(_), Some(None)) => Ok(None),
-        (Some(_), None) => Err(Error::invalid(
-            "the index keeps vectors: a set gives one, id(…).vector(…).set(…), or says it has none, \
-             id(…).without_vector().set(…)",
-        )),
-        (Some(vectors), Some(Some(values))) => Vector::new(values, vectors.dimensions).map(Some),
-    }
+    let incoming = Incoming { id: checked(&given.id)?.to_owned(), tree, bytes, vector: given.vector };
+    Prepared::new(index, incoming, settings)
 }
 
 /// A document's value as JSON, and its bytes, within the bound.

@@ -271,6 +271,7 @@ impl Store {
             feature = "blobs",
             feature = "records",
             feature = "metrics",
+            feature = "search",
             feature = "backup"
         )),
         expect(dead_code, reason = "only an engine of files reads the clock, and channels keep none")

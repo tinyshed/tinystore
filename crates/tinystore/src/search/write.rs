@@ -17,9 +17,12 @@
 
 use rusqlite::Connection;
 
-use super::document::Analyzed;
+use serde_json::Value;
+
+use super::document::{Analyzed, analyze};
 use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
+use super::settings::Settings;
 use super::vectors::{self, Vector};
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
@@ -60,7 +63,37 @@ pub(crate) struct Prepared {
     pub(crate) clustered: bool,
 }
 
+/// A document as a set or a rebuild gives it: its id, its value as JSON
+/// and its bytes, and what it says of its vector: nothing, none, or one.
+#[derive(Debug)]
+pub(crate) struct Incoming<'v> {
+    pub(crate) id: String,
+    pub(crate) tree: Value,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) vector: Option<Option<&'v [f32]>>,
+}
+
 impl Prepared {
+    /// A document ready to set in the index `index` by `settings`: its words
+    /// as its fields read them and its vector, which an index with vectors
+    /// requires a set to give or to say it has none.
+    pub(crate) fn new(index: i64, incoming: Incoming<'_>, settings: &Settings) -> Result<Prepared> {
+        let analyzed = analyze(&incoming.tree, &settings.fields, &settings.filters)?;
+        let vector = match (settings.vectors, incoming.vector) {
+            (None, Some(Some(_))) => return Err(Error::invalid("a vector for an index without vectors")),
+            (None, _) | (Some(_), Some(None)) => None,
+            (Some(_), None) => {
+                return Err(Error::invalid(
+                    "the index keeps vectors: a set gives one, id(…).vector(…).set(…), or says it has none, \
+                     id(…).without_vector().set(…)",
+                ));
+            }
+            (Some(vectors), Some(Some(values))) => Some(Vector::new(values, vectors.dimensions)?),
+        };
+        let clustered = settings.vectors.is_some_and(|vectors| vectors.recall.is_some());
+        Ok(Prepared { index, id: incoming.id, value: incoming.bytes, analyzed, vector, clustered })
+    }
+
     /// What the write adds to its commit, about.
     pub(crate) fn bytes(&self) -> usize {
         let words: usize = self.analyzed.terms.iter().map(|(_, term, _)| term.len() + 16).sum();

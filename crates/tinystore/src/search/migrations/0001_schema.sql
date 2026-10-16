@@ -9,7 +9,11 @@
 -- search reads and rescored: members of them it scores again, chosen when
 -- the index held calibrated_vectors for calibrated_recall, probes 0 for an
 -- exact search when no fewer reach it; clusters_version grows with every
--- change of centroids
+-- change of centroids; beside_of: the index this one is rebuilt beside,
+-- whose documents numbered below copy_until it reads, those up to
+-- copied_through read already, for why; failed: why its rebuild stopped;
+-- dropping: its rows are dropped a step a commit; opened_at: when a program
+-- last opened it, in milliseconds of the store's clock
 create table _tinystore_search_indexes (
     id            integer primary key autoincrement,
     name          text    not null unique,
@@ -26,7 +30,14 @@ create table _tinystore_search_indexes (
     rescored           integer not null default 0,
     calibrated_vectors integer not null default 0,
     calibrated_recall  real    not null default 0,
-    clusters_version   integer not null default 0
+    clusters_version   integer not null default 0,
+    beside_of          integer,
+    copy_until         integer not null default 0,
+    copied_through     integer not null default 0,
+    why                text,
+    failed             text,
+    dropping           integer not null default 0,
+    opened_at          integer not null default 0
 ) strict;
 
 -- a part is a field's words as written, 2 × its number, or their stems, one

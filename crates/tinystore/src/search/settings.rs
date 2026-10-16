@@ -74,6 +74,51 @@ pub(crate) struct Wanted {
     pub(crate) recall: Option<f64>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
+    /// Whether a change that needs the index read again waits for `reindex`.
+    pub(crate) manual: bool,
+}
+
+/// What a change of settings makes of an index.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Changed {
+    /// The settings that change at once.
+    pub(crate) settings: Settings,
+    pub(crate) said: Vec<String>,
+    pub(crate) rebuild: Option<Asked>,
+}
+
+/// A rebuild a change asks for: why, as the log says it, and whether the
+/// index needs it to serve what was asked, or only to drop what it keeps
+/// no longer, which an index rebuilt by hand leaves for its next rebuild.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Asked {
+    pub(crate) why: String,
+    pub(crate) needed: bool,
+}
+
+/// The rebuild a change gathers, reason by reason.
+#[derive(Default)]
+struct Rebuild {
+    needed: Vec<String>,
+    cleaning: Vec<String>,
+}
+
+impl Rebuild {
+    fn needs(&mut self, why: String) {
+        self.needed.push(why);
+    }
+
+    fn cleans(&mut self, why: String, documents: u64) {
+        if documents > 0 {
+            self.cleaning.push(why);
+        }
+    }
+
+    fn asked(self) -> Option<Asked> {
+        let needed = !self.needed.is_empty();
+        let why: Vec<String> = self.needed.into_iter().chain(self.cleaning).collect();
+        (!why.is_empty()).then(|| Asked { why: why.join(", "), needed })
+    }
 }
 
 /// The weight of a vector a search by both gives unless its index or it
@@ -170,25 +215,25 @@ impl Settings {
         }
     }
 
-    /// The settings `wanted` makes of these, and each change as the log says
-    /// it. A weight, a field removed, typo tolerance, vectors added and how
-    /// a search by both combines them change at once; a field added to an
-    /// index that holds documents would need them read again, which no
-    /// release does yet, so it is refused, as are other vectors than those
-    /// kept, which the store has nothing to make from.
-    pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<(Settings, Vec<String>)> {
+    /// What `wanted` changes of these: the settings that change at once, each
+    /// change as the log says it, and what needs the index read again beside
+    /// it. A weight, a field or a filter removed, typo tolerance, vectors
+    /// added, recall and how a search by both combines them change at once,
+    /// a field or a filter removed leaving its keys for a rebuild to drop; a
+    /// field or a filter added to an index that holds documents needs them
+    /// read again, as do words read by another release. Other vectors than
+    /// those kept are refused: the store has nothing to make them from.
+    pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<Changed> {
         let mut changed = Settings { fields: Vec::new(), ..self.clone() };
         let mut said = Vec::new();
-        changed.change_filters(wanted, documents, &mut said)?;
+        let mut rebuild = Rebuild::default();
+        changed.change_filters(wanted, documents, (&mut said, &mut rebuild));
         changed.change_vectors(wanted, documents, &mut said)?;
         for (path, weight) in wanted.fields() {
             let Some(field) = self.fields.iter().find(|field| field.path == path) else {
                 if documents > 0 {
-                    return Err(Error::invalid(format!(
-                        "field {} added to an index of {documents} documents: adding a field to an index that \
-                         holds documents is not built yet",
-                        shown(&path)
-                    )));
+                    rebuild.needs(format!("{} added", shown(&path)));
+                    continue;
                 }
                 said.push(format!("{} added", shown(&path)));
                 changed.fields.push(Field { path, weight, number: changed.next_field });
@@ -203,6 +248,7 @@ impl Settings {
         for field in &self.fields {
             if !changed.fields.iter().any(|kept| kept.number == field.number) {
                 said.push(format!("{} removed; at once from searches", shown(&field.path)));
+                rebuild.cleans(format!("{} removed", shown(&field.path)), documents);
             }
         }
         if wanted.typo_tolerance != self.typo_tolerance {
@@ -210,13 +256,29 @@ impl Settings {
             said.push(format!("typo tolerance {now}; at once"));
             changed.typo_tolerance = wanted.typo_tolerance;
         }
-        Ok((changed, said))
+        if self.analysis != analyzer::VERSION {
+            rebuild.needs("words read by another release".to_owned());
+        }
+        Ok(Changed { settings: changed, said, rebuild: rebuild.asked() })
+    }
+
+    /// Whether these settings read documents as `other` does: the same
+    /// fields, filters and vectors by their paths, whatever their numbers,
+    /// weights and the rest that changes at once.
+    pub(crate) fn reads_as(&self, other: &Settings) -> bool {
+        let fields = |settings: &Settings| settings.fields.iter().map(|field| field.path.clone()).collect::<Vec<_>>();
+        let filters = |settings: &Settings| settings.filters.iter().map(|f| f.path.clone()).collect::<Vec<_>>();
+        let dimensions = |settings: &Settings| settings.vectors.map(|vectors| vectors.dimensions);
+        fields(self) == fields(other)
+            && filters(self) == filters(other)
+            && dimensions(self) == dimensions(other)
+            && self.analysis == other.analysis
     }
 
     /// Keeps the filters `wanted` names, each with its number; one removed
-    /// leaves searches at once, and one added waits for an index that holds
-    /// no documents, as a field does.
-    fn change_filters(&mut self, wanted: &Wanted, documents: u64, said: &mut Vec<String>) -> Result<()> {
+    /// leaves searches at once, and one added to an index that holds
+    /// documents needs them read again, as a field does.
+    fn change_filters(&mut self, wanted: &Wanted, documents: u64, (said, rebuild): (&mut Vec<String>, &mut Rebuild)) {
         let mut filters = Vec::with_capacity(wanted.filters.len());
         for path in &wanted.filters {
             if let Some(kept) = self.filters.iter().find(|filter| &filter.path == path) {
@@ -224,10 +286,8 @@ impl Settings {
                 continue;
             }
             if documents > 0 {
-                return Err(Error::invalid(format!(
-                    "filter {path} added to an index of {documents} documents: adding a filter to an index that \
-                     holds documents is not built yet"
-                )));
+                rebuild.needs(format!("filter {path} added"));
+                continue;
             }
             said.push(format!("filter {path} added"));
             filters.push(Filter { path: path.clone(), number: self.next_filter });
@@ -236,10 +296,10 @@ impl Settings {
         for filter in &self.filters {
             if !filters.iter().any(|kept| kept.number == filter.number) {
                 said.push(format!("filter {} removed; at once from searches", filter.path));
+                rebuild.cleans(format!("filter {} removed", filter.path), documents);
             }
         }
         self.filters = filters;
-        Ok(())
     }
 
     /// The filter of `path`, while the index has it.
@@ -379,6 +439,7 @@ mod tests {
             recall: None,
             vector_weight: None,
             rerank: false,
+            manual: false,
         }
     }
 
@@ -400,11 +461,16 @@ mod tests {
             |filters: &[&str]| Wanted { filters: filters.iter().map(|f| (*f).to_owned()).collect(), ..wanted(&[]) };
         let settings = Settings::new(&with(&["category", "owner"]));
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
-        let (changed, said) = settings.change(&with(&["owner"]), 5).unwrap();
-        assert_eq!(said, ["filter category removed; at once from searches"]);
-        assert_eq!(changed.filters, [Filter { path: "owner".to_owned(), number: 1 }]);
-        assert!(changed.change(&with(&["owner", "category"]), 5).is_err());
-        let (added, _) = changed.change(&with(&["owner", "category"]), 0).unwrap();
+        let removed = settings.change(&with(&["owner"]), 5).unwrap();
+        assert_eq!(removed.said, ["filter category removed; at once from searches"]);
+        assert_eq!(removed.settings.filters, [Filter { path: "owner".to_owned(), number: 1 }]);
+        let cleaning = Asked { why: "filter category removed".to_owned(), needed: false };
+        assert_eq!(removed.rebuild, Some(cleaning), "its keys left for a rebuild to drop");
+        let changed = removed.settings;
+        let added = changed.change(&with(&["owner", "category"]), 5).unwrap();
+        assert_eq!(added.rebuild, Some(Asked { why: "filter category added".to_owned(), needed: true }));
+        assert_eq!(added.settings, changed, "nothing changes at once");
+        let added = changed.change(&with(&["owner", "category"]), 0).unwrap().settings;
         assert_eq!(added.filter("category").unwrap().number, 2, "a filter added again takes a new number");
         assert!(with(&["a", "a"]).check().is_err());
         assert!(with(&["a..b"]).check().is_err());
@@ -413,14 +479,14 @@ mod tests {
     #[test]
     fn vectors_added_change_at_once_and_other_dimensions_or_none_are_refused() {
         let settings = Settings::new(&wanted(&[("title", 1.0)]));
-        let (changed, said) = settings.change(&with_vectors(3, None, false), 2).unwrap();
+        let Changed { settings: changed, said, .. } = settings.change(&with_vectors(3, None, false), 2).unwrap();
         assert_eq!(said, ["vectors of 3 dimensions added; the 2 documents held have none"]);
         assert_eq!(changed.vectors, Some(Vectors { dimensions: 3, recall: None }));
         assert_eq!(changed.change(&with_vectors(4, None, false), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
         assert_eq!(changed.change(&wanted(&[("title", 1.0)]), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
-        let (_, said) = changed.change(&with_vectors(3, Some(0.7), false), 2).unwrap();
+        let said = changed.change(&with_vectors(3, Some(0.7), false), 2).unwrap().said;
         assert_eq!(said, ["a vector weighs 0.7, was 0.5; at once"]);
-        let (_, said) = changed.change(&with_vectors(3, None, true), 2).unwrap();
+        let said = changed.change(&with_vectors(3, None, true), 2).unwrap().said;
         assert_eq!(said, ["rerank on; at once"]);
     }
 
@@ -438,18 +504,23 @@ mod tests {
     #[test]
     fn a_weight_and_a_field_removed_change_at_once_and_say_so() {
         let settings = Settings::new(&wanted(&[("title", 2.0), ("body", 1.0)]));
-        let (changed, said) = settings.change(&wanted(&[("title", 5.0)]), 10).unwrap();
-        assert_eq!(said, ["title weighs 5, was 2; at once", "body removed; at once from searches"]);
-        assert_eq!(changed.fields, [Field { path: "title".to_owned(), weight: 5.0, number: 0 }]);
+        let changed = settings.change(&wanted(&[("title", 5.0)]), 10).unwrap();
+        assert_eq!(changed.said, ["title weighs 5, was 2; at once", "body removed; at once from searches"]);
+        assert_eq!(changed.settings.fields, [Field { path: "title".to_owned(), weight: 5.0, number: 0 }]);
     }
 
     #[test]
-    fn a_field_added_takes_a_new_number_and_waits_for_an_empty_index() {
+    fn a_field_added_takes_a_new_number_at_once_to_an_empty_index_and_asks_a_rebuild_of_one_that_holds_documents() {
         let settings = Settings::new(&wanted(&[("title", 1.0)]));
-        let (changed, _) = settings.change(&wanted(&[("body", 1.0)]), 0).unwrap();
+        let changed = settings.change(&wanted(&[("body", 1.0)]), 0).unwrap().settings;
         assert_eq!(changed.fields, [Field { path: "body".to_owned(), weight: 1.0, number: 1 }]);
-        let refused = settings.change(&wanted(&[("title", 1.0), ("body", 1.0)]), 3).unwrap_err();
-        assert_eq!(refused.kind(), crate::ErrorKind::Invalid);
+        let rebuilt = settings.change(&wanted(&[("title", 2.0), ("body", 1.0)]), 3).unwrap();
+        assert_eq!(rebuilt.rebuild, Some(Asked { why: "body added".to_owned(), needed: true }));
+        assert_eq!(rebuilt.said, ["title weighs 2, was 1; at once"], "what needs no rebuild changes at once");
+        assert!(
+            Settings::new(&wanted(&[("title", 9.0), ("body", 1.0)]))
+                .reads_as(&Settings::new(&wanted(&[("title", 1.0), ("body", 3.0)])))
+        );
     }
 
     #[test]

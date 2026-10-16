@@ -93,8 +93,12 @@ store.index('articles', { fields: { title: 5, body: 1, description: 1 } })    //
 
 ```text
 search articles: title weighs 5, was 2; at once
-search articles: description added: reading 812,345 documents beside the index, which answers without it until then
-search articles: description ready in 41 s; switched
+search articles: description added: reading 812345 documents beside the index, which answers as before until then
+search articles: description added ready in 41 s; switched
+```
+
+```rust
+let articles = store.index::<Article>("articles").field("title", 5.0).field("body", 1.0).field("description", 1.0).open()?;
 ```
 
 Opening an index with other settings than it holds changes it, and opening
@@ -103,7 +107,7 @@ never waits for the work a change needs.
 | What changed                                               | What happens                                                                                         |
 |------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
 | a field's weight, `typoTolerance`, `hybrid`                | at once: a search reads the weights and its blocks' bounds when it runs, so nothing is written again |
-| a field or a filter removed                                | at once from searches; its postings dropped in steps in the background                               |
+| a field or a filter removed                                | at once from searches; its keys dropped by reading the index again in the background                 |
 | a field or a filter added                                  | read from the kept documents in the background; searches use it once it is ready                     |
 | `recall` added or removed                                  | the clusters built or dropped in the background; searches stay exact meanwhile                       |
 | how text is cut, by a release of TinyStore that changes it | the index rebuilt in the background                                                                  |
@@ -111,9 +115,22 @@ never waits for the work a change needs.
 | the vectors' `dimensions`, or `vectors` left out           | `invalid`: the vectors are the program's model's, and the store has nothing to make new ones from    |
 
 - Background work runs beside the index, which answers and takes writes
-  meanwhile, every write reaching both, in commits of a few keys as packing
-  runs; once the new one has caught up it is switched in one commit and the
-  old one dropped (phase 6's gate). A restart continues where it stopped.
+  meanwhile: the new rows read the old ones' documents in the order of
+  their numbers, 256 a commit, worked out in a snapshot so that the
+  writer is held only to write them; a set meanwhile has a later number,
+  which they reach in turn, and a delete reaches both at once. Once a step
+  finds fewer than 256, the last are read and the new rows switched in, in
+  one commit no write runs beside, and the old ones dropped a step a
+  commit. A restart continues where it stopped.
+- The new rows number the documents again from 1, in the order the old
+  ones did, so that of equal scores the document set first still comes
+  first. Reading an index again by its own settings is how its numbers are
+  kept near its documents: once the numbers it gave pass twice the
+  documents it holds, and 4,096, it begins by itself, as it does in any
+  case past 2³¹.
+- A rebuild that cannot read a document, a number where the new settings
+  read text, fails, and `status()` says why: the index answers by the old
+  settings, and the next change or `reindex` begins again.
 - Every change is said in the log when it starts and when it is done.
 
 ```ts
@@ -124,9 +141,20 @@ await articles.ready()        // once the index serves the settings it was opene
 articles.status()             // { state: 'rebuilding', done: 0.42 } | { state: 'ready' } | { state: 'failed', error }
 ```
 
+```rust
+let articles = store.index::<Article>("articles").fields(["title", "body"]).rebuild(Rebuild::Manual).open()?;
+let articles = store.index::<Article>("articles").fields(["title", "body", "description"]).rebuild(Rebuild::Manual).reindex()?;
+
+articles.ready()?;
+articles.status()?;           // Status::Rebuilding { done: 0.42 } | Status::Ready | Status::Failed { error }
+```
+
 - `rebuild: 'manual'` is for a program that schedules its own load: a
   change that needs background work is `invalid`, naming it, until
-  `store.reindex` asks for it. A change that needs none applies all the same.
+  `store.reindex` asks for it. A change that needs none applies all the same,
+  and a field removed leaves its keys for the next rebuild. `reindex` with
+  nothing to change numbers the index again; a manual index is numbered
+  again only so, or past 2³¹.
 - A search never waits for `ready()`: it answers by the settings the index
   serves, which `status()` says.
 
@@ -134,6 +162,11 @@ articles.status()             // { state: 'rebuilding', done: 0.42 } | { state: 
 
 ```ts
 await store.dropIndex('posts')
+```
+
+```rust
+store.drop_index("posts")?;                       // true when there was one
+let listed = tinystore::search::list(&store)?;     // name, documents, vectors, opened, status
 ```
 
 ```bash
@@ -146,8 +179,12 @@ tinystore search drop ./data posts
 
 - An index the program stopped opening stays: another version of it may
   open the index again, so the store never guesses. `tinystore search
-  list` shows each index with its documents, its size and when it was last
-  opened.
+  list` shows each index with its documents, its vectors, when it was last
+  opened and a rebuild under way; its size is not counted apart, since its
+  rows share `search.db` with every other index's.
+- Dropping marks the index's rows in one commit and drops them a step a
+  commit in the background; its open handles are refused from then on, and
+  opening the name again makes a new, empty index.
 
 ## Set and delete
 
@@ -480,12 +517,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-|-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a filter added to an index that holds documents, until slice 6; a `vectorWeight` outside 0–1, or beside `rerank`; a `recall` not above 0 and below 1, or without `vectors`; either in a search without a vector, or `rerank` in one without text |
-| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`, until `reindex`; a handle of an index dropped; a field's weight not above zero or past 1,000; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a `vectorWeight` outside 0–1, or beside `rerank`; a `recall` not above 0 and below 1, or without `vectors`; either in a search without a vector, or `rerank` in one without text |
+| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -539,9 +576,8 @@ Proposed, to be measured before they are promised.
   a 65,536 numbers: a slice-1 mix that set 400 documents 20 times each left
   a file 1.7 times a fresh build's. Slice 6's rebuild in the background
   numbers the documents again from 1, the program's ids kept, and starts by
-  itself once the numbers given pass twice the documents held, and in any
-  case long before 2³², the most a number can be; the threshold is that
-  slice's measurement.
+  itself once the numbers given pass twice the documents held and 4,096,
+  and in any case past 2³¹, long before 2³², the most a number can be.
 - **Filters** are keys of the postings beside a field's words, a value's
   term by its type, `t:shoes`, `i:42`, `b:true`, and `n:` for a document
   with none, a frequency of 1 each, packed and purged with the words, each
@@ -635,7 +671,8 @@ Proposed, to be measured before they are promised.
    the members scored again chosen with the clusters read.
 6. Changes of an index in the background, `ready()`, `status()`,
    `dropIndex` and `tinystore search`, and the documents numbered again by
-   a rebuild that starts by itself.
+   a rebuild that starts by itself: built 16 October, a set reaching the
+   new rows through their copy, in the order of its number.
 7. The wire and the Bun SDK.
 8. `db.searchIndex`: its triggers, the pending keys, and their indexing
    before the commit.

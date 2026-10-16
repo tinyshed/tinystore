@@ -93,7 +93,7 @@ impl Recalled {
     }
 
     fn state(&self) -> State {
-        self.index.search.file_read(|connection| state(connection, self.index.open.id)).unwrap()
+        self.index.search.file_read(|connection| state(connection, self.index.open.id())).unwrap()
     }
 }
 
@@ -143,7 +143,7 @@ fn a_vector_set_once_the_clusters_serve_is_found_from_the_head_and_once_assigned
     held.index.id("odd").vector(&odd).set(&Item { title: "item".to_owned(), half: true }).unwrap();
     let top = |index: &Index<Item>| checked(|| index.search_vector(&odd).limit(1).run()).unwrap().hits[0].id.clone();
     assert_eq!(top(&held.index), "odd", "from the head");
-    let head = |index: &Index<Item>| index.search.file_read(|connection| members(connection, index.open.id, HEAD));
+    let head = |index: &Index<Item>| index.search.file_read(|connection| members(connection, index.open.id(), HEAD));
     assert_eq!(head(&held.index).unwrap(), 1);
     maintain(&fixture.store).unwrap();
     assert_eq!(head(&held.index).unwrap(), 0);
@@ -160,14 +160,15 @@ fn a_cluster_grown_past_twice_its_size_splits_in_two() {
     let held = filled(&fixture.store, &mut random, &centers, 500);
     maintain(&fixture.store).unwrap();
     let before =
-        held.index.search.file_read(|connection| Clusters::read(connection, held.index.open.id, 0, DIMENSIONS));
+        held.index.search.file_read(|connection| Clusters::read(connection, held.index.open.id(), 0, DIMENSIONS));
     let crowd = self::centers(&mut random, 1);
     for n in 0..400 {
         let vector = near(&mut random, &crowd);
         held.index.id(format!("crowd{n}")).vector(&vector).set(&Item { title: "item".to_owned(), half: true }).unwrap();
     }
     maintain(&fixture.store).unwrap();
-    let after = held.index.search.file_read(|connection| Clusters::read(connection, held.index.open.id, 0, DIMENSIONS));
+    let after =
+        held.index.search.file_read(|connection| Clusters::read(connection, held.index.open.id(), 0, DIMENSIONS));
     assert!(after.unwrap().len() > before.unwrap().len(), "the crowded cluster split");
     let question = near(&mut random, &crowd);
     let hits = checked(|| held.index.search_vector(&question).limit(10).run()).unwrap().hits;
@@ -205,9 +206,12 @@ fn an_index_reopened_mid_build_goes_on_and_serves() {
     let centers = centers(&mut random, 20);
     let held = filled(&fixture.store, &mut random, &centers, 3000);
     let state = held.state();
-    let centroids =
-        held.index.search.file_read(|connection| trained(connection, held.index.open.id, &state, DIMENSIONS)).unwrap();
-    held.index.search.file_write(|tx| begin(tx, held.index.open.id, state, &centroids).map(drop)).unwrap();
+    let centroids = held
+        .index
+        .search
+        .file_read(|connection| trained(connection, held.index.open.id(), &state, DIMENSIONS))
+        .unwrap();
+    held.index.search.file_write(|tx| begin(tx, held.index.open.id(), state, &centroids).map(drop)).unwrap();
     let crate::search::fixture::Fixture { dir, store } = fixture;
     drop(held);
     store.close().unwrap();
@@ -216,7 +220,7 @@ fn an_index_reopened_mid_build_goes_on_and_serves() {
     let question = near(&mut random, &centers);
     assert!(!checked(|| index.search_vector(&question).run()).unwrap().hits.is_empty(), "exact while building");
     maintain(&store).unwrap();
-    let state = index.search.file_read(|connection| super::state(connection, index.open.id)).unwrap();
+    let state = index.search.file_read(|connection| super::state(connection, index.open.id())).unwrap();
     assert_eq!(state.phase, Phase::Serving);
 }
 
@@ -244,7 +248,7 @@ fn a_search_from_clusters_over_a_hundred_thousand_takes() {
     }
     let started = std::time::Instant::now();
     maintain(&fixture.store).unwrap();
-    let state = index.search.file_read(|connection| super::state(connection, index.open.id)).unwrap();
+    let state = index.search.file_read(|connection| super::state(connection, index.open.id())).unwrap();
     let built = started.elapsed().as_secs_f64();
     eprintln!("built in {built:.1} s: {} probes, {} scored again", state.probes, state.rescored);
     let (mut took, mut found) = (Vec::new(), 0.0);
