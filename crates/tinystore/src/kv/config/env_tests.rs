@@ -80,11 +80,16 @@ fn a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share
     let read = read(&env, &declared).unwrap();
     let shown: Vec<&str> = read.given.iter().map(|(_, _, shown, _)| shown.as_str()).collect();
     assert_eq!(shown, ["DATABASE_URL", "PORT"]);
-    assert_eq!(read.unused, ["APP_PORT"], "a prefixed variable no setting reads is said");
+    let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        unused,
+        ["APP_PORT: a variable with the prefix that names no setting"],
+        "a prefixed variable no setting reads is said"
+    );
     let clash = read_refused(&Env::prefix("APP"), &declared);
     assert_eq!(clash, ["APP_DB_URL would give both db.url and dbUrl"]);
     let typo = read_refused(&Env::prefix("APP").var("db.ulr", "X"), &declaration(json!({ "db": { "url": "" } })));
-    assert_eq!(typo, ["a variable is named for db.ulr, which is no setting"]);
+    assert_eq!(typo, ["a variable is named for db.ulr, which is no setting; did you mean db.url?"]);
 }
 
 #[test]
@@ -116,5 +121,6 @@ fn a_dotenv_files_variables_count_where_the_process_has_none() {
         read.given.iter().map(|(path, value, _, origin)| (path.as_str(), value, origin)).collect();
     let shown = file.display().to_string();
     assert_eq!(given, [("name", &json!("from-file"), &Origin::DotEnv(shown)), ("port", &json!(2), &Origin::Process)]);
-    assert_eq!(read.unused, ["APP_PROT"]);
+    let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
+    assert_eq!(unused, ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]);
 }

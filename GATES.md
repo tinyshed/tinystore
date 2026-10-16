@@ -445,6 +445,8 @@ module defines.
 - NAME_FILE gives a setting its file's text without its last newline, and NAME beside it is refused — `name_file_gives_a_setting_its_files_text_and_both_set_is_refused` in `kv::config`, `name_file_gives_its_files_text_without_its_last_newline_and_both_set_is_refused` in `kv::config::env`
 - a config reads only the variables its layer gives, a name given a setting in place of its prefixed one, and two settings never share one — `a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share_one` in `kv::config::env`
 - a variable with the prefix that names no setting is said, not ignored — `a_variable_with_the_prefix_that_names_no_setting_is_said` in `kv::config`
+- a key, a field or a variable that names no setting is told the setting it may have meant, and none is read as another — `a_key_no_setting_has_and_a_value_of_another_kind_are_each_named` in `kv::config::files`, `a_lists_items_are_checked_each_its_length_counted_and_a_group_item_filled` in `kv::config::rules`, `a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share_one`, `a_dotenv_files_variables_count_where_the_process_has_none` in `kv::config::env`
+- a misspelt word's nearest are the fewest edits away, two letters swapped one edit, letters of any script, never further than asked — every test in `typos`
 - a `.env` file's variables count where the process has none — `a_dotenv_files_variables_count_where_the_process_has_none` in `kv::config::env`
 - a config's files read alike, TOML, YAML 1.2 and JSON with comments and trailing commas, every key a setting and a missing file refused unless optional — `toml_yaml_and_json_with_comments_give_the_same_settings`, `a_key_no_setting_has_and_a_value_of_another_kind_are_each_named`, `comments_and_trailing_commas_leave_every_line_where_it_was` in `kv::config::files`, `a_file_key_no_setting_has_and_a_missing_file_are_refused_but_an_optional_file_may_be_absent` in `kv::config`
 - a kept change that no longer fits is ignored and said, applies again once it fits, and `strict` refuses to open; another program's is left to it — `a_kept_change_that_no_longer_fits_is_ignored_and_said_and_strict_refuses_to_open`, `a_change_of_a_setting_this_program_does_not_declare_is_another_programs` in `kv::config`
@@ -730,6 +732,7 @@ module defines.
 
 ## The tinystore command
 
+- a misspelt command or flag is told the nearest one, and a word far from any is told none — `a_misspelt_command_is_told_its_nearest_and_a_word_far_from_any_none` in `tinystore-cli`, `a_misspelt_flag_is_told_its_nearest_and_every_flag_named_is_one` in `args`
 - the tool finds each database by its name — `TestTheToolFindsEachDatabaseByItsName`, `TestTheToolWritesTheNextMigrationThroughTheCheck` in `cmd/tinystore`
 - a remote server is bounded unless told otherwise — `TestARemoteServerIsBoundedUnlessToldOtherwise` in `cmd/tinystore`: 1 GiB with `--listen`
 - a sidecar started in the background says why it ended — `TestServeLogsToTheFileItIsGivenWhyItEnded` in `cmd/tinystore`

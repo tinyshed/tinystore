@@ -15,7 +15,7 @@ default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records
 store = ["dep:rusqlite"]
 kv = ["store", "dep:chacha20poly1305", "dep:sha2"]
 # a program's settings, kept in kv.db, and the parsers of the files that give them
-config = ["kv", "dep:toml", "dep:yaml-rust2"]
+config = ["kv", "dep:toml", "dep:yaml-rust2", "typos"]
 # locks and semaphores in the memory of the store's process, their fences
 # from an epoch kept in kv.db
 locks = ["kv"]
@@ -34,6 +34,9 @@ metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics"]
 # the protocol's session and the pipe, which the server, the FFI and every SDK
 # speak, for the engines built beside it; its session answers kv in every call
 wire = ["kv"]
+# the words nearest a misspelt one, which config names for a key it does
+# not know and the command line for a command; it stands on no store
+typos = ["dep:fst", "dep:levenshtein_automata"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
 fuzzing = ["records", "metrics"]
@@ -66,6 +69,10 @@ zstd = { version = "0.14.2", optional = true, default-features = false }
 # that would cost a megabyte
 toml = { version = "0.9.12", default-features = false, features = ["std", "parse", "serde"], optional = true }
 yaml-rust2 = { version = "0.13.0", default-features = false, optional = true }
+# a misspelt name's nearest words: a dictionary in an FST, read through a
+# Levenshtein automaton that counts two letters swapped as one edit
+fst = { version = "0.4.7", optional = true, default-features = false }
+levenshtein_automata = { version = "0.2.1", optional = true, default-features = false }
 # the facade whose macros a Rust program counts with: the metrics engine is a
 # recorder of it, as the logger is a layer of tracing
 metrics = { version = "0.24.6", optional = true, default-features = false }

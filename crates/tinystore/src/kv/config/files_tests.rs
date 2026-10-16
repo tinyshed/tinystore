@@ -44,7 +44,11 @@ fn a_key_no_setting_has_and_a_value_of_another_kind_are_each_named() {
         refused.iter().map(|problem| problem.rsplit_once(".yaml: ").unwrap().1.to_owned()).collect();
     assert_eq!(
         shown,
-        [r#"limits: 3 is not a group of settings"#, r#"port: "eighty" is not a whole number"#, "prot: no such setting"]
+        [
+            r#"limits: 3 is not a group of settings"#,
+            r#"port: "eighty" is not a whole number"#,
+            "prot: no such setting; did you mean port?"
+        ]
     );
 }
 

@@ -201,6 +201,23 @@ pub(crate) fn joined(path: &str, key: &str) -> String {
     if path.is_empty() { key.to_owned() } else { format!("{path}.{key}") }
 }
 
+/// The name a person may have meant by `given`, among `names`: one edit away
+/// for a name of three to six letters, two for a longer one, none shorter.
+/// It is only said: no name is read as another.
+pub(crate) fn meant<S: AsRef<str>>(given: &str, names: impl IntoIterator<Item = S>) -> Option<String> {
+    let edits = match given.chars().count() {
+        0..3 => 0,
+        3..7 => 1,
+        _ => 2,
+    };
+    crate::typos::Dictionary::new(names).nearest(given, edits).map(|near| near.word)
+}
+
+/// What follows a problem's words when a name was perhaps misspelt.
+pub(crate) fn did_you_mean(meant: Option<String>) -> String {
+    meant.map_or_else(String::new, |name| format!("; did you mean {name}?"))
+}
+
 fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, String> {
     let mut settings = Group::new();
     for (key, value) in map {

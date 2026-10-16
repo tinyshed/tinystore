@@ -98,7 +98,7 @@ pub(super) struct Base {
     /// The optional files that were absent.
     pub(super) absent: Vec<String>,
     /// The variables with the prefix that name no setting.
-    pub(super) unused: Vec<String>,
+    pub(super) unused: Vec<env::Unused>,
 }
 
 impl Base {

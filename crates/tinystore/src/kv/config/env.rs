@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::declaration::{Declaration, Setting};
+use super::declaration::{Declaration, Setting, did_you_mean, meant};
 use super::rules;
 
 /// The longest text a config takes from a variable.
@@ -111,7 +111,22 @@ pub(super) enum Origin {
 #[derive(Debug, Default)]
 pub(super) struct Read {
     pub(super) given: Vec<(String, Value, String, Origin)>,
-    pub(super) unused: Vec<String>,
+    pub(super) unused: Vec<Unused>,
+}
+
+/// A variable with the prefix that names no setting, and the variable of a
+/// setting it may have meant.
+#[derive(Clone, Debug)]
+pub(super) struct Unused {
+    pub(super) name: String,
+    meant: Option<String>,
+}
+
+impl std::fmt::Display for Unused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let near = did_you_mean(self.meant.clone());
+        write!(f, "{}: a variable with the prefix that names no setting{near}", self.name)
+    }
 }
 
 /// The texts of the files `NAME_FILE` variables name, by their path.
@@ -158,7 +173,8 @@ fn names<'a>(env: &Env, declaration: &'a Declaration) -> Result<BTreeMap<String,
     }
     for (path, _) in &env.names {
         if declaration.setting(path).is_none() {
-            problems.push(format!("a variable is named for {path}, which is no setting"));
+            let near = meant(path, declaration.settings().into_iter().map(|(path, _)| path));
+            problems.push(format!("a variable is named for {path}, which is no setting{}", did_you_mean(near)));
         }
     }
     let mut taken: HashMap<String, &str> = HashMap::new();
@@ -270,7 +286,7 @@ fn without_newline(mut text: String) -> String {
 
 /// The variables with the prefix that name no setting: a misspelt name is
 /// said, not ignored.
-fn unused(env: &Env, variables: &Variables, names: &BTreeMap<String, (String, &Setting)>) -> Vec<String> {
+fn unused(env: &Env, variables: &Variables, names: &BTreeMap<String, (String, &Setting)>) -> Vec<Unused> {
     if env.prefix.is_empty() {
         return Vec::new();
     }
@@ -283,6 +299,9 @@ fn unused(env: &Env, variables: &Variables, names: &BTreeMap<String, (String, &S
         .collect();
     unused.sort();
     unused
+        .into_iter()
+        .map(|name| Unused { meant: meant(&name, names.values().map(|(name, _)| name.as_str())), name })
+        .collect()
 }
 
 /// The variables a `.env` file sets, a later name over an earlier:

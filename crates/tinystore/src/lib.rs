@@ -55,6 +55,8 @@ pub(crate) mod sqlite;
 mod store;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql"))]
 mod transaction;
+#[cfg(feature = "typos")]
+pub mod typos;
 #[cfg(feature = "wire")]
 pub(crate) mod wire;
 

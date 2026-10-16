@@ -58,7 +58,10 @@ fn a_lists_items_are_checked_each_its_length_counted_and_a_group_item_filled() {
     let upstreams = setting(Kind::List(Box::new(Item::Group(group))), Rules::default());
     assert_eq!(check(&upstreams, &json!([{ "host": "a" }])), Ok(json!([{ "host": "a", "port": 80 }])));
     assert_eq!(check(&upstreams, &json!([{ "port": 443 }])), Err("[0].host is required".to_owned()));
-    assert_eq!(check(&upstreams, &json!([{ "host": "a", "prot": 1 }])), Err("[0].prot: no such setting".to_owned()));
+    assert_eq!(
+        check(&upstreams, &json!([{ "host": "a", "prot": 1 }])),
+        Err("[0].prot: no such setting; did you mean port?".to_owned())
+    );
 }
 
 #[test]

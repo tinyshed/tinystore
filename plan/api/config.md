@@ -480,7 +480,7 @@ Every error is `invalid`, one at open listing every problem:
 ```text
 config app: APP_PORT: "eighty" is not a number
 config app: region is required: set APP_REGION, or region in app.yaml
-config app: app.yaml: prot: no such setting
+config app: app.yaml: prot: no such setting; did you mean port?
 config app: app.local.yaml: no such file; optional lets it be absent
 config app: APP_DB_URL and APP_DB_URL_FILE are both set
 ```
@@ -494,7 +494,10 @@ config app: reset limits.rsp: no such setting, and no change of it is kept
 ```
 
 An update whose `ifVersion` another change came before is `conflict`, and a
-call after the store closed is `closed`.
+call after the store closed is `closed`. A key, a field or a variable that
+names no setting is told the nearest setting's name when one is an edit away,
+two for a name of seven letters or more; it is only said, and nothing is read
+as the setting it names.
 
 ## Bounds
 

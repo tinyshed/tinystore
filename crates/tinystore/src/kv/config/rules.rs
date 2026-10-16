@@ -4,7 +4,7 @@
 
 use serde_json::{Map, Number, Value};
 
-use super::declaration::{Group, Item, Kind, Node, Rules, Setting, joined, shown};
+use super::declaration::{Group, Item, Kind, Node, Rules, Setting, did_you_mean, joined, meant, shown};
 
 /// The units of a span, longest first, as the SDKs spell one: `1h30m`, `250ms`.
 const UNITS: [(&str, u64); 6] =
@@ -73,7 +73,8 @@ fn check_item(item: &Item, value: &Value) -> Result<Value, String> {
 /// the others' defaults filled in where the item leaves them out.
 fn check_group(group: &Group, map: &Map<String, Value>, path: &str) -> Result<Value, String> {
     if let Some(key) = map.keys().find(|key| !group.contains_key(*key)) {
-        return Err(format!(".{}: no such setting", joined(path, key)));
+        let near = meant(key, group.keys()).map(|near| joined(path, &near));
+        return Err(format!(".{}: no such setting{}", joined(path, key), did_you_mean(near)));
     }
     let mut checked = Map::new();
     for (key, node) in group {

@@ -104,7 +104,7 @@ fn a_config_sent_reads_its_layers_as_sent_and_gives_its_value_as_data() {
         ("layer 2".into(), "APP_PORT".into(), "APP_TIMEOUT in .env".into())
     );
     assert_eq!(from("db.url"), "DATABASE_URL_FILE, /run/secrets/db");
-    assert_eq!(explained.notes, ["APP_PROT: a variable with the prefix that names no setting"]);
+    assert_eq!(explained.notes, ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]);
 }
 
 #[test]

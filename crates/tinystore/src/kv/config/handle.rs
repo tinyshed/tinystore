@@ -330,9 +330,8 @@ where
         for file in &self.base.absent {
             tracing::info!(target: "tinystore", "config {}: {file}: absent", self.name);
         }
-        for name in &self.base.unused {
-            let why = "a variable with the prefix that names no setting";
-            tracing::warn!(target: "tinystore", "config {}: {name}: {why}", self.name);
+        for unused in &self.base.unused {
+            tracing::warn!(target: "tinystore", "config {}: {unused}", self.name);
         }
         self.warn_ignored();
         self.warn_differences();
@@ -435,9 +434,7 @@ where
             }
         }
         let mut notes: Vec<String> = self.base.absent.iter().map(|file| format!("{file}: absent")).collect();
-        notes.extend(
-            self.base.unused.iter().map(|name| format!("{name}: a variable with the prefix that names no setting")),
-        );
+        notes.extend(self.base.unused.iter().map(ToString::to_string));
         notes.extend(resolved.ignored.iter().map(|(path, change, why)| ignored(path, change, why)));
         notes.extend(
             resolved.foreign.iter().map(|path| format!("{path}: a change of a setting this program does not declare")),

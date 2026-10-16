@@ -105,7 +105,9 @@ runtime.
   the SQLite under it; `config` turns on kv, whose file keeps its changes,
   and `locks` kv too, whose file keeps their epoch;
   `console`, a logger's lines printed, turns on neither,
-  so a program that only logs links no SQLite. `wire`, the protocol's session
+  so a program that only logs links no SQLite. `typos`, the words nearest a
+  misspelt one, stands on no store; `config` turns it on, and the command
+  line uses it through config. `wire`, the protocol's session
   and the pipe that the server, the FFI and every SDK speak, is a default
   feature that turns on kv, and a Rust program that calls the engines
   directly leaves it out. `just lint` builds the library with each engine,
@@ -132,7 +134,8 @@ runtime.
   a series' identity and a backup's files, chacha20poly1305 for the values of encrypted
   buckets, zstd for the rows of records and the runs of metrics, the
   `metrics` facade, whose recorder the metrics engine is, toml and
-  yaml-rust2, without its encodings, for a config's files, and libc on Unix
+  yaml-rust2, without its encodings, for a config's files, fst and
+  levenshtein_automata for a misspelt name's nearest words, and libc on Unix
   for the disk's free space.
   Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the

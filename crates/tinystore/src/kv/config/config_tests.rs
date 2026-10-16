@@ -384,7 +384,10 @@ fn a_change_of_a_setting_this_program_does_not_declare_is_another_programs() {
 fn a_variable_with_the_prefix_that_names_no_setting_is_said() {
     let f = fixture();
     let config = open(&f, &[("APP_PROT", "1"), ("OTHER", "2")]);
-    assert_eq!(config.explain().notes, ["APP_PROT: a variable with the prefix that names no setting"]);
+    assert_eq!(
+        config.explain().notes,
+        ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]
+    );
 }
 
 #[test]

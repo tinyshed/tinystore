@@ -59,6 +59,24 @@ pub(crate) enum Transport {
     Local { sidecar: bool },
 }
 
+/// Every flag `serve` takes, for a misspelt one's nearest.
+const FLAGS: [&str; 14] = [
+    "--dir",
+    "--stdio",
+    "--local",
+    "--log",
+    "--idle",
+    "--clock",
+    "--listen",
+    "--tls-cert",
+    "--tls-key",
+    "--tokens",
+    "--memory",
+    "--keep-free",
+    "--encryption-key-file",
+    "--durability",
+];
+
 pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let mut dir = None;
     let (mut stdio, mut local) = (false, false);
@@ -86,7 +104,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
                 let word = value("--durability")?;
                 durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
             }
-            flag if flag.starts_with("--") => return Err(format!("no flag {flag}")),
+            flag if flag.starts_with("--") => return Err(format!("no flag {flag}{}", crate::meant(flag, &FLAGS))),
             _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
             _ => return Err(format!("one directory, not {arg} too")),
         }
@@ -212,6 +230,20 @@ mod tests {
 
     fn args(text: &str) -> Vec<String> {
         text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_misspelt_flag_is_told_its_nearest_and_every_flag_named_is_one() {
+        assert_eq!(serve(&args("--dri d")).unwrap_err(), "no flag --dri; did you mean --dir?");
+        assert_eq!(
+            serve(&args("d --encryption-keyfile k")).unwrap_err(),
+            "no flag --encryption-keyfile; did you mean --encryption-key-file?"
+        );
+        assert_eq!(serve(&args("d --verbose")).unwrap_err(), "no flag --verbose");
+        for flag in FLAGS {
+            let refused = serve(&args(&format!("d {flag} 1"))).err().unwrap_or_default();
+            assert!(!refused.starts_with("no flag"), "{flag}: {refused}");
+        }
     }
 
     #[test]

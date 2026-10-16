@@ -20,6 +20,23 @@ const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --s
        tinystore backup <dir> <file.zip> [--include <name>]... [--include-encryption-key]
        tinystore restore <file.zip> <dir>";
 
+/// The commands, for a misspelt one's nearest.
+const COMMANDS: [&str; 4] = ["serve", "backup", "restore", "version"];
+
+/// What follows a refusal when a person may have misspelt a command or a
+/// flag: the nearest of `names`, one edit away for three to six letters and
+/// two for more. It is only said: no word is read as another.
+pub(crate) fn meant(given: &str, names: &[&str]) -> String {
+    let edits = match given.chars().count() {
+        0..3 => 0,
+        3..7 => 1,
+        _ => 2,
+    };
+    tinystore::typos::Dictionary::new(names)
+        .nearest(given, edits)
+        .map_or_else(String::new, |near| format!("; did you mean {}?", near.word))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -30,9 +47,25 @@ fn main() -> ExitCode {
             println!("tinystore {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        _ => {
+        None | Some("help" | "--help" | "-h") => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
+        Some(other) => {
+            eprintln!("tinystore: no command {other}{}\n{USAGE}", meant(other, &COMMANDS));
+            ExitCode::from(2)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_misspelt_command_is_told_its_nearest_and_a_word_far_from_any_none() {
+        assert_eq!(meant("bakup", &COMMANDS), "; did you mean backup?");
+        assert_eq!(meant("serv", &COMMANDS), "; did you mean serve?");
+        assert_eq!(meant("deploy", &COMMANDS), "");
     }
 }

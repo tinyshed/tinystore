@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use yaml_rust2::{Yaml, YamlLoader};
 
-use super::declaration::{Declaration, Group, Node, joined, shown};
+use super::declaration::{Declaration, Group, Node, did_you_mean, joined, meant, shown};
 use super::rules;
 
 /// The largest file a config reads.
@@ -273,7 +273,10 @@ pub(super) fn walk(
         let at = joined(path, key);
         match (group.get(key), value) {
             (_, Value::Null) => {}
-            (None, _) => problems.push(format!("{at}: no such setting")),
+            (None, _) => {
+                let near = meant(key, group.keys()).map(|near| joined(path, &near));
+                problems.push(format!("{at}: no such setting{}", did_you_mean(near)));
+            }
             (Some(Node::Group(inner)), Value::Object(map)) => walk(inner, map, &at, given, problems),
             (Some(Node::Group(_)), other) => {
                 problems.push(format!("{at}: {} is not a group of settings", shown(other)))
