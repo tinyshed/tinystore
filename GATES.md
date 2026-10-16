@@ -786,6 +786,7 @@ module defines.
 - a Bun call under an aborted signal is refused — owed: its test went with protocol 1's records, and protocol 2's is not written
 - a Bun duration or rate misspelled does not compile — `a duration misspelled does not compile, and text from elsewhere is checked at its call` in `sdk/js/test/kv.test.ts`, `a rate it cannot read is refused, its type before its call` in `sdk/js/test/kv.test.ts`
 - a Bun store's close frees its directory — `close returns once the child has exited` in `sdk/js/test/kv.test.ts`
+- a Bun store's close cancels each config's stream before its connection ends, so a private child or a sidecar lets go at once, a store's logger following the config `log` among them — `a store closed as its config begins to follow lets go of what served it at once` in `sdk/js/test/config.test.ts`
 - the Bun SDK's files answer alike through the core in its process, a private child, a sidecar and a remote server, in one call and in pieces within each side's credit — `sdk/js/test/blobs.test.ts`, every test through each
 - a Bun file read whole whose bytes changed is `CorruptError` before its end — `a whole read of a changed byte fails CorruptError before its end` in `sdk/js/test/blobs.test.ts`
 - a Bun file's `slice` reads its range as `Blob.slice` takes one, and a large file read after a replace is `ConflictError` — `slice reads a range as Blob.slice takes one, from a large file or a small one`, `a small file keeps the bytes its get brought, and a large one read after a replace is ConflictError` in `sdk/js/test/blobs.test.ts`

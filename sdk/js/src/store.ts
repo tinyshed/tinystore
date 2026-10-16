@@ -138,7 +138,10 @@ export class Store implements AsyncDisposable {
 	readonly clock: Clock
 	readonly #link: Link
 	/** the configs open, by what opened them, so that the same open shares one stream */
-	readonly #configs = new Map<string, { config: Promise<{ stop(): void }>; validate: unknown }>()
+	readonly #configs = new Map<
+		string,
+		{ config: Promise<{ stop(): Promise<void> }>; validate: unknown }
+	>()
 	readonly #workers = new Set<Worker>()
 	readonly #loggers = new Set<Logger>()
 	readonly #instruments: Instruments
@@ -389,8 +392,8 @@ export class Store implements AsyncDisposable {
 
 	/**
 	 * Stops every worker, each once its handlers under way have answered,
-	 * ingests the instruments' last values and hands over the loggers' lines,
-	 * then closes the connection. A private child is waited for until it has
+	 * ingests the instruments' last values, hands over the loggers' lines and
+	 * cancels every config's stream, then closes the connection. A private child is waited for until it has
 	 * exited, so that the directory is free once this returns; the directory's
 	 * sidecar goes once it has been idle.
 	 */
@@ -399,13 +402,14 @@ export class Store implements AsyncDisposable {
 		await Promise.all([...this.#workers].map(worker => worker.stop()))
 		await this.#instruments.stop()
 		await Promise.all([...this.#loggers].map(logger => logger.stop()))
-		for (const { config } of this.#configs.values()) {
-			config.then(
-				opened => opened.stop(),
-				() => {},
-			)
-		}
-		await Promise.allSettled([...this.#configs.values()].map(({ config }) => config))
+		await Promise.all(
+			[...this.#configs.values()].map(({ config }) =>
+				config.then(
+					opened => opened.stop(),
+					() => {},
+				),
+			),
+		)
 		await this.#link.close()
 	}
 

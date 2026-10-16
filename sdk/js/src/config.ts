@@ -751,6 +751,8 @@ export class Config<D> {
 	#newer: (() => void)[] = []
 	#stream: Stream | undefined
 	#stopped = false
+	/** the loop that follows the config, which ends once it is stopped */
+	#following: Promise<void> = Promise.resolve()
 
 	private constructor(
 		link: Link,
@@ -792,7 +794,7 @@ export class Config<D> {
 		if (config.#refused !== undefined) {
 			throw config.#refused
 		}
-		void config.#follow()
+		config.#following = config.#follow()
 		return config
 	}
 
@@ -859,14 +861,20 @@ export class Config<D> {
 		return Object.assign([...this.#lines], { notes: [...this.#notes, ...refused] })
 	}
 
-	/** Stops following the config: the store closes. */
-	stop(): void {
+	/**
+	 * Stops following the config: the store closes. It resolves once the
+	 * stream that follows it is cancelled, so that the store's connection
+	 * ends after its CANCEL: a stream the server still ran would keep a
+	 * private child, or a sidecar's connection, draining for ten seconds.
+	 */
+	stop(): Promise<void> {
 		this.#stopped = true
 		this.#watchers.clear()
 		this.#stream?.cancel()
 		for (const wake of this.#newer.splice(0)) {
 			wake()
 		}
+		return this.#following
 	}
 
 	/** Runs a call on the config's handle on the link's connection, and takes the value it answers. */
@@ -965,14 +973,25 @@ export class Config<D> {
 			try {
 				const stream = await this.#link.run('read', async connection => {
 					const handle = await this.#handleOn(connection)
+					if (this.#stopped) {
+						return undefined
+					}
 					const opened = await connection.session.open(
 						methods['config.follow'],
 						Handle.encode({ handle }),
 						true,
 					)
+					// kept before its first answer, so that a stop meanwhile cancels it
+					this.#stream = opened
+					if (this.#stopped) {
+						opened.cancel()
+					}
 					await opened.next()
 					return opened
 				})
+				if (stream === undefined) {
+					return
+				}
 				this.#stream = stream
 				if (this.#stopped) {
 					stream.cancel()

@@ -322,5 +322,16 @@ for (const way of ways) {
 			)
 			expect((err as Error).message).toContain('APP_HOSTS: 3 items is above 2 items')
 		})
+
+		test('a store closed as its config begins to follow lets go of what served it at once', async () => {
+			const own = mkdtempSync(join(tmpdir(), 'tinystore-config-close-'))
+			const closing = await way.open(own)
+			await closing.config('app', [{ port: 3000 }])
+			const started = Date.now()
+			await closing.close()
+			await way.leave(own)
+			expect(Date.now() - started).toBeLessThan(3000)
+			await removed(own)
+		})
 	})
 }
