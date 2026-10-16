@@ -7,18 +7,18 @@ or remote through the server. This directory is the plan. Read it before
 working on the rewrite, and change it in the same commit that changes what it
 says.
 
-| File                                   | What it holds                                                                                                                                 |
-|----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| [decisions.md](decisions.md)           | what was decided, when and why; where two files disagree, this one wins                                                                       |
-| [evidence.md](evidence.md)             | what the Rust research measured and what it did not, and what to take from its prototypes                                                     |
-| [architecture.md](architecture.md)     | the layers, the crates, the runtime model, config and logger, durability, the modules that come later                                         |
-| [ffi.md](ffi.md)                       | the byte pipe: its four functions, the bindings per language, async hosts, what ships per platform                                            |
-| [protocol.md](protocol.md)             | protocol 2: the books as messages, one schema, the codecs generated for every language                                                        |
-| [dx.md](dx.md)                         | the API's vocabulary: the rules, the newcomer check, the words decided and the drafts                                                         |
-| [phases.md](phases.md)                 | the order of work: each phase's tasks and the gate that closes it, with their status                                                          |
-| [tests.md](tests.md)                   | how the Go suite becomes the Rust suite                                                                                                       |
-| [metrics-engine.md](metrics-engine.md) | how the metrics engine keeps its book's promises: its file, packing, reads, and what measurements decide                                      |
-| [scaling.md](scaling.md)               | how an application grows past one machine and leaves: the ladder, one stream a file, standby, replicas, failover, cells, the exit; a proposal |
+| File                                   | What it holds                                                                                                                                |
+|----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| [decisions.md](decisions.md)           | what was decided, when and why; where two files disagree, this one wins                                                                      |
+| [evidence.md](evidence.md)             | what the Rust research measured and what it did not, and what to take from its prototypes                                                    |
+| [architecture.md](architecture.md)     | the layers, the crates, the runtime model, config and logger, durability, the modules that come later                                        |
+| [ffi.md](ffi.md)                       | the byte pipe: its four functions, the bindings per language, async hosts, what ships per platform                                           |
+| [protocol.md](protocol.md)             | protocol 2: the books as messages, one schema, the codecs generated for every language                                                       |
+| [dx.md](dx.md)                         | the API's vocabulary: the rules, the newcomer check, the words decided and the drafts                                                        |
+| [phases.md](phases.md)                 | the order of work: each phase's tasks and the gate that closes it, with their status                                                         |
+| [tests.md](tests.md)                   | how the Go suite becomes the Rust suite                                                                                                      |
+| [metrics-engine.md](metrics-engine.md) | how the metrics engine keeps its book's promises: its file, packing, reads, and what measurements decide                                     |
+| [scaling.md](scaling.md)               | how an application grows past one machine and leaves: nodes, a home a file, writes, failures, a home that moves, one stream a file, the exit |
 
 The plan was written on 9 October 2026 from the research rounds of 7–9
 October, an inventory of the Go API and tests, and the owner's decisions of
@@ -33,9 +33,10 @@ and is not the source of truth; these files are.
 | 1. Vertical slice: core and KV through every layer | in progress |
 | 2. sqldb, jobs, blobs                              | in progress |
 | 3. records and metrics                             | in progress |
-| 4. Backup, CLI, guest, SDKs, v0.1.0                | not started |
-| 5. Channels and locks                              | not started |
-| 6. Indexes                                         | not started |
+| 4. Backup, CLI, guest, SDKs, v0.1.0                | in progress |
+| 5. Channels and locks                              | in progress |
+| 6. Indexes                                         | in progress |
+| 7. Replication                                     | not started |
 
 [phases.md](phases.md) has each phase's tasks and gate.
 

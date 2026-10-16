@@ -2,46 +2,206 @@
 
 How TinyStore lets an application grow past one process and one machine
 without rewriting it, and how the application leaves when it outgrows
-TinyStore. Written on 14 October 2026 from a conversation with the owner. Past
-the ladder's built steps nothing here is built or decided: the owner's calls
-are under [Open](#open), and a step they accept moves into
-[phases.md](phases.md) and [decisions.md](decisions.md).
+TinyStore. Written on 14 October 2026 from a conversation with the owner;
+the model of nodes and homes was accepted on 17 October
+([decisions.md](decisions.md), entry 20) and is built in phase 7
+([phases.md](phases.md)). The calls still open are under [Open](#open).
 
 ## The promise
 
-TinyStore does not become a distributed database. It lets an application go
-as far as one machine and copies of it carry it, without infrastructure the
-application did not ask for, and it never traps it: every step has a way out.
+TinyStore does not become a distributed database that merges writes. It lets
+an application go as far as copies of its files and homes spread over
+machines carry it, without infrastructure the application did not ask for,
+and it never traps it: every step has a way out.
 
 - Between steps the application changes an address or an option, never its
   own logic.
-- A file has one writer on one machine. Scaling out is copies that read and
-  stand by, and cells that each own their data; never two writers of a file.
-- Each step says what it costs where it is offered: latency, the commits a
-  failover can lose, how far a copy lags.
+- A file has one writer at a time, on one machine: its home. Scaling out is
+  copies that read where they run, and files whose homes are on different
+  machines; never two writers of a file.
+- Each step says what it costs where it is offered: the round trip a write
+  pays to its home, the commits a failover can lose, how far a copy lags.
 
 ## The ladder
 
-| Step                      | What it gives                                                                                   | What the code changes                                          | Status                                                    |
-|---------------------------|-------------------------------------------------------------------------------------------------|----------------------------------------------------------------|-----------------------------------------------------------|
-| 1. One folder             | the store inside the program, no server                                                         | `open('./data')`                                               | built                                                     |
-| 2. A server               | many processes on one store over TCP and TLS, tokens that admit, write or only read             | `connect('tls://db:7443', { token })`                          | built                                                     |
-| 3. Off the machine        | a backup in a cloud; then every commit in object storage within seconds, restored to any second | nothing: an address where the store opens or the server starts | the zip is built; the cloud and the stream are not        |
-| 4. A standby              | a second server that follows the first, promoted by a command                                   | a second address in `connect`                                  | not built                                                 |
-| 5. Reads near the program | replicas that read, and a copy inside the program that reads at the speed of a folder           | an option on the handles that may read a copy                  | not built                                                 |
-| 6. Failover               | a lease decides the one primary, epochs fence the old one, no person needed                     | nothing                                                        | not built                                                 |
-| 7. Cells                  | tenants spread over machines, a database each, moved while they work                            | the tenant's id picks its database                             | not built                                                 |
-| The exit                  | the data out to Postgres, object storage, ClickHouse or Prometheus, from any step               | a command                                                      | sql's files are plain SQLite; the exporters are not built |
+| Step                   | What it gives                                                                                   | What the code changes                    | Status                                                    |
+|------------------------|-------------------------------------------------------------------------------------------------|------------------------------------------|-----------------------------------------------------------|
+| 1. One folder          | the store inside the program, no server                                                         | `open('./data')`                         | built                                                     |
+| 2. A server            | many processes on one store over TCP and TLS, tokens that admit, write or only read             | `connect('tls://db:7443', { token })`    | built                                                     |
+| 3. Copies              | a node anywhere, in a server or inside the program, holding the files it asks for, read locally | `from` and `serve` where the store opens | not built                                                 |
+| 4. Homes on many nodes | each file written on the node nearest its writers, a tenant's database in its region            | where a database's home is               | not built                                                 |
+| 5. A home that moves   | a file's home moved by a command, later by itself when its node dies                            | nothing                                  | not built                                                 |
+| 6. Off the machine     | a backup in a cloud; then every commit in object storage, restored to any second                | an address where the store opens         | the zip is built; the cloud and the stream are not        |
+| The exit               | the data out to Postgres, object storage, ClickHouse or Prometheus, from any step               | a command                                | sql's files are plain SQLite; the exporters are not built |
 
 ## What it will not be
 
-- No consensus for data, no Raft: a lease decides who writes, and the data
+- No consensus for data, no Raft: one home writes a file, and the data
   follows as pages.
-- No two primaries, no merge of conflicting writes, no writes on a copy cut
-  off from its primary. Writes on both sides while offline are another product
-  (Turso's Sync is one) and another promise.
+- No two homes of a file, no merge of conflicting writes, no writes on a copy
+  cut off from its home. Writes on both sides while offline are another
+  product (Turso's Sync is one) and another promise.
 - No transaction across files, machines or cells: none exists across files on
   one machine today.
+
+## Nodes
+
+Every TinyStore is a node, and every node runs the same code. There is no
+relay, standby or replica in the code: what a node is follows from which files
+it holds, which of them it writes, and who takes them from it.
+
+```ts
+// a draft: the names are the owner's to settle
+const store = await open('./data', {
+  from: ['tls://eu:7443', 'tls://us:7443'],   // where this node takes its files, in order
+  serve: 'tls://0.0.0.0:7443',                // where other nodes take them from this one
+})
+```
+
+- **A file has one home**: the node that writes it, at an epoch. Every other
+  node holding it holds a copy, which only readers and the applier open.
+- **A node takes only the files it asks for.** A program that needs one
+  database of 20 MB does not copy the network's 500 GB.
+- **A node serves whatever it holds**, its own files and its copies alike,
+  the bytes and positions of a copy as it received them. A copy taken from a
+  copy is the same copy: twenty nodes inside programs can take their files
+  from one node in their data centre rather than from a home an ocean away.
+- **`from` is whom the node is connected to**, a list tried in order. Pages
+  come from there and writes go there; a node passes a write for a file it
+  does not write on toward that file's home.
+- **The network is the core's.** The replication engine holds the links on
+  the store's threads, with no async runtime, so that a store inside a Bun or
+  Python program is the same node as a server. The command line watches and
+  steers the links: their lag, `promote`, a move, a fresh copy.
+
+Three jobs stay apart, because they need different guarantees:
+
+| Job                | What it is                                           | What decides it                                                     |
+|--------------------|------------------------------------------------------|---------------------------------------------------------------------|
+| Copying            | each file's commits, as pages, to the nodes that ask | the file's home, which alone writes its log                         |
+| Routing            | where a write for a file goes                        | the catalog: a file naming each file's home, copied like any other  |
+| The right to write | which node is a file's home now                      | a person in the first version; later a lease held outside the nodes |
+
+The catalog routes and never grants the right to write: during a cut of the
+network each side holds its own copy of it, and both would name themselves.
+
+## An example: America, Europe, Russia
+
+The application's backend runs in America, where it is deployed and where its
+migrations run. A node in Europe copies every file so that European servers
+read near them; a node in Russia copies its files from Europe.
+
+```
+America (home, migrations) ──pages──▶ Europe (copy) ──pages──▶ Russia (copy)
+America ◀──────writes────── Europe ◀──────writes────── Russia
+```
+
+- **Reads and searches** are local on every node.
+- **A write from Europe** goes to America, America commits it, its pages come
+  back, and the call answers once Europe's copy holds them: one round trip
+  across the ocean, about 100 ms. From Russia it is two hops, or one if Russia
+  is told to send writes to America directly.
+- **Migrations run at the home alone** and reach the copies as pages. A
+  release goes to the home first; a copy whose code expects a newer schema
+  waits for the migration to arrive.
+- **If America dies**, Europe, the freshest copy, becomes the home; Russia
+  takes its files from Europe as before. Nodes that were connected to America
+  try the next address of their `from`, and Europe answers that it is the home
+  now.
+
+## Writes
+
+A write that two machines must agree on pays the round trip between them, in
+any database: light in fibre needs about 60 ms from Europe to America and
+back. TinyStore makes that cost visible and puts it only where it cannot be
+avoided.
+
+| Write                                             | Where it lands                                          | What it costs                   |
+|---------------------------------------------------|---------------------------------------------------------|---------------------------------|
+| A read                                            | the local copy                                          | nothing                         |
+| A counter's add, an appended event                | a local queue, seen at once, sent to the home           | nothing; no conflict            |
+| A set                                             | the home; answered once the local copy holds its commit | the round trip to the home      |
+| A decision: a unique name, the last item, a quota | the home alone                                          | the round trip to the home      |
+| A tenant's or a region's own data                 | a database whose home is in that region                 | nothing for that region's nodes |
+
+**Read your writes.** A set answers once its home committed it and the
+node's own copy applied that commit, so a `get` right after it sees it. A copy
+that cannot apply it within a bound answers with what it knows: the write
+committed, the copy behind.
+
+**Operations that commute go through a local queue.** Two adds of one counter
+give the same total in either order, so a node writes `+1` into a queue of its
+own on its disk, a file no one copies, and answers at once. `get` answers the
+copy's value with what the queue still holds. The queue sends each operation
+to the home with an id; the home commits the id with the effect, so that an
+operation sent twice counts once; the operation leaves the queue when its id
+arrives back in the pages. If the home dies meanwhile, the queue sends to the
+next one.
+
+**A set through the queue** is an option for values whose last writer may
+win: it answers at once and says, where it is offered, that one of two
+concurrent sets is lost.
+
+**Decisions go to the home alone.** Selling the last item from two continents
+without asking each other sells it twice.
+
+**Where to put data.** A tenant's tables, keys, jobs and index belong in its
+own database, `sql/<tenant>.db` with `db.bucket`, `db.queue` and
+`db.searchIndex`, which are built: it can then have its home in its region
+and move whole.
+
+**A node's logs and metrics are its own**: records' and metrics' files stay on
+the node that writes them and are copied only when asked for.
+
+**Locks and channels** live in the memory of the process that holds the home
+of kv.db; from other nodes a hold or a subscription goes there. When that home
+moves, leases are lost and subscriptions are made again, as after a lost
+connection today.
+
+## When something breaks
+
+| What breaks                 | What happens                                                                                                           |
+|-----------------------------|------------------------------------------------------------------------------------------------------------------------|
+| A copy dies                 | nothing else notices; it catches up from its last position when it returns, or from a fresh copy if the log moved on   |
+| The link to the home is cut | reads go on from the copy, older by the minute; writes try again for a bound, then fail `unavailable`, naming the home |
+| A home dies                 | its files read everywhere and take no writes until a copy becomes their home                                           |
+| A home's disk is lost       | a copy becomes the home; the commits not yet shipped are lost, counted and logged, or none in the synchronous mode     |
+| The home of one file dies   | files with homes elsewhere take writes as before                                                                       |
+
+A lag and an unreachable home are said once in the log and shown by the
+command line; a write never waits without a bound.
+
+**The synchronous mode.** By default a home answers a write after its own
+commit and its copies trail. As an option, a home answers only once a chosen
+copy holds the commit, so that losing the home loses nothing it answered; a
+grouped commit pays one round trip for the whole group.
+
+## Changing a file's home
+
+**Moving a home that is alive** loses nothing: the old home stops taking
+writes, ships its last commits, and the new home opens its writer at the next
+epoch.
+
+**When a home dies**, no node can tell a dead home from a cut cable: both are
+silence. A copy that guessed wrong and opened a writer while the old home
+lived would make a second home, and the file would split for good.
+
+- **In the first version a person decides**: `tinystore promote` on the
+  freshest copy, once the old home is known to be stopped.
+- **Later, a judge outside the nodes decides**: a lease in object storage
+  renewed by a conditional write (`If-Match`), as Litestream 0.5 holds its, or
+  a small witness process. A home that cannot renew stops writing before its
+  lease can be taken, by a margin wider than the clocks' drift; the freshest
+  copy allowed to take it does so once it expired.
+- **Epochs fence.** Each change of home raises the file's epoch; a node
+  refuses pages of an older epoch, and a client a home older than one it has
+  seen.
+- **The news travels along the links**: the new home tells the nodes
+  connected to it, nodes cut off from the old one try the next address of
+  their `from`, and the judge, where there is one, has the last word.
+- **The old home comes back as a copy**: it drops what it had not shipped,
+  counted and logged, and follows the new home before it opens any writer.
+- The margins are chosen by measurement, not here.
 
 ## One stream a file
 
@@ -49,69 +209,75 @@ Every step after the second stands on one mechanism: each file's commits, as
 the pages they wrote, in order.
 
 **Capture.** A file has one writer, and every commit passes through it
-([architecture.md](architecture.md), the writer). After a commit the writer
-reads the frames the commit appended to the WAL and hands them, with the
-file's commit number, to the file's log. Litestream and LiteFS work from
-outside the program, through a read transaction held open or a FUSE file
-system; the writer is inside and knows each commit as it ends.
+([architecture.md](architecture.md), the writer). After a commit, while the
+writer is still held, the adapter reads the frames the commit appended to the
+WAL and hands them, with the file's commit number, to the file's log. The
+three commits of the adapter, a grouped commit, a transaction of its own and
+a begun transaction, already run channels' hooks at that point, the writer
+still held. Litestream and LiteFS work from outside the program, through a
+read transaction held open or a FUSE file system; the writer is inside and
+knows each commit as it ends.
 
 The adapter takes over checkpoints for this: `wal_autocheckpoint` off, and a
-checkpoint of its own once a commit's frames are taken, so that no checkpoint
-resets the WAL before its frames are read. Today SQLite checkpoints by itself,
-and only `close` runs `wal_checkpoint(truncate)` (`sqlite/file.rs`).
+checkpoint of its own once a commit's frames are in the log, so that no
+checkpoint resets the WAL before its frames are read. Today SQLite checkpoints
+by itself, and only `close` runs `wal_checkpoint(truncate)` (`sqlite/file.rs`).
+A commit whose capture fails after SQLite committed it answers
+`OutcomeUnknown`, and the file takes no write until it recovers from the WAL.
 
-**Pages, not operations.** A copy that applies pages is the primary's file
-byte for byte, so:
+**Pages, not operations.** A copy that applies pages is the home's file
+page for page, so:
 
 - every engine and the application's own SQL replicate alike, migrations
   included, and a `now()` or `random()` in a statement changes nothing;
 - what writes by itself — kv's expiry, records' packing and merges, metrics'
-  packing and expiry, jobs' scheduler, `once` — runs on the primary alone and
+  packing and expiry, jobs' scheduler, `once` — runs at the home alone and
   reaches a copy as pages;
-- a copy proves by a checksum that it is the primary's file at a commit.
+- a copy proves by a checksum that it is the home's file at a commit. The
+  checksum leaves out the eight bytes of page 1 that hold SQLite's change
+  counters, which the applier's own commits move.
 
 A small change carries a whole page. Grouped commits share pages, and the log
-packs them with zstd; the research round under [Order](#order) measures what
-remains.
+packs them with zstd.
 
-**Positions.** Each file counts its own commits. Nothing orders two files: no
-write is atomic across files on the primary, so no copy promises it either.
+**Positions.** Each file counts its own commits, at its epoch. Nothing orders
+two files: no write is atomic across files at a home, so no copy promises it
+either. An entry is named by its file, epoch, number and checksum, and names
+the checksum before it, so a node applies an entry once whichever neighbour
+it came from, and a conflicting entry of the same number reveals two homes.
 
-**The log.** The primary keeps each file's recent commits in its directory,
-segments a file (`log/<file>/`, a draft), until every follower and the
-archive hold them, within a bound of bytes and of age and the disk the store
-keeps free. A follower that falls behind the log starts again from a snapshot.
-
-**Integrity.** An entry carries its pages' checksums and a checksum of the
-file after it, as LTX's post-apply checksum does. A follower that disagrees
-stops and starts again from a snapshot rather than serve a file that is not
-the primary's.
+**The log.** A home keeps each file's recent commits in its directory,
+segments a file, within a bound of bytes and of age and the disk the store
+keeps free. A node that falls behind the log starts again from a fresh copy;
+no slow node pins it.
 
 ## Applying it
 
-A follower applies a commit's pages in one write transaction through SQLite's
+A copy applies a commit's pages in one write transaction through SQLite's
 `sqlite_dbpage` table, so its readers see whole commits and only SQLite's
 pager writes the file. SQLite 3.53.2 writes pages through it and truncates the
-file by `INSERT INTO sqlite_dbpage(pgno, data) VALUES (n, NULL)`. It needs
-`SQLITE_ENABLE_DBPAGE_VTAB` added to `LIBSQLITE3_FLAGS` in
+file by `INSERT INTO sqlite_dbpage(pgno, data) VALUES (n, NULL)`, all in one
+statement. It needs `SQLITE_ENABLE_DBPAGE_VTAB` added to `LIBSQLITE3_FLAGS` in
 `.cargo/config.toml`, and no new `unsafe`.
 
-A follower's engines open no writer and run none of their background work: no
-expiry, packing, merges, jobs, `once`, migrations or instruments of their own.
-Its readers are the same `query_only` readers. What follows a file — a jobs
-watch, a records tail, a config's values — goes to the primary in the first
-version; later a follower wakes it after it applies a commit of that file.
+On a copy, a file's engines open readers and no writer, and run none of their
+background work: no expiry, packing, merges, jobs, `once`, migrations or
+instruments of their own. Background work and the writer follow the file, not
+the store, since a node writes its own files and copies others at once. An
+engine that keeps what it read of its file in memory reads it again after a
+commit applies.
 
-A follower judges a key's time to live by its own clock, as the primary does;
-the two clocks agree within the skew the engines accept already.
+A copy judges a key's time to live by its own clock, as its home does; the
+two clocks agree within the skew the engines accept already.
 
 ## The first copy
 
-A follower applies later pages on top of its first copy, so the copy must be
-the primary's file page for page at a known commit. Backup's `vacuum into`
-rebuilds a file and renumbers its pages: it cannot start a follower. The
-snapshot reads every page through `sqlite_dbpage` inside one read transaction
-and records the commit it stands at.
+A copy applies later pages on top of its first copy, so that copy must be the
+home's file page for page at a known commit. Backup's `vacuum into` rebuilds
+a file and renumbers its pages: it cannot start a copy. The snapshot reads
+pages in short read transactions between two positions taken under the
+writer, then applies the commits between them, so that no long reader grows
+the WAL.
 
 Backup's orchestration carries over: each engine's moment while it keeps
 working, blobs' bytes linked while removals are held, and the manifest of
@@ -120,26 +286,12 @@ sizes and SHA-256 ([api/backup.md](api/backup.md)).
 ## Blobs
 
 An object in `objects/` is never written again after its commit, so it ships
-before the commit of `blobs.db` that names it, and a follower fetches an
-object it lacks before it applies that commit. A removal applies after the
-commit that drops the object's last name. Contents small enough to live inline
-in `blobs.db` travel with its pages.
+before the commit of `blobs.db` that names it, and a copy fetches an object it
+lacks before it applies that commit. A removal applies after the commit that
+drops the object's last name. Contents small enough to live inline in
+`blobs.db` travel with its pages.
 
-## Where the stream goes
-
-| Sink                  | What it is for                                                                               | Step |
-|-----------------------|----------------------------------------------------------------------------------------------|------|
-| object storage        | the archive: restore to any commit or second, segments compacted by time as Litestream's are | 3    |
-| a standby server      | a copy ready to be promoted                                                                  | 4    |
-| a read replica        | reads taken off the primary                                                                  | 5    |
-| a copy in the program | reads without the network                                                                    | 5    |
-| another cell          | a database moved to another machine                                                          | 7    |
-
-Object storage means the S3 protocol, which AWS, Cloudflare R2, Backblaze B2,
-Hetzner, Yandex Object Storage, Selectel and MinIO speak: one client reaches
-them all.
-
-## A backup in a cloud, before the stream
+## A backup in a cloud
 
 What a small project wants first is its zip somewhere else, in one line. It
 stands on the backup that is built.
@@ -182,94 +334,9 @@ tinystore restore s3://my-bucket/app/2026-10-14.zip ./data   # a draft
 - **Never sync the live directory** with Google Drive's or Dropbox's client:
   it copies SQLite's files in the middle of a write. Sync the zip.
 
-## A standby
-
-```sh
-tinystore serve ./data --replica-of tls://a:7443    # on b, beside how a serves today; a draft
-tinystore promote ./data                            # on b, once a is gone; a draft
-```
-
-- The standby starts from a snapshot, then follows each file's log; after a
-  lost connection it asks for each file from the commit it applied last.
-- It connects with a token of a capability of its own beside admin, data and
-  read, or with an admin's.
-- `promote` stops following, keeps what was applied, opens the writers,
-  starts the background work and raises the epoch. A person runs it after
-  making sure the old primary is gone; step 6 does it without one.
-
-**Async by default.** The primary answers a write after its own commit, and
-the standby trails: a failover loses the commits not yet shipped, counted and
-logged. **Sync as an option:** a commit's completion fires once the standby
-holds it, and a grouped commit pays one round trip for the whole group. While
-the standby is gone a sync write waits; whether it may fall back to async with
-an alarm is open.
-
-**What a failover keeps.** A job runs at least once already
-([api/jobs.md](api/jobs.md)), so a job may run again. A `once` key may run
-again after an async failover: its book says so, or `once` asks for sync.
-Counters flushed every second and rate limits lose what they lose to a crash
-today.
-
-## Clients
-
-```ts
-const store = await connect(['tls://a:7443', 'tls://b:7443'], { token })   // a draft: today connect takes one address
-```
-
-- The list is where to look, not whom to trust. Each server says in its
-  welcome whether it is the primary or a replica, its epoch, and the primary's
-  address.
-- Writes go to the primary of the highest epoch the client has seen; a
-  replica refuses a write with an error that names the primary. libpq's
-  several hosts with `target_session_attrs=read-write` work the same way.
-- Reads go to the primary unless a handle was opened to read a copy, an
-  option of its builder (a draft).
-- **Reading one's own writes.** A write answers its file's commit number; the
-  session keeps the highest a file and sends it with a read to a copy, which
-  waits until it has applied that commit, within a bound, or the read goes to
-  the primary.
-
-## A copy in the program
-
-```ts
-const store = await open('./copy', { replicaOf: 'tls://a:7443', token })   // a draft
-```
-
-A follower inside the program reads at the speed of a folder; its writes go
-to the primary and are answered once the copy has applied their commit, so
-the program reads what it wrote. The network stays in the SDK or the command
-line: the core applies the pages it is handed and keeps no client of its own.
-Turso's embedded replicas have this shape.
-
-## Failover without a person
-
-Two servers cannot tell a dead peer from a cut cable, so a third party decides
-who writes.
-
-- **A lease in object storage.** The primary holds a lease object and renews
-  it by a conditional write (`If-Match`); a standby takes it only once it has
-  expired. Litestream 0.5 holds its lease this way where LiteFS used Consul.
-  Without object storage a small witness process holds the lease; without
-  either, promotion stays manual.
-- **Epochs fence.** Each promotion raises the epoch. A primary that cannot
-  renew stops accepting writes before its lease can be taken, by a margin
-  wider than the clocks' drift; a follower refuses pages of an older epoch; a
-  client refuses a primary older than one it has seen.
-- **The old primary comes back as a replica:** it reads the lease, drops what
-  it had not shipped, counted and logged, and follows the new primary.
-- The margins are chosen by measurement, not here.
-
-## Cells
-
-- **A tenant is a database.** `store.database(tenant)` keeps the tenant's
-  tables, and `db.bucket` and `db.queue` its keys and jobs, in one file. This
-  is built, and it is the advice to give users now: it makes a tenant movable
-  later.
-- A cell is a store on a machine. A directory maps each tenant to its cell,
-  and the SDK routes by the tenant.
-- **Moving a tenant** streams its database to the new cell, cuts over at a
-  commit and redirects; a tenant's blob set moves by its objects and its rows.
-- Nothing spans two cells in one transaction.
+Later the same `s3://` address takes every commit: object storage is a node
+without a process, holding the log's segments and snapshots in the format
+the links carry, restored to any commit or second.
 
 ## The exit
 
@@ -287,53 +354,71 @@ exporter no other tool reads them. An export is not lossless — time to live,
 versions and a queue's guarantees differ from system to system — and each
 exporter says what it drops.
 
+## What the research measured
+
+Research's rounds of 15 October, on a managed Linux container (kernel
+6.18.44, AMD EPYC 9V74, a quota of 2 CPUs, 8 GiB), SQLite 3.53.2 with FULL
+durability, against product branches `experiment/wal-capture` (`690cdf3`) and
+`experiment/wal-load` (`31b10e4`), which are not merged:
+
+- capture at the writer kept 89.5–91.8 % of the uncaptured write rate under 64
+  writers and eight readers, and a bounded history kept the process at 52–54
+  MiB against 373–384 MiB
+  ([scaling-wal-load](https://github.com/tinyshed/research/blob/main/tinystore/reports/scaling-wal-load-2026-10-15.md));
+- 33 scenarios of a process killed mid-write recovered every acknowledged
+  commit
+  ([scaling-wal](https://github.com/tinyshed/research/blob/main/tinystore/reports/scaling-wal-2026-10-15.md));
+- a node that forwards what it received unchanged, 7 × 20 on loopback, cut
+  the root's response bytes 20× and added 5 % to the network's
+  ([scaling-cascade](https://github.com/tinyshed/research/blob/main/tinystore/reports/scaling-cascade-2026-10-15.md)).
+
+None of it is a WAN measurement, a power cut or a failover time.
+
 ## Order
 
-Nothing here blocks `v0.1.0`: a copy takes the files as they are, and the
-protocol gains messages without changing one.
+Phase 7 builds the first version now, before phase 4's command line and the
+SDKs, which wait for the system's full bounds (the owner, 17 October):
 
-Before `v0.1.0`:
+| Slice               | Its work                                                                                          | Its gate                                                                                       |
+|---------------------|---------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| 1. Capture          | the after-commit seam in the three commits, checkpoints taken over, the log in segments, recovery | every commit of every engine is in its file's log, in order, through a process killed anywhere |
+| 2. Apply            | a copy's pages applied whole; engines on a copy without writer or background work                 | a copy equals its home at each commit; no reader sees half a commit                            |
+| 3. The first copy   | a page-exact snapshot in short reads; blobs' objects before their commit                          | a copy started while the home is written converges on it                                       |
+| 4. Links            | `from` and `serve` in the core, files chosen, copies of copies, reconnects, a fresh copy          | a node three links away holds the home's files; a cut link resumes from its position           |
+| 5. Writes           | writes passed to the home, read your writes, the queue of operations that commute, `unavailable`  | a get after a set sees it on any node; an operation sent twice counts once                     |
+| 6. Several homes    | the catalog, files homed on different nodes, routing, a move                                      | two nodes write their own files and copy each other's; a moved database loses no commit        |
+| 7. Promote          | epochs, `tinystore promote`, an old home back as a copy, the command line's view of links         | a promotion loses only the unshipped commits, counted; an old home cannot write again          |
+| 8. Synchronous mode | a home answering once a chosen copy holds the commit                                              | losing the home's directory loses no write it answered                                         |
 
-- [ ] A research round: what taking a commit's frames costs a commit; the
-  bytes a commit ships for kv, jobs, sql, records and metrics, raw and through
-  zstd; applying them through `sqlite_dbpage`.
-- [ ] Beside phase 4's backup: `s3://` in the Bun SDK, `tinystore backup <dir>
-  -`, a guide to rclone; the command line's S3 once its HTTP client is chosen.
-
-After `v0.1.0`, proposed:
-
-| Phase              | Its work                                                                         | Its gate                                                                                                           |
-|--------------------|----------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| 7. Off the machine | the log, the archive in object storage, restore to a commit or a second          | a store restored at commit N is the primary's files at N, byte for byte                                            |
-| 8. A standby       | `--replica-of`, the snapshot, `promote`, `connect` with a list, roles in welcome | a standby's files equal the primary's at each commit; a promotion loses only the unshipped commits, counted        |
-| 9. Reads           | replicas, the copy in the program, commit numbers for one's own writes           | a read after a write sees it on any copy; no reader sees half a commit                                             |
-| 10. Failover       | the lease, epochs, sync                                                          | no cut of a simulated network leaves two primaries that both accept writes; an old primary comes back as a replica |
-| 11. Cells          | the directory, routing, moving a database                                        | a database moved while written loses no commit and serves from its new cell after the cut-over                     |
-| any time           | the exporters                                                                    | each takes its engine's test data out and names what it lost                                                       |
+After it: the judge and a home that moves by itself, whose gate is that no
+cut of a simulated network leaves two homes taking writes; the log in object
+storage with a restore to a commit or a second; the exporters.
 
 ## Open
 
-1. When: the log and the archive right after `v0.1.0`, before channels and
-   indexes?
-2. Async by default; whether a sync write falls back when the standby is
-   gone; what `once` promises after a failover.
-3. Where the network lives: the command line and the SDKs, with the library
-   writing the log and applying pages (proposed), or an object-storage client
-   in the library behind a feature.
-4. The command line's HTTP client and root certificates.
-5. A backup that leaves the machine: encrypted by default, and the option's
-   name.
-6. The names: `--replica-of`, `replicaOf`, `promote`, the read option, the
-   log's directory.
+1. The names: `from`, `serve`, `promote`, the move, the queue's set, the
+   synchronous mode, the log's directory.
+2. The judge: a lease in object storage, a witness process, or both.
+3. TLS and an object storage client in the library behind the feature:
+   rustls, which `crates/cli` uses, would move into the core.
+4. A file's identity across nodes: its name in the catalog with an id made
+   at its creation; two homes claiming one name refused.
+5. Collecting nodes' logs and metrics in one place: a node copying others'
+   records and metrics, and under what names.
+6. Whether a synchronous write falls back when its copy is gone, and with what
+   alarm; what `once` promises after an asynchronous failover.
 7. The log's format, TinyStore's own or LTX; a checksum of the whole file
    every commit or now and then.
+8. A backup that leaves the machine: encrypted by default, and the option's
+   name.
 
 ## Prior art
 
 - [Litestream](https://fly.io/blog/litestream-revamped/): the WAL to object
   storage, LTX files compacted in levels, a lease through conditional writes,
   and [read replicas through a VFS](https://litestream.io/how-it-works/vfs/).
-- LiteFS: a FUSE file system and a lease in Consul.
+- LiteFS: a FUSE file system, a lease in Consul, writes forwarded to the
+  primary.
 - rqlite: Raft, and reads at a consistency the caller picks.
 - [Turso](https://docs.turso.tech/features/embedded-replicas): embedded
   replicas by pages; Sync by logical changes, for writes on both sides.

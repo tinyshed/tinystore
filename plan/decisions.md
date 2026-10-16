@@ -151,10 +151,27 @@ to `upper`, beside a gauge's exact percentile by rank; B6 is `names`,
 `labelNames` and `labelValues`. Rollups, Prometheus' text and `poll` (C4, C5,
 C6) are shapes for later.
 
+**20. Every store is a node, and a file has one home** ([scaling.md](scaling.md)),
+on 17 October, after search closed. The owner wants replication and scaling
+built now and the command line and SDKs last, once the system's bounds are
+known. Every TinyStore is a node running the same code: it takes the files it
+asks for `from` other nodes and `serve`s whatever it holds, so a relay, a
+standby or a replica is only who takes what from whom. A file is written by
+one node at a time, its home, since two versions of one page cannot be merged;
+different files may have homes on different nodes. A write goes to its file's
+home and answers once the node's own copy holds its commit; a read is local;
+operations that commute, a counter's add and an append, go through a local
+queue and are seen at once. Migrations run at the home alone. In the first
+version a person moves a home with `promote`; a judge outside the nodes comes
+later. An outside review the owner brought held the three jobs apart: copying,
+routing through the catalog, and the right to write, which the catalog never
+grants. The network is the core's, so that a store inside a program is the
+same node as a server; a node's logs and metrics stay its own.
+
 ## Open
 
 - Every name in [dx.md](dx.md) marked draft waits for its engine's API book.
 - Whether the Rust API is blocking only or also offers `async` wrappers.
 - Crate names on crates.io, the npm scope and the PyPI name, checked free
   before the first release.
-- Scaling past one machine: the calls under [scaling.md](scaling.md)'s Open.
+- Replication: the calls under [scaling.md](scaling.md)'s Open.

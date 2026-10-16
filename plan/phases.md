@@ -269,3 +269,22 @@ delivered; a subscriber that falls behind receives a gap event.
 
 **Gate:** a changed index definition rebuilds while reads keep answering from
 the old one.
+
+## 7. Replication
+
+Taken before phase 4's command line and the SDKs at the owner's word on 17
+October: they wait for the system's full bounds. The model and its slices are
+in [scaling.md](scaling.md#order).
+
+- [ ] Capture: the after-commit seam in the adapter's three commits, checkpoints taken over, each file's log in segments, recovery at open.
+- [ ] Apply: a copy's pages applied whole through `sqlite_dbpage`; engines on a copy with readers alone, background work following the file.
+- [ ] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
+- [ ] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
+- [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
+- [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
+- [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
+- [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
+
+**Gate:** a node three links away holds its home's files commit for commit; a
+get after a set sees it on any node; a promotion loses only the commits not
+shipped, counted, and the old home cannot write again.
