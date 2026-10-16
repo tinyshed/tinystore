@@ -70,18 +70,69 @@ let products = store
 - Every index `store.index` opens lives in `search.db`: an index's
   documents, words and vectors commit together, and no other engine waits on
   its writer. One of an SQL table lives in that database's file, below.
-- Opening an index again with other fields, weights or vectors is
-  `invalid`, naming the setting: opening a store never starts a rebuild of
-  a million documents unasked. A rebuild is asked for:
+## Change an index
 
 ```ts
-await store.reindex('articles', { fields: { title: 5, body: 1 } })
+store.index('articles', { fields: { title: 2, body: 1 } })                    // before a deploy
+store.index('articles', { fields: { title: 5, body: 1, description: 1 } })    // after it
 ```
 
-- `reindex` builds the new index beside the old one, which answers and
-  takes writes meanwhile, every write reaching both; it switches once the
-  new one has caught up, and answers then (phase 6's gate). Opening with the
-  new settings before the switch is `invalid`, with the old ones after it.
+```text
+search articles: title weighs 5, was 2; at once
+search articles: description added: reading 812,345 documents beside the index, which answers without it until then
+search articles: description ready in 41 s; switched
+```
+
+Opening an index with other settings than it holds changes it, and opening
+never waits for the work a change needs.
+
+| What changed                                               | What happens                                                                                         |
+|------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| a field's weight, `typoTolerance`                          | at once: a search reads the weights and its blocks' bounds when it runs, so nothing is written again |
+| a field removed                                            | at once from searches; its postings dropped in steps in the background                               |
+| a field added                                              | its words read from the kept documents in the background; searches use it once it is ready           |
+| `recall` added or removed                                  | the clusters built or dropped in the background; searches stay exact meanwhile                       |
+| how text is cut, by a release of TinyStore that changes it | the index rebuilt in the background                                                                  |
+| the vectors' `dimensions`                                  | `invalid`: the vectors are the program's model's, and the store has nothing to make new ones from    |
+
+- Background work runs beside the index, which answers and takes writes
+  meanwhile, every write reaching both, in commits of a few keys as packing
+  runs; once the new one has caught up it is switched in one commit and the
+  old one dropped (phase 6's gate). A restart continues where it stopped.
+- Every change is said in the log when it starts and when it is done.
+
+```ts
+const articles = store.index<Article>('articles', { fields, rebuild: 'manual' })
+await store.reindex('articles', { fields: { title: 2, body: 1, description: 1 } })
+
+await articles.ready()        // once the index serves the settings it was opened with
+articles.status()             // { state: 'rebuilding', done: 0.42 } | { state: 'ready' } | { state: 'failed', error }
+```
+
+- `rebuild: 'manual'` is for a program that schedules its own load: a
+  change that needs background work is `invalid`, naming it, until
+  `store.reindex` asks for it. A change that needs none applies all the same.
+- A search never waits for `ready()`: it answers by the settings the index
+  serves, which `status()` says.
+
+## Drop an index
+
+```ts
+await store.dropIndex('posts')
+```
+
+```bash
+tinystore search list ./data
+```
+
+```bash
+tinystore search drop ./data posts
+```
+
+- An index the program stopped opening stays: another version of it may
+  open the index again, so the store never guesses. `tinystore search
+  list` shows each index with its documents, its size and when it was last
+  opened.
 
 ## Set and delete
 
@@ -150,7 +201,7 @@ let found = products.search("red shoes").vector(&q).limit(20).run()?;
 
 ```rust
 let commands = tinystore::typos::Dictionary::new(["serve", "backup", "restore"]);
-let near = commands.nearest("bakup");            // Some(Near { word: "backup", edits: 1 })
+let near = commands.nearest("bakup", 1);         // Some(Near { word: "backup", edits: 1 })
 ```
 
 - What reads a search's misspelled words is a module of the core's own,
@@ -165,11 +216,13 @@ let near = commands.nearest("bakup");            // Some(Near { word: "backup", 
   short, takes one from three and chooses among several. How much of it is
   public is the slice's question.
 - A suggestion changes nothing. Config names the key it does not know and
-  the one it may have meant in its error, `config: key "log.levle": unknown;
-  did you mean "log.level"?`, and never reads one as the other.
-- `typos` is a feature of its own, which `search`, `config` and the command
-  line turn on: fst and levenshtein_automata, about 0.13 MiB measured in
-  search-plan, and a build without them links neither.
+  the one it may have meant in its error, `config app: app.yaml: log.levle:
+  no such setting; did you mean log.level?`, and never reads one as the
+  other; the command line says `tinystore: no command bakup; did you mean
+  backup?`. Built in the core, 16 October.
+- `typos` is a feature of its own, which `search` and `config` turn on, the
+  command line through config: fst and levenshtein_automata, about 0.13 MiB
+  measured in search-plan, and a build without them links neither.
 
 ## Vectors and words together
 
@@ -261,12 +314,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                           |
-|-----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; an index opened with settings other than its own; a field's weight not above zero; a vector of another length, NaN or an infinity, missing, or on an index without `vectors` |
-| `limit`   | a document, a field's text or a search over its bound                                                                                                                                          |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                      |
-| `closed`  | the store closed                                                                                                                                                                               |
+| Kind      | When                                                                                                                                                                                                                                                    |
+|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero; a vector of another length, NaN or an infinity, missing, or on an index without `vectors` |
+| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                   |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                               |
+| `closed`  | the store closed                                                                                                                                                                                                                                        |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -323,8 +376,10 @@ Proposed, to be measured before they are promised.
    `corrected`.
 3. Vectors, exact, and the words' candidates scored on them.
 4. Vectors with `recall`, after a round of writes into the clusters.
-5. The wire and the Bun SDK.
-6. `db.searchIndex`: its triggers, the pending keys, and their indexing
+5. Changes of an index in the background, `ready()`, `status()`,
+   `dropIndex` and `tinystore search`.
+6. The wire and the Bun SDK.
+7. `db.searchIndex`: its triggers, the pending keys, and their indexing
    before the commit.
 
 Python and Go come with their bindings.
@@ -338,8 +393,10 @@ Python and Go come with their bindings.
 - A set is seen by the next search; a deleted document never answers again.
 - A packing changes no answer.
 - A search-only build links no jobs; a build without `typos` links no fst.
-- Opening an index with other settings is `invalid`, and a `reindex`
-  answers from the old index until the switch.
+- A changed weight rebuilds nothing, and the next search reads it.
+- A change that needs background work answers by the old settings until
+  its switch, every write meanwhile reaching both, and a restart continues
+  it; `rebuild: 'manual'` refuses it until `reindex`.
 - A write to a table that rolls back changes neither the table nor its
   index; one from outside the store reaches the index at the store's next
   write or within a second, and a search always answers what indexing the
@@ -405,15 +462,16 @@ reviewer found ambiguous.
 
 The owner and the outside reviewer read the check.
 
-| Question                                  | Decided                                                                                    |
-|-------------------------------------------|--------------------------------------------------------------------------------------------|
-| `boost` beside `fields`, or the weight in | `fields: { title: 2, body: 1 }`, a list for equal weights; `boost` gone                    |
-| `corrected` or `didYouMean`               | `corrected`: the hits already come from the words it names, which `didYouMean` would deny  |
-| the corrector inside search               | `tinystore::typos`, a module and a feature of its own, for the command line and config too |
-| a correction of a config key              | said in the error, never applied                                                           |
-| opening again with other settings         | `invalid`; `store.reindex` rebuilds beside the old index, which answers until the switch   |
-| `db.index`                                | `db.searchIndex`; `store.index` stays                                                      |
-| how words and vectors fuse                | open until a round out of domain; `{ text, vector }` stays                                 |
-| what the corrector answers                | the word and its edits, each caller its own rules                                          |
-| `db.searchIndex`'s shape                  | it follows a table, which owns the rows; no `set`; one commit with every change            |
-| vectors in a table's index                | a column the program fills; the store never runs a model in a write                        |
+| Question                                  | Decided                                                                                                                                                                                      |
+|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `boost` beside `fields`, or the weight in | `fields: { title: 2, body: 1 }`, a list for equal weights; `boost` gone                                                                                                                      |
+| `corrected` or `didYouMean`               | `corrected`: the hits already come from the words it names, which `didYouMean` would deny                                                                                                    |
+| the corrector inside search               | `tinystore::typos`, a module and a feature of its own, for the command line and config too                                                                                                   |
+| a correction of a config key              | said in the error, never applied                                                                                                                                                             |
+| opening again with other settings         | it changes the index: weights at once, other changes in the background beside the old one, said in the log; `rebuild: 'manual'` refuses them until `store.reindex`; `ready()` and `status()` |
+| an index no code opens any more           | kept until `store.dropIndex` or `tinystore search drop`, since another version may open it                                                                                                   |
+| `db.index`                                | `db.searchIndex`; `store.index` stays                                                                                                                                                        |
+| how words and vectors fuse                | open until a round out of domain; `{ text, vector }` stays                                                                                                                                   |
+| what the corrector answers                | the word and its edits, each caller its own rules                                                                                                                                            |
+| `db.searchIndex`'s shape                  | it follows a table, which owns the rows; no `set`; one commit with every change                                                                                                              |
+| vectors in a table's index                | a column the program fills; the store never runs a model in a write                                                                                                                          |
