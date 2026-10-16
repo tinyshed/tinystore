@@ -143,29 +143,30 @@ pub(crate) struct Stepped {
 }
 
 /// Steps `statement` to its end, or until it gave `most` rows, giving `keep`
-/// each value with its column, a row after another, within the store's
-/// memory; past `bytes` of values it is `limit`.
+/// each value with its column and the row's width, a row after another,
+/// within the store's memory; past `bytes` of values it is `limit`.
 pub(crate) fn step(
     statement: &mut Statement<'_>,
     values: &[Value],
     (most, bytes): (usize, usize),
     held: &mut Held,
-    mut keep: impl FnMut(usize, Value),
+    mut keep: impl FnMut(usize, usize, Value),
 ) -> Result<Stepped> {
-    let named = statement.columns();
-    let columns: Vec<String> = named.iter().map(|column| column.name().to_owned()).collect();
-    let declared = named.iter().map(|column| Holds::declared(column.decl_type())).collect();
-    drop(named);
     let mut rows = statement.query(params_from_iter(values)).map_err(|error| failure("its rows", error))?;
+    let mut named = None;
     let (mut count, mut size) = (0, 0usize);
     while count < most {
         let Some(row) = rows.next().map_err(|error| failure("its rows", error))? else {
             break;
         };
-        for index in 0..columns.len() {
+        // A kept statement compiled before its table changed is compiled
+        // again at its first step, so its columns are named after it.
+        let (columns, _) = named.get_or_insert_with(|| named_columns(row.as_ref()));
+        let width = columns.len();
+        for index in 0..width {
             let value = Value::of(row.get_ref(index).map_err(|error| failure("its rows", error))?);
             size += value.size();
-            keep(index, value);
+            keep(index, width, value);
         }
         if size > bytes {
             return Err(past_bound(size, bytes));
@@ -174,7 +175,16 @@ pub(crate) fn step(
         count += 1;
     }
     held.settle();
+    drop(rows);
+    let (columns, declared) = named.unwrap_or_else(|| named_columns(statement));
     Ok(Stepped { columns, declared, rows: count })
+}
+
+/// A stepped statement's columns, and what each one's declared type holds.
+fn named_columns(statement: &Statement<'_>) -> (Vec<String>, Vec<Holds>) {
+    let named = statement.columns();
+    let columns = named.iter().map(|column| column.name().to_owned()).collect();
+    (columns, named.iter().map(|column| Holds::declared(column.decl_type())).collect())
 }
 
 /// Where a statement's values go as its rows are read, for a caller that
@@ -206,8 +216,9 @@ impl<K> Kept<K> {
 #[cfg(feature = "wire")]
 impl<K: Keep> Answer for Kept<K> {
     fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), mut held: Held) -> Result<Self> {
-        let (mut kept, width) = (K::default(), statement.column_count());
-        let stepped = step(statement, values, bounds, &mut held, |column, value| kept.value(column, width, value))?;
+        let mut kept = K::default();
+        let stepped =
+            step(statement, values, bounds, &mut held, |column, width, value| kept.value(column, width, value))?;
         Ok(Kept { columns: stepped.columns, rows: stepped.rows, kept, held })
     }
 
@@ -223,7 +234,7 @@ impl<K: Keep> Answer for Kept<K> {
 impl Answer for Rows {
     fn read(statement: &mut Statement<'_>, values: &[Value], bounds: (usize, usize), mut held: Held) -> Result<Rows> {
         let mut kept = Vec::new();
-        let stepped = step(statement, values, bounds, &mut held, |_, value| kept.push(value))?;
+        let stepped = step(statement, values, bounds, &mut held, |_, _, value| kept.push(value))?;
         Ok(Rows { columns: stepped.columns.into(), values: kept, held, nested: Vec::new() })
     }
 

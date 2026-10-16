@@ -66,8 +66,12 @@ impl Answer for Columns {
         bounds: (usize, usize),
         mut held: Held,
     ) -> Result<Columns> {
-        let mut taking: Vec<Taking> = (0..statement.column_count()).map(|_| Taking::Nulls(0)).collect();
-        let stepped = step(statement, values, bounds, &mut held, |column, value| taking[column].push(value))?;
+        let mut taking: Vec<Taking> = Vec::new();
+        let stepped = step(statement, values, bounds, &mut held, |column, width, value| {
+            taking.resize_with(width, || Taking::Nulls(0));
+            taking[column].push(value);
+        })?;
+        taking.resize_with(stepped.columns.len(), || Taking::Nulls(0));
         let columns = taking.into_iter().zip(stepped.declared).map(|(taking, declared)| taking.end(declared));
         Ok(Columns { rows: stepped.rows, columns: stepped.columns.into_iter().zip(columns).collect(), held })
     }

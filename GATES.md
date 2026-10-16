@@ -364,6 +364,7 @@ module defines.
 - a worker finds a job a transaction added once the transaction commits, and not before — `a_worker_runs_a_job_added_in_a_transaction_once_it_commits` in `inside`; `a worker runs a job its transaction added, once the transaction commits` in `sdk/js/test/sql.test.ts`
 - a transaction refuses a handle kept in another file, and an SDK one made after it began — `a_transaction_refuses_a_handle_kept_in_another_file` in `inside`; `a transaction refuses a handle kept elsewhere, or one made after it began` in `sdk/js/test/sql.test.ts`
 - the store closes what a database keeps before the database's file — `the_store_closes_what_a_database_keeps_before_its_file` in `inside`
+- a statement kept across a migration names the columns its table has now: a `select *` reads a column dropped or added since, and one of no rows names them too — `a_kept_statement_names_the_columns_a_table_has_after_a_change_of_it` in `sql::database_tests`
 
 ## SQLite under every engine
 

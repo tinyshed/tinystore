@@ -653,3 +653,22 @@ fn a_migration_changes_tables_and_nothing_of_its_connection() {
     let db = fixture.store.database("app").migrations([("0001_tables.sql", "create table early (x)")]).open().unwrap();
     assert_eq!(db.scalar::<i64>("select count(*) from early").unwrap(), 0);
 }
+
+#[test]
+fn a_kept_statement_names_the_columns_a_table_has_after_a_change_of_it() {
+    let f = fixture();
+    let db =
+        f.store.database("scratch").migrations([("0001_t.sql", "create table t (a integer, b integer, c integer)")]);
+    let db = db.open().unwrap();
+    db.exec(sql!("insert into t values (1, 2, 3)")).unwrap();
+    let before: Vec<serde_json::Value> = db.all(sql!("select * from t")).unwrap();
+    assert_eq!(before, [serde_json::json!({ "a": 1, "b": 2, "c": 3 })]);
+    db.exec(sql!("alter table t drop column b")).unwrap();
+    let after: Vec<serde_json::Value> = db.all(sql!("select * from t")).unwrap();
+    assert_eq!(after, [serde_json::json!({ "a": 1, "c": 3 })]);
+    db.exec(sql!("alter table t add column d integer default 4")).unwrap();
+    let added: Vec<serde_json::Value> = db.all(sql!("select * from t")).unwrap();
+    assert_eq!(added, [serde_json::json!({ "a": 1, "c": 3, "d": 4 })]);
+    let none: Vec<serde_json::Value> = db.all(sql!("select * from t where a = 0")).unwrap();
+    assert!(none.is_empty());
+}

@@ -236,6 +236,10 @@ snapshot hands back stays consistent after it ends, so decoding, merging and
 building the answer happen outside it; otherwise a heavy query is itself a
 long reader, and the write-ahead log's size is the age of the oldest reader.
 
+**A statement's columns are named after its first step**: one kept by its
+text and compiled before a migration changed its table is compiled again
+there, and its columns before it are the old ones.
+
 **SQL is a named constant beside its function, prepared once a connection.** A
 prepared program is not a cached result: each read still starts a new
 snapshot. A bound limit is `LIMIT CAST(? AS INTEGER)`, because a bare `LIMIT ?`
