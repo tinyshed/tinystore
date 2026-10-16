@@ -468,19 +468,24 @@ let found = products.search("red shoes").filter(missing("category")).run()?;
 ## An index of a table
 
 ```ts
+const db = await store.database('app', { migrations: './migrations' })
 const articles = db.searchIndex<Article>('articles_search', {
   table: 'articles',
   fields: { title: 2, body: 1 },
+  filters: ['category', 'done'],
 })
+await articles.ready()                                           // the rows the table held, read once
 
-await db.execute('update articles set title = ? where id = ?', ['Новый заголовок', 42])
-const { hits } = await articles.search('новый заголовок')     // sees the update; hit.value is the row
+await db.exec`update articles set title = ${'Новый заголовок'} where id = ${42}`
+const { hits } = await articles.search('новый заголовок')       // sees the update; hit.value is the row
+await articles.search({ text: 'bread', where: { done: true } })  // the 1 SQLite keeps
 
 const products = db.searchIndex<Product>('products_search', {
   table: 'products',
   fields: { name: 3, description: 1 },
   vectors: { column: 'embedding', dimensions: 1024 },
 })
+await db.dropSearchIndex('products_search')
 ```
 
 ```rust
@@ -489,42 +494,80 @@ let articles = db
     .table("articles")
     .field("title", 2.0)
     .field("body", 1.0)
+    .filters(["category", "done"])
     .open()?;
+articles.ready()?;
+let found = articles.search("новый заголовок").filter(search::eq("done", &true)).run()?;
+db.tx(|tx| {
+    tx.exec(sql!("insert into articles (id, title) values (?, ?)", 7, "inside"))?;
+    let found = tx.with(&articles).search("inside").run()?;     // sees the insert
+    Ok(())
+})?;
+let products = db.search_index::<Product>("products_search").table("products").key("sku")
+    .field("name", 3.0).vectors("embedding", 1024).open()?;
+db.drop_search_index("products_search")?;
 ```
 
 - `db.searchIndex` follows a table of the database: the table owns the
   rows, and the index has no `set` or `delete`. Its key is the table's
-  primary key unless `key` names another unique column, `fields` names its
-  text columns and `filters` the columns a search may filter by.
-- Every way a row changes reaches it: `execute`, `batch`, a transaction, a
+  primary key unless `key` names another column of unique values, by a
+  primary key or a unique index, integers or text; a hit's id is the key as
+  text. `fields` and `filters` name columns, never paths into one.
+- Every way a row changes reaches it: `exec`, `batch`, a transaction, a
   trigger of the program's own, a migration. A change and the index's change
   commit together or not at all: the index's triggers on the table write
   each changed key into a list of pending keys in the same transaction, and
-  the store's writer indexes them before that commit. A rollback, a failed
-  savepoint or a crash leaves neither, and a search in the transaction that
-  wrote sees its writes.
+  every transaction of the file reads those keys' rows into the index
+  before it commits, a grouped write inside its own savepoint. A rollback, a
+  failed savepoint or a crash leaves neither, and a search in the
+  transaction that wrote, `tx.with(&index)`, sees its writes.
 - A write from outside the store, a process opened beside it or the sqlite3
-  shell, fires the same triggers, so its keys wait in the list; the store
-  indexes them at its next write to that file, or within a second. The
-  index may lag such a write; it never loses one.
+  shell, fires the same triggers, which only write a key, so its keys wait in
+  the list; the store reads them at its next write to that file, or within
+  a second. The index may lag such a write; it never loses one. A row of
+  theirs the index cannot read is said in the log and left out of it, since
+  no caller of the store's made it.
+- The triggers name only the key, so every change of a row lists it and a
+  migration may drop any other column. The index reads the row as it is
+  and sets it again only when what it reads of it changed, which a digest
+  of those columns and the vector says: an update of a column it does not
+  read costs a read. A column a migration dropped reads as empty until the
+  index is opened without it.
+- A migration that rebuilds the table by SQLite's twelve steps drops its
+  triggers with the old table. The index's next open puts them back and,
+  finding them gone, reads the table again: its rows set where they
+  changed, then its documents whose rows are gone deleted. A program that
+  rebuilds a table at run time opens its index again after.
+- The first open reads the rows the table holds in the background, a step
+  of 256 keys a commit in the order of the keys; the triggers keep the rows
+  behind the step, and each step reads its rows as they are. `status()` is
+  `rebuilding` meanwhile and `ready()` waits for it.
 - Vectors come from a column the program fills, a blob of little-endian
-  floats, never from a model the store runs. A write whose vector has
-  another length, NaN or an infinity fails with its row. A changed text does
-  not change its row's vector: keeping the two in step is the program's.
-- `hit.value` is the row, read in the same snapshot as the index.
+  floats or null for none, never from a model the store runs. A write whose
+  vector has another length, NaN or an infinity fails with its row. A
+  changed text does not change its row's vector: keeping the two in step
+  is the program's.
+- `hit.value` is the row, read whole in the same snapshot as the index, as
+  `db.all` reads one: an integer column the program keeps a boolean in
+  comes back the number SQLite keeps. A filter's `true` and `false` pass
+  that 1 and 0.
+- Over the wire a table's index opens with its database's handle, and a
+  hit carries its row's cells as `sql.Rows` does (docs/wire.md).
 - On a database `index` would read as SQL's `create index`, so it is spelled
   out there; `store.index` stays short where nothing else is an index. An
   index in `search.db` owns its documents and joins no store's transaction,
   since no write is atomic across two files.
+- Measured on nothing yet: what a row costs a commit, and a table's first
+  read. A round with the owner's word.
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`, until `reindex`; a handle of an index dropped; a field's weight not above zero or past 1,000; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a `vectorWeight` outside 0–1, or beside `rerank`; a `recall` not above 0 and below 1, or without `vectors`; either in a search without a vector, or `rerank` in one without text |
-| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`, until `reindex`; a handle of an index dropped; a field's weight not above zero or past 1,000; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a `vectorWeight` outside 0–1, or beside `rerank`; a `recall` not above 0 and below 1, or without `vectors`; either in a search without a vector, or `rerank` in one without text; for a table's index, a table, key or column the database lacks, a key of values not unique, another table or key than it follows, and a row whose vector does not read, which fails its write |
+| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -682,7 +725,11 @@ Proposed, to be measured before they are promised.
    `dropIndex` and `indexes`, and `search.or` and `search.and`, as sqldb's
    `sql.or`.
 8. `db.searchIndex`: its triggers, the pending keys, and their indexing
-   before the commit.
+   before the commit: built 16 October, every transaction of a file
+   settling what an engine kept in it left, a digest of what the index
+   reads of a row, the table read the first time and again after a
+   migration rebuilt it, and the wire and the Bun SDK; a search in the
+   transaction that wrote in Rust alone.
 
 Python and Go come with their bindings. Each slice ends with its gates and
 a newcomer check of what it made public.
@@ -745,6 +792,14 @@ a newcomer check of what it made public.
   settings and why on `status()` (slice 6's check).
 - The paths of `fields`, `filters` and `where` checked against the
   document's type in TypeScript (slice 7's check).
+- A table's index searched inside a transaction over the wire and in the
+  Bun SDK, `tx.with(index)`, as Rust's is.
+- The columns a hit's row reads, leaving out a vector's blob; an index of
+  a view or of several tables (slice 8's check).
+- A table renamed by a migration: SQLite renames its triggers' table, and
+  the index's settings still name the old one.
+- A database's tables' indexes in `search::list`, `store.indexes()` and
+  `tinystore search list`, which list search.db's.
 - How many documents a search by a vector passed for having none.
 - Questions that are an identifier alone, a part number or an error code,
   which no round sampled apart.
@@ -879,6 +934,26 @@ the Bun SDK's search at the highest effort.
 | `search.or` read as a function beside `products.search`                               | left to the owner: `or` and `and` exported by name would change sqldb's `sql.or` too                      |
 | the paths of `fields`, `filters` and `where` unchecked against `Product`              | Later                                                                                                     |
 | what a handle opened before `reindex` reads after it, and a search while `rebuilding` | none: "Change an index" says the old settings answer until the switch, which every handle follows         |
+
+## Slice 8's check, 16 October
+
+A Haiku agent that had read nothing about TinyStore, told it had used
+Postgres' full-text search, Meilisearch's and Typesense's syncing from a
+database, Prisma, Drizzle and SQLite's FTS5 with triggers, read
+`db.searchIndex` at the highest effort.
+
+| It read                                                                                                                                                   | Change                                                                           |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| a filter on a column a rebuild adds, answered by the old settings, passing every row                                                                      | none: it is `invalid` until the switch, as any filter on a field the index lacks |
+| a write beside the store reaching the index within a second as a journal would; a trigger calling a function only the store has failing the sqlite3 shell | said: the triggers only write a key into a table, which any process can          |
+| a migration that drops a column the index reads failing when it runs before the index opens without it                                                    | built: the triggers name only the key, and a dropped column reads as empty       |
+| a table rebuilt by SQLite's twelve steps losing its triggers                                                                                              | built: the next open puts them back and reads the table again                    |
+| `open()` in Rust answering a partial first read                                                                                                           | said: `ready()` waits for it, in Rust as in TypeScript                           |
+| `hit.value` the whole row, a vector column's 4 KiB a hit with it                                                                                          | Later: the columns a hit's row reads                                             |
+| `done: boolean` in TypeScript reading the 1 SQLite keeps                                                                                                  | said: a row as `db.all` reads it; a filter's `true` and `false` pass 1 and 0     |
+| one table an index, where Meilisearch's documents are any JSON                                                                                            | Later: an index of a view or of several tables                                   |
+| `filters` beside `.filter`, one letter apart                                                                                                              | left to the owner: `filterable` would rename `store.index`'s too                 |
+| what a row costs a commit, and a first read's time and size                                                                                               | Later: a round, with the owner's word                                            |
 
 ## The owner's calls, 16 October
 

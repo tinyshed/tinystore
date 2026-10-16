@@ -1170,6 +1170,13 @@ a vector is bin, its floats little-endian, four bytes a dimension.
 A set on an index with vectors gives `vector`, or `noVector: true` for a
 document only its words find; one that says neither is `invalid`.
 
+A table's index opens with `database`, a handle `sql.open` gave, and
+`table`, with `key` and `vectorColumn` where it needs them: its fields and
+filters are columns of the table. Its search answers `columns` once and
+each hit's `row`, a cell a column, as `sql.Rows` carries rows, and `value`
+null. A `set`, `setMany`, `delete` or `get` on it is `invalid`, since the
+table owns the rows, and `dropIndex` names the database beside the name.
+
 #### search's where
 
 A search's `where` is a JSON list of conditions, every one of which a

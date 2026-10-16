@@ -19,6 +19,7 @@ mod migrate;
 mod mutex;
 mod prefix;
 mod readers;
+mod settle;
 
 use std::cell::RefCell;
 use std::fmt;
@@ -36,6 +37,7 @@ pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
 pub(crate) use prefix::{TextBytes, prefix_end};
+pub(crate) use settle::{Left, Settle, Settlers};
 
 /// The writer inside a transaction: a grouped write's savepoint, or a
 /// transaction of its own. It derefs to the connection, so an engine prepares
@@ -43,11 +45,18 @@ pub(crate) use prefix::{TextBytes, prefix_end};
 pub(crate) struct Tx<'a> {
     connection: &'a Connection,
     committed: &'a Committed,
+    settlers: &'a Settlers,
 }
 
 impl<'a> Tx<'a> {
-    pub(crate) fn new(connection: &'a Connection, committed: &'a Committed) -> Self {
-        Self { connection, committed }
+    pub(crate) fn new(connection: &'a Connection, committed: &'a Committed, settlers: &'a Settlers) -> Self {
+        Self { connection, committed, settlers }
+    }
+
+    /// Brings the engines kept in the file up to date with what `left`'s
+    /// writes left them, before the transaction commits.
+    pub(crate) fn settle(&self, left: Left) -> crate::Result<()> {
+        self.settlers.run(self, left)
     }
 
     /// Runs `hook` once the transaction's commit is in the file, while its

@@ -9660,12 +9660,18 @@ export const SearchQuery = message(
 	},
 )
 
+/**
+ * A hit: a document and its value, or a table's row, a value a column of
+ * the answer's columns, as sql.Rows holds one.
+ */
 export const SearchHit = message(
 	'search.Hit',
 	{
 		id: [1, str],
+		/** null for a table's row */
 		value: [2, str],
 		score: [3, float],
+		row: [4, list(sqlValue)],
 	},
 	{
 		write(w, v) {
@@ -9686,12 +9692,21 @@ export const SearchHit = message(
 				w.float(v.score)
 				n++
 			}
+			if (v.row !== undefined) {
+				w.field(4)
+				w.array(v.row.length)
+				for (const item0 of v.row) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $id: string | undefined
 			let $value: string | undefined
 			let $score: number | undefined
+			let $row: (SqlValue | boolean)[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -9703,12 +9718,21 @@ export const SearchHit = message(
 					case 3:
 						$score = r.float()
 						break
+					case 4: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$row = items0
+						break
+					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { id: $id, value: $value, score: $score }
+			return { id: $id, value: $value, score: $score, row: $row }
 		},
 	},
 )
@@ -9719,6 +9743,8 @@ export const SearchFound = message(
 		hits: [1, list(SearchHit)],
 		/** the text the search read in fact, when a word was read as another */
 		corrected: [2, str],
+		/** the columns of a table's index's rows */
+		columns: [3, list(str)],
 	},
 	{
 		write(w, v) {
@@ -9737,11 +9763,20 @@ export const SearchFound = message(
 				w.str(v.corrected)
 				n++
 			}
+			if (v.columns !== undefined) {
+				w.field(3)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $hits: Read<typeof SearchHit.fields>[] | undefined
 			let $corrected: string | undefined
+			let $columns: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -9756,12 +9791,21 @@ export const SearchFound = message(
 					case 2:
 						$corrected = r.str()
 						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { hits: $hits, corrected: $corrected }
+			return { hits: $hits, corrected: $corrected, columns: $columns }
 		},
 	},
 )
@@ -9829,6 +9873,8 @@ export const SearchName = message(
 	'search.Name',
 	{
 		name: [1, str],
+		/** a database's handle, for a table's index */
+		database: [2, uint],
 	},
 	{
 		write(w, v) {
@@ -9839,21 +9885,30 @@ export const SearchName = message(
 				w.str(v.name)
 				n++
 			}
+			if (v.database !== undefined) {
+				w.field(2)
+				w.uint(v.database)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $name: string | undefined
+			let $database: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
 						$name = r.str()
+						break
+					case 2:
+						$database = r.uint()
 						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name }
+			return { name: $name, database: $database }
 		},
 	},
 )
@@ -11212,7 +11267,8 @@ export const MetricsPlan = message(
 /**
  * Opens an index, made the first time; one that holds other settings is
  * changed to these, as the book's "Change an index" has it. A read
- * connection opens an index only as it is.
+ * connection opens an index only as it is. With a database, the index
+ * follows a table of it: its fields and filters are columns.
  */
 export const SearchOpen = message(
 	'search.Open',
@@ -11236,6 +11292,14 @@ export const SearchOpen = message(
 		manual: [9, bool],
 		/** reads the index again beside itself */
 		reindex: [10, bool],
+		/** a database's handle: the index follows a table in its file */
+		database: [11, uint],
+		/** the table a database's index follows */
+		table: [12, str],
+		/** the table's column of unique values; its primary key when absent */
+		key: [13, str],
+		/** the column of each row's vector, a blob of little-endian floats */
+		vectorColumn: [14, str],
 	},
 	{
 		write(w, v) {
@@ -11297,6 +11361,26 @@ export const SearchOpen = message(
 				w.bool(v.reindex)
 				n++
 			}
+			if (v.database !== undefined) {
+				w.field(11)
+				w.uint(v.database)
+				n++
+			}
+			if (v.table !== undefined) {
+				w.field(12)
+				w.str(v.table)
+				n++
+			}
+			if (v.key !== undefined) {
+				w.field(13)
+				w.str(v.key)
+				n++
+			}
+			if (v.vectorColumn !== undefined) {
+				w.field(14)
+				w.str(v.vectorColumn)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -11310,6 +11394,10 @@ export const SearchOpen = message(
 			let $rerank: boolean | undefined
 			let $manual: boolean | undefined
 			let $reindex: boolean | undefined
+			let $database: number | undefined
+			let $table: string | undefined
+			let $key: string | undefined
+			let $vectorColumn: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -11354,6 +11442,18 @@ export const SearchOpen = message(
 					case 10:
 						$reindex = r.bool()
 						break
+					case 11:
+						$database = r.uint()
+						break
+					case 12:
+						$table = r.str()
+						break
+					case 13:
+						$key = r.str()
+						break
+					case 14:
+						$vectorColumn = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -11370,6 +11470,10 @@ export const SearchOpen = message(
 				rerank: $rerank,
 				manual: $manual,
 				reindex: $reindex,
+				database: $database,
+				table: $table,
+				key: $key,
+				vectorColumn: $vectorColumn,
 			}
 		},
 	},

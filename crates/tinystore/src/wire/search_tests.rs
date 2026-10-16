@@ -1,8 +1,10 @@
 use crate::pipe::Capability;
 use crate::pipe::fixture::Client;
+use crate::wire::codec::Cell;
 use crate::wire::protocol::{
     Empty, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound, SearchGot, SearchKey,
-    SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
+    SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, SqlDone, SqlMigration,
+    SqlOpen, SqlStatement, method,
 };
 use crate::{Options, Store};
 
@@ -115,7 +117,45 @@ fn an_index_is_listed_and_dropped_over_the_wire() {
     assert_eq!((listed.indexes[0].name.as_str(), listed.indexes[0].documents), ("products", 1));
     assert!(listed.indexes[0].opened.is_some());
     let dropped: SearchDropped =
-        client.call(method::SEARCH_DROP_INDEX, &SearchName { name: "products".to_owned() }).unwrap();
+        client.call(method::SEARCH_DROP_INDEX, &SearchName { name: "products".to_owned(), database: None }).unwrap();
     assert!(dropped.dropped);
     assert_eq!(client.call::<SearchFound>(method::SEARCH_SEARCH, &query(handle, "red")).unwrap_err().code, "invalid");
+}
+
+#[test]
+fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut client = Client::admitted(&store, Capability::Data);
+    let articles =
+        "create table articles (id integer primary key, title text not null, done integer not null default 0)";
+    let migrations = Some(vec![SqlMigration { name: "0001_articles.sql".to_owned(), sql: articles.to_owned() }]);
+    let open = SqlOpen { name: "app".to_owned(), migrations, durability: None };
+    let database = client.call::<Handle>(method::SQL_OPEN, &open).unwrap().handle;
+    let asked = SearchOpen {
+        name: "articles_search".to_owned(),
+        fields: vec![SearchField { path: "title".to_owned(), weight: 1.0 }],
+        filters: vec!["done".to_owned()],
+        database: Some(database),
+        table: Some("articles".to_owned()),
+        ..SearchOpen::default()
+    };
+    let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
+    let insert = SqlStatement {
+        handle: database,
+        text: "insert into articles (id, title, done) values (7, 'rye bread', 1)".to_owned(),
+        values: Vec::new(),
+    };
+    client.call::<SqlDone>(method::SQL_EXEC, &insert).unwrap();
+    let filtered = SearchQuery { r#where: Some(r#"[{"eq":["done",true]}]"#.to_owned()), ..query(handle, "bread") };
+    let found: SearchFound = client.call(method::SEARCH_SEARCH, &filtered).unwrap();
+    assert_eq!(ids(&found), ["7"]);
+    assert_eq!(found.columns.as_deref(), Some(&["id".to_owned(), "title".to_owned(), "done".to_owned()][..]));
+    let row = [Cell::Int(7), Cell::Str("rye bread".to_owned()), Cell::Int(1)];
+    assert_eq!(found.hits[0].row.as_deref(), Some(&row[..]));
+    let set = SearchSet { handle, id: "8".to_owned(), value: "{}".to_owned(), vector: None, no_vector: true };
+    let refused = client.call::<Empty>(method::SEARCH_SET, &set).unwrap_err();
+    assert!(refused.message.contains("written to the table"), "{}", refused.message);
+    let named = SearchName { name: "articles_search".to_owned(), database: Some(database) };
+    assert!(client.call::<SearchDropped>(method::SEARCH_DROP_INDEX, &named).unwrap().dropped);
 }

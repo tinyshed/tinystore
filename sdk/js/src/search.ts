@@ -2,14 +2,16 @@
 // named index and found again by their words, by vectors the program's own
 // model gives them, or by both, kept to the documents a `where` passes. A
 // search answers the exact best ten, or `limit`, of what the index holds; an
-// index opened with `recall` answers its vectors from clusters.
+// index opened with `recall` answers its vectors from clusters. A table's
+// index, `db.searchIndex`, finds a database's rows, each hit its row.
 
 import type { Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
-import { checkName, type Via, viaLink } from './handles.ts'
+import { checkName, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import { keyText } from './kv.ts'
-import type { Key } from './wire/codec.ts'
+import { rowsOf } from './sql.ts'
+import type { Key, SqlValue } from './wire/codec.ts'
 import {
 	Empty,
 	Handle,
@@ -117,6 +119,26 @@ export interface IndexInfo {
 	status: IndexStatus
 }
 
+/**
+ * How a table's index reads a table of its database: its columns of text,
+ * those a search may filter by, and a column of vectors the program fills.
+ */
+export interface TableIndexOptions {
+	/** the table whose rows the index holds and follows */
+	table: string
+	/** the column of unique values a row is found by, the table's primary key unless said */
+	key?: string | undefined
+	/** the columns whose words are read, each with what a word found there weighs, or a list that weighs each 1 */
+	fields: Record<string, number> | readonly string[]
+	/** the columns a search may keep its hits to; a boolean is the 1 or 0 SQLite keeps */
+	filters?: readonly string[] | undefined
+	typoTolerance?: boolean | undefined
+	/** a column of blobs of little-endian floats, one a row or null, and `recall` for searches from clusters */
+	vectors?: { column: string; dimensions: number; recall?: number | undefined } | undefined
+	hybrid?: { vectorWeight?: number | undefined; rerank?: boolean | undefined } | undefined
+	rebuild?: 'automatic' | 'manual' | undefined
+}
+
 /** A document `setMany` sets: its id, its value, and its vector, or `null` for none. */
 export interface IndexDocument<T> {
 	id: Key
@@ -127,74 +149,32 @@ export interface IndexDocument<T> {
 /** How often `ready` asks whether a rebuild switched in. */
 const readyEvery = 100
 
-/** Documents of one type by id, found again by their words, vectors or both: `store.index(name, options)`. */
-export class SearchIndex<T> {
+/** The calls of an index that a call names. */
+type Method =
+	| 'search.set'
+	| 'search.setMany'
+	| 'search.delete'
+	| 'search.get'
+	| 'search.search'
+	| 'search.status'
+
+/** What every index answers: its searches, and where it stands. */
+abstract class Searchable<T> {
 	readonly name: string
 	readonly #via: Via
-	readonly #open: Uint8Array
+	readonly #open: Open
 
-	/** An index comes from `store.index` and `store.reindex`. */
-	constructor(link: Link, name: string, open: Uint8Array) {
+	constructor(via: Via, name: string, open: Open) {
 		this.name = name
-		this.#via = viaLink(link)
+		this.#via = via
 		this.#open = open
 	}
 
 	/**
-	 * Sets the document `id` to `value`, replacing it whole; the next search
-	 * sees it. On an index with vectors a set gives its vector, or `null` for
-	 * a document only its words find.
-	 */
-	async set(id: Key, value: T, options?: { vector?: Vector | null | undefined }): Promise<void> {
-		const said = vectorSaid(options?.vector)
-		const json = documentJson(this.name, value)
-		await this.#call(
-			'search.set',
-			handle => SearchSet.encode({ handle, id: keyText(id), value: json, ...said }),
-			'write',
-		)
-	}
-
-	/** Sets every document in one commit, all of them or none: 1,000 and 16 MiB at most. */
-	async setMany(documents: readonly IndexDocument<T>[]): Promise<void> {
-		const encoded = documents.map(document => ({
-			id: keyText(document.id),
-			value: documentJson(this.name, document.value),
-			...vectorSaid(document.vector),
-		}))
-		await this.#call(
-			'search.setMany',
-			handle => SearchSetMany.encode({ handle, documents: encoded }),
-			'write',
-		)
-	}
-
-	/** Deletes the document `id`; says whether there was one. */
-	async delete(id: Key): Promise<boolean> {
-		const answer = await this.#call(
-			'search.delete',
-			handle => SearchKey.encode({ handle, id: keyText(id) }),
-			'write',
-		)
-		return SearchDeleted.decode(answer).deleted ?? false
-	}
-
-	/** The document `id`, or undefined. */
-	async get(id: Key): Promise<T | undefined> {
-		const answer = await this.#call(
-			'search.get',
-			handle => SearchKey.encode({ handle, id: keyText(id) }),
-			'read',
-		)
-		const got = SearchGot.decode(answer)
-		return got.found && got.value !== undefined ? (parseJson(got.value) as T) : undefined
-	}
-
-	/**
-	 * The best ten documents, or `limit`, by `text`'s words, a string being a
-	 * search by its words; by a vector; or by both, each half's best hundred
-	 * scaled and summed at the index's `vectorWeight`; kept to what `where`
-	 * passes. Of equal scores the document set first comes first.
+	 * The best ten, or `limit`, by `text`'s words, a string being a search
+	 * by its words; by a vector; or by both, each half's best hundred scaled
+	 * and summed at the index's `vectorWeight`; kept to what `where` passes.
+	 * Of equal scores the one set first comes first.
 	 */
 	async search(query: string | Query): Promise<Found<T>> {
 		const asked = typeof query === 'string' ? { text: query } : query
@@ -211,10 +191,13 @@ export class SearchIndex<T> {
 				offset: asked.offset,
 				limit: asked.limit,
 			})
-		const found = SearchFound.decode(await this.#call('search.search', body, 'read'))
+		const found = SearchFound.decode(await this.call('search.search', body, 'read'))
+		const columns = found.columns
 		const hits = (found.hits ?? []).map(hit => ({
 			id: hit.id ?? '',
-			value: parseJson(hit.value ?? 'null') as T,
+			value: (columns === undefined
+				? parseJson(hit.value ?? 'null')
+				: rowsOf<T>(columns, [(hit.row ?? []) as SqlValue[]])[0]) as T,
 			score: hit.score ?? 0,
 		}))
 		return found.corrected === undefined ? { hits } : { hits, corrected: found.corrected }
@@ -222,7 +205,7 @@ export class SearchIndex<T> {
 
 	/** Where the index stands; a search never waits, and answers by the settings it serves. */
 	async status(): Promise<IndexStatus> {
-		const answer = await this.#call('search.status', handle => Handle.encode({ handle }), 'read')
+		const answer = await this.call('search.status', handle => Handle.encode({ handle }), 'read')
 		return statusOf(SearchStatus.decode(answer))
 	}
 
@@ -240,14 +223,8 @@ export class SearchIndex<T> {
 		}
 	}
 
-	#call(
-		method:
-			| 'search.set'
-			| 'search.setMany'
-			| 'search.delete'
-			| 'search.get'
-			| 'search.search'
-			| 'search.status',
+	protected call(
+		method: Method,
 		body: (handle: number) => Uint8Array,
 		idempotence: 'read' | 'write',
 	): Promise<Uint8Array> {
@@ -255,15 +232,110 @@ export class SearchIndex<T> {
 	}
 }
 
+/** Documents of one type by id, found again by their words, vectors or both: `store.index(name, options)`. */
+export class SearchIndex<T> extends Searchable<T> {
+	/** An index comes from `store.index` and `store.reindex`. */
+	constructor(link: Link, name: string, open: Uint8Array) {
+		super(viaLink(link), name, open)
+	}
+
+	/**
+	 * Sets the document `id` to `value`, replacing it whole; the next search
+	 * sees it. On an index with vectors a set gives its vector, or `null` for
+	 * a document only its words find.
+	 */
+	async set(id: Key, value: T, options?: { vector?: Vector | null | undefined }): Promise<void> {
+		const said = vectorSaid(options?.vector)
+		const json = documentJson(this.name, value)
+		await this.call(
+			'search.set',
+			handle => SearchSet.encode({ handle, id: keyText(id), value: json, ...said }),
+			'write',
+		)
+	}
+
+	/** Sets every document in one commit, all of them or none: 1,000 and 16 MiB at most. */
+	async setMany(documents: readonly IndexDocument<T>[]): Promise<void> {
+		const encoded = documents.map(document => ({
+			id: keyText(document.id),
+			value: documentJson(this.name, document.value),
+			...vectorSaid(document.vector),
+		}))
+		await this.call(
+			'search.setMany',
+			handle => SearchSetMany.encode({ handle, documents: encoded }),
+			'write',
+		)
+	}
+
+	/** Deletes the document `id`; says whether there was one. */
+	async delete(id: Key): Promise<boolean> {
+		const answer = await this.call(
+			'search.delete',
+			handle => SearchKey.encode({ handle, id: keyText(id) }),
+			'write',
+		)
+		return SearchDeleted.decode(answer).deleted ?? false
+	}
+
+	/** The document `id`, or undefined. */
+	async get(id: Key): Promise<T | undefined> {
+		const answer = await this.call(
+			'search.get',
+			handle => SearchKey.encode({ handle, id: keyText(id) }),
+			'read',
+		)
+		const got = SearchGot.decode(answer)
+		return got.found && got.value !== undefined ? (parseJson(got.value) as T) : undefined
+	}
+}
+
+/**
+ * A table's rows found again by their words, vectors or both, each hit's
+ * value its row as `db.all` reads it: `db.searchIndex(name, options)`. The
+ * table owns the rows, and every change of one reaches the index in the
+ * commit that makes it.
+ */
+export class TableIndex<T> extends Searchable<T> {}
+
+/** The open of a table's index: its name, its table and settings, and its database's handle. */
+export function tableIndexOpen(
+	name: string,
+	options: TableIndexOptions,
+	database?: number,
+	reindex = false,
+): Uint8Array {
+	checkName(name, 'index')
+	return SearchOpen.encode({
+		name,
+		fields: fieldsOf(options.fields),
+		filters: [...(options.filters ?? [])],
+		typoTolerance: options.typoTolerance,
+		dimensions: options.vectors?.dimensions,
+		recall: options.vectors?.recall,
+		vectorWeight: options.hybrid?.vectorWeight,
+		rerank: options.hybrid?.rerank,
+		manual: options.rebuild === 'manual',
+		reindex,
+		database,
+		table: options.table,
+		key: options.key,
+		vectorColumn: options.vectors?.column,
+	})
+}
+
+function fieldsOf(fields: IndexOptions['fields']): { path: string; weight: number }[] {
+	return Array.isArray(fields)
+		? fields.map(path => ({ path, weight: 1 }))
+		: Object.entries(fields ?? {}).map(([path, weight]) => ({ path, weight }))
+}
+
 /** The open of an index: its name, settings, and whether it reads the index again. */
 export function indexOpen(name: string, options: IndexOptions = {}, reindex = false): Uint8Array {
 	checkName(name, 'index')
-	const fields = Array.isArray(options.fields)
-		? options.fields.map(path => ({ path, weight: 1 }))
-		: Object.entries(options.fields ?? {}).map(([path, weight]) => ({ path, weight }))
 	return SearchOpen.encode({
 		name,
-		fields,
+		fields: fieldsOf(options.fields),
 		filters: [...(options.filters ?? [])],
 		typoTolerance: options.typoTolerance,
 		dimensions: options.vectors?.dimensions,

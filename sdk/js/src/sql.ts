@@ -33,11 +33,14 @@ import {
 import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf } from './kv.ts'
 import { Table, type TableOptions } from './query.ts'
 import type { StandardSchemaV1 } from './schema.ts'
+import { TableIndex, type TableIndexOptions, tableIndexOpen } from './search.ts'
 import type { Stream } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import { int64Of } from './wire/msgpack.ts'
 import {
 	methods,
+	SearchDropped,
+	SearchName,
 	SqlBatch,
 	SqlBatched,
 	SqlColumns,
@@ -506,7 +509,7 @@ export async function openDatabase(
 }
 
 /** A query's rows as objects, refusing two columns of one name, which one object cannot hold. */
-function rowsOf<T>(columns: readonly string[], rows: readonly SqlValue[][]): T[] {
+export function rowsOf<T>(columns: readonly string[], rows: readonly SqlValue[][]): T[] {
 	if (new Set(columns).size !== columns.length) {
 		const twice = columns.find((column, at) => columns.indexOf(column) !== at)
 		throw new InvalidError(`two columns named ${twice}: name them apart with as`)
@@ -767,6 +770,35 @@ export class Database implements Runner, Home {
 	queue<T = unknown>(name: string, options?: QueueOptions): Queue<T>
 	queue(name: string, options: QueueOptions & { schema?: StandardSchemaV1 } = {}): Queue<unknown> {
 		return openQueue(this.#link, this.#workers, name, options, this)
+	}
+
+	/**
+	 * An index of a table of this database, kept in its file: its rows found
+	 * again by their words, vectors or both, each hit's value its row as
+	 * `all` reads it. The table owns the rows and the index follows them:
+	 * every change of a row, by any statement, trigger or migration, reaches
+	 * it in the commit that makes it, and one by a process beside the store
+	 * within a second.
+	 *
+	 *     const articles = db.searchIndex<Article>('articles_search', { table: 'articles', fields: { title: 2, body: 1 } })
+	 */
+	searchIndex<T = Row>(name: string, options: TableIndexOptions): TableIndex<T> {
+		const bytes = tableIndexOpen(name, options)
+		const open = this.keep(methods['search.open'], bytes, async connection =>
+			tableIndexOpen(name, options, await this.handle(connection)),
+		)
+		return new TableIndex<T>(this.via(`index ${name}`), name, open)
+	}
+
+	/** Drops a table's index this database keeps, its triggers off the table; says whether there was one. */
+	async dropSearchIndex(name: string): Promise<boolean> {
+		const answer = await this.#link.run('write', async connection =>
+			connection.session.call(
+				methods['search.dropIndex'],
+				SearchName.encode({ name, database: await this.handle(connection) }),
+			),
+		)
+		return SearchDropped.decode(answer).dropped ?? false
 	}
 
 	/** Every row a statement gives: `db.all<Note>\`select * from notes where author_id = ${id}\`` */

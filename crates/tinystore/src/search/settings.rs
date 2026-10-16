@@ -1,13 +1,15 @@
 //! An index's settings: its fields, each with its weight and a number of
 //! its own for good, its filters, numbered the same way, whether a misspelt
 //! word is read as the nearest, its vectors' dimensions, and how a search
-//! by words and a vector at once combines them. They are kept as JSON in
-//! the index's row, and an open that asks for others changes them.
+//! by words and a vector at once combines them, and for a table's index the
+//! table it follows. They are kept as JSON in the index's row, and an open
+//! that asks for others changes them.
 //!
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
 //!  "filters":[{"path":"category","number":0}],"next_filter":1,
-//!  "vectors":{"dimensions":1024},"hybrid":{"vector_weight":0.5,"rerank":false}}
+//!  "vectors":{"dimensions":1024},"hybrid":{"vector_weight":0.5,"rerank":false},
+//!  "table":{"name":"articles","key":"id","vector":"embedding"}}
 //! ```
 
 use serde_json::{Value, json};
@@ -43,6 +45,34 @@ pub(crate) struct Settings {
     pub(crate) analysis: u32,
     pub(crate) vectors: Option<Vectors>,
     pub(crate) hybrid: Hybrid,
+    pub(crate) table: Option<Table>,
+}
+
+/// The table of a database that a table's index follows: its rows are the
+/// index's documents by `key`, a column of unique values, and their vectors
+/// are the column `vector`'s, when it keeps them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Table {
+    pub(crate) name: String,
+    pub(crate) key: String,
+    pub(crate) vector: Option<String>,
+}
+
+impl Table {
+    fn to_json(&self) -> Value {
+        json!({ "name": self.name, "key": self.key, "vector": self.vector })
+    }
+
+    /// A table as its settings keep it, none for an index of documents;
+    /// none outer when it does not read.
+    fn from_json(table: &Value) -> Option<Option<Table>> {
+        if table.is_null() {
+            return Some(None);
+        }
+        let name = table["name"].as_str()?.to_owned();
+        let key = table["key"].as_str()?.to_owned();
+        Some(Some(Table { name, key, vector: table["vector"].as_str().map(str::to_owned) }))
+    }
 }
 
 /// The vectors an index keeps: of how many dimensions each, and the share
@@ -76,6 +106,24 @@ pub(crate) struct Wanted {
     pub(crate) rerank: bool,
     /// Whether a change that needs the index read again waits for `reindex`.
     pub(crate) manual: bool,
+    pub(crate) table: Option<Table>,
+}
+
+impl Default for Wanted {
+    /// An index of a document that is its own text, typos forgiven.
+    fn default() -> Self {
+        Wanted {
+            fields: Vec::new(),
+            filters: Vec::new(),
+            typo_tolerance: true,
+            dimensions: None,
+            recall: None,
+            vector_weight: None,
+            rerank: false,
+            manual: false,
+            table: None,
+        }
+    }
 }
 
 /// What a change of settings makes of an index.
@@ -153,7 +201,25 @@ impl Wanted {
                 return Err(Error::invalid(format!("filter {path} is given twice")));
             }
         }
+        self.check_table()?;
         self.check_vectors()
+    }
+
+    /// Refuses a table's index that reads no column as its text, a path
+    /// into a column's value, and vectors from no column.
+    fn check_table(&self) -> Result<()> {
+        let Some(table) = &self.table else { return Ok(()) };
+        if self.fields.is_empty() {
+            return Err(Error::invalid("a table's index reads at least one column as text: field(column, weight)"));
+        }
+        let paths = self.fields.iter().map(|(path, _)| path).chain(&self.filters);
+        if let Some(path) = paths.into_iter().find(|path| path.contains('.')) {
+            return Err(Error::invalid(format!("a table's index reads columns, and {path:?} names none")));
+        }
+        if self.dimensions.is_some() != table.vector.is_some() {
+            return Err(Error::invalid("a table's index reads its vectors from a column: vectors(column, dimensions)"));
+        }
+        Ok(())
     }
 
     fn check_vectors(&self) -> Result<()> {
@@ -212,6 +278,7 @@ impl Settings {
             analysis: analyzer::VERSION,
             vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions, recall: wanted.recall }),
             hybrid: Hybrid::of(wanted),
+            table: wanted.table.clone(),
         }
     }
 
@@ -222,13 +289,16 @@ impl Settings {
     /// a field or a filter removed leaving its keys for a rebuild to drop; a
     /// field or a filter added to an index that holds documents needs them
     /// read again, as do words read by another release. Other vectors than
-    /// those kept are refused: the store has nothing to make them from.
+    /// those kept are refused: the store has nothing to make them from, but
+    /// a table's index reads them again from their column. A table's index
+    /// follows the table and key it was made for.
     pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<Changed> {
+        self.check_same_table(wanted)?;
         let mut changed = Settings { fields: Vec::new(), ..self.clone() };
         let mut said = Vec::new();
         let mut rebuild = Rebuild::default();
         changed.change_filters(wanted, documents, (&mut said, &mut rebuild));
-        changed.change_vectors(wanted, documents, &mut said)?;
+        changed.change_vectors(wanted, documents, (&mut said, &mut rebuild))?;
         for (path, weight) in wanted.fields() {
             let Some(field) = self.fields.iter().find(|field| field.path == path) else {
                 if documents > 0 {
@@ -273,6 +343,25 @@ impl Settings {
             && filters(self) == filters(other)
             && dimensions(self) == dimensions(other)
             && self.analysis == other.analysis
+            && self.table == other.table
+    }
+
+    /// Refuses another table or key than the index follows: its documents
+    /// would be another's.
+    fn check_same_table(&self, wanted: &Wanted) -> Result<()> {
+        let followed = |table: &Option<Table>| table.as_ref().map(|table| (table.name.clone(), table.key.clone()));
+        let (kept, asked) = (followed(&self.table), followed(&wanted.table));
+        if kept == asked {
+            return Ok(());
+        }
+        let shown = |table: Option<(String, String)>| {
+            table.map_or_else(|| "documents of its own".to_owned(), |(name, key)| format!("table {name} by {key}"))
+        };
+        Err(Error::invalid(format!(
+            "the index follows {}, not {}: drop it to make one that does",
+            shown(kept),
+            shown(asked)
+        )))
     }
 
     /// Keeps the filters `wanted` names, each with its number; one removed
@@ -307,8 +396,14 @@ impl Settings {
         self.filters.iter().find(|filter| filter.path == path)
     }
 
-    fn change_vectors(&mut self, wanted: &Wanted, documents: u64, said: &mut Vec<String>) -> Result<()> {
+    fn change_vectors(
+        &mut self,
+        wanted: &Wanted,
+        documents: u64,
+        (said, rebuild): (&mut Vec<String>, &mut Rebuild),
+    ) -> Result<()> {
         match (self.vectors, wanted.dimensions) {
+            _ if self.table.is_some() => self.change_column(wanted, documents, (said, rebuild))?,
             (Some(kept), Some(dimensions)) if kept.dimensions != dimensions => {
                 return Err(Error::invalid(format!(
                     "vectors of {dimensions} dimensions where the index keeps {}: they are the program's model's, \
@@ -330,6 +425,12 @@ impl Settings {
             }
             _ => {}
         }
+        self.change_recall(wanted, said);
+        self.change_hybrid(wanted, said);
+        Ok(())
+    }
+
+    fn change_recall(&mut self, wanted: &Wanted, said: &mut Vec<String>) {
         if let Some(vectors) = self.vectors.as_mut().filter(|vectors| vectors.recall != wanted.recall) {
             said.push(match wanted.recall {
                 Some(recall) => format!("recall {recall}: clusters built in the background, searches exact until then"),
@@ -337,6 +438,9 @@ impl Settings {
             });
             vectors.recall = wanted.recall;
         }
+    }
+
+    fn change_hybrid(&mut self, wanted: &Wanted, said: &mut Vec<String>) {
         let hybrid = Hybrid::of(wanted);
         if hybrid.vector_weight != self.hybrid.vector_weight {
             said.push(format!("a vector weighs {}, was {}; at once", hybrid.vector_weight, self.hybrid.vector_weight));
@@ -345,6 +449,39 @@ impl Settings {
             said.push(format!("rerank {}; at once", if hybrid.rerank { "on" } else { "off" }));
         }
         self.hybrid = hybrid;
+    }
+
+    /// A table's index's vectors as `wanted` reads them: at once while it
+    /// holds no document, and by reading the column again once it does.
+    fn change_column(
+        &mut self,
+        wanted: &Wanted,
+        documents: u64,
+        (said, rebuild): (&mut Vec<String>, &mut Rebuild),
+    ) -> Result<()> {
+        let column = |table: &Option<Table>| table.as_ref().and_then(|table| table.vector.clone());
+        let (kept, asked) = (column(&self.table), column(&wanted.table));
+        let kept_dimensions = self.vectors.map(|vectors| vectors.dimensions);
+        if (kept.as_ref(), kept_dimensions) == (asked.as_ref(), wanted.dimensions) {
+            return Ok(());
+        }
+        let Some(column) = asked else {
+            return Err(Error::invalid(format!(
+                "opened without vectors, an index that reads them from column {} would lose them",
+                kept.unwrap_or_default()
+            )));
+        };
+        let dimensions = wanted.dimensions.unwrap_or_default();
+        let change = format!("vectors of {dimensions} dimensions from column {column}");
+        if documents > 0 {
+            rebuild.needs(change);
+            return Ok(());
+        }
+        said.push(change);
+        self.vectors = Some(Vectors { dimensions, recall: wanted.recall });
+        if let Some(table) = &mut self.table {
+            table.vector = Some(column);
+        }
         Ok(())
     }
 
@@ -371,6 +508,7 @@ impl Settings {
             "analysis": self.analysis,
             "vectors": vectors,
             "hybrid": { "vector_weight": self.hybrid.vector_weight, "rerank": self.hybrid.rerank },
+            "table": self.table.as_ref().map(Table::to_json),
         });
         settings.to_string()
     }
@@ -398,6 +536,7 @@ impl Settings {
             }),
         };
         let hybrid = &settings["hybrid"];
+        let table = Table::from_json(&settings["table"]).ok_or_else(broken)?;
         Ok(Settings {
             fields,
             next_field: number(&settings["next_field"])?,
@@ -410,6 +549,7 @@ impl Settings {
                 vector_weight: hybrid["vector_weight"].as_f64().ok_or_else(broken)?,
                 rerank: hybrid["rerank"].as_bool().ok_or_else(broken)?,
             },
+            table,
         })
     }
 }
@@ -440,6 +580,7 @@ mod tests {
             vector_weight: None,
             rerank: false,
             manual: false,
+            table: None,
         }
     }
 

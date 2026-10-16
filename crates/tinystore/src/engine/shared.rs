@@ -24,13 +24,13 @@ pub(crate) struct SharedFile {
     owner: String,
     /// Weak, as an engine holds it, so that a handle never keeps it open.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
     store: WeakStore,
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
     guests: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
@@ -46,8 +46,8 @@ impl SharedFile {
     }
 
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
     pub(crate) fn owner(&self) -> &str {
         &self.owner
@@ -56,8 +56,8 @@ impl SharedFile {
     /// The engine of type `E` kept in this file, or the one `open` makes; every
     /// handle opened from the file shares it.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
     pub(crate) fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))?;
@@ -93,8 +93,8 @@ pub(crate) enum Home {
 }
 
 #[cfg_attr(
-    not(any(feature = "kv", feature = "jobs")),
-    expect(dead_code, reason = "only kv's and jobs' handles are guests")
+    not(any(feature = "kv", feature = "jobs", feature = "search")),
+    expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
 )]
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)

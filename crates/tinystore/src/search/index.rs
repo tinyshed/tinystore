@@ -14,8 +14,12 @@ use super::filter::{self, Condition};
 use super::open::{Data, OpenIndex, Status};
 use super::read::Query;
 use super::settings::{Settings, Wanted, check_hybrid};
+#[cfg(feature = "sql")]
+use super::table_index::ReadRow;
 use super::vectors::Question;
 use super::write::{Incoming, Prepared};
+#[cfg(feature = "sql")]
+use crate::Transaction;
 use crate::{Error, Key, Result, Store};
 
 /// The largest document, as its JSON.
@@ -51,17 +55,7 @@ impl<T> std::fmt::Debug for IndexBuilder<'_, T> {
 
 impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     pub(crate) fn new(store: &'s Store, name: &str) -> Self {
-        let wanted = Wanted {
-            fields: Vec::new(),
-            filters: Vec::new(),
-            typo_tolerance: true,
-            dimensions: None,
-            recall: None,
-            vector_weight: None,
-            rerank: false,
-            manual: false,
-        };
-        IndexBuilder { store, name: name.to_owned(), wanted, _value: PhantomData }
+        IndexBuilder { store, name: name.to_owned(), wanted: Wanted::default(), _value: PhantomData }
     }
 
     /// A field whose text is read, by its path into the document, `author.name`
@@ -158,7 +152,7 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         let within = |error: Error| error.within(format!("index {}", self.name));
         let search = Search::of(self.store).map_err(within)?;
         let open = search.open_index(&self.name, &self.wanted, reindex).map_err(within)?;
-        Ok(Index { search, open, _value: PhantomData })
+        Ok(Index::of_documents(search, open))
     }
 }
 
@@ -169,7 +163,7 @@ pub(crate) fn open_as_it_is<T: Serialize + DeserializeOwned>(store: &Store, name
     let within = |error: Error| error.within(format!("index {name}"));
     let search = Search::of(store).map_err(within)?;
     let open = search.open_existing(name).map_err(within)?;
-    Ok(Index { search, open, _value: PhantomData })
+    Ok(Index::of_documents(search, open))
 }
 
 /// Whether a change of an index's settings that needs it read again begins
@@ -188,12 +182,40 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {}
 pub struct Index<T> {
     pub(crate) search: Arc<Search>,
     pub(crate) open: Arc<OpenIndex>,
-    _value: PhantomData<fn() -> T>,
+    /// How a table's index reads its hits' rows, which are their values.
+    #[cfg(feature = "sql")]
+    pub(crate) read_row: Option<ReadRow<T>>,
+    pub(crate) _value: PhantomData<fn() -> T>,
 }
 
 impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
-        Index { search: Arc::clone(&self.search), open: Arc::clone(&self.open), _value: PhantomData }
+        Index {
+            search: Arc::clone(&self.search),
+            open: Arc::clone(&self.open),
+            #[cfg(feature = "sql")]
+            read_row: self.read_row.clone(),
+            _value: PhantomData,
+        }
+    }
+}
+
+impl<T> Index<T> {
+    /// Whether it is a table's index, whose rows are written to the table.
+    #[cfg(feature = "wire")]
+    pub(crate) fn follows_table(&self) -> bool {
+        #[cfg(feature = "sql")]
+        return self.read_row.is_some();
+        #[cfg(not(feature = "sql"))]
+        false
+    }
+
+    /// An index of documents of its own, in search.db.
+    fn of_documents(search: Arc<Search>, open: Arc<OpenIndex>) -> Self {
+        #[cfg(feature = "sql")]
+        return Index { search, open, read_row: None, _value: PhantomData };
+        #[cfg(not(feature = "sql"))]
+        Index { search, open, _value: PhantomData }
     }
 }
 
@@ -203,11 +225,65 @@ impl<T> std::fmt::Debug for Index<T> {
     }
 }
 
-impl<T: Serialize + DeserializeOwned> Index<T> {
+impl<T: DeserializeOwned> Index<T> {
     pub fn name(&self) -> &str {
         &self.open.name
     }
 
+    /// Where the index stands: serving the settings it was opened with, read
+    /// again beside them and how far, or a rebuild that failed and why. A
+    /// search never waits: it answers by the settings the index serves.
+    pub fn status(&self) -> Result<Status> {
+        self.search.status(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
+    }
+
+    /// Waits until the index serves the settings it was opened with: at once
+    /// when no rebuild is under way, and an error naming why when one failed.
+    /// A store opened without background work runs [`maintain`](super::maintain)
+    /// itself meanwhile.
+    pub fn ready(&self) -> Result<()> {
+        self.search.ready(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
+    }
+
+    /// A search by `text`'s words: a document needs any of them, not all,
+    /// and the best ten come first unless the search says otherwise. Of
+    /// equal scores the document set first comes first, so pages of one
+    /// search join without a hit twice. With a [`vector`](SearchCall::vector)
+    /// it searches by both.
+    pub fn search(&self, text: &str) -> SearchCall<'_, T> {
+        SearchCall {
+            index: self,
+            #[cfg(feature = "sql")]
+            tx: None,
+            text: text.to_owned(),
+            vector: None,
+            vector_weight: None,
+            rerank: false,
+            filter: Vec::new(),
+            offset: 0,
+            limit: LIMIT,
+        }
+    }
+
+    /// A search by `vector` alone, which the program's model gave the
+    /// question: the exact best by their cosine with it, which is each
+    /// hit's score. A document without a vector is never found by one.
+    pub fn search_vector<'i>(&'i self, vector: &'i [f32]) -> SearchCall<'i, T> {
+        self.search("").vector(vector)
+    }
+
+    /// The hits of `query`, each with its document as its value.
+    fn found(&self, query: Query) -> Result<Found<T>> {
+        let answer = self.search.search(&self.open, query)?;
+        let hits = answer.hits.into_iter().map(|(id, value, score)| {
+            let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
+            Ok(Hit { id, value, score })
+        });
+        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected: answer.corrected })
+    }
+}
+
+impl<T: Serialize + DeserializeOwned> Index<T> {
     /// Sets the document `id` to `value`, replacing it whole; the next
     /// search sees it. On an index with vectors a set gives its vector, or
     /// says it has none, through [`id`](Index::id).
@@ -268,21 +344,6 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         self.search.delete(&self.open, checked).map_err(within)
     }
 
-    /// Where the index stands: serving the settings it was opened with, read
-    /// again beside them and how far, or a rebuild that failed and why. A
-    /// search never waits: it answers by the settings the index serves.
-    pub fn status(&self) -> Result<Status> {
-        self.search.status(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
-    }
-
-    /// Waits until the index serves the settings it was opened with: at once
-    /// when no rebuild is under way, and an error naming why when one failed.
-    /// A store opened without background work runs [`maintain`](super::maintain)
-    /// itself meanwhile.
-    pub fn ready(&self) -> Result<()> {
-        self.search.ready(&self.open).map_err(|error| error.within(format!("index {}", self.open.name)))
-    }
-
     /// The document `id`, or none.
     pub fn get(&self, id: impl Key) -> Result<Option<T>> {
         let id = id.text();
@@ -291,31 +352,6 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
             return Ok(None);
         };
         decode(&value).map(Some).map_err(within)
-    }
-
-    /// A search by `text`'s words: a document needs any of them, not all,
-    /// and the best ten come first unless the search says otherwise. Of
-    /// equal scores the document set first comes first, so pages of one
-    /// search join without a hit twice. With a [`vector`](SearchCall::vector)
-    /// it searches by both.
-    pub fn search(&self, text: &str) -> SearchCall<'_, T> {
-        SearchCall {
-            index: self,
-            text: text.to_owned(),
-            vector: None,
-            vector_weight: None,
-            rerank: false,
-            filter: Vec::new(),
-            offset: 0,
-            limit: LIMIT,
-        }
-    }
-
-    /// A search by `vector` alone, which the program's model gave the
-    /// question: the exact best by their cosine with it, which is each
-    /// hit's score. A document without a vector is never found by one.
-    pub fn search_vector<'i>(&'i self, vector: &'i [f32]) -> SearchCall<'i, T> {
-        self.search("").vector(vector)
     }
 }
 
@@ -405,6 +441,9 @@ impl<'v, T> Given<'v, T> {
 #[must_use = "a search runs at `run`"]
 pub struct SearchCall<'i, T> {
     index: &'i Index<T>,
+    /// The transaction a table's index searches in, `tx.with(&index)`.
+    #[cfg(feature = "sql")]
+    tx: Option<&'i Transaction<'i>>,
     text: String,
     vector: Option<&'i [f32]>,
     vector_weight: Option<f64>,
@@ -437,7 +476,7 @@ pub struct Hit<T> {
     pub score: f64,
 }
 
-impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
+impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// Searches by `vector` too, which the program's model gave the question:
     /// each half's best hundred, or `offset + limit` if more, their scores
     /// each scaled to 0–1 by its own lowest and highest, 0 where the other
@@ -476,6 +515,13 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
         self
     }
 
+    /// The search run inside `tx`, a transaction of a table's database.
+    #[cfg(feature = "sql")]
+    pub(crate) fn in_tx(mut self, tx: &'i Transaction<'i>) -> Self {
+        self.tx = Some(tx);
+        self
+    }
+
     /// The hits it answers, 10 unless it says.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
@@ -492,13 +538,20 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
         let name = &self.index.open.name;
         let within = |error: Error| error.within(format!("index {name}"));
         let query = self.query().map_err(within)?;
-        let answer = self.index.search.search(&self.index.open, query).map_err(within)?;
-        let mut hits = Vec::with_capacity(answer.hits.len());
-        for (id, value, score) in answer.hits {
-            let value = decode(&value).map_err(|error| within(error.within(format!("id {id:?}"))))?;
-            hits.push(Hit { id, value, score });
+        #[cfg(feature = "sql")]
+        if let Some(read_row) = &self.index.read_row {
+            return super::table_index::found(self.index, &**read_row, query, self.tx).map_err(within);
         }
-        Ok(Found { hits, corrected: answer.corrected })
+        self.index.found(query).map_err(within)
+    }
+
+    /// The search's index and query, for a caller that reads its hits
+    /// itself: the wire reads a table's rows by their cells.
+    #[cfg(all(feature = "wire", feature = "sql"))]
+    pub(crate) fn asked(self) -> Result<(&'i Index<T>, Query)> {
+        let name = &self.index.open.name;
+        let query = self.query().map_err(|error| error.within(format!("index {name}")))?;
+        Ok((self.index, query))
     }
 
     fn query(&self) -> Result<Query> {

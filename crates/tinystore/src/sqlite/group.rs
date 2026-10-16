@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use super::connection::{execute, sql_error};
 use super::given::own;
-use super::{Committed, GroupLimits, Tx};
+use super::{Committed, GroupLimits, Left, Settlers, Tx};
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) type Work = Box<dyn FnOnce(&Tx<'_>) -> Result<()> + Send>;
@@ -53,6 +53,7 @@ pub(crate) struct Group {
     grew: Condvar,
     limits: GroupLimits,
     commits: AtomicU64,
+    settlers: Arc<Settlers>,
 }
 
 #[derive(Default)]
@@ -96,8 +97,9 @@ struct Answer {
 }
 
 impl Group {
-    pub(crate) fn new(limits: GroupLimits) -> Self {
-        Self { queue: Mutex::new(Queue::default()), grew: Condvar::new(), limits, commits: AtomicU64::new(0) }
+    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>) -> Self {
+        let queue = Mutex::new(Queue::default());
+        Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers }
     }
 
     pub(crate) fn commits(&self) -> u64 {
@@ -175,7 +177,7 @@ impl Group {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();
-            let answers = commit(&connection, &batch);
+            let answers = commit(&connection, &batch, &self.settlers);
             let held = started.elapsed();
             drop(connection);
             if !batch.is_empty() {
@@ -356,7 +358,7 @@ fn answer_in_halves(mut callers: Vec<(Arc<Write>, Result<()>)>) {
 /// Runs a batch in one transaction, each write in a savepoint, and says how
 /// each one ended. What the writes that succeeded asked to run once they
 /// commit runs after the commit, in their order, the writer still held.
-fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
+fn commit(connection: &Connection, batch: &[Arc<Write>], settlers: &Settlers) -> Vec<Result<()>> {
     if batch.is_empty() {
         return Vec::new();
     }
@@ -365,7 +367,12 @@ fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
         return batch.iter().map(|_| Err(failure.duplicate())).collect();
     }
     let committed = Committed::default();
-    let answers: Vec<Result<()>> = batch.iter().map(|write| run(connection, write.take_work(), &committed)).collect();
+    if let Err(failure) = Tx::new(connection, &committed, settlers).settle(Left::Before) {
+        let _ = execute(connection, ROLLBACK);
+        return batch.iter().map(|_| Err(failure.duplicate())).collect();
+    }
+    let answers: Vec<Result<()>> =
+        batch.iter().map(|write| run(connection, write.take_work(), (&committed, settlers))).collect();
     let Err(error) = execute(connection, COMMIT) else {
         committed.run();
         return answers;
@@ -379,16 +386,17 @@ fn commit(connection: &Connection, batch: &[Arc<Write>]) -> Vec<Result<()>> {
     answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
 }
 
-/// Runs one write in a savepoint, which it keeps when the write succeeds and
-/// rolls back when it fails or panics, its hooks with it.
-fn run(connection: &Connection, work: Option<Work>, committed: &Committed) -> Result<()> {
+/// Runs one write in a savepoint, then settles what it left, keeping the
+/// savepoint when both succeed and rolling it back when either fails or
+/// panics, its hooks with it.
+fn run(connection: &Connection, work: Option<Work>, (committed, settlers): (&Committed, &Settlers)) -> Result<()> {
     let Some(work) = work else {
         return Err(Error::internal("a grouped write ran twice"));
     };
     execute(connection, SAVEPOINT).map_err(|error| sql_error("a grouped write: its savepoint", error))?;
     let mark = committed.mark();
-    let tx = Tx::new(connection, committed);
-    let outcome = catch_unwind(AssertUnwindSafe(|| work(&tx)))
+    let tx = Tx::new(connection, committed, settlers);
+    let outcome = catch_unwind(AssertUnwindSafe(|| work(&tx).and_then(|()| tx.settle(Left::Here))))
         .unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
     if outcome.is_ok() {
         if let Err(error) = execute(connection, RELEASE) {

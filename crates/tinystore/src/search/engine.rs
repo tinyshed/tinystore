@@ -3,16 +3,17 @@
 //! packing each head into blocks, purging the documents gone, building
 //! again a dictionary of words that fell behind, keeping the clusters of
 //! vectors, reading an index again beside itself and dropping what is
-//! dropped.
+//! dropped. A table's indexes keep the same tables in a database's file,
+//! beside the program's own, in an engine of their own.
 //!
 //! ```text
 //! set ──► head, a grouped commit ── maintenance ──► blocks, a step a commit
 //! search ◄── blocks and head, one snapshot
 //! ```
 
-use std::collections::HashMap;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -21,7 +22,8 @@ use super::kept::lock;
 use super::open::{Beside, Current, Data, OpenIndex};
 use super::read::{self, Answer, Asked, Query};
 use super::rebuild;
-use super::settings::{Changed, Settings, Wanted};
+use super::settings::{Changed, Settings, Table, Wanted};
+use super::table;
 use super::upkeep::PACK_AT;
 use super::write::{self, Prepared};
 use crate::clock::Clock;
@@ -32,7 +34,7 @@ use crate::{Error, Memory, Result, Store};
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// search's file in the store's directory.
-const FILE: &str = "search.db";
+pub(super) const FILE: &str = "search.db";
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
 
@@ -41,14 +43,21 @@ const COUNT_DOCUMENTS: &str = "select documents from _tinystore_search_indexes w
 const READ_VALUE: &str = "select value from _tinystore_search_docs where index_id = ?1 and id = ?2";
 
 pub(crate) struct Search {
-    pub(crate) file: File,
+    pub(crate) file: Arc<File>,
+    /// What the log calls a file another engine lends: `sql app`.
+    pub(super) lent_by: Option<String>,
     memory: Arc<Memory>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
     /// Held by a pass of maintenance, so that two never pack the same head.
     maintaining: Mutex<()>,
     wake: OnceLock<Wake>,
-    _claim: Claim,
+    /// Rows a settle set since maintenance last packed, and the indexes it
+    /// set them in, which maintenance keeps whether or not this process
+    /// opened them. A settle runs on the writer, so these are all it holds.
+    table_sets: AtomicU64,
+    reached: Mutex<HashSet<String>>,
+    _claim: Option<Claim>,
 }
 
 /// What one pass of maintenance did.
@@ -61,12 +70,46 @@ pub struct Maintenance {
 }
 
 impl Engine for Search {
+    /// Closes search.db; a database's file is the database's to close.
     fn close(&self) -> Result<()> {
+        if self.lent_by.is_some() {
+            return Ok(());
+        }
         self.file.close()
     }
 
+    /// Copies search.db; a table's indexes are copied with their database.
     fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+        if self.lent_by.is_some() {
+            return Ok(Vec::new());
+        }
         Ok(vec![crate::engine::copy_file(&self.file, FILE, "search", into)?])
+    }
+}
+
+/// The search engines kept in the store's databases' files, which
+/// [`maintain`](super::maintain) reaches as it does search.db.
+#[derive(Default)]
+pub(crate) struct InFiles(Mutex<Vec<Weak<Search>>>);
+
+impl Engine for InFiles {
+    fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl InFiles {
+    pub(crate) fn of(store: &Store) -> Result<Arc<InFiles>> {
+        store.engine(|_| Ok(Arc::new(InFiles::default())))
+    }
+
+    #[cfg(feature = "sql")]
+    pub(crate) fn keep(&self, search: &Arc<Search>) {
+        lock(&self.0).push(Arc::downgrade(search));
+    }
+
+    pub(crate) fn engines(&self) -> Vec<Arc<Search>> {
+        lock(&self.0).iter().filter_map(Weak::upgrade).collect()
     }
 }
 
@@ -76,24 +119,52 @@ impl Search {
     pub(crate) fn of(store: &Store) -> Result<Arc<Search>> {
         store.engine(|store| {
             let claim = store.claim(FILE)?;
-            let file = File::open(claim.path(), Config::committing(store.durability()))?;
-            file.migrate("search", MIGRATIONS)?;
-            let search = Arc::new(Search {
-                file,
-                memory: Arc::clone(store.memory()),
-                clock: store.clock(),
-                indexes: Mutex::default(),
-                maintaining: Mutex::default(),
-                wake: OnceLock::new(),
-                _claim: claim,
-            });
-            let weak = Arc::downgrade(&search);
-            let wake = store.every("search: maintenance", MAINTENANCE, move || {
-                weak.upgrade().map_or(Ok(()), |search| search.maintain(false).map(drop))
-            })?;
-            let _ = search.wake.set(wake);
-            Ok(search)
+            let file = Arc::new(File::open(claim.path(), Config::committing(store.durability()))?);
+            Search::start(store, file, None, Some(claim))
         })
+    }
+
+    /// Makes search's tables in `file` when it has none, and starts its
+    /// maintenance on the store's schedule.
+    pub(super) fn start(
+        store: &Store,
+        file: Arc<File>,
+        lent_by: Option<String>,
+        claim: Option<Claim>,
+    ) -> Result<Arc<Search>> {
+        file.migrate("search", MIGRATIONS)?;
+        let tasks = lent_by.as_ref().map_or_else(|| "search".to_owned(), |owner| format!("search in {owner}"));
+        let search = Arc::new(Search {
+            file,
+            lent_by,
+            memory: Arc::clone(store.memory()),
+            clock: store.clock(),
+            indexes: Mutex::default(),
+            maintaining: Mutex::default(),
+            wake: OnceLock::new(),
+            table_sets: AtomicU64::new(0),
+            reached: Mutex::default(),
+            _claim: claim,
+        });
+        let weak = Arc::downgrade(&search);
+        let wake = store.every(&format!("{tasks}: maintenance"), MAINTENANCE, move || {
+            weak.upgrade().map_or(Ok(()), |search| search.maintain(false).map(drop))
+        })?;
+        let _ = search.wake.set(wake);
+        Ok(search)
+    }
+
+    /// Counts a row a settle set in the index `name`, which maintenance
+    /// then keeps, and wakes it once enough wait to be packed.
+    pub(crate) fn table_set(&self, name: &str) {
+        let mut reached = lock(&self.reached);
+        if !reached.contains(name) {
+            reached.insert(name.to_owned());
+        }
+        drop(reached);
+        if self.table_sets.fetch_add(1, Ordering::Relaxed) + 1 == PACK_AT {
+            self.wake();
+        }
     }
 
     /// Opens the index `name`, made the first time, with the settings
@@ -103,14 +174,23 @@ impl Search {
         check_name(name)?;
         wanted.check()?;
         let mut indexes = lock(&self.indexes);
+        let mut made = false;
         let open = match indexes.get(name) {
             Some(open) => Arc::clone(open),
             None => {
                 let current = match self.file.read(|connection| rebuild::read_current(connection, name))? {
                     Some(current) => current,
                     None => {
+                        made = true;
                         let settings = Settings::new(wanted);
-                        let id = self.file.transaction(|tx| rebuild::add_index(tx, name, &settings))?;
+                        let id = self.file.transaction(|tx| {
+                            let id = rebuild::add_index(tx, name, &settings)?;
+                            if settings.table.is_some() {
+                                table::begin_fill(tx, id)?;
+                            }
+                            Ok::<i64, Error>(id)
+                        })?;
+                        self.wake();
                         Current { serving: Data::new(id, settings), beside: None }
                     }
                 };
@@ -122,8 +202,31 @@ impl Search {
         drop(indexes);
         open.manual.store(wanted.manual, Ordering::Relaxed);
         self.change(&open, wanted, reindex)?;
+        if let Some(followed) = &wanted.table {
+            self.follow(&open, followed, made)?;
+        }
         self.opened(open.id())?;
         Ok(open)
+    }
+
+    /// Puts a table's index's triggers on its table; when they were missing
+    /// from an index it did not make now, as after a migration rebuilt the
+    /// table, it reads the table again, said in the log.
+    fn follow(&self, open: &OpenIndex, followed: &Table, made: bool) -> Result<()> {
+        let id = open.id();
+        let again = self.file.transaction(|tx| {
+            let missing = table::follow(tx, &open.name, followed)?;
+            if missing && !made {
+                table::begin_again(tx, id)?;
+            }
+            Ok::<bool, Error>(missing && !made)
+        })?;
+        if again {
+            tracing::warn!(target: "tinystore", "search {}: its triggers were missing from table {}, as a migration \
+                that rebuilds the table leaves it; reading the table again", open.name, followed.name);
+            self.wake();
+        }
+        Ok(())
     }
 
     /// The index `name` as it is, made by no one: a read connection's.
@@ -249,15 +352,39 @@ impl Search {
     }
 
     pub(crate) fn search(&self, open: &OpenIndex, query: Query) -> Result<Answer> {
+        self.search_then(open, query, |_, _| Ok(())).map(|(answer, ())| answer)
+    }
+
+    /// Searches, then runs `then` on its answer in the same snapshot, as a
+    /// table's index reads its hits' rows.
+    pub(crate) fn search_then<R>(
+        &self,
+        open: &OpenIndex,
+        query: Query,
+        then: impl FnOnce(&Connection, &Answer) -> Result<R>,
+    ) -> Result<(Answer, R)> {
+        self.file.read(|connection| self.search_on(connection, open, query, then))
+    }
+
+    /// Searches on `connection`, a reader's snapshot or the writer of a
+    /// transaction that holds the file, whose writes the search then sees.
+    pub(crate) fn search_on<R>(
+        &self,
+        connection: &Connection,
+        open: &OpenIndex,
+        query: Query,
+        then: impl FnOnce(&Connection, &Answer) -> Result<R>,
+    ) -> Result<(Answer, R)> {
         open.refuse_dropped()?;
         let serving = open.current().serving.clone();
         let asked =
             Asked { index: serving.id, settings: &serving.settings, kept: &serving.kept, memory: &self.memory, query };
-        let answer = self.file.read(|connection| read::search(connection, asked))?;
+        let answer = read::search(connection, asked)?;
+        let then = then(connection, &answer)?;
         if answer.behind {
             self.wake();
         }
-        Ok(answer)
+        Ok((answer, then))
     }
 
     pub(crate) fn wake(&self) {
@@ -274,9 +401,12 @@ impl Search {
     pub(crate) fn maintain(&self, everything: bool) -> Result<Maintenance> {
         let _one = lock(&self.maintaining);
         let mut done = Maintenance::default();
+        self.keep_reached()?;
+        self.table_sets.store(0, Ordering::Relaxed);
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
         for open in indexes {
             let within = |error: Error| error.within(format!("index {}", open.name));
+            self.fill(&open).map_err(within)?;
             let current = open.current();
             for data in current.written() {
                 done.packed += self.pack(data, everything).map_err(within)?;
@@ -291,6 +421,38 @@ impl Search {
         }
         self.drop_rows()?;
         Ok(done)
+    }
+
+    /// Opens, for maintenance, each table's index a settle set rows in that
+    /// this process has not opened.
+    fn keep_reached(&self) -> Result<()> {
+        let names = std::mem::take(&mut *lock(&self.reached));
+        for name in names {
+            if lock(&self.indexes).contains_key(&name) {
+                continue;
+            }
+            if let Some(current) = self.file.read(|connection| rebuild::read_current(connection, &name))? {
+                let open = Arc::new(OpenIndex::new(&name, current));
+                lock(&self.indexes).entry(name).or_insert(open);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads a table's index's rows the first time, a step a commit, and
+    /// wakes whoever waits for it once they are read.
+    fn fill(&self, open: &OpenIndex) -> Result<()> {
+        if open.current().serving.settings.table.is_none() {
+            return Ok(());
+        }
+        let mut stepped = false;
+        while !self.file.transaction(|tx| self.fill_step(tx, &open.name))? {
+            stepped = true;
+        }
+        if stepped {
+            open.settle();
+        }
+        Ok(())
     }
 }
 

@@ -11,7 +11,7 @@ use super::rows::{Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
-#[cfg(any(feature = "kv", feature = "jobs"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
 use crate::engine::SharedFile;
 use crate::{Durability, Error, Result, Store, Transaction};
 
@@ -152,8 +152,9 @@ impl Database {
         Transaction::run(self.base.file(), &owner, Some(&bound), |transaction| work(&Tx::new(transaction, &self.base)))
     }
 
-    /// The file the database lends to the buckets and queues opened from it.
-    #[cfg(any(feature = "kv", feature = "jobs"))]
+    /// The file the database lends to the buckets, queues and indexes opened
+    /// from it.
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
     pub(crate) fn shared(&self) -> &Arc<SharedFile> {
         &self.base.shared
     }

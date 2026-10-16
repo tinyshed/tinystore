@@ -125,6 +125,38 @@ for (const way of ways) {
 			await reindexed.ready()
 		})
 
+		test("a table's index finds its rows, each hit its row, and follows every write to the table", async () => {
+			const db = await store.database('shop', {
+				migrations: {
+					'0001_articles.sql':
+						'create table articles (id integer primary key, title text not null, done integer not null default 0, embedding blob)',
+				},
+			})
+			await db.exec`insert into articles (id, title) values (1, 'Sourdough bread')`
+			const articles = db.searchIndex<{ id: number; title: string; done: number }>(
+				'articles_search',
+				{
+					table: 'articles',
+					fields: ['title'],
+					filters: ['done'],
+					vectors: { column: 'embedding', dimensions: 3 },
+				},
+			)
+			await articles.ready()
+			expect(ids(await articles.search('bread'))).toEqual(['1'])
+			const embedding = new Uint8Array(new Float32Array([1, 0, 0]).buffer)
+			await db.exec`insert into articles (id, title, done, embedding) values (2, 'Rye bread', 1, ${embedding})`
+			const done = await articles.search({ text: 'bread', where: { done: true } })
+			expect(ids(done)).toEqual(['2'])
+			expect(done.hits[0]?.value.title).toBe('Rye bread')
+			expect(ids(await articles.search({ vector: [1, 0, 0] }))).toEqual(['2'])
+			const ragged = db.exec`insert into articles (id, title, embedding) values (3, 'ragged', ${new Uint8Array(5)})`
+			expect(await caught(ragged)).toBeInstanceOf(InvalidError)
+			expect(await db.scalar<number>`select count(*) from articles where id = 3`).toBe(0)
+			expect(await db.dropSearchIndex('articles_search')).toBe(true)
+			expect(await caught(articles.search('bread'))).toBeInstanceOf(InvalidError)
+		})
+
 		test('an index is listed, and dropped with every document it holds', async () => {
 			const posts = store.index<string>('posts')
 			await posts.set('p', 'hello')

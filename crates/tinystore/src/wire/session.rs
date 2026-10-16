@@ -1190,7 +1190,10 @@ impl Shared {
             #[cfg(feature = "channels")]
             0x0a => channels::call(&self.store, method, body),
             #[cfg(feature = "search")]
-            0x0b => search::call(&self.store, &self.search, method, body, self.read_only.load(Ordering::Relaxed)),
+            0x0b => {
+                let read_only = self.read_only.load(Ordering::Relaxed);
+                search::call(&self.store, &self.search, &lent, method, body, read_only)
+            }
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }

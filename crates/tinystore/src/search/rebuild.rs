@@ -25,6 +25,7 @@ use serde_json::Value;
 use super::engine::{Search, check_name};
 use super::open::{Beside, Current, Data, OpenIndex, Status};
 use super::settings::{Settings, Wanted};
+use super::table;
 use super::vectors;
 use super::write::{self, Incoming, Prepared, execute};
 use crate::sqlite::{Tx, sql_error};
@@ -45,7 +46,9 @@ const READ_PROGRESS: &str = "select (select next_doc from _tinystore_search_inde
     copied_through, failed, why from _tinystore_search_indexes where id = ?1";
 const WRITE_COPIED: &str = "update _tinystore_search_indexes set copied_through = ?2 where id = ?1";
 const WRITE_FAILED: &str = "update _tinystore_search_indexes set failed = ?2 where id = ?1";
-const SWITCH: &str = "update _tinystore_search_indexes set name = ?2, beside_of = null, why = null where id = ?1";
+const SWITCH: &str = "update _tinystore_search_indexes set name = ?2, beside_of = null, why = null,
+    filling = (select filling from _tinystore_search_indexes where id = ?3),
+    filled_through = (select filled_through from _tinystore_search_indexes where id = ?3) where id = ?1";
 const READ_DOCS: &str = "select doc, id, value from _tinystore_search_docs
     where index_id = ?1 and doc > ?2 order by doc limit ?3";
 const STILL_THERE: &str = "select exists (select 1 from _tinystore_search_docs where index_id = ?1 and doc = ?2)";
@@ -156,6 +159,12 @@ fn copied(connection: &Connection, serving: i64, beside: &Data, progress: &Progr
     let rows: Vec<(u32, String, Vec<u8>)> = rows.and_then(Iterator::collect).map_err(failed)?;
     let mut documents = Vec::with_capacity(rows.len());
     for (doc, id, bytes) in &rows {
+        if beside.settings.table.is_some() {
+            let prepared = table::prepared_again(connection, beside.id, &beside.settings, (id, bytes))
+                .map_err(|error| error.within(format!("id {id:?}")))?;
+            documents.extend(prepared.map(|prepared| (*doc, prepared)));
+            continue;
+        }
         let tree: Value = serde_json::from_slice(bytes)
             .map_err(|error| Error::corrupt(format!("document {doc} that does not read as JSON")).with_source(error))?;
         let vector = match beside.settings.vectors {
@@ -267,7 +276,7 @@ impl Search {
                 }
             }
             execute(tx, MARK_DROPPING, [serving], "drop an index's old rows")?;
-            execute(tx, SWITCH, (beside, &name), "switch an index's rows")?;
+            execute(tx, SWITCH, (beside, &name, serving), "switch an index's rows")?;
             Ok(why)
         });
         let why = match switched {
@@ -299,7 +308,8 @@ impl Search {
             });
         }
         drop(current);
-        tracing::warn!(target: "tinystore", "search {}: its rebuild failed: {said}; the index answers as before", open.name);
+        let name = &open.name;
+        tracing::warn!(target: "tinystore", "search {name}: its rebuild failed: {said}; the index answers as before");
         open.settle();
         Ok(())
     }
@@ -330,7 +340,12 @@ impl Search {
 
     pub(crate) fn status(&self, open: &OpenIndex) -> Result<Status> {
         open.refuse_dropped()?;
-        let Some(beside) = open.current().beside.clone() else { return Ok(Status::Ready) };
+        let current = open.current();
+        let Some(beside) = current.beside.clone() else {
+            let serving = &current.serving;
+            let filling = self.file.read(|connection| table::filling(connection, serving.id, &serving.settings))?;
+            return Ok(filling.map_or(Status::Ready, |done| Status::Rebuilding { done }));
+        };
         let progress = self.file.read(|connection| progress(connection, (open.id(), beside.data.id)))?;
         Ok(match progress.failed {
             Some(error) => Status::Failed { error },
@@ -363,6 +378,7 @@ impl Search {
         });
         let named = name.to_owned();
         let dropped = self.file.transaction(|tx| {
+            table::unfollow(tx, &named)?;
             let marked = tx.prepare_cached(MARK_NAMED_DROPPING).and_then(|mut update| update.execute([&named]));
             marked.map_err(|error| sql_error("drop an index", error))
         })?;
@@ -510,5 +526,6 @@ pub(crate) fn wanted_of(settings: &Settings) -> Wanted {
         vector_weight: settings.vectors.map(|_| settings.hybrid.vector_weight),
         rerank: settings.hybrid.rerank,
         manual: false,
+        table: settings.table.clone(),
     }
 }

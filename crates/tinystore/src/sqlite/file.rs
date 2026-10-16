@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use rusqlite::Connection;
 
@@ -11,7 +11,7 @@ use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
-use super::{Committed, Config, Tx};
+use super::{Committed, Config, Left, Settle, Settlers, Tx};
 use crate::{Error, ErrorKind, Result};
 
 const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
@@ -30,6 +30,7 @@ pub(crate) struct File {
     group: Group,
     readers: Readers,
     closed: AtomicBool,
+    settlers: Arc<Settlers>,
 }
 
 impl File {
@@ -40,17 +41,25 @@ impl File {
         }
         let config = Arc::new(config);
         let writer = connection::open(&path, &config, Role::Writer)?;
+        let settlers = Arc::new(Settlers::default());
         Ok(Self {
-            group: Group::new(config.group),
+            group: Group::new(config.group, Arc::clone(&settlers)),
             readers: Readers::new(path.clone(), Arc::clone(&config)),
             writer: Mutex::new(writer),
             path,
             closed: AtomicBool::new(false),
+            settlers,
         })
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Has every transaction of the file settle `settle` before it commits,
+    /// from the next one on, until the engine is dropped.
+    pub(crate) fn settle_with(&self, settle: Weak<dyn Settle>) {
+        self.settlers.add(settle);
     }
 
     /// Runs `write` in a commit it may share with the writes queued beside it,
@@ -136,7 +145,10 @@ impl File {
         let _held = Held::enter(self.address());
         let mut open = Open { connection, finished: false };
         let committed = Committed::default();
-        let value = work(&Tx::new(connection, &committed))?;
+        let tx = Tx::new(connection, &committed, &self.settlers);
+        tx.settle(Left::Before)?;
+        let value = work(&tx)?;
+        tx.settle(Left::Here)?;
         open.finished = true;
         self.commit(connection)?;
         committed.run();
@@ -170,7 +182,9 @@ impl File {
         self.refuse_when_closed("a transaction")?;
         let connection = lock(&self.writer);
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
-        Ok(Begun { file: self, connection, hooks: Committed::default(), committed: false })
+        let begun = Begun { file: self, connection, hooks: Committed::default(), committed: false };
+        begun.tx().settle(Left::Before)?;
+        Ok(begun)
     }
 
     /// Whether this thread holds the file's writer in a transaction.
@@ -305,12 +319,13 @@ impl Begun<'_> {
 
     /// The writer inside the transaction.
     pub(crate) fn tx(&self) -> Tx<'_> {
-        Tx::new(&self.connection, &self.hooks)
+        Tx::new(&self.connection, &self.hooks, &self.file.settlers)
     }
 
-    /// Commits, then runs what the calls asked to run once it did, the
-    /// writer still held.
+    /// Settles what the calls left, commits, then runs what they asked to
+    /// run once it did, the writer still held.
     pub(crate) fn commit(mut self) -> Result<()> {
+        self.tx().settle(Left::Here)?;
         self.committed = true;
         self.file.commit(&self.connection)?;
         self.hooks.run();

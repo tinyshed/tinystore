@@ -371,6 +371,7 @@ module defines.
 - the build gives each connection a page cache of its own, and no mutex of the process on a page — `the_build_gives_each_connection_a_page_cache_of_its_own` in `sqlite::file`
 - SQLite takes the core's mutexes before its first connection — `sqlite_takes_the_cores_mutexes_before_its_first_connection` in `sqlite::file`
 - no connection attaches a file, whoever wrote the statement — `no_connection_attaches_a_file_whoever_wrote_the_statement` in `sqlite::file`
+- every transaction of a file settles what an engine kept in it was left, first what a process beside the store left and then each write's own inside its savepoint, so that a write whose settle fails fails alone and a commit, a grouped one, one of its own and a database's `tx`, never lands without it — `every_way_a_row_changes_reaches_its_index_and_a_hit_is_the_row`, `a_row_whose_vector_does_not_read_fails_its_write_and_one_beside_the_store_is_left_out` in `search::table_index`
 - a statement the store was given cannot be the adapter's own kept `commit`, found by its text — `a_given_statement_that_starts_as_the_adapters_own_is_refused_unrun` in `sqlite::file`
 - a mutex of the core's lets one thread in, parks a thread past its spins and wakes it, and is its holder's as often as it entered — `a_lock_lets_one_thread_in_at_a_time`, `a_thread_past_its_spins_parks_and_is_woken`, `a_reentrant_lock_is_its_holders_until_it_leaves_as_often_as_it_entered`, `sqlite_is_given_a_mutex_by_its_kind_and_the_same_one_by_its_number` in `sqlite::mutex`
 - a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
@@ -646,6 +647,16 @@ module defines.
 - an error names the index, the id and what failed; a document, a search's text and its hits over their bounds are `limit` — `errors_name_the_index_the_id_and_what_failed` in `search::index`
 - postings, directories and a document's keys that do not read say which invariant broke — `bytes_that_break_an_invariant_say_which` in `search::postings`
 - a search-only build links no jobs, records or metrics — `just lint`'s `lint-alone "search"`
+- a table's index: every way a row changes, a statement, a batch, a transaction, reaches it in the commit that makes it, the rows the table held before it read in the background; a hit's value is its row; a boolean filter passes the 1 or 0 SQLite keeps — `every_way_a_row_changes_reaches_its_index_and_a_hit_is_the_row` in `search::table_index`
+- a write to a table that rolls back, a transaction's or one failing in its savepoint, changes neither the table nor its index — `a_write_that_rolls_back_changes_neither_the_table_nor_its_index` in `search::table_index`
+- a search in the transaction that wrote sees its writes, and one beside the transaction from inside it is `invalid` — `a_search_in_the_transaction_that_wrote_sees_its_writes` in `search::table_index`
+- a write from beside the store reaches a table's index at the store's next write to its file, and within a second when there is none — `a_write_from_beside_the_store_reaches_the_index_at_the_store_s_next_write`, `a_write_from_beside_the_store_reaches_the_index_within_a_second_when_the_store_writes_nothing` in `search::table_index`; a row written while no process had the index open reaches it at its next open — `a_row_written_while_no_process_had_its_index_open_reaches_it_at_its_next_open`
+- a row whose vector does not read, ragged or not a number, fails its write and stays out of the table; one written beside the store is said and left out, and the store's writes go on — `a_row_whose_vector_does_not_read_fails_its_write_and_one_beside_the_store_is_left_out` in `search::table_index`
+- through a long mix of writes by statements, batches, transactions and a process beside the store, read the first time a step at a time while rows change behind and ahead of it, a table's index answers what an index made afresh of the table's rows answers, hit for hit and score for score — `through_a_long_mix_of_writes_a_search_answers_what_an_index_made_afresh_of_the_rows_would` in `search::table_index`
+- a table's index follows one table by a column of unique values, its primary key unless named, and refuses another table, a missing column, a key of values not unique and a path into a column — `a_table_s_index_follows_one_table_by_a_key_of_unique_values` in `search::table_index`
+- a column added reads the table again beside the index, and a drop takes the triggers off the table and its pending keys with them — `a_column_added_reads_the_table_again_beside_the_index_and_a_drop_takes_the_triggers_off` in `search::table_index`
+- a column a migration dropped reads as empty until the index is opened without it, the table's writes going on — `a_column_a_migration_dropped_reads_as_empty_until_the_index_is_opened_without_it` in `search::table_index`
+- a table a migration rebuilt by SQLite's twelve steps, its triggers gone with the old one, is read again when its index opens: its changed rows set, its deleted ones dropped, its new ones added, and its triggers back — `a_table_a_migration_rebuilt_is_read_again_when_its_index_opens` in `search::table_index`
 
 ## Backups
 
@@ -801,6 +812,7 @@ module defines.
 - search over the wire: an index opened by handle sets, reads, searches by words, a vector and a `where`, and deletes; a set on an index with vectors that says nothing of one, a vector of ragged bytes, a `where` of no condition and an unknown handle are `invalid` — `an_index_sets_reads_searches_and_deletes_documents_over_the_wire`, `a_refusal_over_the_wire_names_what_failed` in `wire::search`
 - a read connection opens an index only as it is, makes none and writes none — `a_read_connection_opens_an_index_only_as_it_is_and_writes_none` in `wire::search`
 - an index is listed and dropped over the wire, its handle refused after — `an_index_is_listed_and_dropped_over_the_wire` in `wire::search`
+- a table's index opens over the wire with its database's handle, its hits carrying their rows' cells and the rows' columns once, a set on it refused, and its drop naming the database — `a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows` in `wire::search`
 
 ## The SDKs
 
@@ -848,4 +860,4 @@ module defines.
 - what a release publishes says its version, stamped as it is built — `TestTheSDKPackageCarriesTheReleasesVersion`, `TestAPyprojectIsStampedWithTheReleasesVersion`
 - a platform wheel is one PyPI takes: every file in RECORD, each file's sizes before its bytes — `TestAPlatformWheelRecordsEveryFile`
 - `feat` and `fix` subjects are a release's notes — `TestNotesKeepFeaturesAndFixesUnderTheirSections`, `TestNotesBeginAfterThePreviousReleaseOfTheirKind`
-- the Bun SDK's search through every way a store is reached: words, `setMany`, `get`, `delete` and `corrected`; a vector, a sum and a rerank; `where` with lists, ranges, `null` and `search.or`; a field added read beside the index until `ready`, `rebuild: 'manual'` and `reindex`; `indexes` and `dropIndex` — `sdk/js/test/search.test.ts`
+- the Bun SDK's search through every way a store is reached: words, `setMany`, `get`, `delete` and `corrected`; a vector, a sum and a rerank; `where` with lists, ranges, `null` and `search.or`; a field added read beside the index until `ready`, `rebuild: 'manual'` and `reindex`; `indexes` and `dropIndex`; a table's index through `db.searchIndex`, each hit its row as `all` reads it, a boolean `where` on an integer column, vectors from a column, a ragged one failing its write, and `dropSearchIndex` — `sdk/js/test/search.test.ts`

@@ -702,7 +702,7 @@ fn value_of(cell: Cell) -> Result<Value, Failure> {
     })
 }
 
-fn cell_of(value: Value) -> Cell {
+pub(super) fn cell_of(value: Value) -> Cell {
     match value {
         Value::Null => Cell::Nil,
         Value::Integer(n) => Cell::Int(n),

@@ -52,6 +52,9 @@ mod read;
 mod rebuild;
 mod score;
 mod settings;
+mod table;
+#[cfg(feature = "sql")]
+mod table_index;
 mod upkeep;
 mod vectors;
 mod write;
@@ -61,6 +64,12 @@ pub use filter::{Condition, and, eq, is_in, missing, or, range};
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};
 pub use open::Status;
 pub use rebuild::Listed;
+#[cfg(feature = "sql")]
+pub(crate) use table_index::{ReadRow, drop_in_file};
+#[cfg(feature = "sql")]
+pub use table_index::{TableIndex, TableIndexBuilder, TxTableIndex};
+#[cfg(all(feature = "sql", feature = "wire"))]
+pub(crate) use table_index::{by_cells, found_by, table_as_it_is};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -99,7 +108,15 @@ pub fn list(store: &Store) -> Result<Vec<Listed>> {
 }
 
 /// Runs the store's search maintenance now, as a store opened without
-/// background work has to: every head packed and the documents gone purged.
+/// background work has to: every head packed and the documents gone purged,
+/// in search.db and in each database a table's index was opened in, and a
+/// table's rows read the first time.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
-    engine::Search::of(store)?.maintain(true)
+    let mut done = engine::Search::of(store)?.maintain(true)?;
+    for search in engine::InFiles::of(store)?.engines() {
+        let more = search.maintain(true)?;
+        done.packed += more.packed;
+        done.purged += more.purged;
+    }
+    Ok(done)
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::codec::{self, Map, Message, Row};
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "search", feature = "sql"))]
 use super::codec::Cell;
 use super::msgpack::Reader;
 
@@ -8741,7 +8741,8 @@ impl Message for RecordsDamages {
 
 /// Opens an index, made the first time; one that holds other settings is
 /// changed to these, as the book's "Change an index" has it. A read
-/// connection opens an index only as it is.
+/// connection opens an index only as it is. With a database, the index
+/// follows a table of it: its fields and filters are columns.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchOpen {
@@ -8764,6 +8765,14 @@ pub(crate) struct SearchOpen {
     pub(crate) manual: bool,
     /// Reads the index again beside itself.
     pub(crate) reindex: bool,
+    /// A database's handle: the index follows a table in its file.
+    pub(crate) database: Option<u64>,
+    /// The table a database's index follows.
+    pub(crate) table: Option<String>,
+    /// The table's column of unique values; its primary key when absent.
+    pub(crate) key: Option<String>,
+    /// The column of each row's vector, a blob of little-endian floats.
+    pub(crate) vector_column: Option<String>,
 }
 
 #[cfg(feature = "search")]
@@ -8785,6 +8794,10 @@ impl Message for SearchOpen {
                 8 => message.rerank = codec::bool(r, "rerank")?,
                 9 => message.manual = codec::bool(r, "manual")?,
                 10 => message.reindex = codec::bool(r, "reindex")?,
+                11 => message.database = Some(codec::uint(r, "database")?),
+                12 => message.table = Some(codec::str(r, "table")?),
+                13 => message.key = Some(codec::str(r, "key")?),
+                14 => message.vector_column = Some(codec::str(r, "vectorColumn")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -8833,6 +8846,22 @@ impl Message for SearchOpen {
             map.field(out, 10);
             codec::write_bool(out, &self.reindex);
         }
+        if let Some(database) = &self.database {
+            map.field(out, 11);
+            codec::write_uint(out, database);
+        }
+        if let Some(table) = &self.table {
+            map.field(out, 12);
+            codec::write_str(out, table);
+        }
+        if let Some(key) = &self.key {
+            map.field(out, 13);
+            codec::write_str(out, key);
+        }
+        if let Some(vector_column) = &self.vector_column {
+            map.field(out, 14);
+            codec::write_str(out, vector_column);
+        }
         map.close(out);
     }
 
@@ -8848,6 +8877,10 @@ impl Message for SearchOpen {
             + 2
             + 2
             + 2
+            + self.database.map_or(0, |_| 10)
+            + self.table.as_ref().map_or(0, |table| 1 + 5 + table.len())
+            + self.key.as_ref().map_or(0, |key| 1 + 5 + key.len())
+            + self.vector_column.as_ref().map_or(0, |vector_column| 1 + 5 + vector_column.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -8861,6 +8894,10 @@ impl Message for SearchOpen {
             && !self.rerank
             && !self.manual
             && !self.reindex
+            && self.database.is_none()
+            && self.table.is_none()
+            && self.key.is_none()
+            && self.vector_column.is_none()
     }
 }
 
@@ -9349,12 +9386,16 @@ impl Message for SearchQuery {
     }
 }
 
+/// A hit: a document and its value, or a table's row, a value a column of
+/// the answer's columns, as sql.Rows holds one.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchHit {
     pub(crate) id: String,
+    /// Null for a table's row.
     pub(crate) value: String,
     pub(crate) score: f64,
+    pub(crate) row: Option<Vec<Cell>>,
 }
 
 #[cfg(feature = "search")]
@@ -9369,6 +9410,7 @@ impl Message for SearchHit {
                 1 => message.id = codec::str(r, "id")?,
                 2 => message.value = codec::str(r, "value")?,
                 3 => message.score = codec::float(r, "score")?,
+                4 => message.row = Some(codec::list(r, "row", codec::cell)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9389,6 +9431,10 @@ impl Message for SearchHit {
             map.field(out, 3);
             codec::write_float(out, &self.score);
         }
+        if let Some(row) = &self.row {
+            map.field(out, 4);
+            codec::write_list(out, row, codec::write_cell);
+        }
         map.close(out);
     }
 
@@ -9397,12 +9443,14 @@ impl Message for SearchHit {
             + 1 + 5 + self.id.len()
             + 1 + 5 + self.value.len()
             + 10
+            + self.row.as_ref().map_or(0, |row| 1 + codec::list_size(row, codec::cell_size))
     }
 
     fn is_zero(&self) -> bool {
         self.id.is_empty()
             && self.value.is_empty()
             && self.score.to_bits() == 0
+            && self.row.is_none()
     }
 }
 
@@ -9412,6 +9460,8 @@ pub(crate) struct SearchFound {
     pub(crate) hits: Vec<SearchHit>,
     /// The text the search read in fact, when a word was read as another.
     pub(crate) corrected: Option<String>,
+    /// The columns of a table's index's rows.
+    pub(crate) columns: Option<Vec<String>>,
 }
 
 #[cfg(feature = "search")]
@@ -9425,6 +9475,7 @@ impl Message for SearchFound {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.hits = codec::list(r, "hits", codec::message::<SearchHit>)?,
                 2 => message.corrected = Some(codec::str(r, "corrected")?),
+                3 => message.columns = Some(codec::list(r, "columns", codec::str)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9441,6 +9492,10 @@ impl Message for SearchFound {
             map.field(out, 2);
             codec::write_str(out, corrected);
         }
+        if let Some(columns) = &self.columns {
+            map.field(out, 3);
+            codec::write_list(out, columns, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -9448,11 +9503,13 @@ impl Message for SearchFound {
         3
             + 1 + codec::list_size(&self.hits, codec::message_size)
             + self.corrected.as_ref().map_or(0, |corrected| 1 + 5 + corrected.len())
+            + self.columns.as_ref().map_or(0, |columns| 1 + codec::list_size(columns, |item| 5 + item.len()))
     }
 
     fn is_zero(&self) -> bool {
         self.hits.is_empty()
             && self.corrected.is_none()
+            && self.columns.is_none()
     }
 }
 
@@ -9521,6 +9578,8 @@ impl Message for SearchStatus {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchName {
     pub(crate) name: String,
+    /// A database's handle, for a table's index.
+    pub(crate) database: Option<u64>,
 }
 
 #[cfg(feature = "search")]
@@ -9533,6 +9592,7 @@ impl Message for SearchName {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.name = codec::str(r, "name")?,
+                2 => message.database = Some(codec::uint(r, "database")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9545,16 +9605,22 @@ impl Message for SearchName {
             map.field(out, 1);
             codec::write_str(out, &self.name);
         }
+        if let Some(database) = &self.database {
+            map.field(out, 2);
+            codec::write_uint(out, database);
+        }
         map.close(out);
     }
 
     fn size(&self) -> usize {
         3
             + 1 + 5 + self.name.len()
+            + self.database.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
         self.name.is_empty()
+            && self.database.is_none()
     }
 }
 

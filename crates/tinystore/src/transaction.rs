@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crate::Store;
 #[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::sqlite::{Begun, Committed, Mark};
-use crate::sqlite::{File, Tx as SqlTx, sql_error};
+use crate::sqlite::{File, Left, Tx as SqlTx, sql_error};
 use crate::{Error, Result};
 
 const SAVEPOINT: &str = "savepoint call";
@@ -152,7 +152,11 @@ impl Transaction<'_> {
         let (mut work, mut value) = (Some(work), None);
         self.writer.on(&mut |raw| {
             let work = work.take().ok_or_else(|| Error::internal("a transaction's call ran twice"))?;
-            value = Some(in_savepoint(raw, || work(raw))?);
+            value = Some(in_savepoint(raw, || {
+                let value = work(raw)?;
+                raw.settle(Left::Here)?;
+                Ok(value)
+            })?);
             Ok(())
         })?;
         value.ok_or_else(|| Error::internal("a transaction's call did not run"))
@@ -170,7 +174,7 @@ impl Transaction<'_> {
 
     /// Refuses a handle kept in another file than the transaction's, `place`:
     /// what it wrote would not commit with the rest.
-    #[cfg(any(feature = "kv", feature = "jobs"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
     pub(crate) fn takes(&self, file: &File, place: &str) -> Result<()> {
         self.writer.takes(file, place)
     }
@@ -196,7 +200,7 @@ impl fmt::Debug for Transaction<'_> {
 /// What holds a transaction's writer and says which file it is of.
 trait Writer {
     /// Refuses a handle kept in another file than the transaction's.
-    #[cfg(any(feature = "kv", feature = "jobs"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
     fn takes(&self, file: &File, place: &str) -> Result<()>;
 
     /// Runs `work` on the writer the transaction holds.
@@ -213,21 +217,21 @@ trait Writer {
 struct OneFile<'t> {
     raw: &'t SqlTx<'t>,
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles ask whether they are kept in a file")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles ask whether they are kept in a file")
     )]
     file: &'t File,
     /// What an error calls the file: `sql app`.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs")),
-        expect(dead_code, reason = "only kv's and jobs' handles ask whether they are kept in a file")
+        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs' and search's handles ask whether they are kept in a file")
     )]
     owner: &'t str,
 }
 
 #[cfg(feature = "sql")]
 impl Writer for OneFile<'_> {
-    #[cfg(any(feature = "kv", feature = "jobs"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
     fn takes(&self, file: &File, place: &str) -> Result<()> {
         if std::ptr::eq(self.file, file) {
             return Ok(());

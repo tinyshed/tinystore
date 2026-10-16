@@ -4655,6 +4655,9 @@
     },
     {
       "fields": {
+        "database": {
+          "uint": "1107"
+        },
         "dimensions": {
           "uint": "507"
         },
@@ -4679,6 +4682,9 @@
             }
           ]
         },
+        "key": {
+          "str": "key"
+        },
         "manual": {
           "bool": true
         },
@@ -4694,14 +4700,20 @@
         "rerank": {
           "bool": true
         },
+        "table": {
+          "str": "table"
+        },
         "typoTolerance": {
           "bool": true
+        },
+        "vectorColumn": {
+          "str": "vectorColumn"
         },
         "vectorWeight": {
           "float": "3ff8000000000000"
         }
       },
-      "hex": "8a01a46e616d6502918201a47061746802cb3ff80000000000000391a766696c7465727304c305cd01fb06cb3ff800000000000007cb3ff800000000000008c309c30ac3",
+      "hex": "8e01a46e616d6502918201a47061746802cb3ff80000000000000391a766696c7465727304c305cd01fb06cb3ff800000000000007cb3ff800000000000008c309c30ac30bcd04530ca57461626c650da36b65790eac766563746f72436f6c756d6e",
       "message": "search.Open",
       "name": "search.Open with every field"
     },
@@ -4915,6 +4927,13 @@
         "id": {
           "str": "id"
         },
+        "row": {
+          "list": [
+            {
+              "str": "row"
+            }
+          ]
+        },
         "score": {
           "float": "3ff8000000000000"
         },
@@ -4922,7 +4941,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8301a2696402a77b2261223a317d03cb3ff8000000000000",
+      "hex": "8401a2696402a77b2261223a317d03cb3ff80000000000000491a3726f77",
       "message": "search.Hit",
       "name": "search.Hit with every field"
     },
@@ -4934,6 +4953,13 @@
     },
     {
       "fields": {
+        "columns": {
+          "list": [
+            {
+              "str": "columns"
+            }
+          ]
+        },
         "corrected": {
           "str": "corrected"
         },
@@ -4943,6 +4969,13 @@
               "fields": {
                 "id": {
                   "str": "id"
+                },
+                "row": {
+                  "list": [
+                    {
+                      "str": "row"
+                    }
+                  ]
                 },
                 "score": {
                   "float": "3ff8000000000000"
@@ -4955,7 +4988,7 @@
           ]
         }
       },
-      "hex": "8201918301a2696402a77b2261223a317d03cb3ff800000000000002a9636f72726563746564",
+      "hex": "8301918401a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7702a9636f727265637465640391a7636f6c756d6e73",
       "message": "search.Found",
       "name": "search.Found with every field"
     },
@@ -4989,11 +5022,14 @@
     },
     {
       "fields": {
+        "database": {
+          "uint": "207"
+        },
         "name": {
           "str": "name"
         }
       },
-      "hex": "8101a46e616d65",
+      "hex": "8201a46e616d6502cccf",
       "message": "search.Name",
       "name": "search.Name with every field"
     },

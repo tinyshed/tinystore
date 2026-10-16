@@ -99,6 +99,28 @@ fn answered<A: Answer>(
     Ok(rows)
 }
 
+/// The one row `statement` gives on `connection`, as a `T`, or none: a
+/// table's search index reads a hit's row so, in its search's snapshot.
+#[cfg(feature = "search")]
+pub(crate) fn row_on<T: serde::de::DeserializeOwned>(connection: &Connection, statement: &Sql) -> Result<Option<T>> {
+    let rows: super::rows::Rows = write(connection, statement, Wanted::One, Held::default())?;
+    Ok(rows.decode()?.into_iter().next())
+}
+
+/// The one row `statement` gives on `connection` as its columns and values,
+/// or none: the wire sends a table's index's hits so.
+#[cfg(all(feature = "search", feature = "wire"))]
+pub(crate) fn cells_on(
+    connection: &Connection,
+    statement: &Sql,
+) -> Result<Option<(Vec<String>, Vec<super::values::Value>)>> {
+    let rows: super::rows::Rows = write(connection, statement, Wanted::One, Held::default())?;
+    if rows.len() == 0 {
+        return Ok(None);
+    }
+    Ok(Some((rows.columns().to_vec(), rows.into_values())))
+}
+
 /// Runs `statement` on the writer to its end and says what it changed.
 pub(crate) fn exec(connection: &Connection, statement: &Sql) -> Result<Done> {
     given(statement.text(), || exec_given(connection, statement))

@@ -32,8 +32,8 @@ console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
 metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics"]
 # documents found again by their words in search.db, a misspelt word read as
-# the index's nearest
-search = ["store", "typos", "dep:unicode-normalization", "dep:unicode-segmentation", "dep:rust-stemmers"]
+# the index's nearest; a table's row known by its digest
+search = ["store", "typos", "dep:unicode-normalization", "dep:unicode-segmentation", "dep:rust-stemmers", "dep:sha2"]
 # the protocol's session and the pipe, which the server, the FFI and every SDK
 # speak, for the engines built beside it; its session answers kv in every call
 wire = ["kv"]
@@ -58,8 +58,8 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 # bundled one where there is none, on Windows and in a slim container
 jiff = { version = "0.2.38", optional = true, features = ["tzdb-bundle-always"] }
 # a file's SHA-256, taken as its bytes are written and checked on a whole read,
-# and the id of the store's encryption key: RustCrypto's, with the processor's SHA
-# instructions where it has them
+# the id of the store's encryption key, and the digest of a row a table's index
+# reads: RustCrypto's, with the processor's SHA instructions where it has them
 sha2 = { version = "0.11.0", default-features = false, optional = true }
 # the values of an encrypted bucket, sealed with the store's encryption key:
 # XChaCha20-Poly1305, RustCrypto's, its key and nonces from the system's source

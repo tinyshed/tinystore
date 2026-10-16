@@ -175,6 +175,8 @@ export {
 	type Query as SearchQuery,
 	SearchIndex,
 	search,
+	TableIndex,
+	type TableIndexOptions,
 	type Vector,
 	type Where,
 	type WhereValue,

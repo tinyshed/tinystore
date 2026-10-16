@@ -1,11 +1,13 @@
 # search, as plan/api/search.md has it: indexes by name, documents of JSON
 # set by id with a vector or none, found again by their words, their vector
-# or both, kept to the documents a filter passes. A vector travels as its
-# floats' bytes, little-endian, four a dimension.
+# or both, kept to the documents a filter passes; and a table's index, kept
+# in a database's file, whose documents are the table's rows. A vector
+# travels as its floats' bytes, little-endian, four a dimension.
 
 # Opens an index, made the first time; one that holds other settings is
 # changed to these, as the book's "Change an index" has it. A read
-# connection opens an index only as it is.
+# connection opens an index only as it is. With a database, the index
+# follows a table of it: its fields and filters are columns.
 message search.Open {
   1 name: str               # [a-z0-9][a-z0-9_-]{0,63}
   2 fields: [search.Field]  # in order; none for a document that is its own text
@@ -17,6 +19,10 @@ message search.Open {
   8 rerank: bool
   9 manual: bool            # a change that needs reading again waits for reindex
   10 reindex: bool          # reads the index again beside itself
+  11 database: uint?        # a database's handle: the index follows a table in its file
+  12 table: str?            # the table a database's index follows
+  13 key: str?              # the table's column of unique values; its primary key when absent
+  14 vectorColumn: str?     # the column of each row's vector, a blob of little-endian floats
 }
 
 # A field a search reads, by its path into the document, and what a word
@@ -74,15 +80,19 @@ message search.Query {
   8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
 }
 
+# A hit: a document and its value, or a table's row, a value a column of
+# the answer's columns, as sql.Rows holds one.
 message search.Hit {
   1 id: str
-  2 value: json
+  2 value: json             # null for a table's row
   3 score: float
+  4 row: [cell]?
 }
 
 message search.Found {
   1 hits: [search.Hit]
   2 corrected: str?         # the text the search read in fact, when a word was read as another
+  3 columns: [str]?         # the columns of a table's index's rows
 }
 
 # Where an index stands: ready, rebuilding and how far, or failed and why.
@@ -94,6 +104,7 @@ message search.Status {
 
 message search.Name {
   1 name: str
+  2 database: uint?         # a database's handle, for a table's index
 }
 
 message search.Dropped {

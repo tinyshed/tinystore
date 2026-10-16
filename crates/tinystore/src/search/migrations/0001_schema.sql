@@ -13,7 +13,11 @@
 -- whose documents numbered below copy_until it reads, those up to
 -- copied_through read already, for why; failed: why its rebuild stopped;
 -- dropping: its rows are dropped a step a commit; opened_at: when a program
--- last opened it, in milliseconds of the store's clock
+-- last opened it, in milliseconds of the store's clock; filling: a table's
+-- index reads its table's rows, 1 the first time, 2 again after its triggers
+-- went with a table a migration rebuilt, and 3 then reads its documents to
+-- delete those whose rows are gone; filled_through: how far, a row's key or
+-- a document's number
 create table _tinystore_search_indexes (
     id            integer primary key autoincrement,
     name          text    not null unique,
@@ -37,7 +41,9 @@ create table _tinystore_search_indexes (
     why                text,
     failed             text,
     dropping           integer not null default 0,
-    opened_at          integer not null default 0
+    opened_at          integer not null default 0,
+    filling            integer not null default 0,
+    filled_through     any
 ) strict;
 
 -- a part is a field's words as written, 2 × its number, or their stems, one
@@ -161,3 +167,13 @@ create table _tinystore_search_members (
 ) without rowid, strict;
 
 create unique index _tinystore_search_members_by_doc on _tinystore_search_members (index_id, doc);
+
+-- the key of a row a table's index has not read as it is: its table's
+-- triggers write it in the transaction that changes the row, and the index
+-- takes it out once it has the row, before that commit when the store wrote
+-- it, and at the store's next write or within a second when a process
+-- beside it did; name: the index's
+create table _tinystore_search_pending (
+    name text not null,
+    key  any
+) strict;

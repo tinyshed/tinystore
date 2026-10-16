@@ -422,11 +422,21 @@ impl Reader<'_> {
         };
         let mut holding = Vec::new();
         for term in terms {
-            if let Some(key) = self.find(Part::filter(filter.number), term)? {
+            if let Some(key) = self.find(Part::filter(filter.number), self.as_kept(term))? {
                 holding = union(&holding, &self.docs_of(key)?);
             }
         }
         Ok(holding)
+    }
+
+    /// A term as the index keeps it: a table's rows hold a boolean as SQLite
+    /// does, the integer 1 or 0, so that `eq("done", &true)` passes them.
+    fn as_kept<'t>(&self, term: &'t str) -> &'t str {
+        match term {
+            "b:true" if self.settings.table.is_some() => "i:1",
+            "b:false" if self.settings.table.is_some() => "i:0",
+            term => term,
+        }
     }
 
     fn find(&self, part: Part, term: &str) -> Result<Option<i64>> {
