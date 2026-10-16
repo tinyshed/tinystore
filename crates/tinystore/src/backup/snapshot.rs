@@ -25,8 +25,13 @@ pub(super) const PREFIX: &str = ".snapshot-";
 
 /// The engines' files a store's directory may hold besides those of `sql/`
 /// and `blobs/`, by their names in it.
-const FILES: [(&str, &str); 4] =
-    [("kv.db", "kv"), ("jobs.db", "jobs"), ("records.db", "records"), ("metrics.db", "metrics")];
+const FILES: [(&str, &str); 5] = [
+    ("kv.db", "kv"),
+    ("jobs.db", "jobs"),
+    ("records.db", "records"),
+    ("metrics.db", "metrics"),
+    ("search.db", "search"),
+];
 
 /// A copy of every engine's files, removed with its directory once dropped.
 pub(super) struct Snapshot {

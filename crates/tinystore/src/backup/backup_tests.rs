@@ -55,6 +55,7 @@ impl Fixture {
         store.events("audit").open().unwrap().append("role.changed", &serde_json::json!({ "user": 42 })).unwrap();
         let sample = Series::gauge("temperature").label("room", "kitchen").sample(store.now(), 21.5);
         store.metrics().unwrap().ingest(&[sample]).unwrap();
+        store.index::<String>("notes").open().unwrap().set("n-1", &"sourdough starter".to_owned()).unwrap();
         store
     }
 
@@ -71,6 +72,9 @@ impl Fixture {
         assert_eq!(events.iter().map(|event| event.name.as_str()).collect::<Vec<_>>(), ["role.changed"]);
         let read = store.metrics().unwrap().query().name("temperature").since(Duration::from_secs(3600)).read();
         assert_eq!(read.unwrap()[0].samples()[0].value, 21.5);
+        let notes = store.index::<String>("notes").open().unwrap();
+        let hits = notes.search("starter").run().unwrap().hits;
+        assert_eq!(hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["n-1"]);
     }
 }
 
@@ -102,7 +106,7 @@ fn a_backup_restores_every_engine_while_its_store_keeps_working() {
     let f = fixture();
     let store = f.filled();
     let backup = store.backup().write(&f.zip).unwrap();
-    assert_eq!((backup.key_left_out, backup.files), (false, 7), "an engine's file each, a database's, a photo's bytes");
+    assert_eq!((backup.key_left_out, backup.files), (false, 8), "an engine's file each, a database's, a photo's bytes");
     store.bucket::<String>("codes").open().unwrap().set("after", &"not in it".to_owned()).unwrap();
     assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the snapshot is gone");
     drop(store);
@@ -119,7 +123,7 @@ fn an_engine_no_handle_opened_is_backed_up_from_its_files() {
     f.filled().close().unwrap();
     let store = f.open(&f.data);
     let backup = store.backup().write(&f.zip).unwrap();
-    assert_eq!(backup.files, 7);
+    assert_eq!(backup.files, 8);
     drop(store);
     restore(&f.zip, &f.restored).unwrap();
     f.holds_everything(&f.open(&f.restored));

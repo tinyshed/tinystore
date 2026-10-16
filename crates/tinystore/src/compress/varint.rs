@@ -13,6 +13,10 @@ pub(crate) fn put_count(out: &mut Vec<u8>, mut count: u64) {
 }
 
 /// Appends an integer of either sign, small ones of either sign in one byte.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn put_int(out: &mut Vec<u8>, value: i64) {
     put_count(out, fold(value));
 }
@@ -25,10 +29,18 @@ pub(crate) fn put_text(out: &mut Vec<u8>, text: &str) {
 
 /// ZigZag: 0, -1, 1, -2 … become 0, 1, 2, 3 …, so that a small magnitude of
 /// either sign is a small count.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) const fn fold(value: i64) -> u64 {
     ((value << 1) ^ (value >> 63)) as u64
 }
 
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) const fn unfold(value: u64) -> i64 {
     (value >> 1) as i64 ^ -((value & 1) as i64)
 }
@@ -67,18 +79,29 @@ impl<'a> Reader<'a> {
     }
 
     /// Bytes behind their count, `most` at most.
+    #[cfg_attr(
+        not(any(feature = "records", feature = "metrics")),
+        expect(dead_code, reason = "records and metrics use it")
+    )]
     pub(crate) fn counted(&mut self, most: usize) -> &'a [u8] {
         let length = self.count(most);
         self.take(length)
     }
 
     /// Everything not read yet.
+    #[cfg_attr(
+        not(any(feature = "records", feature = "metrics")),
+        expect(dead_code, reason = "records and metrics use it")
+    )]
     pub(crate) fn rest(&mut self) -> &'a [u8] {
         std::mem::take(&mut self.data)
     }
 
     /// What is not read yet, left to read.
-    #[cfg_attr(not(feature = "metrics"), expect(dead_code, reason = "only metrics uses it"))]
+    #[cfg_attr(
+        not(any(feature = "metrics", feature = "search")),
+        expect(dead_code, reason = "metrics and search use it")
+    )]
     pub(crate) fn remaining(&self) -> &'a [u8] {
         self.data
     }
@@ -112,6 +135,10 @@ impl<'a> Reader<'a> {
         }
     }
 
+    #[cfg_attr(
+        all(not(test), not(any(feature = "records", feature = "metrics"))),
+        expect(dead_code, reason = "records and metrics use it")
+    )]
     pub(crate) fn int(&mut self) -> i64 {
         unfold(self.uvarint())
     }

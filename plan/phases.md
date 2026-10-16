@@ -259,7 +259,8 @@ delivered; a subscriber that falls behind receives a gap event.
 - [ ] Search, accepted in [its book](api/search.md) on 16 October: an index's
   words and vectors in `search.db`, summed at a weight, filters, the typo
   corrector the command line and config share (built), and an SQL table's
-  index kept in step in its own file, in eight slices.
+  index kept in step in its own file, in eight slices; the words in the
+  Rust core built.
 - [ ] Full text and geo declared in sqldb's schema, rebuilt beside the old
   index and switched when ready.
 - [ ] Vectors, and compute operations, for real callers.

@@ -401,12 +401,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                  |
-|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero; a vector of another length, NaN or an infinity, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank` |
-| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                                                                                                                                                 |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                             |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                      |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN or an infinity, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank` |
+| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -421,6 +421,7 @@ Proposed, to be measured before they are promised.
 | a vector           | 4,096 dimensions          |
 | `limit` + `offset` | 1,000                     |
 | an index's name    | 64 bytes                  |
+| a field's weight   | above 0, at most 1,000    |
 | a filter's value   | 256 bytes                 |
 | a search's filter  | 8 fields, 100 values      |
 
@@ -437,7 +438,10 @@ Proposed, to be measured before they are promised.
   lengths are kept apart, a row a 65,536 documents; a word in no more than
   16 documents keeps its postings in its own row. A search reads blocks by
   windows of 4,096 documents, eight blocks a statement, and skips every
-  block whose bound cannot reach the tenth best. search-compact: `or` at
+  block whose bound cannot reach the tenth best. A posting's score is kept
+  in whole points of 2⁻³², which add exactly in any order, so packing,
+  which changes the order a search adds a document's postings in, changes
+  no score. search-compact: `or` at
   1.5–2.5 times Tantivy's p99 in one session, 22–90 times faster than FTS5,
   a reader of 71 MiB against Tantivy's 309–323, a set in 3.5 ms, every
   answer equal to scoring every posting.
@@ -467,7 +471,10 @@ Proposed, to be measured before they are promised.
 - **Typos** come from `tinystore::typos`: one FST of the index's words a
   script, through a Levenshtein automaton; search-plan measured a mixed
   question's candidates at a median 18.6 ms from one FST for every script,
-  2.6 from one a script.
+  2.6 from one a script. The first search that needs them builds them;
+  once the index's words change, a search goes on with the ones kept,
+  reading no word its own snapshot no longer holds, and background work
+  builds them again within a minute.
 - **Vectors** are kept as given, a row each, 4.5 KiB of pages for 1,024
   dimensions. An exact search reads a byte a dimension of every vector, kept
   with the length of what the byte leaves out, which bounds each score.
@@ -486,7 +493,10 @@ Proposed, to be measured before they are promised.
 
 1. The analyzer, words and postings in the Rust core: `set`, `delete`,
    `get`, `search` by words, the head packed in steps, the gone purged,
-   and `corrected`.
+   and `corrected`: built 16 October, a field added to an index that
+   holds documents refused until slice 6. Its tables are named
+   `_tinystore_search_*`, as kv's are, so that slice 8 keeps the same ones
+   in a database's file beside the program's.
 2. `tinystore::typos`, which the command line and config use too: built
    16 October, `40672f2`.
 3. Vectors, exact; a search by both, its `vectorWeight` and `rerank`.
@@ -585,6 +595,21 @@ Kept against a reviewer: `hit.value` (the blind check chose it over
 `document`, and a bucket's value is `value`), `tx.with` (every engine's
 word), and `exact` on the answer, which two asked for and the outside
 reviewer found ambiguous.
+
+## Slice 1's check, 16 October
+
+Three Haiku agents that had read nothing about TinyStore read the Rust calls
+slice 1 made public: a newcomer's reading of thirteen bare lines, a free
+review by a developer who knows Meilisearch, Algolia and Tantivy, and a blind
+choice between three shapes of five calls.
+
+| It read                                                                                  | Change                                                                      |
+|------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| `.run()`, `found.hits`, `delete` answering a `bool`, `typo_tolerance`, `index::<String>` | none: the blind choice took each over its two others                        |
+| a second `open` with other settings as a handle of its own, both readers                 | none: an open changes the index, the owner's call; `open`'s comment says so |
+| whether a search needs every word                                                        | none: any word, said in `search`'s comment                                  |
+| pages of equal scores repeating or skipping a hit                                        | the document set first comes first, said in `search`'s comment              |
+| `total`, highlights, `set_many`, `patch`                                                 | `total` and highlights are in Later; `set_many` and `patch` for the owner   |
 
 ## The owner's calls, 16 October
 

@@ -54,7 +54,8 @@ pub struct Copied {
         feature = "sql",
         feature = "blobs",
         feature = "records",
-        feature = "metrics"
+        feature = "metrics",
+        feature = "search"
     )),
     expect(dead_code, reason = "every engine copies its files with it, and a store of none has none")
 )]

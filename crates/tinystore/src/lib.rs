@@ -11,7 +11,7 @@ pub mod blobs;
 #[cfg(feature = "channels")]
 pub mod channels;
 mod clock;
-#[cfg(any(feature = "records", feature = "metrics", feature = "backup"))]
+#[cfg(any(feature = "records", feature = "metrics", feature = "search", feature = "backup"))]
 mod compress;
 #[cfg(feature = "console")]
 pub mod console;
@@ -45,6 +45,8 @@ pub mod pipe;
 pub mod records;
 #[cfg(feature = "store")]
 mod schedule;
+#[cfg(feature = "search")]
+pub mod search;
 #[cfg(feature = "blobs")]
 mod space;
 #[cfg(feature = "sql")]

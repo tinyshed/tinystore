@@ -598,6 +598,27 @@ module defines.
 - a snapshot links the files, and removal waits for it — `TestASnapshotLinksFilesAndCopiesTheDatabase`, `TestCollectionWaitsForASnapshot`
 - the blobs engine links no HTTP: `sha2` is its one dependency more, in `crates/tinystore/Cargo.toml`
 
+## Search
+
+- a search by words answers what scoring every document answers, under sets, deletes, packing and purging — `a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packing_and_purging` in `search::index`, against a model that scores every document it holds, and every search of the tests scoring every posting in its own snapshot too; `the_best_by_their_blocks_bounds_are_the_best_by_every_posting` in `search::execute`
+- a block's bound is never below what a posting of it adds — `a_bound_from_a_blocks_largest_frequency_and_shortest_length_is_never_below_its_postings` in `search::score`
+- of equal scores the document set first comes first — `of_equal_scores_the_lower_document_comes_first` in `search::execute`
+- a set is seen by the next search; a deleted document never answers again — `a_set_is_seen_by_the_next_search_and_a_deleted_document_never_answers` in `search::index`
+- a packing or a purge changes no answer, step by step — `packing_and_purging_change_no_answer` in `search::index`
+- searches and writes from many threads at once answer as one at a time would — `searches_and_writes_from_many_threads_answer_as_one_at_a_time_would` in `search::index`
+- a crash between the steps of a packing or a purge leaves the last commit, and both go on — `a_crash_between_steps_of_packing_or_purging_leaves_the_last_commit` in `search::index`
+- through a long mix of sets and deletes the file stays within twice a fresh build of the same documents, and the log within its checkpoint — `through_a_long_mix_the_file_stays_near_a_fresh_build_of_the_same_documents` in `search::index`
+- a word is found as written and by its stem, in any script — `a_word_is_found_as_written_and_by_its_stem_in_any_script` in `search::index`; every test in `search::analyzer`
+- a misspelt word of five letters or more is read as the nearest the index holds, and `corrected` says the text read; a word that matches is never changed — `a_misspelt_word_is_read_as_the_nearest_and_corrected_says_the_text_read`, `a_word_that_matches_is_never_changed` in `search::index`; every test in `search::correct`
+- a word new since the index's dictionary was built is read once maintenance builds it again, and a word gone is never read — `a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_again` in `search::index`
+- a changed weight rebuilds nothing, and the next search reads it — `a_changed_weight_rebuilds_nothing_and_the_next_search_reads_it` in `search::index`
+- a field removed leaves searches at once; one added waits for an index that holds no documents — `a_field_removed_leaves_searches_at_once_and_one_added_waits_for_an_empty_index` in `search::index`
+- an index answers after a restart as it did before — `an_index_answers_after_a_restart_as_it_did_before` in `search::index`
+- pages of a search join into its whole ranking — `pages_of_a_search_join_into_its_whole_ranking` in `search::index`
+- an error names the index, the id and what failed; a document, a search's text and its hits over their bounds are `limit` — `errors_name_the_index_the_id_and_what_failed` in `search::index`
+- postings, directories and a document's keys that do not read say which invariant broke — `bytes_that_break_an_invariant_say_which` in `search::postings`
+- a search-only build links no jobs, records or metrics — `just lint`'s `lint-alone "search"`
+
 ## Backups
 
 - a backup restores every engine while its store keeps working, an engine no handle opened from its files — `a_backup_restores_every_engine_while_its_store_keeps_working`, `an_engine_no_handle_opened_is_backed_up_from_its_files` in `backup`

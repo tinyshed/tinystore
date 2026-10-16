@@ -6,7 +6,8 @@
 //!
 //! ```text
 //! backup.zip
-//! ├── kv.db, jobs.db, records.db, metrics.db     each engine's file
+//! ├── kv.db, jobs.db, records.db, metrics.db,    each engine's file
+//! │   search.db
 //! ├── sql/app.db                                 each database, its buckets and queues with it
 //! ├── blobs/blobs.db, blobs/objects/1a3/1a3f07   the files and their bytes, linked rather than copied
 //! ├── secret.key, encryption.key                 the program's own files and the key, when asked for
@@ -211,7 +212,8 @@ fn check_file(name: &str) -> Result<()> {
 /// The names of the store's directory a program's file is none of: the
 /// engines' files, with their journals after a `-`, `LOCK`, the server's
 /// and the manifest's.
-const OWN: [&str; 9] = ["LOCK", MANIFEST, "kv.db", "jobs.db", "records.db", "metrics.db", "sql", "blobs", "server"];
+const OWN: [&str; 10] =
+    ["LOCK", MANIFEST, "kv.db", "jobs.db", "records.db", "metrics.db", "search.db", "sql", "blobs", "server"];
 
 /// Whether `name` is a relative path whose parts are each a name: no `..`,
 /// no root, no drive, no `\`.
@@ -239,7 +241,8 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     feature = "sql",
     feature = "blobs",
     feature = "records",
-    feature = "metrics"
+    feature = "metrics",
+    feature = "search"
 ))]
 #[path = "backup_tests.rs"]
 mod tests;
