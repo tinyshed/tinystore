@@ -1,12 +1,14 @@
 //! A search, in one snapshot of search.db: the index's statistics, its
 //! words' keys, their lists from the blocks and the head, the best of them,
-//! and the hits' values.
+//! the best of its vectors, the two summed, and the hits' values.
 //!
 //! The read lasts the whole search rather than fetching its bytes alone:
 //! which block a search opens next depends on the scores of those it opened,
 //! and the blocks' bounds skip most of them. A search's statements are
 //! point and short range reads, and search-compact measured them at 14–16
-//! ms at p99 over a million documents, so the read stays as short.
+//! ms at p99 over a million documents, so the read stays as short. A search
+//! by a vector reads every code of the index in it, a scan whose work is the
+//! fetch itself.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -16,11 +18,13 @@ use rusqlite::{Connection, OptionalExtension};
 use super::analyzer::{self, Word};
 use super::correct::Corrector;
 use super::execute::{Fetch, List, best};
+use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS, lock};
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
-use super::score::{Part, average, idf};
+use super::score::{Part, average, idf, score};
 use super::settings::Settings;
+use super::vectors::{self, Question};
 use crate::sqlite::sql_error;
 use crate::{Error, Memory, Result};
 
@@ -39,11 +43,14 @@ const READ_HIT: &str = "select id, value from _tinystore_search_docs where index
 const AHEAD: usize = 8;
 
 /// A search's text as the analyzer normalized it, its words found in it,
-/// and the hits it asks for.
+/// its vector, how it combines the two if it says, and the hits it asks for.
 #[derive(Debug)]
 pub(crate) struct Query {
     pub(crate) normal: String,
     pub(crate) words: Vec<Word>,
+    pub(crate) vector: Option<Question>,
+    pub(crate) vector_weight: Option<f64>,
+    pub(crate) rerank: bool,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
 }
@@ -58,30 +65,126 @@ pub(crate) struct Asked<'a> {
     pub(crate) query: Query,
 }
 
-/// What a search found: each hit's id, value as JSON and points, and the
+/// What a search found: each hit's id, value as JSON and score, and the
 /// search's text as it was read, when a word was read as another.
 #[derive(Debug)]
 pub(crate) struct Answer {
-    pub(crate) hits: Vec<(String, Vec<u8>, u64)>,
+    pub(crate) hits: Vec<(String, Vec<u8>, f64)>,
     pub(crate) corrected: Option<String>,
     /// The index's words changed since its dictionary was built.
     pub(crate) behind: bool,
 }
 
+/// How a search makes its hits of its words and its vector.
+#[derive(Clone, Copy, Debug)]
+enum Mode {
+    Words,
+    Vector,
+    /// Each half's scores scaled and summed, the vector's at this weight.
+    Sum(f64),
+    /// The words' hits ordered by their vectors.
+    Rerank,
+}
+
 pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<Answer> {
     let (moment, documents, words_version) = moment(connection, asked.index)?;
+    let mode = mode(&asked)?;
     let mut behind = false;
     let corrected = correct(connection, &mut asked, words_version, &mut behind)?;
+    let k = asked.query.offset + asked.query.limit;
+    let both = k.max(HALF);
+    let held = Held { moment, documents };
+    let ranked = match mode {
+        Mode::Words => by_words(connection, &asked, held, k)?,
+        Mode::Vector => by_vector(connection, &asked, k)?,
+        Mode::Sum(weight) => {
+            let words = by_words(connection, &asked, held, both)?;
+            hybrid::fuse(&words, &by_vector(connection, &asked, both)?, weight)
+        }
+        Mode::Rerank => {
+            let words = by_words(connection, &asked, held, both)?;
+            let docs: Vec<u32> = words.iter().map(|(_, doc)| *doc).collect();
+            hybrid::rerank(&words, &vectors::cosines(connection, asked.index, question(&asked)?, &docs)?)
+        }
+    };
+    let page = ranked.into_iter().skip(asked.query.offset).take(asked.query.limit);
+    let hits = page.map(|(score, doc)| hit(connection, asked.index, doc, score)).collect::<Result<_>>()?;
+    Ok(Answer { hits, corrected, behind })
+}
+
+/// How the search makes its hits, from what it gives and what its index
+/// says unless it does.
+fn mode(asked: &Asked<'_>) -> Result<Mode> {
+    let query = &asked.query;
+    let Some(question) = &query.vector else { return Ok(Mode::Words) };
+    let Some(vectors) = asked.settings.vectors else {
+        return Err(Error::invalid("a search by a vector of an index without vectors"));
+    };
+    if question.dimensions() != vectors.dimensions {
+        return Err(Error::invalid(format!(
+            "a vector of {} dimensions where the index holds {}",
+            question.dimensions(),
+            vectors.dimensions
+        )));
+    }
+    if query.words.is_empty() && !query.rerank {
+        return Ok(Mode::Vector);
+    }
+    let hybrid = asked.settings.hybrid;
+    let weight = match query.vector_weight {
+        Some(weight) => weight,
+        None if query.rerank || hybrid.rerank => return Ok(Mode::Rerank),
+        None => hybrid.vector_weight,
+    };
+    // A weight of 0 is the words alone and of 1 the vector alone, each with
+    // its own scores, rather than a sum whose other half adds documents at 0.
+    Ok(match weight {
+        0.0 => Mode::Words,
+        1.0 => Mode::Vector,
+        weight => Mode::Sum(weight),
+    })
+}
+
+fn question<'a>(asked: &'a Asked<'_>) -> Result<&'a Question> {
+    asked.query.vector.as_ref().ok_or_else(|| Error::internal("a search by its vector has none"))
+}
+
+/// What a snapshot holds of an index: the moment of its kept parts, and
+/// how many documents.
+#[derive(Clone, Copy)]
+struct Held {
+    moment: Moment,
+    documents: u64,
+}
+
+/// The best `k` by the search's words, with their scores.
+fn by_words(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    Held { moment, documents }: Held,
+    k: usize,
+) -> Result<Vec<(f64, u32)>> {
     let stats =
         Stats { documents, tokens: tokens(connection, asked.index)?, gone: asked.kept.gone(connection, moment)? };
-    let k = asked.query.offset + asked.query.limit;
-    let mut source = Source::new(connection, &asked, moment, &stats);
-    let found = best(&mut lists(connection, &asked, &stats)?, &mut source, k)?;
+    let mut source = Source::new(connection, asked, moment, &stats);
+    let found = best(&mut lists(connection, asked, &stats)?, &mut source, k)?;
     #[cfg(test)]
-    check(connection, &asked, &stats, moment, &found)?;
-    let hits =
-        found.into_iter().skip(asked.query.offset).map(|(points, doc)| hit(connection, asked.index, doc, points));
-    Ok(Answer { hits: hits.collect::<Result<_>>()?, corrected, behind })
+    check(connection, asked, &stats, moment, (&found, k))?;
+    Ok(found.into_iter().map(|(points, doc)| (score(points), doc)).collect())
+}
+
+/// The best `k` by the search's vector, with their cosines.
+fn by_vector(connection: &Connection, asked: &Asked<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
+    let question = question(asked)?;
+    let found = vectors::best(connection, asked.index, question, k)?;
+    #[cfg(test)]
+    if CHECKED.get() {
+        let every = vectors::every(connection, asked.index, question, k)?;
+        if every != found {
+            return Err(Error::internal(format!("found {found:?} where every vector gives {every:?}")));
+        }
+    }
+    Ok(found)
 }
 
 /// The moment of the index this snapshot holds, its documents and how far
@@ -135,12 +238,11 @@ fn check(
     asked: &Asked<'_>,
     stats: &Stats,
     moment: Moment,
-    found: &[(u64, u32)],
+    (found, k): (&[(u64, u32)], usize),
 ) -> Result<()> {
     if !CHECKED.get() {
         return Ok(());
     }
-    let k = asked.query.offset + asked.query.limit;
     let mut source = Source::new(connection, asked, moment, stats);
     let every = super::execute::every(&mut lists(connection, asked, stats)?, &mut source, k)?;
     if every != found {
@@ -293,12 +395,12 @@ fn head(connection: &Connection, index: i64, key: i64) -> Result<Vec<Posting>> {
     rows.and_then(Iterator::collect).map_err(failed)
 }
 
-fn hit(connection: &Connection, index: i64, doc: u32, points: u64) -> Result<(String, Vec<u8>, u64)> {
+fn hit(connection: &Connection, index: i64, doc: u32, score: f64) -> Result<(String, Vec<u8>, f64)> {
     let failed = |error| sql_error(format!("read document {doc}"), error);
     let mut select = connection.prepare_cached(READ_HIT).map_err(failed)?;
     let found = select.query_row((index, doc), |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
-    let (id, value) = found.ok_or_else(|| Error::corrupt(format!("document {doc} found by its words is not kept")))?;
-    Ok((id, value, points))
+    let (id, value) = found.ok_or_else(|| Error::corrupt(format!("document {doc} a search found is not kept")))?;
+    Ok((id, value, score))
 }
 
 /// Where a search's blocks come from: SQLite, a statement a block or eight

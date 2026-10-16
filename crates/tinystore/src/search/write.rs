@@ -6,6 +6,10 @@
 //! key's list. The number the document had is marked gone: searches leave
 //! it out of every block until a purge takes it out.
 //!
+//! A document's vector is kept beside it and goes with it: a set keeps the
+//! new number's and forgets the old one's, so a scan of vectors never meets
+//! a document gone.
+//!
 //! Every count a score reads changes here and nowhere else: how many
 //! documents the index holds, how many hold each key, how many words each
 //! part has. Packing and purging move postings and change no count, so they
@@ -16,6 +20,7 @@ use rusqlite::Connection;
 use super::document::Analyzed;
 use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
+use super::vectors::{self, Vector};
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
@@ -42,19 +47,22 @@ const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2 + 1
 /// The last number an index gives: past it, [`END`](super::execute::END).
 const LAST_DOC: i64 = u32::MAX as i64 - 1;
 
-/// A document ready to set: its id, its value as JSON, and its words.
+/// A document ready to set: its id, its value as JSON, its words and its
+/// vector, if it has one.
 #[derive(Debug)]
 pub(crate) struct Prepared {
     pub(crate) index: i64,
     pub(crate) id: String,
     pub(crate) value: Vec<u8>,
     pub(crate) analyzed: Analyzed,
+    pub(crate) vector: Option<Vector>,
 }
 
 impl Prepared {
     /// What the write adds to its commit, about.
     pub(crate) fn bytes(&self) -> usize {
-        self.value.len() + self.analyzed.terms.iter().map(|(_, term, _)| term.len() + 16).sum::<usize>()
+        let words: usize = self.analyzed.terms.iter().map(|(_, term, _)| term.len() + 16).sum();
+        self.value.len() + words + self.vector.as_ref().map_or(0, Vector::size)
     }
 }
 
@@ -85,6 +93,9 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
     let lengths: Vec<(u32, u32)> = document.analyzed.lengths.iter().map(|(part, len)| (part.0, *len)).collect();
     let row = (index, doc, &document.id, &document.value, encode_keys(&keys), encode_lengths(&lengths));
     execute(tx, KEEP_DOC, row, "keep a document")?;
+    if let Some(vector) = &document.vector {
+        vectors::keep(tx, index, doc as u32, vector)?;
+    }
     execute(tx, JOIN_INDEX, (index, doc, i64::from(new_words)), "count a document")
 }
 
@@ -118,6 +129,7 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     }
     execute(tx, MARK_GONE, (index, doc, &keys), "mark a document gone")?;
     execute(tx, DROP_DOC, (index, doc), "drop a document")?;
+    vectors::forget(tx, index, doc as u32)?;
     execute(tx, LEAVE_INDEX, (index, i64::from(words_left)), "count a document")?;
     Ok(true)
 }

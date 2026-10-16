@@ -96,3 +96,20 @@ create table _tinystore_search_gone (
     keys     blob    not null,
     primary key (index_id, doc)
 ) without rowid, strict;
+
+-- a document's vector as the program gave it, its floats little-endian, and
+-- its length; key: the index's id × 2³² + the document's number, so that an
+-- index's vectors lie together, in the order their documents were set
+create table _tinystore_search_vectors (
+    key    integer primary key,
+    length real    not null,
+    vector blob    not null
+) strict;
+
+-- what a search by a vector reads of every one, by the same key: a byte a
+-- dimension of its direction, after the scale of a byte and the length of
+-- what the bytes leave out
+create table _tinystore_search_codes (
+    key  integer primary key,
+    code blob    not null
+) strict;

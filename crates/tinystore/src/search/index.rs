@@ -1,4 +1,5 @@
-//! An index's handle: documents set by id, found again by their words.
+//! An index's handle: documents set by id, found again by their words, their
+//! vectors or both.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -11,8 +12,8 @@ use super::analyzer;
 use super::document::analyze;
 use super::engine::{OpenIndex, Search};
 use super::read::Query;
-use super::score::score;
-use super::settings::{Settings, Wanted};
+use super::settings::{Settings, Wanted, check_hybrid};
+use super::vectors::{Question, Vector};
 use super::write::Prepared;
 use crate::{Error, Key, Result, Store};
 
@@ -49,7 +50,8 @@ impl<T> std::fmt::Debug for IndexBuilder<'_, T> {
 
 impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     pub(crate) fn new(store: &'s Store, name: &str) -> Self {
-        let wanted = Wanted { fields: Vec::new(), typo_tolerance: true };
+        let wanted =
+            Wanted { fields: Vec::new(), typo_tolerance: true, dimensions: None, vector_weight: None, rerank: false };
         IndexBuilder { store, name: name.to_owned(), wanted, _value: PhantomData }
     }
 
@@ -75,9 +77,34 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         self
     }
 
+    /// Keeps a vector of `dimensions` numbers with each document, which the
+    /// program's own model gives it, and finds documents by their cosine
+    /// with a search's.
+    pub fn vectors(mut self, dimensions: usize) -> Self {
+        self.wanted.dimensions = Some(dimensions);
+        self
+    }
+
+    /// What a vector weighs against the words in a search by both, from 0,
+    /// the words alone, to 1, the vector alone; 0.5 unless set, and a
+    /// search may give its own.
+    pub fn vector_weight(mut self, weight: f64) -> Self {
+        self.wanted.vector_weight = Some(weight);
+        self
+    }
+
+    /// Makes a search by both order the hits of its words by their vectors,
+    /// finding nothing its words do not, unless it gives a weight.
+    pub fn rerank(mut self) -> Self {
+        self.wanted.rerank = true;
+        self
+    }
+
     /// Opens the index, made the first time. An index that holds other
-    /// settings is changed to these: a weight, a field removed and typo
-    /// tolerance at once, and each change said in the log.
+    /// settings is changed to these: a weight, a field removed, typo
+    /// tolerance, vectors added and how a search by both combines them at
+    /// once, and each change said in the log; vectors of other dimensions,
+    /// or none where it keeps some, are refused.
     pub fn open(self) -> Result<Index<T>> {
         let within = |error: Error| error.within(format!("index {}", self.name));
         let search = Search::of(self.store).map_err(within)?;
@@ -86,7 +113,8 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     }
 }
 
-/// Documents of type `T` by id in a named index, found again by their words.
+/// Documents of type `T` by id in a named index, found again by their words,
+/// their vectors or both.
 pub struct Index<T> {
     search: Arc<Search>,
     open: Arc<OpenIndex>,
@@ -111,25 +139,37 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     }
 
     /// Sets the document `id` to `value`, replacing it whole; the next
-    /// search sees it.
+    /// search sees it. On an index with vectors a set gives its vector, or
+    /// says it has none, through [`id`](Index::id).
     pub fn set(&self, id: impl Key, value: &T) -> Result<()> {
-        let id = id.text();
-        let within = |error: Error| error.within(format!("index {}: id {id:?}", self.open.name));
+        self.set_given(Given { id: id.text().into_owned(), value, vector: None })
+    }
+
+    /// A set of the document `id` with its vector, run by its last step:
+    /// `products.id("p-3").vector(&embedding).set(&product)`.
+    pub fn id(&self, id: impl Key) -> DocumentCall<'_, T> {
+        DocumentCall { index: self, id: id.text().into_owned(), vector: None }
+    }
+
+    fn set_given(&self, given: Given<'_, T>) -> Result<()> {
+        let within = |error: Error| error.within(format!("index {}: id {:?}", self.open.name, given.id));
         let index = self.open.id;
-        let document = |settings: &Settings| Ok(vec![prepared(index, &id, value, settings)?]);
+        let document = |settings: &Settings| Ok(vec![prepared(index, &given, settings)?]);
         self.search.set(&self.open, document).map_err(within)
     }
 
     /// Sets each document to its value, all of them in one commit or none:
-    /// a refused one names its place in the list and its id. A call holds
-    /// 1,000 documents and 16 MiB of them as JSON at most; a larger import
-    /// goes in calls of that size.
-    pub fn set_many<'v, K: Key>(&self, documents: impl IntoIterator<Item = (K, &'v T)>) -> Result<()>
+    /// `(id, &value)`, or on an index with vectors `(id, &value, &vector)`,
+    /// and in a list where some have none `(id, &value, Some(&vector[..]))`
+    /// and `(id, &value, None)`. A refused one names its place in the list
+    /// and its id. A call holds 1,000 documents and 16 MiB of them as JSON
+    /// at most; a larger import goes in calls of that size.
+    pub fn set_many<'v>(&self, documents: impl IntoIterator<Item = impl Document<'v, T>>) -> Result<()>
     where
         T: 'v,
     {
         let within = |error: Error| error.within(format!("index {}", self.open.name));
-        let documents: Vec<(K, &T)> = documents.into_iter().collect();
+        let documents: Vec<Given<'v, T>> = documents.into_iter().map(Given::of).collect();
         if documents.len() > MOST_MANY {
             let said = format!("a set_many of {} documents, past {MOST_MANY}", documents.len());
             return Err(within(Error::limit(said)));
@@ -138,10 +178,9 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         let all = |settings: &Settings| {
             let mut prepared_all = Vec::with_capacity(documents.len());
             let mut bytes = 0;
-            for (at, (id, value)) in documents.iter().enumerate() {
-                let id = id.text();
-                let place = |error: Error| error.within(format!("document {at}, id {id:?}"));
-                let document = prepared(index, &id, value, settings).map_err(place)?;
+            for (at, given) in documents.iter().enumerate() {
+                let place = |error: Error| error.within(format!("document {at}, id {:?}", given.id));
+                let document = prepared(index, given, settings).map_err(place)?;
                 bytes += document.value.len();
                 if bytes > MOST_MANY_BYTES {
                     return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
@@ -174,9 +213,107 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     /// A search by `text`'s words: a document needs any of them, not all,
     /// and the best ten come first unless the search says otherwise. Of
     /// equal scores the document set first comes first, so pages of one
-    /// search join without a hit twice.
+    /// search join without a hit twice. With a [`vector`](SearchCall::vector)
+    /// it searches by both.
     pub fn search(&self, text: &str) -> SearchCall<'_, T> {
-        SearchCall { index: self, text: text.to_owned(), offset: 0, limit: LIMIT }
+        SearchCall {
+            index: self,
+            text: text.to_owned(),
+            vector: None,
+            vector_weight: None,
+            rerank: false,
+            offset: 0,
+            limit: LIMIT,
+        }
+    }
+
+    /// A search by `vector` alone, which the program's model gave the
+    /// question: the exact best by their cosine with it, which is each
+    /// hit's score. A document without a vector is never found by one.
+    pub fn search_vector<'i>(&'i self, vector: &'i [f32]) -> SearchCall<'i, T> {
+        self.search("").vector(vector)
+    }
+}
+
+/// A set of one document with its vector, run by [`DocumentCall::set`].
+#[must_use = "a document is set at `set`"]
+pub struct DocumentCall<'a, T> {
+    index: &'a Index<T>,
+    id: String,
+    vector: Option<Option<&'a [f32]>>,
+}
+
+impl<T> std::fmt::Debug for DocumentCall<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocumentCall").field("id", &self.id).finish_non_exhaustive()
+    }
+}
+
+impl<'a, T: Serialize + DeserializeOwned> DocumentCall<'a, T> {
+    /// The document's vector, which the program's own model gave it: of
+    /// the index's dimensions, every number finite and not all zeros.
+    pub fn vector(mut self, vector: &'a [f32]) -> Self {
+        self.vector = Some(Some(vector));
+        self
+    }
+
+    /// The document has no vector, and only its words find it.
+    pub fn without_vector(mut self) -> Self {
+        self.vector = Some(None);
+        self
+    }
+
+    /// Sets the document to `value`, replacing it whole, its words and its
+    /// vector; the next search sees it.
+    pub fn set(self, value: &T) -> Result<()> {
+        self.index.set_given(Given { id: self.id, value, vector: self.vector })
+    }
+}
+
+/// A document as [`Index::set_many`] takes it: `(id, &value)`, or on an index
+/// with vectors `(id, &value, &vector[..])` and `(id, &value, None)`.
+pub trait Document<'v, T> {
+    /// Its id, its value, and its vector: `None` when it says nothing of one,
+    /// `Some(None)` when it has none.
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>);
+}
+
+impl<'v, K: Key, T> Document<'v, T> for (K, &'v T) {
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
+        (self.0.text().into_owned(), self.1, None)
+    }
+}
+
+impl<'v, K: Key, T> Document<'v, T> for (K, &'v T, &'v [f32]) {
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
+        (self.0.text().into_owned(), self.1, Some(Some(self.2)))
+    }
+}
+
+impl<'v, K: Key, T> Document<'v, T> for (K, &'v T, &'v Vec<f32>) {
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
+        (self.0.text().into_owned(), self.1, Some(Some(self.2)))
+    }
+}
+
+impl<'v, K: Key, T> Document<'v, T> for (K, &'v T, Option<&'v [f32]>) {
+    fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
+        (self.0.text().into_owned(), self.1, Some(self.2))
+    }
+}
+
+/// A document as a call gave it: its id, its value, and what it said of its
+/// vector.
+struct Given<'v, T> {
+    id: String,
+    value: &'v T,
+    vector: Option<Option<&'v [f32]>>,
+}
+
+impl<'v, T> Given<'v, T> {
+    fn of(document: impl Document<'v, T>) -> Self {
+        let (id, value, vector) = document.parts();
+        Given { id, value, vector }
     }
 }
 
@@ -185,6 +322,9 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
 pub struct SearchCall<'i, T> {
     index: &'i Index<T>,
     text: String,
+    vector: Option<&'i [f32]>,
+    vector_weight: Option<f64>,
+    rerank: bool,
     offset: usize,
     limit: usize,
 }
@@ -212,7 +352,35 @@ pub struct Hit<T> {
     pub score: f64,
 }
 
-impl<T: Serialize + DeserializeOwned> SearchCall<'_, T> {
+impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
+    /// Searches by `vector` too, which the program's model gave the question:
+    /// each half's best hundred, or `offset + limit` if more, their scores
+    /// each scaled to 0–1 by its own lowest and highest, 0 where the other
+    /// half did not find a document, and summed at the index's vector
+    /// weight; a hit's score is that sum. Pages join within the first
+    /// hundred, where both halves stay the same; past it each page's halves
+    /// are longer, and their sums may order it otherwise.
+    pub fn vector(mut self, vector: &'i [f32]) -> Self {
+        self.vector = Some(vector);
+        self
+    }
+
+    /// What the vector weighs in this search, in place of the index's: from
+    /// 0, the search by its words alone, to 1, by its vector alone, each
+    /// with its own scores.
+    pub fn vector_weight(mut self, weight: f64) -> Self {
+        self.vector_weight = Some(weight);
+        self
+    }
+
+    /// Orders the hundred best of the search's words by their vectors'
+    /// cosines with its vector, finding nothing the words do not; a hit
+    /// without a vector comes after those with one, scored −1.
+    pub fn rerank(mut self) -> Self {
+        self.rerank = true;
+        self
+    }
+
     /// The hits it answers, 10 unless it says.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
@@ -231,9 +399,9 @@ impl<T: Serialize + DeserializeOwned> SearchCall<'_, T> {
         let query = self.query().map_err(within)?;
         let answer = self.index.search.search(&self.index.open, query).map_err(within)?;
         let mut hits = Vec::with_capacity(answer.hits.len());
-        for (id, value, points) in answer.hits {
+        for (id, value, score) in answer.hits {
             let value = decode(&value).map_err(|error| within(error.within(format!("id {id:?}"))))?;
-            hits.push(Hit { id, value, score: score(points) });
+            hits.push(Hit { id, value, score });
         }
         Ok(Found { hits, corrected: answer.corrected })
     }
@@ -253,16 +421,55 @@ impl<T: Serialize + DeserializeOwned> SearchCall<'_, T> {
         let normal = analyzer::normalize(&self.text);
         let mut words = analyzer::words_of(&normal);
         words.truncate(MOST_WORDS);
-        Ok(Query { normal, words, offset: self.offset, limit: self.limit })
+        Ok(Query {
+            normal,
+            words,
+            vector: self.question()?,
+            vector_weight: self.vector_weight,
+            rerank: self.rerank,
+            offset: self.offset,
+            limit: self.limit,
+        })
+    }
+
+    /// The search's vector, refusing a weight or a rerank without one and a
+    /// rerank without words to order.
+    fn question(&self) -> Result<Option<Question>> {
+        let Some(vector) = self.vector else {
+            if self.vector_weight.is_some() || self.rerank {
+                return Err(Error::invalid("a vector weight or a rerank for a search without a vector"));
+            }
+            return Ok(None);
+        };
+        check_hybrid(self.vector_weight, self.rerank)?;
+        if self.rerank && self.text.trim().is_empty() {
+            return Err(Error::invalid("a rerank orders a search's words' hits, and a search without words has none"));
+        }
+        Question::new(vector).map(Some)
     }
 }
 
-/// A document ready to set: its id checked, its value as JSON and its words
-/// as the index's fields read them.
-fn prepared<T: Serialize>(index: i64, id: &str, value: &T, settings: &Settings) -> Result<Prepared> {
-    let (tree, bytes) = json(value)?;
+/// A document ready to set: its id checked, its value as JSON, its words as
+/// the index's fields read them and its vector.
+fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings) -> Result<Prepared> {
+    let (tree, bytes) = json(given.value)?;
     let analyzed = analyze(&tree, &settings.fields)?;
-    Ok(Prepared { index, id: checked(id)?.to_owned(), value: bytes, analyzed })
+    let vector = vector(given.vector, settings)?;
+    Ok(Prepared { index, id: checked(&given.id)?.to_owned(), value: bytes, analyzed, vector })
+}
+
+/// A document's vector as the index keeps it: required on an index with
+/// vectors, so that a set never drops one by leaving it out.
+fn vector(given: Option<Option<&[f32]>>, settings: &Settings) -> Result<Option<Vector>> {
+    match (settings.vectors, given) {
+        (None, Some(Some(_))) => Err(Error::invalid("a vector for an index without vectors")),
+        (None, _) | (Some(_), Some(None)) => Ok(None),
+        (Some(_), None) => Err(Error::invalid(
+            "the index keeps vectors: a set gives one, id(…).vector(…).set(…), or says it has none, \
+             id(…).without_vector().set(…)",
+        )),
+        (Some(vectors), Some(Some(values))) => Vector::new(values, vectors.dimensions).map(Some),
+    }
 }
 
 /// A document's value as JSON, and its bytes, within the bound.

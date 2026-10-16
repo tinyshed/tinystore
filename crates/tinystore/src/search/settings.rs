@@ -1,15 +1,18 @@
 //! An index's settings: its fields, each with its weight and a number of
-//! its own for good, and whether a misspelt word is read as the nearest.
-//! They are kept as JSON in the index's row, and an open that asks for
-//! others changes them.
+//! its own for good, whether a misspelt word is read as the nearest, its
+//! vectors' dimensions, and how a search by words and a vector at once
+//! combines them. They are kept as JSON in the index's row, and an open
+//! that asks for others changes them.
 //!
 //! ```text
-//! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1}
+//! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
+//!  "vectors":{"dimensions":1024},"hybrid":{"vector_weight":0.5,"rerank":false}}
 //! ```
 
 use serde_json::{Value, json};
 
 use super::analyzer;
+use super::vectors::MOST_DIMENSIONS;
 use crate::{Error, Result};
 
 /// A field: where its text lies in a document, what a word found there
@@ -27,6 +30,23 @@ pub(crate) struct Settings {
     pub(crate) next_field: u32,
     pub(crate) typo_tolerance: bool,
     pub(crate) analysis: u32,
+    pub(crate) vectors: Option<Vectors>,
+    pub(crate) hybrid: Hybrid,
+}
+
+/// The vectors an index keeps: of how many dimensions each.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Vectors {
+    pub(crate) dimensions: usize,
+}
+
+/// How a search by words and a vector at once combines them, unless it says:
+/// their scores summed at `vector_weight`, or the words' hits ordered by the
+/// vector.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Hybrid {
+    pub(crate) vector_weight: f64,
+    pub(crate) rerank: bool,
 }
 
 /// What an open asks for: the fields by their paths and weights, none for a
@@ -35,7 +55,14 @@ pub(crate) struct Settings {
 pub(crate) struct Wanted {
     pub(crate) fields: Vec<(String, f64)>,
     pub(crate) typo_tolerance: bool,
+    pub(crate) dimensions: Option<usize>,
+    pub(crate) vector_weight: Option<f64>,
+    pub(crate) rerank: bool,
 }
+
+/// The weight of a vector a search by both gives unless its index or it
+/// says: search-hybrid found no weight that won both its collections.
+pub(crate) const VECTOR_WEIGHT: f64 = 0.5;
 
 /// The heaviest weight a field may have: a thousand to one is far past what
 /// orders hits, and a score of a search of 32 words stays within its points.
@@ -63,7 +90,33 @@ impl Wanted {
                 return Err(Error::invalid(format!("field {path} is given twice")));
             }
         }
-        Ok(())
+        self.check_vectors()
+    }
+
+    fn check_vectors(&self) -> Result<()> {
+        match self.dimensions {
+            Some(0) => return Err(Error::invalid("vectors of 0 dimensions")),
+            Some(dimensions) if dimensions > MOST_DIMENSIONS => {
+                return Err(Error::limit(format!("vectors of {dimensions} dimensions, past {MOST_DIMENSIONS}")));
+            }
+            None if self.vector_weight.is_some() || self.rerank => {
+                return Err(Error::invalid("a vector weight or a rerank for an index without vectors"));
+            }
+            _ => {}
+        }
+        check_hybrid(self.vector_weight, self.rerank)
+    }
+}
+
+/// Refuses a vector weight outside 0–1, and one beside a rerank, which
+/// orders by the vector alone.
+pub(crate) fn check_hybrid(vector_weight: Option<f64>, rerank: bool) -> Result<()> {
+    match vector_weight {
+        Some(weight) if !(0.0..=1.0).contains(&weight) => {
+            Err(Error::invalid(format!("a vector weight of {weight}: it is from 0, the words alone, to 1")))
+        }
+        Some(_) if rerank => Err(Error::invalid("a vector weight beside a rerank, which orders by the vector alone")),
+        _ => Ok(()),
     }
 }
 
@@ -72,16 +125,26 @@ impl Settings {
         let fields: Vec<Field> =
             (0..).zip(wanted.fields()).map(|(number, (path, weight))| Field { path, weight, number }).collect();
         let next_field = fields.len() as u32;
-        Settings { fields, next_field, typo_tolerance: wanted.typo_tolerance, analysis: analyzer::VERSION }
+        Settings {
+            fields,
+            next_field,
+            typo_tolerance: wanted.typo_tolerance,
+            analysis: analyzer::VERSION,
+            vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions }),
+            hybrid: Hybrid::of(wanted),
+        }
     }
 
     /// The settings `wanted` makes of these, and each change as the log says
-    /// it. A weight, a field removed and typo tolerance change at once; a
-    /// field added to an index that holds documents would need them read
-    /// again, which no release does yet, so it is refused.
+    /// it. A weight, a field removed, typo tolerance, vectors added and how
+    /// a search by both combines them change at once; a field added to an
+    /// index that holds documents would need them read again, which no
+    /// release does yet, so it is refused, as are other vectors than those
+    /// kept, which the store has nothing to make from.
     pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<(Settings, Vec<String>)> {
         let mut changed = Settings { fields: Vec::new(), ..self.clone() };
         let mut said = Vec::new();
+        changed.change_vectors(wanted, documents, &mut said)?;
         for (path, weight) in wanted.fields() {
             let Some(field) = self.fields.iter().find(|field| field.path == path) else {
                 if documents > 0 {
@@ -114,6 +177,40 @@ impl Settings {
         Ok((changed, said))
     }
 
+    fn change_vectors(&mut self, wanted: &Wanted, documents: u64, said: &mut Vec<String>) -> Result<()> {
+        match (self.vectors, wanted.dimensions) {
+            (Some(kept), Some(dimensions)) if kept.dimensions != dimensions => {
+                return Err(Error::invalid(format!(
+                    "vectors of {dimensions} dimensions where the index keeps {}: they are the program's model's, \
+                     and the store has nothing to make new ones from",
+                    kept.dimensions
+                )));
+            }
+            (Some(kept), None) => {
+                return Err(Error::invalid(format!(
+                    "opened without vectors, an index that keeps vectors of {} dimensions would lose them",
+                    kept.dimensions
+                )));
+            }
+            (None, Some(dimensions)) => {
+                let held =
+                    if documents > 0 { format!("; the {documents} documents held have none") } else { "".into() };
+                said.push(format!("vectors of {dimensions} dimensions added{held}"));
+                self.vectors = Some(Vectors { dimensions });
+            }
+            _ => {}
+        }
+        let hybrid = Hybrid::of(wanted);
+        if hybrid.vector_weight != self.hybrid.vector_weight {
+            said.push(format!("a vector weighs {}, was {}; at once", hybrid.vector_weight, self.hybrid.vector_weight));
+        }
+        if hybrid.rerank != self.hybrid.rerank {
+            said.push(format!("rerank {}; at once", if hybrid.rerank { "on" } else { "off" }));
+        }
+        self.hybrid = hybrid;
+        Ok(())
+    }
+
     /// The weight of the field numbered `number`, while the index has it.
     pub(crate) fn weight(&self, number: u32) -> Option<f64> {
         self.fields.iter().find(|field| field.number == number).map(|field| field.weight)
@@ -125,11 +222,14 @@ impl Settings {
             .iter()
             .map(|field| json!({ "path": field.path, "weight": field.weight, "number": field.number }))
             .collect();
+        let vectors = self.vectors.map(|vectors| json!({ "dimensions": vectors.dimensions }));
         let settings = json!({
             "fields": fields,
             "next_field": self.next_field,
             "typo_tolerance": self.typo_tolerance,
             "analysis": self.analysis,
+            "vectors": vectors,
+            "hybrid": { "vector_weight": self.hybrid.vector_weight, "rerank": self.hybrid.rerank },
         });
         settings.to_string()
     }
@@ -144,12 +244,28 @@ impl Settings {
             let weight = field["weight"].as_f64().ok_or_else(broken)?;
             fields.push(Field { path, weight, number: number(&field["number"])? });
         }
+        let vectors = match &settings["vectors"] {
+            Value::Null => None,
+            vectors => Some(Vectors { dimensions: number(&vectors["dimensions"])? as usize }),
+        };
+        let hybrid = &settings["hybrid"];
         Ok(Settings {
             fields,
             next_field: number(&settings["next_field"])?,
             typo_tolerance: settings["typo_tolerance"].as_bool().ok_or_else(broken)?,
             analysis: number(&settings["analysis"])?,
+            vectors,
+            hybrid: Hybrid {
+                vector_weight: hybrid["vector_weight"].as_f64().ok_or_else(broken)?,
+                rerank: hybrid["rerank"].as_bool().ok_or_else(broken)?,
+            },
         })
+    }
+}
+
+impl Hybrid {
+    fn of(wanted: &Wanted) -> Hybrid {
+        Hybrid { vector_weight: wanted.vector_weight.unwrap_or(VECTOR_WEIGHT), rerank: wanted.rerank }
     }
 }
 
@@ -167,13 +283,47 @@ mod tests {
         Wanted {
             fields: fields.iter().map(|(path, weight)| ((*path).to_owned(), *weight)).collect(),
             typo_tolerance: true,
+            dimensions: None,
+            vector_weight: None,
+            rerank: false,
         }
+    }
+
+    fn with_vectors(dimensions: usize, vector_weight: Option<f64>, rerank: bool) -> Wanted {
+        Wanted { dimensions: Some(dimensions), vector_weight, rerank, ..wanted(&[("title", 1.0)]) }
     }
 
     #[test]
     fn settings_read_back_as_written() {
         let settings = Settings::new(&wanted(&[("title", 2.0), ("body", 1.0)]));
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+        let settings = Settings::new(&with_vectors(1024, Some(0.7), false));
+        assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+    }
+
+    #[test]
+    fn vectors_added_change_at_once_and_other_dimensions_or_none_are_refused() {
+        let settings = Settings::new(&wanted(&[("title", 1.0)]));
+        let (changed, said) = settings.change(&with_vectors(3, None, false), 2).unwrap();
+        assert_eq!(said, ["vectors of 3 dimensions added; the 2 documents held have none"]);
+        assert_eq!(changed.vectors, Some(Vectors { dimensions: 3 }));
+        assert_eq!(changed.change(&with_vectors(4, None, false), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
+        assert_eq!(changed.change(&wanted(&[("title", 1.0)]), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
+        let (_, said) = changed.change(&with_vectors(3, Some(0.7), false), 2).unwrap();
+        assert_eq!(said, ["a vector weighs 0.7, was 0.5; at once"]);
+        let (_, said) = changed.change(&with_vectors(3, None, true), 2).unwrap();
+        assert_eq!(said, ["rerank on; at once"]);
+    }
+
+    #[test]
+    fn a_vector_weight_is_from_zero_to_one_and_never_beside_a_rerank() {
+        assert!(with_vectors(8, Some(1.0), false).check().is_ok());
+        assert!(with_vectors(8, Some(1.5), false).check().is_err());
+        assert!(with_vectors(8, Some(f64::NAN), false).check().is_err());
+        assert!(with_vectors(8, Some(0.5), true).check().is_err());
+        assert!(with_vectors(0, None, false).check().is_err());
+        assert_eq!(with_vectors(4097, None, false).check().unwrap_err().kind(), crate::ErrorKind::Limit);
+        assert!(Wanted { rerank: true, ..wanted(&[("title", 1.0)]) }.check().is_err());
     }
 
     #[test]

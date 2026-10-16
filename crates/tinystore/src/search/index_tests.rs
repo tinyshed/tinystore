@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -340,20 +340,25 @@ struct Model {
     prefix: String,
 }
 
-/// A document of the model: its number, its value and its words.
+/// A document of the model: its number, its value, its words and its vector.
 struct Doc {
     number: u32,
     value: Article,
     terms: HashMap<(Part, String), u32>,
     analyzed: Analyzed,
+    vector: Option<Vec<f32>>,
 }
 
 impl Model {
     fn set(&mut self, settings: &Settings, id: String, value: Article) {
+        self.set_with(settings, id, value, None);
+    }
+
+    fn set_with(&mut self, settings: &Settings, id: String, value: Article, vector: Option<Vec<f32>>) {
         self.next += 1;
         let analyzed = document::analyze(&serde_json::to_value(&value).unwrap(), &settings.fields).unwrap();
         let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
-        self.docs.insert(id, Doc { number: self.next, value, terms, analyzed });
+        self.docs.insert(id, Doc { number: self.next, value, terms, analyzed, vector });
     }
 
     /// The best `k` by scoring every document the model holds, as the
@@ -386,6 +391,71 @@ impl Model {
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         scored.into_iter().take(k).map(|(total, _, id)| (id.clone(), score(total))).collect()
     }
+
+    /// The cosine of a document's vector with `question`, none when it has none.
+    fn cosine(&self, id: &str, question: &[f32]) -> Option<f64> {
+        let length = |vector: &[f32]| vector.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>().sqrt();
+        let vector = self.docs[id].vector.as_ref()?;
+        let dot: f64 = question.iter().zip(vector).map(|(q, v)| f64::from(*q) * f64::from(*v)).sum();
+        Some(dot / (length(question) * length(vector)))
+    }
+
+    /// The best `k` by scoring every vector the model holds.
+    fn nearest(&self, question: &[f32], k: usize) -> Vec<(String, f64)> {
+        let scored = self.docs.keys().filter_map(|id| Some((id.clone(), self.cosine(id, question)?)));
+        self.ordered(scored.collect(), k)
+    }
+
+    /// Hits by their scores, the document set first first of equal ones.
+    fn ordered(&self, mut hits: Vec<(String, f64)>, k: usize) -> Vec<(String, f64)> {
+        let number = |id: &str| self.docs[id].number;
+        hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(number(&a.0).cmp(&number(&b.0))));
+        hits.truncate(k);
+        hits
+    }
+
+    /// The best `k` of a search by `text` and `question` at once, from the
+    /// best hundred of each half, or `k` if more.
+    fn both(&self, settings: &Settings, (text, question): (&str, &[f32]), how: How, k: usize) -> Vec<(String, f64)> {
+        let alone = analyzer::words(text).is_empty() && !matches!(how, How::Rerank);
+        if alone || matches!(how, How::Sum(1.0)) {
+            return self.nearest(question, k);
+        }
+        if matches!(how, How::Sum(0.0)) {
+            return self.best(settings, text, k);
+        }
+        let words = self.best(settings, text, k.max(100));
+        let How::Sum(weight) = how else {
+            let (with, without): (Vec<_>, Vec<_>) =
+                words.into_iter().partition(|(id, _)| self.docs[id].vector.is_some());
+            let cosines = with.into_iter().map(|(id, _)| (id.clone(), self.cosine(&id, question).unwrap())).collect();
+            let mut reranked = self.ordered(cosines, usize::MAX);
+            reranked.extend(without.into_iter().map(|(id, _)| (id, -1.0)));
+            reranked.truncate(k);
+            return reranked;
+        };
+        let (words, vectors) = (scaled(&words), scaled(&self.nearest(question, k.max(100))));
+        let ids: BTreeSet<&String> = words.keys().chain(vectors.keys()).collect();
+        let half = |half: &HashMap<String, f64>, id: &String| half.get(id).copied().unwrap_or(0.0);
+        let sums =
+            ids.into_iter().map(|id| (id.clone(), (1.0 - weight) * half(&words, id) + weight * half(&vectors, id)));
+        self.ordered(sums.collect(), k)
+    }
+}
+
+/// How a search by both combines its halves.
+#[derive(Clone, Copy, Debug)]
+enum How {
+    Sum(f64),
+    Rerank,
+}
+
+/// A half's scores from 0, its lowest, to 1, its highest; 1 each when all are equal.
+fn scaled(half: &[(String, f64)]) -> HashMap<String, f64> {
+    let lowest = half.iter().map(|(_, score)| *score).fold(f64::INFINITY, f64::min);
+    let highest = half.iter().map(|(_, score)| *score).fold(f64::NEG_INFINITY, f64::max);
+    let scale = |score: f64| if highest > lowest { (score - lowest) / (highest - lowest) } else { 1.0 };
+    half.iter().map(|(id, score)| (id.clone(), scale(*score))).collect()
 }
 
 /// Checks a search against the model, by every document it holds.
@@ -611,4 +681,229 @@ fn through_a_long_mix_the_file_stays_near_a_fresh_build_of_the_same_documents() 
     eprintln!("{mixed} bytes after the mix, {built} built afresh, a log of {mixed_log}");
     assert!(mixed <= built * 2, "{mixed} bytes after the mix, {built} built afresh");
     assert!(mixed_log <= 8 << 20, "the write-ahead log holds {mixed_log} bytes");
+}
+
+/// The dimensions of the vectors the tests give.
+const DIMENSIONS: usize = 6;
+
+/// A vector of whole numbers and of fractions, which gives equal cosines as
+/// often as nearly equal ones.
+fn embedding(random: &mut Random) -> Vec<f32> {
+    let mut values: Vec<f32> = (0..DIMENSIONS)
+        .map(|_| match random.below(3) {
+            0 => random.below(5) as f32 - 2.0,
+            _ => (random.below(2001) as f32 - 1000.0) / 997.0,
+        })
+        .collect();
+    if values.iter().all(|value| *value == 0.0) {
+        values[0] = 1.0;
+    }
+    values
+}
+
+fn products(fixture: &Fixture) -> Index<Article> {
+    let builder = fixture.store.index("products").field("title", 2.0).field("body", 1.0);
+    builder.typo_tolerance(false).vectors(DIMENSIONS).open().unwrap()
+}
+
+#[test]
+fn a_search_by_a_vector_answers_the_nearest_by_their_cosine() {
+    let fixture = fixture();
+    let shoes = fixture.store.index::<Article>("shoes").field("title", 1.0).vectors(3).open().unwrap();
+    shoes.id("a").vector(&[1.0, 0.0, 0.0]).set(&article("red shoes", "")).unwrap();
+    shoes.id("b").vector(&[0.0, 1.0, 0.0]).set(&article("blue shoes", "")).unwrap();
+    shoes.id("c").vector(&[2.0, 0.5, 0.0]).set(&article("red hat", "")).unwrap();
+    shoes.id("d").without_vector().set(&article("red", "")).unwrap();
+    let nearest = checked(|| shoes.search_vector(&[1.0, 0.0, 0.0]).run()).unwrap();
+    assert_eq!(ids(&nearest), ["a", "c", "b"], "a document without a vector is found by its words alone");
+    assert_eq!(nearest.hits.iter().map(|hit| hit.score).collect::<Vec<_>>(), [1.0, 2.0 / 4.25f64.sqrt(), 0.0]);
+    let reranked = checked(|| shoes.search("red").vector(&[0.0, 1.0, 0.0]).rerank().run()).unwrap();
+    assert_eq!(ids(&reranked), ["c", "a", "d"], "the words' hits by their vectors, none without last");
+    assert_eq!(reranked.hits[2].score, -1.0);
+    let words = checked(|| shoes.search("red").vector(&[0.0, 1.0, 0.0]).vector_weight(0.0).run()).unwrap();
+    assert_eq!(words, search(&shoes, "red"), "a weight of 0 is the search by the words alone");
+    let vector = checked(|| shoes.search("red").vector(&[1.0, 0.0, 0.0]).vector_weight(1.0).run()).unwrap();
+    assert_eq!(vector, nearest, "and of 1, by the vector alone");
+    let (first, second, third) = (article("a", ""), article("b", ""), article("c", ""));
+    let (va, vb) = (vec![1.0, 2.0, 3.0], vec![3.0, 2.0, 1.0]);
+    shoes.set_many([("e", &first, &va), ("f", &second, &vb)]).unwrap();
+    shoes.set_many([("g", &third, Some(&va[..])), ("h", &third, None)]).unwrap();
+    let listed = checked(|| shoes.search_vector(&[3.0, 2.0, 1.0]).limit(20).run()).unwrap();
+    assert_eq!(ids(&listed), ["f", "c", "a", "e", "g", "b"], "of equal cosines, e set first; h has no vector");
+}
+
+#[test]
+fn an_index_with_vectors_asks_each_set_for_one_and_refuses_a_vector_it_cannot_compare() {
+    let fixture = fixture();
+    let products = products(&fixture);
+    let kind = |result: crate::Result<()>| result.unwrap_err().kind();
+    let said = products.set("p", &article("shoes", "")).unwrap_err().to_string();
+    assert!(said.starts_with("index products: id \"p\": the index keeps vectors"), "{said}");
+    assert_eq!(kind(products.id("p").vector(&[1.0; 5]).set(&article("shoes", ""))), ErrorKind::Invalid);
+    assert_eq!(kind(products.id("p").vector(&[f32::NAN; DIMENSIONS]).set(&article("", ""))), ErrorKind::Invalid);
+    assert_eq!(kind(products.id("p").vector(&[0.0; DIMENSIONS]).set(&article("", ""))), ErrorKind::Invalid);
+    let many = products.set_many([("p", &article("shoes", ""))]).unwrap_err().to_string();
+    assert!(many.starts_with("index products: document 0, id \"p\": the index keeps vectors"), "{many}");
+    assert_eq!(products.get("p").unwrap(), None);
+    let words = fixture.articles::<Article>("articles");
+    assert_eq!(kind(words.id("a").vector(&[1.0]).set(&article("", ""))), ErrorKind::Invalid);
+    words.id("a").without_vector().set(&article("bread", "")).unwrap();
+    let search = |call: SearchCall<'_, Article>| call.run().map(drop).unwrap_err().kind();
+    let q = [1.0; DIMENSIONS];
+    assert_eq!(search(words.search("bread").vector(&q)), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").vector(&[1.0; 5])), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").vector(&[0.0; DIMENSIONS])), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").vector(&q).vector_weight(1.5)), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").vector(&q).vector_weight(0.5).rerank()), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").vector_weight(0.5)), ErrorKind::Invalid);
+    assert_eq!(search(products.search("bread").rerank()), ErrorKind::Invalid);
+    assert_eq!(search(products.search("").vector(&q).rerank()), ErrorKind::Invalid);
+}
+
+#[test]
+fn vectors_added_leave_the_documents_held_without_and_other_dimensions_are_refused() {
+    let fixture = fixture();
+    let articles = fixture.articles::<Article>("articles");
+    articles.set("old", &article("bread", "")).unwrap();
+    let opened = |dimensions: Option<usize>| {
+        let builder = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0);
+        match dimensions {
+            Some(dimensions) => builder.vectors(dimensions).open(),
+            None => builder.open(),
+        }
+    };
+    let with = opened(Some(2)).unwrap();
+    with.id("new").vector(&[1.0, 0.0]).set(&article("bread", "")).unwrap();
+    assert_eq!(ids(&checked(|| with.search("").vector(&[1.0, 1.0]).run()).unwrap()), ["new"]);
+    assert_eq!(ids(&search(&with, "bread")), ["old", "new"]);
+    assert_eq!(opened(Some(3)).unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(opened(None).unwrap_err().kind(), ErrorKind::Invalid, "nor would an open without them drop them");
+}
+
+#[test]
+fn a_changed_vector_weight_rebuilds_nothing_and_the_next_search_reads_it() {
+    let fixture = fixture();
+    let products = products(&fixture);
+    let mut random = Random::new(3);
+    for n in 0..40 {
+        products.id(n).vector(&embedding(&mut random)).set(&random_article(&mut random)).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    let (text, q) = (words(&mut random, 3) + " bread", embedding(&mut random));
+    let weighed = checked(|| products.search(&text).vector(&q).vector_weight(0.8).run()).unwrap();
+    let before = postings_in(fixture.dir.path());
+    let builder = fixture.store.index::<Article>("products").field("title", 2.0).field("body", 1.0);
+    let reopened = builder.typo_tolerance(false).vectors(DIMENSIONS).vector_weight(0.8).open().unwrap();
+    assert_eq!(postings_in(fixture.dir.path()), before, "no block or list written again");
+    assert_eq!(checked(|| reopened.search(&text).vector(&q).run()).unwrap(), weighed);
+    assert_eq!(checked(|| products.search(&text).vector(&q).run()).unwrap(), weighed, "every handle reads it");
+}
+
+/// Checks a search by a vector, or by words and a vector, against the model.
+fn agrees_by_vector(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64) {
+    let settings = Settings::clone(&index.open.settings_read());
+    let (offset, limit) = (random.below(15) as usize, 1 + random.below(25) as usize);
+    let (text, q) = (if random.below(4) == 0 { String::new() } else { words(random, 4) }, embedding(random));
+    let call = index.search(&text).vector(&q).offset(offset).limit(limit);
+    let (call, how) = match random.below(4) {
+        0 if !text.trim().is_empty() => (call.rerank(), How::Rerank),
+        1 => {
+            let weight = [0.0, 0.3, 1.0][random.below(3) as usize];
+            (call.vector_weight(weight), How::Sum(weight))
+        }
+        _ => (call, How::Sum(0.5)),
+    };
+    let found = checked(|| call.run()).unwrap();
+    let mut expected = model.both(&settings, (&text, &q), how, offset + limit);
+    expected.drain(..offset.min(expected.len()));
+    let got: Vec<(String, f64)> = found.hits.iter().map(|hit| (hit.id.clone(), hit.score)).collect();
+    assert_eq!(got, expected, "seed {seed}: {text:?} {how:?}");
+}
+
+/// Sets a document of the model's with its vector, or without one.
+fn set_with(index: &Index<Article>, id: &str, value: &Article, vector: Option<&[f32]>) {
+    let call = index.id(id);
+    let call = match vector {
+        Some(vector) => call.vector(vector),
+        None => call.without_vector(),
+    };
+    call.set(value).unwrap();
+}
+
+#[test]
+fn searches_by_a_vector_and_by_both_answer_what_scoring_every_document_answers() {
+    for seed in 0..4 {
+        let fixture = fixture();
+        let index = products(&fixture);
+        let mut random = Random::new(seed);
+        let mut model = Model::default();
+        let settings = Settings::clone(&index.open.settings_read());
+        for _ in 0..1500 {
+            match random.below(100) {
+                0..60 => {
+                    let (id, value) = (format!("d{}", random.below(300)), random_article(&mut random));
+                    let vector = (random.below(10) != 0).then(|| embedding(&mut random));
+                    set_with(&index, &id, &value, vector.as_deref());
+                    model.set_with(&settings, id, value, vector);
+                }
+                60..72 => {
+                    let id = format!("d{}", random.below(300));
+                    assert_eq!(index.delete(&id).unwrap(), model.docs.remove(&id).is_some());
+                }
+                72..74 => drop(maintain(&fixture.store).unwrap()),
+                74..76 => {
+                    let ids: Vec<String> =
+                        (0..1 + random.below(8)).map(|_| format!("d{}", random.below(300))).collect();
+                    let values: Vec<(Article, Vec<f32>)> =
+                        ids.iter().map(|_| (random_article(&mut random), embedding(&mut random))).collect();
+                    index.set_many(ids.iter().zip(&values).map(|(id, (value, vector))| (id, value, vector))).unwrap();
+                    for (id, (value, vector)) in ids.into_iter().zip(values) {
+                        model.set_with(&settings, id, value, Some(vector));
+                    }
+                }
+                76..78 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                78..79 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
+                79..85 => agrees(&index, &model, &mut random, seed),
+                _ => agrees_by_vector(&index, &model, &mut random, seed),
+            }
+        }
+        let Fixture { dir, store } = fixture;
+        drop(index);
+        store.close().unwrap();
+        let reopened = Fixture { store: open(dir.path()), dir };
+        let index = products(&reopened);
+        for _ in 0..20 {
+            agrees_by_vector(&index, &model, &mut random, seed);
+        }
+    }
+}
+
+/// How long an exact search by a vector takes over 100,000 vectors of 1,024
+/// dimensions, each number a sum of three uniform ones. Run by hand:
+/// `cargo test -p tinystore --release --lib a_search_by_a_vector_over -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing, run by hand"]
+fn a_search_by_a_vector_over_a_hundred_thousand_takes() {
+    let fixture = fixture();
+    let index = fixture.store.index::<String>("timing").vectors(1024).open().unwrap();
+    let mut random = Random::new(1);
+    let mut normal = |_| (0..3).map(|_| random.below(2001) as f32 / 1000.0 - 1.0).sum::<f32>();
+    let empty = String::new();
+    for batch in 0..100 {
+        let vectors: Vec<Vec<f32>> = (0..1000).map(|_| (0..1024).map(&mut normal).collect()).collect();
+        let ids: Vec<String> = (0..1000).map(|n| format!("{batch}-{n}")).collect();
+        index.set_many(ids.iter().zip(&vectors).map(|(id, vector)| (id, &empty, vector))).unwrap();
+    }
+    let questions: Vec<Vec<f32>> = (0..21).map(|_| (0..1024).map(&mut normal).collect()).collect();
+    index.search("").vector(&questions[0]).run().unwrap();
+    let mut took: Vec<f64> = questions[1..]
+        .iter()
+        .map(|question| {
+            let started = std::time::Instant::now();
+            index.search("").vector(question).run().unwrap();
+            started.elapsed().as_secs_f64() * 1000.0
+        })
+        .collect();
+    took.sort_by(f64::total_cmp);
+    eprintln!("a search by a vector over 100,000: {:.1} ms at the median, {:.1} at most", took[10], took[19]);
 }

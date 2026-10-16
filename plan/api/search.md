@@ -107,7 +107,8 @@ never waits for the work a change needs.
 | a field or a filter added                                  | read from the kept documents in the background; searches use it once it is ready                     |
 | `recall` added or removed                                  | the clusters built or dropped in the background; searches stay exact meanwhile                       |
 | how text is cut, by a release of TinyStore that changes it | the index rebuilt in the background                                                                  |
-| the vectors' `dimensions`                                  | `invalid`: the vectors are the program's model's, and the store has nothing to make new ones from    |
+| `vectors` added                                            | at once: the documents the index holds have none until they are set again                            |
+| the vectors' `dimensions`, or `vectors` left out           | `invalid`: the vectors are the program's model's, and the store has nothing to make new ones from    |
 
 - Background work runs beside the index, which answers and takes writes
   meanwhile, every write reaching both, in commits of a few keys as packing
@@ -161,9 +162,11 @@ await articles.setMany([{ id: 'a-1', value: first }, { id: 'a-2', value: second 
 
 ```rust
 articles.set("a-17", &article)?;
-products.set("p-3", &product).vector(&embedding)?;
+products.id("p-3").vector(&embedding).set(&product)?;
+products.id("p-4").without_vector().set(&draft)?;
 articles.delete("a-17")?;
 articles.set_many([("a-1", &first), ("a-2", &second)])?;
+products.set_many([("p-5", &first, Some(&va[..])), ("p-6", &second, None)])?;
 ```
 
 - A set replaces the document whole, its words and its vector; the next
@@ -204,6 +207,7 @@ hits = products.search(text="red shoes", vector=q, filter={"owner_id": 42}).hits
 
 ```rust
 let found = articles.search("как испечь хлеб").run()?;
+let found = products.search_vector(&q).run()?;
 let found = products.search("red shoes").vector(&q).filter("owner_id", 42).limit(20).run()?;
 ```
 
@@ -267,7 +271,12 @@ let found = products.search("red shoes").vector(&q).rerank().run()?;
   highest, a document the other half did not find scoring 0 there; and
   orders the documents by (1 − `vectorWeight`) × words + `vectorWeight` ×
   vector. `vectorWeight` is 0.5 unless the index or the search says
-  otherwise, from 0, the words alone, to 1, the vector alone.
+  otherwise, from 0, the search by its words alone, to 1, by its vector
+  alone, each with its own scores rather than a sum the other half adds
+  documents to at 0.
+- Pages of a search by both join within the first hundred, where both
+  halves stay the same; past it each page asks the halves for more, and
+  their sums may order it otherwise.
 - The weight is the only setting a search may give in place of its index's:
   one index serves searches that weigh differently, a catalog's search box
   and a support page's, and a weight changes no stored byte, so neither
@@ -277,7 +286,8 @@ let found = products.search("red shoes").vector(&q).rerank().run()?;
   scan of every vector, a hundred vectors read by their number. It is for a
   program whose questions always have words and whose vectors only order
   them. At open it makes every search by both rerank; beside a
-  `vectorWeight` in the same `hybrid` it is `invalid`.
+  `vectorWeight` in the same `hybrid` it is `invalid`. A hit without a
+  vector comes after those with one, scored −1, the least a cosine can be.
 - search-hybrid, bge-m3 on Amazon's products in three languages and twelve
   StackExchange forums, 600 judged questions each, nDCG@10:
 
@@ -310,6 +320,16 @@ const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions:
   ms a million vectors on two cores, by reading a byte a dimension and
   scoring again on the vectors as given the 25 a question that bytes could
   not rule out; it grows with the index, about 25 ms a hundred thousand.
+- Slice 3 keeps a vector's code in a row of its own and reads them a row
+  at a time, holding no vector in memory but the ones it scores again: 83
+  ms at the median over 100,000 vectors of 1,024 dimensions, 20 searches
+  after a first, the file in the system's cache, on a Ryzen 7 7700 under
+  Windows 11, nearly all of it reading the rows, since the same scan
+  without a bound computed took as long; search-vectors read codes packed
+  into its clusters' lists. Slice 5 packs them so, and the exact search
+  reads them there. A vector of 1,024 dimensions keeps 4 KiB and its code
+  1 KiB. `a_search_by_a_vector_over_a_hundred_thousand_takes` in
+  `search::index`, by hand with `--release -- --ignored`.
 - With `recall`, the index answers from the clusters nearest the question:
   about 3 ms a million at 0.94 of the exact ten, holding 96 MiB, against
   HNSW's 0.4 ms and 2.2 GiB. The program asked for it at open, so no answer
@@ -411,12 +431,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN or an infinity, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank` |
-| `limit`   | a document, a field's text, a search or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank`; either in a search without a vector, or `rerank` in one without text |
+| `limit`   | a document, a field's text, a search or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -495,8 +515,13 @@ Proposed, to be measured before they are promised.
   reading no word its own snapshot no longer holds, and background work
   builds them again within a minute.
 - **Vectors** are kept as given, a row each, 4.5 KiB of pages for 1,024
-  dimensions. An exact search reads a byte a dimension of every vector, kept
-  with the length of what the byte leaves out, which bounds each score.
+  dimensions. An exact search reads a byte a dimension of every vector's
+  direction, kept with the length of what the bytes leave out, and puts the
+  question's direction in levels to ±4,095, whose product with a code is
+  exact in an i32: a code bounds its vector's cosine rather than estimating
+  it, and only a vector whose bound reaches the tenth best is scored again,
+  on its floats as given. Of 5,000 random vectors of 256 dimensions, 13 a
+  search were (`codes_rule_out_most_vectors`).
   `recall` adds clusters by spherical k-means, each member kept as RaBitQ's
   bit a dimension, 146 bytes a vector: a bit a dimension reached the same
   recall as a byte three times sooner. SQLite's own vec1 answered 1.2–1.5
@@ -518,7 +543,8 @@ Proposed, to be measured before they are promised.
    in a database's file beside the program's.
 2. `tinystore::typos`, which the command line and config use too: built
    16 October, `40672f2`.
-3. Vectors, exact; a search by both, its `vectorWeight` and `rerank`.
+3. Vectors, exact; a search by both, its `vectorWeight` and `rerank`:
+   built 16 October, a vector's code and the vector as given a row each.
 4. Filters, for words and exact vectors, with the round that finds where
    a filter's own documents are scored apart.
 5. Vectors with `recall`: the clusters, their heads, packing and splits,
@@ -578,6 +604,10 @@ a newcomer check of what it made public.
 - A vector's model named at open, so that one swapped for another of the
   same dimensions is refused.
 - A model in the binary, so that a program without one gets vectors.
+- Each half's own score on a hit of a search by both, and a least cosine
+  a search by a vector keeps to, as Qdrant's `score_threshold` (slice 3's
+  check).
+- How many documents a search by a vector passed for having none.
 - Questions that are an identifier alone, a part number or an error code,
   which no round sampled apart.
 - `patch`, a document's fields set apart, once a program needs one and its
@@ -632,6 +662,25 @@ choice between three shapes of five calls.
 | whether a search needs every word                                                        | none: any word, said in `search`'s comment                                                    |
 | pages of equal scores repeating or skipping a hit                                        | the document set first comes first, said in `search`'s comment                                |
 | `total`, highlights, `set_many`, `patch`                                                 | `total` and highlights are in Later; `set_many` built, `patch` later, the owner's calls below |
+
+## Slice 3's check, 16 October
+
+Three Haiku agents that had read nothing about TinyStore read the Rust calls
+slice 3 made public, at the highest effort: a newcomer's reading of thirteen
+bare lines, a free review by a developer who knows Meilisearch, Algolia,
+Qdrant, LanceDB and Tantivy, and a blind choice between three shapes of four
+calls.
+
+| It read                                                                             | Change                                                                                          |
+|-------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| `id(…).vector(…).set(…)`, `.without_vector()`, `.vector(&q).rerank()`               | none: the blind choice took each over its two others                                            |
+| `search("").vector(&q)` as a hidden flag, two of three                              | `search_vector(&q)`; an empty text with a vector still searches by the vector                   |
+| a weight of 0 that still answers what the vector alone found, at 0                  | a weight of 0 is the search by words alone, of 1 by the vector alone, each with its own scores  |
+| `set_many` mixing `&va[..]` and `None` in one list, which does not compile          | the list where some have none says `Some(&va[..])`, as `set_many`'s comment and a test do       |
+| pages past the first hundred of a search by both ordered otherwise                  | said in `vector`'s comment and above                                                            |
+| `set(id, &doc)` on an index with vectors failing only when it runs                  | none: an index's settings change as it opens, so its handle's type cannot know them             |
+| `.vectors(1024)` read as a count of vectors by one; `Combine` for weight and rerank | left to the owner: the newcomer read `vectors` right, and `hybrid` is the book's accepted shape |
+| each half's score on a hit, a least cosine, documents without a vector counted      | Later                                                                                           |
 
 ## The owner's calls, 16 October
 
