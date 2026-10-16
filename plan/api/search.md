@@ -138,7 +138,7 @@ const articles = store.index<Article>('articles', { fields, rebuild: 'manual' })
 await store.reindex('articles', { fields: { title: 2, body: 1, description: 1 } })
 
 await articles.ready()        // once the index serves the settings it was opened with
-articles.status()             // { state: 'rebuilding', done: 0.42 } | { state: 'ready' } | { state: 'failed', error }
+await articles.status()       // { state: 'rebuilding', done: 0.42 } | { state: 'ready' } | { state: 'failed', error }
 ```
 
 ```rust
@@ -161,7 +161,8 @@ articles.status()?;           // Status::Rebuilding { done: 0.42 } | Status::Rea
 ## Drop an index
 
 ```ts
-await store.dropIndex('posts')
+await store.dropIndex('posts')            // true when there was one
+await store.indexes()                     // [{ name, documents, vectors, opened, status }]
 ```
 
 ```rust
@@ -408,7 +409,7 @@ const products = store.index<Product>('products', { fields, filters: ['category'
 
 await products.search({ text: 'red shoes', where: { ownerId: 42 } })
 await products.search({ text: 'red shoes', where: { category: ['shoes', 'boots'], price: { gte: 10, lt: 100 } } })
-await products.search({ vector: q, where: or({ category: 'boots' }, { tags: 'sale' }) })
+await products.search({ vector: q, where: search.or({ category: 'boots' }, { tags: 'sale' }) })
 await products.search({ text: 'red shoes', where: { category: null } })      // documents with no category
 ```
 
@@ -427,7 +428,8 @@ let found = products.search("red shoes").filter(missing("category")).run()?;
 
 - A filter is written as sqldb's conditions are, the owner's call: in
   TypeScript the object `where` takes, equal values with a list for one of
-  them and `null` for none; in Rust the pieces `.filter` takes, `eq`,
+  them and `null` for none, grouped by `search.or` and `search.and` as
+  sqldb's by `sql.or`; in Rust the pieces `.filter` takes, `eq`,
   `is_in`, `or` and `and` as `sql::eq` and the rest, and `range` for
   numbers between two bounds, any Rust range. Each `.filter` adds a
   condition with and. A piece of SQL is no filter: a search's filter runs
@@ -673,7 +675,12 @@ Proposed, to be measured before they are promised.
    `dropIndex` and `tinystore search`, and the documents numbered again by
    a rebuild that starts by itself: built 16 October, a set reaching the
    new rows through their copy, in the order of its number.
-7. The wire and the Bun SDK.
+7. The wire and the Bun SDK: built 16 October, the engine's methods
+   `0x0b01` to `0x0b09`, documents as JSON and vectors as their floats'
+   bytes, a `where` as a JSON list of conditions (docs/wire.md), a read
+   connection opening an index only as it is; `store.index`, `reindex`,
+   `dropIndex` and `indexes`, and `search.or` and `search.and`, as sqldb's
+   `sql.or`.
 8. `db.searchIndex`: its triggers, the pending keys, and their indexing
    before the commit.
 
@@ -734,6 +741,10 @@ a newcomer check of what it made public.
 - How a search by a vector found its hits, exactly or from how many
   clusters, on its answer, and the recall measured on `status()` (slice 5's
   check).
+- A rebuild's cancel and dry run, `ready()` with a timeout, and the target
+  settings and why on `status()` (slice 6's check).
+- The paths of `fields`, `filters` and `where` checked against the
+  document's type in TypeScript (slice 7's check).
 - How many documents a search by a vector passed for having none.
 - Questions that are an identifier alone, a part number or an error code,
   which no round sampled apart.
@@ -840,6 +851,34 @@ Qdrant, LanceDB, pgvector and FAISS, read `recall` at the highest effort.
 | the answer silent on whether clusters or the exact search found it           | Later: how a search found its hits on its answer, and the recall measured on `status()` |
 | `recall_target` for `recall`, the measured value keeping the name            | left to the owner: `recall` is the book's accepted word                                 |
 | a ceiling on a filtered search that reads further clusters until enough pass | none: it reads at most every cluster, which the exact search over a filter's few bounds |
+
+## Slice 6's check, 16 October
+
+A Haiku agent that had read nothing about TinyStore, told it had used
+Meilisearch, Elasticsearch's reindex and aliases, Typesense and SQL
+migrations, read the calls slice 6 made public at the highest effort.
+
+| It read                                                                                     | Change                                                                                                      |
+|---------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| an open that changes the schema: a stale build that lists fewer fields removes one          | left to the owner: open changes the index, the owner's call above; the reviewer would split `migrate()` off |
+| a rebuild that fails seen only by `status()`                                                | none: it is said in the log as it fails, and `ready()` is the error                                         |
+| renumbering as a rebuild nobody asked for, and `Rebuild::Manual` still renumbering near 2³¹ | said in "Change an index": past 2³¹ a manual index is numbered again regardless                             |
+| a cancel, a dry run, `ready()` with a timeout, the target settings and why on `status()`    | Later                                                                                                       |
+| a typo in a name opening a new, empty index                                                 | none: as a bucket's name does                                                                               |
+
+## Slice 7's check, 16 October
+
+A Haiku agent that had read nothing about TinyStore, told it had used
+Meilisearch's and Typesense's JavaScript clients, Prisma and Drizzle, read
+the Bun SDK's search at the highest effort.
+
+| It read                                                                               | Change                                                                                                    |
+|---------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| `undefined` in `where` an error, where Prisma and Drizzle leave the condition out     | kept, since a silent `ownerId` would hand a user another's documents; the error says to leave the key out |
+| `tags: 'sale'` on a field that holds a list: contains or equals                       | none: "Filters" says a list passes on any of its values                                                   |
+| `search.or` read as a function beside `products.search`                               | left to the owner: `or` and `and` exported by name would change sqldb's `sql.or` too                      |
+| the paths of `fields`, `filters` and `where` unchecked against `Product`              | Later                                                                                                     |
+| what a handle opened before `reindex` reads after it, and a search while `rebuilding` | none: "Change an index" says the old settings answer until the switch, which every handle follows         |
 
 ## The owner's calls, 16 October
 

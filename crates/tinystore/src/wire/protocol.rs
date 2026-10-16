@@ -8739,6 +8739,998 @@ impl Message for RecordsDamages {
     }
 }
 
+/// Opens an index, made the first time; one that holds other settings is
+/// changed to these, as the book's "Change an index" has it. A read
+/// connection opens an index only as it is.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchOpen {
+    /// [a-z0-9][a-z0-9_-]{0,63}.
+    pub(crate) name: String,
+    /// In order; none for a document that is its own text.
+    pub(crate) fields: Vec<SearchField>,
+    /// The fields a search may filter by.
+    pub(crate) filters: Vec<String>,
+    /// On when absent.
+    pub(crate) typo_tolerance: Option<bool>,
+    /// The vectors' dimensions; none for an index without vectors.
+    pub(crate) dimensions: Option<u64>,
+    /// Above 0 and below 1; exact when absent.
+    pub(crate) recall: Option<f64>,
+    /// 0.5 when absent.
+    pub(crate) vector_weight: Option<f64>,
+    pub(crate) rerank: bool,
+    /// A change that needs reading again waits for reindex.
+    pub(crate) manual: bool,
+    /// Reads the index again beside itself.
+    pub(crate) reindex: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchOpen {
+    const NAME: &'static str = "search.Open";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.fields = codec::list(r, "fields", codec::message::<SearchField>)?,
+                3 => message.filters = codec::list(r, "filters", codec::str)?,
+                4 => message.typo_tolerance = Some(codec::bool(r, "typoTolerance")?),
+                5 => message.dimensions = Some(codec::uint(r, "dimensions")?),
+                6 => message.recall = Some(codec::float(r, "recall")?),
+                7 => message.vector_weight = Some(codec::float(r, "vectorWeight")?),
+                8 => message.rerank = codec::bool(r, "rerank")?,
+                9 => message.manual = codec::bool(r, "manual")?,
+                10 => message.reindex = codec::bool(r, "reindex")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.fields.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.fields, codec::write_message);
+        }
+        if !self.filters.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.filters, codec::write_str);
+        }
+        if let Some(typo_tolerance) = &self.typo_tolerance {
+            map.field(out, 4);
+            codec::write_bool(out, typo_tolerance);
+        }
+        if let Some(dimensions) = &self.dimensions {
+            map.field(out, 5);
+            codec::write_uint(out, dimensions);
+        }
+        if let Some(recall) = &self.recall {
+            map.field(out, 6);
+            codec::write_float(out, recall);
+        }
+        if let Some(vector_weight) = &self.vector_weight {
+            map.field(out, 7);
+            codec::write_float(out, vector_weight);
+        }
+        if self.rerank {
+            map.field(out, 8);
+            codec::write_bool(out, &self.rerank);
+        }
+        if self.manual {
+            map.field(out, 9);
+            codec::write_bool(out, &self.manual);
+        }
+        if self.reindex {
+            map.field(out, 10);
+            codec::write_bool(out, &self.reindex);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.fields, codec::message_size)
+            + 1 + codec::list_size(&self.filters, |item| 5 + item.len())
+            + self.typo_tolerance.map_or(0, |_| 2)
+            + self.dimensions.map_or(0, |_| 10)
+            + self.recall.map_or(0, |_| 10)
+            + self.vector_weight.map_or(0, |_| 10)
+            + 2
+            + 2
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.fields.is_empty()
+            && self.filters.is_empty()
+            && self.typo_tolerance.is_none()
+            && self.dimensions.is_none()
+            && self.recall.is_none()
+            && self.vector_weight.is_none()
+            && !self.rerank
+            && !self.manual
+            && !self.reindex
+    }
+}
+
+/// A field a search reads, by its path into the document, and what a word
+/// found there weighs.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchField {
+    pub(crate) path: String,
+    /// Above 0, at most 1000.
+    pub(crate) weight: f64,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchField {
+    const NAME: &'static str = "search.Field";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.path = codec::str(r, "path")?,
+                2 => message.weight = codec::float(r, "weight")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.path.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.path);
+        }
+        if self.weight.to_bits() != 0 {
+            map.field(out, 2);
+            codec::write_float(out, &self.weight);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.path.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.path.is_empty()
+            && self.weight.to_bits() == 0
+    }
+}
+
+/// A document set by its id, replacing it whole.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchSet {
+    pub(crate) handle: u64,
+    /// 1 to 1024 bytes.
+    pub(crate) id: String,
+    /// 1 MiB at most.
+    pub(crate) value: String,
+    /// Four bytes a dimension, little-endian floats.
+    pub(crate) vector: Option<Vec<u8>>,
+    /// The document has no vector, on an index with vectors.
+    pub(crate) no_vector: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchSet {
+    const NAME: &'static str = "search.Set";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.id = codec::str(r, "id")?,
+                3 => message.value = codec::str(r, "value")?,
+                4 => message.vector = Some(codec::bin(r, "vector")?),
+                5 => message.no_vector = codec::bool(r, "noVector")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.id.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.id);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.value);
+        }
+        if let Some(vector) = &self.vector {
+            map.field(out, 4);
+            codec::write_bin(out, vector);
+        }
+        if self.no_vector {
+            map.field(out, 5);
+            codec::write_bool(out, &self.no_vector);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.id.len()
+            + 1 + 5 + self.value.len()
+            + self.vector.as_ref().map_or(0, |vector| 1 + 5 + vector.len())
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.id.is_empty()
+            && self.value.is_empty()
+            && self.vector.is_none()
+            && !self.no_vector
+    }
+}
+
+/// Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchSetMany {
+    pub(crate) handle: u64,
+    pub(crate) documents: Vec<SearchDocument>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchSetMany {
+    const NAME: &'static str = "search.SetMany";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.documents = codec::list(r, "documents", codec::message::<SearchDocument>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.documents.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.documents, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::list_size(&self.documents, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.documents.is_empty()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchDocument {
+    pub(crate) id: String,
+    pub(crate) value: String,
+    pub(crate) vector: Option<Vec<u8>>,
+    pub(crate) no_vector: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchDocument {
+    const NAME: &'static str = "search.Document";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.id = codec::str(r, "id")?,
+                2 => message.value = codec::str(r, "value")?,
+                3 => message.vector = Some(codec::bin(r, "vector")?),
+                4 => message.no_vector = codec::bool(r, "noVector")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.id.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.id);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.value);
+        }
+        if let Some(vector) = &self.vector {
+            map.field(out, 3);
+            codec::write_bin(out, vector);
+        }
+        if self.no_vector {
+            map.field(out, 4);
+            codec::write_bool(out, &self.no_vector);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.id.len()
+            + 1 + 5 + self.value.len()
+            + self.vector.as_ref().map_or(0, |vector| 1 + 5 + vector.len())
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        self.id.is_empty()
+            && self.value.is_empty()
+            && self.vector.is_none()
+            && !self.no_vector
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchKey {
+    pub(crate) handle: u64,
+    pub(crate) id: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchKey {
+    const NAME: &'static str = "search.Key";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.id = codec::str(r, "id")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.id.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.id);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.id.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.id.is_empty()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchDeleted {
+    pub(crate) deleted: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchDeleted {
+    const NAME: &'static str = "search.Deleted";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.deleted = codec::bool(r, "deleted")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.deleted {
+            map.field(out, 1);
+            codec::write_bool(out, &self.deleted);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.deleted
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchGot {
+    pub(crate) found: bool,
+    pub(crate) value: Option<String>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchGot {
+    const NAME: &'static str = "search.Got";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.found = codec::bool(r, "found")?,
+                2 => message.value = Some(codec::str(r, "value")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.found {
+            map.field(out, 1);
+            codec::write_bool(out, &self.found);
+        }
+        if let Some(value) = &self.value {
+            map.field(out, 2);
+            codec::write_str(out, value);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+            + self.value.as_ref().map_or(0, |value| 1 + 5 + value.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.found
+            && self.value.is_none()
+    }
+}
+
+/// A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchQuery {
+    pub(crate) handle: u64,
+    pub(crate) text: String,
+    pub(crate) vector: Option<Vec<u8>>,
+    /// This search's, in place of the index's.
+    pub(crate) vector_weight: Option<f64>,
+    pub(crate) rerank: bool,
+    /// The conditions, as docs/wire.md's "search's where" writes them.
+    pub(crate) r#where: Option<String>,
+    pub(crate) offset: u64,
+    /// 10 when absent; offset and limit together 1000 at most.
+    pub(crate) limit: Option<u64>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchQuery {
+    const NAME: &'static str = "search.Query";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.handle = codec::uint(r, "handle")?,
+                2 => message.text = codec::str(r, "text")?,
+                3 => message.vector = Some(codec::bin(r, "vector")?),
+                4 => message.vector_weight = Some(codec::float(r, "vectorWeight")?),
+                5 => message.rerank = codec::bool(r, "rerank")?,
+                6 => message.r#where = Some(codec::str(r, "where")?),
+                7 => message.offset = codec::uint(r, "offset")?,
+                8 => message.limit = Some(codec::uint(r, "limit")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.handle != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.handle);
+        }
+        if !self.text.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.text);
+        }
+        if let Some(vector) = &self.vector {
+            map.field(out, 3);
+            codec::write_bin(out, vector);
+        }
+        if let Some(vector_weight) = &self.vector_weight {
+            map.field(out, 4);
+            codec::write_float(out, vector_weight);
+        }
+        if self.rerank {
+            map.field(out, 5);
+            codec::write_bool(out, &self.rerank);
+        }
+        if let Some(r#where) = &self.r#where {
+            map.field(out, 6);
+            codec::write_str(out, r#where);
+        }
+        if self.offset != 0 {
+            map.field(out, 7);
+            codec::write_uint(out, &self.offset);
+        }
+        if let Some(limit) = &self.limit {
+            map.field(out, 8);
+            codec::write_uint(out, limit);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + 5 + self.text.len()
+            + self.vector.as_ref().map_or(0, |vector| 1 + 5 + vector.len())
+            + self.vector_weight.map_or(0, |_| 10)
+            + 2
+            + self.r#where.as_ref().map_or(0, |r#where| 1 + 5 + r#where.len())
+            + 10
+            + self.limit.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.handle == 0
+            && self.text.is_empty()
+            && self.vector.is_none()
+            && self.vector_weight.is_none()
+            && !self.rerank
+            && self.r#where.is_none()
+            && self.offset == 0
+            && self.limit.is_none()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchHit {
+    pub(crate) id: String,
+    pub(crate) value: String,
+    pub(crate) score: f64,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchHit {
+    const NAME: &'static str = "search.Hit";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.id = codec::str(r, "id")?,
+                2 => message.value = codec::str(r, "value")?,
+                3 => message.score = codec::float(r, "score")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.id.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.id);
+        }
+        if !self.value.is_empty() {
+            map.field(out, 2);
+            codec::write_str(out, &self.value);
+        }
+        if self.score.to_bits() != 0 {
+            map.field(out, 3);
+            codec::write_float(out, &self.score);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.id.len()
+            + 1 + 5 + self.value.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.id.is_empty()
+            && self.value.is_empty()
+            && self.score.to_bits() == 0
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchFound {
+    pub(crate) hits: Vec<SearchHit>,
+    /// The text the search read in fact, when a word was read as another.
+    pub(crate) corrected: Option<String>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchFound {
+    const NAME: &'static str = "search.Found";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.hits = codec::list(r, "hits", codec::message::<SearchHit>)?,
+                2 => message.corrected = Some(codec::str(r, "corrected")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.hits.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.hits, codec::write_message);
+        }
+        if let Some(corrected) = &self.corrected {
+            map.field(out, 2);
+            codec::write_str(out, corrected);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.hits, codec::message_size)
+            + self.corrected.as_ref().map_or(0, |corrected| 1 + 5 + corrected.len())
+    }
+
+    fn is_zero(&self) -> bool {
+        self.hits.is_empty()
+            && self.corrected.is_none()
+    }
+}
+
+/// Where an index stands: ready, rebuilding and how far, or failed and why.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchStatus {
+    /// Ready, rebuilding or failed.
+    pub(crate) state: String,
+    /// The share a rebuild has read.
+    pub(crate) done: f64,
+    /// Why a rebuild failed.
+    pub(crate) error: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchStatus {
+    const NAME: &'static str = "search.Status";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.state = codec::str(r, "state")?,
+                2 => message.done = codec::float(r, "done")?,
+                3 => message.error = codec::str(r, "error")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.state.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.state);
+        }
+        if self.done.to_bits() != 0 {
+            map.field(out, 2);
+            codec::write_float(out, &self.done);
+        }
+        if !self.error.is_empty() {
+            map.field(out, 3);
+            codec::write_str(out, &self.error);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.state.len()
+            + 10
+            + 1 + 5 + self.error.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.state.is_empty()
+            && self.done.to_bits() == 0
+            && self.error.is_empty()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchName {
+    pub(crate) name: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchName {
+    const NAME: &'static str = "search.Name";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchDropped {
+    pub(crate) dropped: bool,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchDropped {
+    const NAME: &'static str = "search.Dropped";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.dropped = codec::bool(r, "dropped")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.dropped {
+            map.field(out, 1);
+            codec::write_bool(out, &self.dropped);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 2
+    }
+
+    fn is_zero(&self) -> bool {
+        !self.dropped
+    }
+}
+
+/// An index as the store's search.db holds it.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchIndex {
+    pub(crate) name: String,
+    pub(crate) documents: u64,
+    pub(crate) vectors: u64,
+    /// When a program last opened it. Unix milliseconds.
+    pub(crate) opened: Option<i64>,
+    pub(crate) state: String,
+    pub(crate) done: f64,
+    pub(crate) error: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchIndex {
+    const NAME: &'static str = "search.Index";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.documents = codec::uint(r, "documents")?,
+                3 => message.vectors = codec::uint(r, "vectors")?,
+                4 => message.opened = Some(codec::int(r, "opened")?),
+                5 => message.state = codec::str(r, "state")?,
+                6 => message.done = codec::float(r, "done")?,
+                7 => message.error = codec::str(r, "error")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.documents != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.documents);
+        }
+        if self.vectors != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.vectors);
+        }
+        if let Some(opened) = &self.opened {
+            map.field(out, 4);
+            codec::write_int(out, opened);
+        }
+        if !self.state.is_empty() {
+            map.field(out, 5);
+            codec::write_str(out, &self.state);
+        }
+        if self.done.to_bits() != 0 {
+            map.field(out, 6);
+            codec::write_float(out, &self.done);
+        }
+        if !self.error.is_empty() {
+            map.field(out, 7);
+            codec::write_str(out, &self.error);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+            + 10
+            + self.opened.map_or(0, |_| 10)
+            + 1 + 5 + self.state.len()
+            + 10
+            + 1 + 5 + self.error.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.documents == 0
+            && self.vectors == 0
+            && self.opened.is_none()
+            && self.state.is_empty()
+            && self.done.to_bits() == 0
+            && self.error.is_empty()
+    }
+}
+
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchListed {
+    pub(crate) indexes: Vec<SearchIndex>,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchListed {
+    const NAME: &'static str = "search.Listed";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.indexes = codec::list(r, "indexes", codec::message::<SearchIndex>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.indexes.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.indexes, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.indexes, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.indexes.is_empty()
+    }
+}
+
 /// A private server's clock: a time to set it to, a span to move it forward by,
 /// or neither to read it. The answer is the time it reads once moved.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -9804,6 +10796,26 @@ pub(crate) mod method {
     pub(crate) const RECORDS_DAMAGED: u16 = 0x050c;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_DROP: u16 = 0x050d;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_OPEN: u16 = 0x0b01;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_SET: u16 = 0x0b02;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_SET_MANY: u16 = 0x0b03;
+    /// Answers whether the index held the document.
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_DELETE: u16 = 0x0b04;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_GET: u16 = 0x0b05;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_SEARCH: u16 = 0x0b06;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_STATUS: u16 = 0x0b07;
+    /// Drops an index and every document it holds, in the background.
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_DROP_INDEX: u16 = 0x0b08;
+    #[cfg(feature = "search")]
+    pub(crate) const SEARCH_LIST: u16 = 0x0b09;
     /// Stops the server as its closing does: the streams running finish, every
     /// connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
     pub(crate) const SERVER_STOP: u16 = 0x0001;
@@ -10010,6 +11022,24 @@ pub(crate) mod method {
             RECORDS_DAMAGED => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_DROP => Some(Access::Write),
+            #[cfg(feature = "search")]
+            SEARCH_OPEN => Some(Access::Read),
+            #[cfg(feature = "search")]
+            SEARCH_SET => Some(Access::Write),
+            #[cfg(feature = "search")]
+            SEARCH_SET_MANY => Some(Access::Write),
+            #[cfg(feature = "search")]
+            SEARCH_DELETE => Some(Access::Write),
+            #[cfg(feature = "search")]
+            SEARCH_GET => Some(Access::Read),
+            #[cfg(feature = "search")]
+            SEARCH_SEARCH => Some(Access::Read),
+            #[cfg(feature = "search")]
+            SEARCH_STATUS => Some(Access::Read),
+            #[cfg(feature = "search")]
+            SEARCH_DROP_INDEX => Some(Access::Write),
+            #[cfg(feature = "search")]
+            SEARCH_LIST => Some(Access::Read),
             SERVER_STOP => Some(Access::Admin),
             SERVER_CLOCK => Some(Access::Admin),
             #[cfg(feature = "sql")]
@@ -10211,6 +11241,24 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.damaged", 0x050c, "call"),
     #[cfg(feature = "records")]
     ("records.drop", 0x050d, "call"),
+    #[cfg(feature = "search")]
+    ("search.open", 0x0b01, "call"),
+    #[cfg(feature = "search")]
+    ("search.set", 0x0b02, "call"),
+    #[cfg(feature = "search")]
+    ("search.setMany", 0x0b03, "call"),
+    #[cfg(feature = "search")]
+    ("search.delete", 0x0b04, "call"),
+    #[cfg(feature = "search")]
+    ("search.get", 0x0b05, "call"),
+    #[cfg(feature = "search")]
+    ("search.search", 0x0b06, "call"),
+    #[cfg(feature = "search")]
+    ("search.status", 0x0b07, "call"),
+    #[cfg(feature = "search")]
+    ("search.dropIndex", 0x0b08, "call"),
+    #[cfg(feature = "search")]
+    ("search.list", 0x0b09, "call"),
     ("server.stop", 0x0001, "call"),
     ("server.clock", 0x0002, "call"),
     #[cfg(feature = "sql")]
@@ -10500,6 +11548,38 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Damage" => RecordsDamage::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Damages" => RecordsDamages::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Open" => SearchOpen::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Field" => SearchField::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Set" => SearchSet::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.SetMany" => SearchSetMany::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Document" => SearchDocument::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Key" => SearchKey::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Deleted" => SearchDeleted::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Got" => SearchGot::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Query" => SearchQuery::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Hit" => SearchHit::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Found" => SearchFound::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Status" => SearchStatus::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Name" => SearchName::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Dropped" => SearchDropped::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Index" => SearchIndex::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Listed" => SearchListed::decode(body).map(|message| (message.encode(), message.size())),
         "server.Clock" => ServerClock::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "sql")]
         "sql.Migration" => SqlMigration::decode(body).map(|message| (message.encode(), message.size())),

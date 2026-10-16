@@ -126,6 +126,22 @@ impl Search {
         Ok(open)
     }
 
+    /// The index `name` as it is, made by no one: a read connection's.
+    #[cfg(feature = "wire")]
+    pub(crate) fn open_existing(&self, name: &str) -> Result<Arc<OpenIndex>> {
+        check_name(name)?;
+        let mut indexes = lock(&self.indexes);
+        if let Some(open) = indexes.get(name) {
+            return Ok(Arc::clone(open));
+        }
+        let Some(current) = self.file.read(|connection| rebuild::read_current(connection, name))? else {
+            return Err(Error::invalid("no such index, and a connection that only reads makes none"));
+        };
+        let open = Arc::new(OpenIndex::new(name, current));
+        indexes.insert(name.to_owned(), Arc::clone(&open));
+        Ok(open)
+    }
+
     /// Changes an index to `wanted`: what applies at once to its serving
     /// rows and to a rebuild's beside them, and a rebuild begun where the
     /// change needs one that none under way gives; each said in the log.

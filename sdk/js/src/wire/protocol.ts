@@ -131,6 +131,21 @@ export const methods = {
 	'records.lines': 0x050b,
 	'records.damaged': 0x050c,
 	'records.drop': 0x050d,
+	'search.open': 0x0b01,
+	'search.set': 0x0b02,
+	'search.setMany': 0x0b03,
+	/**
+	 * Answers whether the index held the document.
+	 */
+	'search.delete': 0x0b04,
+	'search.get': 0x0b05,
+	'search.search': 0x0b06,
+	'search.status': 0x0b07,
+	/**
+	 * Drops an index and every document it holds, in the background.
+	 */
+	'search.dropIndex': 0x0b08,
+	'search.list': 0x0b09,
 	/**
 	 * Stops the server as its closing does: the streams running finish, every
 	 * connection is told GOAWAY, and a sidecar gives back SERVE and its directory.
@@ -9218,6 +9233,812 @@ export const RecordsDamages = message(
 )
 
 /**
+ * A field a search reads, by its path into the document, and what a word
+ * found there weighs.
+ */
+export const SearchField = message(
+	'search.Field',
+	{
+		path: [1, str],
+		/** above 0, at most 1000 */
+		weight: [2, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.path !== undefined) {
+				w.field(1)
+				w.str(v.path)
+				n++
+			}
+			if (v.weight !== undefined) {
+				w.field(2)
+				w.float(v.weight)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $path: string | undefined
+			let $weight: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$path = r.str()
+						break
+					case 2:
+						$weight = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { path: $path, weight: $weight }
+		},
+	},
+)
+
+/**
+ * A document set by its id, replacing it whole.
+ */
+export const SearchSet = message(
+	'search.Set',
+	{
+		handle: [1, uint],
+		/** 1 to 1024 bytes */
+		id: [2, str],
+		/** 1 MiB at most */
+		value: [3, str],
+		/** four bytes a dimension, little-endian floats */
+		vector: [4, bin],
+		/** the document has no vector, on an index with vectors */
+		noVector: [5, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.id !== undefined) {
+				w.field(2)
+				w.str(v.id)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.str(v.value)
+				n++
+			}
+			if (v.vector !== undefined) {
+				w.field(4)
+				w.bin(v.vector)
+				n++
+			}
+			if (v.noVector !== undefined) {
+				w.field(5)
+				w.bool(v.noVector)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $id: string | undefined
+			let $value: string | undefined
+			let $vector: Uint8Array | undefined
+			let $noVector: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$id = r.str()
+						break
+					case 3:
+						$value = r.str()
+						break
+					case 4:
+						$vector = r.bytes()
+						break
+					case 5:
+						$noVector = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, id: $id, value: $value, vector: $vector, noVector: $noVector }
+		},
+	},
+)
+
+export const SearchDocument = message(
+	'search.Document',
+	{
+		id: [1, str],
+		value: [2, str],
+		vector: [3, bin],
+		noVector: [4, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.id !== undefined) {
+				w.field(1)
+				w.str(v.id)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.vector !== undefined) {
+				w.field(3)
+				w.bin(v.vector)
+				n++
+			}
+			if (v.noVector !== undefined) {
+				w.field(4)
+				w.bool(v.noVector)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $id: string | undefined
+			let $value: string | undefined
+			let $vector: Uint8Array | undefined
+			let $noVector: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$id = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$vector = r.bytes()
+						break
+					case 4:
+						$noVector = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { id: $id, value: $value, vector: $vector, noVector: $noVector }
+		},
+	},
+)
+
+export const SearchKey = message(
+	'search.Key',
+	{
+		handle: [1, uint],
+		id: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.id !== undefined) {
+				w.field(2)
+				w.str(v.id)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $id: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$id = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, id: $id }
+		},
+	},
+)
+
+export const SearchDeleted = message(
+	'search.Deleted',
+	{
+		deleted: [1, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.deleted !== undefined) {
+				w.field(1)
+				w.bool(v.deleted)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $deleted: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$deleted = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { deleted: $deleted }
+		},
+	},
+)
+
+export const SearchGot = message(
+	'search.Got',
+	{
+		found: [1, bool],
+		value: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.found !== undefined) {
+				w.field(1)
+				w.bool(v.found)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $found: boolean | undefined
+			let $value: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$found = r.bool()
+						break
+					case 2:
+						$value = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { found: $found, value: $value }
+		},
+	},
+)
+
+/**
+ * A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+ */
+export const SearchQuery = message(
+	'search.Query',
+	{
+		handle: [1, uint],
+		text: [2, str],
+		vector: [3, bin],
+		/** this search's, in place of the index's */
+		vectorWeight: [4, float],
+		rerank: [5, bool],
+		/** the conditions, as docs/wire.md's "search's where" writes them */
+		where: [6, str],
+		offset: [7, uint],
+		/** 10 when absent; offset and limit together 1000 at most */
+		limit: [8, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.text !== undefined) {
+				w.field(2)
+				w.str(v.text)
+				n++
+			}
+			if (v.vector !== undefined) {
+				w.field(3)
+				w.bin(v.vector)
+				n++
+			}
+			if (v.vectorWeight !== undefined) {
+				w.field(4)
+				w.float(v.vectorWeight)
+				n++
+			}
+			if (v.rerank !== undefined) {
+				w.field(5)
+				w.bool(v.rerank)
+				n++
+			}
+			if (v.where !== undefined) {
+				w.field(6)
+				w.str(v.where)
+				n++
+			}
+			if (v.offset !== undefined) {
+				w.field(7)
+				w.uint(v.offset)
+				n++
+			}
+			if (v.limit !== undefined) {
+				w.field(8)
+				w.uint(v.limit)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $text: string | undefined
+			let $vector: Uint8Array | undefined
+			let $vectorWeight: number | undefined
+			let $rerank: boolean | undefined
+			let $where: string | undefined
+			let $offset: number | undefined
+			let $limit: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$text = r.str()
+						break
+					case 3:
+						$vector = r.bytes()
+						break
+					case 4:
+						$vectorWeight = r.float()
+						break
+					case 5:
+						$rerank = r.bool()
+						break
+					case 6:
+						$where = r.str()
+						break
+					case 7:
+						$offset = r.uint()
+						break
+					case 8:
+						$limit = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				handle: $handle,
+				text: $text,
+				vector: $vector,
+				vectorWeight: $vectorWeight,
+				rerank: $rerank,
+				where: $where,
+				offset: $offset,
+				limit: $limit,
+			}
+		},
+	},
+)
+
+export const SearchHit = message(
+	'search.Hit',
+	{
+		id: [1, str],
+		value: [2, str],
+		score: [3, float],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.id !== undefined) {
+				w.field(1)
+				w.str(v.id)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.score !== undefined) {
+				w.field(3)
+				w.float(v.score)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $id: string | undefined
+			let $value: string | undefined
+			let $score: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$id = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$score = r.float()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { id: $id, value: $value, score: $score }
+		},
+	},
+)
+
+export const SearchFound = message(
+	'search.Found',
+	{
+		hits: [1, list(SearchHit)],
+		/** the text the search read in fact, when a word was read as another */
+		corrected: [2, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.hits !== undefined) {
+				w.field(1)
+				w.array(v.hits.length)
+				for (const item0 of v.hits) {
+					SearchHit.write(w, item0)
+				}
+				n++
+			}
+			if (v.corrected !== undefined) {
+				w.field(2)
+				w.str(v.corrected)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $hits: Read<typeof SearchHit.fields>[] | undefined
+			let $corrected: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SearchHit.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchHit.read(r))
+						}
+						r.leave()
+						$hits = items0
+						break
+					}
+					case 2:
+						$corrected = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { hits: $hits, corrected: $corrected }
+		},
+	},
+)
+
+/**
+ * Where an index stands: ready, rebuilding and how far, or failed and why.
+ */
+export const SearchStatus = message(
+	'search.Status',
+	{
+		/** ready, rebuilding or failed */
+		state: [1, str],
+		/** the share a rebuild has read */
+		done: [2, float],
+		/** why a rebuild failed */
+		error: [3, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.state !== undefined) {
+				w.field(1)
+				w.str(v.state)
+				n++
+			}
+			if (v.done !== undefined) {
+				w.field(2)
+				w.float(v.done)
+				n++
+			}
+			if (v.error !== undefined) {
+				w.field(3)
+				w.str(v.error)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $state: string | undefined
+			let $done: number | undefined
+			let $error: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$state = r.str()
+						break
+					case 2:
+						$done = r.float()
+						break
+					case 3:
+						$error = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { state: $state, done: $done, error: $error }
+		},
+	},
+)
+
+export const SearchName = message(
+	'search.Name',
+	{
+		name: [1, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name }
+		},
+	},
+)
+
+export const SearchDropped = message(
+	'search.Dropped',
+	{
+		dropped: [1, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.dropped !== undefined) {
+				w.field(1)
+				w.bool(v.dropped)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $dropped: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$dropped = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { dropped: $dropped }
+		},
+	},
+)
+
+/**
+ * An index as the store's search.db holds it.
+ */
+export const SearchIndex = message(
+	'search.Index',
+	{
+		name: [1, str],
+		documents: [2, uint],
+		vectors: [3, uint],
+		/** when a program last opened it */
+		opened: [4, int],
+		state: [5, str],
+		done: [6, float],
+		error: [7, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.documents !== undefined) {
+				w.field(2)
+				w.uint(v.documents)
+				n++
+			}
+			if (v.vectors !== undefined) {
+				w.field(3)
+				w.uint(v.vectors)
+				n++
+			}
+			if (v.opened !== undefined) {
+				w.field(4)
+				w.int(v.opened)
+				n++
+			}
+			if (v.state !== undefined) {
+				w.field(5)
+				w.str(v.state)
+				n++
+			}
+			if (v.done !== undefined) {
+				w.field(6)
+				w.float(v.done)
+				n++
+			}
+			if (v.error !== undefined) {
+				w.field(7)
+				w.str(v.error)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $documents: number | undefined
+			let $vectors: number | undefined
+			let $opened: number | undefined
+			let $state: string | undefined
+			let $done: number | undefined
+			let $error: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$documents = r.uint()
+						break
+					case 3:
+						$vectors = r.uint()
+						break
+					case 4:
+						$opened = r.int()
+						break
+					case 5:
+						$state = r.str()
+						break
+					case 6:
+						$done = r.float()
+						break
+					case 7:
+						$error = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				documents: $documents,
+				vectors: $vectors,
+				opened: $opened,
+				state: $state,
+				done: $done,
+				error: $error,
+			}
+		},
+	},
+)
+
+export const SearchListed = message(
+	'search.Listed',
+	{
+		indexes: [1, list(SearchIndex)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.indexes !== undefined) {
+				w.field(1)
+				w.array(v.indexes.length)
+				for (const item0 of v.indexes) {
+					SearchIndex.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $indexes: Read<typeof SearchIndex.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SearchIndex.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchIndex.read(r))
+						}
+						r.leave()
+						$indexes = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { indexes: $indexes }
+		},
+	},
+)
+
+/**
  * A private server's clock: a time to set it to, a span to move it forward by,
  * or neither to read it. The answer is the time it reads once moved.
  */
@@ -10384,6 +11205,227 @@ export const MetricsPlan = message(
 			}
 			r.leave()
 			return { series: $series, bytes: $bytes, decoded: $decoded, exceeds: $exceeds }
+		},
+	},
+)
+
+/**
+ * Opens an index, made the first time; one that holds other settings is
+ * changed to these, as the book's "Change an index" has it. A read
+ * connection opens an index only as it is.
+ */
+export const SearchOpen = message(
+	'search.Open',
+	{
+		/** [a-z0-9][a-z0-9_-]{0,63} */
+		name: [1, str],
+		/** in order; none for a document that is its own text */
+		fields: [2, list(SearchField)],
+		/** the fields a search may filter by */
+		filters: [3, list(str)],
+		/** on when absent */
+		typoTolerance: [4, bool],
+		/** the vectors' dimensions; none for an index without vectors */
+		dimensions: [5, uint],
+		/** above 0 and below 1; exact when absent */
+		recall: [6, float],
+		/** 0.5 when absent */
+		vectorWeight: [7, float],
+		rerank: [8, bool],
+		/** a change that needs reading again waits for reindex */
+		manual: [9, bool],
+		/** reads the index again beside itself */
+		reindex: [10, bool],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.fields !== undefined) {
+				w.field(2)
+				w.array(v.fields.length)
+				for (const item0 of v.fields) {
+					SearchField.write(w, item0)
+				}
+				n++
+			}
+			if (v.filters !== undefined) {
+				w.field(3)
+				w.array(v.filters.length)
+				for (const item0 of v.filters) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.typoTolerance !== undefined) {
+				w.field(4)
+				w.bool(v.typoTolerance)
+				n++
+			}
+			if (v.dimensions !== undefined) {
+				w.field(5)
+				w.uint(v.dimensions)
+				n++
+			}
+			if (v.recall !== undefined) {
+				w.field(6)
+				w.float(v.recall)
+				n++
+			}
+			if (v.vectorWeight !== undefined) {
+				w.field(7)
+				w.float(v.vectorWeight)
+				n++
+			}
+			if (v.rerank !== undefined) {
+				w.field(8)
+				w.bool(v.rerank)
+				n++
+			}
+			if (v.manual !== undefined) {
+				w.field(9)
+				w.bool(v.manual)
+				n++
+			}
+			if (v.reindex !== undefined) {
+				w.field(10)
+				w.bool(v.reindex)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $fields: Read<typeof SearchField.fields>[] | undefined
+			let $filters: string[] | undefined
+			let $typoTolerance: boolean | undefined
+			let $dimensions: number | undefined
+			let $recall: number | undefined
+			let $vectorWeight: number | undefined
+			let $rerank: boolean | undefined
+			let $manual: boolean | undefined
+			let $reindex: boolean | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2: {
+						const items0: Read<typeof SearchField.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchField.read(r))
+						}
+						r.leave()
+						$fields = items0
+						break
+					}
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$filters = items0
+						break
+					}
+					case 4:
+						$typoTolerance = r.bool()
+						break
+					case 5:
+						$dimensions = r.uint()
+						break
+					case 6:
+						$recall = r.float()
+						break
+					case 7:
+						$vectorWeight = r.float()
+						break
+					case 8:
+						$rerank = r.bool()
+						break
+					case 9:
+						$manual = r.bool()
+						break
+					case 10:
+						$reindex = r.bool()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return {
+				name: $name,
+				fields: $fields,
+				filters: $filters,
+				typoTolerance: $typoTolerance,
+				dimensions: $dimensions,
+				recall: $recall,
+				vectorWeight: $vectorWeight,
+				rerank: $rerank,
+				manual: $manual,
+				reindex: $reindex,
+			}
+		},
+	},
+)
+
+/**
+ * Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+ */
+export const SearchSetMany = message(
+	'search.SetMany',
+	{
+		handle: [1, uint],
+		documents: [2, list(SearchDocument)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.documents !== undefined) {
+				w.field(2)
+				w.array(v.documents.length)
+				for (const item0 of v.documents) {
+					SearchDocument.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $documents: Read<typeof SearchDocument.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2: {
+						const items0: Read<typeof SearchDocument.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchDocument.read(r))
+						}
+						r.leave()
+						$documents = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, documents: $documents }
 		},
 	},
 )

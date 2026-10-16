@@ -60,6 +60,14 @@ import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import type { StandardSchemaV1 } from './schema.ts'
+import {
+	dropIndex,
+	type IndexInfo,
+	type IndexOptions,
+	indexOpen,
+	listIndexes,
+	SearchIndex,
+} from './search.ts'
 import { type Database, type DatabaseOptions, openDatabase } from './sql.ts'
 import { type Duration, ms, type Time, unixMs } from './time.ts'
 import { runTx, type Tx } from './tx.ts'
@@ -225,6 +233,41 @@ export class Store implements AsyncDisposable {
 	 */
 	quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W> {
 		return new Quota<W>(this.#link, name, quotaOpen(name, windows), [])
+	}
+
+	/**
+	 * Documents of one type set by id and found again by their words, by
+	 * vectors the program's model gives them, or by both:
+	 *
+	 *     const articles = store.index<Article>('articles', { fields: { title: 2, body: 1 } })
+	 *     const { hits } = await articles.search('как испечь хлеб')
+	 *
+	 * Opening an index with other settings than it holds changes it, and
+	 * never waits for the work a change needs.
+	 */
+	index<T = unknown>(name: string, options?: IndexOptions): SearchIndex<T> {
+		return new SearchIndex<T>(this.#link, name, indexOpen(name, options))
+	}
+
+	/**
+	 * Opens an index as `index` does and reads it again beside itself in the
+	 * background: a change `rebuild: 'manual'` left waiting, or its documents
+	 * numbered again. It answers once the rebuild began; `ready()` waits for it.
+	 */
+	async reindex<T = unknown>(name: string, options?: IndexOptions): Promise<SearchIndex<T>> {
+		const index = new SearchIndex<T>(this.#link, name, indexOpen(name, options, true))
+		await index.status()
+		return index
+	}
+
+	/** Drops an index and every document it holds, in the background; says whether there was one. */
+	dropIndex(name: string): Promise<boolean> {
+		return dropIndex(this.#link, name)
+	}
+
+	/** Every index the store holds: its documents and vectors, when it was last opened, and a rebuild under way. */
+	indexes(): Promise<IndexInfo[]> {
+		return listIndexes(this.#link)
 	}
 
 	/**

@@ -461,6 +461,7 @@ carry:
 |            | lines                                                                                    | an upload of another program's output                                                                   |
 | metrics    | ingest, drop                                                                             | calls                                                                                                   |
 |            | read, aggregate                                                                          | a download, a series a message, or several for a series longer than a body holds                        |
+| search     | open, set, setMany, delete, get, search, status, dropIndex, list                         | calls                                                                                                   |
 
 The values they carry:
 
@@ -471,6 +472,8 @@ The values they carry:
 - an SQL value is one of SQLite's five: nil, an integer, a float, str or bin;
 - a record's attribute keeps its JSON spelling as str;
 - a series' samples, and an aggregate's buckets and values, are bin columns.
+- a search's document is its JSON as str, and a vector bin, four bytes a
+  little-endian float a dimension.
 
 ### the server
 
@@ -1145,3 +1148,41 @@ without the payload rows their directory no longer names.
          03 c4 08 00 6c 50 c4 a0 01 00 00                                 times: [1,790,000,000,000]
          04 c4 08 00 00 00 00 00 00 e0 3f                                 values: [0.5]
 ```
+
+### search
+
+An index opens a handle, as a bucket does; its documents are JSON as str, and
+a vector is bin, its floats little-endian, four bytes a dimension.
+`protocol/search.wire` holds every message.
+
+| method   |           | request                                       | answer                                                            |
+|----------|-----------|-----------------------------------------------|-------------------------------------------------------------------|
+| `0x0b01` | open      | a name and the index's settings               | a handle; a read connection's opens an index only as it is        |
+| `0x0b02` | set       | a handle, an id, a document, a vector or none | `{}`                                                              |
+| `0x0b03` | setMany   | a handle and documents, all set or none       | `{}`; `what` names a refused one's place and id                   |
+| `0x0b04` | delete    | a handle and an id                            | `{1: deleted}`                                                    |
+| `0x0b05` | get       | a handle and an id                            | `{1: found, 2: the document}`                                     |
+| `0x0b06` | search    | a handle, text, a vector, a where, a page     | `{1: hits, 2: corrected}`, a hit `{1: id, 2: document, 3: score}` |
+| `0x0b07` | status    | a handle                                      | `{1: ready, rebuilding or failed, 2: done, 3: error}`             |
+| `0x0b08` | dropIndex | a name                                        | `{1: dropped}`                                                    |
+| `0x0b09` | list      | `{}`                                          | the indexes: name, documents, vectors, opened, status             |
+
+A set on an index with vectors gives `vector`, or `noVector: true` for a
+document only its words find; one that says neither is `invalid`.
+
+#### search's where
+
+A search's `where` is a JSON list of conditions, every one of which a
+document passes, as the Bun SDK writes its `where` object:
+
+| condition                                       | passes a document that                                |
+|-------------------------------------------------|-------------------------------------------------------|
+| `{"eq": [path, value]}`                         | holds the value, or a list holding it                 |
+| `{"in": [path, [values]]}`                      | holds one of them; an empty list passes none          |
+| `{"missing": path}`                             | holds no value there: no field, null or an empty list |
+| `{"range": [path, {"gte": 10, "lt": 100}]}`     | holds a number within it: `gt`, `gte`, `lt` and `lte` |
+| `{"or": [conditions]}`, `{"and": [conditions]}` | passes any, or every, of them                         |
+
+A value is text, a number or a boolean: the text "50" never passes for the
+number 50, and an integer past 2⁵³ is written as its digits and matched
+exactly. A path the index was not opened with is `invalid`.

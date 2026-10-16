@@ -85,6 +85,12 @@ impl Store {
     }
 }
 
+/// The conditions a search's `where` writes over the wire.
+#[cfg(feature = "wire")]
+pub(crate) use filter::from_json as conditions;
+#[cfg(feature = "wire")]
+pub(crate) use index::open_as_it_is;
+
 /// Every index the store's `search.db` holds, by name: its documents and
 /// vectors, when a program last opened it, and whether a rebuild is under
 /// way.

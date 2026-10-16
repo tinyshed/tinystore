@@ -25,6 +25,8 @@ pub(crate) mod msgpack;
 pub(crate) mod protocol;
 #[cfg(feature = "records")]
 mod records;
+#[cfg(feature = "search")]
+mod search;
 mod session;
 #[cfg(feature = "sql")]
 mod sql;

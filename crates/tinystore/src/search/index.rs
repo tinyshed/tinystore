@@ -162,6 +162,16 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     }
 }
 
+/// The index `name` as it is, for a connection that may only read: none is
+/// made and no setting changed.
+#[cfg(feature = "wire")]
+pub(crate) fn open_as_it_is<T: Serialize + DeserializeOwned>(store: &Store, name: &str) -> Result<Index<T>> {
+    let within = |error: Error| error.within(format!("index {name}"));
+    let search = Search::of(store).map_err(within)?;
+    let open = search.open_existing(name).map_err(within)?;
+    Ok(Index { search, open, _value: PhantomData })
+}
+
 /// Whether a change of an index's settings that needs it read again begins
 /// by itself or waits for [`IndexBuilder::reindex`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

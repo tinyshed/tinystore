@@ -112,8 +112,8 @@ that it changes nothing a client wrote.
 
 **The number** is `0x` and four hex digits, once in the schema. Its first
 byte is the engine, `00` the server, `01` kv, `02` jobs, `03` sql, `04`
-blobs, `05` records, `06` metrics, `07` config, `08` backup, `09` locks and
-`0a` channels, and its second the method.
+blobs, `05` records, `06` metrics, `07` config, `08` backup, `09` locks,
+`0a` channels and `0b` search, and its second the method.
 
 **The name** is the call as the engine's book has it: `kv.bucket.open` is
 `method::KV_BUCKET_OPEN` in Rust and `methods['kv.bucket.open']` in

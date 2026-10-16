@@ -166,6 +166,20 @@ export type {
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export {
+	type Found as SearchFound,
+	type Hit as SearchHit,
+	type IndexDocument,
+	type IndexInfo,
+	type IndexOptions,
+	type IndexStatus,
+	type Query as SearchQuery,
+	SearchIndex,
+	search,
+	type Vector,
+	type Where,
+	type WhereValue,
+} from './search.ts'
+export {
 	type Columns,
 	type Database,
 	type DatabaseOptions,

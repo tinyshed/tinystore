@@ -4655,6 +4655,448 @@
     },
     {
       "fields": {
+        "dimensions": {
+          "uint": "507"
+        },
+        "fields": {
+          "list": [
+            {
+              "fields": {
+                "path": {
+                  "str": "path"
+                },
+                "weight": {
+                  "float": "3ff8000000000000"
+                }
+              }
+            }
+          ]
+        },
+        "filters": {
+          "list": [
+            {
+              "str": "filters"
+            }
+          ]
+        },
+        "manual": {
+          "bool": true
+        },
+        "name": {
+          "str": "name"
+        },
+        "recall": {
+          "float": "3ff8000000000000"
+        },
+        "reindex": {
+          "bool": true
+        },
+        "rerank": {
+          "bool": true
+        },
+        "typoTolerance": {
+          "bool": true
+        },
+        "vectorWeight": {
+          "float": "3ff8000000000000"
+        }
+      },
+      "hex": "8a01a46e616d6502918201a47061746802cb3ff80000000000000391a766696c7465727304c305cd01fb06cb3ff800000000000007cb3ff800000000000008c309c30ac3",
+      "message": "search.Open",
+      "name": "search.Open with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Open",
+      "name": "search.Open with no field"
+    },
+    {
+      "fields": {
+        "path": {
+          "str": "path"
+        },
+        "weight": {
+          "float": "3ff8000000000000"
+        }
+      },
+      "hex": "8201a47061746802cb3ff8000000000000",
+      "message": "search.Field",
+      "name": "search.Field with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Field",
+      "name": "search.Field with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "id": {
+          "str": "id"
+        },
+        "noVector": {
+          "bool": true
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        },
+        "vector": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "85016b02a2696403a77b2261223a317d04c40201ff05c3",
+      "message": "search.Set",
+      "name": "search.Set with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Set",
+      "name": "search.Set with no field"
+    },
+    {
+      "fields": {
+        "documents": {
+          "list": [
+            {
+              "fields": {
+                "id": {
+                  "str": "id"
+                },
+                "noVector": {
+                  "bool": true
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                },
+                "vector": {
+                  "bin": "01ff"
+                }
+              }
+            }
+          ]
+        },
+        "handle": {
+          "uint": "107"
+        }
+      },
+      "hex": "82016b02918401a2696402a77b2261223a317d03c40201ff04c3",
+      "message": "search.SetMany",
+      "name": "search.SetMany with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.SetMany",
+      "name": "search.SetMany with no field"
+    },
+    {
+      "fields": {
+        "id": {
+          "str": "id"
+        },
+        "noVector": {
+          "bool": true
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        },
+        "vector": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8401a2696402a77b2261223a317d03c40201ff04c3",
+      "message": "search.Document",
+      "name": "search.Document with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Document",
+      "name": "search.Document with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "id": {
+          "str": "id"
+        }
+      },
+      "hex": "82016b02a26964",
+      "message": "search.Key",
+      "name": "search.Key with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Key",
+      "name": "search.Key with no field"
+    },
+    {
+      "fields": {
+        "deleted": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "search.Deleted",
+      "name": "search.Deleted with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Deleted",
+      "name": "search.Deleted with no field"
+    },
+    {
+      "fields": {
+        "found": {
+          "bool": true
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "8201c302a77b2261223a317d",
+      "message": "search.Got",
+      "name": "search.Got with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Got",
+      "name": "search.Got with no field"
+    },
+    {
+      "fields": {
+        "handle": {
+          "uint": "107"
+        },
+        "limit": {
+          "uint": "807"
+        },
+        "offset": {
+          "uint": "707"
+        },
+        "rerank": {
+          "bool": true
+        },
+        "text": {
+          "str": "text"
+        },
+        "vector": {
+          "bin": "01ff"
+        },
+        "vectorWeight": {
+          "float": "3ff8000000000000"
+        },
+        "where": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "88016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd0327",
+      "message": "search.Query",
+      "name": "search.Query with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Query",
+      "name": "search.Query with no field"
+    },
+    {
+      "fields": {
+        "id": {
+          "str": "id"
+        },
+        "score": {
+          "float": "3ff8000000000000"
+        },
+        "value": {
+          "str": "{\"a\":1}"
+        }
+      },
+      "hex": "8301a2696402a77b2261223a317d03cb3ff8000000000000",
+      "message": "search.Hit",
+      "name": "search.Hit with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Hit",
+      "name": "search.Hit with no field"
+    },
+    {
+      "fields": {
+        "corrected": {
+          "str": "corrected"
+        },
+        "hits": {
+          "list": [
+            {
+              "fields": {
+                "id": {
+                  "str": "id"
+                },
+                "score": {
+                  "float": "3ff8000000000000"
+                },
+                "value": {
+                  "str": "{\"a\":1}"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8201918301a2696402a77b2261223a317d03cb3ff800000000000002a9636f72726563746564",
+      "message": "search.Found",
+      "name": "search.Found with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Found",
+      "name": "search.Found with no field"
+    },
+    {
+      "fields": {
+        "done": {
+          "float": "3ff8000000000000"
+        },
+        "error": {
+          "str": "error"
+        },
+        "state": {
+          "str": "state"
+        }
+      },
+      "hex": "8301a5737461746502cb3ff800000000000003a56572726f72",
+      "message": "search.Status",
+      "name": "search.Status with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Status",
+      "name": "search.Status with no field"
+    },
+    {
+      "fields": {
+        "name": {
+          "str": "name"
+        }
+      },
+      "hex": "8101a46e616d65",
+      "message": "search.Name",
+      "name": "search.Name with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Name",
+      "name": "search.Name with no field"
+    },
+    {
+      "fields": {
+        "dropped": {
+          "bool": true
+        }
+      },
+      "hex": "8101c3",
+      "message": "search.Dropped",
+      "name": "search.Dropped with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Dropped",
+      "name": "search.Dropped with no field"
+    },
+    {
+      "fields": {
+        "documents": {
+          "uint": "207"
+        },
+        "done": {
+          "float": "3ff8000000000000"
+        },
+        "error": {
+          "str": "error"
+        },
+        "name": {
+          "str": "name"
+        },
+        "opened": {
+          "int": "1790000000000"
+        },
+        "state": {
+          "str": "state"
+        },
+        "vectors": {
+          "uint": "307"
+        }
+      },
+      "hex": "8701a46e616d6502cccf03cd013304cf000001a0c4506c0005a5737461746506cb3ff800000000000007a56572726f72",
+      "message": "search.Index",
+      "name": "search.Index with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Index",
+      "name": "search.Index with no field"
+    },
+    {
+      "fields": {
+        "indexes": {
+          "list": [
+            {
+              "fields": {
+                "documents": {
+                  "uint": "207"
+                },
+                "done": {
+                  "float": "3ff8000000000000"
+                },
+                "error": {
+                  "str": "error"
+                },
+                "name": {
+                  "str": "name"
+                },
+                "opened": {
+                  "int": "1790000000000"
+                },
+                "state": {
+                  "str": "state"
+                },
+                "vectors": {
+                  "uint": "307"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "hex": "8101918701a46e616d6502cccf03cd013304cf000001a0c4506c0005a5737461746506cb3ff800000000000007a56572726f72",
+      "message": "search.Listed",
+      "name": "search.Listed with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Listed",
+      "name": "search.Listed with no field"
+    },
+    {
+      "fields": {
         "advance": {
           "uint": "1500"
         },
@@ -5198,6 +5640,15 @@
     "records.streams": 1287,
     "records.tail": 1290,
     "records.top": 1285,
+    "search.delete": 2820,
+    "search.dropIndex": 2824,
+    "search.get": 2821,
+    "search.list": 2825,
+    "search.open": 2817,
+    "search.search": 2822,
+    "search.set": 2818,
+    "search.setMany": 2819,
+    "search.status": 2823,
     "server.clock": 2,
     "server.stop": 1,
     "sql.batch": 772,

@@ -127,6 +127,61 @@ pub fn and(conditions: impl IntoIterator<Item = Condition>) -> Condition {
     Condition(Node::And(conditions.into_iter().collect()))
 }
 
+/// The conditions a search's `where` writes over the wire, each one of
+///
+/// ```text
+/// {"eq": [path, value]}   {"in": [path, [values]]}   {"missing": path}
+/// {"range": [path, {"gt" | "gte" | "lt" | "lte": number, …}]}
+/// {"or": [conditions]}    {"and": [conditions]}
+/// ```
+///
+/// a list of them joined by and, as the Bun SDK writes its `where` object.
+#[cfg(feature = "wire")]
+pub(crate) fn from_json(text: &str) -> Result<Vec<Condition>> {
+    let value: Value = serde_json::from_str(text).map_err(|error| Error::invalid(format!("a where: {error}")))?;
+    match value {
+        Value::Array(items) => items.iter().map(condition_of).collect(),
+        one => Ok(vec![condition_of(&one)?]),
+    }
+}
+
+#[cfg(feature = "wire")]
+fn condition_of(value: &Value) -> Result<Condition> {
+    let refused = || Error::invalid(format!("a where's condition {value}"));
+    let Some((kind, given)) = value.as_object().filter(|object| object.len() == 1).and_then(|o| o.iter().next()) else {
+        return Err(refused());
+    };
+    let path_and = |given: &Value| -> Result<(String, Value)> {
+        match given.as_array().map(Vec::as_slice) {
+            Some([Value::String(path), operand]) => Ok((path.clone(), operand.clone())),
+            _ => Err(refused()),
+        }
+    };
+    match kind.as_str() {
+        "eq" => path_and(given).map(|(path, operand)| eq(&path, &operand)),
+        "in" => match path_and(given)? {
+            (path, Value::Array(values)) => Ok(is_in(&path, &values)),
+            _ => Err(refused()),
+        },
+        "missing" => given.as_str().map(missing).ok_or_else(refused),
+        "range" => {
+            let (path, bounds) = path_and(given)?;
+            let bound = |strict: &str, loose: &str| match (bounds.get(strict), bounds.get(loose)) {
+                (Some(value), _) => Bound::Excluded(value.clone()),
+                (None, Some(value)) => Bound::Included(value.clone()),
+                (None, None) => Bound::Unbounded,
+            };
+            Ok(Condition(Node::Range { path, low: bound("gt", "gte"), high: bound("lt", "lte") }))
+        }
+        "or" | "and" => {
+            let parts: Vec<Condition> =
+                given.as_array().ok_or_else(refused)?.iter().map(condition_of).collect::<Result<_>>()?;
+            Ok(if kind == "or" { or(parts) } else { and(parts) })
+        }
+        _ => Err(refused()),
+    }
+}
+
 /// A condition as a search reads it: the keys of a filter one of which a
 /// document holds, or its parts joined.
 #[derive(Clone, Debug)]

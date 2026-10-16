@@ -797,6 +797,10 @@ module defines.
 - `logs -f` prints a record sent a little late, each once and two alike twice — `TestLogsPrintTheLastRecordsAndFollowTheNext`
 - an agent over MCP writes nothing, nor makes an engine's file — `TestAnAgentReadsTheStoreOverMCP`, `TestAnAgentMakesNoEnginesFile`
 
+- search over the wire: an index opened by handle sets, reads, searches by words, a vector and a `where`, and deletes; a set on an index with vectors that says nothing of one, a vector of ragged bytes, a `where` of no condition and an unknown handle are `invalid` — `an_index_sets_reads_searches_and_deletes_documents_over_the_wire`, `a_refusal_over_the_wire_names_what_failed` in `wire::search`
+- a read connection opens an index only as it is, makes none and writes none — `a_read_connection_opens_an_index_only_as_it_is_and_writes_none` in `wire::search`
+- an index is listed and dropped over the wire, its handle refused after — `an_index_is_listed_and_dropped_over_the_wire` in `wire::search`
+
 ## The SDKs
 
 - the Bun SDK's configs answer alike through the core in its process, a private child, a sidecar and a remote server, a config opened again in the process sharing its one stream — `sdk/js/test/config.test.ts`, every test of `configs through …`
@@ -843,3 +847,4 @@ module defines.
 - what a release publishes says its version, stamped as it is built — `TestTheSDKPackageCarriesTheReleasesVersion`, `TestAPyprojectIsStampedWithTheReleasesVersion`
 - a platform wheel is one PyPI takes: every file in RECORD, each file's sizes before its bytes — `TestAPlatformWheelRecordsEveryFile`
 - `feat` and `fix` subjects are a release's notes — `TestNotesKeepFeaturesAndFixesUnderTheirSections`, `TestNotesBeginAfterThePreviousReleaseOfTheirKind`
+- the Bun SDK's search through every way a store is reached: words, `setMany`, `get`, `delete` and `corrected`; a vector, a sum and a rerank; `where` with lists, ranges, `null` and `search.or`; a field added read beside the index until `ready`, `rebuild: 'manual'` and `reindex`; `indexes` and `dropIndex` — `sdk/js/test/search.test.ts`

@@ -27,6 +27,8 @@ use super::protocol::method::{self, Access};
 use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome};
 #[cfg(feature = "records")]
 use super::records;
+#[cfg(feature = "search")]
+use super::search;
 #[cfg(feature = "sql")]
 use super::sql;
 use super::workers::Workers;
@@ -93,6 +95,8 @@ struct Shared {
     jobs: jobs::Handles,
     #[cfg(feature = "sql")]
     sql: sql::Handles,
+    #[cfg(feature = "search")]
+    search: search::Handles,
     #[cfg(feature = "blobs")]
     blobs: blobs::Handles,
     #[cfg(feature = "records")]
@@ -210,6 +214,8 @@ impl Session {
             jobs: jobs::Handles::default(),
             #[cfg(feature = "sql")]
             sql: sql::Handles::default(),
+            #[cfg(feature = "search")]
+            search: search::Handles::default(),
             #[cfg(feature = "blobs")]
             blobs: blobs::Handles::default(),
             #[cfg(feature = "records")]
@@ -1183,6 +1189,8 @@ impl Shared {
             0x09 => locks::call(&self.store, method, body),
             #[cfg(feature = "channels")]
             0x0a => channels::call(&self.store, method, body),
+            #[cfg(feature = "search")]
+            0x0b => search::call(&self.store, &self.search, method, body, self.read_only.load(Ordering::Relaxed)),
             _ => Err(Failure::unimplemented(format!("method {method:#06x}"))),
         }
     }

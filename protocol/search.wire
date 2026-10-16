@@ -1,0 +1,128 @@
+# search, as plan/api/search.md has it: indexes by name, documents of JSON
+# set by id with a vector or none, found again by their words, their vector
+# or both, kept to the documents a filter passes. A vector travels as its
+# floats' bytes, little-endian, four a dimension.
+
+# Opens an index, made the first time; one that holds other settings is
+# changed to these, as the book's "Change an index" has it. A read
+# connection opens an index only as it is.
+message search.Open {
+  1 name: str               # [a-z0-9][a-z0-9_-]{0,63}
+  2 fields: [search.Field]  # in order; none for a document that is its own text
+  3 filters: [str]          # the fields a search may filter by
+  4 typoTolerance: bool?    # on when absent
+  5 dimensions: uint?       # the vectors' dimensions; none for an index without vectors
+  6 recall: float?          # above 0 and below 1; exact when absent
+  7 vectorWeight: float?    # 0.5 when absent
+  8 rerank: bool
+  9 manual: bool            # a change that needs reading again waits for reindex
+  10 reindex: bool          # reads the index again beside itself
+}
+
+# A field a search reads, by its path into the document, and what a word
+# found there weighs.
+message search.Field {
+  1 path: str
+  2 weight: float           # above 0, at most 1000
+}
+
+# A document set by its id, replacing it whole.
+message search.Set {
+  1 handle: uint
+  2 id: str                 # 1 to 1024 bytes
+  3 value: json             # 1 MiB at most
+  4 vector: bin?            # four bytes a dimension, little-endian floats
+  5 noVector: bool          # the document has no vector, on an index with vectors
+}
+
+# Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+message search.SetMany {
+  1 handle: uint
+  2 documents: [search.Document]
+}
+
+message search.Document {
+  1 id: str
+  2 value: json
+  3 vector: bin?
+  4 noVector: bool
+}
+
+message search.Key {
+  1 handle: uint
+  2 id: str
+}
+
+message search.Deleted {
+  1 deleted: bool
+}
+
+message search.Got {
+  1 found: bool
+  2 value: json?
+}
+
+# A search: by `text`'s words, `vector`, or both, kept to what `where` passes.
+message search.Query {
+  1 handle: uint
+  2 text: str
+  3 vector: bin?
+  4 vectorWeight: float?    # this search's, in place of the index's
+  5 rerank: bool
+  6 where: json?            # the conditions, as docs/wire.md's "search's where" writes them
+  7 offset: uint
+  8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
+}
+
+message search.Hit {
+  1 id: str
+  2 value: json
+  3 score: float
+}
+
+message search.Found {
+  1 hits: [search.Hit]
+  2 corrected: str?         # the text the search read in fact, when a word was read as another
+}
+
+# Where an index stands: ready, rebuilding and how far, or failed and why.
+message search.Status {
+  1 state: str              # ready, rebuilding or failed
+  2 done: float             # the share a rebuild has read
+  3 error: str              # why a rebuild failed
+}
+
+message search.Name {
+  1 name: str
+}
+
+message search.Dropped {
+  1 dropped: bool
+}
+
+# An index as the store's search.db holds it.
+message search.Index {
+  1 name: str
+  2 documents: uint
+  3 vectors: uint
+  4 opened: time?           # when a program last opened it
+  5 state: str
+  6 done: float
+  7 error: str
+}
+
+message search.Listed {
+  1 indexes: [search.Index]
+}
+
+read  0x0b01 search.open(search.Open)       -> Handle
+write 0x0b02 search.set(search.Set)         -> Empty
+write 0x0b03 search.setMany(search.SetMany) -> Empty
+# Answers whether the index held the document.
+write 0x0b04 search.delete(search.Key)      -> search.Deleted
+read  0x0b05 search.get(search.Key)         -> search.Got
+read  0x0b06 search.search(search.Query)    -> search.Found
+read  0x0b07 search.status(Handle)          -> search.Status
+# Drops an index and every document it holds, in the background.
+write 0x0b08 search.dropIndex(search.Name)  -> search.Dropped
+read  0x0b09 search.list(Empty)             -> search.Listed
