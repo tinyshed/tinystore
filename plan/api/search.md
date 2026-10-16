@@ -1,7 +1,8 @@
 # search: the API book
 
 Accepted by the owner on 16 October 2026, after a newcomer check and the
-owner's and an outside reviewer's readings (below). Documents a program sets
+owner's and an outside reviewer's readings (below), and closed by the owner
+on 17 October, its eight slices built. Documents a program sets
 by id in a named index and finds again by their words, by vectors it gives
 with them, or by both, kept to the documents a filter passes.
 [dx.md](../dx.md) holds the rules it follows. The evidence is research's
