@@ -71,15 +71,24 @@ impl crate::engine::Engine for Engine {
         if self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let written = self.write_totals();
+        // A copy's totals are its home's to write.
+        let written = if self.file.is_copy() { Ok(()) } else { self.write_totals() };
         let closed = self.file.close();
         written.and(closed)
     }
 
     /// Writes the instruments' totals, then copies metrics.db.
     fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
-        self.write_totals()?;
+        if !self.file.is_copy() {
+            self.write_totals()?;
+        }
         Ok(vec![crate::engine::copy_file(&self.file, FILE, "metrics", into)?])
+    }
+
+    /// A name a copy's home made after the copy read its names is read once
+    /// the home's commits arrive.
+    fn applied(&self, _: &str) {
+        let _ = self.names.read_again(&self.file);
     }
 }
 
@@ -109,6 +118,10 @@ impl Engine {
                 closed: AtomicBool::new(false),
                 _claim: claim,
             });
+            // A copy's packing, expiry and instruments are its home's.
+            if engine.file.is_copy() {
+                return Ok(engine);
+            }
             let weak = Arc::downgrade(&engine);
             let wake = store.every("metrics: maintenance", MAINTENANCE, move || {
                 weak.upgrade().map_or(Ok(()), |engine| engine.maintain_in_background())

@@ -180,8 +180,8 @@ impl Observe for Log {
         self.lock().last
     }
 
-    fn begin(&self, position: Position) -> Result<()> {
-        self.append(Kind::Begin, position, 0, 0, &[])
+    fn begin(&self, position: Position, size: u32) -> Result<()> {
+        self.append(Kind::Begin, position, 0, size, &[])
     }
 
     fn committed(&self, commit: &Commit<'_>) -> Result<()> {

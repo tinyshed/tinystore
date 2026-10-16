@@ -27,6 +27,12 @@ pub trait Engine: Send + Sync + 'static {
     /// until a time reads the clock again.
     fn clock_moved(&self) {}
 
+    /// A commit of its home was applied to the store's file `file`, a copy:
+    /// what the engine keeps in memory of the file may be its no longer.
+    fn applied(&self, file: &str) {
+        let _ = file;
+    }
+
     /// Copies the engine's files into `into`, each at the path it has in the
     /// store's directory, as one moment of the engine while it keeps working.
     /// An engine whose file another lends copies nothing: the lender does.

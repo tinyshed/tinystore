@@ -285,7 +285,14 @@ in [scaling.md](scaling.md#order).
   open a torn tail is cut and the WAL hands what the log lacks; a commit the log could not take answers
   `OutcomeUnknown` and the file takes no write until it opens again; a WAL started over beside the store is logged
   as a gap. Left: the log's bound by age and the disk the store keeps free, which the links' positions decide.
-- [ ] Apply: a copy's pages applied whole through `sqlite_dbpage`; engines on a copy with readers alone, background work following the file.
+- [x] Apply: a copy's pages applied whole through `sqlite_dbpage`; engines on a copy with readers alone, background work following the file.
+  Built: a copy's file is marked in its log's directory and opens as a copy, whose writes run on a reader so that
+  finding a name its home made answers and a write is `Invalid`; its migrations only checked, `Unavailable` until
+  they arrive; no engine's background work on it. Its entries are applied in order, each in one transaction of the
+  applier's own connection, page 1 last and a truncation the last row, an entry that does not follow refused, one
+  held taken as nothing, the position kept after each commit and the copy going on from it. Engines read again the
+  names they keep once a commit applies. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: the
+  copy's own log of what it received, which it serves on, and a file's checksum that proves a copy its home's.
 - [ ] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
 - [ ] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
 - [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.

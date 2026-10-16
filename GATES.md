@@ -682,6 +682,13 @@ module defines.
 - a WAL started over by a writer beside the store is logged as a gap — `a_wal_started_over_beside_the_store_is_a_gap` in `sqlite::capture`
 - a WAL's frames read as SQLite recovers them: a checksum that breaks ends them — `a_wal_header_and_frames_read_as_sqlite_recovers_them` in `sqlite::capture`
 - a log keeps within its bytes, its oldest segments removed, and counts on with no hole — `a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed` in `replication`
+- a copy is its home's file, page for page but page 1's change counters, after each commit of every engine's file, applied through `sqlite_dbpage` — `a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing` in `replication::copy_tests`; a bare file's log with no engine open, `a_copy_takes_a_file_s_log_whole_with_no_engine_open` in `replication`
+- a copy's engines read it and write nothing: a write is `Invalid`, its migrations only checked, its background work its home's — `a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing` in `replication::copy_tests`
+- a copy's engines follow what its home writes next, the names they keep read again — `a_copy_takes_what_its_home_writes_next_its_caches_following` in `replication::copy_tests`
+- a reader of a copy never sees half of a commit — `a_reader_of_a_copy_never_sees_half_a_commit` in `replication::copy_tests`
+- a copy refuses an entry that does not follow by its sequence or the check it names, takes one it holds as nothing, and goes on from its position when opened again — `a_copy_refuses_an_entry_that_does_not_follow_and_takes_one_it_has_as_nothing` in `replication::copy_tests`
+- a copy is made neither of a file its store wrote nor from a log begun on a file that had pages — `a_copy_is_not_made_of_a_file_the_store_wrote_nor_from_a_log_begun_on_a_file_with_pages` in `replication::copy_tests`
+- a migration its home has not shipped yet is `Unavailable` on a copy, and opens once it arrives — `a_migration_its_home_has_not_shipped_yet_is_unavailable_on_a_copy` in `replication::copy_tests`
 
 ## The server and the wire
 

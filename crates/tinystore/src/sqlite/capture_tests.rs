@@ -28,7 +28,7 @@ impl Observe for Kept {
         *self.last.lock().unwrap()
     }
 
-    fn begin(&self, position: Position) -> Result<()> {
+    fn begin(&self, position: Position, _size: u32) -> Result<()> {
         self.begun.lock().unwrap().push(position);
         *self.last.lock().unwrap() = Some(position);
         Ok(())

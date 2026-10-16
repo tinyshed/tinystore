@@ -82,6 +82,14 @@ impl Names {
         Ok(Names { known: Mutex::new(known) })
     }
 
+    /// Reads the names again, as a copy does once its home's commits arrive.
+    pub(super) fn read_again(&self, file: &File) -> Result<()> {
+        let again = Names::read(file)?;
+        *self.known.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            again.known.into_inner().unwrap_or_default();
+        Ok(())
+    }
+
     pub(super) fn get(&self, name: &str) -> Option<Name> {
         lock(&self.known).get(name).cloned()
     }

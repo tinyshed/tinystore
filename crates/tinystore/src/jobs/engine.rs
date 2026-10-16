@@ -67,7 +67,10 @@ impl Jobs {
     /// maintenance on the store's background thread.
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Jobs>> {
         file.migrate("jobs", MIGRATIONS)?;
-        file.transaction(|tx| rows::end_dead_leases(tx))?;
+        // A copy's leases are its home's workers', and its home ends them.
+        if !file.is_copy() {
+            file.transaction(|tx| rows::end_dead_leases(tx))?;
+        }
         let task = lent_by.as_ref().map_or_else(|| "jobs".to_owned(), |owner| format!("jobs in {owner}"));
         let jobs = Arc::new(Jobs {
             file,
@@ -80,6 +83,10 @@ impl Jobs {
             _claim: claim,
         });
         let weak = Arc::downgrade(&jobs);
+        // A copy's maintenance is its home's, and reaches it as pages.
+        if jobs.file.is_copy() {
+            return Ok(jobs);
+        }
         store.every(&format!("{task}: maintenance"), MAINTENANCE, move || {
             weak.upgrade().map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
         })?;
@@ -203,6 +210,12 @@ impl Engine for Jobs {
             return Ok(Vec::new());
         }
         Ok(vec![copy_file(&self.file, FILE, "jobs", into)?])
+    }
+
+    /// A queue's settings are its home's, read again on a copy once its
+    /// home's commits arrive.
+    fn applied(&self, _: &str) {
+        lock(&self.queues).clear();
     }
 }
 

@@ -33,11 +33,25 @@ pub(crate) struct File {
     closed: AtomicBool,
     settlers: Arc<Settlers>,
     capture: Option<Arc<Capture>>,
+    /// The file is a copy its home writes: what would write here runs on a
+    /// reader, whose `query_only` refuses a write.
+    copy: bool,
 }
 
 impl File {
     pub(crate) fn open(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
         Self::open_observed(path, config, None)
+    }
+
+    /// Opens a copy of a file another node writes: its engines read it, a
+    /// migration only checks that its home applied the steps, and a write is
+    /// refused as `Invalid`.
+    pub(crate) fn open_copy(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
+        Ok(Self { copy: true, ..Self::open_observed(path, config, None)? })
+    }
+
+    pub(crate) fn is_copy(&self) -> bool {
+        self.copy
     }
 
     /// Opens the file with each commit handed to `observer`, which is first
@@ -63,6 +77,7 @@ impl File {
             closed: AtomicBool::new(false),
             settlers,
             capture,
+            copy: false,
         })
     }
 
@@ -90,6 +105,9 @@ impl File {
     {
         self.refuse_when_closed("a write")?;
         self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")?;
+        if self.copy {
+            return self.as_a_copy(write);
+        }
         let slot = Arc::new(Mutex::new(None));
         let filled = Arc::clone(&slot);
         let work: Work = Box::new(move |tx| {
@@ -119,6 +137,9 @@ impl File {
         if let Err(error) = refused {
             return done(Err(error));
         }
+        if self.copy {
+            return done(self.as_a_copy(write));
+        }
         let slot = Arc::new(Mutex::new(None));
         let filled = Arc::clone(&slot);
         let work: Work = Box::new(move |tx| {
@@ -146,8 +167,26 @@ impl File {
     pub(crate) fn transaction<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.refuse_when_closed("a transaction")?;
         self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
+        if self.copy {
+            return self.as_a_copy(work);
+        }
         let connection = lock(&self.writer);
         self.transaction_on(&connection, work)
+    }
+
+    /// Runs what would write the file, on a copy, in one snapshot of a reader:
+    /// what only reads, as finding a name already made, answers, and what
+    /// writes fails, its home's to do.
+    fn as_a_copy<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
+        let mut outcome = None;
+        self.readers
+            .read(|connection| {
+                let (committed, settled_by_none) = (Committed::default(), Settlers::default());
+                outcome = Some(work(&Tx::new(connection, &committed, &settled_by_none)));
+                Ok(())
+            })
+            .map_err(|error| error.within(self.describe()))?;
+        outcome.expect("the read ran")
     }
 
     fn transaction_on<T, E: From<Error>>(
@@ -210,6 +249,12 @@ impl File {
     /// until it commits, and rolls back when it is dropped before.
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
+        if self.copy {
+            return Err(Error::invalid(format!(
+                "{}: a copy takes no transaction: its home writes it",
+                self.describe()
+            )));
+        }
         let connection = lock(&self.writer);
         self.refuse_when_unlogged()?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
@@ -240,7 +285,17 @@ impl File {
     }
 
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
+        if self.copy {
+            return self.check_its_home_migrated(history, migrations);
+        }
         self.transaction(|tx| migrate::apply(tx, history, migrations)).map_err(|error| error.within(self.describe()))
+    }
+
+    /// A copy's migrations are its home's: they arrive as pages, and the copy
+    /// only checks that its home applied these steps.
+    fn check_its_home_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
+        self.read(|connection| migrate::check_applied_by_home(connection, history, migrations))
+            .map_err(|error| error.within(self.describe()))
     }
 
     /// Applies migrations as `migrate` does, with foreign keys off while they
@@ -250,6 +305,9 @@ impl File {
     pub(crate) fn migrate_checked(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         self.refuse_when_closed("a migration")?;
         self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
+        if self.copy {
+            return self.check_its_home_migrated(history, migrations);
+        }
         let connection = lock(&self.writer);
         let what = || format!("{}: {history}: foreign keys", self.describe());
         // foreign_keys cannot change inside a transaction, so it changes around one.

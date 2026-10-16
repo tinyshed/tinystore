@@ -8,6 +8,7 @@
 // are reached only from tests.
 #![allow(dead_code, unused_imports)]
 
+mod apply;
 mod capture;
 mod config;
 mod connection;
@@ -28,6 +29,7 @@ use std::ops::Deref;
 
 use rusqlite::Connection;
 
+pub(crate) use apply::Applier;
 pub(crate) use capture::{Commit, Observe, Position};
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};

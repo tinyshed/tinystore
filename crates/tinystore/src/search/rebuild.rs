@@ -403,8 +403,12 @@ impl Search {
         Ok(())
     }
 
-    /// Records that a program opened an index now.
+    /// Records that a program opened an index now; a copy's programs open
+    /// its home's indexes, and record nothing.
     pub(crate) fn opened(&self, id: i64) -> Result<()> {
+        if self.file.is_copy() {
+            return Ok(());
+        }
         let at = self.clock.now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64);
         self.file.write(16, move |tx| execute(tx, WRITE_OPENED, (id, at), "write when an index was opened"))
     }

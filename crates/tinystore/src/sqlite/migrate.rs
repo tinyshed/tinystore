@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use super::Tx;
 use super::connection::sql_error;
 use super::given::given;
-use crate::{Error, Result};
+use crate::{Error, ErrorKind, Result};
 
 /// One step of a schema's history: applied once, in order, and never edited
 /// or renamed after it shipped. Until `v0.1.0` an engine keeps one step and
@@ -34,6 +34,7 @@ const CREATE_HISTORY: &str = "create table if not exists _tinystore_migrations (
 const SELECT_APPLIED: &str = "select version, name, sql from _tinystore_migrations where history = ?1 order by version";
 const INSERT_APPLIED: &str = "insert into _tinystore_migrations (history, version, name, sql) values (?1, ?2, ?3, ?4)";
 const FOREIGN_KEY_CHECK: &str = "pragma foreign_key_check";
+const HISTORY_KEPT: &str = "select count(*) from sqlite_schema where name = '_tinystore_migrations'";
 
 /// Applies the steps of `history` the file has not seen, after checking that
 /// the ones it has seen are these steps, word for word and name for name.
@@ -53,6 +54,25 @@ pub(crate) fn apply(tx: &Tx<'_>, history: &str, migrations: &[Migration]) -> Res
             .map_err(|error| sql_error(what(), error))?;
     }
     Ok(())
+}
+
+/// Checks, on a copy, that its home applied these steps of `history` and no
+/// other: the steps are the home's to run, and arrive as its pages. A step
+/// not there yet is `Unavailable` until the home's commit of it arrives.
+pub(crate) fn check_applied_by_home(connection: &Connection, history: &str, migrations: &[Migration]) -> Result<()> {
+    check_order(history, migrations)?;
+    let kept: i64 = connection
+        .query_row(HISTORY_KEPT, [], |row| row.get(0))
+        .map_err(|error| sql_error(format!("{history}: its migration history"), error))?;
+    let applied = if kept == 0 { Vec::new() } else { applied(connection, history)? };
+    check_applied(history, migrations, &applied)?;
+    match migrations.get(applied.len()) {
+        None => Ok(()),
+        Some(missing) => Err(Error::new(
+            ErrorKind::Unavailable,
+            format!("{history}: {} has not reached this copy from its home yet", missing.name),
+        )),
+    }
 }
 
 /// Fails when a row refers to a parent that is not there, as migrations run
@@ -91,9 +111,9 @@ struct Applied {
     sql: String,
 }
 
-fn applied(tx: &Tx<'_>, history: &str) -> Result<Vec<Applied>> {
+fn applied(connection: &Connection, history: &str) -> Result<Vec<Applied>> {
     let read = || -> rusqlite::Result<Vec<Applied>> {
-        let mut select = tx.prepare_cached(SELECT_APPLIED)?;
+        let mut select = connection.prepare_cached(SELECT_APPLIED)?;
         let rows = select
             .query_map([history], |row| Ok(Applied { version: row.get(0)?, name: row.get(1)?, sql: row.get(2)? }))?;
         rows.collect()

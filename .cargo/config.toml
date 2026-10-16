@@ -8,4 +8,5 @@
 # sets the same flags.
 # Linux builds add HAVE_FDATASYNC in CI and the release: without it the Unix VFS
 # calls fsync, which cost a 64 KiB set 1.5x (research kv-optimization-2026-10-09).
-LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT"
+# A copy of a node's file writes its home's pages through sqlite_dbpage.
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB"

@@ -1,0 +1,127 @@
+//! A copy's writer: each commit of its home applied whole, page for page,
+//! through SQLite's `sqlite_dbpage`, so that readers of the copy see whole
+//! commits and only SQLite's pager writes the file.
+//!
+//! The pages go in one transaction, page 1 last. A statement checks the
+//! schema's cookie, which page 1 holds, before it runs: were page 1 written
+//! first, the next statement would read a schema whose tables' pages are not
+//! all written yet. A truncation is a row of its own, `(n, NULL)`, which
+//! drops page `n` and those after it, and only the last row may be one, since
+//! a page written after it cancels it.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use rusqlite::Connection;
+
+use super::connection::{self, Role, execute, sql_error};
+use super::group::{BEGIN, COMMIT, ROLLBACK};
+use super::{Config, Durability};
+use crate::{Error, ErrorKind, Result};
+
+const WRITE_PAGE: &str = "insert into sqlite_dbpage (pgno, data) values (?1, ?2)";
+const WRITE_FIRST: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1)";
+const WRITE_FIRST_AND_CUT: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1), (?2, null)";
+const PAGES: &str = "pragma page_count";
+const PAGE_SIZE: &str = "pragma page_size";
+
+/// The connection that writes a copy, opened at its first commit, whose
+/// pages say what size the file's pages are.
+pub(crate) struct Applier {
+    path: PathBuf,
+    durability: Durability,
+    connection: Mutex<Option<Connection>>,
+}
+
+impl Applier {
+    pub(crate) fn new(path: impl Into<PathBuf>, durability: Durability) -> Applier {
+        Applier { path: path.into(), durability, connection: Mutex::new(None) }
+    }
+
+    /// Writes `pages` of `page_size` bytes and leaves the file `size` pages,
+    /// in one transaction.
+    pub(crate) fn apply(&self, page_size: u32, size: u32, pages: &[(u32, &[u8])]) -> Result<()> {
+        let mut held = self.lock();
+        let connection = self.connection(&mut held, page_size)?;
+        execute(connection, BEGIN).map_err(|error| sql_error("a copy's commit: its transaction", error))?;
+        let written = write(connection, page_size, size, pages);
+        let committed =
+            written.and_then(|()| execute(connection, COMMIT).map_err(|error| sql_error("a copy's commit", error)));
+        if committed.is_err() && !connection.is_autocommit() {
+            let _ = execute(connection, ROLLBACK);
+        }
+        committed.map_err(|error| error.within(self.path.display()))
+    }
+
+    /// Closes the connection, so that the file can be closed or removed.
+    pub(crate) fn close(&self) {
+        self.lock().take();
+    }
+
+    fn connection<'a>(&self, held: &'a mut Option<Connection>, page_size: u32) -> Result<&'a Connection> {
+        if held.is_none() {
+            let config = Config { page_size, durability: self.durability, ..Config::default() };
+            *held = Some(open(&self.path, &config)?);
+        }
+        Ok(held.as_ref().expect("opened just above"))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<Connection>> {
+        self.connection.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn open(path: &Path, config: &Config) -> Result<Connection> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| Error::io(path.display().to_string(), error))?;
+    }
+    let connection = connection::open(path, config, Role::Writer)?;
+    let found: i64 = connection
+        .query_row("select count(*) from pragma_module_list where name = 'sqlite_dbpage'", [], |row| row.get(0))
+        .map_err(|error| sql_error(path.display().to_string(), error))?;
+    if found == 0 {
+        return Err(Error::new(
+            ErrorKind::Invalid,
+            format!(
+                "{}: the SQLite linked in has no sqlite_dbpage, which a copy writes its pages through: build with \
+                 LIBSQLITE3_FLAGS holding SQLITE_ENABLE_DBPAGE_VTAB, as this workspace does",
+                path.display()
+            ),
+        ));
+    }
+    Ok(connection)
+}
+
+fn write(connection: &Connection, page_size: u32, size: u32, pages: &[(u32, &[u8])]) -> Result<()> {
+    let own_size: u32 = connection.query_row(PAGE_SIZE, [], |row| row.get(0)).map_err(|e| sql_error("its pages", e))?;
+    if own_size != page_size {
+        return Err(Error::new(
+            ErrorKind::Corrupt,
+            format!("its pages are {own_size} bytes and its home's {page_size}: it is a copy of another file"),
+        ));
+    }
+    let had: u32 = connection.query_row(PAGES, [], |row| row.get(0)).map_err(|e| sql_error("its pages", e))?;
+    let mut first = None;
+    let mut statement = connection.prepare_cached(WRITE_PAGE).map_err(|error| sql_error("a page", error))?;
+    for &(number, page) in pages {
+        if number == 1 {
+            first = Some(page);
+            continue;
+        }
+        statement
+            .execute(rusqlite::params![number, page])
+            .map_err(|error| sql_error(format!("page {number}"), error))?;
+    }
+    drop(statement);
+    let cut = had.max(1) > size;
+    match (first, cut) {
+        (Some(first), true) => connection.execute(WRITE_FIRST_AND_CUT, rusqlite::params![first, size + 1]),
+        (Some(first), false) => connection.execute(WRITE_FIRST, [first]),
+        (None, false) => Ok(0),
+        (None, true) => {
+            return Err(Error::new(ErrorKind::Corrupt, "a commit that makes the file smaller writes no page 1"));
+        }
+    }
+    .map(drop)
+    .map_err(|error| sql_error("page 1", error))
+}

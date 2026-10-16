@@ -146,6 +146,10 @@ impl Search {
             reached: Mutex::default(),
             _claim: claim,
         });
+        // A copy's packing and purges are its home's, and reach it as pages.
+        if search.file.is_copy() {
+            return Ok(search);
+        }
         let weak = Arc::downgrade(&search);
         let wake = store.every(&format!("{tasks}: maintenance"), MAINTENANCE, move || {
             weak.upgrade().map_or(Ok(()), |search| search.maintain(false).map(drop))

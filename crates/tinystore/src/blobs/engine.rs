@@ -67,6 +67,12 @@ impl Engine for Blobs {
         }
         Ok(copied)
     }
+
+    /// A set's name and id are its home's, read again on a copy once its
+    /// home's commits arrive.
+    fn applied(&self, _: &str) {
+        lock(&self.sets).clear();
+    }
 }
 
 /// blobs' directory in the store's, and its file in it.
@@ -108,6 +114,11 @@ impl Blobs {
                 sets: Mutex::new(HashMap::new()),
                 _claim: claim,
             });
+            // What a process that died left, and the maintenance after it,
+            // are a copy's home's to clear.
+            if blobs.file.is_copy() {
+                return Ok(blobs);
+            }
             blobs.recover()?;
             let weak = Arc::downgrade(&blobs);
             store.every("blobs: maintenance", MAINTENANCE, move || {
@@ -232,10 +243,16 @@ impl Blobs {
             return Ok(id);
         }
         let owned = name.to_owned();
+        // Found before it is made, so that a copy, which writes nothing,
+        // opens a set its home made.
         let id = self.file.write(0, move |tx| {
-            tx.execute(INSERT_SET, [&owned]).map_err(|error| sql_error("blobs: a set of files", error))?;
-            tx.query_row(SELECT_SET, [&owned], |row| row.get(0))
-                .map_err(|error| sql_error("blobs: a set of files", error))
+            let failed = |error| sql_error("blobs: a set of files", error);
+            let found = tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).optional().map_err(failed)?;
+            if let Some(id) = found {
+                return Ok(id);
+            }
+            tx.execute(INSERT_SET, [&owned]).map_err(failed)?;
+            tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).map_err(failed)
         })?;
         lock(&self.sets).insert(name.to_owned(), id);
         Ok(id)

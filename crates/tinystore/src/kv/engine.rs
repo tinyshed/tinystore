@@ -110,6 +110,10 @@ impl Kv {
             configs: Mutex::new(HashMap::new()),
             _claim: claim,
         });
+        // A copy's expiry and renewals are its home's, and reach it as pages.
+        if kv.file.is_copy() {
+            return Ok(kv);
+        }
         let weak = Arc::downgrade(&kv);
         store
             .every(&format!("{tasks}: maintenance"), MAINTENANCE, move || with(&weak, |kv| kv.maintain().map(drop)))?;
@@ -331,6 +335,13 @@ impl Engine for Kv {
         self.renewals.flush(&self.file)?;
         self.flush_buffers()?;
         Ok(vec![copy_file(&self.file, FILE, "kv", into)?])
+    }
+
+    /// A bucket's name and id are its home's, and a copy forgets those it
+    /// read once its home's commits arrive, since a name dropped there may
+    /// come back as another bucket.
+    fn applied(&self, _: &str) {
+        lock(&self.names).clear();
     }
 }
 

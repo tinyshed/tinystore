@@ -95,6 +95,15 @@ impl Engine for Records {
         self.flush_held(false)?;
         Ok(vec![crate::engine::copy_file(&self.file, FILE, "records", into)?])
     }
+
+    /// The streams a copy knows are those its home had made when it last
+    /// read them: read again once its home's commits arrive.
+    fn applied(&self, _: &str) {
+        if let (Ok(streams), Ok(waiting)) = (read_streams(&self.file), read_waiting(&self.file)) {
+            *self.streams() = streams;
+            *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = waiting;
+        }
+    }
 }
 
 const SELECT_STREAMS: &str = "select id, name, keep from streams";
@@ -127,6 +136,10 @@ impl Records {
                 damaged: Mutex::default(),
                 _claim: claim,
             });
+            // A copy's packing and expiry are its home's, and reach it as pages.
+            if records.file.is_copy() {
+                return Ok(records);
+            }
             let weak = Arc::downgrade(&records);
             store.every("records: maintenance", MAINTENANCE, move || {
                 weak.upgrade().map_or(Ok(()), |records| records.maintain().map(drop))

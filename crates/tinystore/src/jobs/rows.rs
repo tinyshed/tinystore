@@ -127,10 +127,20 @@ pub(crate) struct Change<'a> {
 /// Registers a queue on its first open, and answers its id, its kind and the
 /// group bound it was last opened with.
 pub(crate) fn queue(c: &Connection, name: &str, kind: &str) -> Result<(i64, String, i64)> {
+    let named = || {
+        c.prepare_cached(QUEUE_NAMED)
+            .and_then(|mut select| {
+                select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()
+            })
+            .map_err(|error| sql_error("a queue's registration", error))
+    };
+    // Found before it is made, so that a copy, which writes nothing, opens a
+    // queue its home made.
+    if let Some(found) = named()? {
+        return Ok(found);
+    }
     execute(c, REGISTER_QUEUE, params![name, kind], "a queue's registration")?;
-    c.prepare_cached(QUEUE_NAMED)
-        .and_then(|mut select| select.query_row([name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
-        .map_err(|error| sql_error("a queue's registration", error))
+    named()?.ok_or_else(|| crate::Error::internal("a queue registered and not found"))
 }
 
 /// Keeps the group bound a queue opens with, and gives back the jobs another

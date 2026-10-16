@@ -84,9 +84,9 @@ pub(crate) trait Observe: Send + Sync {
     /// Where the commits it keeps end, or `None` when it keeps none yet.
     fn last(&self) -> Option<Position>;
 
-    /// It starts keeping the file as it stands at `position`; what came
-    /// before is kept nowhere.
-    fn begin(&self, position: Position) -> Result<()>;
+    /// It starts keeping the file as it stands at `position`, `size` pages;
+    /// what came before is kept nowhere.
+    fn begin(&self, position: Position, size: u32) -> Result<()>;
 
     fn committed(&self, commit: &Commit<'_>) -> Result<()>;
 
@@ -128,7 +128,7 @@ impl Capture {
         writer.wal_hook(Some(remember_the_end));
         let state = State { file: None, at: Position::default(), checkpointed: 0, restart_expected: true };
         let capture = Capture { observer, wal: wal_of(path), state: Mutex::new(state), broken: AtomicBool::new(false) };
-        capture.recover().map_err(|error| error.within(format!("{}: its WAL", path.display())))?;
+        capture.recover(writer).map_err(|error| error.within(format!("{}: its WAL", path.display())))?;
         Ok(capture)
     }
 
@@ -218,7 +218,7 @@ impl Capture {
     /// Hands the commits a WAL left by a process that died holds past the
     /// observer's last position, or starts the observer where the file
     /// stands when it keeps nothing yet.
-    fn recover(&self) -> Result<()> {
+    fn recover(&self, writer: &Connection) -> Result<()> {
         let bytes = match fs::read(&self.wal) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
@@ -229,7 +229,10 @@ impl Capture {
         match (self.observer.last(), wal) {
             (None, wal) => {
                 let at = wal.as_ref().map_or_else(Position::default, |wal| wal.header.at(wal.end));
-                self.observer.begin(at)?;
+                let size = writer
+                    .query_row("pragma page_count", [], |row| row.get(0))
+                    .map_err(|error| sql_error("its pages", error))?;
+                self.observer.begin(at, size)?;
                 state.at = at;
                 state.restart_expected = wal.is_none();
             }

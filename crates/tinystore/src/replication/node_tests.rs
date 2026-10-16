@@ -7,15 +7,16 @@ use super::entry::{self, Kind, MAGIC};
 use super::*;
 use crate::{Options, Store, sql};
 
-const FILES: [&str; 7] = ["kv.db", "jobs.db", "sql/app.db", "search.db", "blobs/blobs.db", "records.db", "metrics.db"];
+pub(super) const FILES: [&str; 7] =
+    ["kv.db", "jobs.db", "sql/app.db", "search.db", "blobs/blobs.db", "records.db", "metrics.db"];
 
-fn node(dir: &Path) -> Store {
+pub(super) fn node(dir: &Path) -> Store {
     let options = Options { node: Some(Node::default()), background: false, ..Options::default() };
     Store::open(dir, options).unwrap()
 }
 
 /// Writes through every engine whose file the test reads back.
-fn write_through_every_engine(store: &Store, round: u32) {
+pub(super) fn write_through_every_engine(store: &Store, round: u32) {
     let sessions = store.bucket::<String>("sessions").open().unwrap();
     for i in 0..40 {
         sessions.set(format!("{round}/{i}"), &format!("session {i} of round {round}")).unwrap();

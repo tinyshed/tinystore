@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -91,19 +91,19 @@ pub struct Store {
 /// A store that its engines reach without keeping it open: an engine holds
 /// this, so that dropping the application's last handle closes the store.
 #[derive(Clone, Debug)]
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 pub(crate) struct WeakStore(
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records")),
+        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication")),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     Weak<Inner>,
 );
 
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 impl WeakStore {
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records")),
+        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication")),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     pub(crate) fn upgrade(&self) -> Option<Store> {
@@ -207,9 +207,34 @@ impl Store {
         let path = self.inner.dir.join(name);
         #[cfg(feature = "replication")]
         if let Some(logs) = &self.inner.logs {
+            if crate::replication::is_copy(&logs.dir_of(name)) {
+                return crate::sqlite::File::open_copy(path, config);
+            }
             return crate::sqlite::File::open_observed(path, config, Some(logs.open(name)?));
         }
         crate::sqlite::File::open(path, config)
+    }
+
+    /// The directory of the log of the store's file `name`; a store that is
+    /// no node keeps none.
+    #[cfg(feature = "replication")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "a node's links drive its copies, phase 7's fourth slice"))]
+    pub(crate) fn log_of(&self, name: &str) -> Result<PathBuf> {
+        let logs = self.inner.logs.as_ref().ok_or_else(|| {
+            Error::invalid(format!("{}: a store that is no node keeps no log: open it with a node", self.describe()))
+        })?;
+        Ok(logs.dir_of(name))
+    }
+
+    /// Tells every engine open that a commit of its home was applied to the
+    /// copy `name`.
+    #[cfg(feature = "replication")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "a node's links drive its copies, phase 7's fourth slice"))]
+    pub(crate) fn applied(&self, name: &str) {
+        let engines = lock(&self.inner.engines).clone();
+        for engine in engines {
+            engine.applied(name);
+        }
     }
 
     /// What the store's options said of its files' commits, for an engine
@@ -317,7 +342,7 @@ impl Store {
         Arc::clone(&self.inner.clock)
     }
 
-    #[cfg(any(feature = "kv", feature = "sql", feature = "records"))]
+    #[cfg(any(feature = "kv", feature = "sql", feature = "records", feature = "replication"))]
     pub(crate) fn downgrade(&self) -> WeakStore {
         WeakStore(Arc::downgrade(&self.inner))
     }
