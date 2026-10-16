@@ -16,6 +16,7 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension};
 
 use super::analyzer;
+use super::clusters::{self, HEAD, Phase};
 use super::correct::Corrector;
 use super::kept::{Kept, lock};
 use super::pack;
@@ -244,6 +245,7 @@ impl Search {
             done.packed += self.pack(&open, everything).map_err(within)?;
             done.purged += self.purge(&open, everything).map_err(within)?;
             self.build_dictionary(&open, everything).map_err(within)?;
+            self.cluster(&open, everything).map_err(within)?;
         }
         Ok(done)
     }
@@ -319,8 +321,115 @@ impl Search {
     }
 }
 
+impl Search {
+    /// Builds, keeps or drops an index's clusters of vectors, as its recall
+    /// asks: trained once it holds enough vectors, every vector assigned a
+    /// step a commit, the head assigned once due, a cluster grown too large
+    /// split, and how many a search reads chosen again as the index grows.
+    fn cluster(&self, open: &OpenIndex, everything: bool) -> Result<()> {
+        let settings = Arc::clone(&open.settings_read());
+        let Some(vectors) = settings.vectors else { return Ok(()) };
+        let id = open.id;
+        let state = self.file.read(|connection| clusters::state(connection, id))?;
+        let Some(recall) = vectors.recall.filter(|_| state.phase != Phase::Dropping) else {
+            while state.phase != Phase::None && !self.file.transaction(|tx| clusters::drop_step(tx, id))? {}
+            return Ok(());
+        };
+        if state.phase == Phase::None {
+            if state.vectors < clusters::BUILD_AT {
+                return Ok(());
+            }
+            let centroids =
+                self.file.read(|connection| clusters::trained(connection, id, &state, vectors.dimensions))?;
+            if centroids.is_empty() {
+                return Ok(());
+            }
+            self.file.transaction(|tx| clusters::begin(tx, id, state, &centroids))?;
+        }
+        self.assign(open, vectors.dimensions, everything)?;
+        self.calibrate(open, vectors.dimensions, recall)
+    }
+
+    /// Assigns what a build has not reached, or the head once it is due, a
+    /// step a commit, then splits each cluster it grew too large.
+    fn assign(&self, open: &OpenIndex, dimensions: usize, everything: bool) -> Result<()> {
+        let id = open.id;
+        let (mut touched, mut draining) = (Vec::new(), false);
+        loop {
+            let state = self.file.read(|connection| clusters::state(connection, id))?;
+            match state.phase {
+                Phase::Building => {}
+                Phase::Serving => {
+                    let head = self.file.read(|connection| clusters::members(connection, id, HEAD))?;
+                    if head == 0 || !(draining || everything || head >= clusters::HEAD_AT) {
+                        break;
+                    }
+                    draining = true;
+                }
+                Phase::None | Phase::Dropping => break,
+            }
+            let step = self.file.read(|connection| {
+                let kept = clusters::kept(&open.kept.clusters, connection, (id, state.version, dimensions))?;
+                clusters::assigned(connection, id, &kept, state)
+            })?;
+            match self.file.transaction(|tx| clusters::assign(tx, id, &step))? {
+                // A head whose members no longer have vectors would come back alike every time.
+                Some(added) if added.is_empty() && state.phase == Phase::Serving => break,
+                Some(added) => touched.extend(added),
+                None => {}
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        for cluster in touched {
+            self.file.transaction(|tx| {
+                let state = clusters::state(tx, id)?;
+                let kept = clusters::kept(&open.kept.clusters, tx, (id, state.version, dimensions))?;
+                if clusters::too_large(tx, id, cluster)? { clusters::split(tx, id, &kept, cluster) } else { Ok(()) }
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Chooses again how many clusters a search reads, once none was chosen,
+    /// the recall asked for changed or the vectors doubled since.
+    fn calibrate(&self, open: &OpenIndex, dimensions: usize, recall: f64) -> Result<()> {
+        let id = open.id;
+        let state = self.file.read(|connection| clusters::state(connection, id))?;
+        let due = state.calibrated_vectors == 0
+            || state.calibrated_recall != recall
+            || state.vectors >= 2 * state.calibrated_vectors.max(1);
+        if state.phase != Phase::Serving || !due {
+            return Ok(());
+        }
+        let ((probes, rescored), count) = self.file.read(|connection| {
+            let kept = clusters::kept(&open.kept.clusters, connection, (id, state.version, dimensions))?;
+            Ok((clusters::calibrate(connection, id, &kept, recall)?, kept.len()))
+        })?;
+        let calibrated = ((probes, rescored), (state.vectors, recall));
+        self.file.transaction(|tx| clusters::calibrated(tx, id, calibrated.0, calibrated.1))?;
+        if probes == 0 {
+            tracing::info!(target: "tinystore", "search {}: no clusters reach recall {recall}; searches stay exact", open.name);
+        } else {
+            tracing::info!(target: "tinystore", "search {}: {count} clusters of vectors, {probes} read and {rescored} \
+                scored again a search for recall {recall}", open.name);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 impl Search {
+    /// Reads search.db in a snapshot, as a search does.
+    pub(crate) fn file_read<T>(&self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        self.file.read(read)
+    }
+
+    /// Writes search.db in a transaction of its own.
+    pub(crate) fn file_write<T>(&self, write: impl FnOnce(&crate::sqlite::Tx<'_>) -> Result<T>) -> Result<T> {
+        self.file.transaction(write)
+    }
+
     /// One step of packing an index's head, as maintenance takes them.
     pub(crate) fn pack_step(&self, open: &OpenIndex, most_rows: usize) -> Result<pack::Packed> {
         self.file.transaction(|tx| pack::step(tx, open.id, most_rows))

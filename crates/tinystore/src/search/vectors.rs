@@ -32,6 +32,8 @@ const DROP_CODE: &str = "delete from _tinystore_search_codes where key = ?1";
 const SCAN: &str = "select key, code from _tinystore_search_codes where key >= ?1 and key < ?2 order by key";
 const READ_VECTOR: &str = "select length, vector from _tinystore_search_vectors where key = ?1";
 const READ_CODE: &str = "select key, code from _tinystore_search_codes where key = ?1";
+const ADD_HEAD: &str = "insert into _tinystore_search_members (index_id, cluster, doc, code) values (?1, -1, ?2, x'')";
+const DROP_MEMBER: &str = "delete from _tinystore_search_members where index_id = ?1 and doc = ?2";
 
 /// The most dimensions a vector has.
 pub(crate) const MOST_DIMENSIONS: usize = 4096;
@@ -105,6 +107,11 @@ impl Question {
         self.values.len()
     }
 
+    /// Its direction, of length one.
+    pub(crate) fn direction(&self) -> Vec<f32> {
+        self.values.iter().map(|value| (f64::from(*value) / self.length) as f32).collect()
+    }
+
     /// The range a vector's cosine with the question lies in, from its code.
     ///
     /// With q̂ the question's direction, t its step, b its levels and ρ what
@@ -150,11 +157,20 @@ pub(crate) fn keep(tx: &Tx<'_>, index: i64, doc: u32, vector: &Vector) -> Result
     execute(tx, ADD_CODE, (key, &vector.code), "keep a vector's code")
 }
 
-/// Forgets a document's vector, if it had one.
-pub(crate) fn forget(tx: &Tx<'_>, index: i64, doc: u32) -> Result<()> {
+/// Forgets a document's vector and its place among the clusters; says
+/// whether it had one.
+pub(crate) fn forget(tx: &Tx<'_>, index: i64, doc: u32) -> Result<bool> {
     let key = key(index, doc);
-    execute(tx, DROP_VECTOR, [key], "drop a vector")?;
-    execute(tx, DROP_CODE, [key], "drop a vector's code")
+    let dropped = tx.prepare_cached(DROP_VECTOR).and_then(|mut delete| delete.execute([key]));
+    let dropped = dropped.map_err(|error| sql_error("drop a vector", error))? > 0;
+    execute(tx, DROP_CODE, [key], "drop a vector's code")?;
+    execute(tx, DROP_MEMBER, (index, doc), "drop a vector's member")?;
+    Ok(dropped)
+}
+
+/// Puts a document's vector in the head of its index's clusters.
+pub(crate) fn join_head(tx: &Tx<'_>, index: i64, doc: u32) -> Result<()> {
+    execute(tx, ADD_HEAD, (index, doc), "put a vector in the head")
 }
 
 /// A search of an index's vectors: its question, the hits it asks for, and

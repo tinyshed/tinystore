@@ -28,9 +28,11 @@
 //! best ten; a set writes to a head that searches read beside them, and the
 //! store's background work packs it into the blocks. A search by a vector
 //! reads a code of every vector, a byte a dimension, and scores again only
-//! those whose bound reaches the best.
+//! those whose bound reaches the best; on an index opened with `recall`, it
+//! reads only the clusters nearest its question.
 
 mod analyzer;
+mod clusters;
 mod correct;
 mod document;
 mod engine;
@@ -44,6 +46,7 @@ mod kept;
 mod pack;
 mod postings;
 mod purge;
+mod rabitq;
 mod read;
 mod score;
 mod settings;

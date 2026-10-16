@@ -315,6 +315,10 @@ const products = store.index<Product>('products', { fields, vectors: { dimension
 const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions: 1024, recall: 0.95 } })
 ```
 
+```rust
+let catalog = store.index::<Product>("catalog").field("name", 1.0).vectors(1024).recall(0.95).open()?;
+```
+
 - Without `recall`, a search by a vector answers the exact best: the same
   as scoring every vector, scores bit for bit. search-vectors measured 245
   ms a million vectors on two cores, by reading a byte a dimension and
@@ -326,8 +330,8 @@ const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions:
   after a first, the file in the system's cache, on a Ryzen 7 7700 under
   Windows 11, nearly all of it reading the rows, since the same scan
   without a bound computed took as long; search-vectors read codes packed
-  into its clusters' lists. Slice 5 packs them so, and the exact search
-  reads them there. A vector of 1,024 dimensions keeps 4 KiB and its code
+  into its clusters' lists, which a later release may pack so for the
+  exact search too. A vector of 1,024 dimensions keeps 4 KiB and its code
   1 KiB. `a_search_by_a_vector_over_a_hundred_thousand_takes` in
   `search::index`, by hand with `--release -- --ignored`.
 - With `recall`, the index answers from the clusters nearest the question:
@@ -338,7 +342,25 @@ const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions:
   measured on a sample of its own vectors and again as it grows: the same
   3 % of the clusters found 0.94 on MIRACL and 0.90 on Amazon's products
   and StackExchange (search-hybrid), so a fixed number would promise
-  nothing.
+  nothing. So is how many of the best by RaBitQ's estimate it scores
+  again, from 64 up to 2,048: vectors much alike in a crowd need more,
+  since a bit a dimension cannot tell their cosines apart. When even every
+  cluster cannot reach `recall`, searches stay exact, and the log says so.
+- The clusters are built once the index holds 2,048 vectors, in the
+  background; searches stay exact until they serve. They live in
+  `search.db` and serve again after a restart, and a build stopped by one
+  goes on. A vector set while they serve is found at once, from the head,
+  which every search reads beside its clusters. `recall` is above 0 and
+  below 1, the exact search being the default, and is an average over
+  questions drawn from the index's own vectors, not a floor for each
+  search; every score a search answers is still its vector's exact cosine.
+- Built in slice 5, over 100,000 vectors of 256 dimensions drawn about 500
+  centres, `recall` 0.95, on a Ryzen 7 7700 under Windows 11: built in 5.5
+  s, one cluster of 316 read and 256 members scored again a search, 1.57
+  ms at the median against the exact search's 16, every one of the exact
+  ten found (`a_search_from_clusters_over_a_hundred_thousand_takes` in
+  `search::clusters`, by hand). Vectors drawn about centres are easy for
+  clusters; search-vectors' real embeddings are the measure above.
 - Words are always exact. In a search by both, `recall` speaks for the
   vector half alone.
 
@@ -458,12 +480,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a filter added to an index that holds documents, until slice 6; a `vectorWeight` outside 0–1, or beside `rerank`; either in a search without a vector, or `rerank` in one without text |
-| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|-----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a filter added to an index that holds documents, until slice 6; a `vectorWeight` outside 0–1, or beside `rerank`; a `recall` not above 0 and below 1, or without `vectors`; either in a search without a vector, or `rerank` in one without text |
+| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -570,16 +592,26 @@ Proposed, to be measured before they are promised.
   it, and only a vector whose bound reaches the tenth best is scored again,
   on its floats as given. Of 5,000 random vectors of 256 dimensions, 13 a
   search were (`codes_rule_out_most_vectors`).
-  `recall` adds clusters by spherical k-means, each member kept as RaBitQ's
-  bit a dimension, 146 bytes a vector: a bit a dimension reached the same
-  recall as a byte three times sooner. SQLite's own vec1 answered 1.2–1.5
-  times sooner at equal recall.
-- **Writes into the clusters** go to the nearest cluster's head, a commit
-  each, 3.1–6.1 ms at the median; a cluster is packed in a commit of its
-  own and split past twice the mean. Through 130,000 writes, a language the
-  clusters were never trained on among them, that kept a search at 4.5 ms
-  at the median where an unpacked one reached 14.2, recall at 0.942, and
-  every exact answer exact (search-vchurn).
+  `recall` adds clusters by spherical k-means from k-means++'s seeds over
+  a sample of the byte codes, 32 a cluster, √n clusters for n vectors, so
+  that a cluster holds about as many members as there are clusters; each
+  member kept as RaBitQ's bit a dimension of its offset from the centroid,
+  turned by a fixed rotation, 136 bytes a vector of 1,024 dimensions: a bit
+  a dimension reached the same recall as a byte three times sooner.
+  SQLite's own vec1 answered 1.2–1.5 times sooner at equal recall.
+- **Members are rows ordered by their cluster**, so that a search reads a
+  cluster as one range and nothing needs packing; search-vchurn packed
+  because its head was a table apart, read through an index.
+- **Writes into the clusters** go to the head, cluster −1, in the set's own
+  commit. Maintenance assigns the head to the cluster nearest each once it
+  holds 256, 1,024 a commit, as a build assigns every vector: each step is
+  worked out in a snapshot, so that the writer is held only to write it,
+  and a member whose vector a write dropped meanwhile is left out. A
+  cluster past twice √n is split by spherical 2-means in a commit of its
+  own, so that clusters grow in number with the index, as search-vchurn's
+  splits held them under drift. Through 130,000 writes there, a language
+  the clusters were never trained on among them, recall held at 0.942 and
+  every exact answer stayed exact (search-vchurn).
 
 ## Slices
 
@@ -598,7 +630,9 @@ Proposed, to be measured before they are promised.
    `and` and ranges of numbers, in the shape of sqldb's conditions (the
    owner's calls below).
 5. Vectors with `recall`: the clusters, their heads, packing and splits,
-   the clusters read chosen from `recall`, and filters through them.
+   the clusters read chosen from `recall`, and filters through them: built
+   16 October, members ordered by their cluster in place of packing, and
+   the members scored again chosen with the clusters read.
 6. Changes of an index in the background, `ready()`, `status()`,
    `dropIndex` and `tinystore search`, and the documents numbered again by
    a rebuild that starts by itself.
@@ -659,6 +693,9 @@ a newcomer check of what it made public.
 - A model in the binary, so that a program without one gets vectors.
 - Each half's own score on a hit of a search by both, and a least cosine
   a search by a vector keeps to, as Qdrant's `score_threshold` (slice 3's
+  check).
+- How a search by a vector found its hits, exactly or from how many
+  clusters, on its answer, and the recall measured on `status()` (slice 5's
   check).
 - How many documents a search by a vector passed for having none.
 - Questions that are an identifier alone, a part number or an error code,
@@ -753,6 +790,19 @@ between three shapes of four calls.
 | typed field references from a derive, `.filterable` for `.filters`                                   | left to the owner: sqldb names its columns by text too                                 |
 | `&42` beside `"sale"`                                                                                | none: `sql::eq` takes its value so, and a `&str` is already one                        |
 | a listing by a filter alone, its order and `total`; facets; `not`                                    | Later                                                                                  |
+
+## Slice 5's check, 16 October
+
+A Haiku agent that had read nothing about TinyStore, told it had used
+Qdrant, LanceDB, pgvector and FAISS, read `recall` at the highest effort.
+
+| It read                                                                      | Change                                                                                  |
+|------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `recall(0.95)` as a promise for each search                                  | said: an average over questions drawn from the index's own vectors, not a floor         |
+| whether the clusters survive a restart, and when a set is found              | said: they live in `search.db`; a set is found at once, from the head                   |
+| the answer silent on whether clusters or the exact search found it           | Later: how a search found its hits on its answer, and the recall measured on `status()` |
+| `recall_target` for `recall`, the measured value keeping the name            | left to the owner: `recall` is the book's accepted word                                 |
+| a ceiling on a filtered search that reads further clusters until enough pass | none: it reads at most every cluster, which the exact search over a filter's few bounds |
 
 ## The owner's calls, 16 October
 

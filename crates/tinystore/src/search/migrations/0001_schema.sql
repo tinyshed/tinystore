@@ -3,7 +3,13 @@
 -- growing; normed: every document below it has its lengths in norms;
 -- gone_version grows with every change to what is gone, words_version each
 -- time a word as written comes into the index or leaves it, so that what a
--- search keeps of them knows when it is behind
+-- search keeps of them knows when it is behind; vectors: how many it holds;
+-- clusters: 0 none, 1 building, 2 serving, 3 dropping; built_through: while
+-- building, every vector numbered up to it is assigned; probes: clusters a
+-- search reads and rescored: members of them it scores again, chosen when
+-- the index held calibrated_vectors for calibrated_recall, probes 0 for an
+-- exact search when no fewer reach it; clusters_version grows with every
+-- change of centroids
 create table _tinystore_search_indexes (
     id            integer primary key autoincrement,
     name          text    not null unique,
@@ -12,7 +18,15 @@ create table _tinystore_search_indexes (
     next_doc      integer not null default 1,
     normed        integer not null default 1,
     gone_version  integer not null default 0,
-    words_version integer not null default 0
+    words_version integer not null default 0,
+    vectors            integer not null default 0,
+    clusters           integer not null default 0,
+    built_through      integer not null default 0,
+    probes             integer not null default 0,
+    rescored           integer not null default 0,
+    calibrated_vectors integer not null default 0,
+    calibrated_recall  real    not null default 0,
+    clusters_version   integer not null default 0
 ) strict;
 
 -- a part is a field's words as written, 2 × its number, or their stems, one
@@ -113,3 +127,26 @@ create table _tinystore_search_codes (
     key  integer primary key,
     code blob    not null
 ) strict;
+
+-- an index's clusters of vectors: each centroid, of length one, its floats
+-- little-endian
+create table _tinystore_search_clusters (
+    index_id integer not null,
+    cluster  integer not null,
+    centroid blob    not null,
+    primary key (index_id, cluster)
+) without rowid, strict;
+
+-- a vector's place among the clusters, ordered by its cluster so that a
+-- search reads a cluster as one range: RaBitQ's code of its offset from the
+-- centroid; cluster -1 is the head, vectors set since maintenance last
+-- assigned them, with an empty code
+create table _tinystore_search_members (
+    index_id integer not null,
+    cluster  integer not null,
+    doc      integer not null,
+    code     blob    not null,
+    primary key (index_id, cluster, doc)
+) without rowid, strict;
+
+create unique index _tinystore_search_members_by_doc on _tinystore_search_members (index_id, doc);

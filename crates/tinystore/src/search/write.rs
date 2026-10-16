@@ -34,7 +34,7 @@ const ADD_TOKENS: &str = "insert into _tinystore_search_parts (index_id, part, t
     on conflict (index_id, part) do update set tokens = tokens + excluded.tokens";
 const LEAVE_INDEX: &str =
     "update _tinystore_search_indexes set documents = documents - 1, gone_version = gone_version + 1,
-    words_version = words_version + ?2 where id = ?1";
+    words_version = words_version + ?2, vectors = vectors - ?3 where id = ?1";
 const NEXT_DOC: &str = "select next_doc from _tinystore_search_indexes where id = ?1";
 const JOIN_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, 1)
     on conflict (index_id, part, term) do update set documents = documents + 1 returning id, documents";
@@ -42,7 +42,7 @@ const ADD_HEAD: &str = "insert into _tinystore_search_head (index_id, key, doc, 
 const KEEP_DOC: &str =
     "insert into _tinystore_search_docs (index_id, doc, id, value, keys, lengths) values (?1, ?2, ?3, ?4, ?5, ?6)";
 const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2 + 1, documents = documents + 1,
-    words_version = words_version + ?3 where id = ?1";
+    words_version = words_version + ?3, vectors = vectors + ?4 where id = ?1";
 
 /// The last number an index gives: past it, [`END`](super::execute::END).
 const LAST_DOC: i64 = u32::MAX as i64 - 1;
@@ -56,6 +56,8 @@ pub(crate) struct Prepared {
     pub(crate) value: Vec<u8>,
     pub(crate) analyzed: Analyzed,
     pub(crate) vector: Option<Vector>,
+    /// Whether the index keeps clusters of its vectors, whose head a vector joins.
+    pub(crate) clustered: bool,
 }
 
 impl Prepared {
@@ -95,8 +97,12 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
     execute(tx, KEEP_DOC, row, "keep a document")?;
     if let Some(vector) = &document.vector {
         vectors::keep(tx, index, doc as u32, vector)?;
+        if document.clustered {
+            vectors::join_head(tx, index, doc as u32)?;
+        }
     }
-    execute(tx, JOIN_INDEX, (index, doc, i64::from(new_words)), "count a document")
+    let counted = (index, doc, i64::from(new_words), i64::from(document.vector.is_some()));
+    execute(tx, JOIN_INDEX, counted, "count a document")
 }
 
 /// Deletes the document of `id`; says whether there was one.
@@ -129,8 +135,8 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     }
     execute(tx, MARK_GONE, (index, doc, &keys), "mark a document gone")?;
     execute(tx, DROP_DOC, (index, doc), "drop a document")?;
-    vectors::forget(tx, index, doc as u32)?;
-    execute(tx, LEAVE_INDEX, (index, i64::from(words_left)), "count a document")?;
+    let had_vector = vectors::forget(tx, index, doc as u32)?;
+    execute(tx, LEAVE_INDEX, (index, i64::from(words_left), i64::from(had_vector)), "count a document")?;
     Ok(true)
 }
 

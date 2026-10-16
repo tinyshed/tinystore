@@ -56,6 +56,7 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
             filters: Vec::new(),
             typo_tolerance: true,
             dimensions: None,
+            recall: None,
             vector_weight: None,
             rerank: false,
         };
@@ -100,6 +101,16 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         self
     }
 
+    /// Searches by a vector read the clusters nearest their question rather
+    /// than every vector, and find `recall` of the exact ten on average,
+    /// from above 0 to below 1: the clusters are built in the background,
+    /// and searches stay exact until then. How many clusters a search reads
+    /// is the index's to choose, from questions drawn from its own vectors.
+    pub fn recall(mut self, recall: f64) -> Self {
+        self.wanted.recall = Some(recall);
+        self
+    }
+
     /// What a vector weighs against the words in a search by both, from 0,
     /// the words alone, to 1, the vector alone; 0.5 unless set, and a
     /// search may give its own.
@@ -131,8 +142,8 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
 /// Documents of type `T` by id in a named index, found again by their words,
 /// their vectors or both.
 pub struct Index<T> {
-    search: Arc<Search>,
-    open: Arc<OpenIndex>,
+    pub(crate) search: Arc<Search>,
+    pub(crate) open: Arc<OpenIndex>,
     _value: PhantomData<fn() -> T>,
 }
 
@@ -483,7 +494,8 @@ fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings)
     let (tree, bytes) = json(given.value)?;
     let analyzed = analyze(&tree, &settings.fields, &settings.filters)?;
     let vector = vector(given.vector, settings)?;
-    Ok(Prepared { index, id: checked(&given.id)?.to_owned(), value: bytes, analyzed, vector })
+    let clustered = settings.vectors.is_some_and(|vectors| vectors.recall.is_some());
+    Ok(Prepared { index, id: checked(&given.id)?.to_owned(), value: bytes, analyzed, vector, clustered })
 }
 
 /// A document's vector as the index keeps it: required on an index with

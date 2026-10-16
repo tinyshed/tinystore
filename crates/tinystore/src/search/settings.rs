@@ -45,10 +45,13 @@ pub(crate) struct Settings {
     pub(crate) hybrid: Hybrid,
 }
 
-/// The vectors an index keeps: of how many dimensions each.
+/// The vectors an index keeps: of how many dimensions each, and the share
+/// of the exact ten a search by one finds from clusters, when it is not
+/// exact.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Vectors {
     pub(crate) dimensions: usize,
+    pub(crate) recall: Option<f64>,
 }
 
 /// How a search by words and a vector at once combines them, unless it says:
@@ -68,6 +71,7 @@ pub(crate) struct Wanted {
     pub(crate) filters: Vec<String>,
     pub(crate) typo_tolerance: bool,
     pub(crate) dimensions: Option<usize>,
+    pub(crate) recall: Option<f64>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
 }
@@ -113,10 +117,15 @@ impl Wanted {
             Some(dimensions) if dimensions > MOST_DIMENSIONS => {
                 return Err(Error::limit(format!("vectors of {dimensions} dimensions, past {MOST_DIMENSIONS}")));
             }
-            None if self.vector_weight.is_some() || self.rerank => {
-                return Err(Error::invalid("a vector weight or a rerank for an index without vectors"));
+            None if self.vector_weight.is_some() || self.rerank || self.recall.is_some() => {
+                return Err(Error::invalid("a vector weight, a rerank or a recall for an index without vectors"));
             }
             _ => {}
+        }
+        if let Some(recall) = self.recall.filter(|recall| !(recall > &0.0 && recall < &1.0)) {
+            return Err(Error::invalid(format!(
+                "a recall of {recall}: it is above 0 and below 1, the exact search being the default"
+            )));
         }
         check_hybrid(self.vector_weight, self.rerank)
     }
@@ -156,7 +165,7 @@ impl Settings {
             filters,
             typo_tolerance: wanted.typo_tolerance,
             analysis: analyzer::VERSION,
-            vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions }),
+            vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions, recall: wanted.recall }),
             hybrid: Hybrid::of(wanted),
         }
     }
@@ -257,9 +266,16 @@ impl Settings {
                 let held =
                     if documents > 0 { format!("; the {documents} documents held have none") } else { "".into() };
                 said.push(format!("vectors of {dimensions} dimensions added{held}"));
-                self.vectors = Some(Vectors { dimensions });
+                self.vectors = Some(Vectors { dimensions, recall: None });
             }
             _ => {}
+        }
+        if let Some(vectors) = self.vectors.as_mut().filter(|vectors| vectors.recall != wanted.recall) {
+            said.push(match wanted.recall {
+                Some(recall) => format!("recall {recall}: clusters built in the background, searches exact until then"),
+                None => "recall removed: searches exact at once, clusters dropped in the background".to_owned(),
+            });
+            vectors.recall = wanted.recall;
         }
         let hybrid = Hybrid::of(wanted);
         if hybrid.vector_weight != self.hybrid.vector_weight {
@@ -283,7 +299,7 @@ impl Settings {
             .iter()
             .map(|field| json!({ "path": field.path, "weight": field.weight, "number": field.number }))
             .collect();
-        let vectors = self.vectors.map(|vectors| json!({ "dimensions": vectors.dimensions }));
+        let vectors = self.vectors.map(|vectors| json!({ "dimensions": vectors.dimensions, "recall": vectors.recall }));
         let filters: Vec<Value> =
             self.filters.iter().map(|filter| json!({ "path": filter.path, "number": filter.number })).collect();
         let settings = json!({
@@ -316,7 +332,10 @@ impl Settings {
         }
         let vectors = match &settings["vectors"] {
             Value::Null => None,
-            vectors => Some(Vectors { dimensions: number(&vectors["dimensions"])? as usize }),
+            vectors => Some(Vectors {
+                dimensions: number(&vectors["dimensions"])? as usize,
+                recall: vectors["recall"].as_f64(),
+            }),
         };
         let hybrid = &settings["hybrid"];
         Ok(Settings {
@@ -357,6 +376,7 @@ mod tests {
             filters: Vec::new(),
             typo_tolerance: true,
             dimensions: None,
+            recall: None,
             vector_weight: None,
             rerank: false,
         }
@@ -395,7 +415,7 @@ mod tests {
         let settings = Settings::new(&wanted(&[("title", 1.0)]));
         let (changed, said) = settings.change(&with_vectors(3, None, false), 2).unwrap();
         assert_eq!(said, ["vectors of 3 dimensions added; the 2 documents held have none"]);
-        assert_eq!(changed.vectors, Some(Vectors { dimensions: 3 }));
+        assert_eq!(changed.vectors, Some(Vectors { dimensions: 3, recall: None }));
         assert_eq!(changed.change(&with_vectors(4, None, false), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
         assert_eq!(changed.change(&wanted(&[("title", 1.0)]), 2).unwrap_err().kind(), crate::ErrorKind::Invalid);
         let (_, said) = changed.change(&with_vectors(3, Some(0.7), false), 2).unwrap();

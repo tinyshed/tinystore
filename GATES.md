@@ -629,6 +629,12 @@ module defines.
 - a range's keys hold every number within it and none without, and a number's place sorts as numbers do — `a_ranges_blocks_hold_every_number_within_it_and_none_without`, `places_sort_as_their_numbers_do` in `search::filter`
 - a search's filter past 8 conditions, those inside `or` and `and` counted, or 100 values is `limit` — `a_filter_counts_the_conditions_inside_or_and_and` in `search::filter`
 - a filter removed leaves searches at once; one added waits for an index that holds no documents, and one added again takes a new number — `a_filter_removed_leaves_at_once_and_one_added_waits_for_an_empty_index_as_a_field_does` in `search::settings`
+- a search with `recall` is exact until its clusters serve, then finds its share of the exact ten, filtered or not, every hit's score its exact cosine — `a_search_with_recall_is_exact_until_its_clusters_serve_and_then_finds_its_share` in `search::clusters`, against every vector scored in the test
+- a vector set once the clusters serve is found from the head and once assigned, and a deleted one never answers — `a_vector_set_once_the_clusters_serve_is_found_from_the_head_and_once_assigned` in `search::clusters`
+- a cluster grown past twice √n splits in two — `a_cluster_grown_past_twice_its_size_splits_in_two` in `search::clusters`
+- `recall` removed is exact at once and its clusters are dropped — `recall_removed_is_exact_at_once_and_drops_the_clusters` in `search::clusters`
+- an index reopened in the middle of a build is exact meanwhile, goes on and serves — `an_index_reopened_mid_build_goes_on_and_serves` in `search::clusters`
+- k-means gathers the rows drawn about each centre; RaBitQ's rotation keeps lengths and its estimate lies near the cosine — `k_means_gathers_the_rows_drawn_about_each_center` in `search::clusters`, every test in `search::rabitq`
 - an error names the index, the id and what failed; a document, a search's text and its hits over their bounds are `limit` — `errors_name_the_index_the_id_and_what_failed` in `search::index`
 - postings, directories and a document's keys that do not read say which invariant broke — `bytes_that_break_an_invariant_say_which` in `search::postings`
 - a search-only build links no jobs, records or metrics — `just lint`'s `lint-alone "search"`

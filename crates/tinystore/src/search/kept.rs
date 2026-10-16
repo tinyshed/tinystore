@@ -31,6 +31,7 @@ pub(crate) struct Kept {
     norms: Mutex<HashMap<(Part, u32), Arc<Chunk>>>,
     gone: Mutex<Option<Arc<Gone>>>,
     pub(super) corrector: Mutex<Option<Arc<Corrector>>>,
+    pub(super) clusters: Mutex<Option<Arc<super::clusters::Clusters>>>,
 }
 
 impl std::fmt::Debug for Kept {

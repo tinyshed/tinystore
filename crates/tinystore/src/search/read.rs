@@ -16,6 +16,7 @@ use std::sync::Arc;
 use rusqlite::{Connection, OptionalExtension};
 
 use super::analyzer::{self, Word};
+use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
 use super::execute::{Fetch, List, best, best_of};
 use super::filter::{self, Docs, Reader};
@@ -213,6 +214,34 @@ fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize
     Ok(found.into_iter().map(|(points, doc)| (score(points), doc)).collect())
 }
 
+/// The best `k` from the index's clusters, when it has a `recall` and its
+/// clusters serve; none while they do not, and the search is exact.
+fn by_clusters(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    held: Held<'_>,
+    k: usize,
+) -> Result<Option<Vec<(f64, u32)>>> {
+    let Some(vectors) = asked.settings.vectors.filter(|vectors| vectors.recall.is_some()) else { return Ok(None) };
+    let state = clusters::state(connection, asked.index)?;
+    if state.phase != Phase::Serving || state.probes <= 0 {
+        return Ok(None);
+    }
+    let at = (asked.index, state.version, vectors.dimensions);
+    let kept = clusters::kept(&asked.kept.clusters, connection, at)?;
+    let question = question(asked)?;
+    let probe = Probe {
+        index: asked.index,
+        clusters: &kept,
+        question,
+        k,
+        probes: state.probes as usize,
+        rescored: state.rescored as usize,
+        passing: held.passing,
+    };
+    clusters::best(connection, &probe).map(Some)
+}
+
 /// The best `k` by the search's vector, with their cosines.
 fn by_vector(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
     let among = match held.passing {
@@ -220,6 +249,11 @@ fn by_vector(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usiz
         Some(docs) if narrow(docs.len(), held.documents, NARROW_VECTORS) => Among::Only(docs),
         Some(docs) => Among::Crossed(docs),
     };
+    if !matches!(among, Among::Only(_))
+        && let Some(found) = by_clusters(connection, asked, held, k)?
+    {
+        return Ok(found);
+    }
     let scan = Scan { index: asked.index, question: question(asked)?, k, among };
     let found = vectors::best(connection, &scan)?;
     #[cfg(test)]
