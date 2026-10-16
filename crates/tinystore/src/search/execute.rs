@@ -13,6 +13,11 @@
 //! the one scoring every posting gives, [`every`], which the tests hold it
 //! to: of equal scores the lower document comes first, and documents are
 //! met in their order, so a document that could only tie may be passed.
+//!
+//! A filter's documents cross out of each window those it does not pass,
+//! and a window that holds none of them is passed unread; a filter that
+//! passes few is scored alone instead, [`best_of`], each of its documents
+//! sought in every list.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -141,9 +146,13 @@ impl List {
 
     /// The bound of the block that could hold `doc`, nothing when none could.
     fn bound_at(&self, doc: u32) -> u64 {
+        self.block_at(doc).map_or(0, |block| block.bound)
+    }
+
+    fn block_at(&self, doc: u32) -> Option<&Block> {
         let ahead = self.ahead();
         let at = ahead.partition_point(|block| block.last < doc);
-        ahead.get(at).filter(|block| block.first <= doc).map_or(0, |block| block.bound)
+        ahead.get(at).filter(|block| block.first <= doc)
     }
 
     /// The most the key adds to any document in `[start, end)`.
@@ -234,34 +243,105 @@ impl Best {
     }
 }
 
-/// The best `k` documents of every one the lists hold, with their points,
-/// the best first.
-pub(crate) fn best(lists: &mut [List], source: &mut dyn Fetch, k: usize) -> Result<Vec<(u64, u32)>> {
+/// The best `k` documents of every one the lists hold, or of those `passing`
+/// holds, with their points, the best first.
+pub(crate) fn best(
+    lists: &mut [List],
+    source: &mut dyn Fetch,
+    k: usize,
+    passing: Option<&[u32]>,
+) -> Result<Vec<(u64, u32)>> {
     let best = Best { k, heap: BinaryHeap::with_capacity(k + 1) };
-    let mut run = Run { lists, source, best, points: Vec::new(), touched: Vec::new(), docs: Vec::new() };
-    let mut start = run.next_from(0);
+    let pass = passing.map(|docs| Pass { docs, at: 0 });
+    let mut run = Run { lists, source, best, pass, points: Vec::new(), touched: Vec::new(), docs: Vec::new() };
+    let mut start = run.start(0);
     while start != END && k > 0 {
         let end = start.saturating_add(WINDOW);
         run.window(start..end)?;
-        start = run.next_from(end);
+        start = run.start(end);
     }
     Ok(run.best.sorted())
 }
 
-/// A search under way: its lists, the best so far, and what the window
-/// being read holds.
+/// The best `k` of `docs` alone, each sought in every list that could hold
+/// it, the most it could add first, while their bounds may still lift it
+/// past θ: a filter that passes few documents.
+pub(crate) fn best_of(lists: &mut [List], source: &mut dyn Fetch, docs: &[u32], k: usize) -> Result<Vec<(u64, u32)>> {
+    let mut best = Best { k, heap: BinaryHeap::with_capacity(k + 1) };
+    let mut order: Vec<usize> = Vec::with_capacity(lists.len());
+    for &doc in docs {
+        order.clear();
+        order.extend((0..lists.len()).filter(|at| lists[*at].block_at(doc).is_some()));
+        order.sort_by_key(|at| Reverse(lists[*at].bound_at(doc)));
+        let mut rest = order.iter().fold(0_u64, |sum, at| sum.saturating_add(lists[*at].bound_at(doc)));
+        let (mut points, mut held) = (0_u64, false);
+        for &at in &order {
+            if best.full() && points.saturating_add(rest) <= best.theta() {
+                break;
+            }
+            rest = rest.saturating_sub(lists[at].bound_at(doc));
+            if lists[at].seek(doc, source)? == doc {
+                points = points.saturating_add(lists[at].points());
+                held = true;
+            }
+        }
+        if held {
+            best.offer(points, doc);
+        }
+    }
+    Ok(best.sorted())
+}
+
+/// The documents a filter passes, met in their order.
+struct Pass<'a> {
+    docs: &'a [u32],
+    at: usize,
+}
+
+impl Pass<'_> {
+    /// The first passing document at `doc` or after it.
+    fn from(&mut self, doc: u32) -> u32 {
+        self.at += self.docs[self.at..].partition_point(|passing| *passing < doc);
+        self.docs.get(self.at).copied().unwrap_or(END)
+    }
+
+    fn passes(&mut self, doc: u32) -> bool {
+        self.from(doc) == doc
+    }
+}
+
+/// A search under way: its lists, the best so far, the documents a filter
+/// passes, and what the window being read holds.
 struct Run<'a> {
     lists: &'a mut [List],
     source: &'a mut dyn Fetch,
     best: Best,
+    pass: Option<Pass<'a>>,
     points: Vec<u64>,
     touched: Vec<bool>,
     docs: Vec<u32>,
 }
 
+/// A document no later than the first any list holds at `end` or after it.
+fn next_from(lists: &[List], end: u32) -> u32 {
+    lists.iter().map(|list| list.next_from(end)).min().unwrap_or(END)
+}
+
 impl Run<'_> {
-    fn next_from(&self, end: u32) -> u32 {
-        self.lists.iter().map(|list| list.next_from(end)).min().unwrap_or(END)
+    /// Where the next window starts at `from` or after it: at the next
+    /// document a list may hold, and past the documents before the next the
+    /// filter passes.
+    fn start(&mut self, from: u32) -> u32 {
+        let mut start = next_from(self.lists, from);
+        let Some(pass) = &mut self.pass else { return start };
+        while start != END {
+            let passing = pass.from(start);
+            if passing == END || passing < start.saturating_add(WINDOW) {
+                return if passing == END { END } else { start };
+            }
+            start = next_from(self.lists, passing);
+        }
+        END
     }
 
     fn window(&mut self, documents: Range<u32>) -> Result<()> {
@@ -284,6 +364,9 @@ impl Run<'_> {
             let slot = (doc - documents.start) as usize;
             let points = std::mem::take(&mut self.points[slot]);
             self.touched[slot] = false;
+            if self.pass.as_mut().is_some_and(|pass| !pass.passes(doc)) {
+                continue;
+            }
             if self.best.full() && points.saturating_add(rest) <= self.best.theta() {
                 continue;
             }
@@ -345,9 +428,15 @@ impl Run<'_> {
     }
 }
 
-/// The best `k` by every posting of every list: what [`best`] must answer.
+/// The best `k` by every posting of every list, of those `passing` holds
+/// when a filter gives them: what [`best`] and [`best_of`] must answer.
 #[cfg(test)]
-pub(crate) fn every(lists: &mut [List], source: &mut dyn Fetch, k: usize) -> Result<Vec<(u64, u32)>> {
+pub(crate) fn every(
+    lists: &mut [List],
+    source: &mut dyn Fetch,
+    k: usize,
+    passing: Option<&[u32]>,
+) -> Result<Vec<(u64, u32)>> {
     let mut scores: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
     for list in lists.iter_mut() {
         while list.doc(source)? != END {
@@ -357,7 +446,9 @@ pub(crate) fn every(lists: &mut [List], source: &mut dyn Fetch, k: usize) -> Res
             list.next();
         }
     }
-    let mut all: Vec<(u64, u32)> = scores.into_iter().map(|(doc, points)| (points, doc)).collect();
+    let passes = |doc: &u32| passing.is_none_or(|docs| docs.binary_search(doc).is_ok());
+    let mut all: Vec<(u64, u32)> =
+        scores.into_iter().filter(|(doc, _)| passes(doc)).map(|(doc, points)| (points, doc)).collect();
     all.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     all.truncate(k);
     Ok(all)

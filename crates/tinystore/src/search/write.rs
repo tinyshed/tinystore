@@ -81,7 +81,7 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
     let mut new_words = false;
     for (part, term, tf) in &document.analyzed.terms {
         let (key, documents) = join_key(tx, index, *part, term)?;
-        new_words |= documents == 1 && !part.is_stems();
+        new_words |= documents == 1 && part.is_written();
         let len = document.analyzed.length(*part);
         execute(tx, ADD_HEAD, (index, key, doc, tf, len), "write a posting")?;
         keys.push(key);
@@ -121,7 +121,7 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     let mut words_left = false;
     for key in decode_keys(&keys).map_err(within)? {
         let (part, documents) = leave_key(tx, key)?;
-        words_left |= documents == 0 && !part.is_stems();
+        words_left |= documents == 0 && part.is_written();
         execute(tx, DROP_HEAD, (index, key, doc), "drop a posting")?;
     }
     for (part, len) in decode_lengths(&lengths).map_err(within)? {

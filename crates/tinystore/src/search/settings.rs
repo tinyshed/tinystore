@@ -1,11 +1,12 @@
 //! An index's settings: its fields, each with its weight and a number of
-//! its own for good, whether a misspelt word is read as the nearest, its
-//! vectors' dimensions, and how a search by words and a vector at once
-//! combines them. They are kept as JSON in the index's row, and an open
-//! that asks for others changes them.
+//! its own for good, its filters, numbered the same way, whether a misspelt
+//! word is read as the nearest, its vectors' dimensions, and how a search
+//! by words and a vector at once combines them. They are kept as JSON in
+//! the index's row, and an open that asks for others changes them.
 //!
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
+//!  "filters":[{"path":"category","number":0}],"next_filter":1,
 //!  "vectors":{"dimensions":1024},"hybrid":{"vector_weight":0.5,"rerank":false}}
 //! ```
 
@@ -24,10 +25,20 @@ pub(crate) struct Field {
     pub(crate) number: u32,
 }
 
+/// A filter: where its values lie in a document, and its number, which
+/// names its part and is never given again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Filter {
+    pub(crate) path: String,
+    pub(crate) number: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Settings {
     pub(crate) fields: Vec<Field>,
     pub(crate) next_field: u32,
+    pub(crate) filters: Vec<Filter>,
+    pub(crate) next_filter: u32,
     pub(crate) typo_tolerance: bool,
     pub(crate) analysis: u32,
     pub(crate) vectors: Option<Vectors>,
@@ -54,6 +65,7 @@ pub(crate) struct Hybrid {
 #[derive(Clone, Debug)]
 pub(crate) struct Wanted {
     pub(crate) fields: Vec<(String, f64)>,
+    pub(crate) filters: Vec<String>,
     pub(crate) typo_tolerance: bool,
     pub(crate) dimensions: Option<usize>,
     pub(crate) vector_weight: Option<f64>,
@@ -76,11 +88,7 @@ impl Wanted {
 
     pub(crate) fn check(&self) -> Result<()> {
         for (at, (path, weight)) in self.fields.iter().enumerate() {
-            if path.is_empty() || path.split('.').any(str::is_empty) {
-                return Err(Error::invalid(format!(
-                    "a field's path names a field, or fields joined by dots: {path:?}"
-                )));
-            }
+            check_path(path)?;
             if !(weight.is_finite() && *weight > 0.0 && *weight <= MOST_WEIGHT) {
                 return Err(Error::invalid(format!(
                     "field {path} weighs {weight}: a weight is above 0, at most 1,000"
@@ -88,6 +96,12 @@ impl Wanted {
             }
             if self.fields[..at].iter().any(|(earlier, _)| earlier == path) {
                 return Err(Error::invalid(format!("field {path} is given twice")));
+            }
+        }
+        for (at, path) in self.filters.iter().enumerate() {
+            check_path(path)?;
+            if self.filters[..at].contains(path) {
+                return Err(Error::invalid(format!("filter {path} is given twice")));
             }
         }
         self.check_vectors()
@@ -108,6 +122,14 @@ impl Wanted {
     }
 }
 
+/// Refuses a path that names no field, or fields joined by dots.
+pub(crate) fn check_path(path: &str) -> Result<()> {
+    if path.is_empty() || path.split('.').any(str::is_empty) {
+        return Err(Error::invalid(format!("a path names a field, or fields joined by dots: {path:?}")));
+    }
+    Ok(())
+}
+
 /// Refuses a vector weight outside 0–1, and one beside a rerank, which
 /// orders by the vector alone.
 pub(crate) fn check_hybrid(vector_weight: Option<f64>, rerank: bool) -> Result<()> {
@@ -125,9 +147,13 @@ impl Settings {
         let fields: Vec<Field> =
             (0..).zip(wanted.fields()).map(|(number, (path, weight))| Field { path, weight, number }).collect();
         let next_field = fields.len() as u32;
+        let filters: Vec<Filter> =
+            (0..).zip(&wanted.filters).map(|(number, path)| Filter { path: path.clone(), number }).collect();
         Settings {
             fields,
             next_field,
+            next_filter: filters.len() as u32,
+            filters,
             typo_tolerance: wanted.typo_tolerance,
             analysis: analyzer::VERSION,
             vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions }),
@@ -144,6 +170,7 @@ impl Settings {
     pub(crate) fn change(&self, wanted: &Wanted, documents: u64) -> Result<(Settings, Vec<String>)> {
         let mut changed = Settings { fields: Vec::new(), ..self.clone() };
         let mut said = Vec::new();
+        changed.change_filters(wanted, documents, &mut said)?;
         changed.change_vectors(wanted, documents, &mut said)?;
         for (path, weight) in wanted.fields() {
             let Some(field) = self.fields.iter().find(|field| field.path == path) else {
@@ -175,6 +202,40 @@ impl Settings {
             changed.typo_tolerance = wanted.typo_tolerance;
         }
         Ok((changed, said))
+    }
+
+    /// Keeps the filters `wanted` names, each with its number; one removed
+    /// leaves searches at once, and one added waits for an index that holds
+    /// no documents, as a field does.
+    fn change_filters(&mut self, wanted: &Wanted, documents: u64, said: &mut Vec<String>) -> Result<()> {
+        let mut filters = Vec::with_capacity(wanted.filters.len());
+        for path in &wanted.filters {
+            if let Some(kept) = self.filters.iter().find(|filter| &filter.path == path) {
+                filters.push(kept.clone());
+                continue;
+            }
+            if documents > 0 {
+                return Err(Error::invalid(format!(
+                    "filter {path} added to an index of {documents} documents: adding a filter to an index that \
+                     holds documents is not built yet"
+                )));
+            }
+            said.push(format!("filter {path} added"));
+            filters.push(Filter { path: path.clone(), number: self.next_filter });
+            self.next_filter += 1;
+        }
+        for filter in &self.filters {
+            if !filters.iter().any(|kept| kept.number == filter.number) {
+                said.push(format!("filter {} removed; at once from searches", filter.path));
+            }
+        }
+        self.filters = filters;
+        Ok(())
+    }
+
+    /// The filter of `path`, while the index has it.
+    pub(crate) fn filter(&self, path: &str) -> Option<&Filter> {
+        self.filters.iter().find(|filter| filter.path == path)
     }
 
     fn change_vectors(&mut self, wanted: &Wanted, documents: u64, said: &mut Vec<String>) -> Result<()> {
@@ -223,9 +284,13 @@ impl Settings {
             .map(|field| json!({ "path": field.path, "weight": field.weight, "number": field.number }))
             .collect();
         let vectors = self.vectors.map(|vectors| json!({ "dimensions": vectors.dimensions }));
+        let filters: Vec<Value> =
+            self.filters.iter().map(|filter| json!({ "path": filter.path, "number": filter.number })).collect();
         let settings = json!({
             "fields": fields,
             "next_field": self.next_field,
+            "filters": filters,
+            "next_filter": self.next_filter,
             "typo_tolerance": self.typo_tolerance,
             "analysis": self.analysis,
             "vectors": vectors,
@@ -244,6 +309,11 @@ impl Settings {
             let weight = field["weight"].as_f64().ok_or_else(broken)?;
             fields.push(Field { path, weight, number: number(&field["number"])? });
         }
+        let mut filters = Vec::new();
+        for filter in settings["filters"].as_array().ok_or_else(broken)? {
+            let path = filter["path"].as_str().ok_or_else(broken)?.to_owned();
+            filters.push(Filter { path, number: number(&filter["number"])? });
+        }
         let vectors = match &settings["vectors"] {
             Value::Null => None,
             vectors => Some(Vectors { dimensions: number(&vectors["dimensions"])? as usize }),
@@ -252,6 +322,8 @@ impl Settings {
         Ok(Settings {
             fields,
             next_field: number(&settings["next_field"])?,
+            filters,
+            next_filter: number(&settings["next_filter"])?,
             typo_tolerance: settings["typo_tolerance"].as_bool().ok_or_else(broken)?,
             analysis: number(&settings["analysis"])?,
             vectors,
@@ -282,6 +354,7 @@ mod tests {
     fn wanted(fields: &[(&str, f64)]) -> Wanted {
         Wanted {
             fields: fields.iter().map(|(path, weight)| ((*path).to_owned(), *weight)).collect(),
+            filters: Vec::new(),
             typo_tolerance: true,
             dimensions: None,
             vector_weight: None,
@@ -299,6 +372,22 @@ mod tests {
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
         let settings = Settings::new(&with_vectors(1024, Some(0.7), false));
         assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+    }
+
+    #[test]
+    fn a_filter_removed_leaves_at_once_and_one_added_waits_for_an_empty_index_as_a_field_does() {
+        let with =
+            |filters: &[&str]| Wanted { filters: filters.iter().map(|f| (*f).to_owned()).collect(), ..wanted(&[]) };
+        let settings = Settings::new(&with(&["category", "owner"]));
+        assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+        let (changed, said) = settings.change(&with(&["owner"]), 5).unwrap();
+        assert_eq!(said, ["filter category removed; at once from searches"]);
+        assert_eq!(changed.filters, [Filter { path: "owner".to_owned(), number: 1 }]);
+        assert!(changed.change(&with(&["owner", "category"]), 5).is_err());
+        let (added, _) = changed.change(&with(&["owner", "category"]), 0).unwrap();
+        assert_eq!(added.filter("category").unwrap().number, 2, "a filter added again takes a new number");
+        assert!(with(&["a", "a"]).check().is_err());
+        assert!(with(&["a..b"]).check().is_err());
     }
 
     #[test]

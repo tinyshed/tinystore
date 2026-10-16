@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::analyzer;
 use super::document::analyze;
 use super::engine::{OpenIndex, Search};
+use super::filter::{self, Condition};
 use super::read::Query;
 use super::settings::{Settings, Wanted, check_hybrid};
 use super::vectors::{Question, Vector};
@@ -50,8 +51,14 @@ impl<T> std::fmt::Debug for IndexBuilder<'_, T> {
 
 impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     pub(crate) fn new(store: &'s Store, name: &str) -> Self {
-        let wanted =
-            Wanted { fields: Vec::new(), typo_tolerance: true, dimensions: None, vector_weight: None, rerank: false };
+        let wanted = Wanted {
+            fields: Vec::new(),
+            filters: Vec::new(),
+            typo_tolerance: true,
+            dimensions: None,
+            vector_weight: None,
+            rerank: false,
+        };
         IndexBuilder { store, name: name.to_owned(), wanted, _value: PhantomData }
     }
 
@@ -67,6 +74,14 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     /// Fields that each weigh 1.
     pub fn fields<S: AsRef<str>>(mut self, paths: impl IntoIterator<Item = S>) -> Self {
         self.wanted.fields.extend(paths.into_iter().map(|path| (path.as_ref().to_owned(), 1.0)));
+        self
+    }
+
+    /// The fields a search may keep its hits to, each a path into the
+    /// document whose value is text, a number, a boolean or a list of them;
+    /// the index keeps their values and no other field's.
+    pub fn filters<S: AsRef<str>>(mut self, paths: impl IntoIterator<Item = S>) -> Self {
+        self.wanted.filters.extend(paths.into_iter().map(|path| path.as_ref().to_owned()));
         self
     }
 
@@ -222,6 +237,7 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
             vector: None,
             vector_weight: None,
             rerank: false,
+            filter: Vec::new(),
             offset: 0,
             limit: LIMIT,
         }
@@ -325,6 +341,7 @@ pub struct SearchCall<'i, T> {
     vector: Option<&'i [f32]>,
     vector_weight: Option<f64>,
     rerank: bool,
+    filter: Vec<Condition>,
     offset: usize,
     limit: usize,
 }
@@ -381,6 +398,16 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
         self
     }
 
+    /// Keeps its hits to the documents `condition` passes, and to those
+    /// every earlier one passes: `.filter(search::eq("owner_id", &42))`,
+    /// `.filter(search::is_in("category", &["shoes", "boots"]))`. It answers
+    /// the best of those, scored by the words of the whole index, never the
+    /// best of all with the others taken out after.
+    pub fn filter(mut self, condition: Condition) -> Self {
+        self.filter.push(condition);
+        self
+    }
+
     /// The hits it answers, 10 unless it says.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
@@ -427,6 +454,7 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
             vector: self.question()?,
             vector_weight: self.vector_weight,
             rerank: self.rerank,
+            filter: if self.filter.is_empty() { None } else { Some(filter::asked(&self.filter)?) },
             offset: self.offset,
             limit: self.limit,
         })
@@ -453,7 +481,7 @@ impl<'i, T: Serialize + DeserializeOwned> SearchCall<'i, T> {
 /// the index's fields read them and its vector.
 fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings) -> Result<Prepared> {
     let (tree, bytes) = json(given.value)?;
-    let analyzed = analyze(&tree, &settings.fields)?;
+    let analyzed = analyze(&tree, &settings.fields, &settings.filters)?;
     let vector = vector(given.vector, settings)?;
     Ok(Prepared { index, id: checked(&given.id)?.to_owned(), value: bytes, analyzed, vector })
 }

@@ -19,15 +19,15 @@ The Go engine had no search.
 
 ## What a newcomer learns
 
-| Word            | What it is                                                                                      |
-|-----------------|-------------------------------------------------------------------------------------------------|
-| an index        | a name documents of one type are kept and found under, `store.index('articles')`                |
-| a document      | a value set by its id, as a bucket's is; the index keeps it and answers with it                 |
-| fields          | which of a document's text its words are read from, and how much each weighs                    |
-| a vector        | numbers the program's own model gave a document or a question; never made here                  |
-| a filter        | a field of the document a search can keep its hits to, declared at open: `{ userId: 42 }`       |
-| a hit           | `{ id, value, score }`: a document found, and what ordered it                                   |
-| a table's index | `db.searchIndex`: an SQL table's rows, found as an index's documents, kept in step by the store |
+| Word            | What it is                                                                                       |
+|-----------------|--------------------------------------------------------------------------------------------------|
+| an index        | a name documents of one type are kept and found under, `store.index('articles')`                 |
+| a document      | a value set by its id, as a bucket's is; the index keeps it and answers with it                  |
+| fields          | which of a document's text its words are read from, and how much each weighs                     |
+| a vector        | numbers the program's own model gave a document or a question; never made here                   |
+| a filter        | a field of the document a search can keep its hits to, declared at open: `where: { userId: 42 }` |
+| a hit           | `{ id, value, score }`: a document found, and what ordered it                                    |
+| a table's index | `db.searchIndex`: an SQL table's rows, found as an index's documents, kept in step by the store  |
 
 The engine is `search`, its file `search.db`; what a program opens in it is
 an index, and what it does with one is `search`. An index answers the best
@@ -195,20 +195,20 @@ const { hits } = await products.search({ text: 'red shoes', vector: q })        
 const { hits } = await products.search({ vector: q })                           // by the vector alone
 const { hits } = await articles.search({ text: 'хлеб', limit: 20, offset: 20 })
 const { hits, corrected } = await articles.search('helo wrld')                  // corrected: 'hello world'
-const { hits } = await products.search({ text: 'red shoes', filter: { ownerId: 42 } })
+const { hits } = await products.search({ text: 'red shoes', where: { ownerId: 42 } })
 
 for (const hit of hits) show(hit.id, hit.value.title)
 ```
 
 ```python
 hits = articles.search("как испечь хлеб").hits
-hits = products.search(text="red shoes", vector=q, filter={"owner_id": 42}).hits
+hits = products.search(text="red shoes", vector=q, where={"owner_id": 42}).hits
 ```
 
 ```rust
 let found = articles.search("как испечь хлеб").run()?;
 let found = products.search_vector(&q).run()?;
-let found = products.search("red shoes").vector(&q).filter("owner_id", 42).limit(20).run()?;
+let found = products.search("red shoes").vector(&q).filter(eq("owner_id", &42)).limit(20).run()?;
 ```
 
 - A string is a search by its words: `search('хлеб')` is
@@ -345,37 +345,64 @@ const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions:
 ## Filters
 
 ```ts
-const products = store.index<Product>('products', { fields, filters: ['category', 'ownerId', 'inStock'] })
+const products = store.index<Product>('products', { fields, filters: ['category', 'ownerId', 'price', 'tags'] })
 
-await products.search({ text: 'red shoes', filter: { ownerId: 42 } })
-await products.search({ text: 'red shoes', filter: { category: ['shoes', 'boots'], inStock: true } })
-await products.search({ vector: q, filter: { category: 'shoes' } })
+await products.search({ text: 'red shoes', where: { ownerId: 42 } })
+await products.search({ text: 'red shoes', where: { category: ['shoes', 'boots'], price: { gte: 10, lt: 100 } } })
+await products.search({ vector: q, where: or({ category: 'boots' }, { tags: 'sale' }) })
+await products.search({ text: 'red shoes', where: { category: null } })      // documents with no category
 ```
 
 ```rust
+use tinystore::search::{eq, is_in, missing, or, range};
+
 let found = products
     .search("red shoes")
-    .filter("category", ["shoes", "boots"])
-    .filter("in_stock", true)
+    .filter(eq("owner_id", &42))
+    .filter(is_in("category", &["shoes", "boots"]))
+    .filter(range("price", 10..100))
     .run()?;
+let found = products.search_vector(&q).filter(or([eq("category", "boots"), eq("tags", "sale")])).run()?;
+let found = products.search("red shoes").filter(missing("category")).run()?;
 ```
 
+- A filter is written as sqldb's conditions are, the owner's call: in
+  TypeScript the object `where` takes, equal values with a list for one of
+  them and `null` for none; in Rust the pieces `.filter` takes, `eq`,
+  `is_in`, `or` and `and` as `sql::eq` and the rest, and `range` for
+  numbers between two bounds, any Rust range. Each `.filter` adds a
+  condition with and. A piece of SQL is no filter: a search's filter runs
+  over its postings, not a table.
 - `filters` names the fields a search may filter by, each a path into the
-  document whose value is a string, a whole number, a boolean, or a list of
-  them: a product in two categories passes a filter on either. A filter on
-  a field the index was not opened with is `invalid`, since the index keeps
-  only what it was told to.
-- A search keeps to the documents its filter passes: a value must match
-  exactly, one of a list given, and every field named must pass. It answers
-  the best ten of those documents, never the best ten of all with the
-  others taken out after, which could leave a user nothing where their own
-  documents were there to find.
+  document whose value is text, a number, a boolean, or a list of them: a
+  product in two categories passes a filter on either. A filter on a field
+  the index was not opened with is `invalid`, since the index keeps only
+  what it was told to.
+- A value must match exactly, its case and its type: the text "50" never
+  passes for the number 50, and 42.0 is 42; `eq` is exact for whole
+  numbers past 2⁵³ too, so an id of 64 bits filters as it is. A field
+  that holds a list passes `eq`, `is_in` or `range` on any of its values.
+- A document has no value where it has no such field, null or an empty
+  list, and `missing(path)` asks for it, as SQL's `is null`; in Rust `eq`
+  refuses `None`, so that an id a session lacks never asks for documents
+  without one. In TypeScript `null` in `where` asks for none, as sqldb's
+  does, and `undefined` is `invalid`.
+- A range takes any of Rust's ranges, `10..100` holding 10 and not 100, and
+  compares numbers as f64, so whole numbers past 2⁵³ compare by the
+  nearest one; a document with no number there never passes.
+- A search keeps to the documents its filter passes and answers the best
+  ten of those, never the best ten of all with the others taken out after,
+  which could leave a user nothing where their own documents were there to
+  find.
 - Searches by words and by an exact vector answer what scoring every
   document that passes would; with `recall`, the vector half finds that
   share of the exact ten among them.
-- A tenant is a filter: `filter: { tenantId }` keeps each tenant to their
+- A tenant is a filter: `where: { tenantId }` keeps each tenant to their
   own documents, ranked by the words of the whole index.
-- Ranges of numbers and dates are not in the first version.
+- A filter on a field the index was not opened with names the nearest it
+  was, `did you mean price?`, through `tinystore::typos`.
+- `not`, ranges of text and counts of hits by value are not in the first
+  version.
 
 ## An index of a table
 
@@ -431,12 +458,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank`; either in a search without a vector, or `rerank` in one without text |
-| `limit`   | a document, a field's text, a search or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds, or none where it keeps them; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero or past 1,000; a field added to an index that holds documents, until slice 6 reads it in the background; a vector of another length, NaN, an infinity or zeros alone, missing, or on an index without `vectors`; a filter on a field not in `filters`, a value of no type a filter keeps, `eq` given a list, or a range of other than numbers; a filter added to an index that holds documents, until slice 6; a `vectorWeight` outside 0–1, or beside `rerank`; either in a search without a vector, or `rerank` in one without text |
+| `limit`   | a document, a field's text, a filter's text, a search, its filter or a `setMany` over its bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -453,7 +480,7 @@ Proposed, to be measured before they are promised.
 | an index's name    | 64 bytes                  |
 | a field's weight   | above 0, at most 1,000    |
 | a filter's value   | 256 bytes                 |
-| a search's filter  | 8 fields, 100 values      |
+| a search's filter  | 8 conditions, 100 values  |
 | a `setMany`        | 1,000 documents, 16 MiB   |
 
 ## Under the surface
@@ -493,16 +520,37 @@ Proposed, to be measured before they are promised.
   itself once the numbers given pass twice the documents held, and in any
   case long before 2³², the most a number can be; the threshold is that
   slice's measurement.
-- **Filters** are keys of the postings without frequencies, `category` and
-  `shoes` beside a field's words, packed and purged with them, and the
-  index knows each one's count of documents. A filter that passes few
-  documents is scored alone: its documents and nothing else. One that
-  passes many runs the usual search, crossing out of each window the
-  documents it does not pass, whose blocks' bounds then skip less. Exact
-  vectors score only what passes; clusters skip what does not and read
-  further clusters until enough pass, or go exact over a filter's few. Where
-  each path begins is the filters slice's measurement; graphs such as HNSW
-  are what filters are hard for, and clusters are not one.
+- **Filters** are keys of the postings beside a field's words, a value's
+  term by its type, `t:shoes`, `i:42`, `b:true`, and `n:` for a document
+  with none, a frequency of 1 each, packed and purged with the words, each
+  knowing its count of documents. A number is also kept at eight
+  precisions, its place among all numbers with its last 8, 16, … 56 bits
+  dropped, as Lucene's numeric fields were, so that a range is a few
+  hundred keys at most. A search reads every document of the keys its
+  conditions name and joins them, `or` by their union and `and` by their
+  intersection. A filter that passes few documents has them scored alone,
+  each sought in every list, or each vector's code read by its number; one
+  that passes many runs the usual search, crossing out of each window the
+  documents it does not pass and passing a window that holds none, or
+  scans every code crossing them out. Over 100,000 articles with vectors
+  of 256 dimensions, on a Ryzen 7 7700 under Windows 11, medians in ms
+  (`where_a_filter_is_scored_alone_takes` in `search::index`, by hand):
+
+  | passes | words alone | words crossed | vector alone | vector crossed |
+  |--------|-------------|---------------|--------------|----------------|
+  | 1/2    | 7.62        | 1.70          | 28.15        | 25.11          |
+  | 1/8    | 2.36        | 1.28          | 16.54        | 23.66          |
+  | 1/32   | 1.15        | 1.30          | 6.54         | 22.89          |
+  | 1/128  | 0.73        | 1.34          | 2.82         | 22.86          |
+  | 1/512  | 0.64        | 1.21          | 0.85         | 22.08          |
+  | 1/2048 | 0.31        | 0.88          | 0.08         | 22.91          |
+  | 1/8192 | 0.15        | 0.37          | 0.03         | 21.46          |
+
+  So a search by words scores a filter's documents alone from 1 in 32 of
+  the index's, and one by a vector from 1 in 4. Clusters will skip what
+  does not pass and read further clusters until enough pass, or go exact
+  over a filter's few (slice 5); graphs such as HNSW are what filters are
+  hard for, and clusters are not one.
 - **Two halves at once** are asked one after the other and summed as the
   search section says; search-hybrid's fusion took 7.4 and 14.8 ms at the
   median with clusters, the words' share of it 2.2 and 11.8, and `rerank`
@@ -546,7 +594,9 @@ Proposed, to be measured before they are promised.
 3. Vectors, exact; a search by both, its `vectorWeight` and `rerank`:
    built 16 October, a vector's code and the vector as given a row each.
 4. Filters, for words and exact vectors, with the round that finds where
-   a filter's own documents are scored apart.
+   a filter's own documents are scored apart: built 16 October, with `or`,
+   `and` and ranges of numbers, in the shape of sqldb's conditions (the
+   owner's calls below).
 5. Vectors with `recall`: the clusters, their heads, packing and splits,
    the clusters read chosen from `recall`, and filters through them.
 6. Changes of an index in the background, `ready()`, `status()`,
@@ -592,8 +642,11 @@ a newcomer check of what it made public.
 
 ## Later
 
-- Ranges of numbers and dates in a filter, `filter: { price: { below: 100
-  } }`, from a sorted key of their own; `not`.
+- `not` in a filter, which needs every document the index holds; ranges
+  of text; how many hits each value of a filter holds (facets), each
+  leaving out its own field's condition, as Algolia's do.
+- A search with a filter and neither words nor a vector, listing what it
+  passes in an order a field gives, and `total` for a pager.
 - Tenants ranked by their own words, `under(orgId)`: whether a branch
   counts its words apart needs a round with thousands of small tenants
   first. A tenant as a filter is in the first version.
@@ -682,6 +735,25 @@ calls.
 | `.vectors(1024)` read as a count of vectors by one; `Combine` for weight and rerank | left to the owner: the newcomer read `vectors` right, and `hybrid` is the book's accepted shape |
 | each half's score on a hit, a least cosine, documents without a vector counted      | Later                                                                                           |
 
+## Slice 4's check, 16 October
+
+Three Haiku agents that had read nothing about TinyStore read slice 4's
+filters at the highest effort: a newcomer's reading of twelve bare lines, a
+free review by a developer who knows Meilisearch, Algolia, Qdrant,
+Elasticsearch, LanceDB, Prisma, Drizzle and Diesel, and a blind choice
+between three shapes of four calls.
+
+| It read                                                                                              | Change                                                                                 |
+|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `search::eq` with `.filter`, `range` with a Rust range, `or([…])`                                    | none: the blind choice took each over its two others, for being sqldb's                |
+| `eq(path, &None)`, two of three, and an `Option` id whose `None` would ask for documents without one | `missing(path)`; `eq` and `is_in` refuse `None`                                        |
+| what has no value: no field, null, an empty list, an empty text                                      | no field, null and an empty list, said in `missing`'s comment and above; "" is a value |
+| a field misspelt, found only at `run`                                                                | the error names the nearest filter the index has                                       |
+| the case of a value, a document without a number in a range, a list field                            | said in `eq`'s and `range`'s comments and above                                        |
+| typed field references from a derive, `.filterable` for `.filters`                                   | left to the owner: sqldb names its columns by text too                                 |
+| `&42` beside `"sale"`                                                                                | none: `sql::eq` takes its value so, and a `&str` is already one                        |
+| a listing by a filter alone, its order and `total`; facets; `not`                                    | Later                                                                                  |
+
 ## The owner's calls, 16 October
 
 The owner and the outside reviewer read the check, then search-hybrid, and
@@ -707,3 +779,5 @@ accepted the book.
 | numbers that grow with every set          | numbered again by slice 6's rebuild, which starts by itself at a threshold that slice measures, long before 2³² (the outside reviewer's)                                                      |
 | a list of documents at once               | `setMany`: one commit, all or none, 1,000 documents and 16 MiB a call (the outside reviewer's)                                                                                                |
 | `patch`                                   | later: `set` replaces a document whole until a program needs a part set and what it means is decided (the outside reviewer's)                                                                 |
+| how a search's filter is written          | as sqldb's conditions: the object `where` takes in TypeScript, and in Rust `.filter` with `eq`, `is_in`, `or` and `and` as `sql::eq` and the rest                                             |
+| a filter beyond equal values              | `or`, `and` and ranges of numbers in the first version: they are unions and intersections of the documents' keys, and a number kept at eight precisions makes a range a few hundred keys      |

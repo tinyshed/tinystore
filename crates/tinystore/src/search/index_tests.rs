@@ -12,14 +12,20 @@ use crate::search::score::{Part, average, idf, points, score};
 use crate::search::settings::Settings;
 use crate::search::{analyzer, maintain};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Article {
     title: String,
     body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    price: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
 }
 
 fn article(title: &str, body: &str) -> Article {
-    Article { title: title.to_owned(), body: body.to_owned() }
+    Article { title: title.to_owned(), body: body.to_owned(), ..Article::default() }
 }
 
 fn ids<T>(found: &Found<T>) -> Vec<&str> {
@@ -327,7 +333,7 @@ fn words(random: &mut Random, most: u64) -> String {
 }
 
 fn random_article(random: &mut Random) -> Article {
-    Article { title: words(random, 5), body: words(random, 60) }
+    Article { title: words(random, 5), body: words(random, 60), ..Article::default() }
 }
 
 /// The documents an index should hold, each with the number its set gave
@@ -356,14 +362,16 @@ impl Model {
 
     fn set_with(&mut self, settings: &Settings, id: String, value: Article, vector: Option<Vec<f32>>) {
         self.next += 1;
-        let analyzed = document::analyze(&serde_json::to_value(&value).unwrap(), &settings.fields).unwrap();
+        let analyzed =
+            document::analyze(&serde_json::to_value(&value).unwrap(), &settings.fields, &settings.filters).unwrap();
         let terms = analyzed.terms.iter().map(|(part, term, tf)| ((*part, term.clone()), *tf)).collect();
         self.docs.insert(id, Doc { number: self.next, value, terms, analyzed, vector });
     }
 
-    /// The best `k` by scoring every document the model holds, as the
-    /// engine's hits say them.
-    fn best(&self, settings: &Settings, text: &str, k: usize) -> Vec<(String, f64)> {
+    /// The best `k` by scoring every document the model holds that the
+    /// search keeps, as the engine's hits say them; every document counts in
+    /// the scores.
+    fn best(&self, settings: &Settings, ask: &Ask<'_>, k: usize) -> Vec<(String, f64)> {
         let documents = self.docs.len() as u64;
         let mut holding: HashMap<&(Part, String), u64> = HashMap::new();
         let mut tokens: HashMap<Part, u64> = HashMap::new();
@@ -371,9 +379,9 @@ impl Model {
             doc.terms.keys().for_each(|key| *holding.entry(key).or_default() += 1);
             doc.analyzed.lengths.iter().for_each(|(part, len)| *tokens.entry(*part).or_default() += u64::from(*len));
         }
-        let query = forms(&analyzer::words(text).into_iter().take(32).collect::<Vec<_>>(), settings);
+        let query = forms(&analyzer::words(ask.text).into_iter().take(32).collect::<Vec<_>>(), settings);
         let mut scored: Vec<(u64, u32, &String)> = Vec::new();
-        for (id, doc) in &self.docs {
+        for (id, doc) in self.docs.iter().filter(|(_, doc)| (ask.keep)(&doc.value)) {
             let mut total: Option<u64> = None;
             for key in &query {
                 let Some(tf) = doc.terms.get(key) else { continue };
@@ -400,9 +408,11 @@ impl Model {
         Some(dot / (length(question) * length(vector)))
     }
 
-    /// The best `k` by scoring every vector the model holds.
-    fn nearest(&self, question: &[f32], k: usize) -> Vec<(String, f64)> {
-        let scored = self.docs.keys().filter_map(|id| Some((id.clone(), self.cosine(id, question)?)));
+    /// The best `k` by scoring every vector the model holds that the
+    /// search keeps.
+    fn nearest(&self, ask: &Ask<'_>, k: usize) -> Vec<(String, f64)> {
+        let kept = self.docs.iter().filter(|(_, doc)| (ask.keep)(&doc.value));
+        let scored = kept.filter_map(|(id, _)| Some((id.clone(), self.cosine(id, ask.question)?)));
         self.ordered(scored.collect(), k)
     }
 
@@ -416,15 +426,16 @@ impl Model {
 
     /// The best `k` of a search by `text` and `question` at once, from the
     /// best hundred of each half, or `k` if more.
-    fn both(&self, settings: &Settings, (text, question): (&str, &[f32]), how: How, k: usize) -> Vec<(String, f64)> {
+    fn both(&self, settings: &Settings, ask: &Ask<'_>, how: How, k: usize) -> Vec<(String, f64)> {
+        let (text, question) = (ask.text, ask.question);
         let alone = analyzer::words(text).is_empty() && !matches!(how, How::Rerank);
         if alone || matches!(how, How::Sum(1.0)) {
-            return self.nearest(question, k);
+            return self.nearest(ask, k);
         }
         if matches!(how, How::Sum(0.0)) {
-            return self.best(settings, text, k);
+            return self.best(settings, ask, k);
         }
-        let words = self.best(settings, text, k.max(100));
+        let words = self.best(settings, ask, k.max(100));
         let How::Sum(weight) = how else {
             let (with, without): (Vec<_>, Vec<_>) =
                 words.into_iter().partition(|(id, _)| self.docs[id].vector.is_some());
@@ -434,13 +445,21 @@ impl Model {
             reranked.truncate(k);
             return reranked;
         };
-        let (words, vectors) = (scaled(&words), scaled(&self.nearest(question, k.max(100))));
+        let (words, vectors) = (scaled(&words), scaled(&self.nearest(ask, k.max(100))));
         let ids: BTreeSet<&String> = words.keys().chain(vectors.keys()).collect();
         let half = |half: &HashMap<String, f64>, id: &String| half.get(id).copied().unwrap_or(0.0);
         let sums =
             ids.into_iter().map(|id| (id.clone(), (1.0 - weight) * half(&words, id) + weight * half(&vectors, id)));
         self.ordered(sums.collect(), k)
     }
+}
+
+/// What a check asks the model: a search's text and vector, and which
+/// documents its filter keeps.
+struct Ask<'a> {
+    text: &'a str,
+    question: &'a [f32],
+    keep: &'a dyn Fn(&Article) -> bool,
 }
 
 /// How a search by both combines its halves.
@@ -464,7 +483,7 @@ fn agrees(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64)
     let text = words(random, 4);
     let (offset, limit) = (random.below(15) as usize, 1 + random.below(25) as usize);
     let found = checked(|| index.search(&text).offset(offset).limit(limit).run()).unwrap();
-    let mut expected = model.best(&settings, &text, offset + limit);
+    let mut expected = model.best(&settings, &Ask { text: &text, question: &[], keep: &|_| true }, offset + limit);
     expected.drain(..offset.min(expected.len()));
     let got: Vec<(String, f64)> = found.hits.iter().map(|hit| (hit.id.clone(), hit.score)).collect();
     assert_eq!(got, expected, "seed {seed}: {text:?}");
@@ -814,7 +833,8 @@ fn agrees_by_vector(index: &Index<Article>, model: &Model, random: &mut Random, 
         _ => (call, How::Sum(0.5)),
     };
     let found = checked(|| call.run()).unwrap();
-    let mut expected = model.both(&settings, (&text, &q), how, offset + limit);
+    let ask = Ask { text: &text, question: &q, keep: &|_| true };
+    let mut expected = model.both(&settings, &ask, how, offset + limit);
     expected.drain(..offset.min(expected.len()));
     let got: Vec<(String, f64)> = found.hits.iter().map(|hit| (hit.id.clone(), hit.score)).collect();
     assert_eq!(got, expected, "seed {seed}: {text:?} {how:?}");
@@ -906,4 +926,230 @@ fn a_search_by_a_vector_over_a_hundred_thousand_takes() {
         .collect();
     took.sort_by(f64::total_cmp);
     eprintln!("a search by a vector over 100,000: {:.1} ms at the median, {:.1} at most", took[10], took[19]);
+}
+
+/// A condition as the tests ask it, which the engine is given and the model
+/// passes documents by itself.
+#[derive(Clone, Debug)]
+enum Test {
+    Eq(&'static str, serde_json::Value),
+    In(&'static str, Vec<serde_json::Value>),
+    /// From the first, inclusive, to the second, exclusive.
+    Range(&'static str, Option<i64>, Option<i64>),
+    Or(Vec<Test>),
+    And(Vec<Test>),
+}
+
+const CATEGORIES: &[&str] = &["shoes", "boots", "hats", "bags", "socks", "coats"];
+
+/// An article with a category mostly, a price mostly, and tags of which
+/// some few documents hold each, so that a filter by one passes few.
+fn random_product(random: &mut Random) -> Article {
+    let category = (random.below(6) != 0).then(|| CATEGORIES[random.below(6) as usize].to_owned());
+    let price = (random.below(8) != 0).then(|| random.below(2000) as i64 - 300);
+    let tags = (0..random.below(4)).map(|_| format!("tag{}", random.skewed(60))).collect();
+    Article { category, price, tags, ..random_article(random) }
+}
+
+/// The values a document holds at a filter's path.
+fn values_of(article: &Article, path: &str) -> Vec<serde_json::Value> {
+    match path {
+        "category" => article.category.iter().map(|category| serde_json::json!(category)).collect(),
+        "price" => article.price.iter().map(|price| serde_json::json!(price)).collect(),
+        _ => article.tags.iter().map(|tag| serde_json::json!(tag)).collect(),
+    }
+}
+
+impl Test {
+    fn passes(&self, article: &Article) -> bool {
+        match self {
+            Test::Eq(path, serde_json::Value::Null) => values_of(article, path).is_empty(),
+            Test::Eq(path, value) => values_of(article, path).contains(value),
+            Test::In(path, values) => values.iter().any(|value| Test::Eq(path, value.clone()).passes(article)),
+            Test::Range(path, low, high) => values_of(article, path)
+                .iter()
+                .filter_map(serde_json::Value::as_i64)
+                .any(|number| low.is_none_or(|low| number >= low) && high.is_none_or(|high| number < high)),
+            Test::Or(parts) => parts.iter().any(|part| part.passes(article)),
+            Test::And(parts) => parts.iter().all(|part| part.passes(article)),
+        }
+    }
+
+    fn condition(&self) -> crate::search::Condition {
+        use crate::search::{and, eq, is_in, or, range};
+        match self {
+            Test::Eq(path, serde_json::Value::Null) => crate::search::missing(path),
+            Test::Eq(path, value) => eq(path, value),
+            Test::In(path, values) => is_in(path, values),
+            Test::Range(path, Some(low), Some(high)) => range(path, *low..*high),
+            Test::Range(path, Some(low), None) => range(path, *low..),
+            Test::Range(path, None, Some(high)) => range(path, ..*high),
+            Test::Range(path, None, None) => range::<i64>(path, ..),
+            Test::Or(parts) => or(parts.iter().map(Test::condition)),
+            Test::And(parts) => and(parts.iter().map(Test::condition)),
+        }
+    }
+
+    fn random(random: &mut Random, depth: u32) -> Test {
+        let tag = |random: &mut Random| serde_json::json!(format!("tag{}", random.skewed(60)));
+        let price = |random: &mut Random| (random.below(5) != 0).then(|| random.below(2200) as i64 - 400);
+        match random.below(if depth == 0 { 6 } else { 4 }) {
+            0 => {
+                let category = CATEGORIES[random.below(6) as usize];
+                Test::Eq("category", if random.below(8) == 0 { serde_json::Value::Null } else { category.into() })
+            }
+            1 => Test::In("tags", (0..random.below(4)).map(|_| tag(random)).collect()),
+            2 => Test::Eq("tags", tag(random)),
+            3 => Test::Range("price", price(random), price(random)),
+            4 => Test::Or((0..2).map(|_| Test::random(random, depth + 1)).collect()),
+            _ => Test::And((0..2).map(|_| Test::random(random, depth + 1)).collect()),
+        }
+    }
+}
+
+fn shop(fixture: &Fixture) -> Index<Article> {
+    let builder = fixture.store.index("shop").field("title", 2.0).field("body", 1.0);
+    let builder = builder.filters(["category", "price", "tags"]).vectors(DIMENSIONS);
+    builder.typo_tolerance(false).open().unwrap()
+}
+
+/// Checks a filtered search, by words, by a vector or by both, against the
+/// model, which passes each document by the conditions itself.
+fn agrees_filtered(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64) {
+    let settings = Settings::clone(&index.open.settings_read());
+    let tests: Vec<Test> = (0..1 + random.below(2)).map(|_| Test::random(random, 0)).collect();
+    let keep = |article: &Article| tests.iter().all(|test| test.passes(article));
+    let (offset, limit) = (random.below(10) as usize, 1 + random.below(20) as usize);
+    let (text, q) = (words(random, 4), embedding(random));
+    let ask = Ask { text: &text, question: &q, keep: &keep };
+    let (call, mut expected) = match random.below(4) {
+        0 => (index.search(&text), model.best(&settings, &ask, offset + limit)),
+        1 => (index.search_vector(&q), model.nearest(&ask, offset + limit)),
+        2 if !text.trim().is_empty() => {
+            (index.search(&text).vector(&q).rerank(), model.both(&settings, &ask, How::Rerank, offset + limit))
+        }
+        _ => (index.search(&text).vector(&q), model.both(&settings, &ask, How::Sum(0.5), offset + limit)),
+    };
+    let call = tests.iter().fold(call.offset(offset).limit(limit), |call, test| call.filter(test.condition()));
+    let found = checked(|| call.run()).unwrap();
+    expected.drain(..offset.min(expected.len()));
+    let got: Vec<(String, f64)> = found.hits.iter().map(|hit| (hit.id.clone(), hit.score)).collect();
+    assert_eq!(got, expected, "seed {seed}: {text:?} {tests:?}");
+}
+
+#[test]
+fn a_filtered_search_answers_what_scoring_every_document_it_passes_answers() {
+    for seed in 0..4 {
+        let fixture = fixture();
+        let index = shop(&fixture);
+        let mut random = Random::new(seed);
+        let mut model = Model::default();
+        let settings = Settings::clone(&index.open.settings_read());
+        for _ in 0..1500 {
+            match random.below(100) {
+                0..60 => {
+                    let (id, value) = (format!("d{}", random.below(400)), random_product(&mut random));
+                    let vector = (random.below(10) != 0).then(|| embedding(&mut random));
+                    set_with(&index, &id, &value, vector.as_deref());
+                    model.set_with(&settings, id, value, vector);
+                }
+                60..70 => {
+                    let id = format!("d{}", random.below(400));
+                    assert_eq!(index.delete(&id).unwrap(), model.docs.remove(&id).is_some());
+                }
+                70..72 => drop(maintain(&fixture.store).unwrap()),
+                72..74 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                74..75 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
+                _ => agrees_filtered(&index, &model, &mut random, seed),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_filter_keeps_a_search_to_its_documents_and_names_what_it_cannot_read() {
+    use crate::search::{and, eq, is_in, or, range};
+    let fixture = fixture();
+    let shop = shop(&fixture);
+    let item = |category: Option<&str>, price: Option<i64>, tags: &[&str]| Article {
+        category: category.map(str::to_owned),
+        price,
+        tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        ..article("red shoes", "")
+    };
+    shop.id("a").without_vector().set(&item(Some("shoes"), Some(50), &["sale"])).unwrap();
+    shop.id("b").without_vector().set(&item(Some("boots"), Some(150), &["sale", "new"])).unwrap();
+    shop.id("c").without_vector().set(&item(None, Some(-5), &[])).unwrap();
+    let found = |condition| ids(&checked(|| shop.search("red").filter(condition).limit(20).run()).unwrap()).join(",");
+    assert_eq!(found(eq("category", "shoes")), "a");
+    assert_eq!(found(is_in("category", &["shoes", "boots"])), "a,b");
+    assert_eq!(found(crate::search::missing("category")), "c", "missing passes a document with no value");
+    assert_eq!(found(eq("tags", "new")), "b", "a list passes on any of its values");
+    assert_eq!(found(range("price", 0..150)), "a");
+    assert_eq!(found(range("price", ..=150)), "a,b,c");
+    assert_eq!(found(or([eq("category", "boots"), range("price", ..0)])), "b,c");
+    assert_eq!(found(and([eq("tags", "sale"), range("price", 100..)])), "b");
+    assert_eq!(found(eq("category", "hats")), "", "a value no document holds passes none");
+    assert_eq!(found(eq("price", "50")), "", "the text 50 is not the number 50");
+    let kind = |condition| shop.search("red").filter(condition).run().map(drop).unwrap_err().kind();
+    assert_eq!(kind(eq("color", "red")), ErrorKind::Invalid, "a field the index was not opened with");
+    let said = shop.search("red").filter(eq("prise", &5)).run().map(drop).unwrap_err().to_string();
+    assert!(said.ends_with("did you mean price?: invalid"), "{said}");
+    assert_eq!(kind(eq("price", &serde_json::json!({ "a": 1 }))), ErrorKind::Invalid, "an object is no value");
+    assert_eq!(kind(or((0..9).map(|n| eq("price", &n)))), ErrorKind::Limit);
+    let refused = shop.id("d").without_vector().set(&Article { tags: vec!["x".repeat(300)], ..article("", "") });
+    assert_eq!(refused.unwrap_err().kind(), ErrorKind::Limit);
+}
+
+/// Where a filter's own documents are best scored alone: 100,000 articles
+/// with vectors of 256 dimensions, each tagged `1/m` one time in `m`, a
+/// search by three common words and one by a vector timed on each path.
+/// Run by hand:
+/// `cargo test -p tinystore --release --lib where_a_filter_is_scored_alone -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing, run by hand"]
+fn where_a_filter_is_scored_alone_takes() {
+    use crate::search::read::NARROW;
+    let fixture = fixture();
+    let builder = fixture.store.index::<Article>("timing").field("title", 2.0).field("body", 1.0);
+    let index = builder.filters(["tags"]).vectors(256).typo_tolerance(false).open().unwrap();
+    let shares = [2, 8, 32, 128, 512, 2048, 8192];
+    let mut random = Random::new(1);
+    let normal = |random: &mut Random| (0..3).map(|_| random.below(2001) as f32 / 1000.0 - 1.0).sum::<f32>();
+    for batch in 0..100 {
+        let mut documents = Vec::new();
+        for n in 0..1000 {
+            let tags = shares.iter().filter(|m| random.below(**m) == 0).map(|m| format!("1/{m}")).collect();
+            let vector: Vec<f32> = (0..256).map(|_| normal(&mut random)).collect();
+            documents.push((format!("{batch}-{n}"), Article { tags, ..random_article(&mut random) }, vector));
+        }
+        index.set_many(documents.iter().map(|(id, value, vector)| (id, value, vector))).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    let texts: Vec<String> = (0..20).map(|_| words(&mut random, 3) + " bread").collect();
+    let questions: Vec<Vec<f32>> = (0..10).map(|_| (0..256).map(|_| normal(&mut random)).collect()).collect();
+    let median = |mut took: Vec<f64>| {
+        took.sort_by(f64::total_cmp);
+        took[took.len() / 2]
+    };
+    let time = |run: &dyn Fn() -> crate::Result<()>| {
+        let started = std::time::Instant::now();
+        run().unwrap();
+        started.elapsed().as_secs_f64() * 1000.0
+    };
+    eprintln!("share   words alone  words crossed  vector alone  vector crossed   (ms, median)");
+    for share in shares {
+        let tag = format!("1/{share}");
+        let mut row = Vec::new();
+        for narrow in [true, false] {
+            NARROW.set(Some(narrow));
+            let filter = || crate::search::eq("tags", &tag);
+            let took = texts.iter().map(|text| time(&|| index.search(text).filter(filter()).run().map(drop)));
+            row.push(median(took.collect()));
+            let took = questions.iter().map(|q| time(&|| index.search_vector(q).filter(filter()).run().map(drop)));
+            row.push(median(took.collect()));
+        }
+        NARROW.set(None);
+        eprintln!("1/{share:<6} {:>10.2} {:>14.2} {:>13.2} {:>15.2}", row[0], row[2], row[1], row[3]);
+    }
 }

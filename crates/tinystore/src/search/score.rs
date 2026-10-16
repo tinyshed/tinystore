@@ -18,11 +18,28 @@ const POINT: f64 = 4_294_967_296.0;
 const STEMS: f64 = 0.75;
 
 /// A field's words as written, or their stems: each its own lengths, keys
-/// and weight. A field's number `n` is parts `2n` and `2n + 1`.
+/// and weight. A field's number `n` is parts `2n` and `2n + 1`; a filter's
+/// `n`, whose keys are its values and score nothing, is part `2³⁰ + n`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Part(pub(crate) u32);
 
+/// The first filter's part, past every field's.
+const FILTERS: u32 = 1 << 30;
+
 impl Part {
+    pub(crate) fn filter(number: u32) -> Part {
+        Part(FILTERS + number)
+    }
+
+    pub(crate) fn is_filter(self) -> bool {
+        self.0 >= FILTERS
+    }
+
+    /// Whether its keys are words as written, which a misspelt word is read as.
+    pub(crate) fn is_written(self) -> bool {
+        !self.is_filter() && self.0.is_multiple_of(2)
+    }
+
     pub(crate) fn written(field: u32) -> Part {
         Part(field * 2)
     }

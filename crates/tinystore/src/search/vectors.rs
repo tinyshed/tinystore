@@ -31,6 +31,7 @@ const DROP_VECTOR: &str = "delete from _tinystore_search_vectors where key = ?1"
 const DROP_CODE: &str = "delete from _tinystore_search_codes where key = ?1";
 const SCAN: &str = "select key, code from _tinystore_search_codes where key >= ?1 and key < ?2 order by key";
 const READ_VECTOR: &str = "select length, vector from _tinystore_search_vectors where key = ?1";
+const READ_CODE: &str = "select key, code from _tinystore_search_codes where key = ?1";
 
 /// The most dimensions a vector has.
 pub(crate) const MOST_DIMENSIONS: usize = 4096;
@@ -156,22 +157,38 @@ pub(crate) fn forget(tx: &Tx<'_>, index: i64, doc: u32) -> Result<()> {
     execute(tx, DROP_CODE, [key], "drop a vector's code")
 }
 
+/// A search of an index's vectors: its question, the hits it asks for, and
+/// which vectors it reads.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Scan<'a> {
+    pub(crate) index: i64,
+    pub(crate) question: &'a Question,
+    pub(crate) k: usize,
+    pub(crate) among: Among<'a>,
+}
+
+/// Which of an index's vectors a search reads.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Among<'a> {
+    Every,
+    /// Every code read, those of documents a filter does not pass crossed out.
+    Crossed(&'a [u32]),
+    /// A filter's few documents' codes, each read by its number.
+    Only(&'a [u32]),
+}
+
 /// The best `k` of an index's vectors by their cosine with `question`, the
 /// document set first first of equal ones: every code read for its range,
 /// then those whose range reaches the k-th best lower end scored again,
 /// the highest upper end first, until the next cannot reach the k-th best.
-pub(crate) fn best(connection: &Connection, index: i64, question: &Question, k: usize) -> Result<Vec<(f64, u32)>> {
-    best_counted(connection, index, question, k).map(|(best, _)| best)
+pub(crate) fn best(connection: &Connection, scan: &Scan<'_>) -> Result<Vec<(f64, u32)>> {
+    best_counted(connection, scan).map(|(best, _)| best)
 }
 
 /// [`best`], and how many vectors it scored again.
-fn best_counted(
-    connection: &Connection,
-    index: i64,
-    question: &Question,
-    k: usize,
-) -> Result<(Vec<(f64, u32)>, usize)> {
-    let mut candidates = candidates(connection, index, question, k)?;
+fn best_counted(connection: &Connection, scan: &Scan<'_>) -> Result<(Vec<(f64, u32)>, usize)> {
+    let (index, question, k) = (scan.index, scan.question, scan.k);
+    let mut candidates = candidates(connection, scan)?;
     candidates.sort_unstable_by(ranked);
     let mut best: Vec<(f64, u32)> = Vec::with_capacity(k + 1);
     let mut rescored = 0;
@@ -191,34 +208,80 @@ fn best_counted(
 }
 
 /// Each vector whose range reaches the k-th best lower end once every code
-/// is read, with its upper end.
-fn candidates(connection: &Connection, index: i64, question: &Question, k: usize) -> Result<Vec<(f64, u32)>> {
+/// the search reads is read, with its upper end.
+fn candidates(connection: &Connection, scan: &Scan<'_>) -> Result<Vec<(f64, u32)>> {
+    let mut kept = Candidates::new(scan.k);
+    if let Among::Only(docs) = scan.among {
+        let failed = |error| sql_error("read a vector's code", error);
+        let mut select = connection.prepare_cached(READ_CODE).map_err(failed)?;
+        for &doc in docs {
+            let mut rows = select.query([key(scan.index, doc)]).map_err(failed)?;
+            if let Some(row) = rows.next().map_err(failed)? {
+                let (_, code) = code_of(row)?;
+                kept.offer(scan.question, doc, code)?;
+            }
+        }
+        return Ok(kept.finish());
+    }
+    let crossed = match scan.among {
+        Among::Crossed(docs) => Some(docs),
+        _ => None,
+    };
+    let mut at = 0;
     let failed = |error| sql_error("read vectors' codes", error);
     let mut select = connection.prepare_cached(SCAN).map_err(failed)?;
-    let mut rows = select.query((key(index, 0), key(index + 1, 0))).map_err(failed)?;
-    let mut lowers: BinaryHeap<Reverse<Lower>> = BinaryHeap::with_capacity(k + 1);
-    let mut threshold = f64::NEG_INFINITY;
-    let mut candidates = Vec::new();
+    let mut rows = select.query((key(scan.index, 0), key(scan.index + 1, 0))).map_err(failed)?;
     while let Some(row) = rows.next().map_err(failed)? {
         let (doc, code) = code_of(row)?;
-        let (lower, upper) = question.bounds(code).map_err(|error| error.within(format!("document {doc}")))?;
-        if upper < threshold {
-            continue;
+        if let Some(docs) = crossed {
+            at += docs[at..].partition_point(|passing| *passing < doc);
+            if docs.get(at) != Some(&doc) {
+                continue;
+            }
         }
-        candidates.push((upper, doc));
-        lowers.push(Reverse(Lower(lower)));
-        if lowers.len() > k {
-            lowers.pop();
-        }
-        if lowers.len() == k {
-            threshold = lowers.peek().map_or(threshold, |Reverse(Lower(kth))| *kth);
-        }
-        if candidates.len() >= CANDIDATES + k {
-            candidates.retain(|(upper, _)| *upper >= threshold);
-        }
+        kept.offer(scan.question, doc, code)?;
     }
-    candidates.retain(|(upper, _)| *upper >= threshold);
-    Ok(candidates)
+    Ok(kept.finish())
+}
+
+/// The vectors whose upper ends reach the k-th best lower end so far.
+struct Candidates {
+    k: usize,
+    lowers: BinaryHeap<Reverse<Lower>>,
+    threshold: f64,
+    held: Vec<(f64, u32)>,
+}
+
+impl Candidates {
+    fn new(k: usize) -> Candidates {
+        Candidates { k, lowers: BinaryHeap::with_capacity(k + 1), threshold: f64::NEG_INFINITY, held: Vec::new() }
+    }
+
+    fn offer(&mut self, question: &Question, doc: u32, code: &[u8]) -> Result<()> {
+        let (lower, upper) = question.bounds(code).map_err(|error| error.within(format!("document {doc}")))?;
+        if upper < self.threshold {
+            return Ok(());
+        }
+        self.held.push((upper, doc));
+        self.lowers.push(Reverse(Lower(lower)));
+        if self.lowers.len() > self.k {
+            self.lowers.pop();
+        }
+        if self.lowers.len() == self.k {
+            self.threshold = self.lowers.peek().map_or(self.threshold, |Reverse(Lower(kth))| *kth);
+        }
+        if self.held.len() >= CANDIDATES + self.k {
+            let threshold = self.threshold;
+            self.held.retain(|(upper, _)| *upper >= threshold);
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Vec<(f64, u32)> {
+        let threshold = self.threshold;
+        self.held.retain(|(upper, _)| *upper >= threshold);
+        self.held
+    }
 }
 
 /// The cosine with `question` of each of `docs` that has a vector.
@@ -357,10 +420,15 @@ impl Ord for Lower {
     }
 }
 
-/// The best `k` by scoring every vector the index holds, as [`best`] should
-/// answer them.
+/// The best `k` by scoring every vector the index holds that the search
+/// reads, as [`best`] should answer them.
 #[cfg(test)]
-pub(crate) fn every(connection: &Connection, index: i64, question: &Question, k: usize) -> Result<Vec<(f64, u32)>> {
+pub(crate) fn every(connection: &Connection, scan: &Scan<'_>) -> Result<Vec<(f64, u32)>> {
+    let (index, question, k) = (scan.index, scan.question, scan.k);
+    let passing = match scan.among {
+        Among::Every => None,
+        Among::Crossed(docs) | Among::Only(docs) => Some(docs),
+    };
     let failed = |error| sql_error("read vectors", error);
     let sql = "select key, length, vector from _tinystore_search_vectors where key >= ?1 and key < ?2";
     let mut select = connection.prepare_cached(sql).map_err(failed)?;
@@ -369,7 +437,9 @@ pub(crate) fn every(connection: &Connection, index: i64, question: &Question, k:
     while let Some(row) = rows.next().map_err(failed)? {
         let (key, length): (i64, f64) = (row.get(0).map_err(failed)?, row.get(1).map_err(failed)?);
         let bytes = row.get_ref(2).and_then(|value| Ok(value.as_blob()?)).map_err(failed)?;
-        scored.push((question.cosine(bytes, length), doc_of(key)));
+        if passing.is_none_or(|docs| docs.binary_search(&doc_of(key)).is_ok()) {
+            scored.push((question.cosine(bytes, length), doc_of(key)));
+        }
     }
     scored.sort_by(ranked);
     scored.truncate(k);

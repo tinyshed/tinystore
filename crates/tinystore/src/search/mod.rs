@@ -1,7 +1,10 @@
 //! Documents set by id in a named index and found again by their words, by
 //! vectors the program's own model gave them, or by both, in `search.db`:
 //! words in any language and any script, a typo forgiven, the exact best by
-//! BM25 over the fields and their weights; vectors the exact best by cosine.
+//! BM25 over the fields and their weights; vectors the exact best by cosine;
+//! either kept to the documents a filter passes, made of [`eq`], [`is_in`],
+//! [`range`], [`missing`], [`or`] and [`and`] as a query's conditions are of
+//! `sql::eq` and the rest.
 //!
 //! ```no_run
 //! # fn main() -> tinystore::Result<()> {
@@ -32,6 +35,7 @@ mod correct;
 mod document;
 mod engine;
 mod execute;
+mod filter;
 #[cfg(test)]
 mod fixture;
 mod hybrid;
@@ -47,6 +51,7 @@ mod vectors;
 mod write;
 
 pub use engine::Maintenance;
+pub use filter::{Condition, and, eq, is_in, missing, or, range};
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, SearchCall};
 
 use serde::Serialize;

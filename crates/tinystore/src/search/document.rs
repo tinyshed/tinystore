@@ -1,13 +1,14 @@
 //! A document as its index reads it: the text of each field, its words and
-//! their stems counted by part.
+//! their stems counted by part, and the values of each filter.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
 use super::analyzer;
+use super::filter;
 use super::score::Part;
-use super::settings::{Field, shown};
+use super::settings::{Field, Filter, shown};
 use crate::{Error, Result};
 
 /// The most words a part's length counts: a length is kept in two bytes.
@@ -29,8 +30,9 @@ impl Analyzed {
     }
 }
 
-/// The words of a document's fields.
-pub(crate) fn analyze(document: &Value, fields: &[Field]) -> Result<Analyzed> {
+/// The words of a document's fields, and its filters' values, each a key
+/// held once.
+pub(crate) fn analyze(document: &Value, fields: &[Field], filters: &[Filter]) -> Result<Analyzed> {
     let mut terms: BTreeMap<(Part, String), u32> = BTreeMap::new();
     let mut lengths: BTreeMap<Part, u32> = BTreeMap::new();
     for field in fields {
@@ -44,6 +46,11 @@ pub(crate) fn analyze(document: &Value, fields: &[Field]) -> Result<Analyzed> {
                 }
                 *terms.entry((written, word.text)).or_default() += 1;
             }
+        }
+    }
+    for filter in filters {
+        for term in filter::held(document, &filter.path)? {
+            terms.insert((Part::filter(filter.number), term), 1);
         }
     }
     Ok(Analyzed {
@@ -91,7 +98,7 @@ mod tests {
     fn a_document_counts_its_words_and_stems_by_part() {
         let document = json!({ "title": "Кошки и кошка", "tags": ["cat", null, "cats"], "author": { "name": "Ann" } });
         let fields = [field("title", 0), field("tags", 1), field("author.name", 2), field("missing", 3)];
-        let analyzed = analyze(&document, &fields).unwrap();
+        let analyzed = analyze(&document, &fields, &[]).unwrap();
         let (title, stems, tags) = (Part::written(0), Part::stems(0), Part::written(1));
         assert_eq!(analyzed.lengths, [(title, 3), (stems, 2), (tags, 2), (Part::written(2), 1)]);
         assert_eq!(analyzed.terms.iter().filter(|(part, _, _)| *part == stems).count(), 1);
@@ -101,9 +108,9 @@ mod tests {
 
     #[test]
     fn a_string_document_is_its_own_text_and_a_field_of_no_text_is_refused() {
-        let analyzed = analyze(&json!("hello world"), &[field("", 0)]).unwrap();
+        let analyzed = analyze(&json!("hello world"), &[field("", 0)], &[]).unwrap();
         assert_eq!(analyzed.lengths, [(Part::written(0), 2)]);
-        let refused = analyze(&json!({ "year": 2024 }), &[field("year", 0)]).unwrap_err();
+        let refused = analyze(&json!({ "year": 2024 }), &[field("year", 0)], &[]).unwrap_err();
         assert_eq!(refused.to_string(), "field year holds a number, not text: invalid");
     }
 }

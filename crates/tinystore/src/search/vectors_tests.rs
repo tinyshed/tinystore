@@ -101,7 +101,7 @@ fn near(random: &mut Random, pool: &[Vec<f32>]) -> Vec<f32> {
 }
 
 #[test]
-fn the_best_by_codes_are_the_best_by_every_vector_bit_for_bit() {
+fn the_best_by_codes_are_the_best_by_every_vector_bit_for_bit_of_all_or_of_those_a_filter_passes() {
     for seed in 0..60 {
         let mut random = Random::new(seed);
         let dimensions = [1, 3, 16, 64, 300][random.below(5) as usize];
@@ -118,11 +118,18 @@ fn the_best_by_codes_are_the_best_by_every_vector_bit_for_bit() {
                 if random.below(2) == 0 { near(&mut random, &pool) } else { vector(&mut random, dimensions) };
             let question = Question::new(&question).unwrap();
             let k = 1 + random.below(60) as usize;
-            let (found, _) = best_counted(&connection, 7, &question, k).unwrap();
-            let every = every(&connection, 7, &question, k).unwrap();
+            let passing: Vec<u32> = (1..=count + 3).filter(|_| random.below(3) == 0).collect();
+            let among = match random.below(3) {
+                0 => Among::Every,
+                1 => Among::Crossed(&passing),
+                _ => Among::Only(&passing),
+            };
+            let scan = Scan { index: 7, question: &question, k, among };
+            let (found, _) = best_counted(&connection, &scan).unwrap();
+            let every = every(&connection, &scan).unwrap();
             let bits =
                 |hits: &[(f64, u32)]| hits.iter().map(|(score, doc)| (score.to_bits(), *doc)).collect::<Vec<_>>();
-            assert_eq!(bits(&found), bits(&every), "seed {seed}, k {k}");
+            assert_eq!(bits(&found), bits(&every), "seed {seed}, k {k}, {:?}", scan.among);
         }
     }
 }
@@ -139,7 +146,9 @@ fn codes_rule_out_most_vectors() {
     let mut rescored = 0;
     for _ in 0..20 {
         let question: Vec<f32> = (0..256).map(|_| normal(&mut random)).collect();
-        rescored += best_counted(&connection, 1, &Question::new(&question).unwrap(), 10).unwrap().1;
+        let question = Question::new(&question).unwrap();
+        rescored +=
+            best_counted(&connection, &Scan { index: 1, question: &question, k: 10, among: Among::Every }).unwrap().1;
     }
     eprintln!("{} vectors of 5,000 scored again a search", rescored / 20);
     assert!(rescored / 20 < 100, "{} vectors of 5,000 scored again a search", rescored / 20);
@@ -151,7 +160,7 @@ fn a_code_that_no_longer_reads_is_named() {
     put(&connection, 1, 1, &[1.0, 2.0, 3.0]);
     connection.execute("update _tinystore_search_codes set code = x'0102'", []).unwrap();
     let question = Question::new(&[1.0, 0.0, 0.0]).unwrap();
-    let error = best(&connection, 1, &question, 10).unwrap_err();
+    let error = best(&connection, &Scan { index: 1, question: &question, k: 10, among: Among::Every }).unwrap_err();
     assert_eq!(error.kind(), crate::ErrorKind::Corrupt);
     assert!(error.to_string().contains("document 1"), "{error}");
 }

@@ -71,9 +71,38 @@ fn the_best_by_their_blocks_bounds_are_the_best_by_every_posting() {
         }
         fast.retain(|list| !list.is_empty());
         slow.retain(|list| !list.is_empty());
-        let found = best(&mut fast, &mut memory, k).unwrap();
-        let expected = every(&mut slow, &mut memory, k).unwrap();
+        let found = best(&mut fast, &mut memory, k, None).unwrap();
+        let expected = every(&mut slow, &mut memory, k, None).unwrap();
         assert_eq!(found, expected, "seed {seed}");
+    }
+}
+
+/// Lists of `postings`, each cut into blocks as its seed says, the blocks kept in `memory`.
+fn cut(seed: u64, postings: &[Vec<Posting>], memory: &mut Memory) -> Vec<List> {
+    let mut lists: Vec<List> = (0..)
+        .zip(postings)
+        .map(|(key, postings)| list(key, postings, &mut Random::new(seed * 31 + key as u64), memory))
+        .collect();
+    lists.retain(|list| !list.is_empty());
+    lists
+}
+
+#[test]
+fn the_best_a_filter_passes_are_the_best_of_every_posting_it_passes_on_either_path() {
+    for seed in 0..300 {
+        let mut random = Random::new(seed);
+        let span = 1 + random.below(20_000) as u32;
+        let k = 1 + random.below(40) as usize;
+        let share = 1 + random.below(200);
+        let passing: Vec<u32> = (1..=span).filter(|_| random.below(share) == 0).collect();
+        let postings: Vec<Vec<Posting>> = (0..1 + random.below(6)).map(|_| postings(&mut random, span)).collect();
+        let mut memory = Memory::default();
+        let mut wide = cut(seed, &postings, &mut memory);
+        let mut narrow = cut(seed, &postings, &mut Memory::default());
+        let mut slow = cut(seed, &postings, &mut Memory::default());
+        let expected = every(&mut slow, &mut memory, k, Some(&passing)).unwrap();
+        assert_eq!(best(&mut wide, &mut memory, k, Some(&passing)).unwrap(), expected, "seed {seed}, crossed out");
+        assert_eq!(best_of(&mut narrow, &mut memory, &passing, k).unwrap(), expected, "seed {seed}, scored alone");
     }
 }
 
@@ -84,6 +113,6 @@ fn of_equal_scores_the_lower_document_comes_first() {
     let mut lists = vec![List::new(1, Part(0), 1.0, 10.0, Vec::new())];
     let held = lists[0].in_hand(same);
     lists[0].push(held);
-    let found = best(&mut lists, &mut memory, 3).unwrap();
+    let found = best(&mut lists, &mut memory, 3, None).unwrap();
     assert_eq!(found.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(), [1, 2, 3]);
 }

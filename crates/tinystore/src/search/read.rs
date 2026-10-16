@@ -17,14 +17,15 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::analyzer::{self, Word};
 use super::correct::Corrector;
-use super::execute::{Fetch, List, best};
+use super::execute::{Fetch, List, best, best_of};
+use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS, lock};
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
 use super::score::{Part, average, idf, score};
 use super::settings::Settings;
-use super::vectors::{self, Question};
+use super::vectors::{self, Among, Question, Scan};
 use crate::sqlite::sql_error;
 use crate::{Error, Memory, Result};
 
@@ -41,6 +42,14 @@ const READ_HIT: &str = "select id, value from _tinystore_search_docs where index
 
 /// Blocks a statement reads at once while a list is read in order.
 const AHEAD: usize = 8;
+/// A filter that passes no more than one document in this many of an
+/// index's has them scored alone, rather than crossed out of a search of
+/// every one; a search by a vector reads their codes by their numbers
+/// rather than scanning every code. Over 100,000 documents, searches by
+/// words took as long both ways at 1 in 32 and by a vector between 1 in 2
+/// and 1 in 8 (`where_a_filter_is_scored_alone_takes` in `search::index`).
+const NARROW_WORDS: u64 = 32;
+const NARROW_VECTORS: u64 = 4;
 
 /// A search's text as the analyzer normalized it, its words found in it,
 /// its vector, how it combines the two if it says, and the hits it asks for.
@@ -51,6 +60,7 @@ pub(crate) struct Query {
     pub(crate) vector: Option<Question>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
+    pub(crate) filter: Option<filter::Asked>,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
 }
@@ -93,13 +103,14 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     let corrected = correct(connection, &mut asked, words_version, &mut behind)?;
     let k = asked.query.offset + asked.query.limit;
     let both = k.max(HALF);
-    let held = Held { moment, documents };
+    let passing = passing(connection, &asked, moment)?;
+    let held = Held { moment, documents, passing: passing.as_deref() };
     let ranked = match mode {
         Mode::Words => by_words(connection, &asked, held, k)?,
-        Mode::Vector => by_vector(connection, &asked, k)?,
+        Mode::Vector => by_vector(connection, &asked, held, k)?,
         Mode::Sum(weight) => {
             let words = by_words(connection, &asked, held, both)?;
-            hybrid::fuse(&words, &by_vector(connection, &asked, both)?, weight)
+            hybrid::fuse(&words, &by_vector(connection, &asked, held, both)?, weight)
         }
         Mode::Rerank => {
             let words = by_words(connection, &asked, held, both)?;
@@ -149,37 +160,71 @@ fn question<'a>(asked: &'a Asked<'_>) -> Result<&'a Question> {
     asked.query.vector.as_ref().ok_or_else(|| Error::internal("a search by its vector has none"))
 }
 
-/// What a snapshot holds of an index: the moment of its kept parts, and
-/// how many documents.
+/// What a snapshot holds of an index: the moment of its kept parts, how
+/// many documents, and those the search's filter passes, if it has one.
 #[derive(Clone, Copy)]
-struct Held {
+struct Held<'a> {
     moment: Moment,
     documents: u64,
+    passing: Option<&'a [u32]>,
+}
+
+/// The documents the search's filter passes, in their order; none when it
+/// has no filter or one that passes every document.
+fn passing(connection: &Connection, asked: &Asked<'_>, moment: Moment) -> Result<Option<Vec<u32>>> {
+    let Some(conditions) = &asked.query.filter else { return Ok(None) };
+    let gone = asked.kept.gone(connection, moment)?;
+    let reader = Reader { connection, index: asked.index, settings: asked.settings, gone: &gone.docs };
+    Ok(match reader.passing(conditions)? {
+        Docs::All => None,
+        Docs::Only(docs) => Some(docs),
+    })
+}
+
+/// Whether a filter that passes `passing` of `documents` passes few
+/// enough, by `share`, to read them alone.
+fn narrow(passing: usize, documents: u64, share: u64) -> bool {
+    #[cfg(test)]
+    if let Some(narrow) = NARROW.get() {
+        return narrow;
+    }
+    (passing as u64).saturating_mul(share) <= documents
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every filter of this thread's searches on one path, for a timing.
+    pub(crate) static NARROW: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// The best `k` by the search's words, with their scores.
-fn by_words(
-    connection: &Connection,
-    asked: &Asked<'_>,
-    Held { moment, documents }: Held,
-    k: usize,
-) -> Result<Vec<(f64, u32)>> {
+fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
+    let Held { moment, documents, passing } = held;
     let stats =
         Stats { documents, tokens: tokens(connection, asked.index)?, gone: asked.kept.gone(connection, moment)? };
     let mut source = Source::new(connection, asked, moment, &stats);
-    let found = best(&mut lists(connection, asked, &stats)?, &mut source, k)?;
+    let mut lists = lists(connection, asked, &stats)?;
+    let found = match passing {
+        Some(docs) if narrow(docs.len(), documents, NARROW_WORDS) => best_of(&mut lists, &mut source, docs, k)?,
+        passing => best(&mut lists, &mut source, k, passing)?,
+    };
     #[cfg(test)]
-    check(connection, asked, &stats, moment, (&found, k))?;
+    check(connection, asked, (&stats, held), (&found, k))?;
     Ok(found.into_iter().map(|(points, doc)| (score(points), doc)).collect())
 }
 
 /// The best `k` by the search's vector, with their cosines.
-fn by_vector(connection: &Connection, asked: &Asked<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
-    let question = question(asked)?;
-    let found = vectors::best(connection, asked.index, question, k)?;
+fn by_vector(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
+    let among = match held.passing {
+        None => Among::Every,
+        Some(docs) if narrow(docs.len(), held.documents, NARROW_VECTORS) => Among::Only(docs),
+        Some(docs) => Among::Crossed(docs),
+    };
+    let scan = Scan { index: asked.index, question: question(asked)?, k, among };
+    let found = vectors::best(connection, &scan)?;
     #[cfg(test)]
     if CHECKED.get() {
-        let every = vectors::every(connection, asked.index, question, k)?;
+        let every = vectors::every(connection, &scan)?;
         if every != found {
             return Err(Error::internal(format!("found {found:?} where every vector gives {every:?}")));
         }
@@ -236,15 +281,14 @@ pub(crate) fn checked<T>(run: impl FnOnce() -> T) -> T {
 fn check(
     connection: &Connection,
     asked: &Asked<'_>,
-    stats: &Stats,
-    moment: Moment,
+    (stats, held): (&Stats, Held<'_>),
     (found, k): (&[(u64, u32)], usize),
 ) -> Result<()> {
     if !CHECKED.get() {
         return Ok(());
     }
-    let mut source = Source::new(connection, asked, moment, stats);
-    let every = super::execute::every(&mut lists(connection, asked, stats)?, &mut source, k)?;
+    let mut source = Source::new(connection, asked, held.moment, stats);
+    let every = super::execute::every(&mut lists(connection, asked, stats)?, &mut source, k, held.passing)?;
     if every != found {
         return Err(Error::internal(format!("found {found:?} where every posting gives {every:?}")));
     }
