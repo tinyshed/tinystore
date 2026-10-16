@@ -1,17 +1,20 @@
 # search: the API book
 
-Documents a program sets by id in a named index and finds again by their
-words, by vectors it gives with them, or by both. This book is a draft of
-16 October 2026: nothing in it is accepted. It holds the call sites after one
-newcomer check and the owner's and an outside reviewer's first reading.
+Accepted by the owner on 16 October 2026, after a newcomer check and the
+owner's and an outside reviewer's readings (below). Documents a program sets
+by id in a named index and finds again by their words, by vectors it gives
+with them, or by both, kept to the documents a filter passes.
 [dx.md](../dx.md) holds the rules it follows. The evidence is research's
 rounds of 16 October:
 [search-plan](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-plan-2026-10-16.md),
 [search-1m](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-1m-2026-10-16.md),
 [search-blocks](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-blocks-2026-10-16.md),
-[search-compact](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-compact-2026-10-16.md)
+[search-compact](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-compact-2026-10-16.md),
+[search-vectors](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-vectors-2026-10-16.md),
+[search-vchurn](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-vchurn-2026-10-16.md),
+[search-wchurn](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-wchurn-2026-10-16.md)
 and
-[search-vectors](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-vectors-2026-10-16.md).
+[search-hybrid](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-hybrid-2026-10-16.md).
 The Go engine had no search.
 
 ## What a newcomer learns
@@ -22,6 +25,7 @@ The Go engine had no search.
 | a document      | a value set by its id, as a bucket's is; the index keeps it and answers with it                 |
 | fields          | which of a document's text its words are read from, and how much each weighs                    |
 | a vector        | numbers the program's own model gave a document or a question; never made here                  |
+| a filter        | a field of the document a search can keep its hits to, declared at open: `{ userId: 42 }`       |
 | a hit           | `{ id, value, score }`: a document found, and what ordered it                                   |
 | a table's index | `db.searchIndex`: an SQL table's rows, found as an index's documents, kept in step by the store |
 
@@ -39,7 +43,9 @@ const posts = store.index<Post>('posts', { fields: ['title', 'body'] })   // eve
 const notes = store.index<string>('notes')                                // a string is its own field
 const products = store.index<Product>('products', {
   fields: { name: 3, description: 1 },
+  filters: ['category', 'ownerId'],
   vectors: { dimensions: 1024 },
+  hybrid: { vectorWeight: 0.5 },
 })
 ```
 
@@ -47,7 +53,8 @@ const products = store.index<Product>('products', {
 articles = store.index("articles", Article, fields={"title": 2, "body": 1})
 posts = store.index("posts", Post, fields=["title", "body"])
 products = store.index("products", Product, fields={"name": 3, "description": 1},
-                       vectors=Vectors(dimensions=1024))
+                       filters=["category", "owner_id"], vectors=Vectors(dimensions=1024),
+                       hybrid=Hybrid(vector_weight=0.5))
 ```
 
 ```rust
@@ -57,7 +64,9 @@ let products = store
     .index::<Product>("products")
     .field("name", 3.0)
     .field("description", 1.0)
+    .filters(["category", "owner_id"])
     .vectors(1024)
+    .vector_weight(0.5)
     .open()?;
 ```
 
@@ -67,9 +76,14 @@ let products = store
   of 2 scores twice what it would in a field of 1. A list weighs every field
   1, and is the same index as the object that says so; a weight must be
   above zero.
+- `filters` names the fields a search may keep its hits to, below.
+  `hybrid` says how a search by words and a vector at once combines the
+  two, below; it is the default every such search starts from, and a
+  search may say otherwise.
 - Every index `store.index` opens lives in `search.db`: an index's
   documents, words and vectors commit together, and no other engine waits on
   its writer. One of an SQL table lives in that database's file, below.
+
 ## Change an index
 
 ```ts
@@ -88,9 +102,9 @@ never waits for the work a change needs.
 
 | What changed                                               | What happens                                                                                         |
 |------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| a field's weight, `typoTolerance`                          | at once: a search reads the weights and its blocks' bounds when it runs, so nothing is written again |
-| a field removed                                            | at once from searches; its postings dropped in steps in the background                               |
-| a field added                                              | its words read from the kept documents in the background; searches use it once it is ready           |
+| a field's weight, `typoTolerance`, `hybrid`                | at once: a search reads the weights and its blocks' bounds when it runs, so nothing is written again |
+| a field or a filter removed                                | at once from searches; its postings dropped in steps in the background                               |
+| a field or a filter added                                  | read from the kept documents in the background; searches use it once it is ready                     |
 | `recall` added or removed                                  | the clusters built or dropped in the background; searches stay exact meanwhile                       |
 | how text is cut, by a release of TinyStore that changes it | the index rebuilt in the background                                                                  |
 | the vectors' `dimensions`                                  | `invalid`: the vectors are the program's model's, and the store has nothing to make new ones from    |
@@ -168,18 +182,19 @@ const { hits } = await products.search({ text: 'red shoes', vector: q })        
 const { hits } = await products.search({ vector: q })                           // by the vector alone
 const { hits } = await articles.search({ text: 'хлеб', limit: 20, offset: 20 })
 const { hits, corrected } = await articles.search('helo wrld')                  // corrected: 'hello world'
+const { hits } = await products.search({ text: 'red shoes', filter: { ownerId: 42 } })
 
 for (const hit of hits) show(hit.id, hit.value.title)
 ```
 
 ```python
 hits = articles.search("как испечь хлеб").hits
-hits = products.search(text="red shoes", vector=q).hits
+hits = products.search(text="red shoes", vector=q, filter={"owner_id": 42}).hits
 ```
 
 ```rust
 let found = articles.search("как испечь хлеб").run()?;
-let found = products.search("red shoes").vector(&q).limit(20).run()?;
+let found = products.search("red shoes").vector(&q).filter("owner_id", 42).limit(20).run()?;
 ```
 
 - A string is a search by its words: `search('хлеб')` is
@@ -226,20 +241,52 @@ let near = commands.nearest("bakup", 1);         // Some(Near { word: "backup", 
 
 ## Vectors and words together
 
-search-vectors embedded a million passages with bge-m3 and asked 600 judged
-questions, a model trained on that benchmark's own domain. Its vectors alone
-found 1.7 times what the words found (nDCG@10 0.736 against 0.432). Fusing
-the two lists by rank at equal weight lost to the vectors alone (0.641);
-weighing the vectors four times came within 0.02 of them. The words' best
-hundred scored again on their vectors, which needs no vector index, reached
-0.687.
+```ts
+await products.search({ text: 'red shoes', vector: q })                                  // the index's vectorWeight
+await products.search({ text: 'red shoes', vector: q, hybrid: { vectorWeight: 0.7 } })   // this search's
+await products.search({ text: 'red shoes', vector: q, hybrid: { rerank: true } })        // the words' hits, ordered by the vector
+```
 
-So how `{ text, vector }` combines the two is not settled: fusion by rank
-with a weight, or the words' candidates scored on their vectors. A round
-with a model out of its domain and questions by keyword, where words are
-expected to matter more, decides. Whichever it is, each half is asked for
-at least `offset + limit` and never fewer than a hundred, so that paging
-past the first hundred still answers.
+```rust
+let found = products.search("red shoes").vector(&q).vector_weight(0.7).run()?;
+let found = products.search("red shoes").vector(&q).rerank().run()?;
+```
+
+- A search by both asks each half for its best hundred, or `offset +
+  limit` if more; scales each half's scores to 0–1 by its own lowest and
+  highest, a document the other half did not find scoring 0 there; and
+  orders the documents by (1 − `vectorWeight`) × words + `vectorWeight` ×
+  vector. `vectorWeight` is 0.5 unless the index or the search says
+  otherwise, from 0, the words alone, to 1, the vector alone.
+- The weight is the only setting a search may give in place of its index's:
+  one index serves searches that weigh differently, a catalog's search box
+  and a support page's, and a weight changes no stored byte, so neither
+  needs an index of its own.
+- `rerank: true` orders the words' hundred by their vectors' cosine with
+  the question's and finds nothing the words did not: no clusters and no
+  scan of every vector, a hundred vectors read by their number. It is for a
+  program whose questions always have words and whose vectors only order
+  them. At open it makes every search by both rerank; beside a
+  `vectorWeight` in the same `hybrid` it is `invalid`.
+- search-hybrid, bge-m3 on Amazon's products in three languages and twelve
+  StackExchange forums, 600 judged questions each, nDCG@10:
+
+  | mode               | products | forums |
+  |--------------------|----------|--------|
+  | words              | 0.306    | 0.240  |
+  | vectors, exact     | 0.307    | 0.378  |
+  | fusion by rank     | 0.359    | 0.348  |
+  | `vectorWeight` 0.5 | 0.361    | 0.366  |
+  | `vectorWeight` 0.7 | 0.348    | 0.391  |
+  | `rerank`           | 0.361    | 0.353  |
+
+  Scores summed beat fusion by rank at equal weight in all four pairs of
+  the round, outside the 95 % interval in three; no weight won both
+  collections, so the program chooses it, from 0.5. `rerank` cost 0.6–0.8
+  ms on top of the words and lost nothing to clusters, which cost every
+  fusion 0.014–0.039. On MIRACL, the model's own domain, the vectors alone
+  led the words 0.736 to 0.432 and no fusion by rank passed them
+  (search-vectors).
 
 ## Exact and approximate vectors
 
@@ -257,8 +304,48 @@ const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions:
   about 3 ms a million at 0.94 of the exact ten, holding 96 MiB, against
   HNSW's 0.4 ms and 2.2 GiB. The program asked for it at open, so no answer
   says it again.
+- How many clusters a search reads is the index's to choose from `recall`,
+  measured on a sample of its own vectors and again as it grows: the same
+  3 % of the clusters found 0.94 on MIRACL and 0.90 on Amazon's products
+  and StackExchange (search-hybrid), so a fixed number would promise
+  nothing.
 - Words are always exact. In a search by both, `recall` speaks for the
   vector half alone.
+
+## Filters
+
+```ts
+const products = store.index<Product>('products', { fields, filters: ['category', 'ownerId', 'inStock'] })
+
+await products.search({ text: 'red shoes', filter: { ownerId: 42 } })
+await products.search({ text: 'red shoes', filter: { category: ['shoes', 'boots'], inStock: true } })
+await products.search({ vector: q, filter: { category: 'shoes' } })
+```
+
+```rust
+let found = products
+    .search("red shoes")
+    .filter("category", ["shoes", "boots"])
+    .filter("in_stock", true)
+    .run()?;
+```
+
+- `filters` names the fields a search may filter by, each a path into the
+  document whose value is a string, a whole number, a boolean, or a list of
+  them: a product in two categories passes a filter on either. A filter on
+  a field the index was not opened with is `invalid`, since the index keeps
+  only what it was told to.
+- A search keeps to the documents its filter passes: a value must match
+  exactly, one of a list given, and every field named must pass. It answers
+  the best ten of those documents, never the best ten of all with the
+  others taken out after, which could leave a user nothing where their own
+  documents were there to find.
+- Searches by words and by an exact vector answer what scoring every
+  document that passes would; with `recall`, the vector half finds that
+  share of the exact ten among them.
+- A tenant is a filter: `filter: { tenantId }` keeps each tenant to their
+  own documents, ranked by the words of the whole index.
+- Ranges of numbers and dates are not in the first version.
 
 ## An index of a table
 
@@ -289,8 +376,8 @@ let articles = db
 
 - `db.searchIndex` follows a table of the database: the table owns the
   rows, and the index has no `set` or `delete`. Its key is the table's
-  primary key unless `key` names another unique column, and `fields` names
-  its text columns.
+  primary key unless `key` names another unique column, `fields` names its
+  text columns and `filters` the columns a search may filter by.
 - Every way a row changes reaches it: `execute`, `batch`, a transaction, a
   trigger of the program's own, a migration. A change and the index's change
   commit together or not at all: the index's triggers on the table write
@@ -314,12 +401,12 @@ let articles = db
 
 ## Errors
 
-| Kind      | When                                                                                                                                                                                                                                                    |
-|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero; a vector of another length, NaN or an infinity, missing, or on an index without `vectors` |
-| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                   |
-| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                               |
-| `closed`  | the store closed                                                                                                                                                                                                                                        |
+| Kind      | When                                                                                                                                                                                                                                                                                                                                                                                  |
+|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `invalid` | a bad name or id; vectors of other dimensions than the index holds; a change that needs a rebuild under `rebuild: 'manual'`; a field's weight not above zero; a vector of another length, NaN or an infinity, missing, or on an index without `vectors`; a filter on a field not in `filters`, or a value of no type a filter keeps; a `vectorWeight` outside 0–1, or beside `rerank` |
+| `limit`   | a document, a field's text or a search over its bound                                                                                                                                                                                                                                                                                                                                 |
+| `corrupt` | a block, a list or a document that no longer reads, named                                                                                                                                                                                                                                                                                                                             |
+| `closed`  | the store closed                                                                                                                                                                                                                                                                                                                                                                      |
 
 Every error names the index and the document: `index articles: id "a-17": invalid`.
 
@@ -334,6 +421,8 @@ Proposed, to be measured before they are promised.
 | a vector           | 4,096 dimensions          |
 | `limit` + `offset` | 1,000                     |
 | an index's name    | 64 bytes                  |
+| a filter's value   | 256 bytes                 |
+| a search's filter  | 8 fields, 100 values      |
 
 ## Under the surface
 
@@ -355,7 +444,26 @@ Proposed, to be measured before they are promised.
 - **Writes** go to a head that searches read beside the blocks; a set gives
   its document a new number and marks the old one gone. Background work
   packs the head into the blocks every thousand writes, which kept `or`'s
-  p99 at 14–16 ms through 15,000 writes where an unpacked head reached 37.
+  p99 at 14–16 ms through 15,000 writes where an unpacked head reached 37
+  (search-compact). It packs 2,048 of the head's rows a commit, holding the
+  writer 92 ms at most where one commit held it a second, at 3.4 times the
+  work in all; once the gone pass 0.5 % of the documents it purges them,
+  rewriting only the blocks whose range holds one, in commits as short
+  (search-wchurn). Every answer stayed exact throughout.
+- **Filters** are keys of the postings without frequencies, `category` and
+  `shoes` beside a field's words, packed and purged with them, and the
+  index knows each one's count of documents. A filter that passes few
+  documents is scored alone: its documents and nothing else. One that
+  passes many runs the usual search, crossing out of each window the
+  documents it does not pass, whose blocks' bounds then skip less. Exact
+  vectors score only what passes; clusters skip what does not and read
+  further clusters until enough pass, or go exact over a filter's few. Where
+  each path begins is the filters slice's measurement; graphs such as HNSW
+  are what filters are hard for, and clusters are not one.
+- **Two halves at once** are asked one after the other and summed as the
+  search section says; search-hybrid's fusion took 7.4 and 14.8 ms at the
+  median with clusters, the words' share of it 2.2 and 11.8, and `rerank`
+  2.9 and 12.4.
 - **Typos** come from `tinystore::typos`: one FST of the index's words a
   script, through a Levenshtein automaton; search-plan measured a mixed
   question's candidates at a median 18.6 ms from one FST for every script,
@@ -366,34 +474,58 @@ Proposed, to be measured before they are promised.
   `recall` adds clusters by spherical k-means, each member kept as RaBitQ's
   bit a dimension, 146 bytes a vector: a bit a dimension reached the same
   recall as a byte three times sooner. SQLite's own vec1 answered 1.2–1.5
-  times sooner at equal recall; writes into the clusters are not measured.
+  times sooner at equal recall.
+- **Writes into the clusters** go to the nearest cluster's head, a commit
+  each, 3.1–6.1 ms at the median; a cluster is packed in a commit of its
+  own and split past twice the mean. Through 130,000 writes, a language the
+  clusters were never trained on among them, that kept a search at 4.5 ms
+  at the median where an unpacked one reached 14.2, recall at 0.942, and
+  every exact answer exact (search-vchurn).
 
 ## Slices
 
 1. The analyzer, words and postings in the Rust core: `set`, `delete`,
-   `get`, `search` by words, the head and its packing.
-2. `tinystore::typos`, which the command line and config use too, and
-   `corrected`.
-3. Vectors, exact, and the words' candidates scored on them.
-4. Vectors with `recall`, after a round of writes into the clusters.
-5. Changes of an index in the background, `ready()`, `status()`,
+   `get`, `search` by words, the head packed in steps, the gone purged,
+   and `corrected`.
+2. `tinystore::typos`, which the command line and config use too: built
+   16 October, `40672f2`.
+3. Vectors, exact; a search by both, its `vectorWeight` and `rerank`.
+4. Filters, for words and exact vectors, with the round that finds where
+   a filter's own documents are scored apart.
+5. Vectors with `recall`: the clusters, their heads, packing and splits,
+   the clusters read chosen from `recall`, and filters through them.
+6. Changes of an index in the background, `ready()`, `status()`,
    `dropIndex` and `tinystore search`.
-6. The wire and the Bun SDK.
-7. `db.searchIndex`: its triggers, the pending keys, and their indexing
+7. The wire and the Bun SDK.
+8. `db.searchIndex`: its triggers, the pending keys, and their indexing
    before the commit.
 
-Python and Go come with their bindings.
+Python and Go come with their bindings. Each slice ends with its gates and
+a newcomer check of what it made public.
 
 ## Gates
 
 - A search by words answers what scoring every document answers, under
-  sets, deletes and packing.
+  sets, deletes, packing and purging.
 - An exact vector search answers what scoring every vector answers, bit for
   bit.
+- A filtered search answers what scoring every document the filter passes
+  answers, and finds a document that passes whenever one holds a word of
+  the search.
+- A search by both orders its hits by the sum the search section gives,
+  computed again from both halves' scores.
 - A set is seen by the next search; a deleted document never answers again.
-- A packing changes no answer.
+- A packing or a purge changes no answer.
+- Searches and writes from many threads at once answer what one at a time
+  would, in some order of the writes.
+- A crash at any moment of a write, a packing, a purge or a rebuild leaves
+  the index as its last commit, and the next open answers as it did.
+- Through a long mix of sets and deletes, the file stays within a bound of
+  a fresh build of the same documents and the write-ahead log within its
+  checkpoint's.
 - A search-only build links no jobs; a build without `typos` links no fst.
-- A changed weight rebuilds nothing, and the next search reads it.
+- A changed weight or `vectorWeight` rebuilds nothing, and the next search
+  reads it.
 - A change that needs background work answers by the old settings until
   its switch, every write meanwhile reaching both, and a restart continues
   it; `rebuild: 'manual'` refuses it until `reindex`.
@@ -404,24 +536,20 @@ Python and Go come with their bindings.
 
 ## Later
 
-- Filters on a document's values, declared at open and given a search:
-  `filter: { category: 'shoes' }`; the first thing a real application asks.
-- Tenants, `under(orgId)`: whether a branch counts its words apart, a
-  ranking of its own, needs a round with thousands of small tenants first.
+- Ranges of numbers and dates in a filter, `filter: { price: { below: 100
+  } }`, from a sorted key of their own; `not`.
+- Tenants ranked by their own words, `under(orgId)`: whether a branch
+  counts its words apart needs a round with thousands of small tenants
+  first. A tenant as a filter is in the first version.
 - `total` for a pager, which an exact top ten that skips blocks does not
   count.
 - Phrases, from positions kept beside the blocks (+283 MiB a million
   documents, search-compact); highlighted matches.
-- Merges that purge the documents a set or a delete left gone.
 - A vector's model named at open, so that one swapped for another of the
   same dimensions is refused.
 - A model in the binary, so that a program without one gets vectors.
-
-## Open questions for the owner
-
-1. How `{ text, vector }` combines the two, after a round out of domain,
-   with questions by identifier, name and article number beside natural
-   ones. The call stays as it is.
+- Questions that are an identifier alone, a part number or an error code,
+  which no round sampled apart.
 
 ## Names, 16 October
 
@@ -460,18 +588,22 @@ reviewer found ambiguous.
 
 ## The owner's calls, 16 October
 
-The owner and the outside reviewer read the check.
+The owner and the outside reviewer read the check, then search-hybrid, and
+accepted the book.
 
-| Question                                  | Decided                                                                                                                                                                                      |
-|-------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `boost` beside `fields`, or the weight in | `fields: { title: 2, body: 1 }`, a list for equal weights; `boost` gone                                                                                                                      |
-| `corrected` or `didYouMean`               | `corrected`: the hits already come from the words it names, which `didYouMean` would deny                                                                                                    |
-| the corrector inside search               | `tinystore::typos`, a module and a feature of its own, for the command line and config too                                                                                                   |
-| a correction of a config key              | said in the error, never applied                                                                                                                                                             |
-| opening again with other settings         | it changes the index: weights at once, other changes in the background beside the old one, said in the log; `rebuild: 'manual'` refuses them until `store.reindex`; `ready()` and `status()` |
-| an index no code opens any more           | kept until `store.dropIndex` or `tinystore search drop`, since another version may open it                                                                                                   |
-| `db.index`                                | `db.searchIndex`; `store.index` stays                                                                                                                                                        |
-| how words and vectors fuse                | open until a round out of domain; `{ text, vector }` stays                                                                                                                                   |
-| what the corrector answers                | the word and its edits, each caller its own rules                                                                                                                                            |
-| `db.searchIndex`'s shape                  | it follows a table, which owns the rows; no `set`; one commit with every change                                                                                                              |
-| vectors in a table's index                | a column the program fills; the store never runs a model in a write                                                                                                                          |
+| Question                                  | Decided                                                                                                                                                                                       |
+|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `boost` beside `fields`, or the weight in | `fields: { title: 2, body: 1 }`, a list for equal weights; `boost` gone                                                                                                                       |
+| `corrected` or `didYouMean`               | `corrected`: the hits already come from the words it names, which `didYouMean` would deny                                                                                                     |
+| the corrector inside search               | `tinystore::typos`, a module and a feature of its own, for the command line and config too                                                                                                    |
+| a correction of a config key              | said in the error, never applied                                                                                                                                                              |
+| opening again with other settings         | it changes the index: weights at once, other changes in the background beside the old one, said in the log; `rebuild: 'manual'` refuses them until `store.reindex`; `ready()` and `status()`  |
+| an index no code opens any more           | kept until `store.dropIndex` or `tinystore search drop`, since another version may open it                                                                                                    |
+| `db.index`                                | `db.searchIndex`; `store.index` stays                                                                                                                                                         |
+| how words and vectors fuse                | their scores, each scaled to its own hundred, summed at `hybrid: { vectorWeight }`, 0.5 unless the index or a search says otherwise; `rerank: true` for the words' hits ordered by the vector |
+| the weight at open or in a search         | at open as the default, and a search may give its own, since a weight changes no stored byte (the outside reviewer's)                                                                         |
+| filters                                   | in the first version, equal values and lists of them on fields declared at open, scored while the search runs; ranges later                                                                   |
+| what an implementation must show          | searches and writes at once, a crash at any moment, and a file and a log that stay bounded through a long mix (the outside reviewer's)                                                        |
+| what the corrector answers                | the word and its edits, each caller its own rules                                                                                                                                             |
+| `db.searchIndex`'s shape                  | it follows a table, which owns the rows; no `set`; one commit with every change                                                                                                               |
+| vectors in a table's index                | a column the program fills; the store never runs a model in a write                                                                                                                           |
