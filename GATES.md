@@ -703,6 +703,7 @@ module defines.
 - a node's status says which files it writes, which it copies and where each copy stands, read from its directory — `a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand` in `replication::link_tests`
 - a file written on a copy is kept at its home and reads back on the copy, a big one fetched after, the home deciding what is new and what conflicts — `a_file_written_on_a_copy_is_kept_at_its_home_and_reads_back_on_the_copy` in `replication::link_tests`
 - an encrypted bucket's value written on a copy crosses the link sealed with the key copy and home share, another key's refused, a take refused — `an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed` in `replication::link_tests`
+- a copy's rate limits and quotas are decided at their home, one limit for every node — `a_copy_s_rate_limits_and_quotas_are_decided_at_their_home` in `replication::link_tests`
 - every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
 - a store in a Bun program's own process is a node: a copy of a copy there reads its home's writes and passes its own to the home — `a node in this process` in `sdk/js/test/node.test.ts`
 

@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use super::allowance::{Allowance, Window as WindowUse};
 use super::bucket::{Bucket, Expires, Expiry, Put, Stamp, Version, WriteOptions};
 use super::cells::Cell;
 use super::counters::Counters;
@@ -41,6 +42,17 @@ pub(crate) enum Handle {
         name: String,
         ttl: Option<Duration>,
     },
+    /// A rate limit, its rate as the nanoseconds one request takes.
+    RateLimit {
+        name: String,
+        interval: i64,
+        burst: i64,
+    },
+    /// A quota and its windows: their names, limits and spans in milliseconds.
+    Quota {
+        name: String,
+        windows: Vec<(String, u64, i64)>,
+    },
     /// A name alone, made of a kind, as a handle opening makes it.
     Name {
         name: String,
@@ -63,6 +75,12 @@ pub(crate) enum Call {
     ClearCounters,
     /// Makes the handle's name, which a handle opening on a copy found missing.
     Open,
+    /// Asks a rate limit or a quota for `n` of a key.
+    Allow(u64),
+    /// Gives `n` uses of a quota's key back.
+    Refund(u64),
+    /// Forgets a rate limit's or a quota's key.
+    Reset,
     /// A put of an encrypted bucket's value, sealed where it was written
     /// with the key `key_id`, which its home shares: no value crosses the
     /// link unsealed.
@@ -80,6 +98,7 @@ pub(crate) enum Answer {
     Found(bool),
     Cell(Option<Cell>),
     Sum(i64),
+    Allowance(Allowance),
     Done,
 }
 
@@ -109,6 +128,22 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             out.byte(2);
             out.text(name);
             out.text(role);
+        }
+        Handle::RateLimit { name, interval, burst } => {
+            out.byte(3);
+            out.text(name);
+            out.long(*interval as u64);
+            out.long(*burst as u64);
+        }
+        Handle::Quota { name, windows } => {
+            out.byte(4);
+            out.text(name);
+            out.count(windows.len());
+            for (window, limit, span) in windows {
+                out.text(window);
+                out.long(*limit);
+                out.long(*span as u64);
+            }
         }
     }
     out.count(owners.len());
@@ -143,6 +178,15 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
         Call::DeleteCounter => out.byte(6),
         Call::ClearCounters => out.byte(7),
         Call::Open => out.byte(8),
+        Call::Allow(n) => {
+            out.byte(10);
+            out.long(*n);
+        }
+        Call::Refund(n) => {
+            out.byte(11);
+            out.long(*n);
+        }
+        Call::Reset => out.byte(12),
         Call::PutSealed { raw, key_id, put, options } => {
             out.byte(9);
             raw_out(&mut out, raw);
@@ -176,6 +220,14 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
             Handle::Counters { name, ttl }
         }
         2 => Handle::Name { name: at.text()?, role: at.text()? },
+        3 => Handle::RateLimit { name: at.text()?, interval: at.long()? as i64, burst: at.long()? as i64 },
+        4 => {
+            let name = at.text()?;
+            let windows = (0..at.count()?)
+                .map(|_| Ok((at.text()?, at.long()?, at.long()? as i64)))
+                .collect::<Result<Vec<_>>>()?;
+            Handle::Quota { name, windows }
+        }
         _ => return Err(corrupt("a handle")),
     };
     let owners: Vec<String> = (0..at.count()?).map(|_| at.text()).collect::<Result<_>>()?;
@@ -194,6 +246,9 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
         6 => Call::DeleteCounter,
         7 => Call::ClearCounters,
         8 => Call::Open,
+        10 => Call::Allow(at.long()?),
+        11 => Call::Refund(at.long()?),
+        12 => Call::Reset,
         9 => {
             let raw = raw_in(&mut at)?;
             let key_id = at.text()?;
@@ -240,6 +295,37 @@ fn call_here(store: &Store, handle: Handle, owners: &[String], key: &str, call: 
                 _ => return Err(Error::invalid("a counter's call on a bucket")),
             })
         }
+        Handle::RateLimit { name, interval, burst } => {
+            let per = Duration::from_nanos(u64::try_from(interval).map_err(|_| corrupt("a rate"))?);
+            let limit = store.rate_limit(&name).rate(1, per).burst(u64::try_from(burst).unwrap_or(1)).open()?;
+            let limit = owners.iter().fold(limit, |limit, owner| limit.under(owner));
+            Ok(match call {
+                Call::Allow(n) => Answer::Allowance(limit.allow_n(key, n)?),
+                Call::Reset => {
+                    limit.reset(key)?;
+                    Answer::Done
+                }
+                _ => return Err(Error::invalid("a call a rate limit does not take")),
+            })
+        }
+        Handle::Quota { name, windows } => {
+            let builder = windows.iter().fold(store.quota(&name), |quota, (window, limit, span)| {
+                quota.window(window, *limit, Duration::from_millis(u64::try_from(*span).unwrap_or(0)))
+            });
+            let quota = owners.iter().fold(builder.open()?, |quota, owner| quota.under(owner));
+            Ok(match call {
+                Call::Allow(n) => Answer::Allowance(quota.allow_n(key, n)?),
+                Call::Refund(n) => {
+                    quota.refund_n(key, n)?;
+                    Answer::Done
+                }
+                Call::Reset => {
+                    quota.reset(key)?;
+                    Answer::Done
+                }
+                _ => return Err(Error::invalid("a call a quota does not take")),
+            })
+        }
         Handle::Counters { name, ttl } => {
             let builder = store.counters(&name);
             let builder = match ttl {
@@ -279,6 +365,19 @@ fn answer_bytes(answer: &Answer) -> Vec<u8> {
             None => out.byte(0),
         },
         Answer::Sum(sum) => out.long(*sum as u64),
+        Answer::Allowance(allowance) => {
+            out.byte(u8::from(allowance.ok));
+            out.long(allowance.left);
+            expires_out(&mut out, allowance.retry_at.map(unix_millis));
+            out.count(allowance.windows.len());
+            for window in &allowance.windows {
+                out.text(&window.name);
+                out.long(window.used);
+                out.long(window.limit);
+                out.long(window.left);
+                expires_out(&mut out, window.resets_at.map(unix_millis));
+            }
+        }
         Answer::Done => {}
     }
     out.0
@@ -304,6 +403,20 @@ pub(crate) fn cell(bytes: &[u8]) -> Result<Option<Cell>> {
     let raw = raw_in(&mut at)?;
     let version = at.long()? as i64;
     Ok(Some(Cell { version, expires: expires_in(&mut at)?, raw }))
+}
+
+pub(crate) fn allowance(bytes: &[u8]) -> Result<Allowance> {
+    let mut at = In { bytes, at: 0 };
+    let ok = at.byte()? == 1;
+    let left = at.long()?;
+    let retry_at = expires_in(&mut at)?.map(from_unix_millis);
+    let mut windows = Vec::new();
+    for _ in 0..at.count()? {
+        let name = at.text()?;
+        let (used, limit, left) = (at.long()?, at.long()?, at.long()?);
+        windows.push(WindowUse { name, used, limit, left, resets_at: expires_in(&mut at)?.map(from_unix_millis) });
+    }
+    Ok(Allowance { ok, left, retry_at, windows })
 }
 
 pub(crate) fn sum(bytes: &[u8]) -> Result<i64> {

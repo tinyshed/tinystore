@@ -321,15 +321,16 @@ in [scaling.md](scaling.md#order).
   cancels, on the queue as its home holds it open, blobs' puts, creates, copies, renames, deletes and expiries,
   a copy's upload gathered in memory, 256 MiB at most, and handed over whole at its commit, and an encrypted
   bucket's writes, its values sealed on the copy with the key it shares with its home, which writes them as they
-  are and refuses another key's, pass from a copy to its home through each node on the way,
+  are and refuses another key's, and the decisions of rate limits and quotas, one limit for every node, pass from
+  a copy to its home through each node on the way,
   each node running the call through the same handle; a file a copy waits for half a second that its home never
   made, the home makes, opening the engine that keeps it;
   the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
   ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Records' and metrics'
   files are each node's own, and a node that copies another's reads them only. Left: a transaction, a take of an
   encrypted bucket, whose value would come back unsealed until links have TLS, what a database's file keeps of
-  kv, jobs and search, a schedule, rate limits, quotas and `once`, the queue of operations that commute, and
-  writes that wait for a link a bound before `unavailable`.
+  kv, jobs and search, a schedule and `once`, and the queue of operations that commute. A write waits ten seconds
+  at most for a link to its home before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
   own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is

@@ -105,12 +105,22 @@ impl Quota {
     /// room for `n`. More than a window's limit never passes, and is `Invalid`.
     pub fn allow_n(&self, key: impl Key, n: u64) -> Result<Allowance> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return super::forward::allowance(&self.pass_on(&key, &super::forward::Call::Allow(n))?);
+        }
         self.scope.write(&key, ROW, self.allow_work(&key, n)?)
     }
 
     /// `allow_n` without waiting: `done` gets the allowance once its commit ends.
     #[cfg(feature = "wire")]
     pub(crate) fn allow_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<Allowance>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            let (quota, key) = (self.clone(), key.to_owned());
+            std::thread::spawn(move || done(quota.allow_n(key, n)));
+            return;
+        }
         self.scope.submit_made(key, ROW, self.allow_work(key, n), done);
     }
 
@@ -148,12 +158,22 @@ impl Quota {
     /// Gives `n` uses back, never below nothing.
     pub fn refund_n(&self, key: impl Key, n: u64) -> Result<()> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return self.pass_on(&key, &super::forward::Call::Refund(n)).map(drop);
+        }
         self.scope.write(&key, ROW, self.refund_work(&key, n)?)
     }
 
     /// `refund_n` without waiting for its commit.
     #[cfg(feature = "wire")]
     pub(crate) fn refund_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<()>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            let (quota, key) = (self.clone(), key.to_owned());
+            std::thread::spawn(move || done(quota.refund_n(key, n)));
+            return;
+        }
         self.scope.submit_made(key, ROW, self.refund_work(key, n), done);
     }
 
@@ -177,13 +197,34 @@ impl Quota {
     /// Forgets `key`'s windows, so that its next use starts each anew.
     pub fn reset(&self, key: impl Key) -> Result<()> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return self.pass_on(&key, &super::forward::Call::Reset).map(drop);
+        }
         self.scope.write(&key, 0, self.reset_work(&key)?)
     }
 
     /// `reset` without waiting for its commit.
     #[cfg(feature = "wire")]
     pub(crate) fn reset_then(&self, key: &str, done: impl FnOnce(Result<()>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            let (quota, key) = (self.clone(), key.to_owned());
+            std::thread::spawn(move || done(quota.reset(key)));
+            return;
+        }
         self.scope.submit_made(key, 0, self.reset_work(key), done);
+    }
+
+    /// Passes a call on `key` to the home of the copy the quota's file is.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, key: &str, call: &super::forward::Call) -> Result<Vec<u8>> {
+        let shown = || self.scope.shown_key(key);
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let windows = self.windows.iter().map(|window| (window.name.clone(), window.limit, window.span)).collect();
+        let handle = super::forward::Handle::Quota { name: self.scope.name().to_owned(), windows };
+        super::forward::pass_on(&store, &handle, &owners, key, call)
     }
 
     fn reset_work(&self, key: &str) -> Result<impl Work<()> + use<>> {

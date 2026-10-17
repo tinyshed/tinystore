@@ -91,6 +91,10 @@ impl RateLimit {
     /// More than the burst never passes, and is `Invalid`.
     pub fn allow_n(&self, key: impl Key, n: u64) -> Result<Allowance> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return super::forward::allowance(&self.pass_on(&key, &super::forward::Call::Allow(n))?);
+        }
         let shown = || self.scope.shown_key(&key);
         let asked = i64::try_from(n).ok().filter(|&n| n >= 1 && n <= self.burst).ok_or_else(|| {
             Error::invalid(format!("{n} requests at once, past a burst of {}", self.burst)).within(shown())
@@ -123,10 +127,29 @@ impl RateLimit {
     /// Forgets `key`'s requests, so that its next one has the whole burst.
     pub fn reset(&self, key: impl Key) -> Result<()> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return self.pass_on(&key, &super::forward::Call::Reset).map(drop);
+        }
         let path = self.scope.path(&key)?;
         let now = unix_millis(self.scope.kv.clock().now());
         let step = |live: Option<Live>| Ok((if live.is_some() { Change::Remove } else { Change::Leave }, ()));
         self.buffer.step(&self.scope.kv, &path, now, step).map_err(|error| error.within(self.scope.shown_key(&key)))
+    }
+
+    /// Passes a call on `key` to the home of the copy the rate limit's file is:
+    /// one limit for every node, decided where its file is written.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, key: &str, call: &super::forward::Call) -> Result<Vec<u8>> {
+        let shown = || self.scope.shown_key(key);
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let handle = super::forward::Handle::RateLimit {
+            name: self.scope.name().to_owned(),
+            interval: self.interval,
+            burst: self.burst,
+        };
+        super::forward::pass_on(&store, &handle, &owners, key, call)
     }
 
     /// The algorithm: `due` is when the key's next request is due, in unix

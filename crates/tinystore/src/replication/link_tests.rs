@@ -567,3 +567,34 @@ fn an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed() {
     wrong.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_copy_s_rate_limits_and_quotas_are_decided_at_their_home() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.bucket::<String>("warm").open().unwrap().set("up", &"kv.db made".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+
+    let hour = Duration::from_secs(3600);
+    let limit = copy.rate_limit("api").rate(3, hour).open().unwrap();
+    let home_limit = home.rate_limit("api").rate(3, hour).open().unwrap();
+    assert!(limit.allow("user").unwrap().ok);
+    assert!(home_limit.allow("user").unwrap().ok, "the home counts the copy's request");
+    assert!(limit.allow("user").unwrap().ok);
+    let refused = limit.allow("user").unwrap();
+    assert!(!refused.ok && refused.retry_at.is_some(), "the fourth of three an hour waits, wherever it is asked");
+    limit.reset("user").unwrap();
+    assert!(home_limit.allow("user").unwrap().ok);
+
+    let quota = copy.quota("ai").window("daily", 2, hour * 24).open().unwrap();
+    assert!(quota.allow("user").unwrap().ok);
+    assert!(quota.allow("user").unwrap().ok);
+    let full = quota.allow("user").unwrap();
+    assert!(!full.ok);
+    assert_eq!(full.window("daily").unwrap().used, 2);
+    quota.refund("user").unwrap();
+    let home_quota = home.quota("ai").window("daily", 2, hour * 24).open().unwrap();
+    assert_eq!(home_quota.peek("user").unwrap().window("daily").unwrap().used, 1, "the home holds the refund");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
