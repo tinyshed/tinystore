@@ -7,12 +7,16 @@
 //! | `syntax`                        | reads its text into lines: the language's one parser |
 //! | `format`                        | prints the lines back in the language's one layout   |
 //! | `schema`                        | joins every file's lines and checks them together    |
-//! | `rust`, `typescript`, `vectors` | write a codec, or the vectors, from the schema       |
+//! | `rust`, `typescript`, `python`  | write a codec from the schema                        |
+//! | `golang`                        | writes the Go codec, laid out as gofmt lays it out   |
+//! | `vectors`                       | writes a vector of every message from the schema     |
 
 #[cfg(test)]
 mod agreement_tests;
 mod format;
+mod golang;
 mod names;
+mod python;
 mod rust;
 mod schema;
 mod syntax;
@@ -42,6 +46,8 @@ fn run(root: &Path, check: bool) -> Result<(), String> {
     let outputs = [
         ("crates/tinystore/src/wire/protocol.rs", rust::write(&schema)),
         ("sdk/js/src/wire/protocol.ts", typescript::write(&schema)),
+        ("sdk/python/src/tinystore/_wire/protocol.py", python::write(&schema)),
+        ("internal/wire/protocol.go", golang::write(&schema)),
         ("testdata/wire/protocol.json", vectors::write(&schema)),
     ];
     for (name, text) in outputs {

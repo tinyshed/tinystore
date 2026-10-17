@@ -16,6 +16,10 @@ says so. Mark a task done in the commit that does it.
 - [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the owner accepted the jobs book on 9 October, after a survey of job libraries and a second newcomer round.
 - [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
 - [ ] The generator's Python and Go codecs, with their SDKs.
+  Built, on 18 October: the codecs, `sdk/python/src/tinystore/_wire/protocol.py` on the Python SDK's codec and
+  `internal/wire` of a Go module at the root, each message's reader and writer written out a field at a time, both
+  read and written over every vector of `testdata/wire/protocol.json` and Go's over `vectors.json` too, by `just
+  codec-go` and `just codec-python` and in CI. Left: the SDKs that stand on them.
 
 **Gate:** the jobs and kv books pass the newcomer check and the owner accepts
 them; the workspace builds and tests on three operating systems.

@@ -10,6 +10,9 @@ binary := if os() == "windows" { "tinystore.exe" } else { "tinystore" }
 export TINYSTORE_LIBRARY := justfile_directory() / "target" / "release" / library
 export TINYSTORE_BIN := justfile_directory() / "target" / "release" / binary
 
+# a go.work left from the Go engine names modules that are gone
+export GOWORK := "off"
+
 # the Linux the container recipes run in; named volumes keep cargo's registry
 # and the build between runs, so a second run compiles only what changed
 rust_image := "rust:1.99"
@@ -49,6 +52,17 @@ protocol:
 # fail when a file the schema writes is not what it writes
 protocol-check:
     cargo run --locked -p tinystore-protocol -- --check
+
+# read and write every vector through the Go codec, which its test holds to gofmt's layout
+[working-directory: 'internal/wire']
+codec-go:
+    go vet .
+    go test .
+
+# read and write every vector through the Python codec
+[working-directory: 'sdk/python']
+codec-python:
+    uv run pytest tests/test_protocol.py --noconftest -q
 
 # build the core's library that bun:ffi loads, and tinystore
 build:
@@ -92,7 +106,7 @@ tables:
 fuzz target="records_rows" time="60":
     docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src/fuzz {{rust_image}} sh -c 'rustup toolchain install nightly --profile minimal >/dev/null && cargo +nightly install cargo-fuzz --locked --quiet && cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}'
 
-check: fmt-check lint test protocol-check sdk sdk-check lint-actions
+check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check lint-actions
 
 # remove build output
 clean:

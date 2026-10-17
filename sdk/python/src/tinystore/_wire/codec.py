@@ -169,7 +169,7 @@ def _read_sql(r: Reader) -> SqlValue | bool:
 sql_value = Codec("sql value", _write_sql, _read_sql)
 
 
-def names(value: Codec) -> Codec:
+def names(value: Codec | Message) -> Codec:
     """Names mapped to values, written in the byte order of their UTF-8.
 
     That order is their code points'.
@@ -190,7 +190,7 @@ def names(value: Codec) -> Codec:
         r.names(each)
         return named
 
-    return Codec("sql names" if value.kind == "sql value" else "names", write, read)
+    return Codec("sql names" if value.kind == "sql value" else "names", write, read, value)
 
 
 # a column's values are little-endian, as the machines this SDK runs on hold
@@ -255,26 +255,45 @@ class Message:
 
     A field is written when its value is not None, so an absent field and a
     zero one stay what the caller said; a key the declaration lacks is skipped
-    as it reads, well formed and within bounds.
+    as it reads, well formed and within bounds. A message crates/protocol
+    writes reads and writes a field at a time through the functions it is
+    given, and keeps its table of fields for its readers and as the
+    reference a test holds them to.
     """
 
     kind = "message"
     item = None
 
-    def __init__(self, name: str, fields: Mapping[str, tuple[int, Codec | Message]]) -> None:
+    def __init__(
+        self,
+        name: str,
+        fields: Mapping[str, tuple[int, Codec | Message]],
+        write: Callable[[Writer, Mapping[str, Any]], None] | None = None,
+        read: Callable[[Reader], dict[str, Any]] | None = None,
+    ) -> None:
         self.name = name
         self.fields = dict(fields)
         self._order = sorted(((key, field, codec) for field, (key, codec) in fields.items()))
         self._by_key = {key: (field, codec) for key, field, codec in self._order}
+        if write is not None:
+            self.write = write  # type: ignore[method-assign]
+        if read is not None:
+            self.read = read  # type: ignore[method-assign]
 
     def write(self, w: Writer, value: Mapping[str, Any]) -> None:
+        self.write_by_table(w, value)
+
+    def read(self, r: Reader) -> dict[str, Any]:
+        return self.read_by_table(r)
+
+    def write_by_table(self, w: Writer, value: Mapping[str, Any]) -> None:
         present = [(key, codec, value[field]) for key, field, codec in self._order if value.get(field) is not None]
         w.map(len(present))
         for key, codec, v in present:
             w.uint(key)
             codec.write(w, v)
 
-    def read(self, r: Reader) -> dict[str, Any]:
+    def read_by_table(self, r: Reader) -> dict[str, Any]:
         read: dict[str, Any] = {}
 
         def each(key: int) -> bool:

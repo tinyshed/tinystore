@@ -25,6 +25,12 @@ pub(crate) fn rust_field(name: &str) -> String {
     }
 }
 
+/// A field, or a function of a message's, as Python names it: in snake case.
+/// A keyword stays as it is, since a field is a key of a dict.
+pub(crate) fn python_field(name: &str) -> String {
+    snake(name)
+}
+
 fn capitalized(part: &str) -> String {
     let mut chars = part.chars();
     match chars.next() {

@@ -155,6 +155,20 @@ class Writer:
     def map(self, n: builtins.int) -> None:
         self._count(n, FIXMAP, MAP16, MAP32)
 
+    def open_map(self) -> builtins.int:
+        """Opens a map whose count is known once its entries are written: a byte kept for it."""
+        self._buf.append(FIXMAP)
+        return len(self._buf) - 1
+
+    def close_map(self, head: builtins.int, n: builtins.int) -> None:
+        """Writes the count of the map open_map opened at head, widening its head when 15 is past."""
+        if n <= 15:
+            self._buf[head] = FIXMAP | n
+        elif n <= 0xFFFF:
+            self._buf[head : head + 1] = bytes((MAP16,)) + _U16.pack(n)
+        else:
+            self._buf[head : head + 1] = bytes((MAP32,)) + _U32.pack(n)
+
     def _count(self, n: builtins.int, fix: builtins.int, two: builtins.int, four: builtins.int) -> None:
         buf = self._buf
         if n <= 15:
@@ -369,6 +383,22 @@ class Reader:
 
     def leave(self) -> None:
         self._depth -= 1
+
+    def name(self, seen: set[builtins.str]) -> builtins.str:
+        """Reads a map of names' next name, refusing one it met already."""
+        name = self.str()
+        if name in seen:
+            raise _fail(f"name {name!r} twice")
+        seen.add(name)
+        return name
+
+    def field(self, seen: set[builtins.int]) -> builtins.int:
+        """Reads a message's next key, refusing one it met already."""
+        key = self.uint()
+        if key in seen:
+            raise _fail(f"key {key} twice")
+        seen.add(key)
+        return key
 
     def _enter(
         self,

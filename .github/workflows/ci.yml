@@ -100,6 +100,12 @@ jobs:
       - name: Protocol
         run: cargo run --locked -p tinystore-protocol -- --check
 
+      # the Go and Python codecs read and write every vector; the runner has Go and pipx
+      - name: Codecs
+        run: |
+          (cd internal/wire && go vet . && go test .)
+          PYTHONPATH=sdk/python/src pipx run pytest sdk/python/tests/test_protocol.py --noconftest -q
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
