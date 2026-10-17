@@ -1282,14 +1282,17 @@ fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     let witness =
         node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), witness: true, ..Node::default() });
     let judge = Some(bound(witness.node().unwrap()).unwrap().to_string());
-    let home =
-        node_with(dirs[1].path(), Node { serve: Some("127.0.0.1:0".into()), judge: judge.clone(), ..Node::default() });
+    let home = node_with(
+        dirs[1].path(),
+        Node { serve: Some("127.0.0.1:0".into()), failover: judge.clone(), ..Node::default() },
+    );
     let home_address = bound(home.node().unwrap()).unwrap().to_string();
     let sessions = home.bucket::<String>("sessions").open().unwrap();
     eventually("the home writes once its witness leased it the file", || {
         sessions.set("first", &"leased".to_owned()).is_ok()
     });
-    let copy_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], judge, ..Node::default() };
+    let copy_node =
+        Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], failover: judge, ..Node::default() };
     let copy = node_with(dirs[2].path(), copy_node);
     let copied = copy.bucket::<String>("sessions").open().unwrap();
     caught_up(&home, &copy, &["kv.db"]);
@@ -1348,7 +1351,7 @@ fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_bo
     let dir = tempfile::tempdir().unwrap();
     let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
     let home =
-        node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), judge: Some(nobody), ..Node::default() });
+        node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), failover: Some(nobody), ..Node::default() });
     let began = Instant::now();
     let refused = home.bucket::<String>("sessions").open().unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
@@ -1363,12 +1366,15 @@ fn a_witness_that_starts_again_keeps_each_lease_s_holder_and_its_home_writes_on(
     let witness_node = || Node { serve: Some(witness_address.clone()), witness: true, ..Node::default() };
     let witness = node_with(dirs[0].path(), witness_node());
     let judge = Some(witness_address.clone());
-    let home =
-        node_with(dirs[1].path(), Node { serve: Some("127.0.0.1:0".into()), judge: judge.clone(), ..Node::default() });
+    let home = node_with(
+        dirs[1].path(),
+        Node { serve: Some("127.0.0.1:0".into()), failover: judge.clone(), ..Node::default() },
+    );
     let home_address = bound(home.node().unwrap()).unwrap().to_string();
     let sessions = home.bucket::<String>("sessions").open().unwrap();
     sessions.set("before", &"leased".to_owned()).unwrap();
-    let copy_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], judge, ..Node::default() };
+    let copy_node =
+        Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], failover: judge, ..Node::default() };
     let copy = node_with(dirs[2].path(), copy_node);
     copy.bucket::<String>("sessions").open().unwrap();
     caught_up(&home, &copy, &["kv.db"]);
@@ -1400,7 +1406,7 @@ fn a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_s
     let eu_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
     let home_node = Node {
         serve: Some("127.0.0.1:0".into()),
-        judge: judge.clone(),
+        failover: judge.clone(),
         synchronous_with: vec![eu_address.clone()],
         ..Node::default()
     };
@@ -1410,14 +1416,14 @@ fn a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_s
     let eu_node = || Node {
         serve: Some(eu_address.clone()),
         from: vec![home_address.clone()],
-        judge: judge.clone(),
+        failover: judge.clone(),
         ..Node::default()
     };
     let eu = node_with(dirs[2].path(), eu_node());
     let ru_node = Node {
         serve: Some("127.0.0.1:0".into()),
         from: vec![home_address.clone()],
-        judge: judge.clone(),
+        failover: judge.clone(),
         ..Node::default()
     };
     let ru = node_with(dirs[3].path(), ru_node);
@@ -1453,7 +1459,7 @@ fn a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_s
 #[test]
 fn a_synchronous_node_a_witness_judges_names_the_copies_it_waits_for() {
     let dir = tempfile::tempdir().unwrap();
-    let node = Node { judge: Some("127.0.0.1:1".into()), synchronous: true, ..Node::default() };
+    let node = Node { failover: Some("127.0.0.1:1".into()), synchronous: true, ..Node::default() };
     let options = Options { node: Some(node), background: false, ..Options::default() };
     let refused = Store::open(dir.path(), options).unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");

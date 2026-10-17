@@ -39,7 +39,7 @@ message store.Options {
   7 token: str?              # what it says to the node it takes from, and asks of the nodes that take from it
   8 synchronous: bool        # a write of a file it writes answers once a node copying it holds the commit
   9 catalog: bool            # it is the home of the catalog, which names each file's home
-  10 address: str?           # where other nodes reach it, host:port; the address serve listens on when absent
+  10 advertise: str?         # where other nodes reach it, host:port; the address serve listens on when absent
   11 synchronousWith: [str]  # the nodes, by address or id, a synchronous commit waits for one of; any when empty
 }
 

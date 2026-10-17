@@ -151,7 +151,7 @@ export interface NodeOptions {
 	 */
 	catalog?: boolean | undefined
 	/** where other nodes reach this one, `host:port`, when `serve` listens on every interface */
-	address?: string | undefined
+	advertise?: string | undefined
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */

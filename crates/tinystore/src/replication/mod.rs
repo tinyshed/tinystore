@@ -91,12 +91,12 @@ pub struct Node {
     /// Where other nodes reach this one, `host:port`, which the catalog keeps
     /// beside the files it is home of; the address `serve` listens on when
     /// none.
-    pub address: Option<String>,
+    pub advertise: Option<String>,
     /// The witness that judges which node writes each file, `host:port`: a
     /// home renews its lease there and writes only while it holds one, and
     /// the freshest copy takes a lease that ran out. None: a person decides,
     /// with `promote`.
-    pub judge: Option<String>,
+    pub failover: Option<String>,
     /// This node is a witness, which keeps the leases of the nodes it judges.
     pub witness: bool,
 }
@@ -125,8 +125,8 @@ impl fmt::Debug for Node {
             .field("synchronous_with", &self.synchronous_with)
             .field("tls", &self.tls)
             .field("catalog", &self.catalog)
-            .field("address", &self.address)
-            .field("judge", &self.judge)
+            .field("advertise", &self.advertise)
+            .field("failover", &self.failover)
             .field("witness", &self.witness)
             .finish()
     }

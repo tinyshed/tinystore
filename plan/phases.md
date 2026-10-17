@@ -362,8 +362,8 @@ in [scaling.md](scaling.md#order).
   the other claimant copying it. A node that serves nothing claims nothing, its file made by the node it takes
   from; a node claims at its start the files it wrote before, and logs a file the catalog names another home of
   as two homes'. While the catalog's home is out of reach, a node writes the files it is home of and makes no new
-  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line, and the Bun SDK's `node.catalog`
-  and `node.address`. A file whose home the catalog
+  one, `Unavailable`. `--node-catalog` and `--node-advertise` in the command line, and the Bun SDK's `node.catalog`
+  and `node.advertise`. A file whose home the catalog
   names at an address that the nodes of `from` do not serve, a node takes over a link straight to that home,
   one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
   them, and the address is kept beside the copy's log so that the link is made again at the next start. A claim
@@ -420,7 +420,7 @@ shipped, counted, and the old home cannot write again.
 - [ ] A home that moves by itself, a witness outside the nodes deciding.
   Built so far, a draft: `Node::witness` makes a node a witness, which keeps each file's lease, its holder, epoch
   and the copies a synchronous home waits for kept durably in `log/witness` before it answers a grant;
-  `Node::judge`, `--node-judge` and `--node-witness` name a node's witness. A judged node asks for all its leases in
+  `Node::failover`, `--node-failover` and `--node-witness` name a node's witness. A judged node asks for all its leases in
   one message a second. A home's lease lasts five seconds from when its renewal reached the witness, and its log
   refuses the file's writes, `Unavailable`, past what it keeps of the lease by its own clock, short of the witness's
   by a margin of a second and a half, whatever its link does meanwhile, a write waiting three seconds at most for a

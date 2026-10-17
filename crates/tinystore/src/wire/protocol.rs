@@ -2029,7 +2029,7 @@ pub(crate) struct StoreOptions {
     /// It is the home of the catalog, which names each file's home.
     pub(crate) catalog: bool,
     /// Where other nodes reach it, host:port; the address serve listens on when absent.
-    pub(crate) address: Option<String>,
+    pub(crate) advertise: Option<String>,
     /// The nodes, by address or id, a synchronous commit waits for one of; any when empty.
     pub(crate) synchronous_with: Vec<String>,
 }
@@ -2051,7 +2051,7 @@ impl Message for StoreOptions {
                 7 => message.token = Some(codec::str(r, "token")?),
                 8 => message.synchronous = codec::bool(r, "synchronous")?,
                 9 => message.catalog = codec::bool(r, "catalog")?,
-                10 => message.address = Some(codec::str(r, "address")?),
+                10 => message.advertise = Some(codec::str(r, "advertise")?),
                 11 => message.synchronous_with = codec::list(r, "synchronousWith", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
@@ -2097,9 +2097,9 @@ impl Message for StoreOptions {
             map.field(out, 9);
             codec::write_bool(out, &self.catalog);
         }
-        if let Some(address) = &self.address {
+        if let Some(advertise) = &self.advertise {
             map.field(out, 10);
-            codec::write_str(out, address);
+            codec::write_str(out, advertise);
         }
         if !self.synchronous_with.is_empty() {
             map.field(out, 11);
@@ -2119,7 +2119,7 @@ impl Message for StoreOptions {
             + self.token.as_ref().map_or(0, |token| 1 + 5 + token.len())
             + 2
             + 2
-            + self.address.as_ref().map_or(0, |address| 1 + 5 + address.len())
+            + self.advertise.as_ref().map_or(0, |advertise| 1 + 5 + advertise.len())
             + 1 + codec::list_size(&self.synchronous_with, |item| 5 + item.len())
     }
 
@@ -2133,7 +2133,7 @@ impl Message for StoreOptions {
             && self.token.is_none()
             && !self.synchronous
             && !self.catalog
-            && self.address.is_none()
+            && self.advertise.is_none()
             && self.synchronous_with.is_empty()
     }
 }

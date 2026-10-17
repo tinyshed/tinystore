@@ -276,8 +276,8 @@ function nodeFlags(node: NodeOptions | undefined): string[] {
 	if (node.catalog === true) {
 		flags.push('--node-catalog')
 	}
-	if (node.address !== undefined) {
-		flags.push('--node-address', node.address)
+	if (node.advertise !== undefined) {
+		flags.push('--node-advertise', node.advertise)
 	}
 	return flags
 }
@@ -528,7 +528,7 @@ export function embedded(
 		token,
 		synchronous: node?.synchronous === true,
 		catalog: node?.catalog === true,
-		address: node?.address,
+		advertise: node?.advertise,
 		synchronousWith: node?.synchronousWith ?? [],
 	})
 	return async () => {

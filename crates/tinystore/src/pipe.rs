@@ -231,8 +231,8 @@ fn asked(options: &[u8]) -> Result<Asked> {
         synchronous_with: asked.synchronous_with,
         tls: None,
         catalog: asked.catalog,
-        address: asked.address,
-        judge: None,
+        advertise: asked.advertise,
+        failover: None,
         witness: false,
     });
     Ok(Asked {

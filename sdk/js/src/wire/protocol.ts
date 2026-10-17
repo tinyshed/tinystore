@@ -2200,7 +2200,7 @@ export const StoreOptions = message(
 		/** it is the home of the catalog, which names each file's home */
 		catalog: [9, bool],
 		/** where other nodes reach it, host:port; the address serve listens on when absent */
-		address: [10, str],
+		advertise: [10, str],
 		/** the nodes, by address or id, a synchronous commit waits for one of; any when empty */
 		synchronousWith: [11, list(str)],
 	},
@@ -2259,9 +2259,9 @@ export const StoreOptions = message(
 				w.bool(v.catalog)
 				n++
 			}
-			if (v.address !== undefined) {
+			if (v.advertise !== undefined) {
 				w.field(10)
-				w.str(v.address)
+				w.str(v.advertise)
 				n++
 			}
 			if (v.synchronousWith !== undefined) {
@@ -2284,7 +2284,7 @@ export const StoreOptions = message(
 			let $token: string | undefined
 			let $synchronous: boolean | undefined
 			let $catalog: boolean | undefined
-			let $address: string | undefined
+			let $advertise: string | undefined
 			let $synchronousWith: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
@@ -2328,7 +2328,7 @@ export const StoreOptions = message(
 						$catalog = r.bool()
 						break
 					case 10:
-						$address = r.str()
+						$advertise = r.str()
 						break
 					case 11: {
 						const items0: string[] = []
@@ -2354,7 +2354,7 @@ export const StoreOptions = message(
 				token: $token,
 				synchronous: $synchronous,
 				catalog: $catalog,
-				address: $address,
+				advertise: $advertise,
 				synchronousWith: $synchronousWith,
 			}
 		},

@@ -131,7 +131,7 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   `records.db` and `metrics.db`, or those `--node-files` names. With a
   catalog, `--node-catalog` on one node, a node writes each file it made once
   its claim won, and needs no list; without one, a file its home never made,
-  the home makes when a copy waits for it. `--node-address` says where other
+  the home makes when a copy waits for it. `--node-advertise` says where other
   nodes reach a node that listens on every interface; a node takes a file
   whose home its `from` does not serve straight from that home, at the
   address the catalog names.
@@ -478,9 +478,9 @@ storage with a restore to a commit or a second; the exporters.
 The owner took these on 18 October, from a review they brought.
 
 1. **Names** stay as they are until the API review before the SDKs and the
-   command line, but two: `address` becomes `advertise`, the address the
-   other nodes reach a node at, and `judge` becomes `failover`, the witness
-   that decides; `Judge` stays inside, and `witness` stays.
+   command line, but two, changed since: `advertise`, once `address`, the
+   address the other nodes reach a node at, and `failover`, once `judge`,
+   the witness that decides; `Judge` stays inside, and `witness` stays.
 2. **`once`** runs a key at most once while its answer stands, never an
    effect exactly once: a run whose answer a lost home had not shipped runs
    again. What the function writes in the store's own transaction is atomic

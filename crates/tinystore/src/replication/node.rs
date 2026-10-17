@@ -198,7 +198,7 @@ impl State {
     /// Starts the node's links: a server where it serves, and the link to the
     /// node it takes its files from.
     pub(crate) fn start(self: &Arc<Self>, store: &Store) -> Result<()> {
-        if self.options.judge.is_some() && self.options.synchronous && self.options.synchronous_with.is_empty() {
+        if self.options.failover.is_some() && self.options.synchronous && self.options.synchronous_with.is_empty() {
             return Err(Error::invalid(
                 "a synchronous node a witness judges names the copies its commits wait for, synchronous_with: only \
                  they hold every commit it answered, and the witness gives its lease to one of them",
@@ -225,7 +225,7 @@ impl State {
         }
         let writing = Arc::clone(self);
         self.spawn("tinystore node: links", move || super::links::keep_written(&writing));
-        if let Some(witness) = &self.options.judge {
+        if let Some(witness) = &self.options.failover {
             super::judge::start(self, store, witness.clone());
         }
         if self.options.catalog || !self.options.from.is_empty() {
@@ -275,7 +275,7 @@ impl State {
     /// Where other nodes reach this one: the address it was given, or the one
     /// its server listens on; empty for a node that serves nothing.
     pub(crate) fn address(&self) -> String {
-        match &self.options.address {
+        match &self.options.advertise {
             Some(address) => address.clone(),
             None => lock(&self.listening).map(|at| at.to_string()).unwrap_or_default(),
         }
@@ -649,7 +649,7 @@ impl State {
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
             .followed(name, Arc::clone(&self.acks));
-        if self.options.judge.is_some() {
+        if self.options.failover.is_some() {
             log = log.judged(lock(&self.granted).remove(name).unwrap_or_else(Instant::now));
         }
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {

@@ -58,8 +58,8 @@ pub(crate) struct Node {
     pub(crate) synchronous_with: Vec<String>,
     pub(crate) tls: Option<tinystore::replication::NodeTls>,
     pub(crate) catalog: bool,
-    pub(crate) address: Option<String>,
-    pub(crate) judge: Option<String>,
+    pub(crate) advertise: Option<String>,
+    pub(crate) failover: Option<String>,
     pub(crate) witness: bool,
 }
 
@@ -83,11 +83,11 @@ pub(crate) enum Transport {
 /// Every flag `serve` takes, for a misspelt one's nearest.
 const FLAGS: [&str; 28] = [
     "--node",
-    "--node-judge",
+    "--node-failover",
     "--node-witness",
     "--node-synchronous-with",
     "--node-catalog",
-    "--node-address",
+    "--node-advertise",
     "--node-tls-cert",
     "--node-tls-key",
     "--node-tls-roots",
@@ -140,12 +140,12 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--node-synchronous" => (node.synchronous, node_flags) = (true, true),
             "--node-catalog" => (node.catalog, node_flags) = (true, true),
             "--node-witness" => (node.witness, node_flags) = (true, true),
-            "--node-judge" => (node.judge, node_flags) = (Some(value("--node-judge")?), true),
+            "--node-failover" => (node.failover, node_flags) = (Some(value("--node-failover")?), true),
             "--node-synchronous-with" => {
                 node.synchronous_with.push(value("--node-synchronous-with")?);
                 node_flags = true;
             }
-            "--node-address" => (node.address, node_flags) = (Some(value("--node-address")?), true),
+            "--node-advertise" => (node.advertise, node_flags) = (Some(value("--node-advertise")?), true),
             "--node-tls-cert" => {
                 node.tls.get_or_insert_default().cert = Some(PathBuf::from(value("--node-tls-cert")?));
                 node_flags = true;
