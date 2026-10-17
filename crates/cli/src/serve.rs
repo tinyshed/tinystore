@@ -493,13 +493,22 @@ impl Console {
         // a sidecar's stderr goes nowhere once its lines go to a file
         let on_stderr = terminal.terminal || !to_file;
         let shown = if quiet { level.min(tracing::level_filters::LevelFilter::WARN) } else { level };
+        // tracing colours a span's fields itself unless told not to: the lines paint their own
         let stderr = on_stderr.then(|| {
             let lines = Lines { colours: terminal.colours(), person: terminal.terminal };
-            tracing_subscriber::fmt::layer().event_format(lines).with_writer(io::stderr).with_filter(shown)
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .event_format(lines)
+                .with_writer(io::stderr)
+                .with_filter(shown)
         });
         let kept = file.map(|file| {
             let lines = Lines { colours: false, person: false };
-            tracing_subscriber::fmt::layer().event_format(lines).with_writer(Mutex::new(file)).with_filter(level)
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .event_format(lines)
+                .with_writer(Mutex::new(file))
+                .with_filter(level)
         });
         tracing_subscriber::registry().with(stderr).with(kept).init();
         Ok(Console { terminal, to_file })
