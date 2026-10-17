@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use rusqlite::Connection;
 
-use super::capture::{Capture, Observe};
+use super::capture::{Capture, Logged, Observe, logged};
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
@@ -34,10 +34,23 @@ pub(crate) struct File {
     readers: Arc<Readers>,
     closed: AtomicBool,
     settlers: Arc<Settlers>,
-    capture: Option<Arc<Capture>>,
+    capture: Logged,
     /// The file is a copy its home writes: what would write here runs on a
     /// reader, whose `query_only` refuses a write.
-    copy: bool,
+    copy: Arc<AtomicBool>,
+    config: Arc<Config>,
+}
+
+/// What a node holds of an engine's file to change its mode as the file's
+/// home moves, weakly, so that the file closes with its engine.
+#[cfg(feature = "replication")]
+pub(crate) struct Switch {
+    path: PathBuf,
+    config: Arc<Config>,
+    writer: Weak<Mutex<Connection>>,
+    capture: Weak<std::sync::RwLock<Option<Arc<Capture>>>>,
+    copy: Weak<AtomicBool>,
+    readers: Weak<Readers>,
 }
 
 impl File {
@@ -54,19 +67,36 @@ impl File {
     /// taken again closes while it takes the file's place.
     pub(crate) fn open_copy(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
         let file = Self::open_observed(path, config, None)?;
-        let writer = Connection::open_in_memory().map_err(|error| sql_error(file.describe(), error))?;
-        Ok(Self { copy: true, writer: Arc::new(Mutex::new(writer)), ..file })
+        let writer = no_writer(&file.describe())?;
+        Ok(Self { copy: Arc::new(AtomicBool::new(true)), writer: Arc::new(Mutex::new(writer)), ..file })
     }
 
-    /// The file's readers, which a copy's node pauses while a snapshot takes
-    /// the file's place.
+    /// What a node holds of the file to change its mode, and to pause its
+    /// readers, as its home moves.
     #[cfg(feature = "replication")]
-    pub(crate) fn readers(&self) -> &Arc<Readers> {
-        &self.readers
+    pub(crate) fn switch(&self) -> Switch {
+        Switch {
+            path: self.path.clone(),
+            config: Arc::clone(&self.config),
+            writer: Arc::downgrade(&self.writer),
+            capture: Arc::downgrade(&self.capture),
+            copy: Arc::downgrade(&self.copy),
+            readers: Arc::downgrade(&self.readers),
+        }
+    }
+
+    #[cfg(all(test, feature = "replication"))]
+    pub(crate) fn become_home(&self, observer: Arc<dyn Observe>) -> Result<()> {
+        self.switch().become_home(observer)
+    }
+
+    #[cfg(all(test, feature = "replication"))]
+    pub(crate) fn become_copy(&self) -> Result<()> {
+        self.switch().become_copy()
     }
 
     pub(crate) fn is_copy(&self) -> bool {
-        self.copy
+        self.copy.load(Ordering::SeqCst)
     }
 
     /// Opens the file with each commit handed to `observer`, which is first
@@ -91,15 +121,17 @@ impl File {
             observer.writer(Arc::downgrade(&writer));
         }
         let settlers = Arc::new(Settlers::default());
+        let capture: Logged = Arc::new(std::sync::RwLock::new(capture));
         Ok(Self {
-            group: Group::new(config.group, Arc::clone(&settlers), capture.clone()),
+            group: Group::new(config.group, Arc::clone(&settlers), Arc::clone(&capture)),
             readers: Arc::new(Readers::new(path.clone(), Arc::clone(&config))),
             writer,
             path,
             closed: AtomicBool::new(false),
             settlers,
             capture,
-            copy: false,
+            copy: Arc::new(AtomicBool::new(false)),
+            config,
         })
     }
 
@@ -127,7 +159,7 @@ impl File {
     {
         self.refuse_when_closed("a write")?;
         self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")?;
-        if self.copy {
+        if self.is_copy() {
             return self.as_a_copy(write);
         }
         let slot = Arc::new(Mutex::new(None));
@@ -159,7 +191,7 @@ impl File {
         if let Err(error) = refused {
             return done(Err(error));
         }
-        if self.copy {
+        if self.is_copy() {
             return done(self.as_a_copy(write));
         }
         let slot = Arc::new(Mutex::new(None));
@@ -189,7 +221,7 @@ impl File {
     pub(crate) fn transaction<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.refuse_when_closed("a transaction")?;
         self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
-        if self.copy {
+        if self.is_copy() {
             return self.as_a_copy(work);
         }
         let connection = lock(&self.writer);
@@ -234,7 +266,8 @@ impl File {
     /// Commits the transaction on `connection`; a commit that fails may or may
     /// not be in the file.
     fn commit(&self, connection: &Connection) -> Result<()> {
-        if let Some(capture) = &self.capture {
+        let capture = logged(&self.capture);
+        if let Some(capture) = &capture {
             capture.arm();
         }
         execute(connection, COMMIT).map_err(|error| {
@@ -244,7 +277,7 @@ impl File {
             Error::new(ErrorKind::OutcomeUnknown, format!("{}: a transaction's commit", self.describe()))
                 .with_source(error)
         })?;
-        match &self.capture {
+        match &capture {
             Some(capture) => capture.committed(connection).map_err(|error| error.within(self.describe())),
             None => Ok(()),
         }
@@ -252,7 +285,7 @@ impl File {
 
     /// Refuses a transaction once a commit of the file could not be logged.
     fn refuse_when_unlogged(&self) -> Result<()> {
-        match &self.capture {
+        match logged(&self.capture) {
             Some(capture) => capture.refuse_a_write().map_err(|error| error.within(self.describe())),
             None => Ok(()),
         }
@@ -271,7 +304,7 @@ impl File {
     /// until it commits, and rolls back when it is dropped before.
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
-        if self.copy {
+        if self.is_copy() {
             return Err(a_copy_takes_no_transaction(&self.describe()));
         }
         let connection = lock(&self.writer);
@@ -304,7 +337,7 @@ impl File {
     }
 
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
-        if self.copy {
+        if self.is_copy() {
             return self.check_its_home_migrated(history, migrations);
         }
         if self.migrated(history, migrations)? {
@@ -338,7 +371,7 @@ impl File {
     pub(crate) fn migrate_checked(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         self.refuse_when_closed("a migration")?;
         self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
-        if self.copy {
+        if self.is_copy() {
             return self.check_its_home_migrated(history, migrations);
         }
         if self.migrated(history, migrations)? {
@@ -388,7 +421,7 @@ impl File {
         self.group.close();
         self.readers.close();
         let connection = lock(&self.writer);
-        if let Some(capture) = &self.capture {
+        if let Some(capture) = logged(&self.capture) {
             capture.close().map_err(|error| error.within(format!("{}: its log", self.describe())))?;
         }
         // A truncated WAL leaves the directory as small as its data.
@@ -431,6 +464,77 @@ pub(crate) struct Mark(
     )]
     Held,
 );
+
+#[cfg(feature = "replication")]
+impl Switch {
+    /// Whether the file is still open.
+    pub(crate) fn is_open(&self) -> bool {
+        self.copy.strong_count() > 0
+    }
+
+    pub(crate) fn readers(&self) -> Option<Arc<Readers>> {
+        self.readers.upgrade()
+    }
+
+    /// Makes a copy this node's own while it is open: a writer on the file,
+    /// each commit handed to `observer`, the file's log, from now on. The copy's
+    /// applier and readers are closed before, and what the applier left in the
+    /// WAL is checkpointed first, so that the log takes no frame of it for a
+    /// commit of its own.
+    pub(crate) fn become_home(&self, observer: Arc<dyn Observe>) -> Result<()> {
+        let (Some(held), Some(capture_cell), Some(copy)) =
+            (self.writer.upgrade(), self.capture.upgrade(), self.copy.upgrade())
+        else {
+            return Err(Error::closed(format!("{}: its change of home", self.path.display())));
+        };
+        let describe = self.path.display().to_string();
+        let config = Config { keep_wal: true, ..(*self.config).clone() };
+        let writer = connection::open(&self.path, &config, Role::Writer)?;
+        writer
+            .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .map_err(|error| sql_error(format!("{describe}: the copy's last checkpoint"), error))?;
+        let capture = Capture::open(&self.path, &writer, Arc::clone(&observer))?;
+        let mut writing = lock(&held);
+        *writing = writer;
+        observer.writer(Arc::downgrade(&held));
+        *capture_cell.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(capture));
+        copy.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Makes this node's file a copy its new home writes, while it is open:
+    /// what its log holds made durable, its WAL checkpointed, its writer
+    /// closed. Its writes were refused before, so that none waits for a writer
+    /// that is gone; one that still reached the group fails on the writer left.
+    pub(crate) fn become_copy(&self) -> Result<()> {
+        let (Some(held), Some(capture_cell), Some(copy)) =
+            (self.writer.upgrade(), self.capture.upgrade(), self.copy.upgrade())
+        else {
+            return Err(Error::closed(format!("{}: its change of home", self.path.display())));
+        };
+        let describe = self.path.display().to_string();
+        let mut writing = lock(&held);
+        let capture = capture_cell.write().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(capture) = capture {
+            capture.close().map_err(|error| error.within(format!("{describe}: its log")))?;
+        }
+        writing
+            .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .map_err(|error| sql_error(format!("{describe}: its last checkpoint as a home"), error))?;
+        copy.store(true, Ordering::SeqCst);
+        *writing = no_writer(&describe)?;
+        Ok(())
+    }
+}
+
+/// The writer of a copy, which nothing of a copy writes through: a database
+/// in memory that refuses a write, so that one which reached the group as the
+/// file became a copy fails rather than vanish.
+fn no_writer(describe: &str) -> Result<Connection> {
+    let writer = Connection::open_in_memory().map_err(|error| sql_error(describe, error))?;
+    writer.pragma_update(None, "query_only", true).map_err(|error| sql_error(describe, error))?;
+    Ok(writer)
+}
 
 /// A transaction begun on a file by [`File::begin`].
 pub(crate) struct Begun<'f> {

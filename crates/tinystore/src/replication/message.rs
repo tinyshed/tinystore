@@ -424,7 +424,7 @@ impl Out {
         }
     }
 
-    fn point(&mut self, point: &Point) {
+    pub(crate) fn point(&mut self, point: &Point) {
         self.long(point.sequence);
         self.long(point.epoch);
         self.0.extend_from_slice(&point.check);
@@ -481,7 +481,7 @@ impl<'a> In<'a> {
         Ok(texts)
     }
 
-    fn point(&mut self) -> Result<Point> {
+    pub(crate) fn point(&mut self) -> Result<Point> {
         Ok(Point {
             sequence: self.long()?,
             epoch: self.long()?,

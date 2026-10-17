@@ -19,7 +19,7 @@ use super::links::Follower;
 use super::log::{Acks, Bounds, Log, Notify, segments_in};
 use super::snapshot::Source;
 use super::{DIR, NODE_LOCAL, Node};
-use crate::sqlite::{File, Observe, Readers};
+use crate::sqlite::{File, Observe, Readers, Switch};
 use crate::store::WeakStore;
 use crate::{Error, ErrorKind, Result, Store};
 
@@ -64,9 +64,10 @@ pub(crate) struct State {
     /// A file is being opened that no copy holds yet: the link asks for the
     /// files served now rather than at its next turn.
     pub(crate) wanted: AtomicBool,
-    /// The readers of each engine's file open on a copy, by the copy's name:
-    /// a snapshot taken again closes them while it takes the file's place.
-    copy_readers: Mutex<HashMap<String, Vec<Weak<Readers>>>>,
+    /// What the node holds of each engine's file it opened, by the file's
+    /// name: a snapshot taken again closes their readers while it takes the
+    /// file's place, and a move of the file's home changes their mode.
+    opened: Mutex<HashMap<String, Vec<Switch>>>,
     /// The nodes taking from this one now, by their link: what `log/links`
     /// says of them.
     pub(crate) followers: Mutex<HashMap<u64, Follower>>,
@@ -158,7 +159,7 @@ impl State {
             snapshots: std::sync::atomic::AtomicU64::new(0),
             lost: std::sync::atomic::AtomicU64::new(0),
             wanted: AtomicBool::new(false),
-            copy_readers: Mutex::default(),
+            opened: Mutex::default(),
             followers: Mutex::default(),
             next_follower: std::sync::atomic::AtomicU64::new(0),
             upstream_at: Mutex::default(),
@@ -350,6 +351,46 @@ impl State {
         };
         direct.add(name);
         Ok(())
+    }
+
+    /// Makes the copy `name` this running node's own at the next epoch: its
+    /// readers paused, its applier closed once no link holds it, its log going
+    /// on after the last entry it applied, and each engine's file of it given
+    /// a writer.
+    pub(crate) fn take_over(self: &Arc<Self>, store: &Store, name: &str, copy: Arc<Copy>) -> Result<()> {
+        let paused = self.pause_readers(name)?;
+        if let Some(direct) = lock(&self.direct).values().find(|direct| direct.follows(name)) {
+            direct.remove(name);
+        }
+        self.drop_copy(name);
+        let deadline = Instant::now() + PAUSE_AT_MOST;
+        while Arc::strong_count(&copy) > 1 {
+            if Instant::now() >= deadline {
+                self.keep_copy(name, copy);
+                return Err(Error::new(ErrorKind::Unavailable, format!("{name}: a link still applies its copy")));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(copy);
+        super::promote::promote_one(name.to_owned(), &self.log_dir(name))?;
+        let log = self.open_log(name)?;
+        self.switch_each(name, |switch| switch.become_home(Arc::clone(&log)))?;
+        drop(paused);
+        store.applied(name);
+        Ok(())
+    }
+
+    /// Takes writes of `name` again, after a move that did not finish.
+    pub(crate) fn unfence(&self, name: &str) -> Result<()> {
+        match lock(&self.logs).get(name).and_then(Weak::upgrade) {
+            Some(log) => log.unfence(),
+            None => Log::unfence_in(&self.log_dir(name)),
+        }
+    }
+
+    /// Has the link to `from` ask for the files served at its next turn.
+    pub(crate) fn ask_for_what_is_served(&self) {
+        self.wanted.store(true, Ordering::SeqCst);
     }
 
     /// Refuses every write of `name` from now on, and across restarts: this
@@ -568,21 +609,30 @@ impl State {
         Following { state: Arc::clone(self), id }
     }
 
-    /// Keeps the readers of an engine's file opened on the copy `name`.
-    pub(crate) fn opened_copy(&self, name: &str, file: File) -> File {
-        let mut held = lock(&self.copy_readers);
-        let readers = held.entry(name.to_owned()).or_default();
-        readers.retain(|readers| readers.strong_count() > 0);
-        readers.push(Arc::downgrade(file.readers()));
+    /// Keeps what the node holds of an engine's file `name` it opened.
+    pub(crate) fn opened(&self, name: &str, file: File) -> File {
+        let mut held = lock(&self.opened);
+        let switches = held.entry(name.to_owned()).or_default();
+        switches.retain(Switch::is_open);
+        switches.push(file.switch());
         file
     }
 
-    /// Closes the readers of every engine's file open on the copy `name`, and
-    /// holds its reads waiting until what it gives back drops.
+    /// Runs `change` on each engine's file of `name` open on this node.
+    pub(crate) fn switch_each(&self, name: &str, change: impl Fn(&Switch) -> Result<()>) -> Result<()> {
+        let held = lock(&self.opened);
+        for switch in held.get(name).into_iter().flatten().filter(|switch| switch.is_open()) {
+            change(switch)?;
+        }
+        Ok(())
+    }
+
+    /// Closes the readers of every engine's file open on `name`, and holds
+    /// its reads waiting until what it gives back drops.
     pub(crate) fn pause_readers(&self, name: &str) -> Result<Paused> {
-        let open: Vec<Arc<Readers>> = lock(&self.copy_readers)
+        let open: Vec<Arc<Readers>> = lock(&self.opened)
             .get(name)
-            .map(|readers| readers.iter().filter_map(Weak::upgrade).collect())
+            .map(|switches| switches.iter().filter_map(Switch::readers).collect())
             .unwrap_or_default();
         let mut paused = Paused(Vec::new());
         for readers in open {

@@ -124,6 +124,10 @@ impl Direct {
         lock(&self.files).contains(file)
     }
 
+    pub(crate) fn remove(&self, file: &str) {
+        lock(&self.files).remove(file);
+    }
+
     fn files(&self) -> Vec<String> {
         let mut files: Vec<String> = lock(&self.files).iter().cloned().collect();
         files.sort_unstable();
@@ -257,6 +261,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
             link.take(message)?;
         }
         if welcomed {
+            link.forget_copies_gone();
             link.say_applied()?;
         }
         match frames.fill(&mut reading) {
@@ -431,6 +436,13 @@ impl Link<'_> {
             std::fs::rename(&temp, &target).map_err(io)?;
         }
         Ok(())
+    }
+
+    /// Lets go of each copy this node holds no longer, as one it became the
+    /// home of, so that its applier closes.
+    fn forget_copies_gone(&mut self) {
+        let state = self.state;
+        self.held.retain(|name, held| !matches!(held, Held::Whole(_)) || state.copy(name).is_some());
     }
 
     /// Tells the other node the entry each copy holds now, where it moved:

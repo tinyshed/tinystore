@@ -1024,3 +1024,33 @@ fn a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names() {
     ru.close().unwrap();
     us.close().unwrap();
 }
+
+#[test]
+fn a_live_move_hands_a_file_s_home_over_and_loses_no_commit() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let us = node_with(us_dir.path(), Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() });
+    let us_address = bound(us.node().unwrap()).unwrap().to_string();
+    let eu_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![us_address], ..Node::default() };
+    let eu = node_with(eu_dir.path(), eu_node);
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    for i in 0..20 {
+        eu_db.exec(crate::sql!("insert into notes (body) values (?)", format!("before {i}"))).unwrap();
+    }
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america holds europe's rows", || bodies(&us_db).len() == 20);
+
+    let moved = crate::replication::move_home(&us, "sql/users.db").unwrap();
+    assert_eq!(moved.epoch, 2);
+    assert!(us.node().unwrap().copy("sql/users.db").is_none(), "america writes the file now");
+    us_db.exec(crate::sql!("insert into notes (body) values ('at the new home')")).unwrap();
+    eventually("europe becomes a copy of america", || eu.node().unwrap().copy("sql/users.db").is_some());
+    eventually("europe reads the new home's write", || bodies(&eu_db).len() == 21);
+    eu_db.exec(crate::sql!("insert into notes (body) values ('from the old home')")).unwrap();
+    assert_eq!(bodies(&us_db).len(), 22, "europe's write went to america");
+    assert_eq!(bodies(&us_db)[..20], bodies(&eu_db)[..20], "no commit of the old home was lost");
+    let home = us.node().unwrap().catalog(&us).unwrap().home_of("sql/users.db").unwrap().unwrap();
+    assert_eq!((home.node.as_str(), home.epoch), (us.node().unwrap().id.as_str(), 2));
+    drop((us_db, eu_db));
+    eu.close().unwrap();
+    us.close().unwrap();
+}

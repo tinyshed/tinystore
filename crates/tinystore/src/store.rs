@@ -218,12 +218,13 @@ impl Store {
             }
             if node.takes(name) {
                 node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
-                return Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?));
+                return Ok(node.opened(name, crate::sqlite::File::open_copy(path, config)?));
             }
             if crate::replication::is_copy(&node.log_dir(name)) {
-                return Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?));
+                return Ok(node.opened(name, crate::sqlite::File::open_copy(path, config)?));
             }
-            return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
+            let file = crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?))?;
+            return Ok(node.opened(name, file));
         }
         crate::sqlite::File::open(path, config)
     }
@@ -240,7 +241,8 @@ impl Store {
         let path = self.inner.dir.join(name);
         match node.claim(self, name).map_err(|error| error.within(self.describe()))? {
             crate::replication::Claimed::Here => {
-                return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
+                let file = crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?))?;
+                return Ok(node.opened(name, file));
             }
             crate::replication::Claimed::At(address) => node.take_directly(self, name, &address)?,
             crate::replication::Claimed::From if !node.takes(name) => {
@@ -253,7 +255,7 @@ impl Store {
             crate::replication::Claimed::From => {}
         }
         node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
-        Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?))
+        Ok(node.opened(name, crate::sqlite::File::open_copy(path, config)?))
     }
 
     /// The directory of the log of the store's file `name`; a store that is

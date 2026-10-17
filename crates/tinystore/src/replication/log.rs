@@ -238,6 +238,18 @@ impl Log {
             let path = segment_path(dir, first);
             fs::remove_file(&path).map_err(|error| io_error(&path, error))?;
         }
+        Self::unfence_in(dir)
+    }
+
+    /// Takes writes of this log's file again, after a move that did not finish.
+    pub(crate) fn unfence(&self) -> Result<()> {
+        Self::unfence_in(&self.dir)?;
+        self.fenced.store(0, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Removes what the log directory `dir` kept of a later epoch.
+    pub(crate) fn unfence_in(dir: &Path) -> Result<()> {
         match fs::remove_file(dir.join(FENCED)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),

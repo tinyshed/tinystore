@@ -595,7 +595,8 @@ fn a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_w
     let copy = Arc::new(File::open_copy(dir.path().join("copy.db"), Config::default()).unwrap());
     assert_eq!(count(&copy), 1);
 
-    copy.readers().pause(Duration::from_secs(1)).unwrap();
+    let readers = copy.switch().readers().unwrap();
+    readers.pause(Duration::from_secs(1)).unwrap();
     assert_eq!(copy.readers_open(), 0);
     let reading = {
         let copy = Arc::clone(&copy);
@@ -607,6 +608,6 @@ fn a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_w
     }
     // fails on Windows while any connection holds the copy open
     std::fs::rename(dir.path().join("snapshot.db"), dir.path().join("copy.db")).unwrap();
-    copy.readers().resume();
+    readers.resume();
     assert_eq!(reading.join().unwrap(), 2, "the read that waited reads the file that took the copy's place");
 }

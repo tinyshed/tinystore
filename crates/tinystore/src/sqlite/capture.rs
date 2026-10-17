@@ -111,6 +111,16 @@ pub(crate) trait Observe: Send + Sync {
     }
 }
 
+/// What hands a file's commits to its log, shared by the file and its
+/// group: a node sets it and takes it away as the file's home moves, and a
+/// file no log keeps holds none.
+pub(crate) type Logged = Arc<std::sync::RwLock<Option<Arc<Capture>>>>;
+
+/// The capture a file's commits go through now, if any.
+pub(crate) fn logged(cell: &Logged) -> Option<Arc<Capture>> {
+    cell.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
 /// A file's capture: its writer's hook, and where the last commit it handed
 /// ended.
 pub(crate) struct Capture {

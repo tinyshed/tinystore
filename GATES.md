@@ -376,6 +376,7 @@ module defines.
 - a mutex of the core's lets one thread in, parks a thread past its spins and wakes it, and is its holder's as often as it entered — `a_lock_lets_one_thread_in_at_a_time`, `a_thread_past_its_spins_parks_and_is_woken`, `a_reentrant_lock_is_its_holders_until_it_leaves_as_often_as_it_entered`, `sqlite_is_given_a_mutex_by_its_kind_and_the_same_one_by_its_number` in `sqlite::mutex`
 - a reader beyond one closes once idle, and the next read opens one that still refuses to write — `TestAnIdleReaderClosesAndTheNextReadOpensIt`
 - a copy's readers paused hold its file open nowhere, its reads waiting for the file that takes its place — `a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_what_replaces_it` in `sqlite::file`
+- a file open becomes a copy and a home again, its commits handed to its log only as a home — `a_file_open_becomes_a_copy_and_a_home_again_its_commits_handed_only_as_a_home` in `sqlite::capture`
 - the read that has waited longest for a reader takes the next one before a read that came after it, a turn due every millisecond — `a_read_that_waited_takes_the_next_reader_before_one_that_came_after_it` in `sqlite::file`
 - the store's Options.Readers bounds what an engine opens — `TestTheStoresReadersBoundWhatAnEngineWants`, `TestTheStoresReadersCapEveryDatabase`
 - a guest engine keeps its history in its owner's file — `TestAGuestKeepsItsOwnHistoryInItsOwnersFile`
@@ -703,6 +704,7 @@ module defines.
 - nodes with a catalog write the files they made and copy the others with no list, and of two nodes making one file in the same moment one writes it — `nodes_with_a_catalog_write_the_files_they_made_and_copy_the_others_with_no_list` in `replication::link_tests`
 - a node takes a file its `from` does not serve straight from its home, writes it there, and links to it again at its next start — `a_node_takes_a_file_its_from_does_not_serve_straight_from_its_home_and_writes_it_there` in `replication::link_tests`
 - a copy promoted once its home stopped moves the route the catalog names, at its next epoch, and the other nodes take the file and pass its writes there; the old home, back undemoted, learns it from the catalog and writes no more — `a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names` in `replication::link_tests`
+- a live move hands a file's home over while both nodes run, the old home becoming the new one's copy with no snapshot and no commit lost — `a_live_move_hands_a_file_s_home_over_and_loses_no_commit` in `replication::link_tests`
 - a node cut off from the catalog's home writes its files and makes no new one — `a_node_cut_off_from_the_catalog_s_home_writes_its_files_and_makes_no_new_one` in `replication::link_tests`
 - two nodes each taking from the other write their own databases, copy each other's and pass a write on a copy to its home — `two_nodes_write_their_own_databases_and_copy_each_other_s` in `replication::link_tests`
 - a synchronous home answers a write once a copy holds it, and waits for none while no copy follows — `a_synchronous_home_answers_a_write_once_a_copy_holds_it` in `replication::link_tests`

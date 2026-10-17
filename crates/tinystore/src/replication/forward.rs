@@ -25,6 +25,8 @@ pub(crate) const MAKE: u8 = 0;
 pub(crate) const BATCH: u8 = 6;
 /// The tag of a claim of a file's name in the catalog.
 pub(crate) const CATALOG: u8 = 7;
+/// The tag of a node's ask that a file's home hand it over.
+pub(crate) const HANDOVER: u8 = 8;
 /// The tag of a call of kv's, the first byte of what passes on.
 #[cfg(feature = "kv")]
 pub(crate) const KV: u8 = 1;
@@ -68,7 +70,7 @@ pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>>
 
 /// Passes a write on, and says whether this node's copy held its commit within
 /// the wait.
-fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool)> {
+pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool)> {
     let Some(node) = store.node() else {
         return Err(Error::invalid(format!("{file} is a copy, and the store is no node to pass its writes on")));
     };
@@ -329,6 +331,7 @@ fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
             Ok((Vec::new(), file))
         }
         CATALOG => super::catalog::run(store, body),
+        HANDOVER => super::handover::run(store, op),
         #[cfg(feature = "kv")]
         KV => crate::kv::forward::run(store, &lenders, body),
         #[cfg(feature = "sql")]

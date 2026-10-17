@@ -346,8 +346,8 @@ in [scaling.md](scaling.md#order).
   it opens, and a copy promoted with ops still queued counts them itself; an add past an i64 at the home is let go
   and logged, its caller answered already. A take of an encrypted bucket on a copy
   asks for the value sealed with the key it names, which its home checks, and opens it on the copy.
-- [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
-  Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
+- [x] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
+  Built: two nodes each taking from the other, each naming in `files` the databases it copies, write their
   own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is
   its own. The catalog, `catalog.db`, is written by the node `Node::catalog` names, opened at its start so that its
   first link serves it, and copied by every other node like any file: a home a file, the node's id and address, an
@@ -362,8 +362,16 @@ in [scaling.md](scaling.md#order).
   one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
   them, and the address is kept beside the copy's log so that the link is made again at the next start. A claim
   carries the epoch of the node's log of the file: one at a later epoch, a copy a person promoted, moves the route
-  to its node when it starts, and the others take the file from there. Left: moving a home that is alive, which
-  swaps a file between a copy and a home under engines that hold it open.
+  to its node when it starts, and the others take the file from there. `replication::move_home` moves a file's
+  home to the running node that calls it, from another running node, through the catalog: the ask passes to the
+  home like a write, which keeps the next epoch in `fenced`, refusing its writes, and answers its last commit
+  once the new home's copy holds it; the new home claims the route at the next epoch, closes the copy's readers
+  and applier, and gives each engine's file of it a writer and its log, going on after that commit; the old
+  home, once its copy of the catalog names the new one, closes its writer, keeps its log's entries as a copy's
+  from that commit on, and takes the file from the new home, with no snapshot. A file's mode moves under the
+  engines that hold it open, which ask it at each turn of their maintenance; a move that does not finish within
+  a minute leaves the old home writing again, and one that a node stopped in the middle of is a person's to
+  settle with `promote`.
 - [x] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
   Built: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the

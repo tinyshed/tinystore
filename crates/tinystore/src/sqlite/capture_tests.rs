@@ -282,3 +282,38 @@ fn a_wal_header_and_frames_read_as_sqlite_recovers_them() {
     assert!(recovered.end < wal.end, "a frame whose checksum breaks ends what is recovered");
     std::mem::forget(file);
 }
+
+#[cfg(feature = "replication")]
+#[test]
+fn a_file_open_becomes_a_copy_and_a_home_again_its_commits_handed_only_as_a_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let kept = Arc::new(Kept::default());
+    let file = File::open_observed(dir.path().join("moving.db"), Config::default(), Some(kept.clone())).unwrap();
+    let insert = |file: &File, value: &'static str| {
+        file.write(value.len(), move |tx| {
+            tx.execute("insert into t (v) values (?1)", [value]).map(drop).map_err(|error| sql_error("insert", error))
+        })
+    };
+    let count = |file: &File| {
+        file.read(|connection| {
+            connection
+                .query_row("select count(*) from t", [], |row| row.get::<_, i64>(0))
+                .map_err(|e| sql_error("count", e))
+        })
+        .unwrap()
+    };
+    file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("t", error))).unwrap();
+    insert(&file, "as a home").unwrap();
+    let handed = kept.handed();
+
+    file.become_copy().unwrap();
+    assert!(file.is_copy());
+    assert!(insert(&file, "as a copy").is_err(), "a copy takes no write");
+    assert_eq!((kept.handed(), count(&file)), (handed, 1), "and hands nothing");
+
+    file.become_home(kept.clone()).unwrap();
+    assert!(!file.is_copy());
+    insert(&file, "a home again").unwrap();
+    assert_eq!((kept.handed(), count(&file)), (handed + 1, 2), "a home again hands its commits");
+    file.close().unwrap();
+}

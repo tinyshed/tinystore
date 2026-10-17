@@ -14,6 +14,7 @@ mod copy;
 mod entry;
 mod follow;
 mod forward;
+mod handover;
 mod links;
 mod log;
 mod message;
@@ -40,6 +41,7 @@ pub(crate) use forward::SEARCH;
 #[cfg(feature = "sql")]
 pub(crate) use forward::SQL;
 pub(crate) use forward::{Lenders, database_file, database_of, enqueue, make_in, pass_on, queued, tag_of};
+pub use handover::{Moved, move_home};
 pub use links::{Follower, Links, links};
 pub(crate) use log::Notify;
 pub(crate) use message::{In, Out};

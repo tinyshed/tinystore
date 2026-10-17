@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use super::capture::Capture;
+use super::capture::{Capture, Logged, logged};
 use super::connection::{execute, sql_error};
 use super::given::own;
 use super::{Committed, GroupLimits, Left, Settlers, Tx};
@@ -55,7 +55,7 @@ pub(crate) struct Group {
     limits: GroupLimits,
     commits: AtomicU64,
     settlers: Arc<Settlers>,
-    capture: Option<Arc<Capture>>,
+    capture: Logged,
 }
 
 #[derive(Default)]
@@ -99,7 +99,7 @@ struct Answer {
 }
 
 impl Group {
-    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>, capture: Option<Arc<Capture>>) -> Self {
+    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>, capture: Logged) -> Self {
         let queue = Mutex::new(Queue::default());
         Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers, capture }
     }
@@ -179,7 +179,9 @@ impl Group {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();
-            let answers = commit(&connection, &batch, &self.settlers, self.capture.as_deref());
+            // read while the writer is held, which a change of the file's home holds too
+            let capture = logged(&self.capture);
+            let answers = commit(&connection, &batch, &self.settlers, capture.as_deref());
             let held = started.elapsed();
             drop(connection);
             if !batch.is_empty() {

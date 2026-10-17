@@ -88,12 +88,10 @@ impl Jobs {
             _claim: claim,
         });
         let weak = Arc::downgrade(&jobs);
-        // A copy's maintenance is its home's, and reaches it as pages.
-        if jobs.file.is_copy() {
-            return Ok(jobs);
-        }
+        // A copy's maintenance is its home's, and reaches it as pages: each turn
+        // asks, since a file's home may move while it is open.
         store.every(&format!("{task}: maintenance"), MAINTENANCE, move || {
-            weak.upgrade().map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
+            weak.upgrade().filter(|jobs| !jobs.file.is_copy()).map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
         })?;
         Ok(jobs)
     }

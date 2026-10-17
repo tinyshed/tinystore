@@ -120,15 +120,14 @@ impl Kv {
             configs: Mutex::new(HashMap::new()),
             _claim: claim,
         });
-        // A copy's expiry and renewals are its home's, and reach it as pages.
-        if kv.file.is_copy() {
-            return Ok(kv);
-        }
+        // A copy's expiry and renewals are its home's, and reach it as pages:
+        // each turn asks, since a file's home may move while it is open.
         let weak = Arc::downgrade(&kv);
-        store
-            .every(&format!("{tasks}: maintenance"), MAINTENANCE, move || with(&weak, |kv| kv.maintain().map(drop)))?;
+        let maintain = move || with(&weak, |kv| if kv.file.is_copy() { Ok(()) } else { kv.maintain().map(drop) });
+        store.every(&format!("{tasks}: maintenance"), MAINTENANCE, maintain)?;
         let weak = Arc::downgrade(&kv);
-        let renew = move || with(&weak, |kv| kv.renewals.flush(&kv.file).map(drop));
+        let renew =
+            move || with(&weak, |kv| if kv.file.is_copy() { Ok(()) } else { kv.renewals.flush(&kv.file).map(drop) });
         store.every(&format!("{tasks}: renewals"), RENEWALS, renew)?;
         Ok(kv)
     }

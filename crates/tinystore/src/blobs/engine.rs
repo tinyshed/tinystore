@@ -155,14 +155,14 @@ impl Blobs {
                 _claim: claim,
             });
             // What a process that died left, and the maintenance after it,
-            // are a copy's home's to clear.
-            if blobs.file.is_copy() {
-                return Ok(blobs);
+            // are a copy's home's to clear: each turn asks, since a file's
+            // home may move while it is open.
+            if !blobs.file.is_copy() {
+                blobs.recover()?;
             }
-            blobs.recover()?;
             let weak = Arc::downgrade(&blobs);
             store.every("blobs: maintenance", MAINTENANCE, move || {
-                weak.upgrade().map_or(Ok(()), |blobs| blobs.maintain().map(drop))
+                weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| blobs.maintain().map(drop))
             })?;
             Ok(blobs)
         })

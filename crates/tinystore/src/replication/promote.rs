@@ -62,7 +62,7 @@ pub fn promote(dir: &Path, files: &[String]) -> Result<Vec<Promoted>> {
     promoting.into_iter().map(|(name, log)| promote_one(name, &log).map_err(|error| error.within(what()))).collect()
 }
 
-fn promote_one(file: String, log: &Path) -> Result<Promoted> {
+pub(crate) fn promote_one(file: String, log: &Path) -> Result<Promoted> {
     let applied = Position::read(log.join(Position::FILE))?.point();
     let point = Point { epoch: applied.epoch + 1, ..applied };
     let mut promoted = Position::read(log.join(PROMOTED))?;
