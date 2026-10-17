@@ -476,8 +476,8 @@ storage with a restore to a commit or a second; the exporters.
 6. What `once` promises after an asynchronous failover. A synchronous write
    whose chosen copy is gone falls back and answers, counted and said once an
    outage, as the owner left to the builder on 18 October.
-7. The log's format, TinyStore's own or LTX; a checksum of the whole file
-   every commit or now and then.
+7. The log's format, TinyStore's own or LTX. A checksum of the whole file is
+   taken when a program asks, `replication::verify`, rather than every commit.
 8. A backup that leaves the machine: encrypted by default, and the option's
    name.
 

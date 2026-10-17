@@ -29,6 +29,14 @@ pub(crate) struct Pages {
     connection: Connection,
 }
 
+/// One read transaction over a whole file, its snapshot pinned at the commit
+/// the file stood at when it began: what a checksum of the file reads. It
+/// ends when dropped.
+pub(crate) struct Snapshot<'a> {
+    pages: &'a Pages,
+    size: u32,
+}
+
 /// Pages read in one transaction, and the file's size at it.
 pub(crate) struct Chunk {
     pub(crate) page_size: u32,
@@ -55,6 +63,20 @@ impl Pages {
         Ok(Pages { path: path.to_owned(), connection })
     }
 
+    /// Begins a read transaction and pins its snapshot with a first read, so
+    /// that a caller holding the file still while it begins reads that commit.
+    pub(crate) fn begin(&self) -> Result<Snapshot<'_>> {
+        let what = || format!("{}: its snapshot", self.path.display());
+        execute(&self.connection, BEGIN).map_err(|error| sql_error(what(), error))?;
+        match self.connection.query_row(PAGES, [], |row| row.get(0)) {
+            Ok(size) => Ok(Snapshot { pages: self, size }),
+            Err(error) => {
+                let _ = execute(&self.connection, END);
+                Err(sql_error(what(), error))
+            }
+        }
+    }
+
     /// Pages from `first`, `count` at most and none past the file's end, read
     /// in one transaction.
     pub(crate) fn read(&self, first: u32, count: u32) -> Result<Chunk> {
@@ -68,6 +90,7 @@ impl Pages {
     }
 
     fn read_inside(&self, first: u32, count: u32) -> rusqlite::Result<Chunk> {
+        // its size and pages are read in the transaction `read` began
         let page_size: u32 = self.connection.query_row(PAGE_SIZE, [], |row| row.get(0))?;
         let size: u32 = self.connection.query_row(PAGES, [], |row| row.get(0))?;
         let last = first.saturating_add(count).min(size.saturating_add(1));
@@ -78,5 +101,25 @@ impl Pages {
             pages.push((number, page));
         }
         Ok(Chunk { page_size, size, pages })
+    }
+}
+
+impl Snapshot<'_> {
+    /// Hands each page of the snapshot to `each`, in order.
+    pub(crate) fn each(&self, mut each: impl FnMut(u32, &[u8])) -> Result<()> {
+        let what = || format!("{}: its pages", self.pages.path.display());
+        let mut statement = self.pages.connection.prepare_cached(PAGE).map_err(|error| sql_error(what(), error))?;
+        for number in 1..=self.size {
+            let page: Vec<u8> =
+                statement.query_row([number], |row| row.get(0)).map_err(|error| sql_error(what(), error))?;
+            each(number, &page);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Snapshot<'_> {
+    fn drop(&mut self) {
+        let _ = execute(&self.pages.connection, END);
     }
 }

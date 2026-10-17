@@ -26,6 +26,7 @@ mod serve;
 mod snapshot;
 mod status;
 mod transport;
+mod verify;
 
 use std::fmt;
 
@@ -48,6 +49,7 @@ pub(crate) use message::{In, Out};
 pub(crate) use node::{Claimed, State};
 pub use promote::{Demoted, Promoted, demote, promote};
 pub use status::{FileStatus, status};
+pub use verify::verify;
 
 /// What makes a store a node: it keeps a log of each file it writes, from
 /// which other nodes copy the file, and copies the files of the node it

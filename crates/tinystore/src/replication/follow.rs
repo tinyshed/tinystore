@@ -231,6 +231,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
         held: HashMap::new(),
         retries: Vec::new(),
         said: HashMap::new(),
+        awaiting: HashMap::new(),
         #[cfg(feature = "blobs")]
         fetching: Fetching::default(),
     };
@@ -268,6 +269,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
         if welcomed {
             link.forget_copies_gone();
             link.say_applied()?;
+            link.ask_to_verify()?;
         }
         match frames.fill(&mut reading) {
             Ok(true) => {}
@@ -320,6 +322,8 @@ struct Link<'a> {
     retries: Vec<(String, Instant)>,
     /// The entry of each copy this link last said it holds.
     said: HashMap<String, u64>,
+    /// The checks whose answer names a point the copy has not reached yet.
+    awaiting: HashMap<String, (Point, Vec<u8>)>,
     /// The files blobs keeps beside blobs.db, fetched once a copy names them.
     #[cfg(feature = "blobs")]
     fetching: Fetching,
@@ -417,10 +421,14 @@ impl Link<'_> {
     #[cfg(feature = "blobs")]
     fn object(&mut self, path: &str, offset: u64, bytes: &[u8], last: bool) -> Result<()> {
         use std::io::Write;
+        let target = self.state.dir.join(path);
+        // a file sent before the commit that names it comes unasked
+        if offset == 0 && crate::blobs::is_object(path) && !target.exists() {
+            self.fetching.under_way.entry(path.to_owned()).or_insert(None);
+        }
         let Some(written) = self.fetching.under_way.get_mut(path) else {
             return Ok(());
         };
-        let target = self.state.dir.join(path);
         let mut temp = target.as_os_str().to_owned();
         temp.push(".part");
         let temp = std::path::PathBuf::from(temp);
@@ -441,6 +449,46 @@ impl Link<'_> {
             std::fs::rename(&temp, &target).map_err(io)?;
         }
         Ok(())
+    }
+
+    /// Asks for the checks a program wants of the copies this link holds.
+    fn ask_to_verify(&mut self) -> Result<()> {
+        let held = &self.held;
+        for file in self.state.to_verify(|file| matches!(held.get(file), Some(Held::Whole(_)))) {
+            self.out.send(&Message::Verify { file })?;
+        }
+        Ok(())
+    }
+
+    /// Takes the point and hash its source answered for `file`: compared now
+    /// when the copy stands there, once it reaches it otherwise.
+    fn verified(&mut self, file: &str, at: Point, sum: Vec<u8>, why: &str) {
+        let stands = match self.held.get(file) {
+            Some(Held::Whole(copy)) => copy.point(),
+            _ => return self.state.verification(file, Err(Error::new(ErrorKind::Unavailable, "no whole copy"))),
+        };
+        if sum.is_empty() {
+            return self.state.verification(file, Err(Error::new(ErrorKind::Unavailable, why.to_owned())));
+        }
+        if stands.sequence < at.sequence {
+            self.awaiting.insert(file.to_owned(), (at, sum));
+            return;
+        }
+        self.compare(file, at, &sum, stands);
+    }
+
+    /// Compares the copy's hash with its source's, the copy standing at `stands`.
+    fn compare(&mut self, file: &str, at: Point, sum: &[u8], stands: Point) {
+        let done = if stands != at {
+            Err(Error::new(
+                ErrorKind::Conflict,
+                format!("the copy stands at entry {}, past those checked", stands.sequence),
+            ))
+        } else {
+            super::verify::of_copy(self.state, file)
+                .and_then(|ours| super::verify::compare(file, at.sequence, ours, sum))
+        };
+        self.state.verification(file, done);
     }
 
     /// Lets go of each copy this node holds no longer, as one it became the
@@ -509,6 +557,10 @@ impl Link<'_> {
                 self.upstream().answered(id, Written { outcome, waits });
                 Ok(())
             }
+            Message::Verified { file, at, sum, why } => {
+                self.verified(&file, at, sum, &why);
+                Ok(())
+            }
             Message::Listed { files } => {
                 if matches!(self.scope, Scope::From) {
                     *lock(&self.state.served) = Some(files.clone());
@@ -562,6 +614,14 @@ impl Link<'_> {
         match applied {
             Ok(()) => {
                 self.blobs_changed(file);
+                if let (Some((at, _)), Some(Held::Whole(copy))) = (self.awaiting.get(file), self.held.get(file))
+                    && copy.point().sequence >= at.sequence
+                {
+                    let stands = copy.point();
+                    if let Some((at, sum)) = self.awaiting.remove(file) {
+                        self.compare(file, at, &sum, stands);
+                    }
+                }
                 self.finish_when_whole(file)
             }
             Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::Invalid) => {

@@ -102,6 +102,18 @@ pub(crate) enum Message {
         file: String,
         sequence: u64,
     },
+    /// Asks for the point the node holds `file` at and the hash of its pages.
+    Verify {
+        file: String,
+    },
+    /// The point and the SHA-256 of `file`'s pages there; no hash, and why,
+    /// when the node could not read them.
+    Verified {
+        file: String,
+        at: Point,
+        sum: Vec<u8>,
+        why: String,
+    },
 }
 
 impl Message {
@@ -202,6 +214,17 @@ impl Message {
                 out.bytes(bytes);
                 out.byte(u8::from(*last));
             }
+            Message::Verify { file } => {
+                out.byte(18);
+                out.text(file);
+            }
+            Message::Verified { file, at, sum, why } => {
+                out.byte(19);
+                out.text(file);
+                out.point(at);
+                out.bytes(sum);
+                out.text(why);
+            }
             Message::Applied { file, sequence } => {
                 out.byte(17);
                 out.text(file);
@@ -278,6 +301,8 @@ impl Message {
                 last: at.byte()? == 1,
             },
             17 => Message::Applied { file: at.text()?, sequence: at.long()? },
+            18 => Message::Verify { file: at.text()? },
+            19 => Message::Verified { file: at.text()?, at: at.point()?, sum: at.bytes()?.to_vec(), why: at.text()? },
             _ => return Err(corrupt("a message of a kind the link does not have")),
         };
         if at.at != body.len() {
@@ -526,6 +551,8 @@ mod tests {
             Message::Fetch { path: "blobs/objects/1/1a3f".into() },
             Message::Object { path: "blobs/objects/1/1a3f".into(), offset: 4, bytes: vec![7; 3], last: true },
             Message::Applied { file: "kv.db".into(), sequence: 42 },
+            Message::Verify { file: "kv.db".into() },
+            Message::Verified { file: "kv.db".into(), at, sum: vec![7; 32], why: String::new() },
         ];
         for message in messages {
             let bytes = message.encode();

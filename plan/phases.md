@@ -294,8 +294,10 @@ in [scaling.md](scaling.md#order).
   applier's own connection, page 1 last and a truncation the last row, an entry that does not follow refused, one
   held taken as nothing, the position kept after each commit and the copy going on from it. Engines read again the
   names they keep once a commit applies; the applier's connection is opened again after a commit that wrote page
-  1, whose schema and size it would read stale. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: a
-  file's checksum that proves a copy its home's.
+  1, whose schema and size it would read stale. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. `replication::verify`
+  checks a copy against the node it takes it from, page for page: that node hashes its pages at the point it
+  holds, read from a snapshot pinned while its writer or its copy's position is held, and the copy hashes its own
+  once it applied that point, page 1's change counters aside; pages that differ are `Corrupt`, and logged.
 - [x] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
   Built: a snapshot reads a file's pages through `sqlite_dbpage` 256 at a time, each chunk in a read transaction of
   its own, between two points of its log read with the writer held, or a copy's position held; the taker writes
@@ -303,8 +305,9 @@ in [scaling.md](scaling.md#order).
   takes the copy's name, renamed durably, only once whole, its position kept after. Blobs' files too large to keep
   inline are fetched once a copy of `blobs.db` names them, from the node it copies, in pieces of a mebibyte written
   under a name of their own and renamed whole; a read meeting one not fetched yet fails, for that short while,
-  rather than wait, and a copy keeps the files its home removed. Left: a copy that fetches a file before it applies
-  the commit that names it.
+  rather than wait, and a copy keeps the files its home removed. A node sends the nodes taking blobs.db from it
+  each file of blobs it holds past those it sent them before the entries that name it, on the same link, so that
+  a copy holds a file before the commit that names it; those older than a link's first entries the copy fetches.
 - [x] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
   Built: `Node { from, serve, files, token }`; a node serves over TCP, a thread accepting and two a link, the
   files it writes and its whole copies, each from where the other node's copy stands; a link follows every file
@@ -320,8 +323,7 @@ in [scaling.md](scaling.md#order).
   unless asked, a link goes through TLS, rustls with ring's cryptography: `Node::tls` and `--node-tls-cert`,
   `--node-tls-key` and `--node-tls-roots`, the follower checking its upstream's certificate against the roots
   it trusts, the token still what admits it. A file a node begins to serve, a log's first entry or a copy become
-  whole, is told at once to the nodes linked to it, which then ask for it. Left: a file's checksum that proves a
-  copy its home's.
+  whole, is told at once to the nodes linked to it, which then ask for it.
 - [x] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
   Built: kv's buckets and counters, and the names their handles open, sql's statements and batches,
   search's documents set and deleted, on the index as its home holds it, and jobs' adds, sets, updates and

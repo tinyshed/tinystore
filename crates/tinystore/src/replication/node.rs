@@ -84,6 +84,15 @@ pub(crate) struct State {
     /// The direct links to the homes of files `from` does not serve, by the
     /// address each reaches.
     direct: Mutex<HashMap<String, Arc<Direct>>>,
+    /// The checks of copies a program asked for, by file.
+    verifying: Mutex<HashMap<String, Verifying>>,
+}
+
+/// Where a check of a copy stands.
+enum Verifying {
+    Asked,
+    Sent,
+    Done(Result<u64>),
 }
 
 /// The file in a copy's log directory that names the node a direct link
@@ -153,6 +162,7 @@ impl State {
             served: Mutex::default(),
             catalog: Mutex::default(),
             direct: Mutex::default(),
+            verifying: Mutex::default(),
             queue: Mutex::default(),
             tls,
             dir: dir.to_owned(),
@@ -398,6 +408,59 @@ impl State {
             Some(log) => log.unfence(),
             None => Log::unfence_in(&self.log_dir(name)),
         }
+    }
+
+    /// Runs `read` with where this node's own file `name` stands, held still:
+    /// by its writer while one is open; with none, nothing writes it.
+    pub(crate) fn holding_home<T>(&self, name: &str, read: impl FnOnce(Point) -> Result<T>) -> Result<T> {
+        if let Some(log) = lock(&self.logs).get(name).and_then(Weak::upgrade) {
+            return log.holding(read);
+        }
+        let point = self.point_of(name).ok_or_else(|| {
+            Error::new(ErrorKind::Unavailable, format!("{name}: this node holds no log of it it can read now"))
+        })?;
+        read(point)
+    }
+
+    /// Asks the link that takes `file` to check this node's copy of it.
+    pub(crate) fn ask_to_verify(&self, file: &str) {
+        lock(&self.verifying).insert(file.to_owned(), Verifying::Asked);
+    }
+
+    /// What checking the copy of `file` found, once it did, let go of.
+    pub(crate) fn verified(&self, file: &str) -> Option<Result<u64>> {
+        let mut verifying = lock(&self.verifying);
+        match verifying.get(file) {
+            Some(Verifying::Done(_)) => match verifying.remove(file) {
+                Some(Verifying::Done(done)) => Some(done),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn forget_verifying(&self, file: &str) {
+        lock(&self.verifying).remove(file);
+    }
+
+    /// The files whose check a program asked for and no link sent yet, now
+    /// marked sent.
+    pub(crate) fn to_verify(&self, held: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut verifying = lock(&self.verifying);
+        let asked: Vec<String> = verifying
+            .iter()
+            .filter(|(file, state)| matches!(state, Verifying::Asked) && held(file))
+            .map(|(file, _)| file.clone())
+            .collect();
+        for file in &asked {
+            verifying.insert(file.clone(), Verifying::Sent);
+        }
+        asked
+    }
+
+    /// Keeps what checking the copy of `file` found.
+    pub(crate) fn verification(&self, file: &str, done: Result<u64>) {
+        lock(&self.verifying).insert(file.to_owned(), Verifying::Done(done));
     }
 
     /// Has the link to `from` ask for the files served at its next turn.

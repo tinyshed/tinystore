@@ -1108,3 +1108,49 @@ fn a_file_a_home_makes_after_a_node_linked_reaches_the_node_with_no_wait_for_its
     copy.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_copy_checked_against_its_home_is_its_home_page_for_page_and_a_page_changed_beside_it_is_found() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..30 {
+        sessions.set(format!("{i}"), &format!("value {i}")).unwrap();
+    }
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    let checked = crate::replication::verify(&copy, "kv.db").unwrap();
+    assert_eq!(checked, home_point(&home, "kv.db").sequence, "checked at the point its home holds");
+
+    // a page written beside the applier, as a fault would
+    let beside = rusqlite::Connection::open(copy_dir.path().join("kv.db")).unwrap();
+    beside.pragma_update(None, "user_version", 77).unwrap();
+    drop(beside);
+    let found = crate::replication::verify(&copy, "kv.db").unwrap_err();
+    assert_eq!(found.kind(), crate::ErrorKind::Corrupt, "{found}");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_large_file_reaches_a_copy_before_the_commit_that_names_it() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let home_files = home.files("docs").open().unwrap();
+    home_files.put("seed.txt", b"planted").unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let files = copy.files("docs").open().unwrap();
+    caught_up(&home, &copy, &[crate::blobs::FILE_IN_STORE]);
+
+    for round in 0..5_u8 {
+        let name = format!("large {round}.bin");
+        home_files.put(&name, vec![round; 3 << 20]).unwrap();
+        eventually("the copy names the file", || files.head(&name).unwrap().is_some());
+        // named, and so readable at once: its bytes came before the commit
+        let read = files.get(&name).unwrap().unwrap().read_all().unwrap();
+        assert_eq!((read.len(), read[0]), (3 << 20, round));
+    }
+    copy.close().unwrap();
+    home.close().unwrap();
+}

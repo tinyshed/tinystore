@@ -187,6 +187,18 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
+            Message::Verify { file } => {
+                let (state, out) = (Arc::clone(state), Arc::clone(out));
+                state.clone().spawn("tinystore node: verify", move || {
+                    let answer = match super::verify::here(&state, &file) {
+                        Ok((at, sum)) => Message::Verified { file, at, sum: sum.to_vec(), why: String::new() },
+                        Err(error) => {
+                            Message::Verified { file, at: Point::default(), sum: Vec::new(), why: error.to_string() }
+                        }
+                    };
+                    let _ = out.send(&answer);
+                });
+            }
             Message::Applied { file, sequence } => {
                 if let Some(following) = &lock(asked).following {
                     state.acks.held(following.node(), &file, sequence);
@@ -234,6 +246,23 @@ fn send_object(state: &State, out: &Out, path: &str) -> Result<()> {
         }
         offset += filled as u64;
     }
+}
+
+/// Sends the files of blobs this node holds past those sent on the link
+/// already, before the entries of blobs.db that name them: the link carries
+/// them in order, so a copy holds a file before the commit that names it. The
+/// files older than the link's first entries the copy fetches itself.
+#[cfg(feature = "blobs")]
+fn send_objects_first(state: &State, out: &Out, sent: &mut Option<i64>) -> Result<()> {
+    let Some(after) = *sent else {
+        *sent = Some(crate::blobs::objects_after(&state.dir, 0)?.last().map_or(0, |&(id, _)| id));
+        return Ok(());
+    };
+    for (id, path) in crate::blobs::objects_after(&state.dir, after)? {
+        send_object(state, out, &path)?;
+        *sent = Some(id);
+    }
+    Ok(())
 }
 
 /// Reads the next message, `None` once the link ended; a link silent for
@@ -296,6 +325,10 @@ enum Sending {
 struct Followed {
     file: String,
     sending: Sending,
+    /// The newest file of blobs sent on this link before the commits naming
+    /// it, for blobs.db; none until its entries began.
+    #[cfg(feature = "blobs")]
+    objects: Option<i64>,
 }
 
 /// Sends each file followed: a snapshot where needed, then its entries as
@@ -317,7 +350,12 @@ fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()>
             }
             for (file, at) in asked.follows.drain(..) {
                 followed.retain(|known| known.file != file);
-                followed.push(Followed { file, sending: Sending::Asked(at) });
+                followed.push(Followed {
+                    file,
+                    sending: Sending::Asked(at),
+                    #[cfg(feature = "blobs")]
+                    objects: None,
+                });
             }
         }
         let mut sent = false;
@@ -360,6 +398,10 @@ fn send_some(state: &State, out: &Out, followed: &mut Followed) -> Result<bool> 
                 return Ok(true);
             }
             Sending::Entries { last, segment, offset } => {
+                #[cfg(feature = "blobs")]
+                if file == crate::blobs::FILE_IN_STORE {
+                    send_objects_first(state, out, &mut followed.objects)?;
+                }
                 let (sending, sent) = send_entries(out, &file, &dir, last, segment, offset)?;
                 followed.sending = sending;
                 return Ok(sent);

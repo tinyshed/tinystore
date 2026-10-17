@@ -390,6 +390,18 @@ impl Log {
         Point { sequence: tail.next - 1, epoch: tail.epoch, check: tail.check }
     }
 
+    /// Runs `read` with where the log ends, the file's writer held so that no
+    /// commit is in the file and not in the log meanwhile.
+    pub(crate) fn holding<T>(&self, read: impl FnOnce(Point) -> Result<T>) -> Result<T> {
+        let writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(Weak::upgrade);
+        let _held = writer.as_ref().map(|writer| writer.lock().unwrap_or_else(PoisonError::into_inner));
+        let point = {
+            let tail = self.lock();
+            Point { sequence: tail.next - 1, epoch: tail.epoch, check: tail.check }
+        };
+        read(point)
+    }
+
     /// Keeps an entry a copy applied, as its home wrote it: the first of an
     /// empty log, or the one after its last.
     pub(crate) fn keep(&self, entry: &Entry<'_>, bytes: &[u8]) -> Result<()> {

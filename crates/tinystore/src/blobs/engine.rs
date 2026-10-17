@@ -63,6 +63,25 @@ pub(crate) fn objects_missing(store_dir: &std::path::Path) -> Result<Vec<String>
     Ok(paths.filter(|path| !store_dir.join(path).exists()).collect())
 }
 
+/// The files of `objects/` the blobs.db in `store_dir` holds past the id
+/// `after`, oldest first, each with its id and its path in the store's
+/// directory: what a node sends the nodes taking blobs.db from it before the
+/// commits that name them. One its disk does not hold yet is left out.
+#[cfg(feature = "replication")]
+pub(crate) fn objects_after(store_dir: &std::path::Path, after: i64) -> Result<Vec<(i64, String)>> {
+    let db = store_dir.join(DIR).join(FILE);
+    if !db.exists() {
+        return Ok(Vec::new());
+    }
+    let ids = crate::sqlite::read_copy(&db, |connection| {
+        let mut statement = connection.prepare(SELECT_AFTER)?;
+        let ids = statement.query_map([after], |row| row.get::<_, i64>(0))?;
+        ids.collect::<rusqlite::Result<Vec<i64>>>()
+    })?;
+    let paths = ids.into_iter().map(|id| (id, format!("{DIR}/{OBJECTS}/{:x}/{id:x}", Disk::fan(id))));
+    Ok(paths.filter(|(_, path)| store_dir.join(path).exists()).collect())
+}
+
 /// Whether `path` names a file of `objects/`, as [`objects_missing`] writes
 /// one: what a node serves of blobs beside blobs.db.
 #[cfg(feature = "replication")]
@@ -117,6 +136,8 @@ impl Engine for Blobs {
 const DIR: &str = "blobs";
 const FILE: &str = "blobs.db";
 const SELECT_NAMED: &str = "select id from contents where inline = 0 and names > 0 order by id";
+#[cfg(feature = "replication")]
+const SELECT_AFTER: &str = "select id from contents where inline = 0 and id > ?1 order by id";
 
 const SELECT_MARKS: &str = "select (select value from meta where name = 'revision'),
     (select value from meta where name = 'ids'), (select value from meta where name = 'settled')";

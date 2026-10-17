@@ -80,6 +80,12 @@ impl Copy {
         &self.path
     }
 
+    /// Runs `read` with the entry applied last, no entry applied meanwhile.
+    pub(crate) fn holding<T>(&self, read: impl FnOnce(Point) -> Result<T>) -> Result<T> {
+        let position = self.lock();
+        read(position.point)
+    }
+
     /// The sequence of the entry applied last: the next it takes is the one after.
     pub(crate) fn applied(&self) -> u64 {
         self.lock().point.sequence
