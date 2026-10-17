@@ -210,6 +210,9 @@ pub(crate) struct Log {
     /// The later epoch another node writes the file at, which this node, an
     /// old home, learned of; 0 while none.
     fenced: AtomicU64,
+    /// Until when a judged home holds its lease of the file, by its own clock:
+    /// its writes are refused past it. None for a node no witness judges.
+    lease: Mutex<Option<Instant>>,
 }
 
 /// The file in a home's log directory that keeps the later epoch it learned
@@ -264,6 +267,7 @@ impl Log {
             writer: Mutex::new(None),
             tail: Mutex::new(tail),
             fenced,
+            lease: Mutex::new(None),
         };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
@@ -275,6 +279,26 @@ impl Log {
     pub(crate) fn followed(mut self, name: &str, acks: Arc<Acks>) -> Log {
         self.followers = Some((name.to_owned(), acks));
         self
+    }
+
+    /// Makes the file's writes wait for a lease its witness grants: refused
+    /// until the first renewal, and past each one's end. A file born here, its
+    /// log with no entry and no promotion's point, is written for a lease's
+    /// span before it: no witness grants another node a lease no node held.
+    pub(crate) fn judged(self) -> Log {
+        let born = self.lock().next == 1;
+        let now = Instant::now();
+        let until = if born { now + super::witness::TTL - super::judge::MARGIN } else { now };
+        *self.lease.lock().unwrap_or_else(PoisonError::into_inner) = Some(until);
+        self
+    }
+
+    /// Keeps the lease of a judged home's file on to `until`.
+    pub(crate) fn lease_until(&self, until: Instant) {
+        let mut lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
+        if lease.is_some_and(|held| held < until) {
+            *lease = Some(until);
+        }
     }
 
     /// Makes each commit of the file wait until a node copying it holds it,
@@ -590,6 +614,12 @@ impl Observe for Log {
     }
 
     fn refuse(&self) -> Result<()> {
+        if self.lease.lock().unwrap_or_else(PoisonError::into_inner).is_some_and(|until| Instant::now() >= until) {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                "this node holds no lease of this file from its witness now: it writes again once it renews one",
+            ));
+        }
         let epoch = self.fenced.load(Ordering::SeqCst);
         if epoch == 0 {
             return Ok(());

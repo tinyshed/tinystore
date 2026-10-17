@@ -59,12 +59,15 @@ pub fn promote(dir: &Path, files: &[String]) -> Result<Vec<Promoted>> {
         }
         promoting.push((name, log));
     }
-    promoting.into_iter().map(|(name, log)| promote_one(name, &log).map_err(|error| error.within(what()))).collect()
+    promoting.into_iter().map(|(name, log)| promote_one(name, &log, 0).map_err(|error| error.within(what()))).collect()
 }
 
-pub(crate) fn promote_one(file: String, log: &Path) -> Result<Promoted> {
+/// Makes the copy whose log is in `log` its node's own, at the epoch after
+/// the last it applied, or at `at_least` when that is later, as a lease a
+/// witness granted names it.
+pub(crate) fn promote_one(file: String, log: &Path, at_least: u64) -> Result<Promoted> {
     let applied = Position::read(log.join(Position::FILE))?.point();
-    let point = Point { epoch: applied.epoch + 1, ..applied };
+    let point = Point { epoch: (applied.epoch + 1).max(at_least), ..applied };
     let mut promoted = Position::read(log.join(PROMOTED))?;
     promoted.keep_durably(point)?;
     for gone in [copy::MARK, Position::FILE] {

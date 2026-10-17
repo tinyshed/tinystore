@@ -86,6 +86,8 @@ pub(crate) struct State {
     direct: Mutex<HashMap<String, Arc<Direct>>>,
     /// The checks of copies a program asked for, by file.
     verifying: Mutex<HashMap<String, Verifying>>,
+    /// The leases this node keeps, when it is a witness.
+    pub(crate) witness: Option<super::witness::Witness>,
 }
 
 /// Where a check of a copy stands.
@@ -163,6 +165,7 @@ impl State {
             catalog: Mutex::default(),
             direct: Mutex::default(),
             verifying: Mutex::default(),
+            witness: if options.witness { Some(super::witness::Witness::open(dir)?) } else { None },
             queue: Mutex::default(),
             tls,
             dir: dir.to_owned(),
@@ -212,6 +215,9 @@ impl State {
         }
         let writing = Arc::clone(self);
         self.spawn("tinystore node: links", move || super::links::keep_written(&writing));
+        if let Some(witness) = &self.options.judge {
+            super::judge::start(self, store, witness.clone());
+        }
         if self.options.catalog || !self.options.from.is_empty() {
             let claiming = Arc::clone(self);
             self.spawn("tinystore node: catalog", move || claiming.claim_its_files());
@@ -380,6 +386,18 @@ impl State {
     /// on after the last entry it applied, and each engine's file of it given
     /// a writer.
     pub(crate) fn take_over(self: &Arc<Self>, store: &Store, name: &str, copy: Arc<Copy>) -> Result<()> {
+        self.take_over_at(store, name, copy, 0)
+    }
+
+    /// `take_over` at `at_least`, the epoch a lease a witness granted names,
+    /// when it is later than the one after the copy's own.
+    pub(crate) fn take_over_at(
+        self: &Arc<Self>,
+        store: &Store,
+        name: &str,
+        copy: Arc<Copy>,
+        at_least: u64,
+    ) -> Result<()> {
         let paused = self.pause_readers(name)?;
         if let Some(direct) = lock(&self.direct).values().find(|direct| direct.follows(name)) {
             direct.remove(name);
@@ -394,7 +412,7 @@ impl State {
             thread::sleep(Duration::from_millis(10));
         }
         drop(copy);
-        super::promote::promote_one(name.to_owned(), &self.log_dir(name))?;
+        super::promote::promote_one(name.to_owned(), &self.log_dir(name), at_least)?;
         let log = self.open_log(name)?;
         self.switch_each(name, |switch| switch.become_home(Arc::clone(&log)))?;
         drop(paused);
@@ -609,6 +627,9 @@ impl State {
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
             .followed(name, Arc::clone(&self.acks));
+        if self.options.judge.is_some() {
+            log = log.judged();
+        }
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {
             log = log.synchronous();
         }
@@ -760,6 +781,18 @@ impl State {
             }
         }
         Ok(served)
+    }
+
+    /// Every file with a log directory now, for a judged node's turn.
+    pub(crate) fn files_logged_now(&self) -> Result<Vec<String>> {
+        self.files_logged()
+    }
+
+    /// Keeps the lease of `file` this node writes on to `until`.
+    pub(crate) fn lease_until(&self, file: &str, until: Instant) {
+        if let Some(log) = lock(&self.logs).get(file).and_then(Weak::upgrade) {
+            log.lease_until(until);
+        }
     }
 
     /// Every file with a directory in `log/`, by its name in the store's.

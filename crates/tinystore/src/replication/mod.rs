@@ -15,6 +15,7 @@ mod entry;
 mod follow;
 mod forward;
 mod handover;
+mod judge;
 mod links;
 mod log;
 mod message;
@@ -27,6 +28,7 @@ mod snapshot;
 mod status;
 mod transport;
 mod verify;
+mod witness;
 
 use std::fmt;
 
@@ -90,6 +92,13 @@ pub struct Node {
     /// beside the files it is home of; the address `serve` listens on when
     /// none.
     pub address: Option<String>,
+    /// The witness that judges which node writes each file, `host:port`: a
+    /// home renews its lease there and writes only while it holds one, and
+    /// the freshest copy takes a lease that ran out. None: a person decides,
+    /// with `promote`.
+    pub judge: Option<String>,
+    /// This node is a witness, which keeps the leases of the nodes it judges.
+    pub witness: bool,
 }
 
 /// TLS on a node's links: the certificate its server answers with, and the
@@ -117,6 +126,8 @@ impl fmt::Debug for Node {
             .field("tls", &self.tls)
             .field("catalog", &self.catalog)
             .field("address", &self.address)
+            .field("judge", &self.judge)
+            .field("witness", &self.witness)
             .finish()
     }
 }

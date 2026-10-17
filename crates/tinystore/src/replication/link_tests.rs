@@ -1154,3 +1154,72 @@ fn a_large_file_reaches_a_copy_before_the_commit_that_names_it() {
     copy.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let witness =
+        node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), witness: true, ..Node::default() });
+    let judge = Some(bound(witness.node().unwrap()).unwrap().to_string());
+    let home =
+        node_with(dirs[1].path(), Node { serve: Some("127.0.0.1:0".into()), judge: judge.clone(), ..Node::default() });
+    let home_address = bound(home.node().unwrap()).unwrap().to_string();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    eventually("the home writes once its witness leased it the file", || {
+        sessions.set("first", &"leased".to_owned()).is_ok()
+    });
+    let copy_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], judge, ..Node::default() };
+    let copy = node_with(dirs[2].path(), copy_node);
+    let copied = copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+
+    // a writer on each node keeps the times its writes as a home went through
+    let stop = Arc::new(AtomicBool::new(false));
+    let written = |store: Store, bucket: crate::kv::Bucket<String>, name: &'static str| {
+        let (stop, times) = (Arc::clone(&stop), Arc::new(Mutex::new(Vec::new())));
+        let kept = Arc::clone(&times);
+        let thread = std::thread::spawn(move || {
+            for i in 0.. {
+                if stop.load(Relaxed) {
+                    break;
+                }
+                let home_now = store.node().unwrap().copy("kv.db").is_none();
+                if home_now && bucket.set(format!("{name} {i}"), &"written".to_owned()).is_ok() {
+                    kept.lock().unwrap().push(Instant::now());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        (thread, times)
+    };
+    let (at_home, home_times) = written(home.clone(), sessions.clone(), "home");
+    let (at_copy, copy_times) = written(copy.clone(), copied.clone(), "copy");
+
+    let home_id = home.node().unwrap().id.clone();
+    let judging = witness.node().unwrap().witness.as_ref().unwrap();
+    eventually("the witness holds the home's lease", || {
+        judging.holder("kv.db").is_some_and(|holder| holder.node == home_id)
+    });
+    judging.cut(&home_id);
+    eventually("the copy takes the file over once the home's lease ran out", || {
+        copy.node().unwrap().copy("kv.db").is_none()
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    stop.store(true, Relaxed);
+    at_home.join().unwrap();
+    at_copy.join().unwrap();
+    let last_at_home = *home_times.lock().unwrap().last().unwrap();
+    let first_at_copy = *copy_times.lock().unwrap().first().expect("the new home wrote");
+    assert!(last_at_home < first_at_copy, "the old home's last write came before the new home's first");
+
+    // the old home hears of the new one and becomes its copy
+    judging.heal(&home_id);
+    eventually("the old home becomes the new one's copy", || home.node().unwrap().copy("kv.db").is_some());
+    copied.set("after the cut", &"from the new home".to_owned()).unwrap();
+    eventually("and reads what the new home wrote", || sessions.get("after the cut").unwrap().is_some());
+    copy.close().unwrap();
+    home.close().unwrap();
+    witness.close().unwrap();
+}

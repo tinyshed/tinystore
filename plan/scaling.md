@@ -463,7 +463,10 @@ storage with a restore to a commit or a second; the exporters.
 
 1. The names: `from`, `serve`, `promote`, the move, the queue's set, the
    synchronous mode, the log's directory.
-2. The judge: a lease in object storage, a witness process, or both.
+2. The judge: a witness process is built first, as a draft, and a lease in
+   object storage is a second backend after it, as a review the owner brought on
+   18 October advised; a home that loses its witness stops writing rather than
+   risk a second home.
 3. TLS is built behind `replication-tls`, off by default, rustls with
    ring as `crates/cli` uses it: whether it is on by default, and an object
    storage client in the library, are open.

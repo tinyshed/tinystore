@@ -23,6 +23,7 @@ const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --s
                      [--memory <size>] [--node] [--node-listen <host>:<port>] [--from <host>:<port>]... \
                      [--node-files <file>,...] [--node-token-file <file>] [--node-synchronous] \
                      [--node-catalog] [--node-address <host>:<port>] [--node-synchronous-with <host>:<port>]... \
+                     [--node-judge <host>:<port>] [--node-witness] \
                      [--node-tls-cert <pem> --node-tls-key <pem>] [--node-tls-roots <pem>]
        tinystore backup <dir> <file.zip> [--include <name>]... [--include-encryption-key]
        tinystore restore <file.zip> <dir>

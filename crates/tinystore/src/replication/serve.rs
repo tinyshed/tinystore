@@ -17,6 +17,7 @@ use super::node::{Following, State, lock};
 use super::pack::Packer;
 use super::snapshot::{self, Part};
 use super::transport::{self, Reading, Writing};
+use super::witness::Holder;
 use crate::{Error, ErrorKind, Result};
 
 /// How long a link may say nothing before its other end pings it.
@@ -187,6 +188,16 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
+            Message::Lease { file, node, address, epoch, position, holding } => {
+                let Some(witness) = &state.witness else {
+                    return Err(Error::invalid("a lease asked of a node that is no witness"));
+                };
+                let ask = super::witness::Ask { file: &file, node: &node, address: &address, epoch, position, holding };
+                if let Some(holder) = witness.ask(&ask)? {
+                    let Holder { node: holder, address, epoch } = holder;
+                    out.send(&Message::Leased { file, holder, address, epoch })?;
+                }
+            }
             Message::Verify { file } => {
                 let (state, out) = (Arc::clone(state), Arc::clone(out));
                 state.clone().spawn("tinystore node: verify", move || {

@@ -414,3 +414,19 @@ in [scaling.md](scaling.md#order).
 **Gate:** a node three links away holds its home's files commit for commit; a
 get after a set sees it on any node; a promotion loses only the commits not
 shipped, counted, and the old home cannot write again.
+
+## 8. The judge
+
+- [ ] A home that moves by itself, a witness outside the nodes deciding.
+  Built so far, a draft: `Node::witness` makes a node a witness, which keeps each file's lease, its epochs kept in
+  `log/witness`; `Node::judge`, `--node-judge` and `--node-witness` name a node's witness. A judged home renews the
+  lease of each file it writes every second, for five seconds from when a renewal reached the witness, and its log
+  refuses the file's writes, `Unavailable`, past what it keeps of the lease by its own clock, short of the witness's
+  by a margin of a second and a half, whatever its link does meanwhile; a file born on it is written for a lease's
+  span before its first renewal, since no witness grants a lease no node held. A copy stands for each file it copies,
+  saying where it stands; once a lease ran out and a second passed, the freshest copy standing takes it at the next
+  epoch and the file over, as a live move does, and a home that hears another holds its lease at a later epoch
+  becomes that node's copy. Left: a lease in object storage as a second witness, its option in the Bun SDK, and
+  the margins measured.
+
+**Gate:** no cut of a simulated network leaves two homes taking writes.

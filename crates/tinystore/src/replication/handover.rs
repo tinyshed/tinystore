@@ -142,7 +142,7 @@ fn let_go_once_taken(state: &Arc<State>, file: &str, to: &str, address: &str, la
 
 /// Makes the file this node handed over a copy of its new home at `address`,
 /// going on from `last`, the commit it ended at.
-fn let_go(state: &Arc<State>, store: &Store, file: &str, address: &str, last: Point) -> Result<()> {
+pub(crate) fn let_go(state: &Arc<State>, store: &Store, file: &str, address: &str, last: Point) -> Result<()> {
     let dir = state.log_dir(file);
     let paused = state.pause_readers(file)?;
     state.switch_each(file, |switch| switch.become_copy())?;

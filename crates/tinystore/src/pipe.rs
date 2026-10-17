@@ -232,6 +232,8 @@ fn asked(options: &[u8]) -> Result<Asked> {
         tls: None,
         catalog: asked.catalog,
         address: asked.address,
+        judge: None,
+        witness: false,
     });
     Ok(Asked {
         durability: durability.transpose()?,

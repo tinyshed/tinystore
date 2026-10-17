@@ -15,7 +15,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// The link's version, which a node's hello names: the second packs what
 /// follows the welcome through zstd.
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 4;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
 
@@ -101,6 +101,24 @@ pub(crate) enum Message {
     Applied {
         file: String,
         sequence: u64,
+    },
+    /// A judged node's ask of its witness: a renewal of the lease of a file
+    /// it writes at `epoch`, or a stand for one it copies, at `position`.
+    Lease {
+        file: String,
+        node: String,
+        address: String,
+        epoch: u64,
+        position: u64,
+        holding: bool,
+    },
+    /// The holder of a file's lease, as the witness answers it; an empty
+    /// `holder` while none holds it.
+    Leased {
+        file: String,
+        holder: String,
+        address: String,
+        epoch: u64,
     },
     /// Asks for the point the node holds `file` at and the hash of its pages.
     Verify {
@@ -218,6 +236,22 @@ impl Message {
                 out.byte(18);
                 out.text(file);
             }
+            Message::Lease { file, node, address, epoch, position, holding } => {
+                out.byte(20);
+                out.text(file);
+                out.text(node);
+                out.text(address);
+                out.long(*epoch);
+                out.long(*position);
+                out.byte(u8::from(*holding));
+            }
+            Message::Leased { file, holder, address, epoch } => {
+                out.byte(21);
+                out.text(file);
+                out.text(holder);
+                out.text(address);
+                out.long(*epoch);
+            }
             Message::Verified { file, at, sum, why } => {
                 out.byte(19);
                 out.text(file);
@@ -302,6 +336,15 @@ impl Message {
             },
             17 => Message::Applied { file: at.text()?, sequence: at.long()? },
             18 => Message::Verify { file: at.text()? },
+            20 => Message::Lease {
+                file: at.text()?,
+                node: at.text()?,
+                address: at.text()?,
+                epoch: at.long()?,
+                position: at.long()?,
+                holding: at.byte()? == 1,
+            },
+            21 => Message::Leased { file: at.text()?, holder: at.text()?, address: at.text()?, epoch: at.long()? },
             19 => Message::Verified { file: at.text()?, at: at.point()?, sum: at.bytes()?.to_vec(), why: at.text()? },
             _ => return Err(corrupt("a message of a kind the link does not have")),
         };
@@ -552,6 +595,15 @@ mod tests {
             Message::Object { path: "blobs/objects/1/1a3f".into(), offset: 4, bytes: vec![7; 3], last: true },
             Message::Applied { file: "kv.db".into(), sequence: 42 },
             Message::Verify { file: "kv.db".into() },
+            Message::Lease {
+                file: "kv.db".into(),
+                node: "9f86d081".into(),
+                address: "eu:7444".into(),
+                epoch: 3,
+                position: 90,
+                holding: true,
+            },
+            Message::Leased { file: "kv.db".into(), holder: "9f86d081".into(), address: "eu:7444".into(), epoch: 3 },
             Message::Verified { file: "kv.db".into(), at, sum: vec![7; 32], why: String::new() },
         ];
         for message in messages {

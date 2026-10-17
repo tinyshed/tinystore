@@ -298,7 +298,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
     }
 }
 
-fn connect(address: &str) -> Result<TcpStream> {
+pub(crate) fn connect(address: &str) -> Result<TcpStream> {
     let what = || format!("node: from {address}");
     let addresses = address.to_socket_addrs().map_err(|error| Error::io(what(), error))?;
     let mut last = None;
