@@ -161,6 +161,34 @@ impl Files {
         self.expire_after(&whole, after).map_err(|error| self.fail(&whole, error))
     }
 
+    /// A call on the path with `options` given whole, as a write another node
+    /// passed on asks it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn call(&self, path: &str, options: Options) -> FileCall<'_> {
+        FileCall { files: self, path: path.to_owned(), options }
+    }
+
+    /// Whether the set's file is a copy, whose home takes its writes.
+    #[cfg(feature = "replication")]
+    pub(crate) fn is_copy(&self) -> bool {
+        self.blobs.file.is_copy()
+    }
+
+    /// Passes a call on a copy of blobs' file to its home, and says whether
+    /// it wrote or found a file.
+    #[cfg(feature = "replication")]
+    pub(crate) fn pass_on(&self, call: &super::forward::Call<'_>) -> Result<bool> {
+        let set = super::forward::Set { name: &self.name, ttl: self.ttl, max_file_size: self.max_file_size };
+        super::forward::pass_on(&self.blobs.store()?, &set, call)
+    }
+
+    /// What the file at a whole path carries now, read here: a write passed
+    /// on answers once this copy holds it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn head_here(&self, whole: &str) -> Result<Option<FileInfo>> {
+        self.head_of(whole)
+    }
+
     pub(crate) fn whole(&self, path: &str) -> Result<String> {
         self.usable()?;
         self.folder.path(path).map_err(|error| self.fail(&format!("{}{path}", self.folder.prefix()), error))
@@ -236,6 +264,11 @@ impl Files {
         if from == to {
             return Err(Error::invalid("a copy or a rename onto its own path"));
         }
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            self.pass_on(&super::forward::Call::Copy { from, to, options, rename })?;
+            return self.head_of(to)?.ok_or_else(|| Error::internal("a copy its home wrote that this copy lacks"));
+        }
         let blobs = Arc::clone(&self.blobs);
         let files = self.clone();
         let (from, to, options) = (from.to_owned(), to.to_owned(), options.clone());
@@ -264,6 +297,12 @@ impl Files {
     }
 
     fn delete_at(&self, whole: &str, if_match: Option<String>) -> Result<()> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self
+                .pass_on(&super::forward::Call::Delete { path: whole, if_match: if_match.as_deref() })
+                .map(drop);
+        }
         let blobs = Arc::clone(&self.blobs);
         let (set, path) = (self.set, whole.to_owned());
         let freed = self.blobs.file.write(0, move |tx| {
@@ -282,6 +321,10 @@ impl Files {
     }
 
     fn expire_after(&self, whole: &str, after: Duration) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on(&super::forward::Call::Expire { path: whole, after });
+        }
         let blobs = Arc::clone(&self.blobs);
         let (set, path) = (self.set, whole.to_owned());
         let after = i64::try_from(after.as_millis()).unwrap_or(i64::MAX);
@@ -412,8 +455,9 @@ impl FileCall<'_> {
     }
 
     /// Writes the whole file, or with `create` only where no file is; says
-    /// what it wrote, nothing when a create found a file. The wire's put.
-    #[cfg(feature = "wire")]
+    /// what it wrote, nothing when a create found a file. The wire's put, and
+    /// a put another node passed on.
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn written(self, bytes: &[u8], create: bool) -> Result<Option<FileInfo>> {
         let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
         let condition = Condition { if_match: self.options.if_match.clone(), when_there };

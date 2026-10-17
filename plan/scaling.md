@@ -106,8 +106,9 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
 - A node copies every file the node it takes from serves but its own
   `records.db` and `metrics.db`, or those `--node-files` names; a file its
   home never made, the home makes when a copy waits for it.
-- kv's buckets and counters, sql's statements, search's documents and jobs'
-  adds pass from a copy to their home; any other write on a copy is refused.
+- kv's buckets and counters, encrypted ones sealed on the copy, sql's
+  statements, search's documents, jobs' adds and blobs' files pass from a
+  copy to their home; a transaction on a copy is refused.
 - Links are TCP with a token and no TLS yet: across machines, a tunnel or a
   private network.
 - `--node-synchronous` makes the home answer a write once a node copying

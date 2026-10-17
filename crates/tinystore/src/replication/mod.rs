@@ -25,6 +25,8 @@ mod status;
 use std::fmt;
 
 pub(crate) use copy::is_copy;
+#[cfg(feature = "blobs")]
+pub(crate) use forward::BLOBS;
 #[cfg(feature = "jobs")]
 pub(crate) use forward::JOBS;
 #[cfg(feature = "kv")]

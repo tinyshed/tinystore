@@ -39,6 +39,9 @@ pub(crate) struct Blobs {
     keep_free: u64,
     revision: AtomicI64,
     sets: Mutex<HashMap<String, i64>>,
+    /// The store, for the writes a copy passes to its home.
+    #[cfg(feature = "replication")]
+    store: crate::store::WeakStore,
     _claim: Claim,
 }
 
@@ -147,6 +150,8 @@ impl Blobs {
                 keep_free: store.keep_free(),
                 revision: AtomicI64::new(0),
                 sets: Mutex::new(HashMap::new()),
+                #[cfg(feature = "replication")]
+                store: store.downgrade(),
                 _claim: claim,
             });
             // What a process that died left, and the maintenance after it,
@@ -161,6 +166,12 @@ impl Blobs {
             })?;
             Ok(blobs)
         })
+    }
+
+    /// The store blobs opened in, while it is open.
+    #[cfg(feature = "replication")]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.store.upgrade().ok_or_else(|| Error::closed("the store"))
     }
 
     /// Refuses `coming` bytes that would leave the disk less free than the

@@ -96,6 +96,10 @@ impl Upload {
         let taken = self.bound(bytes.len()).and_then(|()| {
             self.hash.update(bytes);
             self.written += bytes.len() as u64;
+            #[cfg(feature = "replication")]
+            if self.files.is_copy() {
+                return self.gather(bytes);
+            }
             if self.file.is_none() && self.fits_inline() {
                 self.buffer.extend_from_slice(bytes);
                 return Ok(());
@@ -141,6 +145,13 @@ impl Upload {
         if self.ended {
             return Err(self.fail(Error::closed("the upload has ended")));
         }
+        #[cfg(feature = "replication")]
+        if self.files.is_copy() {
+            let passed = self.check_size().and_then(|()| self.pass_on(condition));
+            self.ended = true;
+            self.buffer = Vec::new();
+            return passed.map_err(|error| self.fail(error));
+        }
         let finished = self
             .check_size()
             .and_then(|()| self.content())
@@ -175,6 +186,35 @@ impl Upload {
         self.files.blobs.disk.place(id)?;
         self.placed = true;
         Ok(Content { id, size, sha256, place: Place::File })
+    }
+
+    /// Gathers a copy's bytes, which go to its home whole at the commit.
+    #[cfg(feature = "replication")]
+    fn gather(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.written > super::forward::GATHERED {
+            return Err(Error::limit(format!(
+                "a file past {} MiB written on a copy, whose home takes it whole: write it at the home",
+                super::forward::GATHERED >> 20
+            )));
+        }
+        self.buffer.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Passes a copy's file to its home, and reads what it holds there once
+    /// this copy holds the commit.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, condition: Condition) -> Result<Option<FileInfo>> {
+        let create = matches!(condition.when_there, WhenThere::Skip);
+        let options = Options { if_match: condition.if_match, ..self.options.clone() };
+        let call = super::forward::Call::Put { path: &self.path, options: &options, bytes: &self.buffer, create };
+        if !self.files.pass_on(&call)? {
+            return Ok(None);
+        }
+        self.files
+            .head_here(&self.path)?
+            .map(Some)
+            .ok_or_else(|| Error::internal("a file its home wrote that this copy lacks"))
     }
 
     /// Refuses bytes past the declared size or the files' bound.

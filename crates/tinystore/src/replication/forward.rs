@@ -9,8 +9,8 @@
 //! a read on the node that wrote sees the write.
 //!
 //! Only some engines' calls pass on so far, kv's buckets and counters, sql's
-//! statements, search's documents and jobs' adds, sets, updates and cancels;
-//! a write of any other on a copy is refused, as before.
+//! statements, search's documents, jobs' adds, sets, updates and cancels,
+//! and blobs' files; a write of any other on a copy is refused, as before.
 
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,9 @@ pub(crate) const SEARCH: u8 = 3;
 /// The tag of jobs' calls.
 #[cfg(feature = "jobs")]
 pub(crate) const JOBS: u8 = 4;
+/// The tag of blobs' calls.
+#[cfg(feature = "blobs")]
+pub(crate) const BLOBS: u8 = 5;
 
 /// How long a write passed on waits for its home's answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
@@ -160,6 +163,8 @@ fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
         KV => crate::kv::forward::run(store, body).map(|answer| (answer, crate::kv::forward::FILE.to_owned())),
         #[cfg(feature = "sql")]
         SQL => crate::sql::forward::run(store, body),
+        #[cfg(feature = "blobs")]
+        BLOBS => crate::blobs::forward::run(store, body).map(|answer| (answer, crate::blobs::forward::FILE.to_owned())),
         #[cfg(feature = "jobs")]
         JOBS => crate::jobs::forward::run(store, body).map(|answer| (answer, crate::jobs::forward::FILE.to_owned())),
         #[cfg(feature = "search")]

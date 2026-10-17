@@ -20,6 +20,8 @@ mod engine;
 mod files;
 #[cfg(test)]
 mod fixture;
+#[cfg(feature = "replication")]
+pub(crate) mod forward;
 mod ids;
 mod info;
 mod list;

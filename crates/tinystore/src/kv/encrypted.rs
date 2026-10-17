@@ -76,6 +76,12 @@ impl Encrypted {
         }
     }
 
+    /// The id of the key the bucket's rows are sealed with here.
+    #[cfg(feature = "replication")]
+    pub(crate) fn key_id(&self) -> String {
+        self.key.id()
+    }
+
     /// The row as the file keeps it.
     pub(crate) fn seal(&self, path: &[u8], raw: &Raw) -> Result<Raw> {
         let value = match raw {

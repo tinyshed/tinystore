@@ -205,7 +205,7 @@ impl Kv {
         if let Some(found) = self.file.read(|connection| cells::find_bucket(connection, name))? {
             return Ok(found);
         }
-        super::forward::refuse(false, self.lent_by.as_deref())?;
+        super::forward::refuse(self.lent_by.as_deref())?;
         let handle = super::forward::Handle::Name { name: name.to_owned(), role: kind.role().to_owned() };
         super::forward::pass_on(&self.store()?, &handle, &[], "", &super::forward::Call::Open)?;
         self.file.read(|connection| cells::find_bucket(connection, name))?.ok_or_else(|| {

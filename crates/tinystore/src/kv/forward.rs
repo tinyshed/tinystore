@@ -35,6 +35,7 @@ pub(crate) enum Handle {
     Bucket {
         name: String,
         expiry: Expiry,
+        encrypted: bool,
     },
     Counters {
         name: String,
@@ -62,6 +63,15 @@ pub(crate) enum Call {
     ClearCounters,
     /// Makes the handle's name, which a handle opening on a copy found missing.
     Open,
+    /// A put of an encrypted bucket's value, sealed where it was written
+    /// with the key `key_id`, which its home shares: no value crosses the
+    /// link unsealed.
+    PutSealed {
+        raw: Raw,
+        key_id: String,
+        put: Put,
+        options: WriteOptions,
+    },
 }
 
 /// What a call answered.
@@ -77,7 +87,7 @@ pub(crate) enum Answer {
 pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call) -> Vec<u8> {
     let mut out = Out(vec![crate::replication::KV]);
     match handle {
-        Handle::Bucket { name, expiry } => {
+        Handle::Bucket { name, expiry, encrypted } => {
             out.byte(0);
             out.text(name);
             let (kind, span) = match expiry {
@@ -87,6 +97,7 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             };
             out.byte(kind);
             out.long(millis(span));
+            out.byte(u8::from(*encrypted));
         }
         Handle::Counters { name, ttl } => {
             out.byte(1);
@@ -132,6 +143,13 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
         Call::DeleteCounter => out.byte(6),
         Call::ClearCounters => out.byte(7),
         Call::Open => out.byte(8),
+        Call::PutSealed { raw, key_id, put, options } => {
+            out.byte(9);
+            raw_out(&mut out, raw);
+            out.text(key_id);
+            out.byte(u8::from(*put == Put::OnlyNew));
+            options_out(&mut out, options);
+        }
     }
     out.0
 }
@@ -150,7 +168,7 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
                 2 => Expiry::Idle(span),
                 _ => return Err(corrupt("a bucket's expiry")),
             };
-            Handle::Bucket { name, expiry }
+            Handle::Bucket { name, expiry, encrypted: at.byte()? == 1 }
         }
         1 => {
             let name = at.text()?;
@@ -176,6 +194,12 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
         6 => Call::DeleteCounter,
         7 => Call::ClearCounters,
         8 => Call::Open,
+        9 => {
+            let raw = raw_in(&mut at)?;
+            let key_id = at.text()?;
+            let put = if at.byte()? == 1 { Put::OnlyNew } else { Put::Always };
+            Call::PutSealed { raw, key_id, put, options: options_in(&mut at)? }
+        }
         _ => return Err(corrupt("a call")),
     };
     if !at.done() {
@@ -192,16 +216,20 @@ fn call_here(store: &Store, handle: Handle, owners: &[String], key: &str, call: 
             Kv::of(store)?.name(&name, kind)?;
             Ok(Answer::Done)
         }
-        Handle::Bucket { name, expiry } => {
+        Handle::Bucket { name, expiry, encrypted } => {
             let builder = store.bucket::<()>(&name);
             let builder = match expiry {
                 Expiry::Never => builder,
                 Expiry::Ttl(span) => builder.ttl(span),
                 Expiry::Idle(span) => builder.idle(span),
             };
+            let builder = if encrypted { builder.encrypted() } else { builder };
             let bucket: Bucket<()> = owners.iter().fold(builder.open()?, |bucket, owner| bucket.under(owner));
             Ok(match call {
                 Call::Put { raw, put, options } => Answer::Stamp(bucket.put_raw(key, raw, options, put)?),
+                Call::PutSealed { raw, key_id, put, options } => {
+                    Answer::Stamp(bucket.put_sealed(key, raw, &key_id, options, put)?)
+                }
                 Call::Remove(options) => Answer::Found(bucket.remove(key, options)?),
                 Call::Take(options) => Answer::Cell(bucket.take_cell(key, options)?),
                 Call::Expire(options) => Answer::Found(bucket.expire_as(key, options)?),
@@ -287,16 +315,9 @@ pub(crate) fn pass_on(store: &Store, handle: &Handle, owners: &[String], key: &s
     crate::replication::pass_on(store, FILE, encode(handle, owners, key, call))
 }
 
-/// Why a handle of a copy cannot pass a write on, if it cannot: an
-/// encrypted bucket's values would cross the link unsealed, and a bucket in
+/// Why a handle of a copy cannot pass a write on, if it cannot: a bucket in
 /// a database's file is passed on with the database's writes, not yet built.
-pub(crate) fn refuse(encrypted: bool, lent_by: Option<&str>) -> Result<()> {
-    if encrypted {
-        return Err(Error::new(
-            ErrorKind::Unavailable,
-            "a copy passes no write of an encrypted bucket to its home: its values would cross the link unsealed",
-        ));
-    }
+pub(crate) fn refuse(lent_by: Option<&str>) -> Result<()> {
     if let Some(owner) = lent_by {
         return Err(Error::new(
             ErrorKind::Unavailable,

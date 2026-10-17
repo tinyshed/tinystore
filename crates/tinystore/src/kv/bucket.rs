@@ -459,6 +459,19 @@ impl<V> Bucket<V> {
         options: WriteOptions,
         put: Put,
     ) -> Result<(usize, impl Work<Stamp> + use<V>)> {
+        self.put_work_as(key, raw, options, put, true)
+    }
+
+    /// A put's write, its value sealed first when `seal` says and the bucket
+    /// is encrypted, or written as it was sealed already.
+    fn put_work_as(
+        &self,
+        key: &str,
+        raw: Raw,
+        options: WriteOptions,
+        put: Put,
+        seal: bool,
+    ) -> Result<(usize, impl Work<Stamp> + use<V>)> {
         if raw.len() > MAX_VALUE {
             let too_large = Error::limit(format!("a value of {} bytes, over {MAX_VALUE}", raw.len()));
             return Err(too_large.within(self.scope.shown_key(key)));
@@ -466,7 +479,8 @@ impl<V> Bucket<V> {
         let now = self.scope.now();
         let (id, path, given, default) =
             (self.scope.id, self.scope.path(key)?, options.expires(now), self.default_expires(now));
-        let raw = self.kept(&path, raw).map_err(|error| error.within(self.scope.shown_key(key)))?;
+        let raw =
+            if seal { self.kept(&path, raw).map_err(|error| error.within(self.scope.shown_key(key)))? } else { raw };
         let (if_version, bytes) = (options.if_version, raw.len());
         // a write is a use of an idle key, which lives on from it; a key with a ttl keeps its own
         let keeps_its_expiry = !matches!(self.expiry, Expiry::Idle(_));
@@ -727,11 +741,58 @@ impl<V> Bucket<V> {
     /// bytes once this copy holds the commit that made it.
     pub(crate) fn pass_on(&self, key: &str, call: forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
-        forward::refuse(self.encrypted.is_some(), self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
+        forward::refuse(self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
+        let call = self.sealed(key, call).map_err(|error| error.within(shown()))?;
         let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
         let owners = self.scope.branch()?.owners().to_vec();
-        let handle = forward::Handle::Bucket { name: self.scope.name().to_owned(), expiry: self.expiry };
+        let name = self.scope.name().to_owned();
+        let handle = forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some() };
         forward::pass_on(&store, &handle, &owners, key, &call)
+    }
+
+    /// The call as it crosses the link: an encrypted bucket's value sealed
+    /// here, and a take refused, whose answer would come back unsealed.
+    fn sealed(&self, key: &str, call: forward::Call) -> Result<forward::Call> {
+        let Some(encrypted) = &self.encrypted else {
+            return Ok(call);
+        };
+        match call {
+            forward::Call::Put { raw, put, options } => {
+                let raw = encrypted.seal(&self.scope.path(key)?, &raw)?;
+                Ok(forward::Call::PutSealed { raw, key_id: encrypted.key_id(), put, options })
+            }
+            forward::Call::Take(_) => Err(Error::new(
+                ErrorKind::Unavailable,
+                "a copy passes no take of an encrypted bucket on: the value would come back unsealed",
+            )),
+            call => Ok(call),
+        }
+    }
+
+    /// Writes a value a copy sealed with `key_id`, which must be this store's
+    /// key for the bucket, as it is.
+    pub(crate) fn put_sealed(
+        &self,
+        key: &str,
+        raw: Raw,
+        key_id: &str,
+        options: WriteOptions,
+        put: Put,
+    ) -> Result<Stamp> {
+        let Some(encrypted) = &self.encrypted else {
+            return Err(
+                Error::invalid("a sealed value for a bucket that is not encrypted").within(self.scope.shown_key(key))
+            );
+        };
+        if encrypted.key_id() != key_id {
+            return Err(Error::invalid(format!(
+                "a value sealed with the key {key_id}, and this store's is {}: a copy and its home share one key",
+                encrypted.key_id()
+            ))
+            .within(self.scope.shown_key(key)));
+        }
+        let (bytes, work) = self.put_work_as(key, raw, options, put, false)?;
+        self.scope.write(key, bytes, work)
     }
 
     /// Takes a key's cell, at the home where the bucket's file is a copy.
@@ -753,11 +814,9 @@ impl<V> Bucket<V> {
         read: impl FnOnce(&[u8]) -> Result<T> + Send + 'static,
         done: impl FnOnce(Result<T>) + Send + 'static,
     ) {
-        let refused = forward::refuse(self.encrypted.is_some(), None);
-        let (bucket, key) = (Bucket::<()>::new(self.scope.clone(), self.expiry), key.to_owned());
-        std::thread::spawn(move || {
-            done(refused.and_then(|()| bucket.pass_on(&key, call)).and_then(|bytes| read(&bytes)));
-        });
+        let bucket = Bucket::<()> { encrypted: self.encrypted.clone(), ..Bucket::new(self.scope.clone(), self.expiry) };
+        let key = key.to_owned();
+        std::thread::spawn(move || done(bucket.pass_on(&key, call).and_then(|bytes| read(&bytes))));
     }
 }
 

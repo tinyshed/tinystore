@@ -479,3 +479,91 @@ fn a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand() {
     copy.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_file_written_on_a_copy_is_kept_at_its_home_and_reads_back_on_the_copy() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let home_files = home.files("docs").open().unwrap();
+    home_files.put("seed.txt", b"planted").unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let files = copy.files("docs").open().unwrap();
+    let read =
+        |files: &crate::blobs::Files, path: &str| files.get(path).unwrap().map(|mut file| file.read_all().unwrap());
+
+    let info = files.key("small.txt").content_type("text/plain").meta("by", "the copy").put(b"small").unwrap();
+    assert_eq!((info.size, info.content_type.as_str()), (5, "text/plain"));
+    assert_eq!(read(&files, "small.txt").as_deref(), Some(&b"small"[..]), "the copy reads its own write at once");
+    assert_eq!(read(&home_files, "small.txt").as_deref(), Some(&b"small"[..]));
+    assert_eq!(home_files.head("small.txt").unwrap().unwrap().meta["by"], "the copy");
+
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 249) as u8).collect();
+    files.put("big.bin", &big).unwrap();
+    assert!(read(&home_files, "big.bin").unwrap() == big, "the home keeps the big file byte for byte");
+    eventually("the copy fetches the big file's bytes", || {
+        files.get("big.bin").ok().flatten().and_then(|mut file| file.read_all().ok()).is_some_and(|bytes| bytes == big)
+    });
+
+    assert!(files.create("new.txt", b"first").unwrap());
+    assert!(!files.create("new.txt", b"second").unwrap(), "the home decides what is new");
+    files.copy("small.txt", "copied.txt").unwrap();
+    files.rename("copied.txt", "renamed.txt").unwrap();
+    assert!(read(&home_files, "copied.txt").is_none());
+    assert_eq!(read(&home_files, "renamed.txt").as_deref(), Some(&b"small"[..]));
+    let stale = info.etag.clone();
+    files.put("small.txt", b"changed").unwrap();
+    let refused = files.key("small.txt").if_match(stale).delete().unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Conflict, "{refused}");
+    files.delete("small.txt").unwrap();
+    assert!(read(&home_files, "small.txt").is_none() && read(&files, "small.txt").is_none());
+    assert!(files.expire("new.txt", Duration::from_secs(60)).unwrap());
+    assert!(home_files.head("new.txt").unwrap().unwrap().expires.is_some());
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed() {
+    let (home_dir, copy_dir, keys) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (key, other) = (keys.path().join("one.key"), keys.path().join("other.key"));
+    std::fs::write(&key, "3fa9".repeat(16)).unwrap();
+    std::fs::write(&other, "81c2".repeat(16)).unwrap();
+    let keyed = |dir: &Path, key: &Path, node: Node| {
+        let options = Options {
+            node: Some(node),
+            background: false,
+            encryption_key_file: Some(key.to_owned()),
+            ..Options::default()
+        };
+        Store::open(dir, options).unwrap()
+    };
+    let home = keyed(home_dir.path(), &key, Node { serve: Some("127.0.0.1:0".into()), ..Node::default() });
+    let address = bound(home.node().unwrap()).unwrap().to_string();
+    let home_secrets = home.bucket::<String>("secrets").encrypted().open().unwrap();
+    home_secrets.set("planted", &"at home".to_owned()).unwrap();
+    let copy = keyed(copy_dir.path(), &key, Node { from: vec![address.clone()], ..Node::default() });
+    let secrets = copy.bucket::<String>("secrets").encrypted().open().unwrap();
+    assert_eq!(secrets.get("planted").unwrap().as_deref(), Some("at home"));
+
+    secrets.set("token", &"hunter2".to_owned()).unwrap();
+    assert_eq!(secrets.get("token").unwrap().as_deref(), Some("hunter2"), "the copy opens its own write");
+    assert_eq!(home_secrets.get("token").unwrap().as_deref(), Some("hunter2"), "the home opens it with the same key");
+    assert!(!secrets.create("token", &"again".to_owned()).unwrap());
+    let refused = secrets.take("token").unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a take would carry the value back unsealed: {refused}");
+    assert!(secrets.delete("token").unwrap());
+    assert!(home_secrets.get("token").unwrap().is_none());
+    copy.close().unwrap();
+
+    let wrong_dir = tempfile::tempdir().unwrap();
+    let wrong = keyed(wrong_dir.path(), &other, Node { from: vec![address], ..Node::default() });
+    let mismatched = wrong.bucket::<String>("secrets").encrypted().open();
+    if let Ok(mismatched) = mismatched {
+        let refused = mismatched.set("token", &"under another key".to_owned()).unwrap_err();
+        assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
+    }
+    assert!(home_secrets.get("token").unwrap().is_none(), "nothing sealed with another key reaches the home");
+    wrong.close().unwrap();
+    home.close().unwrap();
+}
