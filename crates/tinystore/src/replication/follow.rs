@@ -154,7 +154,15 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
     let mut reading = stream.try_clone().map_err(|error| Error::io("a link", error))?;
     let out = Arc::new(Out::new(stream));
     out.send(&Message::Hello { version: VERSION, token: state.options.token.clone().unwrap_or_default() })?;
-    let mut link = Link { state, store, out: Arc::clone(&out), held: HashMap::new(), retries: Vec::new() };
+    let mut link = Link {
+        state,
+        store,
+        out: Arc::clone(&out),
+        held: HashMap::new(),
+        retries: Vec::new(),
+        #[cfg(feature = "blobs")]
+        fetching: Fetching::default(),
+    };
     let mut frames = Frames::default();
     let mut heard = Instant::now();
     let mut listed = Instant::now();
@@ -191,6 +199,8 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
         }
         if welcomed {
             link.retry_due()?;
+            #[cfg(feature = "blobs")]
+            link.fetch_due()?;
             let wanted = state.wanted.swap(false, Ordering::SeqCst);
             if wanted || (state.options.files.is_none() && listed.elapsed() > LIST_EVERY) {
                 out.send(&Message::List)?;
@@ -223,6 +233,19 @@ struct Link<'a> {
     held: HashMap<String, Held>,
     /// Files whose sending failed, asked for again once their time comes.
     retries: Vec<(String, Instant)>,
+    /// The files blobs keeps beside blobs.db, fetched once a copy names them.
+    #[cfg(feature = "blobs")]
+    fetching: Fetching,
+}
+
+/// The files of blobs a link fetches: those under way, each with the file
+/// its pieces are written to, and when to look for missing ones next.
+#[cfg(feature = "blobs")]
+#[derive(Default)]
+struct Fetching {
+    under_way: HashMap<String, Option<std::fs::File>>,
+    due: bool,
+    not_before: Option<Instant>,
 }
 
 impl Link<'_> {
@@ -249,6 +272,7 @@ impl Link<'_> {
             Some(copy) => {
                 let at = copy.point();
                 self.held.insert(name.to_owned(), Held::Whole(copy));
+                self.blobs_changed(name);
                 at
             }
             None => {
@@ -257,6 +281,63 @@ impl Link<'_> {
             }
         };
         self.out.send(&Message::Follow { file: name.to_owned(), at })
+    }
+
+    /// Looks for the files of blobs a copy of blobs.db names once it changed.
+    fn blobs_changed(&mut self, file: &str) {
+        #[cfg(feature = "blobs")]
+        if file == crate::blobs::FILE_IN_STORE {
+            self.fetching.due = true;
+        }
+        let _ = file;
+    }
+
+    /// Asks for each file of blobs the copy names and this node lacks.
+    #[cfg(feature = "blobs")]
+    fn fetch_due(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if !self.fetching.due || self.fetching.not_before.is_some_and(|not_before| now < not_before) {
+            return Ok(());
+        }
+        (self.fetching.due, self.fetching.not_before) = (false, Some(now + Duration::from_millis(300)));
+        for path in crate::blobs::objects_missing(&self.state.dir)? {
+            if !self.fetching.under_way.contains_key(&path) {
+                self.out.send(&Message::Fetch { path: path.clone() })?;
+                self.fetching.under_way.insert(path, None);
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes a piece of a file of blobs, and gives the file its name once
+    /// whole: blobs never writes it again, so a name means its bytes.
+    #[cfg(feature = "blobs")]
+    fn object(&mut self, path: &str, offset: u64, bytes: &[u8], last: bool) -> Result<()> {
+        use std::io::Write;
+        let Some(written) = self.fetching.under_way.get_mut(path) else {
+            return Ok(());
+        };
+        let target = self.state.dir.join(path);
+        let mut temp = target.as_os_str().to_owned();
+        temp.push(".part");
+        let temp = std::path::PathBuf::from(temp);
+        let io = |error| Error::io(temp.display().to_string(), error);
+        if offset == 0 {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(io)?;
+            }
+            *written = Some(std::fs::File::create(&temp).map_err(io)?);
+        }
+        let Some(file) = written.as_mut() else {
+            return Err(Error::corrupt(format!("{path}: a piece of a file whose first never came")));
+        };
+        file.write_all(bytes).map_err(io)?;
+        if last {
+            file.sync_all().map_err(io)?;
+            self.fetching.under_way.remove(path);
+            std::fs::rename(&temp, &target).map_err(io)?;
+        }
+        Ok(())
     }
 
     fn retry_due(&mut self) -> Result<()> {
@@ -283,6 +364,14 @@ impl Link<'_> {
                 self.finish_when_whole(&file)
             }
             Message::Entry { file, bytes } => self.apply(&file, &bytes),
+            #[cfg(feature = "blobs")]
+            Message::Failed { file, .. } if crate::blobs::is_object(&file) => {
+                self.fetching.under_way.remove(&file);
+                (self.fetching.due, self.fetching.not_before) = (true, Some(Instant::now() + Duration::from_secs(2)));
+                Ok(())
+            }
+            #[cfg(feature = "blobs")]
+            Message::Object { path, offset, bytes, last } => self.object(&path, offset, &bytes, last),
             Message::Failed { file, kind, why } => {
                 tracing::debug!(target: "tinystore", %file, %kind, %why, "a node's file could not be sent yet");
                 self.held.remove(&file);
@@ -324,7 +413,10 @@ impl Link<'_> {
             Some(Held::Asked) | None => return Ok(()),
         };
         match applied {
-            Ok(()) => self.finish_when_whole(file),
+            Ok(()) => {
+                self.blobs_changed(file);
+                self.finish_when_whole(file)
+            }
             Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::Invalid) => {
                 tracing::warn!(target: "tinystore", %file, %error, "a copy starts again from a snapshot");
                 self.held.insert(file.to_owned(), Held::Asked);
@@ -352,6 +444,7 @@ impl Link<'_> {
         self.state.keep_copy(file, Arc::clone(&copy));
         self.held.insert(file.to_owned(), Held::Whole(copy));
         tracing::info!(target: "tinystore", %file, "a node holds a whole copy of a file");
+        self.blobs_changed(file);
         Ok(())
     }
 }

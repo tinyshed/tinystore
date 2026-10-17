@@ -29,6 +29,8 @@ mod read;
 mod scrub;
 mod upload;
 
+#[cfg(feature = "replication")]
+pub(crate) use engine::{FILE_IN_STORE, is_object, objects_missing};
 pub use files::{FileCall, Files, FilesBuilder};
 pub use info::{FileInfo, Page, Usage};
 pub use list::{All, List, PAGE_FILES};

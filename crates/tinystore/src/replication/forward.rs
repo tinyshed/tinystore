@@ -8,8 +8,9 @@
 //! node on the way answers only once its own copy holds that entry, so that
 //! a read on the node that wrote sees the write.
 //!
-//! Only some engines' calls pass on so far, kv's buckets and counters and
-//! sql's statements; a write of any other on a copy is refused, as before.
+//! Only some engines' calls pass on so far, kv's buckets and counters, sql's
+//! statements, search's documents and jobs' adds, sets, updates and cancels;
+//! a write of any other on a copy is refused, as before.
 
 use std::time::{Duration, Instant};
 
@@ -17,12 +18,21 @@ use super::message::Message;
 use super::node::State;
 use crate::{Error, ErrorKind, Result, Store};
 
+/// The tag of a file a copy waits for and its home has not made: the home
+/// opens the engine that keeps it.
+pub(crate) const MAKE: u8 = 0;
 /// The tag of a call of kv's, the first byte of what passes on.
 #[cfg(feature = "kv")]
 pub(crate) const KV: u8 = 1;
 /// The tag of sql's statements.
 #[cfg(feature = "sql")]
 pub(crate) const SQL: u8 = 2;
+/// The tag of search's documents.
+#[cfg(feature = "search")]
+pub(crate) const SEARCH: u8 = 3;
+/// The tag of jobs' calls.
+#[cfg(feature = "jobs")]
+pub(crate) const JOBS: u8 = 4;
 
 /// How long a write passed on waits for its home's answer.
 const ANSWER_WAIT: Duration = Duration::from_secs(30);
@@ -62,6 +72,15 @@ pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>>
         wait_applied(node, name, *sequence);
     }
     Ok(answer)
+}
+
+/// Asks the home to make the file `name`, which this node waits for and the
+/// node it takes from does not serve yet.
+pub(crate) fn make(node: &State, name: &str) -> Result<()> {
+    let mut out = super::Out(vec![MAKE]);
+    out.text(name);
+    let written = node.upstream.write(out.0, ANSWER_WAIT)?;
+    written.outcome.map(drop).map_err(|(kind, why)| Error::new(kind, why))
 }
 
 /// Waits until this node's copy of `name` holds entry `sequence`, a bound at
@@ -105,15 +124,48 @@ pub(crate) fn run(state: &State, op: &[u8]) -> Outcome {
     }
 }
 
+/// Opens the engine that keeps the file `name`, which makes it.
+fn make_here(store: &Store, name: &str) -> Result<()> {
+    #[cfg(feature = "kv")]
+    if name == crate::kv::forward::FILE {
+        return crate::kv::forward::make(store);
+    }
+    #[cfg(feature = "jobs")]
+    if name == crate::jobs::forward::FILE {
+        return crate::jobs::forward::make(store);
+    }
+    #[cfg(feature = "search")]
+    if name == crate::search::forward::FILE {
+        return crate::search::forward::make(store);
+    }
+    #[cfg(feature = "sql")]
+    if let Some(database) = name.strip_prefix("sql/").and_then(|name| name.strip_suffix(".db")) {
+        return store.database(database).open().map(drop);
+    }
+    let _ = store;
+    Err(Error::not_found(format!("{name}: no engine of this node keeps such a file")))
+}
+
 fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
     let Some((&tag, body)) = op.split_first() else {
         return Err(Error::corrupt("a write passed on holds nothing"));
     };
     match tag {
+        MAKE => {
+            let file = super::In { bytes: body, at: 0 }.text()?;
+            make_here(store, &file)?;
+            Ok((Vec::new(), file))
+        }
         #[cfg(feature = "kv")]
         KV => crate::kv::forward::run(store, body).map(|answer| (answer, crate::kv::forward::FILE.to_owned())),
         #[cfg(feature = "sql")]
         SQL => crate::sql::forward::run(store, body),
+        #[cfg(feature = "jobs")]
+        JOBS => crate::jobs::forward::run(store, body).map(|answer| (answer, crate::jobs::forward::FILE.to_owned())),
+        #[cfg(feature = "search")]
+        SEARCH => {
+            crate::search::forward::run(store, body).map(|answer| (answer, crate::search::forward::FILE.to_owned()))
+        }
         _ => {
             let _ = (store, body);
             Err(Error::new(ErrorKind::Invalid, format!("a write of an engine this node does not have, tag {tag}")))

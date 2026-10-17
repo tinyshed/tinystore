@@ -694,6 +694,9 @@ module defines.
 - a link cut goes on from each copy's position with no snapshot again, and a node reads and opens its copy while no link reaches its home — `a_link_cut_goes_on_from_its_position_and_a_node_reads_its_copy_while_cut` in `replication::link_tests`
 - a node whose token is not its server's takes nothing — `a_node_with_another_token_takes_nothing` in `replication::link_tests`
 - a write on a copy two links away commits at its home and reads back at once on the node that wrote it, the home deciding what is new and what conflicts — `a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once` in `replication::link_tests`
+- a document set on a copy is indexed at its home and found on the copy at once, a set of many and a delete alike — `a_document_set_on_a_copy_is_indexed_at_its_home_and_found_on_the_copy` in `replication::link_tests`
+- a job added on a copy runs at its home, its id the home's to keep, an update and a cancel passed on alike, and jobs.db made at the home for the copy that waited for it — `a_job_added_on_a_copy_runs_at_its_home` in `replication::link_tests`
+- a file blobs keeps too large to be inline reaches a copy of a copy byte for byte, one put after the copy began alike — `a_file_too_large_to_keep_inline_reaches_a_copy_of_a_copy` in `replication::link_tests`
 - every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
 - a store in a Bun program's own process is a node: a copy of a copy there reads its home's writes and passes its own to the home — `a node in this process` in `sdk/js/test/node.test.ts`
 

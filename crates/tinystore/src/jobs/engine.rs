@@ -30,6 +30,9 @@ pub(crate) struct Jobs {
     /// The engine whose file jobs are kept in, when it is not jobs.db: `sql app`.
     lent_by: Option<String>,
     clock: Arc<dyn Clock>,
+    /// The store, for the writes a copy passes to its home.
+    #[cfg(feature = "replication")]
+    store: crate::store::WeakStore,
     queues: Mutex<HashMap<String, Arc<QueueState>>>,
     /// Kept here, so that a worker its program let go of still stops at close.
     workers: Mutex<Vec<Arc<Running>>>,
@@ -76,6 +79,8 @@ impl Jobs {
             file,
             lent_by,
             clock: store.clock(),
+            #[cfg(feature = "replication")]
+            store: store.downgrade(),
             queues: Mutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
@@ -91,6 +96,22 @@ impl Jobs {
             weak.upgrade().map_or(Ok(()), |jobs| maintain::run(&jobs).map(drop))
         })?;
         Ok(jobs)
+    }
+
+    /// The store jobs opened in, while it is open.
+    #[cfg(feature = "replication")]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.store.upgrade().ok_or_else(|| Error::closed("the store"))
+    }
+
+    /// The queue `name` as this process holds it open, or as a queue opens
+    /// by default: what a write another node passed on runs on.
+    #[cfg(feature = "replication")]
+    pub(crate) fn queue_as_open(&self, name: &str, kind: Kind) -> Result<Arc<QueueState>> {
+        if let Some(state) = lock(&self.queues).get(name) {
+            return Ok(Arc::clone(state));
+        }
+        self.queue(name, kind, Policy::default())
     }
 
     pub(crate) fn file(&self) -> &File {
@@ -126,6 +147,17 @@ impl Jobs {
             return Ok(Arc::clone(state));
         }
         let bound = i64::from(policy.concurrency.group.unwrap_or(0));
+        #[cfg(feature = "replication")]
+        if self.file.is_copy() {
+            // let go while the home answers: applying its commits reads the queues again
+            drop(queues);
+            let (id, stored) = self.queue_from_home(name, kind).map_err(|error| error.within(describe()))?;
+            if stored != kind.as_str() {
+                return Err(Error::invalid(format!("the name is a {stored}")).within(describe()));
+            }
+            let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
+            return Ok(Arc::clone(lock(&self.queues).entry(name.to_owned()).or_insert(state)));
+        }
         let (id, stored) = self
             .file
             .transaction(|tx| {
@@ -142,6 +174,32 @@ impl Jobs {
         let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
         queues.insert(name.to_owned(), Arc::clone(&state));
         Ok(state)
+    }
+
+    /// The id and kind of the queue `name` in a copy of jobs' file: the
+    /// copy's, or the one its home registers when the name is new.
+    #[cfg(feature = "replication")]
+    fn queue_from_home(&self, name: &str, kind: Kind) -> Result<(i64, String)> {
+        let found = |jobs: &Jobs| jobs.file.read(|c| rows::find_queue(c, name));
+        if let Some(found) = found(self)? {
+            return Ok(found);
+        }
+        if self.lent_by.is_some() {
+            return Err(Error::new(
+                crate::ErrorKind::Unavailable,
+                "a copy passes no queue of a database's file to its home yet",
+            ));
+        }
+        if kind != Kind::Queue {
+            return Err(Error::new(crate::ErrorKind::Unavailable, "a copy passes no schedule to its home yet"));
+        }
+        super::forward::pass_on_open(&self.store()?, name)?;
+        found(self)?.ok_or_else(|| {
+            Error::new(
+                crate::ErrorKind::Unavailable,
+                "its home registered the queue, and this copy does not hold it yet",
+            )
+        })
     }
 
     pub(crate) fn open_queues(&self) -> Vec<Arc<QueueState>> {

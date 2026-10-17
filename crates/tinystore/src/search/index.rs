@@ -156,9 +156,9 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     }
 }
 
-/// The index `name` as it is, for a connection that may only read: none is
-/// made and no setting changed.
-#[cfg(feature = "wire")]
+/// The index `name` as it is, for a connection that may only read, or for
+/// the writes a copy passed on: none is made and no setting changed.
+#[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) fn open_as_it_is<T: Serialize + DeserializeOwned>(store: &Store, name: &str) -> Result<Index<T>> {
     let within = |error: Error| error.within(format!("index {name}"));
     let search = Search::of(store).map_err(within)?;
@@ -299,6 +299,10 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
 
     fn set_given(&self, given: Given<'_, T>) -> Result<()> {
         let within = |error: Error| error.within(format!("index {}: id {:?}", self.open.name, given.id));
+        #[cfg(feature = "replication")]
+        if self.search.file.is_copy() {
+            return self.pass_on_set(std::slice::from_ref(&given)).map_err(within);
+        }
         let document = |data: &Data| Ok(vec![prepared(data.id, &given, &data.settings)?]);
         self.search.set(&self.open, document).map_err(within)
     }
@@ -313,11 +317,20 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     where
         T: 'v,
     {
-        let within = |error: Error| error.within(format!("index {}", self.open.name));
         let documents: Vec<Given<'v, T>> = documents.into_iter().map(Given::of).collect();
+        self.set_all(documents)
+    }
+
+    /// Sets each of `documents`, all in one commit or none.
+    pub(super) fn set_all(&self, documents: Vec<Given<'_, T>>) -> Result<()> {
+        let within = |error: Error| error.within(format!("index {}", self.open.name));
         if documents.len() > MOST_MANY {
             let said = format!("a set_many of {} documents, past {MOST_MANY}", documents.len());
             return Err(within(Error::limit(said)));
+        }
+        #[cfg(feature = "replication")]
+        if self.search.file.is_copy() {
+            return self.pass_on_set(&documents).map_err(within);
         }
         let all = |data: &Data| {
             let mut prepared_all = Vec::with_capacity(documents.len());
@@ -341,7 +354,25 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         let id = id.text();
         let within = |error: Error| error.within(format!("index {}: id {id:?}", self.open.name));
         let checked = checked(&id).map_err(within)?.to_owned();
+        #[cfg(feature = "replication")]
+        if self.search.file.is_copy() {
+            let store = self.search.store().map_err(within)?;
+            return super::forward::pass_on_delete(&store, &self.open.name, &checked).map_err(within);
+        }
         self.search.delete(&self.open, checked).map_err(within)
+    }
+
+    /// Passes a set of documents on a copy of search's file to its home.
+    #[cfg(feature = "replication")]
+    fn pass_on_set(&self, documents: &[Given<'_, T>]) -> Result<()> {
+        if self.search.lent_by.is_some() {
+            return Err(Error::new(
+                crate::ErrorKind::Unavailable,
+                "a copy passes no set of an index in a database's file to its home yet",
+            ));
+        }
+        let passed = documents.iter().map(super::forward::Passed::of).collect::<Result<Vec<_>>>()?;
+        super::forward::pass_on_set(&self.search.store()?, &self.open.name, &passed)
     }
 
     /// The document `id`, or none.
@@ -424,10 +455,10 @@ impl<'v, K: Key, T> Document<'v, T> for (K, &'v T, Option<&'v [f32]>) {
 
 /// A document as a call gave it: its id, its value, and what it said of its
 /// vector.
-struct Given<'v, T> {
-    id: String,
-    value: &'v T,
-    vector: Option<Option<&'v [f32]>>,
+pub(super) struct Given<'v, T> {
+    pub(super) id: String,
+    pub(super) value: &'v T,
+    pub(super) vector: Option<Option<&'v [f32]>>,
 }
 
 impl<'v, T> Given<'v, T> {

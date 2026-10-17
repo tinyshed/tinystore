@@ -40,6 +40,8 @@ mod execute;
 mod filter;
 #[cfg(test)]
 mod fixture;
+#[cfg(feature = "replication")]
+pub(crate) mod forward;
 mod hybrid;
 mod index;
 mod kept;

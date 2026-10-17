@@ -49,6 +49,9 @@ pub(crate) struct Search {
     memory: Arc<Memory>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
+    /// The store, for the writes a copy passes to its home.
+    #[cfg(feature = "replication")]
+    store: crate::store::WeakStore,
     /// Held by a pass of maintenance, so that two never pack the same head.
     maintaining: Mutex<()>,
     wake: OnceLock<Wake>,
@@ -140,6 +143,8 @@ impl Search {
             memory: Arc::clone(store.memory()),
             clock: store.clock(),
             indexes: Mutex::default(),
+            #[cfg(feature = "replication")]
+            store: store.downgrade(),
             maintaining: Mutex::default(),
             wake: OnceLock::new(),
             table_sets: AtomicU64::new(0),
@@ -233,8 +238,15 @@ impl Search {
         Ok(())
     }
 
-    /// The index `name` as it is, made by no one: a read connection's.
-    #[cfg(feature = "wire")]
+    /// The store search opened in, while it is open.
+    #[cfg(feature = "replication")]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.store.upgrade().ok_or_else(|| Error::closed("the store"))
+    }
+
+    /// The index `name` as it is, made by no one: a read connection's, or
+    /// what runs the writes a copy passed on.
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn open_existing(&self, name: &str) -> Result<Arc<OpenIndex>> {
         check_name(name)?;
         let mut indexes = lock(&self.indexes);

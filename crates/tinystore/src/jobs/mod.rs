@@ -28,6 +28,8 @@ mod cron;
 mod engine;
 #[cfg(test)]
 mod fixture;
+#[cfg(feature = "replication")]
+pub(crate) mod forward;
 mod maintain;
 mod policy;
 mod queue;

@@ -42,6 +42,41 @@ pub(crate) struct Blobs {
     _claim: Claim,
 }
 
+/// The files of `objects/` that the copy of blobs.db in `store_dir` names
+/// and the store lacks, by their paths in its directory: what a node fetches
+/// from the node it copies blobs.db from.
+#[cfg(feature = "replication")]
+pub(crate) fn objects_missing(store_dir: &std::path::Path) -> Result<Vec<String>> {
+    let db = store_dir.join(DIR).join(FILE);
+    if !db.exists() {
+        return Ok(Vec::new());
+    }
+    let ids = crate::sqlite::read_copy(&db, |connection| {
+        let mut statement = connection.prepare(SELECT_NAMED)?;
+        let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
+        ids.collect::<rusqlite::Result<Vec<i64>>>()
+    })?;
+    let paths = ids.into_iter().map(|id| format!("{DIR}/{OBJECTS}/{:x}/{id:x}", Disk::fan(id)));
+    Ok(paths.filter(|path| !store_dir.join(path).exists()).collect())
+}
+
+/// Whether `path` names a file of `objects/`, as [`objects_missing`] writes
+/// one: what a node serves of blobs beside blobs.db.
+#[cfg(feature = "replication")]
+pub(crate) fn is_object(path: &str) -> bool {
+    let hex = |part: &str| !part.is_empty() && part.len() <= 16 && part.bytes().all(|b| b.is_ascii_hexdigit());
+    let mut parts = path.split('/');
+    parts.next() == Some(DIR)
+        && parts.next() == Some(OBJECTS)
+        && parts.next().is_some_and(hex)
+        && parts.next().is_some_and(hex)
+        && parts.next().is_none()
+}
+
+/// blobs.db, as a node names it.
+#[cfg(feature = "replication")]
+pub(crate) const FILE_IN_STORE: &str = "blobs/blobs.db";
+
 impl Engine for Blobs {
     fn close(&self) -> Result<()> {
         self.file.close()

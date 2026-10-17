@@ -161,9 +161,21 @@ impl State {
 
     /// Waits until the copy of `name` is whole, `READY_WAIT` at most.
     pub(crate) fn wait_ready(&self, name: &str) -> Result<()> {
-        let deadline = Instant::now() + READY_WAIT;
+        let began = Instant::now();
+        let deadline = began + READY_WAIT;
+        let mut asked_to_make = false;
         let mut copies = lock(&self.copies);
         while !copies.contains_key(name) {
+            // a file its home never made would never come: ask the home to make it
+            if !asked_to_make && began.elapsed() > Duration::from_millis(500) {
+                asked_to_make = true;
+                drop(copies);
+                if let Err(error) = super::forward::make(self, name) {
+                    tracing::debug!(target: "tinystore", file = name, %error, "a node could not ask its home to make a file");
+                }
+                copies = lock(&self.copies);
+                continue;
+            }
             let now = Instant::now();
             if now >= deadline || self.stopping() {
                 return Err(Error::new(

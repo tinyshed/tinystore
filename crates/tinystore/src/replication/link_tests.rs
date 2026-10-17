@@ -269,3 +269,91 @@ fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once()
     between.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_document_set_on_a_copy_is_indexed_at_its_home_and_found_on_the_copy() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let home_docs = home.index::<serde_json::Value>("docs").field("title", 1.0).open().unwrap();
+    home_docs.set("seed", &serde_json::json!({ "title": "planted at the home" })).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let docs = copy.index::<serde_json::Value>("docs").field("title", 1.0).open().unwrap();
+    assert_eq!(docs.search("planted").run().unwrap().hits[0].id, "seed");
+
+    docs.set("far", &serde_json::json!({ "title": "written on a copy" })).unwrap();
+    assert_eq!(docs.search("copy").run().unwrap().hits[0].id, "far", "the copy finds its own set at once");
+    assert_eq!(home_docs.search("copy").run().unwrap().hits[0].id, "far");
+    let many = [
+        ("a", serde_json::json!({ "title": "first of many" })),
+        ("b", serde_json::json!({ "title": "second of many" })),
+    ];
+    docs.set_many(many.iter().map(|(id, value)| (*id, value))).unwrap();
+    assert_eq!(docs.search("many").run().unwrap().hits.len(), 2);
+    assert!(docs.delete("far").unwrap());
+    assert!(home_docs.get("far").unwrap().is_none());
+    assert!(!docs.delete("far").unwrap());
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_job_added_on_a_copy_runs_at_its_home() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.bucket::<String>("warm").open().unwrap().set("up", &"kv.db made".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let mail = copy.queue::<serde_json::Value>("mail").open().unwrap();
+    assert!(mail.id("welcome-7").add(&serde_json::json!({ "to": 7 })).unwrap());
+    assert!(!mail.id("welcome-7").add(&serde_json::json!({ "to": 7 })).unwrap(), "the home keeps its id");
+    assert!(mail.get("welcome-7").unwrap().is_some(), "the copy holds the job its home added");
+    assert!(mail.update("welcome-7", &serde_json::json!({ "to": 8 })).unwrap());
+    assert!(mail.add(&serde_json::json!({ "to": 9 })).unwrap());
+
+    let home_mail = home.queue::<serde_json::Value>("mail").open().unwrap();
+    let seen = std::sync::Mutex::new(Vec::new());
+    let ran = home_mail
+        .run_due(|job: serde_json::Value, _: &crate::jobs::Run| {
+            seen.lock().unwrap().push(job["to"].as_i64().unwrap());
+            Ok::<_, String>(())
+        })
+        .unwrap();
+    assert_eq!(ran, 2);
+    let mut seen = seen.into_inner().unwrap();
+    seen.sort_unstable();
+    assert_eq!(seen, [8, 9]);
+    assert!(mail.id("later").delay(Duration::from_secs(3600)).add(&serde_json::json!({})).unwrap());
+    assert!(mail.cancel("later").unwrap());
+    assert!(home_mail.get("later").unwrap().is_none());
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_file_too_large_to_keep_inline_reaches_a_copy_of_a_copy() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, home_address) = serving(dirs[0].path());
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    let files = home.files("docs").open().unwrap();
+    files.put("film.bin", &big).unwrap();
+    files.put("note.txt", b"small").unwrap();
+    let between = node_with(
+        dirs[1].path(),
+        Node { from: vec![home_address], serve: Some("127.0.0.1:0".into()), ..Node::default() },
+    );
+    let between_address = bound(between.node().unwrap()).unwrap().to_string();
+    let far = node_with(dirs[2].path(), Node { from: vec![between_address], ..Node::default() });
+    let far_files = far.files("docs").open().unwrap();
+    assert_eq!(far_files.get("note.txt").unwrap().unwrap().read_all().unwrap(), b"small");
+    eventually("the film's bytes reach the far node", || {
+        far_files.get("film.bin").ok().flatten().and_then(|mut file| file.read_all().ok()).is_some()
+    });
+    assert!(far_files.get("film.bin").unwrap().unwrap().read_all().unwrap() == big, "byte for byte");
+
+    files.put("second.bin", vec![7u8; 2_000_000]).unwrap();
+    eventually("a file put after the copy began reaches it", || {
+        far_files.get("second.bin").ok().flatten().and_then(|mut file| file.read_all().ok()).is_some()
+    });
+    far.close().unwrap();
+    between.close().unwrap();
+    home.close().unwrap();
+}

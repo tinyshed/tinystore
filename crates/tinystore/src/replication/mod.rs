@@ -22,8 +22,12 @@ mod snapshot;
 use std::fmt;
 
 pub(crate) use copy::is_copy;
+#[cfg(feature = "jobs")]
+pub(crate) use forward::JOBS;
 #[cfg(feature = "kv")]
 pub(crate) use forward::KV;
+#[cfg(feature = "search")]
+pub(crate) use forward::SEARCH;
 #[cfg(feature = "sql")]
 pub(crate) use forward::SQL;
 pub(crate) use forward::pass_on;

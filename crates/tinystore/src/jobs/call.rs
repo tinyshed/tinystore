@@ -138,6 +138,65 @@ impl<V> fmt::Debug for JobCall<'_, V> {
 }
 
 impl Asked {
+    /// What was asked, as a write passed on carries it: each part a byte
+    /// saying whether it is there, then it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn write(&self, out: &mut crate::replication::Out) {
+        let text = |out: &mut crate::replication::Out, text: &Option<String>| {
+            out.byte(u8::from(text.is_some()));
+            out.text(text.as_deref().unwrap_or(""));
+        };
+        text(out, &self.id);
+        text(out, &self.group);
+        text(out, &self.refused);
+        match self.when {
+            None => out.byte(0),
+            Some(When::At(time)) => {
+                out.byte(1);
+                out.long(unix_millis(time) as u64);
+            }
+            Some(When::After(span)) => {
+                out.byte(2);
+                out.long(millis(span) as u64);
+            }
+        }
+        match &self.repeat {
+            None => out.byte(0),
+            Some(Repeat::Every(span)) => {
+                out.byte(1);
+                out.long(millis(*span) as u64);
+            }
+            Some(Repeat::Cron { expr, zone }) => {
+                out.byte(2);
+                out.text(expr);
+                out.text(zone);
+            }
+        }
+    }
+
+    #[cfg(feature = "replication")]
+    pub(crate) fn read(at: &mut crate::replication::In<'_>) -> Result<Asked> {
+        let mut text = || -> Result<Option<String>> {
+            let there = at.byte()? == 1;
+            let text = at.text()?;
+            Ok(there.then_some(text))
+        };
+        let (id, group, refused) = (text()?, text()?, text()?);
+        let when = match at.byte()? {
+            0 => None,
+            1 => Some(When::At(crate::clock::from_unix_millis(at.long()? as i64))),
+            2 => Some(When::After(Duration::from_millis(at.long()?))),
+            _ => return Err(super::forward::corrupt("a job's time")),
+        };
+        let repeat = match at.byte()? {
+            0 => None,
+            1 => Some(Repeat::Every(Duration::from_millis(at.long()?))),
+            2 => Some(Repeat::Cron { expr: at.text()?, zone: at.text()? }),
+            _ => return Err(super::forward::corrupt("a job's repeat")),
+        };
+        Ok(Asked { id, when, group, repeat, refused })
+    }
+
     pub(crate) fn with_id(id: &str) -> Asked {
         Asked { id: Some(id.to_owned()), ..Asked::default() }
     }

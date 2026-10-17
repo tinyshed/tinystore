@@ -81,6 +81,17 @@ pub(crate) enum Message {
     },
     /// Said when nothing else was for a while, so a dead link is noticed.
     Ping,
+    /// Sends a file blobs keeps beside blobs.db, by its path in the store.
+    Fetch {
+        path: String,
+    },
+    /// A piece of a file fetched, from `offset`; `last` ends it.
+    Object {
+        path: String,
+        offset: u64,
+        bytes: Vec<u8>,
+        last: bool,
+    },
 }
 
 impl Message {
@@ -168,6 +179,17 @@ impl Message {
                 }
             }
             Message::Ping => out.byte(14),
+            Message::Fetch { path } => {
+                out.byte(15);
+                out.text(path);
+            }
+            Message::Object { path, offset, bytes, last } => {
+                out.byte(16);
+                out.text(path);
+                out.long(*offset);
+                out.bytes(bytes);
+                out.byte(u8::from(*last));
+            }
         }
         let length = u32::try_from(out.0.len() - 4).unwrap_or(u32::MAX);
         out.0[..4].copy_from_slice(&length.to_le_bytes());
@@ -231,6 +253,13 @@ impl Message {
                 Message::Written { id, outcome, waits }
             }
             14 => Message::Ping,
+            15 => Message::Fetch { path: at.text()? },
+            16 => Message::Object {
+                path: at.text()?,
+                offset: at.long()?,
+                bytes: at.bytes()?.to_vec(),
+                last: at.byte()? == 1,
+            },
             _ => return Err(corrupt("a message of a kind the link does not have")),
         };
         if at.at != body.len() {
@@ -460,6 +489,8 @@ mod tests {
             Message::Written { id: 4, outcome: Ok(vec![5]), waits: vec![("kv.db".into(), 12)] },
             Message::Written { id: 5, outcome: Err((ErrorKind::Conflict, "taken".into())), waits: vec![] },
             Message::Ping,
+            Message::Fetch { path: "blobs/objects/1/1a3f".into() },
+            Message::Object { path: "blobs/objects/1/1a3f".into(), offset: 4, bytes: vec![7; 3], last: true },
         ];
         for message in messages {
             let bytes = message.encode();

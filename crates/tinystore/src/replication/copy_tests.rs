@@ -84,7 +84,7 @@ fn a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing()
     assert_eq!(copy.events("audit").open().unwrap().list().page().unwrap().events.len(), 1);
     assert_eq!(copy.metrics().unwrap().names().page().unwrap().names[0].name, "logins");
     let mail = copy.queue::<serde_json::Value>("mail").open().unwrap();
-    assert_eq!(mail.add(&serde_json::json!({ "to": "no" })).unwrap_err().kind(), ErrorKind::Invalid);
+    assert_eq!(mail.add(&serde_json::json!({ "to": "no" })).unwrap_err().kind(), ErrorKind::Unavailable);
 
     // a write that passes to its home finds no link to send it on: this node takes from none
     let refused = sessions.set("new", &"no".to_owned()).unwrap_err();

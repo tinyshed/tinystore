@@ -21,6 +21,12 @@ use crate::clock::from_unix_millis;
 use crate::replication::{In, Out};
 use crate::{Error, ErrorKind, Result, Store, unix_millis};
 
+/// Opens the engine at the home, which makes its file for a copy waiting
+/// for it.
+pub(crate) fn make(store: &Store) -> Result<()> {
+    super::engine::Kv::of(store).map(drop)
+}
+
 /// What kv's file is called where its home passes writes.
 pub(crate) const FILE: &str = "kv.db";
 

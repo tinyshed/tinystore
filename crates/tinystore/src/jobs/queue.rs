@@ -152,6 +152,27 @@ where
         Queue { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData }
     }
 
+    /// The queue whose state `jobs` holds open.
+    #[cfg(feature = "replication")]
+    pub(crate) fn of_state(jobs: Arc<Jobs>, state: Arc<QueueState>) -> Queue<V> {
+        Queue { jobs, state, _value: PhantomData }
+    }
+
+    /// An add, a set or an update, run where the write would run, and whether
+    /// it changed a job: a set always does.
+    #[cfg(feature = "replication")]
+    pub(crate) fn write_asked(&self, change: Change, asked: Asked, value: &V) -> Result<bool> {
+        let due = self.write_now(change, asked, value, None)?;
+        Ok(change == Change::Set || due.is_some())
+    }
+
+    /// Passes a write on a copy of jobs' file to its home.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, change: Change, asked: &Asked, value: &V) -> Result<bool> {
+        let store = self.jobs.store()?;
+        super::forward::pass_on_write(&store, &self.state.name, change, asked, value)
+    }
+
     pub(crate) fn open(home: &Home, name: &str, kind: Kind, policy: Policy) -> Result<Queue<V>> {
         let jobs = Jobs::at(home)?;
         let state = jobs.queue(name, kind, policy)?;
@@ -188,6 +209,12 @@ where
     /// gone never takes it for done; a cancel that does not commit takes that
     /// back.
     pub(crate) fn cancel_in(&self, id: &str, tx: Option<&Transaction<'_>>) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if tx.is_none() && self.jobs.file().is_copy() {
+            let store = self.jobs.store().map_err(|error| self.fail(Some(id), error))?;
+            return super::forward::pass_on_cancel(&store, &self.state.name, id)
+                .map_err(|error| self.fail(Some(id), error));
+        }
         let (queue, key) = (Arc::clone(&self.state), id.to_owned());
         let work = move |c: &SqlTx<'_>| {
             let cancelled = write::cancel(c, &queue, &key)?;
@@ -216,6 +243,14 @@ where
     /// with whether there was a job on the thread that commits it.
     #[cfg(feature = "wire")]
     pub(crate) fn cancel_then(&self, id: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.jobs.file().is_copy() {
+            let queue =
+                Queue::<V> { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData };
+            let id = id.to_owned();
+            std::thread::spawn(move || done(queue.cancel_in(&id, None)));
+            return;
+        }
         let (queue, key, named) = (Arc::clone(&self.state), id.to_owned(), self.named(Some(id)));
         let work = move |c: &SqlTx<'_>| {
             let cancelled = write::cancel(c, &queue, &key)?;
@@ -367,6 +402,12 @@ where
     /// it, and wakes the queue's workers for that time.
     fn write_now(&self, change: Change, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<Option<i64>> {
         let named = self.named(asked.id());
+        #[cfg(feature = "replication")]
+        if tx.is_none() && self.jobs.file().is_copy() {
+            let changed = self.pass_on(change, &asked, value).map_err(|error| error.within(named))?;
+            // the home's due time stays there: a copy's workers take nothing
+            return Ok(changed.then_some(0));
+        }
         let written = || {
             let call = self.prepared(change, asked, value)?;
             let bytes = call.value.len();
@@ -410,6 +451,19 @@ where
         done: impl FnOnce(Result<bool>) + Send + 'static,
     ) {
         let named = self.named(asked.id());
+        #[cfg(feature = "replication")]
+        if self.jobs.file().is_copy() {
+            let queue =
+                Queue::<V> { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData };
+            let json = serde_json::to_value(value);
+            std::thread::spawn(move || {
+                let written = json
+                    .map_err(|error| Error::invalid(format!("a job that is no JSON: {error}")))
+                    .and_then(|json| queue.retyped::<serde_json::Value>().pass_on(change, &asked, &json));
+                done(written.map_err(|error| error.within(named)));
+            });
+            return;
+        }
         let call = match self.prepared(change, asked, value) {
             Ok(call) => call,
             Err(error) => return done(Err(error.within(named))),

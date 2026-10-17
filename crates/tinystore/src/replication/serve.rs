@@ -153,8 +153,46 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
+            #[cfg(feature = "blobs")]
+            Message::Fetch { path } => {
+                if !crate::blobs::is_object(&path) {
+                    return Err(Error::invalid(format!("a link asked for {path:?}, which is no file blobs keeps")));
+                }
+                let (state, out) = (Arc::clone(state), Arc::clone(out));
+                state.clone().spawn("tinystore node: fetch", move || {
+                    if let Err(error) = send_object(&state, &out, &path) {
+                        let _ = out.send(&Message::Failed { file: path, kind: error.kind(), why: error.to_string() });
+                    }
+                });
+            }
             other => return Err(Error::invalid(format!("a link said {other:?}, which a server is not asked"))),
         }
+    }
+}
+
+/// Sends a file blobs keeps, in pieces of a mebibyte.
+#[cfg(feature = "blobs")]
+fn send_object(state: &State, out: &Out, path: &str) -> Result<()> {
+    let full = state.dir.join(path);
+    let mut file = fs::File::open(&full).map_err(|error| Error::io(full.display().to_string(), error))?;
+    let mut offset = 0;
+    loop {
+        let mut piece = vec![0; 1 << 20];
+        let mut filled = 0;
+        while filled < piece.len() {
+            let read = file.read(&mut piece[filled..]).map_err(|error| Error::io(full.display().to_string(), error))?;
+            if read == 0 {
+                break;
+            }
+            filled += read;
+        }
+        piece.truncate(filled);
+        let last = filled < 1 << 20;
+        out.send(&Message::Object { path: path.to_owned(), offset, bytes: piece, last })?;
+        if last {
+            return Ok(());
+        }
+        offset += filled as u64;
     }
 }
 

@@ -297,8 +297,11 @@ in [scaling.md](scaling.md#order).
   Built: a snapshot reads a file's pages through `sqlite_dbpage` 256 at a time, each chunk in a read transaction of
   its own, between two points of its log read with the writer held, or a copy's position held; the taker writes
   them under a name of its own with plain writes, then the entries between the two points over them, and the file
-  takes the copy's name, renamed durably, only once whole, its position kept after. Left: blobs' objects, which a
-  copy reads only where they are inline in `blobs.db`.
+  takes the copy's name, renamed durably, only once whole, its position kept after. Blobs' files too large to keep
+  inline are fetched once a copy of `blobs.db` names them, from the node it copies, in pieces of a mebibyte written
+  under a name of their own and renamed whole; a read meeting one not fetched yet fails, for that short while,
+  rather than wait, and a copy keeps the files its home removed. Left: a copy that fetches a file before it applies
+  the commit that names it.
 - [x] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
   Built: `Node { from, serve, files, token }`; a node serves over TCP, a thread accepting and two a link, the
   files it writes and its whole copies, each from where the other node's copy stands; a link follows every file
@@ -313,12 +316,16 @@ in [scaling.md](scaling.md#order).
   one zstd stream a link, a file's checksum that proves a copy its home's, and files a home makes after a node
   linked, which it finds by asking every five seconds.
 - [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
-  Built so far: kv's buckets and counters, and the names their handles open, and sql's statements and batches
-  pass from a copy to its home through each node on the way, each node running the call through the same handle;
+  Built so far: kv's buckets and counters, and the names their handles open, sql's statements and batches,
+  search's documents set and deleted, on the index as its home holds it, and jobs' adds, sets, updates and
+  cancels, on the queue as its home holds it open, pass from a copy to its home through each node on the way,
+  each node running the call through the same handle; a file a copy waits for half a second that its home never
+  made, the home makes, opening the engine that keeps it;
   the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
-  ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Left: the other engines'
-  writes, a transaction, an encrypted bucket's and a bucket's in a database's file, the queue of operations that
-  commute, and writes that wait for a link a bound before `unavailable`.
+  ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Left: blobs', records'
+  and metrics' writes, a transaction, an encrypted bucket's and what a database's file keeps of kv, jobs and
+  search, a schedule, rate limits, quotas and `once`, the queue of operations that commute, and writes that wait
+  for a link a bound before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
