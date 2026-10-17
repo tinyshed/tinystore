@@ -284,7 +284,9 @@ in [scaling.md](scaling.md#order).
   commit's pages, each once, chained by SHA-256 to the one before, in segments of 16 MiB within 256 MiB a file. At
   open a torn tail is cut and the WAL hands what the log lacks; a commit the log could not take answers
   `OutcomeUnknown` and the file takes no write until it opens again; a WAL started over beside the store is logged
-  as a gap. Left: the log's bound by age and the disk the store keeps free, which the links' positions decide.
+  as a gap. A node linked now that has not applied a log's oldest segment keeps it past the bytes, within four
+  times them, after which it takes a snapshot; below the disk the store keeps free a log keeps its last segment
+  alone. A bound by age is not built: the bytes bound a log already, and an idle one costs nothing.
 - [x] Apply: a copy's pages applied whole through `sqlite_dbpage`; engines on a copy with readers alone, background work following the file.
   Built: a copy's file is marked in its log's directory and opens as a copy, whose writes run on a reader so that
   finding a name its home made answers and a write is `Invalid`; its migrations only checked, `Unavailable` until
@@ -292,8 +294,8 @@ in [scaling.md](scaling.md#order).
   applier's own connection, page 1 last and a truncation the last row, an entry that does not follow refused, one
   held taken as nothing, the position kept after each commit and the copy going on from it. Engines read again the
   names they keep once a commit applies; the applier's connection is opened again after a commit that wrote page
-  1, whose schema and size it would read stale. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: the
-  copy's own log of what it received, which it serves on, and a file's checksum that proves a copy its home's.
+  1, whose schema and size it would read stale. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: a
+  file's checksum that proves a copy its home's.
 - [x] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
   Built: a snapshot reads a file's pages through `sqlite_dbpage` 256 at a time, each chunk in a read transaction of
   its own, between two points of its log read with the writer held, or a copy's position held; the taker writes
@@ -317,8 +319,9 @@ in [scaling.md](scaling.md#order).
   through the pipe's options, and a server it starts through those flags. With the `replication-tls` feature, off
   unless asked, a link goes through TLS, rustls with ring's cryptography: `Node::tls` and `--node-tls-cert`,
   `--node-tls-key` and `--node-tls-roots`, the follower checking its upstream's certificate against the roots
-  it trusts, the token still what admits it. Left: a file's checksum that proves
-  a copy its home's, and files a home makes after a node linked, which it finds by asking every five seconds.
+  it trusts, the token still what admits it. A file a node begins to serve, a log's first entry or a copy become
+  whole, is told at once to the nodes linked to it, which then ask for it. Left: a file's checksum that proves a
+  copy its home's.
 - [x] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
   Built: kv's buckets and counters, and the names their handles open, sql's statements and batches,
   search's documents set and deleted, on the index as its home holds it, and jobs' adds, sets, updates and

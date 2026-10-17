@@ -9,7 +9,7 @@ use crate::sqlite::{Config, File, sql_error};
 fn a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed() {
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join(DIR).join("test.db");
-    let bounds = Bounds { segment: 64 << 10, keep: 256 << 10 };
+    let bounds = Bounds { segment: 64 << 10, keep: 256 << 10, keep_free: 0 };
     let observer: Arc<dyn crate::sqlite::Observe> = Arc::new(Log::open(logs.clone(), bounds, Arc::default()).unwrap());
     let file = File::open_observed(dir.path().join("test.db"), Config::default(), Some(observer)).unwrap();
     file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
@@ -74,4 +74,38 @@ fn a_copy_takes_a_file_s_log_whole_with_no_engine_open() {
     assert_eq!(rows, 50);
     let refused = read.write(0, |tx| tx.execute("delete from t", []).map(drop).map_err(|e| sql_error("delete", e)));
     assert_eq!(refused.unwrap_err().kind(), crate::ErrorKind::Invalid);
+}
+
+#[test]
+fn a_log_keeps_the_segments_a_node_linked_now_has_not_applied_within_four_times_its_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join(DIR).join("test.db");
+    let bounds = Bounds { segment: 64 << 10, keep: 256 << 10, keep_free: 0 };
+    let acks = Arc::new(super::log::Acks::default());
+    acks.linked("behind", "eu:7444");
+    acks.held("behind", "test.db", 1);
+    let log = Log::open(logs.clone(), bounds, Arc::default()).unwrap().followed("test.db", Arc::clone(&acks));
+    let observer: Arc<dyn crate::sqlite::Observe> = Arc::new(log);
+    let file = File::open_observed(dir.path().join("test.db"), Config::default(), Some(observer)).unwrap();
+    file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
+        .unwrap();
+    let write = |file: &File, from: usize, count: usize| {
+        for i in from..from + count {
+            let value = format!("{i:04}{}", "y".repeat(1000));
+            file.write(value.len(), move |tx| {
+                tx.execute("insert into t (v) values (?1)", [&value]).map(drop).map_err(|e| sql_error("insert", e))
+            })
+            .unwrap();
+        }
+    };
+    let bytes = || fs::read_dir(&logs).unwrap().map(|found| found.unwrap().metadata().unwrap().len()).sum::<u64>();
+    write(&file, 0, 600);
+    assert!(bytes() > bounds.keep + bounds.segment, "kept for the node behind: {} bytes", bytes());
+    write(&file, 600, 900);
+    assert!(bytes() <= 4 * bounds.keep + bounds.segment, "within four times the bytes: {} bytes", bytes());
+
+    acks.held("behind", "test.db", 10_000);
+    write(&file, 1500, 100);
+    assert!(bytes() <= bounds.keep + bounds.segment, "once applied, the bound again: {} bytes", bytes());
+    file.close().unwrap();
 }

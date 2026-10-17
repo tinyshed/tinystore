@@ -144,7 +144,7 @@ impl Drop for Paused {
 }
 
 impl State {
-    pub(crate) fn new(dir: &Path, options: Node) -> Result<State> {
+    pub(crate) fn new(dir: &Path, options: Node, keep_free: u64) -> Result<State> {
         let tls = super::transport::Tls::of(&options)?;
         let acks = Arc::new(Acks::waiting_for(options.synchronous_with.clone()));
         Ok(State {
@@ -158,7 +158,7 @@ impl State {
             dir: dir.to_owned(),
             options,
             store: Mutex::default(),
-            bounds: Bounds::default(),
+            bounds: Bounds { keep_free, ..Bounds::default() },
             notify: Arc::default(),
             logs: Mutex::default(),
             copies: Mutex::default(),
@@ -544,9 +544,10 @@ impl State {
 
     /// The log of the file `name` this node writes, opened for its writer.
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
-        let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?;
+        let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
+            .followed(name, Arc::clone(&self.acks));
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {
-            log = log.synchronous(name, Arc::clone(&self.acks));
+            log = log.synchronous();
         }
         let log = Arc::new(log);
         lock(&self.logs).insert(name.to_owned(), Arc::downgrade(&log));
@@ -664,6 +665,7 @@ impl State {
     pub(crate) fn keep_copy(&self, name: &str, copy: Arc<Copy>) {
         lock(&self.copies).insert(name.to_owned(), copy);
         self.copied.notify_all();
+        self.notify.served_changed();
         self.notify.appended();
     }
 

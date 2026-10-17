@@ -302,8 +302,14 @@ struct Followed {
 /// its log grows, a turn of each file at a time.
 fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()> {
     let mut followed: Vec<Followed> = Vec::new();
+    let mut listed = state.notify.served();
     loop {
         let seen = state.notify.seen();
+        // a file this node began to serve is told at once, not at the next ask
+        if state.notify.served() != listed {
+            listed = state.notify.served();
+            out.send(&Message::Listed { files: state.files_served()? })?;
+        }
         {
             let mut asked = lock(asked);
             if asked.ended || state.stopping() {

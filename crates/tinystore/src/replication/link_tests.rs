@@ -1091,3 +1091,20 @@ fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_he
     ru.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_file_a_home_makes_after_a_node_linked_reaches_the_node_with_no_wait_for_its_next_ask() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+
+    let began = Instant::now();
+    home.database("fresh").migrations(NOTES).open().unwrap();
+    eventually("the copy holds the new file", || copy.node().unwrap().copy("sql/fresh.db").is_some());
+    assert!(began.elapsed() < Duration::from_secs(3), "told at once, not at the next ask: {:?}", began.elapsed());
+    copy.close().unwrap();
+    home.close().unwrap();
+}

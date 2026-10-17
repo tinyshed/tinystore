@@ -29,13 +29,23 @@ pub(crate) struct Bounds {
     /// A segment past these bytes is closed, and the next entry starts one.
     pub(crate) segment: u64,
     /// The bytes of a file's segments kept; the oldest go past them, and a
-    /// copy that needed them starts again from a snapshot.
+    /// copy that needed them starts again from a snapshot. A node linked now
+    /// that has not applied the oldest yet keeps them, within `KEPT_FOR_A_NODE`
+    /// times these bytes.
     pub(crate) keep: u64,
+    /// The disk the store keeps free: below it, a log keeps its last segment
+    /// alone.
+    pub(crate) keep_free: u64,
 }
+
+/// How many times its bytes a log keeps for a node linked now that has not
+/// applied its oldest entries: past it, the node takes a snapshot rather than
+/// the disk fill for it.
+const KEPT_FOR_A_NODE: u64 = 4;
 
 impl Default for Bounds {
     fn default() -> Self {
-        Bounds { segment: 16 << 20, keep: 256 << 20 }
+        Bounds { segment: 16 << 20, keep: 256 << 20, keep_free: 0 }
     }
 }
 
@@ -44,6 +54,9 @@ impl Default for Bounds {
 pub(crate) struct Notify {
     appended: Mutex<u64>,
     changed: Condvar,
+    /// How often the files the node serves changed: a log's first entry, a
+    /// copy become whole, which a link tells the nodes taking from it at once.
+    served: AtomicU64,
 }
 
 impl Notify {
@@ -61,6 +74,15 @@ impl Notify {
     pub(crate) fn appended(&self) {
         *self.appended.lock().unwrap_or_else(PoisonError::into_inner) += 1;
         self.changed.notify_all();
+    }
+
+    /// The files the node serves changed; the senders wake at the next append.
+    pub(crate) fn served_changed(&self) {
+        self.served.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn served(&self) -> u64 {
+        self.served.load(Ordering::SeqCst)
     }
 }
 
@@ -98,6 +120,13 @@ impl Acks {
     /// their ids or addresses, or for any node copying the file when none.
     pub(crate) fn waiting_for(chosen: Vec<String>) -> Acks {
         Acks { chosen, ..Acks::default() }
+    }
+
+    /// The last entry of `file` that every node linked now and copying it
+    /// holds; none while no linked node said it holds one.
+    pub(crate) fn floor(&self, file: &str) -> Option<u64> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.linked.keys().filter_map(|node| held.entries.get(&(node.clone(), file.to_owned())).copied()).min()
     }
 
     /// The node `node` holds `file`'s entries up to `sequence`.
@@ -169,8 +198,11 @@ pub(crate) struct Log {
     dir: PathBuf,
     bounds: Bounds,
     notify: Arc<Notify>,
-    /// A synchronous home's file and what its commits wait for.
-    synchronous: Option<(String, Arc<Acks>)>,
+    /// The file and what the nodes copying it said they hold: what a
+    /// synchronous home's commits wait for, and what the oldest segments are
+    /// kept for.
+    followers: Option<(String, Arc<Acks>)>,
+    synchronous: bool,
     /// The writer of a home's file, held to read where the log stands with
     /// no commit between the file and the log.
     writer: Mutex<Option<Weak<Mutex<Connection>>>>,
@@ -223,18 +255,33 @@ impl Log {
             tail.segments.push_back(Segment { first, bytes });
         }
         let fenced = AtomicU64::new(Self::fenced_in(&dir)?.unwrap_or(0));
-        let log =
-            Log { dir, bounds, notify, synchronous: None, writer: Mutex::new(None), tail: Mutex::new(tail), fenced };
+        let log = Log {
+            dir,
+            bounds,
+            notify,
+            followers: None,
+            synchronous: false,
+            writer: Mutex::new(None),
+            tail: Mutex::new(tail),
+            fenced,
+        };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
         Ok(log)
     }
 
-    /// Makes each commit of the file `name` wait until a node copying it holds
-    /// it, while the writer is held: the commits queued meanwhile share the
-    /// next, and its wait.
-    pub(crate) fn synchronous(mut self, name: &str, acks: Arc<Acks>) -> Log {
-        self.synchronous = Some((name.to_owned(), acks));
+    /// Keeps the oldest segments for the nodes copying the file `name` that
+    /// have not applied them, as `acks` say.
+    pub(crate) fn followed(mut self, name: &str, acks: Arc<Acks>) -> Log {
+        self.followers = Some((name.to_owned(), acks));
+        self
+    }
+
+    /// Makes each commit of the file wait until a node copying it holds it,
+    /// while the writer is held: the commits queued meanwhile share the next,
+    /// and its wait.
+    pub(crate) fn synchronous(mut self) -> Log {
+        self.synchronous = true;
         self
     }
 
@@ -429,7 +476,7 @@ impl Log {
         (tail.next, tail.check, tail.last) = (head.sequence + 1, check, Some(position));
         drop(tail);
         self.notify.appended();
-        if let (Kind::Commit, Some((file, acks))) = (kind, &self.synchronous) {
+        if let (Kind::Commit, true, Some((file, acks))) = (kind, self.synchronous, &self.followers) {
             acks.wait(file, head.sequence);
         }
         Ok(())
@@ -460,12 +507,23 @@ impl Log {
         let mut file =
             OpenOptions::new().append(true).create_new(true).open(&path).map_err(|error| io_error(&path, error))?;
         file.write_all(MAGIC).map_err(|error| io_error(&path, error))?;
+        if tail.segments.is_empty() {
+            self.notify.served_changed();
+        }
         tail.segments.push_back(Segment { first: tail.next, bytes: MAGIC.len() as u64 });
         tail.appending = Some(file);
         tail.named = true;
-        while tail.segments.len() > 1
-            && tail.segments.iter().map(|segment| segment.bytes).sum::<u64>() > self.bounds.keep
-        {
+        let low_on_disk = self.bounds.keep_free > 0
+            && crate::space::available(&self.dir).is_ok_and(|available| available < self.bounds.keep_free);
+        let applied = self.followers.as_ref().and_then(|(file, acks)| acks.floor(file));
+        while tail.segments.len() > 1 {
+            let bytes = tail.segments.iter().map(|segment| segment.bytes).sum::<u64>();
+            // a node linked now that has not applied the oldest segment's entries
+            let needed = applied.is_some_and(|applied| applied + 1 < tail.segments[1].first);
+            let kept = if needed { self.bounds.keep.saturating_mul(KEPT_FOR_A_NODE) } else { self.bounds.keep };
+            if !low_on_disk && bytes <= kept {
+                break;
+            }
             let oldest = tail.segments.pop_front().expect("more than one segment");
             let path = segment_path(&self.dir, oldest.first);
             fs::remove_file(&path).map_err(|error| io_error(&path, error))?;

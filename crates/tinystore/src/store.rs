@@ -179,7 +179,10 @@ impl Store {
             #[cfg(feature = "kv")]
             encryption_key: Mutex::new(None),
             #[cfg(feature = "replication")]
-            node: options.node.map(|node| crate::replication::State::new(&dir, node).map(Arc::new)).transpose()?,
+            node: options
+                .node
+                .map(|node| crate::replication::State::new(&dir, node, options.keep_free).map(Arc::new))
+                .transpose()?,
             closed: AtomicBool::new(false),
             dir,
         };
