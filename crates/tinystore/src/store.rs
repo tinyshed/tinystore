@@ -152,6 +152,8 @@ struct Inner {
     /// alone.
     #[cfg(feature = "replication")]
     node: Option<Arc<crate::replication::State>>,
+    /// Opened beside the process that holds the directory: it reads only.
+    beside: bool,
     closed: AtomicBool,
 }
 
@@ -162,8 +164,26 @@ impl Store {
     pub fn open(dir: impl AsRef<Path>, options: Options) -> Result<Store> {
         let dir = absolute(dir.as_ref())?;
         let lock = take_lock(&dir)?;
+        Self::open_with(dir, options, Some(lock))
+    }
+
+    /// Opens the store in `dir` to read beside the process that holds it, a
+    /// server or a program: no lock taken, no background work, each file read
+    /// through readers alone, none written and none checkpointed. A write is
+    /// refused, `Invalid`, and a file the store does not hold is `NotFound`
+    /// rather than made. What the holder commits meanwhile, a read sees.
+    pub fn open_beside(dir: impl AsRef<Path>) -> Result<Store> {
+        if !dir.as_ref().is_dir() {
+            return Err(Error::not_found(format!("store {}: no such directory", dir.as_ref().display())));
+        }
+        let dir = absolute(dir.as_ref())?;
+        Self::open_with(dir, Options { background: false, ..Options::default() }, None)
+    }
+
+    fn open_with(dir: PathBuf, options: Options, lock: Option<File>) -> Result<Store> {
+        let beside = lock.is_none();
         let inner = Inner {
-            lock: Mutex::new(Some(lock)),
+            lock: Mutex::new(lock),
             clock: options.clock.unwrap_or_else(|| Arc::new(SystemClock)),
             memory: Memory::new(options.memory.unwrap_or(u64::MAX)),
             scheduler: Scheduler::new(options.background),
@@ -183,6 +203,7 @@ impl Store {
                 .node
                 .map(|node| crate::replication::State::new(&dir, node, options.keep_free).map(Arc::new))
                 .transpose()?,
+            beside,
             closed: AtomicBool::new(false),
             dir,
         };
@@ -196,6 +217,11 @@ impl Store {
 
     pub fn dir(&self) -> &Path {
         &self.inner.dir
+    }
+
+    /// Whether the store was opened beside its holder, to read only.
+    pub fn is_beside(&self) -> bool {
+        self.inner.beside
     }
 
     /// Opens an engine's SQLite file, `name` inside the store's directory, its
@@ -214,6 +240,12 @@ impl Store {
     )]
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
+        if self.inner.beside {
+            if !path.exists() {
+                return Err(Error::not_found(format!("{}: it holds no {name}", self.describe())));
+            }
+            return crate::sqlite::File::open_copy(path, config);
+        }
         #[cfg(feature = "replication")]
         if let Some(node) = &self.inner.node {
             if node.is_new(name) && node.uses_catalog() {
@@ -346,9 +378,10 @@ impl Store {
             return Ok(Arc::clone(key));
         }
         let own = self.inner.dir.join(encryption::FILE);
+        // a store beside its holder writes nothing, a key no more than a file
         let key = Arc::new(match &self.inner.encryption_key_file {
             Some(file) => EncryptionKey::read(file)?,
-            None if make => EncryptionKey::read_or_make(&own)?,
+            None if make && !self.inner.beside => EncryptionKey::read_or_make(&own)?,
             None => EncryptionKey::read(&own)?,
         });
         *kept = Some(Arc::clone(&key));
@@ -573,6 +606,31 @@ mod tests {
             lock(&self.closed).push(self.name);
             Ok(())
         }
+    }
+
+    #[test]
+    #[cfg(all(feature = "kv", feature = "jobs", feature = "replication"))]
+    fn a_store_opened_beside_its_holder_reads_what_it_commits_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let sessions = holder.bucket::<String>("sessions").open().unwrap();
+        sessions.set("a", &"first".to_owned()).unwrap();
+
+        let beside = Store::open_beside(dir.path()).unwrap();
+        assert!(beside.is_beside());
+        let read = beside.bucket::<String>("sessions").open().unwrap();
+        assert_eq!(read.get("a").unwrap().as_deref(), Some("first"));
+        sessions.set("b", &"committed after".to_owned()).unwrap();
+        assert_eq!(read.get("b").unwrap().as_deref(), Some("committed after"), "a read sees the holder's commits");
+        let refused = read.set("c", &"no".to_owned()).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+        let missing = beside.queue::<String>("mail").open().unwrap_err();
+        assert_eq!(missing.kind(), ErrorKind::NotFound, "a file it does not hold is not made: {missing}");
+        assert!(!dir.path().join("jobs.db").exists());
+        beside.close().unwrap();
+        sessions.set("d", &"the holder writes on".to_owned()).unwrap();
+        holder.close().unwrap();
+        assert!(Store::open_beside(dir.path().join("nowhere")).is_err());
     }
 
     #[test]

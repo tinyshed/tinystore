@@ -71,6 +71,11 @@ pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>>
 /// Passes a write on, and says whether this node's copy held its commit within
 /// the wait.
 pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool)> {
+    if store.is_beside() {
+        return Err(Error::invalid(format!(
+            "{file}: the store is opened beside the process that holds it, and reads only"
+        )));
+    }
     let Some(node) = store.node() else {
         return Err(Error::invalid(format!("{file} is a copy, and the store is no node to pass its writes on")));
     };
