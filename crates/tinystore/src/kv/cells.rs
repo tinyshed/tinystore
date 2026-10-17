@@ -318,10 +318,7 @@ pub(crate) fn keep_revision(connection: &Connection, revision: i64) -> Result<()
     execute(connection, KEEP_REVISION, params![revision], "the revision")
 }
 
-/// The row of `name`, made with `role` the first time: its id and the role it
-/// holds.
 /// The id and kind of `name`, if it was made.
-#[cfg(feature = "replication")]
 pub(crate) fn find_bucket(connection: &Connection, name: &str) -> Result<Option<(i64, String)>> {
     connection
         .prepare_cached(SELECT_BUCKET)
@@ -350,6 +347,8 @@ pub(crate) fn keep_queued_applied(connection: &Connection, node: &str, op: i64) 
     )
 }
 
+/// The row of `name`, made with `role` the first time: its id and the role it
+/// holds.
 pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<(i64, String)> {
     let found: Option<(i64, String)> = connection
         .prepare_cached(SELECT_BUCKET)

@@ -369,7 +369,7 @@ fn commit(
     if batch.is_empty() {
         return Vec::new();
     }
-    if let Some(Err(refused)) = capture.map(Capture::refuse_when_broken) {
+    if let Some(Err(refused)) = capture.map(Capture::refuse_a_write) {
         return batch.iter().map(|_| Err(refused.duplicate())).collect();
     }
     if let Err(error) = execute(connection, BEGIN) {

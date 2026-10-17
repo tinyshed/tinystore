@@ -352,6 +352,21 @@ impl State {
         Ok(())
     }
 
+    /// Refuses every write of `name` from now on, and across restarts: this
+    /// node is its old home, and another writes it at `epoch`.
+    pub(crate) fn fence(&self, name: &str, epoch: u64) -> Result<()> {
+        tracing::error!(
+            target: "tinystore",
+            file = name,
+            epoch,
+            "another node writes a file this node wrote, at a later epoch: this node takes no more writes of it"
+        );
+        match lock(&self.logs).get(name).and_then(Weak::upgrade) {
+            Some(log) => log.fence(epoch),
+            None => Log::fence_in(&self.log_dir(name), epoch),
+        }
+    }
+
     /// Whether a direct link takes `name`, rather than the link to `from`.
     pub(crate) fn follows_directly(&self, name: &str) -> bool {
         lock(&self.direct).values().any(|direct| direct.follows(name))
@@ -392,25 +407,45 @@ impl State {
         let Some(store) = self.store() else {
             return;
         };
-        let Ok(logged) = self.files_logged() else {
+        let (Ok(logged), Ok(catalog)) = (self.files_logged(), self.catalog(&store)) else {
             return;
         };
+        let address = self.address();
         for name in logged {
             let dir = self.log_dir(&name);
             if name == CATALOG || NODE_LOCAL.contains(&name.as_str()) || copy::is_copy(&dir) || self.stopping() {
                 continue;
             }
-            match self.claim(&store, &name) {
-                Ok(Claimed::Here) => {}
-                Ok(Claimed::From | Claimed::At(_)) => tracing::error!(
-                    target: "tinystore",
-                    file = %name,
-                    "the catalog names another home of a file this node writes: two homes write it now"
-                ),
+            // the claim goes to the catalog's home, whose answer is the last
+            // word: this node's copy may be older than a move made while it was away
+            let epoch = self.epoch_of(&name).unwrap_or(1);
+            let claim = Claim { file: &name, node: &self.id, address: &address, epoch };
+            match catalog.claim(&store, &claim) {
+                Ok(home) if home.node == self.id => {}
+                Ok(home) => self.found_another_home(&name, epoch, home.epoch),
                 Err(error) => {
                     tracing::debug!(target: "tinystore", file = %name, %error, "a node could not claim a file")
                 }
             }
+        }
+    }
+
+    /// A file this node writes whose route the catalog names another node:
+    /// at a later epoch, a copy promoted while this node was away, this node
+    /// is the old home and takes no more writes of it; at the same epoch two
+    /// nodes wrote it before their network kept a catalog, which a person
+    /// settles.
+    fn found_another_home(&self, name: &str, ours: u64, theirs: u64) {
+        if theirs <= ours {
+            tracing::error!(
+                target: "tinystore",
+                file = name,
+                "the catalog names another home of a file this node writes: two homes write it now"
+            );
+            return;
+        }
+        if let Err(error) = self.fence(name, theirs) {
+            tracing::warn!(target: "tinystore", file = name, %error, "a node could not fence a file");
         }
     }
 

@@ -444,8 +444,23 @@ fn an_old_home_back_without_its_demotion_hands_no_node_of_a_later_epoch_its_file
     });
     assert_eq!(read.get("split").unwrap(), None, "no snapshot of the old home's file reached russia");
     assert_eq!(russia.node().unwrap().snapshots.load(Relaxed), 0, "russia went on from its position");
+    let refused = old.bucket::<String>("sessions").open().unwrap().set("again", &"after".to_owned()).unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        crate::ErrorKind::Conflict,
+        "an old home a later epoch reached writes no more: {refused}"
+    );
+    let fenced = |dir: &Path| status(dir).unwrap().into_iter().find(|file| file.file == "kv.db").unwrap().fenced;
     russia.close().unwrap();
     old.close().unwrap();
+    assert_eq!(fenced(dirs[0].path()), Some(2), "its directory keeps the epoch it learned");
+
+    let old = node_with(dirs[0].path(), Node::default());
+    let refused = old.bucket::<String>("sessions").open().unwrap().set("again", &"restarted".to_owned()).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Conflict, "and refuses writes across a restart: {refused}");
+    old.close().unwrap();
+    demote(dirs[0].path(), &[]).unwrap();
+    assert_eq!(fenced(dirs[0].path()), None, "a demotion makes it a copy, which writes nothing anyway");
     europe.close().unwrap();
 }
 
@@ -975,7 +990,7 @@ fn a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names() {
     let us_address = bound(us.node().unwrap()).unwrap().to_string();
     let eu = node_with(dirs[1].path(), serving_from(vec![us_address.clone()], "127.0.0.1:0".into()));
     let eu_address = bound(eu.node().unwrap()).unwrap().to_string();
-    let ru = node_with(dirs[2].path(), serving_from(vec![eu_address], "127.0.0.1:0".into()));
+    let ru = node_with(dirs[2].path(), serving_from(vec![eu_address.clone()], "127.0.0.1:0".into()));
     let ru_address = bound(ru.node().unwrap()).unwrap().to_string();
     let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
     eu_db.exec(crate::sql!("insert into notes (body) values ('a european row')")).unwrap();
@@ -997,7 +1012,15 @@ fn a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names() {
     us_db.exec(crate::sql!("insert into notes (body) values ('written in america')")).unwrap();
     let ru_db = ru.database("users").migrations(NOTES).open().unwrap();
     assert_eq!(bodies(&ru_db), ["a european row", "written in america"], "the write went to russia");
-    drop((us_db, ru_db));
+
+    // europe comes back undemoted: the catalog tells it of the later epoch
+    let eu = node_with(dirs[1].path(), serving_from(vec![bound(us.node().unwrap()).unwrap().to_string()], eu_address));
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eventually("europe, the old home, takes no more writes", || {
+        eu_db.exec(crate::sql!("insert into notes (body) values ('the old home')")).is_err()
+    });
+    drop((us_db, ru_db, eu_db));
+    eu.close().unwrap();
     ru.close().unwrap();
     us.close().unwrap();
 }

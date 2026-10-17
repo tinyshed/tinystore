@@ -91,6 +91,7 @@ fn print_links(dir: &Path, files: &[FileStatus]) {
 /// and where its copy stands.
 fn line(file: &FileStatus, width: usize) -> String {
     let role = match (file.home, file.promoted) {
+        (true, _) if file.fenced.is_some() => "fenced",
         (true, true) => "promoted",
         (true, false) => "writes",
         (false, _) if file.taking => "taking",

@@ -30,6 +30,9 @@ pub struct FileStatus {
     pub taking: bool,
     /// The file became this node's own by a promotion.
     pub promoted: bool,
+    /// Another node writes the file at this later epoch, which this node, its
+    /// old home, learned: it takes no more writes of it.
+    pub fenced: Option<u64>,
 }
 
 /// Every file the node in `dir` logs.
@@ -53,6 +56,7 @@ pub fn status(dir: &Path) -> Result<Vec<FileStatus>> {
             applied: applied.map(|point| point.sequence),
             taking: log.join("taking").exists(),
             promoted: promoted.is_some(),
+            fenced: Log::fenced_in(&log)?,
             home,
             file: name,
         });

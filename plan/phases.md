@@ -364,8 +364,8 @@ in [scaling.md](scaling.md#order).
   carries the epoch of the node's log of the file: one at a later epoch, a copy a person promoted, moves the route
   to its node when it starts, and the others take the file from there. Left: moving a home that is alive, which
   swaps a file between a copy and a home under engines that hold it open.
-- [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
-  Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
+- [x] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
+  Built: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the
   next epoch, so that the nodes behind it go on from where they stand once their `from` reaches it, and one that
   holds an entry of the old epoch it never had conflicts and takes a snapshot. A node with `from` writes the files
@@ -376,7 +376,12 @@ in [scaling.md](scaling.md#order).
   from a node holding an older one, an old home come back without its demotion: that node refuses it, the link
   goes on to the next address, and the copy refuses one at an older epoch than its own. The new home counts and
   logs the commits a node held of the old home past the point its promotion went on from, which that node loses
-  with the snapshot it takes. A snapshot taken again while engines read the copy closes their readers, holding
+  with the snapshot it takes. An old home learns of the later epoch from such a node asking it, or at its start
+  from the catalog's home, whose answer to its claim names the promoted copy: it keeps the epoch in `fenced`
+  beside its log and refuses every write of the file, `Conflict`, across restarts, until `tinystore demote` makes
+  it a copy; an old home no node of the later epoch reaches yet writes on, its commits reaching none of them. A
+  migration that has nothing to apply and a bucket's name made before are read, so that a fenced home still
+  opens and reads its files. A snapshot taken again while engines read the copy closes their readers, holding
   their reads, until the new file has the copy's name. `tinystore node status <dir>` and `replication::status`
   say, from a node's directory, which files it writes, which it copies, the entries each log keeps and where each
   copy stands; a running node writes its links to `log/links` every five seconds, the node it takes from and the

@@ -383,6 +383,10 @@ fn check_epochs(state: &State, file: &str, dir: &std::path::Path, at: Point) -> 
     };
     let held = source.stable()?;
     if at.epoch > held.epoch {
+        // this node writes the file still: it is the old home, which learns here
+        if state.copy(file).is_none() && !super::copy::is_copy(dir) {
+            state.fence(file, at.epoch)?;
+        }
         return Err(Error::new(
             ErrorKind::Conflict,
             format!(

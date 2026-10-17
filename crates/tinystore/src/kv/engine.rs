@@ -218,7 +218,11 @@ impl Kv {
             Some((id, held)) => (id, held.role().to_owned()),
             #[cfg(feature = "replication")]
             None if self.file.is_copy() => self.name_from_home(name, kind)?,
-            None => self.file.transaction(|tx| cells::bucket(tx, name, kind.role()))?,
+            // a name made before is read, so that opening it takes no writer
+            None => match self.file.read(|connection| cells::find_bucket(connection, name))? {
+                Some(found) => found,
+                None => self.file.transaction(|tx| cells::bucket(tx, name, kind.role()))?,
+            },
         };
         if role != kind.role() {
             return Err(Error::invalid(format!("the name holds {}, not {}", described(&role), described(kind.role()))));

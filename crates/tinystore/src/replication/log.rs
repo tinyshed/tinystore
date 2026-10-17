@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -133,7 +133,15 @@ pub(crate) struct Log {
     /// no commit between the file and the log.
     writer: Mutex<Option<Weak<Mutex<Connection>>>>,
     tail: Mutex<Tail>,
+    /// The later epoch another node writes the file at, which this node, an
+    /// old home, learned of; 0 while none.
+    fenced: AtomicU64,
 }
+
+/// The file in a home's log directory that keeps the later epoch it learned
+/// another node writes the file at: its writes are refused from then on, and
+/// across its restarts, until a person demotes it.
+pub(crate) const FENCED: &str = "fenced";
 
 struct Tail {
     /// Every segment, oldest first; appends go to the last.
@@ -172,7 +180,9 @@ impl Log {
             let bytes = fs::metadata(&path).map_err(|error| Error::io(path.display().to_string(), error))?.len();
             tail.segments.push_back(Segment { first, bytes });
         }
-        let log = Log { dir, bounds, notify, synchronous: None, writer: Mutex::new(None), tail: Mutex::new(tail) };
+        let fenced = AtomicU64::new(Self::fenced_in(&dir)?.unwrap_or(0));
+        let log =
+            Log { dir, bounds, notify, synchronous: None, writer: Mutex::new(None), tail: Mutex::new(tail), fenced };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
         Ok(log)
@@ -228,7 +238,45 @@ impl Log {
             let path = segment_path(dir, first);
             fs::remove_file(&path).map_err(|error| io_error(&path, error))?;
         }
+        match fs::remove_file(dir.join(FENCED)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(io_error(&dir.join(FENCED), error)),
+        }
+    }
+
+    /// Refuses this log's file every write from now on: another node writes it
+    /// at `epoch`, later than this log's.
+    pub(crate) fn fence(&self, epoch: u64) -> Result<()> {
+        Self::fence_in(&self.dir, epoch)?;
+        self.fenced.fetch_max(epoch, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Keeps durably, in the log directory `dir`, that another node writes its
+    /// file at `epoch`.
+    pub(crate) fn fence_in(dir: &Path, epoch: u64) -> Result<()> {
+        fs::create_dir_all(dir).map_err(|error| io_error(dir, error))?;
+        let path = dir.join(FENCED);
+        let mut file = fs::File::create(&path).map_err(|error| io_error(&path, error))?;
+        file.write_all(epoch.to_string().as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| io_error(&path, error))?;
+        crate::durable::sync_directory(dir).map_err(|error| io_error(dir, error))
+    }
+
+    /// The later epoch another node writes the file of the log in `dir` at,
+    /// if this node learned of one.
+    pub(crate) fn fenced_in(dir: &Path) -> Result<Option<u64>> {
+        match fs::read_to_string(dir.join(FENCED)) {
+            Ok(kept) => kept
+                .trim()
+                .parse()
+                .map(Some)
+                .map_err(|_| Error::corrupt(format!("{}: no epoch", dir.join(FENCED).display()))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(io_error(&dir.join(FENCED), error)),
+        }
     }
 
     /// Where the log ends now. For a home's file the writer is held while it
@@ -415,6 +463,20 @@ impl Observe for Log {
 
     fn writer(&self, writer: Weak<Mutex<Connection>>) {
         *self.writer.lock().unwrap_or_else(PoisonError::into_inner) = Some(writer);
+    }
+
+    fn refuse(&self) -> Result<()> {
+        let epoch = self.fenced.load(Ordering::SeqCst);
+        if epoch == 0 {
+            return Ok(());
+        }
+        Err(Error::new(
+            ErrorKind::Conflict,
+            format!(
+                "another node writes this file at epoch {epoch}: this node is its old home, which takes no more writes \
+                 of it until `tinystore demote` makes it a copy"
+            ),
+        ))
     }
 }
 

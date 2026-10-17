@@ -253,7 +253,7 @@ impl File {
     /// Refuses a transaction once a commit of the file could not be logged.
     fn refuse_when_unlogged(&self) -> Result<()> {
         match &self.capture {
-            Some(capture) => capture.refuse_when_broken().map_err(|error| error.within(self.describe())),
+            Some(capture) => capture.refuse_a_write().map_err(|error| error.within(self.describe())),
             None => Ok(()),
         }
     }
@@ -307,7 +307,21 @@ impl File {
         if self.copy {
             return self.check_its_home_migrated(history, migrations);
         }
+        if self.migrated(history, migrations)? {
+            return Ok(());
+        }
         self.transaction(|tx| migrate::apply(tx, history, migrations)).map_err(|error| error.within(self.describe()))
+    }
+
+    /// Whether the file holds every step of `history` already: a reader then
+    /// answers, and no writer is taken, so that a file which takes no writes,
+    /// as an old home's, still opens.
+    fn migrated(&self, history: &str, migrations: &[Migration]) -> Result<bool> {
+        match self.read(|connection| migrate::check_applied_by_home(connection, history, migrations)) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::Unavailable => Ok(false),
+            Err(error) => Err(error.within(self.describe())),
+        }
     }
 
     /// A copy's migrations are its home's: they arrive as pages, and the copy
@@ -326,6 +340,9 @@ impl File {
         self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
         if self.copy {
             return self.check_its_home_migrated(history, migrations);
+        }
+        if self.migrated(history, migrations)? {
+            return Ok(());
         }
         let connection = lock(&self.writer);
         let what = || format!("{}: {history}: foreign keys", self.describe());

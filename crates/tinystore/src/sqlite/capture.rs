@@ -103,6 +103,12 @@ pub(crate) trait Observe: Send + Sync {
     fn writer(&self, writer: Weak<Mutex<Connection>>) {
         let _ = writer;
     }
+
+    /// Refuses a write before it runs, as a log whose file another node writes
+    /// now at a later epoch refuses every one.
+    fn refuse(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A file's capture: its writer's hook, and where the last commit it handed
@@ -138,16 +144,17 @@ impl Capture {
         Ok(capture)
     }
 
-    /// Refuses a write once a commit could not be handed: the file is ahead
-    /// of what its observer keeps until it opens again.
-    pub(crate) fn refuse_when_broken(&self) -> Result<()> {
-        if !self.broken.load(Ordering::SeqCst) {
-            return Ok(());
+    /// Refuses a write once a commit could not be handed, the file ahead of
+    /// what its observer keeps until it opens again, or once the observer
+    /// refuses writes.
+    pub(crate) fn refuse_a_write(&self) -> Result<()> {
+        if self.broken.load(Ordering::SeqCst) {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                "a commit is in the file and not in its log: it takes writes again once opened again",
+            ));
         }
-        Err(Error::new(
-            ErrorKind::Unavailable,
-            "a commit is in the file and not in its log: it takes writes again once opened again",
-        ))
+        self.observer.refuse()
     }
 
     /// Readies the hook for a commit this thread is about to make.
