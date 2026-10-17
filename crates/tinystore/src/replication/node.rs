@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use super::catalog::{Catalog, FILE as CATALOG};
 use super::copy::{self, Copy};
 use super::entry::Point;
-use super::follow::Upstream;
+use super::follow::{Direct, Upstream, Written};
 use super::links::Follower;
 use super::log::{Acks, Bounds, Log, Notify, segments_in};
 use super::snapshot::Source;
@@ -80,6 +80,24 @@ pub(crate) struct State {
     /// said; none until a link said.
     pub(crate) served: Mutex<Option<Vec<String>>>,
     catalog: super::catalog::Held,
+    /// The direct links to the homes of files `from` does not serve, by the
+    /// address each reaches.
+    direct: Mutex<HashMap<String, Arc<Direct>>>,
+}
+
+/// The file in a copy's log directory that names the node a direct link
+/// takes it from, so that the link is made again when the node starts.
+const DIRECT: &str = "from";
+
+/// Where a node's claim of a file in the catalog leaves the file.
+pub(crate) enum Claimed {
+    /// This node writes it.
+    Here,
+    /// The node it takes from serves it.
+    From,
+    /// Its home, at this address, serves it, which the node takes it from
+    /// over a direct link.
+    At(String),
 }
 
 /// A node taking from this one, kept among the followers until its link ends.
@@ -120,6 +138,7 @@ impl State {
             id: super::queue::node_id(&dir.join(DIR))?,
             served: Mutex::default(),
             catalog: Mutex::default(),
+            direct: Mutex::default(),
             queue: Mutex::default(),
             tls,
             dir: dir.to_owned(),
@@ -158,9 +177,15 @@ impl State {
         if let Some(address) = &self.options.serve {
             super::serve::start(self, address)?;
         }
-        if !self.options.from.is_empty() {
+        let direct = self.files_taken_directly()?;
+        if !self.options.from.is_empty() || !direct.is_empty() {
             self.open_copies_held(store)?;
+        }
+        if !self.options.from.is_empty() {
             super::follow::start(self, store);
+        }
+        for (name, address) in direct {
+            self.take_directly(store, &name, &address)?;
         }
         let writing = Arc::clone(self);
         self.spawn("tinystore node: links", move || super::links::keep_written(&writing));
@@ -189,6 +214,9 @@ impl State {
             let _ = link.shutdown(std::net::Shutdown::Both);
         }
         self.upstream.stop();
+        for direct in lock(&self.direct).values() {
+            direct.upstream.stop();
+        }
         self.notify.appended();
         let threads: Vec<_> = lock(&self.threads).drain(..).collect();
         for thread in threads {
@@ -261,21 +289,82 @@ impl State {
             && segments_in(&dir).is_ok_and(|segments| segments.is_empty())
     }
 
-    /// Claims `name` in the catalog for this node, which then writes it; false
-    /// when the catalog names another home or the node it takes from serves
-    /// the file, which this node then copies. A node that serves nothing
-    /// claims nothing: the node it takes from makes the file.
-    pub(crate) fn claim(&self, store: &Store, name: &str) -> Result<bool> {
+    /// Claims `name` in the catalog for this node, which then writes it, or
+    /// says where the node copies it from: the node it takes from, when that
+    /// node serves it or is its home, or the home the catalog names. A node
+    /// that serves nothing claims nothing: the node it takes from makes the
+    /// file.
+    pub(crate) fn claim(&self, store: &Store, name: &str) -> Result<Claimed> {
         let catalog = self.catalog(store)?;
-        if let Some(home) = catalog.home_of(name)? {
-            return Ok(home.node == self.id);
+        let home = match catalog.home_of(name)? {
+            Some(home) => home,
+            None if self.address().is_empty() || self.served_by_from(name) => return Ok(Claimed::From),
+            None => catalog.claim(store, name, &self.id, &self.address())?,
+        };
+        if home.node == self.id {
+            return Ok(Claimed::Here);
         }
-        let address = self.address();
-        let served = lock(&self.served).as_ref().is_some_and(|served| served.iter().any(|file| file == name));
-        if address.is_empty() || served {
-            return Ok(false);
+        let from = lock(&self.upstream_at).clone();
+        if self.served_by_from(name) || home.address.is_empty() || from.as_deref() == Some(home.address.as_str()) {
+            return Ok(Claimed::From);
         }
-        Ok(catalog.claim(store, name, &self.id, &address)?.node == self.id)
+        Ok(Claimed::At(home.address))
+    }
+
+    fn served_by_from(&self, name: &str) -> bool {
+        lock(&self.served).as_ref().is_some_and(|served| served.iter().any(|file| file == name))
+    }
+
+    /// Takes `name` over a direct link to the node at `address`, made the
+    /// first time and kept in the copy's log directory for the next start.
+    pub(crate) fn take_directly(self: &Arc<Self>, store: &Store, name: &str, address: &str) -> Result<()> {
+        let dir = self.log_dir(name);
+        fs::create_dir_all(&dir).map_err(|error| Error::io(dir.display().to_string(), error))?;
+        fs::write(dir.join(DIRECT), address).map_err(|error| Error::io(dir.display().to_string(), error))?;
+        let direct = {
+            let mut directs = lock(&self.direct);
+            match directs.get(address) {
+                Some(direct) => Arc::clone(direct),
+                None => {
+                    let direct = Arc::new(Direct::new(address));
+                    directs.insert(address.to_owned(), Arc::clone(&direct));
+                    super::follow::start_direct(self, store, Arc::clone(&direct));
+                    direct
+                }
+            }
+        };
+        direct.add(name);
+        Ok(())
+    }
+
+    /// Whether a direct link takes `name`, rather than the link to `from`.
+    pub(crate) fn follows_directly(&self, name: &str) -> bool {
+        lock(&self.direct).values().any(|direct| direct.follows(name))
+    }
+
+    /// Passes a write of `file` on toward its home: over the direct link that
+    /// takes the file, or the link to `from`.
+    pub(crate) fn write_toward(&self, file: &str, op: Vec<u8>, at_most: Duration) -> Result<Written> {
+        let direct = lock(&self.direct).values().find(|direct| direct.follows(file)).cloned();
+        match direct {
+            Some(direct) => direct.upstream.write(op, at_most),
+            None => self.upstream.write(op, at_most),
+        }
+    }
+
+    /// The copies a direct link takes, each with the address it reaches, as
+    /// their log directories keep them.
+    fn files_taken_directly(&self) -> Result<Vec<(String, String)>> {
+        let mut taken = Vec::new();
+        for name in self.files_logged()? {
+            let dir = self.log_dir(&name);
+            if let Ok(address) = fs::read_to_string(dir.join(DIRECT))
+                && copy::is_copy(&dir)
+            {
+                taken.push((name, address.trim().to_owned()));
+            }
+        }
+        Ok(taken)
     }
 
     /// Claims in the catalog each file this node already writes, as a node's
@@ -297,8 +386,8 @@ impl State {
                 continue;
             }
             match self.claim(&store, &name) {
-                Ok(true) => {}
-                Ok(false) => tracing::error!(
+                Ok(Claimed::Here) => {}
+                Ok(Claimed::From | Claimed::At(_)) => tracing::error!(
                     target: "tinystore",
                     file = %name,
                     "the catalog names another home of a file this node writes: two homes write it now"

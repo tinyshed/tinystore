@@ -238,15 +238,19 @@ impl Store {
         config: crate::sqlite::Config,
     ) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
-        if node.claim(self, name).map_err(|error| error.within(self.describe()))? {
-            return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
-        }
-        if !node.takes(name) {
-            return Err(Error::new(
-                crate::ErrorKind::Unavailable,
-                format!("{name}: the catalog names its home on another node, and this node takes from none"),
-            )
-            .within(self.describe()));
+        match node.claim(self, name).map_err(|error| error.within(self.describe()))? {
+            crate::replication::Claimed::Here => {
+                return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
+            }
+            crate::replication::Claimed::At(address) => node.take_directly(self, name, &address)?,
+            crate::replication::Claimed::From if !node.takes(name) => {
+                return Err(Error::new(
+                    crate::ErrorKind::Unavailable,
+                    format!("{name}: its home serves nothing other nodes reach, and this node takes from none"),
+                )
+                .within(self.describe()));
+            }
+            crate::replication::Claimed::From => {}
         }
         node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
         Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?))

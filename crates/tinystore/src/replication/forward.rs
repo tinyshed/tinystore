@@ -72,14 +72,14 @@ fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool
     let Some(node) = store.node() else {
         return Err(Error::invalid(format!("{file} is a copy, and the store is no node to pass its writes on")));
     };
-    if node.options.from.is_empty() {
+    if node.options.from.is_empty() && !node.follows_directly(file) {
         return Err(Error::new(
             ErrorKind::Unavailable,
             format!("{file} is a copy, and this node takes from no node its writes could go to"),
         ));
     }
     // the home's error names what failed there already; this node's own says the file
-    let written = node.upstream.write(op, ANSWER_WAIT).map_err(|error| error.within(file))?;
+    let written = node.write_toward(file, op, ANSWER_WAIT).map_err(|error| error.within(file))?;
     let answer = written.outcome.map_err(|(kind, why)| Error::new(kind, why))?;
     let mut held = true;
     for (name, sequence) in &written.waits {
@@ -93,7 +93,7 @@ fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool
 pub(crate) fn make(node: &State, name: &str) -> Result<()> {
     let mut out = super::Out(vec![MAKE]);
     out.text(name);
-    let written = node.upstream.write(out.0, ANSWER_WAIT)?;
+    let written = node.write_toward(name, out.0, ANSWER_WAIT)?;
     written.outcome.map(drop).map_err(|(kind, why)| Error::new(kind, why))
 }
 

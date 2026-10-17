@@ -70,6 +70,12 @@ fn promote_one(file: String, log: &Path) -> Result<Promoted> {
     for gone in [copy::MARK, Position::FILE] {
         fs::remove_file(log.join(gone)).map_err(|error| io_error(&log.join(gone), error))?;
     }
+    // a copy a direct link took is taken from no node once it is a home
+    match fs::remove_file(log.join("from")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error(&log.join("from"), error)),
+    }
     crate::durable::sync_directory(log).map_err(|error| io_error(log, error))?;
     Ok(Promoted { file, sequence: point.sequence, epoch: point.epoch })
 }

@@ -43,7 +43,7 @@ pub(crate) use forward::{Lenders, database_file, database_of, enqueue, make_in, 
 pub use links::{Follower, Links, links};
 pub(crate) use log::Notify;
 pub(crate) use message::{In, Out};
-pub(crate) use node::State;
+pub(crate) use node::{Claimed, State};
 pub use promote::{Demoted, Promoted, demote, promote};
 pub use status::{FileStatus, status};
 

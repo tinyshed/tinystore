@@ -102,6 +102,70 @@ pub(crate) fn start(state: &Arc<State>, store: &Store) {
     state.clone().spawn("tinystore node: from", move || keep_linked(&state, &store));
 }
 
+/// A link straight to a node the catalog names the home of files that the
+/// nodes of `from` do not serve: it follows those files alone, and their
+/// writes pass on through it.
+pub(crate) struct Direct {
+    pub(crate) address: String,
+    pub(crate) upstream: Upstream,
+    files: Mutex<HashSet<String>>,
+}
+
+impl Direct {
+    pub(crate) fn new(address: &str) -> Direct {
+        Direct { address: address.to_owned(), upstream: Upstream::default(), files: Mutex::default() }
+    }
+
+    pub(crate) fn add(&self, file: &str) {
+        lock(&self.files).insert(file.to_owned());
+    }
+
+    pub(crate) fn follows(&self, file: &str) -> bool {
+        lock(&self.files).contains(file)
+    }
+
+    fn files(&self) -> Vec<String> {
+        let mut files: Vec<String> = lock(&self.files).iter().cloned().collect();
+        files.sort_unstable();
+        files
+    }
+}
+
+/// What a link follows: every file the node takes, over the link to `from`,
+/// or the files a direct link was opened for.
+#[derive(Clone)]
+enum Scope {
+    From,
+    Direct(Arc<Direct>),
+}
+
+/// Starts the thread that keeps a direct link, made again from each copy's
+/// position whenever it breaks, until the node stops.
+pub(crate) fn start_direct(state: &Arc<State>, store: &Store, direct: Arc<Direct>) {
+    let (state, store) = (Arc::clone(state), store.downgrade());
+    state.clone().spawn("tinystore node: direct", move || {
+        let mut pause = Duration::from_millis(200);
+        while !state.stopping() {
+            let began = Instant::now();
+            if let Err(error) = follow(&state, &store, &direct.address, Scope::Direct(Arc::clone(&direct)))
+                && !state.stopping()
+            {
+                tracing::debug!(target: "tinystore", to = %direct.address, %error, "a node's direct link to a home");
+            }
+            direct.upstream.linked(None);
+            pause = if began.elapsed() > Duration::from_secs(10) {
+                Duration::from_millis(200)
+            } else {
+                (pause * 2).min(Duration::from_secs(5))
+            };
+            let until = Instant::now() + pause;
+            while Instant::now() < until && !state.stopping() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    });
+}
+
 fn keep_linked(state: &Arc<State>, store: &WeakStore) {
     let mut index = 0;
     let mut pause = Duration::from_millis(200);
@@ -109,7 +173,7 @@ fn keep_linked(state: &Arc<State>, store: &WeakStore) {
     while !state.stopping() {
         let address = state.options.from[index % state.options.from.len()].clone();
         let began = Instant::now();
-        match follow(state, store, &address) {
+        match follow(state, store, &address, Scope::From) {
             Ok(()) => {}
             Err(error) => {
                 if said.as_deref() != Some(error.to_string().as_str()) && !state.stopping() {
@@ -142,7 +206,7 @@ enum Held {
 }
 
 /// Follows the files over a link to `address` until it breaks.
-fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
+fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) -> Result<()> {
     let stream = connect(address)?;
     state.keep_link(&stream);
     let (mut reading, writing) = super::transport::connect(state, address, stream)?;
@@ -153,6 +217,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
     let mut link = Link {
         state,
         store,
+        scope,
         out: Arc::clone(&out),
         held: HashMap::new(),
         retries: Vec::new(),
@@ -176,9 +241,11 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
                         welcomed = true;
                         frames.unpack_from_here()?;
                         out.pack()?;
-                        state.upstream.linked(Some(Arc::clone(&out)));
-                        *lock(&state.upstream_at) = Some(address.to_owned());
-                        *lock(&state.served) = Some(files.clone());
+                        link.upstream().linked(Some(Arc::clone(&out)));
+                        if matches!(link.scope, Scope::From) {
+                            *lock(&state.upstream_at) = Some(address.to_owned());
+                            *lock(&state.served) = Some(files.clone());
+                        }
                         tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
                         link.follow_new(&files)?;
                         continue;
@@ -205,7 +272,10 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
             link.retry_due()?;
             #[cfg(feature = "blobs")]
             link.fetch_due()?;
-            let wanted = state.wanted.swap(false, Ordering::SeqCst);
+            if matches!(link.scope, Scope::Direct(_)) {
+                link.follow_new(&[])?;
+            }
+            let wanted = matches!(link.scope, Scope::From) && state.wanted.swap(false, Ordering::SeqCst);
             if wanted || (state.options.files.is_none() && listed.elapsed() > LIST_EVERY) {
                 out.send(&Message::List)?;
                 listed = Instant::now();
@@ -233,6 +303,7 @@ fn connect(address: &str) -> Result<TcpStream> {
 struct Link<'a> {
     state: &'a Arc<State>,
     store: &'a WeakStore,
+    scope: Scope,
     out: Arc<Out>,
     held: HashMap<String, Held>,
     /// Files whose sending failed, asked for again once their time comes.
@@ -255,18 +326,34 @@ struct Fetching {
 }
 
 impl Link<'_> {
-    /// Follows each file served that this node takes and does not follow yet.
-    fn follow_new(&mut self, served: &[String]) -> Result<()> {
-        let mut wanted: HashSet<&str> =
-            served.iter().map(String::as_str).filter(|name| self.state.takes(name)).collect();
-        if let Some(files) = &self.state.options.files {
-            wanted.extend(files.iter().map(String::as_str));
+    /// The writes of the files this link follows pass on through it.
+    fn upstream(&self) -> &Upstream {
+        match &self.scope {
+            Scope::From => &self.state.upstream,
+            Scope::Direct(direct) => &direct.upstream,
         }
-        let mut wanted: Vec<&str> = wanted.into_iter().filter(|name| plain_name(name)).collect();
+    }
+
+    /// Follows each file served that this link takes and does not follow yet:
+    /// over the link to `from`, those the node takes and no direct link
+    /// follows; over a direct link, those it was opened for.
+    fn follow_new(&mut self, served: &[String]) -> Result<()> {
+        let mut wanted: HashSet<String> = match &self.scope {
+            Scope::From => served
+                .iter()
+                .filter(|name| self.state.takes(name) && !self.state.follows_directly(name))
+                .cloned()
+                .collect(),
+            Scope::Direct(direct) => direct.files().into_iter().collect(),
+        };
+        if let (Scope::From, Some(files)) = (&self.scope, &self.state.options.files) {
+            wanted.extend(files.iter().filter(|name| !self.state.follows_directly(name)).cloned());
+        }
+        let mut wanted: Vec<String> = wanted.into_iter().filter(|name| plain_name(name)).collect();
         wanted.sort_unstable();
         for name in wanted {
-            if !self.held.contains_key(name) {
-                self.ask(name)?;
+            if !self.held.contains_key(&name) {
+                self.ask(&name)?;
             }
         }
         Ok(())
@@ -402,11 +489,13 @@ impl Link<'_> {
                 Ok(())
             }
             Message::Written { id, outcome, waits } => {
-                self.state.upstream.answered(id, Written { outcome, waits });
+                self.upstream().answered(id, Written { outcome, waits });
                 Ok(())
             }
             Message::Listed { files } => {
-                *lock(&self.state.served) = Some(files.clone());
+                if matches!(self.scope, Scope::From) {
+                    *lock(&self.state.served) = Some(files.clone());
+                }
                 self.follow_new(&files)
             }
             Message::Ping => Ok(()),

@@ -937,3 +937,32 @@ fn a_node_cut_off_from_the_catalog_s_home_writes_its_files_and_makes_no_new_one(
     assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a new file waits for the catalog: {refused}");
     eu.close().unwrap();
 }
+
+#[test]
+fn a_node_takes_a_file_its_from_does_not_serve_straight_from_its_home_and_writes_it_there() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let catalog = |serve: String| Node { serve: Some(serve), catalog: true, ..Node::default() };
+    let us = node_with(us_dir.path(), catalog("127.0.0.1:0".into()));
+    let us_address = bound(us.node().unwrap()).unwrap().to_string();
+    let eu_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![us_address.clone()], ..Node::default() };
+    let eu = node_with(eu_dir.path(), eu_node);
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('a european row')")).unwrap();
+
+    // america takes from no node: the catalog names europe, which it reaches straight
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    assert!(us.node().unwrap().copy("sql/users.db").is_some(), "america copies sql/users.db from europe");
+    eventually("america reads europe's row", || bodies(&us_db) == ["a european row"]);
+    us_db.exec(crate::sql!("insert into notes (body) values ('written in america')")).unwrap();
+    assert_eq!(bodies(&eu_db), ["a european row", "written in america"], "the write went to europe");
+    drop(us_db);
+    us.close().unwrap();
+
+    let us = node_with(us_dir.path(), catalog(us_address));
+    eu_db.exec(crate::sql!("insert into notes (body) values ('while america was away')")).unwrap();
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america's direct link is made again at its start", || bodies(&us_db).len() == 3);
+    drop(us_db);
+    us.close().unwrap();
+    eu.close().unwrap();
+}

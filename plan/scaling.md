@@ -131,7 +131,9 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   catalog, `--node-catalog` on one node, a node writes each file it made once
   its claim won, and needs no list; without one, a file its home never made,
   the home makes when a copy waits for it. `--node-address` says where other
-  nodes reach a node that listens on every interface.
+  nodes reach a node that listens on every interface; a node takes a file
+  whose home its `from` does not serve straight from that home, at the
+  address the catalog names.
 - kv's buckets and counters, encrypted ones sealed on the copy, sql's
   statements, search's documents, jobs' adds and schedules, blobs' files,
   rate limits, quotas and `once` pass from a copy to their home; a

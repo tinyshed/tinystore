@@ -357,8 +357,11 @@ in [scaling.md](scaling.md#order).
   the other claimant copying it. A node that serves nothing claims nothing, its file made by the node it takes
   from; a node claims at its start the files it wrote before, and logs a file the catalog names another home of
   as two homes'. While the catalog's home is out of reach, a node writes the files it is home of and makes no new
-  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line. Left: a link straight to a file's
-  home that `from` does not serve, a write routed past `from` the same way, and moving a home that is alive.
+  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line. A file whose home the catalog
+  names at an address that the nodes of `from` do not serve, a node takes over a link straight to that home,
+  one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
+  them, and the address is kept beside the copy's log so that the link is made again at the next start. Left:
+  moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
   Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the
