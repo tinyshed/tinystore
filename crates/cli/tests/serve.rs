@@ -137,7 +137,7 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
     let mut server = Command::new(BINARY)
         .args(["serve", "--dir"])
         .arg(dir.path())
-        .args(["--local", "--idle", "0ms", "--log"])
+        .args(["--local", "--idle", "0ms", "--log-file"])
         .arg(&log)
         .stderr(Stdio::null())
         .spawn()
@@ -277,6 +277,25 @@ fn a_mistake_in_the_tokens_leaves_no_files_behind() {
         .unwrap();
     assert_eq!(status.code(), Some(1));
     assert!(!store.exists(), "the store never opened");
+}
+
+#[test]
+fn status_finds_a_running_server_and_stop_stops_it_its_serve_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = Command::new(BINARY).arg("serve").arg(dir.path()).stderr(Stdio::null()).spawn().unwrap();
+    published(&dir.path().join("server").join("SERVE"));
+    let status = Command::new(BINARY).arg("status").arg(dir.path()).output().unwrap();
+    let said = String::from_utf8_lossy(&status.stdout);
+    assert!(status.status.success() && said.contains("served by tinystore"), "{said}");
+    let stop = Command::new(BINARY).arg("stop").arg(dir.path()).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&stop.stdout), String::from_utf8_lossy(&stop.stderr));
+    assert!(stop.status.success() && said.contains("stopped"), "{said}");
+    assert!(!dir.path().join("server").join("SERVE").exists(), "SERVE is gone once stop returns");
+    assert_eq!(wait(&mut server), 0);
+    let status = Command::new(BINARY).arg("status").arg(dir.path()).output().unwrap();
+    assert!(String::from_utf8_lossy(&status.stdout).contains("not served"));
+    let again = Command::new(BINARY).arg("stop").arg(dir.path()).output().unwrap();
+    assert_eq!(again.status.code(), Some(1), "no server to stop");
 }
 
 /// `SERVE` once the server has written it.

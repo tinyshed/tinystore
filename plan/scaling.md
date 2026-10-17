@@ -115,15 +115,20 @@ What phase 7 built so far runs as below; the names are drafts, as
 [Decided](#decided) says.
 
 ```sh
-tinystore serve ./us --node-listen 0.0.0.0:7444 --node-token-file token --node-insecure   # America, the home
-tinystore serve ./eu --from us:7444 --node-listen 0.0.0.0:7444 --node-token-file token --node-insecure
-tinystore serve ./ru --from eu:7444 --from us:7444 --node-token-file token --node-insecure
+tinystore serve ./us --node-listen 0.0.0.0:7444 --node-config node.toml                  # America, the home
+tinystore serve ./eu --from us:7444 --node-listen 0.0.0.0:7444 --node-config node.toml
+tinystore serve ./ru --from eu:7444 --from us:7444 --node-config node.toml
 ```
 
-A link beyond one machine takes TLS, `--node-tls-cert`, `--node-tls-key` and
-`--node-tls-roots` with the `replication-tls` feature, and the commands above
-say `--node-insecure` to send plain TCP instead; a link on loopback needs
-neither.
+```toml
+# node.toml: the rest of what a node is, the command line's book has every setting
+token-file = "token"
+insecure = true    # plain TCP beyond this machine; [tls] cert, key and roots for TLS
+```
+
+A link beyond one machine takes TLS, `[tls]` with `cert`, `key` and `roots`
+with the `replication-tls` feature, and the node config above says
+`insecure` to send plain TCP instead; a link on loopback needs neither.
 
 ```ts
 // a program in Russia, its store inside it, copying Europe's files
@@ -133,10 +138,10 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
 ```
 
 - A node copies every file the node it takes from serves but its own
-  `records.db` and `metrics.db`, or those `--node-files` names. With a
-  catalog, `--node-catalog` on one node, a node writes each file it made once
+  `records.db` and `metrics.db`, or those its config's `files` names. With a
+  catalog, `catalog = true` on one node, a node writes each file it made once
   its claim won, and needs no list; without one, a file its home never made,
-  the home makes when a copy waits for it. `--node-advertise` says where other
+  the home makes when a copy waits for it. `advertise` says where other
   nodes reach a node that listens on every interface; a node takes a file
   whose home its `from` does not serve straight from that home, at the
   address the catalog names.
@@ -145,14 +150,15 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   rate limits, quotas and `once` pass from a copy to their home; a
   transaction on a copy is refused: run it at the home.
 - Links are TCP with a token, or TLS with the `replication-tls` feature:
-  `--node-tls-cert` and `--node-tls-key` where a node serves, and
-  `--node-tls-roots` where one takes.
-- `--node-synchronous` makes the home answer a write once a node copying
+  `[tls]` `cert` and `key` where a node serves, and `roots` where one takes.
+- `synchronous = true` makes the home answer a write once a node copying
   its file holds it.
-- When America is gone for good: stop Europe, `tinystore promote ./eu`, start
-  it without `--from`; Russia goes on from it. With a catalog, the promoted
-  file's next epoch moves its route there when Europe starts. America comes back with
-  `tinystore demote ./us` and `--from eu:7444`.
+- When America is gone for good: stop Europe, `tinystore node promote ./eu
+  --from us:7444`, which asks America first and refuses while it still
+  serves the files, and start it without `--from`; Russia goes on from it.
+  With a catalog, the promoted file's next epoch moves its route there when
+  Europe starts. America comes back with `tinystore node demote ./us` and
+  `--from eu:7444`.
 
 ## An example: America, Europe, Russia
 
@@ -266,7 +272,7 @@ from one that never will.
 silence. A copy that guessed wrong and opened a writer while the old home
 lived would make a second home, and the file would split for good.
 
-- **In the first version a person decides**: `tinystore promote` on the
+- **In the first version a person decides**: `tinystore node promote` on the
   freshest copy, once the old home is known to be stopped.
 - **As an option, a witness outside the nodes decides**, a small process or
   a role of a node, and later a lease in object storage renewed by a
@@ -490,7 +496,7 @@ SDKs, which wait for the system's full bounds (the owner, 17 October):
 | 4. Links            | `from` and `serve` in the core, files chosen, copies of copies, reconnects, a fresh copy          | a node three links away holds the home's files; a cut link resumes from its position           |
 | 5. Writes           | writes passed to the home, read your writes, the queue of operations that commute, `unavailable`  | a get after a set sees it on any node; an operation sent twice counts once                     |
 | 6. Several homes    | the catalog, files homed on different nodes, routing, a move                                      | two nodes write their own files and copy each other's; a moved database loses no commit        |
-| 7. Promote          | epochs, `tinystore promote`, an old home back as a copy, the command line's view of links         | a promotion loses only the unshipped commits, counted; an old home cannot write again          |
+| 7. Promote          | epochs, `tinystore node promote`, an old home back as a copy, the command line's view of links    | a promotion loses only the unshipped commits, counted; an old home cannot write again          |
 | 8. Synchronous mode | a home answering once a chosen copy holds the commit                                              | losing the home's directory loses no write it answered                                         |
 
 After it: the judge and a home that moves by itself, whose gate is that no

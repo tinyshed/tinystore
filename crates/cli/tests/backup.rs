@@ -1,6 +1,6 @@
 //! `tinystore backup` and `tinystore restore` as a person runs them: a store's
 //! directory as one zip, the zip back into an empty directory, and a
-//! directory a program holds refused, saying where its backup goes.
+//! directory a program holds read beside it.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -44,12 +44,21 @@ fn backup_writes_a_zip_that_restore_takes_back_into_an_empty_directory() {
 }
 
 #[test]
-fn backup_of_a_directory_a_program_holds_says_where_its_backup_goes() {
-    let dir = tempfile::tempdir().unwrap();
-    let _held = Store::open(dir.path(), Options::default()).unwrap();
-    let refused = tinystore(&[&"backup", &dir.path(), &dir.path().join("backup.zip")]);
-    assert!(!refused.status.success());
-    assert!(said(&refused).contains("store.backup"), "{}", said(&refused));
-    let usage = tinystore(&[&"backup", &dir.path()]);
+fn backup_reads_beside_a_program_that_holds_the_directory() {
+    let dirs = tempfile::tempdir().unwrap();
+    let (data, zip, restored) =
+        (dirs.path().join("data"), dirs.path().join("backup.zip"), dirs.path().join("restored"));
+    let held = Store::open(&data, Options::default()).unwrap();
+    held.bucket::<String>("codes").open().unwrap().set("K7Q2", &"kept".to_owned()).unwrap();
+    let backed = tinystore(&[&"backup", &data, &zip]);
+    assert!(backed.status.success(), "{}", said(&backed));
+    held.bucket::<String>("codes").open().unwrap().set("K7Q3", &"after".to_owned()).unwrap();
+    let restore = tinystore(&[&"restore", &zip, &restored]);
+    assert!(restore.status.success(), "{}", said(&restore));
+    let back = Store::open(&restored, Options::default()).unwrap();
+    let codes = back.bucket::<String>("codes").open().unwrap();
+    assert_eq!(codes.get("K7Q2").unwrap().as_deref(), Some("kept"));
+    assert_eq!(codes.get("K7Q3").unwrap(), None, "written after the backup");
+    let usage = tinystore(&[&"backup", &data]);
     assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
 }

@@ -1,20 +1,24 @@
 //! `tinystore serve`'s arguments, as the SDKs start it:
 //!
 //! ```text
-//! tinystore serve --dir <dir> --local --log <dir>/server/serve.log [--idle 30000ms]   a sidecar
-//! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]            a private child
-//! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
-//! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key              its key kept apart from its data
+//! tinystore serve --dir <dir> --local --log-file <dir>/server/serve.log [--idle 30000ms]   a sidecar
+//! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]                 a private child
+//! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                           a person's server
+//! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key                   its key kept apart
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
-//! tinystore serve <dir> --node-listen 0.0.0.0:7444 --node-insecure [--node-token-file t]   a node other nodes copy
-//! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-files kv.db,sql/app.db]   a node that copies
+//! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-config node.toml]               a node other nodes copy
+//! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-config node.toml]            a node that copies
 //! ```
+//!
+//! Every flag is named in `help::SERVE`, which `serve --help` prints.
 
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tinystore::Durability;
 
+use crate::help;
+use crate::node_config::NodeConfig;
 use crate::remote::Address;
 
 /// How long a sidecar stays once its last client has gone, unless `--idle` says.
@@ -26,7 +30,10 @@ const REMOTE_MEMORY: u64 = 1 << 30;
 pub(crate) struct Serve {
     pub(crate) dir: PathBuf,
     pub(crate) transport: Transport,
+    /// Where its lines go as JSON as well, `--log-file`.
     pub(crate) log: Option<PathBuf>,
+    /// Only the banner, warnings and errors on the terminal.
+    pub(crate) quiet: bool,
     /// How long the server stays with no client; for ever when `None`.
     pub(crate) idle: Option<Duration>,
     /// Where a private server's test clock starts; the system's clock when `None`.
@@ -46,22 +53,22 @@ pub(crate) struct Serve {
     pub(crate) node: Option<Node>,
 }
 
-/// What `--node`, `--node-listen`, `--from`, `--node-files` and
-/// `--node-token-file` say of the node the store is.
+/// What `--node-listen`, `--from` and `--node-config` say of the node the
+/// store is.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Node {
     pub(crate) listen: Option<String>,
     pub(crate) from: Vec<String>,
-    pub(crate) files: Option<Vec<String>>,
-    pub(crate) token_file: Option<PathBuf>,
-    pub(crate) synchronous: bool,
-    pub(crate) synchronous_with: Vec<String>,
-    pub(crate) tls: Option<tinystore::replication::NodeTls>,
-    pub(crate) catalog: bool,
-    pub(crate) insecure: bool,
-    pub(crate) advertise: Option<String>,
-    pub(crate) failover: Option<String>,
-    pub(crate) witness: bool,
+    /// The file `--node-config` named, and what it holds.
+    pub(crate) config: Option<(PathBuf, NodeConfig)>,
+}
+
+impl Node {
+    /// The node's settings file, or its defaults when none was named.
+    pub(crate) fn settings(&self) -> &NodeConfig {
+        static NONE: std::sync::OnceLock<NodeConfig> = std::sync::OnceLock::new();
+        self.config.as_ref().map_or_else(|| NONE.get_or_init(NodeConfig::default), |(_, config)| config)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,46 +88,13 @@ pub(crate) enum Transport {
     Local { sidecar: bool },
 }
 
-/// Every flag `serve` takes, for a misspelt one's nearest.
-const FLAGS: [&str; 29] = [
-    "--node",
-    "--node-insecure",
-    "--node-failover",
-    "--node-witness",
-    "--node-synchronous-with",
-    "--node-catalog",
-    "--node-advertise",
-    "--node-tls-cert",
-    "--node-tls-key",
-    "--node-tls-roots",
-    "--node-synchronous",
-    "--node-listen",
-    "--from",
-    "--node-files",
-    "--node-token-file",
-    "--dir",
-    "--stdio",
-    "--local",
-    "--log",
-    "--idle",
-    "--clock",
-    "--listen",
-    "--tls-cert",
-    "--tls-key",
-    "--tokens",
-    "--memory",
-    "--keep-free",
-    "--encryption-key-file",
-    "--durability",
-];
-
 pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let mut dir = None;
-    let (mut stdio, mut local) = (false, false);
+    let (mut stdio, mut local, mut quiet) = (false, false, false);
     let (mut log, mut idle, mut clock) = (None, None, None);
     let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
     let (mut durability, mut keep_free, mut encryption_key_file) = (None, None, None);
-    let (mut node, mut node_flags) = (Node::default(), false);
+    let (mut node, mut node_config) = (Node::default(), None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -128,7 +102,8 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--dir" => dir = Some(PathBuf::from(value("--dir")?)),
             "--stdio" => stdio = true,
             "--local" => local = true,
-            "--log" => log = Some(PathBuf::from(value("--log")?)),
+            "--log-file" => log = Some(PathBuf::from(value("--log-file")?)),
+            "--quiet" => quiet = true,
             "--idle" => idle = Some(span(&value("--idle")?)?),
             "--clock" => clock = Some(time(&value("--clock")?)?),
             "--listen" => listen = Some(Address::parse(&value("--listen")?)?),
@@ -138,46 +113,14 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--memory" => memory = Some(size(&value("--memory")?)?),
             "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
             "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
-            "--node" => node_flags = true,
-            "--node-synchronous" => (node.synchronous, node_flags) = (true, true),
-            "--node-catalog" => (node.catalog, node_flags) = (true, true),
-            "--node-insecure" => (node.insecure, node_flags) = (true, true),
-            "--node-witness" => (node.witness, node_flags) = (true, true),
-            "--node-failover" => (node.failover, node_flags) = (Some(value("--node-failover")?), true),
-            "--node-synchronous-with" => {
-                node.synchronous_with.push(value("--node-synchronous-with")?);
-                node_flags = true;
-            }
-            "--node-advertise" => (node.advertise, node_flags) = (Some(value("--node-advertise")?), true),
-            "--node-tls-cert" => {
-                node.tls.get_or_insert_default().cert = Some(PathBuf::from(value("--node-tls-cert")?));
-                node_flags = true;
-            }
-            "--node-tls-key" => {
-                node.tls.get_or_insert_default().key = Some(PathBuf::from(value("--node-tls-key")?));
-                node_flags = true;
-            }
-            "--node-tls-roots" => {
-                node.tls.get_or_insert_default().roots = Some(PathBuf::from(value("--node-tls-roots")?));
-                node_flags = true;
-            }
-            "--node-listen" => (node.listen, node_flags) = (Some(value("--node-listen")?), true),
-            "--from" => {
-                node.from.push(value("--from")?);
-                node_flags = true;
-            }
-            "--node-files" => {
-                let files = value("--node-files")?.split(',').map(|file| file.trim().to_owned()).collect();
-                (node.files, node_flags) = (Some(files), true);
-            }
-            "--node-token-file" => {
-                (node.token_file, node_flags) = (Some(PathBuf::from(value("--node-token-file")?)), true)
-            }
+            "--node-listen" => node.listen = Some(value("--node-listen")?),
+            "--from" => node.from.push(value("--from")?),
+            "--node-config" => node_config = Some(PathBuf::from(value("--node-config")?)),
             "--durability" => {
                 let word = value("--durability")?;
                 durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
             }
-            flag if flag.starts_with("--") => return Err(format!("no flag {flag}{}", crate::meant(flag, &FLAGS))),
+            flag if flag.starts_with("--") => return Err(format!("no flag {flag}{}", crate::meant(flag, &flags()))),
             _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
             _ => return Err(format!("one directory, not {arg} too")),
         }
@@ -206,11 +149,52 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    if node.files.is_some() && node.from.is_empty() {
-        return Err("--node-files names what a node copies: --from".to_owned());
+    if let Some(file) = node_config {
+        node.config = Some((file.clone(), NodeConfig::read(&file)?));
     }
-    let node = node_flags.then_some(node);
-    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free, encryption_key_file, node })
+    let node = (node.listen.is_some() || !node.from.is_empty() || node.config.is_some()).then_some(node);
+    if let Some(node) = &node {
+        refuse_an_unreachable_catalog(node)?;
+    }
+    Ok(Serve {
+        dir,
+        transport,
+        log,
+        quiet,
+        idle,
+        clock,
+        remote,
+        memory,
+        durability,
+        keep_free,
+        encryption_key_file,
+        node,
+    })
+}
+
+/// Every flag `serve` takes, for a misspelt one's nearest.
+fn flags() -> Vec<&'static str> {
+    help::SERVE.flags.iter().map(|flag| flag.name).chain(["--dir"]).collect()
+}
+
+/// A node's settings that cannot work together: files copied from no node,
+/// and a catalog's home on every address that does not say which other nodes
+/// reach it at, which would tell them 0.0.0.0.
+fn refuse_an_unreachable_catalog(node: &Node) -> Result<(), String> {
+    let settings = node.settings();
+    let everywhere = node.listen.as_deref().is_some_and(|listen| {
+        let host = listen.rsplit_once(':').map_or(listen, |(host, _)| host);
+        matches!(host, "0.0.0.0" | "[::]" | "::")
+    });
+    if settings.files.is_some() && node.from.is_empty() {
+        return Err("files in the node's config names what a node copies: --from".to_owned());
+    }
+    if everywhere && settings.catalog && settings.advertise.is_none() {
+        return Err("a catalog's home listening on every address needs advertise in its node config: where other \
+                    nodes reach it"
+            .to_owned());
+    }
+    Ok(())
 }
 
 fn remote(
@@ -317,7 +301,8 @@ mod tests {
             "no flag --encryption-keyfile; did you mean --encryption-key-file?"
         );
         assert_eq!(serve(&args("d --verbose")).unwrap_err(), "no flag --verbose");
-        for flag in FLAGS {
+        assert_eq!(serve(&args("d --node-confg x")).unwrap_err(), "no flag --node-confg; did you mean --node-config?");
+        for flag in flags() {
             let refused = serve(&args(&format!("d {flag} 1"))).err().unwrap_or_default();
             assert!(!refused.starts_with("no flag"), "{flag}: {refused}");
         }
@@ -348,7 +333,7 @@ mod tests {
 
     #[test]
     fn a_sidecar_stays_thirty_seconds_unless_told() {
-        let sidecar = serve(&args("--dir d --local --log d/server/serve.log")).unwrap();
+        let sidecar = serve(&args("--dir d --local --log-file d/server/serve.log")).unwrap();
         assert_eq!(sidecar.transport, Transport::Local { sidecar: true });
         assert_eq!(sidecar.idle, Some(Duration::from_secs(30)));
         assert_eq!(serve(&args("--dir d --local --idle 1500ms")).unwrap().idle, Some(Duration::from_millis(1500)));
@@ -378,6 +363,23 @@ mod tests {
         assert!(serve(&args("--dir d --stdio --listen tcp://127.0.0.1:0 --tokens t")).is_err());
         let sized = serve(&args("d --listen tcp://127.0.0.1:0 --tokens t --memory 512MiB")).unwrap();
         assert_eq!(sized.memory, Some(512 << 20));
+    }
+
+    #[test]
+    fn a_node_is_its_flags_and_its_config_file() {
+        assert_eq!(serve(&args("d")).unwrap().node, None);
+        let node = serve(&args("d --node-listen 0.0.0.0:7444 --from eu:7444 --from us:7444")).unwrap().node.unwrap();
+        assert_eq!((node.listen.as_deref(), node.from.len()), (Some("0.0.0.0:7444"), 2));
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("node.toml");
+        std::fs::write(&config, "catalog = true\n").unwrap();
+        let refused = serve(&args(&format!("d --node-listen 0.0.0.0:7444 --node-config {}", config.display())));
+        assert!(refused.unwrap_err().contains("needs advertise"));
+        std::fs::write(&config, "catalog = true\nadvertise = \"eu:7444\"\n").unwrap();
+        let node = serve(&args(&format!("d --node-listen 0.0.0.0:7444 --node-config {}", config.display()))).unwrap();
+        assert!(node.node.unwrap().settings().catalog);
+        let alone = serve(&args(&format!("d --node-config {}", config.display()))).unwrap();
+        assert!(alone.node.is_some(), "a config alone makes the store a node");
     }
 
     #[test]

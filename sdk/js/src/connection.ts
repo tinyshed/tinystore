@@ -4,7 +4,7 @@
 // remote server.
 
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import manifest from '../package.json' with { type: 'json' }
@@ -218,8 +218,8 @@ export function sidecar(
 				return found.connection
 			}
 		}
-		const flags = [...idling, ...storeFlags(started)]
-		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log', log, ...flags]
+		const flags = [...idling, ...storeFlags(started, absolute)]
+		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log-file', log, ...flags]
 		return startSidecar(runtime, serve, log, command, stoppedInstance)
 	}
 }
@@ -235,17 +235,21 @@ export interface Started {
 	node?: NodeOptions | undefined
 }
 
-/** The flags of `tinystore serve` that say how its store opens. */
-function storeFlags(started: Started): string[] {
+/** The flags of `tinystore serve` that say how the store in `dir` opens. */
+function storeFlags(started: Started, dir: string): string[] {
 	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
 	const key = started.encryptionKeyFile
 	const keyed =
 		key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
-	return [...keyed, ...nodeFlags(started.node)]
+	return [...keyed, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
 }
 
-/** A node's options as `tinystore serve` takes them. */
-function nodeFlags(node: NodeOptions | undefined): string[] {
+/**
+ * A node's options as `tinystore serve` takes them: where it listens and the
+ * nodes it copies as flags, and the rest in a node config written to
+ * `config`, which the server reads at its start.
+ */
+function nodeFlags(node: NodeOptions | undefined, config: string): string[] {
 	if (node === undefined) {
 		return []
 	}
@@ -254,34 +258,39 @@ function nodeFlags(node: NodeOptions | undefined): string[] {
 			"a node's token reaches a server this process starts through a file: give tokenFile, or open embedded",
 		)
 	}
-	const flags = ['--node']
+	const flags: string[] = []
 	for (const from of node.from ?? []) {
 		flags.push('--from', from)
 	}
 	if (node.serve !== undefined) {
 		flags.push('--node-listen', node.serve)
 	}
+	// a JSON string or list of strings is TOML's too
+	const settings: string[] = []
 	if (node.files !== undefined) {
-		flags.push('--node-files', node.files.join(','))
+		settings.push(`files = ${JSON.stringify(node.files)}`)
 	}
 	if (node.tokenFile !== undefined) {
-		flags.push('--node-token-file', resolve(node.tokenFile))
+		settings.push(`token-file = ${JSON.stringify(resolve(node.tokenFile))}`)
 	}
 	if (node.synchronous === true) {
-		flags.push('--node-synchronous')
+		settings.push('synchronous = true')
 	}
-	for (const chosen of node.synchronousWith ?? []) {
-		flags.push('--node-synchronous-with', chosen)
+	if (node.synchronousWith !== undefined && node.synchronousWith.length > 0) {
+		settings.push(`synchronous-with = ${JSON.stringify(node.synchronousWith)}`)
 	}
 	if (node.insecure === true) {
-		flags.push('--node-insecure')
+		settings.push('insecure = true')
 	}
 	if (node.catalog === true) {
-		flags.push('--node-catalog')
+		settings.push('catalog = true')
 	}
 	if (node.advertise !== undefined) {
-		flags.push('--node-advertise', node.advertise)
+		settings.push(`advertise = ${JSON.stringify(node.advertise)}`)
 	}
+	mkdirSync(join(config, '..'), { recursive: true })
+	writeFileSync(config, `${settings.join('\n')}\n`)
+	flags.push('--node-config', config)
 	return flags
 }
 
@@ -481,7 +490,7 @@ export function privateChild(
 			resolve(dir),
 			'--stdio',
 			...clocked,
-			...storeFlags(started),
+			...storeFlags(started, resolve(dir)),
 		]
 		const child = runtime.spawnPrivate(argv, {
 			data: bytes => session?.receive(bytes),

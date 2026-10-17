@@ -20,7 +20,7 @@ async with tinystore.open("./data") as store:
 ```text
 1. read data/server/SERVE           → the sidecar's address, if one runs
 2. connect and check its proof      → it really serves this directory
-3. if anything fails, start one:    tinystore serve --dir ./data --local --log ./data/server/serve.log
+3. if anything fails, start one:    tinystore serve --dir ./data --local --log-file ./data/server/serve.log
 4. connect to the new sidecar
 ```
 

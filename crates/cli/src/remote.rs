@@ -51,7 +51,7 @@ impl Tokens {
         Tokens::parse(&text).map_err(|refused| format!("{}: {refused}", path.display()))
     }
 
-    fn parse(text: &str) -> Result<Tokens, String> {
+    pub(crate) fn parse(text: &str) -> Result<Tokens, String> {
         let mut known = Vec::new();
         for (number, line) in text.lines().enumerate() {
             let line = line.trim();

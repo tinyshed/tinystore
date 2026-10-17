@@ -10,15 +10,14 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use nu_ansi_term::{Color, Style};
-
-use tinystore::pipe::{Connect, Stop};
+use tinystore::pipe::{Connect, Greeted, Stop};
 use tinystore::{Clock, ErrorKind, Options, Store, TestClock};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 
 use crate::args::{self, Transport};
+use crate::banner::{self, Shown};
 use crate::lines::{self, Lines, Terminal};
 use crate::{connection, local, remote};
 
@@ -38,30 +37,23 @@ const FIRST_CLIENT: Duration = Duration::from_secs(15);
 #[cfg(unix)]
 const AGAIN: Duration = Duration::from_millis(10);
 
-/// The node the flags make the store, its token read from its file.
+/// The node the flags and the node's config make the store, its token read
+/// from its file.
 fn node_of(node: &args::Node) -> Result<tinystore::replication::Node, String> {
-    let token = match &node.token_file {
-        Some(file) => Some(
-            std::fs::read_to_string(file)
-                .map_err(|error| format!("--node-token-file {}: {error}", file.display()))?
-                .trim()
-                .to_owned(),
-        ),
-        None => None,
-    };
+    let settings = node.settings();
     Ok(tinystore::replication::Node {
         from: node.from.clone(),
         serve: node.listen.clone(),
-        files: node.files.clone(),
-        token,
-        synchronous: node.synchronous,
-        synchronous_with: node.synchronous_with.clone(),
-        tls: node.tls.clone(),
-        catalog: node.catalog,
-        advertise: node.advertise.clone(),
-        failover: node.failover.clone(),
-        witness: node.witness,
-        insecure: node.insecure,
+        files: settings.files.clone(),
+        token: settings.token()?,
+        synchronous: settings.synchronous,
+        synchronous_with: settings.synchronous_with.clone(),
+        tls: settings.node_tls(),
+        catalog: settings.catalog,
+        advertise: settings.advertise.clone(),
+        failover: settings.failover.clone(),
+        witness: false,
+        insecure: settings.insecure,
     })
 }
 
@@ -74,6 +66,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let shown = Shown::of(&serve);
     // a remote server's tokens and certificate are read first, so that a
     // mistake in them leaves no files behind
     let remote = match serve.remote.map(remote::Ready::of).transpose() {
@@ -83,7 +76,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let console = match Console::open(serve.log.as_deref()) {
+    let console = match Console::open(serve.log.as_deref(), serve.quiet) {
         Ok(console) => console,
         Err(error) => {
             eprintln!("tinystore serve: its log: {error}");
@@ -119,15 +112,19 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             match serve.transport {
                 Transport::Stdio => stdio(&store, clock).await,
                 Transport::Local { sidecar } => {
-                    let listening = Listening { sidecar, idle: serve.idle, console, started };
+                    let listening = Listening { sidecar, idle: serve.idle, console, started, shown };
                     listen(&store, listening, remote).await
                 }
             }
         })
     });
+    let closing = Instant::now();
     let closed = store.close();
     let failed = match (served, closed) {
-        (Ok(()), Ok(())) => return ExitCode::SUCCESS,
+        (Ok(()), Ok(())) => {
+            tracing::info!(target: "tinystore", took = %format!("{:.1}s", closing.elapsed().as_secs_f64()), "stopped");
+            return ExitCode::SUCCESS;
+        }
         (Err(error), _) => error.to_string(),
         (_, Err(error)) => format!("the store did not close cleanly: {error}"),
     };
@@ -155,6 +152,7 @@ async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
 /// How a local server runs: whether its clients started it, how long it
 /// stays with none, and where it speaks.
 struct Listening {
+    shown: Shown,
     sidecar: bool,
     idle: Option<Duration>,
     console: Console,
@@ -165,7 +163,7 @@ struct Listening {
 /// hears Ctrl+C: on a socket or a named pipe that `SERVE` names, and on TCP
 /// when `--listen` says.
 async fn listen(store: &Store, listening: Listening, remote: Option<remote::Ready>) -> io::Result<()> {
-    let Listening { sidecar, idle, console, started } = listening;
+    let Listening { shown, sidecar, idle, console, started } = listening;
     let server = local::server_dir(store.dir())?;
     local::unpublish(&server)?;
     let (listener, endpoint) = Listener::bind(store.dir(), &server)?;
@@ -183,7 +181,7 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
     let stop = stop_by(closing.clone());
     let connect = Connect { prove: Some(serve.prove()), stop: Some(Arc::clone(&stop)), ..Connect::default() };
     local::publish(&server, &serve)?;
-    console.serving(store.dir(), &serve.endpoints, sidecar, started.elapsed());
+    console.serving(&shown, store.dir(), &serve.endpoints, sidecar, started.elapsed());
     let (clients, counted) = watch::channel(0usize);
     let clients = Arc::new(clients);
     let accepted = listener.accept_all(store, &connect, &closed, &clients);
@@ -201,7 +199,8 @@ async fn listen(store: &Store, listening: Listening, remote: Option<remote::Read
         () = interrupted() => "interrupted",
         () = idled(counted.clone(), idle) => "idle",
     };
-    tracing::info!(target: "tinystore", why, "stopping");
+    let connected = *counted.borrow();
+    tracing::info!(target: "tinystore", why, clients = connected, "stopping");
     let _ = closing.send(true);
     left(counted).await;
     local::unpublish(&server)?;
@@ -222,7 +221,8 @@ async fn accept_remote(
     loop {
         let (stream, _) = listener.accept().await?;
         let _ = stream.set_nodelay(true);
-        let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
+        let visit = served(clients);
+        let (store, connect, closed) = (store.clone(), visit.connect(connect), closed.clone());
         let tls = tls.clone();
         tokio::spawn(async move {
             match tls {
@@ -239,7 +239,7 @@ async fn accept_remote(
                     Err(_) => tracing::debug!(target: "tinystore", "a TLS handshake took too long"),
                 },
             }
-            drop(counted);
+            drop(visit);
         });
     }
 }
@@ -255,7 +255,7 @@ async fn stopped(mut closed: watch::Receiver<bool>) {
     let _ = closed.wait_for(|closing| *closing).await;
 }
 
-async fn interrupted() {
+pub(crate) async fn interrupted() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -300,16 +300,41 @@ async fn left(mut clients: watch::Receiver<usize>) {
     let _ = tokio::time::timeout(LEAVING, clients.wait_for(|clients| *clients == 0)).await;
 }
 
+/// A client while it is served: counted in, and said once its HELLO named
+/// it, and again when it leaves.
+struct Visit {
+    clients: Arc<watch::Sender<usize>>,
+    client: Arc<Mutex<Option<String>>>,
+}
+
 /// Counts a client in while it is served.
-fn served(clients: &Arc<watch::Sender<usize>>) -> impl Drop + Send + 'static {
-    struct Counted(Arc<watch::Sender<usize>>);
-    impl Drop for Counted {
-        fn drop(&mut self) {
-            self.0.send_modify(|clients| *clients -= 1);
+fn served(clients: &Arc<watch::Sender<usize>>) -> Visit {
+    clients.send_modify(|clients| *clients += 1);
+    Visit { clients: Arc::clone(clients), client: Arc::default() }
+}
+
+impl Visit {
+    /// The connection's options, with what says who came.
+    fn connect(&self, connect: &Connect) -> Connect {
+        let (clients, client) = (Arc::clone(&self.clients), Arc::clone(&self.client));
+        let greeted: Greeted = Arc::new(move |name: &str| {
+            *client.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(name.to_owned());
+            let connected = *clients.borrow();
+            tracing::info!(target: "tinystore", client = name, clients = connected, "a client connected");
+        });
+        Connect { greeted: Some(greeted), ..connect.clone() }
+    }
+}
+
+impl Drop for Visit {
+    fn drop(&mut self) {
+        self.clients.send_modify(|clients| *clients -= 1);
+        let client = self.client.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some(client) = client {
+            let connected = *self.clients.borrow();
+            tracing::info!(target: "tinystore", client, clients = connected, "a client left");
         }
     }
-    clients.send_modify(|clients| *clients += 1);
-    Counted(Arc::clone(clients))
 }
 
 #[cfg(unix)]
@@ -350,11 +375,12 @@ impl Listener {
                     continue;
                 }
             };
-            let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
+            let visit = served(clients);
+            let (store, connect, closed) = (store.clone(), visit.connect(connect), closed.clone());
             tokio::spawn(async move {
                 let (reader, writer) = stream.into_split();
                 connection::serve(reader, writer, &store, connect, closed).await;
-                drop(counted);
+                drop(visit);
             });
         }
     }
@@ -408,11 +434,12 @@ impl Listener {
             }
             // the next instance is made before this one is served, so that a client never finds none listening
             waiting = Some(self.next_instance().await?);
-            let (store, connect, closed, counted) = (store.clone(), connect.clone(), closed.clone(), served(clients));
+            let visit = served(clients);
+            let (store, connect, closed) = (store.clone(), visit.connect(connect), closed.clone());
             tokio::spawn(async move {
                 let (reader, writer) = tokio::io::split(pipe);
                 connection::serve(reader, writer, &store, connect, closed).await;
-                drop(counted);
+                drop(visit);
             });
         }
     }
@@ -435,90 +462,76 @@ impl Listener {
     fn remove(&self) {}
 }
 
-/// Where the server speaks: its log, a file's or stderr's, and the terminal
-/// a person may read on stderr.
+/// Where the server speaks: stderr, a person's short lines on a terminal and
+/// JSON anywhere else, and a file of JSON lines when `--log-file` names one.
+/// Never stdout, which a private child's frames travel on.
 #[derive(Clone, Copy)]
-struct Console {
+pub(crate) struct Console {
     terminal: Terminal,
     to_file: bool,
 }
 
 impl Console {
-    /// Logs to `file`, appended and plain, or to stderr, quietly coloured when
-    /// a person reads it: never stdout, which a private child's frames travel on.
-    fn open(file: Option<&Path>) -> io::Result<Console> {
+    pub(crate) fn open(file: Option<&Path>, quiet: bool) -> io::Result<Console> {
+        use tracing_subscriber::Layer as _;
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+
         let terminal = Terminal::of_stderr();
         let level = lines::level();
-        match file {
+        let file = match file {
             Some(path) => {
                 // a sidecar logs into <dir>/server/, which may not be there yet
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let file = OpenOptions::new().create(true).append(true).open(path)?;
-                let lines = Lines { colours: false, person: false };
-                tracing_subscriber::fmt()
-                    .event_format(lines)
-                    .with_max_level(level)
-                    .with_writer(Mutex::new(file))
-                    .init();
+                Some(OpenOptions::new().create(true).append(true).open(path)?)
             }
-            None => {
-                let lines = Lines { colours: terminal.colours(), person: terminal.terminal };
-                tracing_subscriber::fmt().event_format(lines).with_max_level(level).with_writer(io::stderr).init();
-            }
-        }
-        Ok(Console { terminal, to_file: file.is_some() })
+            None => None,
+        };
+        let to_file = file.is_some();
+        // a sidecar's stderr goes nowhere once its lines go to a file
+        let on_stderr = terminal.terminal || !to_file;
+        let shown = if quiet { level.min(tracing::level_filters::LevelFilter::WARN) } else { level };
+        let stderr = on_stderr.then(|| {
+            let lines = Lines { colours: terminal.colours(), person: terminal.terminal };
+            tracing_subscriber::fmt::layer().event_format(lines).with_writer(io::stderr).with_filter(shown)
+        });
+        let kept = file.map(|file| {
+            let lines = Lines { colours: false, person: false };
+            tracing_subscriber::fmt::layer().event_format(lines).with_writer(Mutex::new(file)).with_filter(level)
+        });
+        tracing_subscriber::registry().with(stderr).with(kept).init();
+        Ok(Console { terminal, to_file })
+    }
+
+    /// Whether a person reads stderr at a terminal.
+    pub(crate) fn person(self) -> bool {
+        self.terminal.terminal
+    }
+
+    pub(crate) fn colours(self) -> bool {
+        self.terminal.colours()
     }
 
     /// Says why the server failed: in its log, and on stderr too when the log
     /// is a file, so that whoever started it sees it.
     fn fail(self, message: &str) {
         tracing::error!(target: "tinystore", "{message}");
-        if self.to_file {
+        if self.to_file && !self.terminal.terminal {
             eprintln!("tinystore serve: {message}");
         }
     }
 
-    /// Shows a person who started a server in a terminal where it listens,
-    /// as a framework's dev server does; a log gets the same as a line.
-    ///
-    /// ```text
-    ///   tinystore 0.1.0  ready in 14 ms
-    ///
-    ///   ➜  store   /srv/data
-    ///   ➜  local   unix:///srv/data/server/tinystore.sock
-    ///   ➜  remote  tls://0.0.0.0:7443
-    /// ```
-    fn serving(self, store: &Path, endpoints: &[String], sidecar: bool, ready: Duration) {
+    /// Shows a person who started a server in a terminal what it serves and
+    /// how to reach it; a log gets the same as a line.
+    fn serving(self, shown: &Shown, store: &Path, endpoints: &[String], sidecar: bool, ready: Duration) {
         let banner = self.terminal.terminal && !sidecar;
         if !banner || self.to_file {
-            tracing::info!(target: "tinystore", dir = %store.display(), endpoints = ?endpoints, "serving");
+            tracing::info!(target: "tinystore", dir = %store.display(), endpoints = %endpoints.join(" "), "serving");
         }
         if banner {
-            eprint!("{}", banner_of(self.terminal.colours(), store, endpoints, ready));
+            eprint!("{}", banner::text(self.terminal.colours(), shown, store, endpoints, ready));
         }
     }
-}
-
-fn banner_of(colours: bool, store: &Path, endpoints: &[String], ready: Duration) -> String {
-    let paint = |style: Style, text: &str| lines::paint(colours, style, text);
-    let (bold, dim, arrow, address) =
-        (Style::new().bold(), Style::new().dimmed(), Color::Green.normal(), Color::Cyan.normal());
-    let mut banner = format!(
-        "\n  {} {}  {} {}\n\n",
-        paint(bold, "tinystore"),
-        paint(dim, env!("CARGO_PKG_VERSION")),
-        paint(dim, "ready in"),
-        paint(bold, &format!("{} ms", ready.as_millis())),
-    );
-    let mut row = |label: &str, value: String| {
-        banner.push_str(&format!("  {}  {}  {value}\n", paint(arrow, "➜"), paint(dim, &format!("{label:<6}"))));
-    };
-    row("store", store.display().to_string());
-    for (at, endpoint) in endpoints.iter().enumerate() {
-        row(if at == 0 { "local" } else { "remote" }, paint(address, endpoint));
-    }
-    banner.push('\n');
-    banner
 }

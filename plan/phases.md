@@ -210,7 +210,7 @@ that ran clean.
 
 ## 4. Backup, the command line, the release
 
-- [ ] Backup and restore, to their book ([api/backup.md](api/backup.md)); a recovery tool's `openBeside`. A backup
+- [x] Backup and restore, to their book ([api/backup.md](api/backup.md)); a recovery tool's `openBeside`. A backup
   leaves the store's encryption key out unless told to take it, and says so when the store holds encrypted buckets,
   since their values open with no other key.
   Built, slice 1: the Rust core, each engine's snapshot while it keeps working, `vacuum into` on a connection of its
@@ -219,9 +219,20 @@ that ran clean.
   and the key only when asked for, and `restore` into an empty directory, every byte checked or nothing left.
   Built, slice 2: `backup.write`, the zip in pieces within the client's credit and what it holds after them, for an
   admin's connection; the Bun SDK's `store.backup(path, { files, encryptionKey })` through each way a store is
-  reached; `tinystore backup` of a directory no server holds and `tinystore restore`. Left: `openBeside`, and a
-  backup through a running server from the command line, with its client.
-- [ ] `tinystore` serve, status, logs, mcp, backup, restore, migrate, schema.
+  reached; `tinystore backup` of a directory no server holds and `tinystore restore`.
+  Built, slice 3: `Store::open_beside`, a store read beside the process that holds it, no lock taken, no
+  background work, nothing written or checkpointed, a write refused and a file it does not hold `NotFound`; and
+  `tinystore backup` beside a running server or program through it.
+- [x] `tinystore` serve, status, logs, mcp, backup, restore, migrate, schema, to the command line's book
+  ([api/cli.md](api/cli.md)), proposed and reviewed by newcomers on 18 October.
+  Built: help grouped by what a person does, a command's own help with its flags and examples, read from the
+  table the parser reads, a mistake one line and the help's name, exit 2; `serve`'s banner, `--node-config` for a
+  node's rarer settings in place of fourteen `--node-*` flags, `--log-file` of JSON lines, `--quiet`, a person's
+  terminal naming the known events by a word and a client's coming and going; `status`, `logs` with `-f`, `kv`,
+  `sql`, `schema` and `search list` beside a running server; `sql --write` and `migrate` on a directory no one
+  holds; `stop` through `server.stop`; `token new`; `mcp` with tools that only read; `node status`, `node
+  promote`, which asks the nodes `--from` names and refuses while one still serves a file, and `node demote`;
+  `witness`.
 - [ ] Self-metrics.
 - [ ] The thin Go SDK on cgo and a sidecar, under the root module path.
 - [ ] Actions builds the libraries, executables, npm packages, wheels and Go modules for seven targets.
@@ -317,11 +328,11 @@ in [scaling.md](scaling.md#order).
   one is dropped after 30 seconds, pings every five keeping it; a token compared in constant time. A file a node
   copies opens once its copy is whole, 30 seconds at most, and with no link reads the copy it holds.
   What follows a link's hello and welcome goes through one zstd stream each way, a 4 MiB window, each send
-  flushed. `tinystore serve` takes `--node`, `--node-listen`, `--from`, `--node-files` and `--node-token-file`; the Bun
+  flushed. `tinystore serve` takes `--node-listen`, `--from` and `--node-config`, a file of `files`, `token-file` and the rest; the Bun
   SDK's `open(dir, { node: { from, serve, files, token } })` makes a store in the program's own process a node
-  through the pipe's options, and a server it starts through those flags. With the `replication-tls` feature, off
-  unless asked, a link goes through TLS, rustls with ring's cryptography: `Node::tls` and `--node-tls-cert`,
-  `--node-tls-key` and `--node-tls-roots`, the follower checking its upstream's certificate against the roots
+  through the pipe's options, and a server it starts through those flags and a node config it writes. With the `replication-tls` feature, off
+  unless asked, a link goes through TLS, rustls with ring's cryptography: `Node::tls` and a node config's `[tls]`
+  `cert`, `key` and `roots`, the follower checking its upstream's certificate against the roots
   it trusts, the token still what admits it. A file a node begins to serve, a log's first entry or a copy become
   whole, is told at once to the nodes linked to it, which then ask for it.
 - [x] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
@@ -362,7 +373,7 @@ in [scaling.md](scaling.md#order).
   the other claimant copying it. A node that serves nothing claims nothing, its file made by the node it takes
   from; a node claims at its start the files it wrote before, and logs a file the catalog names another home of
   as two homes'. While the catalog's home is out of reach, a node writes the files it is home of and makes no new
-  one, `Unavailable`. `--node-catalog` and `--node-advertise` in the command line, and the Bun SDK's `node.catalog`
+  one, `Unavailable`. `catalog` and `advertise` in a node's config, and the Bun SDK's `node.catalog`
   and `node.advertise`. A file whose home the catalog
   names at an address that the nodes of `from` do not serve, a node takes over a link straight to that home,
   one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
@@ -378,13 +389,13 @@ in [scaling.md](scaling.md#order).
   engines that hold it open, which ask it at each turn of their maintenance; a move that does not finish within
   a minute leaves the old home writing again, and one that a node stopped in the middle of is a person's to
   settle with `promote`.
-- [x] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
-  Built: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
+- [x] Promote: epochs, `tinystore node promote`, an old home back as a copy, the command line's view of the links.
+  Built: `tinystore node promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the
   next epoch, so that the nodes behind it go on from where they stand once their `from` reaches it, and one that
   holds an entry of the old epoch it never had conflicts and takes a snapshot. A node with `from` writes the files
   whose log is its own. A snapshot is put together beside the copy it replaces, which its readers read until it
-  is whole, and a node at the point its source stands at takes none. `tinystore demote` and `replication::demote`
+  is whole, and a node at the point its source stands at takes none. `tinystore node demote` and `replication::demote`
   make a stopped old home's files copies again, its log's last point said and logged, and it takes each from its
   new home once it starts with `from` reaching it. A node that applied an epoch of a file takes no snapshot of it
   from a node holding an older one, an old home come back without its demotion: that node refuses it, the link
@@ -392,7 +403,7 @@ in [scaling.md](scaling.md#order).
   logs the commits a node held of the old home past the point its promotion went on from, which that node loses
   with the snapshot it takes. An old home learns of the later epoch from such a node asking it, or at its start
   from the catalog's home, whose answer to its claim names the promoted copy: it keeps the epoch in `fenced`
-  beside its log and refuses every write of the file, `Conflict`, across restarts, until `tinystore demote` makes
+  beside its log and refuses every write of the file, `Conflict`, across restarts, until `tinystore node demote` makes
   it a copy; an old home no node of the later epoch reaches yet writes on, its commits reaching none of them. A
   migration that has nothing to apply and a bucket's name made before are read, so that a fenced home still
   opens and reads its files. A snapshot taken again while engines read the copy closes their readers, holding
@@ -402,11 +413,11 @@ in [scaling.md](scaling.md#order).
   nodes taking from it with the entry each holds of each file, and removes them when it stops, and
   `replication::links` reads them and the command prints them, each follower's distance behind the log.
 - [x] The synchronous mode: a home answering once a chosen copy holds the commit.
-  Built: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
+  Built: `Node { synchronous: true }`, a node config's `synchronous` and the SDK's `node.synchronous` make each
   commit of a file the node writes wait, the writer held, until a node copying it says it holds the entry, so
   that the commits queued meanwhile share the next and its wait; a follower says what each copy holds after each
   turn of reading. A follower says its id and address in its hello, so that each node's hold is its own, and
-  `Node::synchronous_with` and `--node-synchronous-with` name the nodes, by address or id, a commit waits for one
+  `Node::synchronous_with` and `synchronous-with` name the nodes, by address or id, a commit waits for one
   of; any node copying the file when none. A commit none of them held in five seconds, or made while none of them
   follows, answers all the same, its write in the file already: it is counted, said in the log once an outage,
   and the count is in `log/links` and `tinystore node status`; the Bun SDK's `node.synchronousWith`.
@@ -420,7 +431,7 @@ shipped, counted, and the old home cannot write again.
 - [ ] A home that moves by itself, a witness outside the nodes deciding.
   Built so far, a draft: `Node::witness` makes a node a witness, which keeps each file's lease, its holder, epoch
   and the copies a synchronous home waits for kept durably in `log/witness` before it answers a grant;
-  `Node::failover`, `--node-failover` and `--node-witness` name a node's witness. A judged node asks for all its leases in
+  `Node::failover` and a node config's `failover` name a node's witness, and `tinystore witness` runs one. A judged node asks for all its leases in
   one message a second. A home's lease lasts five seconds from when its renewal reached the witness, and its log
   refuses the file's writes, `Unavailable`, past what it keeps of the lease by its own clock, short of the witness's
   by a margin of a second and a half, whatever its link does meanwhile, a write waiting three seconds at most for a

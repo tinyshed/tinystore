@@ -32,9 +32,19 @@ const PASSWORD = 'hunter2-the-password'
  * holds a value.
  */
 function shown(dir: string, text: string): boolean {
-	return readdirSync(dir, { withFileTypes: true, recursive: true })
-		.filter(entry => entry.isFile() && entry.name !== 'LOCK' && !entry.name.endsWith('-shm'))
-		.some(entry => readFileSync(join(entry.parentPath, entry.name)).includes(text))
+	// a server removes SERVE before it closes its store, whose WAL may go
+	// between the listing and its read: the files are read again until none goes
+	for (let tries = 0; ; tries++) {
+		try {
+			return readdirSync(dir, { withFileTypes: true, recursive: true })
+				.filter(entry => entry.isFile() && entry.name !== 'LOCK' && !entry.name.endsWith('-shm'))
+				.some(entry => readFileSync(join(entry.parentPath, entry.name)).includes(text))
+		} catch (err) {
+			if (tries >= 50 || (err as NodeJS.ErrnoException).code !== 'ENOENT') {
+				throw err
+			}
+		}
+	}
 }
 
 for (const way of opens) {

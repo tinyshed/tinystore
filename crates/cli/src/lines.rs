@@ -1,10 +1,16 @@
 //! How the server's log lines read: short and quietly coloured in a person's
-//! terminal, whole and plain in a file or a pipe, one line an event.
+//! terminal, one JSON object a line in a file or a pipe, one line an event.
 //!
 //! ```text
-//! terminal  14:31:09 info  serving dir=/srv/data
-//! file      2026-10-09T14:31:09.123Z info  serving dir=/srv/data
+//! terminal  11:02:11  linked     us.internal:7444
+//!           11:02:14  client     bun 1.4 · 1 connected
+//! file      {"time":"2026-10-18T11:02:11.123Z","level":"INFO","stream":"tinystore",
+//!            "msg":"a node is linked to the node it copies","from":"us.internal:7444"}     one line
 //! ```
+//!
+//! A person's terminal names a known event by a word, `LABELS`, and shows
+//! the fields that matter; any other line is its level, its message and its
+//! fields, as the file has them.
 
 use std::fmt::{self, Write as _};
 use std::io::{self, IsTerminal};
@@ -15,7 +21,7 @@ use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
-use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
 use tracing_subscriber::registry::LookupSpan;
 
 /// Whether a terminal's lines are coloured, by the conventions every tool
@@ -32,18 +38,26 @@ pub(crate) struct Terminal {
     no_color: bool,
     force_color: bool,
     dumb: bool,
-    /// Whether stderr is a terminal a person reads.
+    /// Whether the stream is a terminal a person reads.
     pub(crate) terminal: bool,
 }
 
 impl Terminal {
     pub(crate) fn of_stderr() -> Terminal {
+        Self::of(io::stderr().is_terminal())
+    }
+
+    pub(crate) fn of_stdout() -> Terminal {
+        Self::of(io::stdout().is_terminal())
+    }
+
+    fn of(terminal: bool) -> Terminal {
         let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty() && value != "0");
         Terminal {
             no_color: set("NO_COLOR"),
             force_color: set("FORCE_COLOR") || set("CLICOLOR_FORCE"),
             dumb: std::env::var_os("TERM").is_some_and(|term| term == "dumb"),
-            terminal: io::stderr().is_terminal(),
+            terminal,
         }
     }
 
@@ -79,11 +93,32 @@ fn level_named(name: Option<&str>) -> LevelFilter {
     }
 }
 
-/// A log line's format: a person's terminal's, or a file's.
+/// The events a person's terminal names by a word: an event's message, its
+/// word, and what follows it, each `{field}` its value and a part between
+/// ` · ` left out when a field it names is missing. A word of `""` is the
+/// event's level.
+pub(crate) const LABELS: [(&str, &str, &str); 14] = [
+    ("a client connected", "client", "{client} · {clients} connected"),
+    ("a client left", "client", "left · {client} · {clients} connected"),
+    ("a node serves its files", "node", "listening on {address}"),
+    ("a node is linked to the node it copies", "linked", "{from}"),
+    ("a node holds a whole copy of a file", "copied", "{file} · caught up"),
+    ("a node's link to the node it copies", "", "{from} · {error}"),
+    ("a copy starts again from a snapshot", "", "{file} starts again from a snapshot · {error}"),
+    ("a file's home moved to this node", "home", "{file} · epoch {epoch}"),
+    ("a node handed a file's home over, and copies it", "handed", "{file} to {to}"),
+    ("a copy took a file over, its lease granted", "took over", "{file} · epoch {epoch}"),
+    ("a witness granted a file's lease", "lease", "{file} to {holder} · epoch {epoch}"),
+    ("a node's link to its witness", "", "witness {witness} · {error}"),
+    ("stopping", "stopping", "{why} · {clients} clients"),
+    ("stopped", "stopped", "in {took}"),
+];
+
+/// A log line's format: a person's terminal's, or a file's JSON.
 pub(crate) struct Lines {
     pub(crate) colours: bool,
-    /// Local time to the second, as a person reads a clock; a file's lines
-    /// carry UTC to the millisecond.
+    /// Local time to the second and the words of `LABELS`, as a person reads
+    /// them; otherwise one JSON object, its time UTC to the millisecond.
     pub(crate) person: bool,
 }
 
@@ -92,24 +127,106 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
 {
-    fn format_event(&self, _: &FmtContext<'_, S, N>, mut writer: Writer<'_>, event: &Event<'_>) -> fmt::Result {
+    fn format_event(&self, context: &FmtContext<'_, S, N>, mut writer: Writer<'_>, event: &Event<'_>) -> fmt::Result {
         let mut fields = Fields::default();
         event.record(&mut fields);
         let level = *event.metadata().level();
-        let time = if self.person { Zoned::now().strftime("%H:%M:%S").to_string() } else { utc(Timestamp::now()) };
-        let mut line = String::new();
-        let _ = write!(
-            line,
-            "{} {} {}",
-            paint(self.colours, dim(), time),
-            paint(self.colours, shade(level), name(level)),
-            fields.message
-        );
-        for (key, value) in fields.named {
-            let _ = write!(line, " {}{value}", paint(self.colours, dim(), format!("{key}=")));
+        if self.person {
+            return writeln!(writer, "{}", self.person_line(level, &fields));
         }
-        writeln!(writer, "{line}")
+        let mut spans = Vec::new();
+        if let Some(scope) = context.event_scope() {
+            for span in scope.from_root() {
+                if let Some(formatted) = span.extensions().get::<FormattedFields<N>>() {
+                    spans.extend(logfmt_pairs(formatted.as_str()));
+                }
+            }
+        }
+        writeln!(writer, "{}", json_line(Timestamp::now(), level, &fields, &spans))
     }
+}
+
+impl Lines {
+    /// `11:02:11  linked     us.internal:7444`, or the level, message and
+    /// fields of an event `LABELS` does not name.
+    fn person_line(&self, level: Level, fields: &Fields) -> String {
+        let paint = |style: Style, text: &str| paint(self.colours, style, text);
+        let time = Zoned::now().strftime("%H:%M:%S").to_string();
+        let labelled = LABELS.iter().find(|(message, ..)| *message == fields.message);
+        let (word, said) = match labelled {
+            Some((_, word, shape)) => (*word, filled(shape, fields)),
+            None => ("", None),
+        };
+        let word = if word.is_empty() { name(level).trim_end() } else { word };
+        let shade = match level {
+            Level::ERROR => Color::Red.bold(),
+            Level::WARN => Color::Yellow.normal(),
+            _ if labelled.is_some() => Color::Green.normal(),
+            Level::INFO => Color::Cyan.normal(),
+            Level::DEBUG | Level::TRACE => Color::Purple.dimmed(),
+        };
+        let mut line = format!("{}  {} ", paint(dim(), &time), paint(shade, &format!("{word:<10}")));
+        match said {
+            Some(said) => line.push_str(&said),
+            None => {
+                line.push_str(&fields.message);
+                for (key, value) in &fields.named {
+                    let _ = write!(line, " {}{}", paint(dim(), &format!("{key}=")), logfmt(value));
+                }
+            }
+        }
+        line
+    }
+}
+
+/// A label's shape filled from an event's fields, its parts that name a
+/// missing field left out; none when no part is left.
+fn filled(shape: &str, fields: &Fields) -> Option<String> {
+    let parts: Vec<String> = shape
+        .split(" · ")
+        .filter_map(|part| {
+            let mut out = String::new();
+            let mut rest = part;
+            while let Some(open) = rest.find('{') {
+                let close = open + rest[open..].find('}')?;
+                out.push_str(&rest[..open]);
+                let name = &rest[open + 1..close];
+                let (_, value) = fields.named.iter().find(|(key, _)| *key == name)?;
+                out.push_str(&value.text());
+                rest = &rest[close + 1..];
+            }
+            out.push_str(rest);
+            Some(out)
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// One JSON object: time, level, stream, msg, the spans' fields, then the
+/// event's, as the console's JSON line has them.
+fn json_line(at: Timestamp, level: Level, fields: &Fields, spans: &[(String, String)]) -> String {
+    let level = name(level).trim_end().to_ascii_uppercase();
+    let mut pairs: Vec<(&str, serde_json::Value)> = vec![
+        ("time", utc(at).into()),
+        ("level", level.into()),
+        ("stream", "tinystore".into()),
+        ("msg", fields.message.clone().into()),
+    ];
+    pairs.extend(spans.iter().map(|(key, value)| (key.as_str(), value.clone().into())));
+    pairs.extend(fields.named.iter().map(|(key, value)| (*key, value.json())));
+    // written by hand, so that its keys keep this order: a JSON map sorts them
+    let written: Vec<String> =
+        pairs.iter().map(|(key, value)| format!("{}:{value}", serde_json::Value::String((*key).to_owned()))).collect();
+    format!("{{{}}}", written.join(","))
+}
+
+/// The `key=value` pairs a span's fields were formatted as.
+fn logfmt_pairs(formatted: &str) -> Vec<(String, String)> {
+    formatted
+        .split_whitespace()
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.trim_matches('"').to_owned()))
+        .collect()
 }
 
 /// A file's time: UTC to the millisecond, every line as wide.
@@ -128,17 +245,6 @@ fn name(level: Level) -> &'static str {
     }
 }
 
-/// Colour where it means something: a warning and an error stand out, the
-/// rest stays quiet.
-fn shade(level: Level) -> Style {
-    match level {
-        Level::ERROR => Color::Red.bold(),
-        Level::WARN => Color::Yellow.normal(),
-        Level::INFO => Color::Cyan.normal(),
-        Level::DEBUG | Level::TRACE => Color::Purple.dimmed(),
-    }
-}
-
 fn dim() -> Style {
     Style::new().dimmed()
 }
@@ -147,31 +253,77 @@ pub(crate) fn paint(colours: bool, style: Style, text: impl fmt::Display) -> Str
     if colours { style.paint(text.to_string()).to_string() } else { text.to_string() }
 }
 
-/// An event's message and its fields, each value as logfmt writes one:
-/// quoted when it holds a space, a quote or an `=`.
+/// A field's value as the event gave it.
+#[derive(Clone, Debug, PartialEq)]
+enum Value {
+    Text(String),
+    Number(serde_json::Number),
+    Bool(bool),
+}
+
+impl Value {
+    fn text(&self) -> String {
+        match self {
+            Value::Text(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            Value::Bool(bool) => bool.to_string(),
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        match self {
+            Value::Text(text) => text.clone().into(),
+            Value::Number(number) => serde_json::Value::Number(number.clone()),
+            Value::Bool(bool) => (*bool).into(),
+        }
+    }
+}
+
+/// A value as logfmt writes one: quoted when it holds a space, a quote or an
+/// `=`.
+fn logfmt(value: &Value) -> String {
+    let text = value.text();
+    if matches!(value, Value::Text(_)) && (text.contains([' ', '"', '=']) || text.is_empty()) {
+        format!("{text:?}")
+    } else {
+        text
+    }
+}
+
+/// An event's message and its fields.
 #[derive(Default)]
 struct Fields {
     message: String,
-    named: Vec<(&'static str, String)>,
+    named: Vec<(&'static str, Value)>,
 }
 
 impl Visit for Fields {
     fn record_str(&mut self, field: &Field, value: &str) {
-        let spoken =
-            if value.contains([' ', '"', '=']) || value.is_empty() { format!("{value:?}") } else { value.to_owned() };
-        self.keep(field, spoken);
+        self.keep(field, Value::Text(value.to_owned()));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.keep(field, Value::Number(value.into()));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.keep(field, Value::Number(value.into()));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.keep(field, Value::Bool(value));
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.keep(field, format!("{value:?}"));
+        self.keep(field, Value::Text(format!("{value:?}")));
     }
 }
 
 impl Fields {
-    fn keep(&mut self, field: &Field, value: String) {
-        match field.name() {
-            "message" => self.message = value,
-            name => self.named.push((name, value)),
+    fn keep(&mut self, field: &Field, value: Value) {
+        match (field.name(), value) {
+            ("message", value) => self.message = value.text(),
+            (name, value) => self.named.push((name, value)),
         }
     }
 }
@@ -192,21 +344,67 @@ mod tests {
         assert!(!terminal(false, false, true, true).colours(), "TERM=dumb");
     }
 
-    #[test]
-    fn a_files_line_is_whole_plain_and_quoted_only_where_it_must_be() {
+    /// What `lines` print of the events `log` logs.
+    fn printed(lines: Lines, log: impl FnOnce()) -> String {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&written);
-        let subscriber = tracing_subscriber::fmt()
-            .event_format(Lines { colours: false, person: false })
-            .with_writer(move || Sink(Arc::clone(&sink)))
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::info!(dir = r"C:\data", why = "a client said stop", "leaving");
+        let subscriber =
+            tracing_subscriber::fmt().event_format(lines).with_writer(move || Sink(Arc::clone(&sink))).finish();
+        tracing::subscriber::with_default(subscriber, log);
+        String::from_utf8(written.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn a_files_line_is_one_json_object_with_its_fields_as_they_were_given() {
+        let line = printed(Lines { colours: false, person: false }, || {
+            tracing::info!(dir = r"C:\data", clients = 2, why = "a client said stop", "stopping");
         });
-        let line = String::from_utf8(written.lock().unwrap().clone()).unwrap();
-        let (time, rest) = line.split_once(' ').unwrap();
-        assert!(time.len() == 24 && time.ends_with('Z'), "{time}");
-        assert_eq!(rest, "info  leaving dir=C:\\data why=\"a client said stop\"\n");
+        let object: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(object["msg"], "stopping");
+        assert_eq!(object["level"], "INFO");
+        assert_eq!(object["dir"], r"C:\data");
+        assert_eq!(object["clients"], 2, "a number stays one");
+        assert!(object["time"].as_str().unwrap().ends_with('Z'));
+    }
+
+    #[test]
+    fn a_persons_terminal_names_a_known_event_by_its_word() {
+        let lines = printed(Lines { colours: false, person: true }, || {
+            tracing::info!(client = "tinystore-bun/0.1.0", clients = 1, "a client connected");
+            tracing::warn!(
+                from = "us:7444",
+                error = "the node said nothing for too long",
+                "a node's link to the node it copies"
+            );
+            tracing::info!(why = "interrupted", "stopping");
+            tracing::info!(work = "kv", "background work recovered");
+        });
+        let shown: Vec<&str> = lines.lines().map(|line| &line[10..]).collect();
+        assert_eq!(
+            shown,
+            [
+                "client     tinystore-bun/0.1.0 · 1 connected",
+                "warn       us:7444 · the node said nothing for too long",
+                "stopping   interrupted",
+                "info       background work recovered work=kv",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_labelled_event_is_one_the_server_or_the_library_logs() {
+        let sources = [
+            include_str!("serve.rs"),
+            include_str!("../../tinystore/src/replication/follow.rs"),
+            include_str!("../../tinystore/src/replication/serve.rs"),
+            include_str!("../../tinystore/src/replication/handover.rs"),
+            include_str!("../../tinystore/src/replication/judge.rs"),
+            include_str!("../../tinystore/src/replication/witness.rs"),
+        ];
+        for (message, ..) in LABELS {
+            let logged = format!("\"{message}\"");
+            assert!(sources.iter().any(|source| source.contains(&logged)), "nothing logs {logged}");
+        }
     }
 
     #[test]

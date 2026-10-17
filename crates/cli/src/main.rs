@@ -1,40 +1,34 @@
-//! The tinystore command. `serve` gives a store's directory to other
-//! processes over the wire protocol: a private child's stdin and stdout, or a
-//! local socket or named pipe that `SERVE` names, for a sidecar or a person.
-//! `backup` writes a store's directory as one checked zip, and `restore` puts
-//! one back into an empty directory. `search` lists a store's indexes and
-//! drops one.
+//! The tinystore command: the one command a person types. `serve` gives a
+//! store's directory to other processes and machines over the wire protocol;
+//! `status`, `logs`, `kv`, `sql` and `mcp` read a store beside whoever holds
+//! it; `backup` and `restore` keep it; `node` and `witness` run the nodes of
+//! a network. `help` lists them all, and plan/api/cli.md is their book.
 
 mod args;
+mod asked;
 mod backup;
+mod banner;
+mod client;
 mod connection;
+mod files;
+mod help;
+mod kv;
 mod lines;
 mod local;
+mod logs;
+mod mcp;
 mod node;
-mod promote;
+mod node_config;
 mod remote;
 mod search;
 mod serve;
+mod sql;
+mod status;
+mod stop;
+mod token;
+mod witness;
 
 use std::process::ExitCode;
-
-const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --stdio] [--log <file>] [--idle <span>] \
-                     [--clock <time>] [--listen tls://<host>:<port> --tls-cert <pem> --tls-key <pem> --tokens <file>] \
-                     [--memory <size>] [--node] [--node-listen <host>:<port>] [--from <host>:<port>]... \
-                     [--node-files <file>,...] [--node-token-file <file>] [--node-synchronous] \
-                     [--node-catalog] [--node-insecure] [--node-advertise <host>:<port>] [--node-synchronous-with <host>:<port>]... \
-                     [--node-failover <host>:<port>] [--node-witness] \
-                     [--node-tls-cert <pem> --node-tls-key <pem>] [--node-tls-roots <pem>]
-       tinystore backup <dir> <file.zip> [--include <name>]... [--include-encryption-key]
-       tinystore restore <file.zip> <dir>
-       tinystore search list <dir>
-       tinystore search drop <dir> <name>
-       tinystore promote <dir> [<file>...]
-       tinystore demote <dir> [<file>...]
-       tinystore node status <dir>";
-
-/// The commands, for a misspelt one's nearest.
-const COMMANDS: [&str; 8] = ["serve", "backup", "restore", "search", "promote", "demote", "node", "version"];
 
 /// What follows a refusal when a person may have misspelt a command or a
 /// flag: the nearest of `names`, one edit away for three to six letters and
@@ -52,25 +46,52 @@ pub(crate) fn meant(given: &str, names: &[&str]) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
-        Some("serve") => serve::run(&args[1..]),
-        Some("backup") => backup::backup(&args[1..]),
-        Some("restore") => backup::restore(&args[1..]),
-        Some("search") => search::run(&args[1..]),
-        Some("promote") => promote::run(&args[1..]),
-        Some("demote") => promote::demote(&args[1..]),
-        Some("node") => node::run(&args[1..]),
-        Some("version" | "--version") => {
+        Some("status") => status::run(rest),
+        Some("logs") => logs::run(rest),
+        Some("kv") => kv::run(rest),
+        Some("sql") => sql::run(rest),
+        Some("search") => search::run(rest),
+        Some("serve") => serve::run(rest),
+        Some("stop") => stop::run(rest),
+        Some("backup") => backup::backup(rest),
+        Some("restore") => backup::restore(rest),
+        Some("mcp") => mcp::run(rest),
+        Some("token") => token::run(rest),
+        Some("node") => node::run(rest),
+        Some("witness") => witness::run(rest),
+        Some("migrate") => sql::migrate(rest),
+        Some("schema") => sql::schema(rest),
+        Some("version" | "--version" | "-V") => {
             println!("tinystore {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        None | Some("help" | "--help" | "-h") => {
-            eprintln!("{USAGE}");
-            ExitCode::from(2)
+        None => {
+            help::print();
+            ExitCode::SUCCESS
+        }
+        Some("help" | "--help" | "-h") if rest.is_empty() => {
+            help::print();
+            ExitCode::SUCCESS
+        }
+        Some("help") => {
+            let name = rest.join(" ");
+            match help::command(&name).or_else(|| help::command(&rest[0])) {
+                Some(command) => {
+                    help::print_command(command);
+                    ExitCode::SUCCESS
+                }
+                None if rest[0] == "node" => node::run(&["--help".to_owned()]),
+                None => asked::end(
+                    "help",
+                    asked::wrong(format!("no command {name}{}", meant(&rest[0], &help::first_words()))),
+                ),
+            }
         }
         Some(other) => {
-            eprintln!("tinystore: no command {other}{}\n{USAGE}", meant(other, &COMMANDS));
-            ExitCode::from(2)
+            let refused = asked::wrong(format!("no command {other}{}", meant(other, &help::first_words())));
+            asked::end("", refused)
         }
     }
 }
@@ -81,8 +102,9 @@ mod tests {
 
     #[test]
     fn a_misspelt_command_is_told_its_nearest_and_a_word_far_from_any_none() {
-        assert_eq!(meant("bakup", &COMMANDS), "; did you mean backup?");
-        assert_eq!(meant("serv", &COMMANDS), "; did you mean serve?");
-        assert_eq!(meant("deploy", &COMMANDS), "");
+        let commands = help::first_words();
+        assert_eq!(meant("bakup", &commands), "; did you mean backup?");
+        assert_eq!(meant("serv", &commands), "; did you mean serve?");
+        assert_eq!(meant("deploy", &commands), "");
     }
 }

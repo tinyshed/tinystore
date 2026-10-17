@@ -136,7 +136,7 @@ def sidecar(
                     print(older_server(server, _runtime.VERSION, directory), file=sys.stderr)
                 told = True
                 return connection
-        command = [binary(), "serve", "--dir", str(absolute), "--local", "--log", str(log), *idling]
+        command = [binary(), "serve", "--dir", str(absolute), "--local", "--log-file", str(log), *idling]
         return await _start_sidecar(serve, log, command, stopped_instance)
 
     return reach
