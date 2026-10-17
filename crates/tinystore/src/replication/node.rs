@@ -245,8 +245,16 @@ impl State {
         if self.stopping.swap(true, Ordering::SeqCst) {
             return;
         }
-        if let Some(address) = *lock(&self.listening) {
-            // wakes the accepting thread, which then sees the node stopping
+        if let Some(mut address) = *lock(&self.listening) {
+            // wakes the accepting thread, which then sees the node stopping; a
+            // server on every interface is reached on loopback, since Windows
+            // refuses a connection to 0.0.0.0 and the thread would sleep on
+            if address.ip().is_unspecified() {
+                address.set_ip(match address {
+                    std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+                    std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+                });
+            }
             let _ = TcpStream::connect_timeout(&address, Duration::from_secs(1));
         }
         for link in lock(&self.links).drain(..) {
