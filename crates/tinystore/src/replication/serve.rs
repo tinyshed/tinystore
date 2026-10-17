@@ -353,6 +353,15 @@ fn begin_at(state: &State, file: &str, dir: &std::path::Path, at: Point) -> Resu
     }
     let segments = segments_in(dir)?;
     let Some(&segment) = segments.iter().rev().find(|&&first| first <= at.sequence + 1) else {
+        // a log that kept no entry since its snapshot, or since a promotion,
+        // stands where the other node does: its next entry is the one it needs
+        let stable = source.stable()?;
+        if stable == at {
+            return Ok(Sending::Entries { last: at, segment: at.sequence + 1, offset: MAGIC.len() as u64 });
+        }
+        if stable.sequence < at.sequence && state.copy(file).is_some() {
+            return Err(Error::new(ErrorKind::Unavailable, "this copy is behind the node that asks"));
+        }
         return Ok(Sending::Snapshot);
     };
     let bytes = read_from(&segment_path(dir, segment), 0)?;

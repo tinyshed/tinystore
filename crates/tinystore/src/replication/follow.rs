@@ -10,9 +10,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use super::copy::Copy;
+use super::copy::{self, Copy};
 use super::entry::{self, Point};
-use super::log::{Bounds, Log};
 use super::message::{Frames, Message, VERSION, plain_name, timed_out};
 use super::node::{State, lock};
 use super::serve::{Out, PING_EVERY, SILENT_AT_MOST};
@@ -135,10 +134,7 @@ fn keep_linked(state: &Arc<State>, store: &WeakStore) {
 
 /// One file a link follows: a snapshot put together, or a copy whole.
 enum Held {
-    Taking {
-        taking: Box<Taking>,
-        log: Log,
-    },
+    Taking(Box<Taking>),
     Whole(Arc<Copy>),
     /// Asked for, nothing come yet.
     Asked,
@@ -356,11 +352,11 @@ impl Link<'_> {
         match message {
             Message::SnapshotBegin { file, page_size, at } => self.begin(&file, page_size, at),
             Message::SnapshotPages { file, pages } => match self.held.get_mut(&file) {
-                Some(Held::Taking { taking, .. }) => taking.pages(&pages),
+                Some(Held::Taking(taking)) => taking.pages(&pages),
                 _ => Err(Error::invalid(format!("{file}: pages of no snapshot under way"))),
             },
             Message::SnapshotEnd { file, ready_at } => {
-                if let Some(Held::Taking { taking, .. }) = self.held.get_mut(&file) {
+                if let Some(Held::Taking(taking)) = self.held.get_mut(&file) {
                     taking.end(ready_at);
                 }
                 self.finish_when_whole(&file)
@@ -390,18 +386,16 @@ impl Link<'_> {
         }
     }
 
-    /// Starts putting a snapshot together, the copy held before dropped.
+    /// Starts putting a snapshot together beside the copy held before, which
+    /// its readers read until the snapshot takes its place.
     fn begin(&mut self, file: &str, page_size: u32, at: Point) -> Result<()> {
         if !plain_name(file) {
             return Err(Error::invalid(format!("a link sent {file:?}, which is no file's name")));
         }
-        self.state.drop_copy(file);
-        self.held.remove(file);
         self.state.snapshots.fetch_add(1, Ordering::Relaxed);
         let dir = self.state.log_dir(file);
         let taking = Box::new(Taking::begin(&dir, &self.state.dir.join(file), page_size, at)?);
-        let log = Log::open(dir, Bounds::default(), Arc::clone(&self.state.notify))?;
-        self.held.insert(file.to_owned(), Held::Taking { taking, log });
+        self.held.insert(file.to_owned(), Held::Taking(taking));
         Ok(())
     }
 
@@ -410,7 +404,7 @@ impl Link<'_> {
             return Err(Error::corrupt(format!("{file}: an entry cut short")));
         };
         let applied = match self.held.get_mut(file) {
-            Some(Held::Taking { taking, log }) => taking.apply(&entry, bytes, log),
+            Some(Held::Taking(taking)) => taking.apply(&entry),
             Some(Held::Whole(copy)) => copy.apply(&entry, Some(bytes)),
             Some(Held::Asked) | None => return Ok(()),
         };
@@ -431,16 +425,22 @@ impl Link<'_> {
     /// Gives a snapshot whose pages are all one commit's the copy's name,
     /// and opens it as the copy its engines read.
     fn finish_when_whole(&mut self, file: &str) -> Result<()> {
-        let whole = matches!(self.held.get(file), Some(Held::Taking { taking, .. }) if taking.whole());
+        let whole = matches!(self.held.get(file), Some(Held::Taking(taking)) if taking.whole());
         if !whole {
             return Ok(());
         }
-        let Some(Held::Taking { taking, log }) = self.held.remove(file) else {
+        let Some(Held::Taking(taking)) = self.held.remove(file) else {
             return Ok(());
         };
-        drop(log);
-        (*taking).finish()?;
         let store = self.store.upgrade().ok_or_else(|| Error::closed("the node's store"))?;
+        // the copy held before closes its writer, so that the snapshot takes its name
+        self.state.drop_copy(file);
+        if let Err(error) = (*taking).finish() {
+            if copy::is_ready(&self.state.log_dir(file), &self.state.dir.join(file)) {
+                self.state.keep_copy(file, Arc::new(Copy::open(&store, file)?));
+            }
+            return Err(error);
+        }
         let copy = Arc::new(Copy::open(&store, file)?);
         drop(store);
         self.state.keep_copy(file, Arc::clone(&copy));

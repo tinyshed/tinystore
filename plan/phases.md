@@ -328,6 +328,13 @@ in [scaling.md](scaling.md#order).
   for a link a bound before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
+  Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
+  copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the
+  next epoch, so that the nodes behind it go on from where they stand once their `from` reaches it, and one that
+  holds an entry of the old epoch it never had conflicts and takes a snapshot. A node with `from` writes the files
+  whose log is its own. A snapshot is put together beside the copy it replaces, which its readers read until it
+  is whole, and a node at the point its source stands at takes none. Left: an old home back as a copy, a client
+  refusing an older home than one it has seen, and the command line's view of the links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
 
 **Gate:** a node three links away holds its home's files commit for commit; a

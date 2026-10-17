@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::copy::Copy;
@@ -89,30 +88,15 @@ fn a_snapshot_read_while_its_home_writes_becomes_the_home_s_file() {
     assert!(chunks > 4, "the file took {chunks} chunks");
     let mut taking = taking.unwrap();
     assert!(!taking.whole(), "commits ended while it read");
-    let log = Log::open(dir.clone(), Bounds::default(), Arc::default()).unwrap();
     let home_log = home_dir.path().join(DIR).join("kv.db");
     Log::read(&home_log, |entry| {
         if !taking.whole() {
-            let bytes = super::entry::encode(
-                &super::entry::Head {
-                    kind: entry.kind,
-                    sequence: entry.sequence,
-                    epoch: entry.epoch,
-                    previous: entry.previous,
-                    position: entry.position,
-                    page_size: entry.page_size,
-                    size: entry.size,
-                },
-                &entry.pages,
-            )
-            .0;
-            taking.apply(&entry, &bytes, &log)?;
+            taking.apply(&entry)?;
         }
         Ok(())
     })
     .unwrap();
     assert!(taking.whole());
-    drop(log);
     taking.finish().unwrap();
     let shipped = Copy::open(&copy, "kv.db").unwrap();
     assert!(shipped.applied() > at.sequence);
@@ -356,4 +340,44 @@ fn a_file_too_large_to_keep_inline_reaches_a_copy_of_a_copy() {
     far.close().unwrap();
     between.close().unwrap();
     home.close().unwrap();
+}
+
+#[test]
+fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_from() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, home_address) = serving(dirs[0].path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..50 {
+        sessions.set(format!("{i}"), &format!("from the first home {i}")).unwrap();
+    }
+    let europe_node = |from: Vec<String>, serve: String| Node { from, serve: Some(serve), ..Node::default() };
+    let europe = node_with(dirs[1].path(), europe_node(vec![home_address.clone()], "127.0.0.1:0".into()));
+    let europe_address = bound(europe.node().unwrap()).unwrap().to_string();
+    let russia =
+        node_with(dirs[2].path(), Node { from: vec![home_address.clone(), europe_address.clone()], ..Node::default() });
+    let read = russia.bucket::<String>("sessions").open().unwrap();
+    europe.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &europe, &["kv.db"]);
+    caught_up(&home, &russia, &["kv.db"]);
+    let before = copy_point(&russia, "kv.db").unwrap();
+
+    home.close().unwrap();
+    europe.close().unwrap();
+    let refused = promote(dirs[0].path(), &["kv.db".to_owned()]).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "a home's own file is no copy: {refused}");
+    let promoted = promote(dirs[1].path(), &[]).unwrap();
+    assert_eq!(promoted, [Promoted { file: "kv.db".into(), sequence: before.sequence, epoch: before.epoch + 1 }]);
+    let europe = node_with(dirs[1].path(), europe_node(Vec::new(), europe_address));
+    let written = europe.bucket::<String>("sessions").open().unwrap();
+    written.set("after", &"the new home".to_owned()).unwrap();
+
+    eventually("russia takes the new home's write", || read.get("after").unwrap().as_deref() == Some("the new home"));
+    let snapshots = russia.node().unwrap().snapshots.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(snapshots, 1, "the first copy alone: russia went on from its position at the new home");
+    assert_eq!(copy_point(&russia, "kv.db").unwrap().epoch, before.epoch + 1);
+    read.set("from russia", &"to the new home".to_owned()).unwrap();
+    assert_eq!(written.get("from russia").unwrap().as_deref(), Some("to the new home"));
+    caught_up(&europe, &russia, &["kv.db"]);
+    russia.close().unwrap();
+    europe.close().unwrap();
 }

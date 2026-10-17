@@ -17,6 +17,7 @@ mod log;
 mod message;
 mod node;
 mod pack;
+mod promote;
 mod serve;
 mod snapshot;
 
@@ -35,6 +36,7 @@ pub(crate) use forward::pass_on;
 pub(crate) use log::Notify;
 pub(crate) use message::{In, Out};
 pub(crate) use node::State;
+pub use promote::{Promoted, promote};
 
 /// What makes a store a node: it keeps a log of each file it writes, from
 /// which other nodes copy the file, and copies the files of the node it

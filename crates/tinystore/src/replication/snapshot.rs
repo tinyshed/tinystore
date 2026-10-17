@@ -10,7 +10,8 @@
 //! carries every page its commit wrote; so once the entries up to P1 are
 //! written over the chunks, every page is P1's. Until then the file is no
 //! file at all, so it is put together under a name of its own, by plain
-//! writes, and takes the copy's name only once whole.
+//! writes, and takes the copy's name only once whole: until then the copy
+//! held before, if any, stays as it was for its readers.
 
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -46,21 +47,10 @@ pub(crate) struct Taking {
 
 impl Taking {
     /// Starts the snapshot of the file `target`, whose log is in `dir`, from
-    /// pages of `page_size` read at `at` or later. What the copy held before
-    /// is dropped.
+    /// pages of `page_size` read at `at` or later.
     pub(crate) fn begin(dir: &Path, target: &Path, page_size: u32, at: Point) -> Result<Taking> {
         copy::mark(dir)?;
         let temp = dir.join(TAKING);
-        let position = dir.join(Position::FILE);
-        for stale in [&position, &temp] {
-            match fs::remove_file(stale) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(io_error(stale, error)),
-            }
-        }
-        remove_file_and_wal(target)?;
-        Log::clear(dir)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -84,9 +74,9 @@ impl Taking {
         self.ready_at = Some(ready_at);
     }
 
-    /// Writes an entry after the snapshot's first point over the pages,
-    /// keeping it in the copy's log; one before it is nothing.
-    pub(crate) fn apply(&mut self, entry: &Entry<'_>, bytes: &[u8], log: &Log) -> Result<()> {
+    /// Writes an entry after the snapshot's first point over the pages; one
+    /// before it is nothing. The copy's log keeps what follows the snapshot.
+    pub(crate) fn apply(&mut self, entry: &Entry<'_>) -> Result<()> {
         if entry.sequence <= self.point.sequence {
             return Ok(());
         }
@@ -115,7 +105,6 @@ impl Taking {
                 ));
             }
         }
-        log.keep(entry, bytes)?;
         self.point = entry.point();
         Ok(())
     }
@@ -125,12 +114,21 @@ impl Taking {
         self.ready_at.is_some_and(|ready_at| self.point.sequence >= ready_at)
     }
 
-    /// Gives the whole file the copy's name, durably, then keeps its
-    /// position: a crash before leaves a copy that starts again from a
-    /// snapshot, never a file that is not whole.
+    /// Gives the whole file the copy's name, durably, in place of the copy
+    /// held before, then keeps its position: a crash before leaves a copy that
+    /// starts again from a snapshot, never a file that is not whole. The copy
+    /// held before must be closed: on Windows a file open is not replaced.
     pub(crate) fn finish(self) -> Result<()> {
         self.file.sync_all().map_err(|error| io_error(&self.temp, error))?;
         drop(self.file);
+        let position = self.dir.join(Position::FILE);
+        match fs::remove_file(&position) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(&position, error)),
+        }
+        remove_file_and_wal(&self.target)?;
+        Log::clear(&self.dir)?;
         if let Some(parent) = self.target.parent() {
             fs::create_dir_all(parent).map_err(|error| io_error(parent, error))?;
         }

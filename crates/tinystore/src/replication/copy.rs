@@ -161,6 +161,11 @@ impl Position {
     pub(crate) const FILE: &str = "applied";
     const BYTES: usize = 8 + 8 + 16 + 4;
 
+    /// The entry the position names.
+    pub(crate) fn point(&self) -> Point {
+        self.point
+    }
+
     /// Reads the position kept in `path`, or the copy's start when there is
     /// none yet.
     pub(crate) fn read(path: PathBuf) -> Result<Position> {

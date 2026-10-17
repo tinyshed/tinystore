@@ -153,6 +153,13 @@ impl State {
         if self.options.from.is_empty() {
             return false;
         }
+        // a file whose log is this node's own, as a promoted copy's, it writes
+        let dir = self.log_dir(name);
+        if !copy::is_copy(&dir) && segments_in(&dir).is_ok_and(|segments| !segments.is_empty())
+            || dir.join(super::promote::PROMOTED).exists()
+        {
+            return false;
+        }
         match &self.options.files {
             Some(files) => files.iter().any(|file| file == name),
             None => !NODE_LOCAL.contains(&name),
@@ -237,10 +244,7 @@ impl State {
 
     /// Every file with a directory in `log/`, by its name in the store's.
     fn files_logged(&self) -> Result<Vec<String>> {
-        let mut names = Vec::new();
-        walk(&self.dir.join(DIR), "", &mut names)?;
-        names.sort();
-        Ok(names)
+        files_logged_in(&self.dir.join(DIR))
     }
 
     /// What a snapshot of the file `name` reads, if this node serves it.
@@ -260,6 +264,15 @@ impl State {
     pub(crate) fn point_of(&self, name: &str) -> Option<Point> {
         self.source(name).and_then(|source| source.stable().ok())
     }
+}
+
+/// Every file with a directory in `logs`, a store's `log/`, by its name in
+/// the store's directory.
+pub(crate) fn files_logged_in(logs: &Path) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    walk(logs, "", &mut names)?;
+    names.sort();
+    Ok(names)
 }
 
 /// Collects the names of the files whose log directories lie under `dir`: a

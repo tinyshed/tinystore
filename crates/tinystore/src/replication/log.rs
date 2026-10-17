@@ -112,6 +112,7 @@ impl Log {
         }
         let log = Log { dir, bounds, notify, writer: Mutex::new(None), tail: Mutex::new(tail) };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
+        log.go_on_from_a_promotion()?;
         Ok(log)
     }
 
@@ -194,6 +195,21 @@ impl Log {
             (entry.sequence + 1, entry.epoch, entry.check, Some(entry.position));
         drop(tail);
         self.notify.appended();
+        Ok(())
+    }
+
+    /// Goes on from the point a promoted copy stood at, at its new epoch: a
+    /// copy whose log kept no entry since its snapshot goes on after its
+    /// position, and the WAL it holds is no generation of its old home's.
+    fn go_on_from_a_promotion(&self) -> Result<()> {
+        let Some(point) = super::promote::promoted_at(&self.dir)? else {
+            return Ok(());
+        };
+        let mut tail = self.lock();
+        if tail.segments.is_empty() {
+            (tail.next, tail.check, tail.last) = (point.sequence + 1, point.check, Some(Position::default()));
+        }
+        tail.epoch = tail.epoch.max(point.epoch);
         Ok(())
     }
 
