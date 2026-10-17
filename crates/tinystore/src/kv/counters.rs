@@ -88,6 +88,9 @@ impl Counters {
         let key = key.text();
         #[cfg(feature = "replication")]
         if self.scope.kv.file().is_copy() {
+            if self.buffer.is_none() && self.scope.kv.lent_by().is_none() {
+                return self.add_queued_here(&key, n);
+            }
             return forward::sum(&self.pass_on(&key, &forward::Call::Add(n))?);
         }
         let Some(buffer) = &self.buffer else {
@@ -126,6 +129,10 @@ impl Counters {
     /// What the counter under `key` holds; 0 when it is not there.
     pub fn get(&self, key: impl Key) -> Result<i64> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.buffer.is_none() && self.scope.kv.file().is_copy() {
+            return self.get_with_queued(&key).map_err(|error| error.within(self.scope.shown_key(&key)));
+        }
         let (id, path, now) = (self.scope.id, self.scope.path(&key)?, self.scope.now());
         let live = match &self.buffer {
             Some(buffer) => buffer.get(&self.scope.kv, &path, now),
@@ -178,6 +185,68 @@ impl Counters {
         return self.scope.kv.file().is_copy();
         #[cfg(not(feature = "replication"))]
         false
+    }
+
+    /// An add on a copy, queued on this node and answered at once: the copy's
+    /// count with what the queue still holds of the key. Adds commute, so the
+    /// home counts them whenever they arrive, each once.
+    #[cfg(feature = "replication")]
+    fn add_queued_here(&self, key: &str, n: i64) -> Result<i64> {
+        let shown = || self.scope.shown_key(key);
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let handle = forward::Handle::Counters { name: self.scope.name().to_owned(), ttl: self.ttl };
+        let request = forward::encode(&handle, &owners, key, &forward::Call::AddQueued { n, from: None });
+        let subject = forward::subject(self.scope.name(), &owners, key);
+        crate::replication::enqueue(&store, forward::FILE, subject, request).map_err(|error| error.within(shown()))?;
+        self.get(key)
+    }
+
+    /// A copy's count with what this node's queue holds of `key`'s adds that
+    /// the copy does not hold yet. The queue is read first: an op it no longer
+    /// holds left it once the copy held it, so the copy's snapshot after has it.
+    #[cfg(feature = "replication")]
+    fn get_with_queued(&self, key: &str) -> Result<i64> {
+        let store = self.scope.kv.store()?;
+        let subject = forward::subject(self.scope.name(), self.scope.branch()?.owners(), key);
+        let pending = crate::replication::queued(&store, forward::FILE, &subject)?;
+        let (id, path, now) = (self.scope.id, self.scope.path(key)?, self.scope.now());
+        let (held, applied) = self.scope.kv.file().read(|connection| {
+            let held = live(connection, id, &path, now)?.map_or(0, |live| live.value);
+            Ok((held, cells::queued_applied(connection, &pending.node)?.unwrap_or(0)))
+        })?;
+        let not_held = pending.ops.iter().filter(|queued| queued.op as i64 > applied);
+        Ok(not_held.filter_map(|queued| forward::added(&queued.request)).fold(held, i64::saturating_add))
+    }
+
+    /// An add a node queued, applied at the home only past the last op of
+    /// that node it applied, in the commit that keeps the op's number: an op
+    /// sent twice counts once.
+    #[cfg(feature = "replication")]
+    pub(crate) fn add_queued(&self, key: &str, n: i64, node: &str, op: u64) -> Result<i64> {
+        if self.scope.kv.file().is_copy() {
+            // a node between the one that queued it and its home passes it on as it came
+            let call = forward::Call::AddQueued { n, from: Some((node.to_owned(), op)) };
+            return forward::sum(&self.pass_on(key, &call)?);
+        }
+        let now = self.scope.now();
+        let (id, path, created) = (self.scope.id, self.scope.path(key)?, self.created(now));
+        let (node, op) = (node.to_owned(), i64::try_from(op).map_err(|_| Error::invalid("an op past 2^63"))?);
+        self.scope.write(key, 0, move |tx: &Tx<'_>, revision: &AtomicI64| {
+            if cells::queued_applied(tx, &node)?.is_some_and(|applied| applied >= op) {
+                return Ok(live(tx, id, &path, now)?.map_or(0, |live| live.value));
+            }
+            let version = next_version(revision, tx)?;
+            let added = cells::add(tx, id, &path, (version, created), n, now)?;
+            cells::keep_queued_applied(tx, &node, op)?;
+            // its caller had its answer when the node queued it, so an add past
+            // an i64 is let go rather than refused, which would hold the queue
+            let Some(sum) = added else {
+                tracing::warn!(target: "tinystore", node, op, n, "a queued add passes the range of an i64 and is not counted");
+                return Ok(live(tx, id, &path, now)?.map_or(0, |live| live.value));
+            };
+            Ok(sum)
+        })
     }
 
     /// Passes a call on `key` to the home of the copy the counters' file is.

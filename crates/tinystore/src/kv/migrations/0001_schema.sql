@@ -65,6 +65,14 @@ create table _tinystore_kv_config_changes (
     primary key (name, path)
 ) strict, without rowid;
 
+-- the last op of each node a home applied of those the node queued, an add of
+-- counters that answered at once there, kept in the commit that applies it so
+-- that an op sent twice counts once
+create table _tinystore_kv_queued (
+    node    text    primary key,
+    applied integer not null
+) strict, without rowid;
+
 -- revision: the high-water mark of versions, kept with the writes that take them
 create table _tinystore_kv_meta (
     name  text    primary key,

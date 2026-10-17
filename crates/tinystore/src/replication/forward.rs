@@ -21,6 +21,8 @@ use crate::{Error, ErrorKind, Result, Store};
 /// The tag of a file a copy waits for and its home has not made: the home
 /// opens the engine that keeps it.
 pub(crate) const MAKE: u8 = 0;
+/// The tag of many writes in order, a node's queued ops sent at once.
+pub(crate) const BATCH: u8 = 6;
 /// The tag of a call of kv's, the first byte of what passes on.
 #[cfg(feature = "kv")]
 pub(crate) const KV: u8 = 1;
@@ -59,6 +61,12 @@ impl Outcome {
 /// Passes `op`, a write on this node's copy of `file`, to the file's home,
 /// and gives the answer's bytes once the copy holds the write.
 pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>> {
+    pass_on_held(store, file, op).map(|(answer, _)| answer)
+}
+
+/// Passes a write on, and says whether this node's copy held its commit within
+/// the wait.
+fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool)> {
     let Some(node) = store.node() else {
         return Err(Error::invalid(format!("{file} is a copy, and the store is no node to pass its writes on")));
     };
@@ -71,10 +79,11 @@ pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>>
     // the home's error names what failed there already; this node's own says the file
     let written = node.upstream.write(op, ANSWER_WAIT).map_err(|error| error.within(file))?;
     let answer = written.outcome.map_err(|(kind, why)| Error::new(kind, why))?;
+    let mut held = true;
     for (name, sequence) in &written.waits {
-        wait_applied(node, name, *sequence);
+        held &= wait_applied(node, name, *sequence);
     }
-    Ok(answer)
+    Ok((answer, held))
 }
 
 /// Asks the home to make the file `name`, which this node waits for and the
@@ -127,14 +136,14 @@ fn make_in_here(lenders: Lenders<'_>, file: &str, tag: u8) -> Result<()> {
 }
 
 /// Waits until this node's copy of `name` holds entry `sequence`, a bound at
-/// most.
-fn wait_applied(node: &State, name: &str, sequence: u64) {
+/// most; whether it does.
+fn wait_applied(node: &State, name: &str, sequence: u64) -> bool {
     let deadline = Instant::now() + APPLIED_WAIT;
     loop {
         let seen = node.notify.seen();
         match node.copy(name) {
-            Some(copy) if copy.applied() >= sequence => return,
-            None => return,
+            Some(copy) if copy.applied() >= sequence => return true,
+            None => return true,
             Some(_) => {}
         }
         let now = Instant::now();
@@ -145,7 +154,7 @@ fn wait_applied(node: &State, name: &str, sequence: u64) {
                 entry = sequence,
                 "a write its home committed answered before this node's copy held it: the copy is behind"
             );
-            return;
+            return false;
         }
         node.notify.wait_past(seen, deadline - now);
     }
@@ -155,15 +164,103 @@ fn wait_applied(node: &State, name: &str, sequence: u64) {
 /// handle, which passes it on again where this node holds a copy.
 pub(crate) fn run(state: &State, op: &[u8]) -> Outcome {
     let ran = match state.store() {
-        Some(store) => run_on(&store, op),
+        Some(store) => run_all(&store, op),
         None => Err(Error::closed("the node's store")),
     };
     match ran {
-        Ok((answer, file)) => {
-            let waits = state.point_of(&file).map(|point| vec![(file, point.sequence)]).unwrap_or_default();
+        Ok((answer, files)) => {
+            let waits = files
+                .into_iter()
+                .filter_map(|file| state.point_of(&file).map(|point| (file, point.sequence)))
+                .collect();
             Outcome { result: Ok(answer), waits }
         }
         Err(error) => Outcome { result: Err(error), waits: Vec::new() },
+    }
+}
+
+/// Runs a write, or a batch of them in order, and gives the answer's bytes
+/// and the files they wrote: a batch answers each write's in turn.
+fn run_all(store: &Store, op: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
+    if op.first() != Some(&BATCH) {
+        return run_on(store, op).map(|(answer, file)| (answer, vec![file]));
+    }
+    let mut at = super::In { bytes: &op[1..], at: 0 };
+    let (mut answers, mut files) = (super::Out(Vec::new()), Vec::new());
+    let count = at.count()?;
+    answers.count(count);
+    for _ in 0..count {
+        let (answer, file) = run_on(store, at.bytes()?)?;
+        answers.bytes(&answer);
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    Ok((answers.0, files))
+}
+
+/// A queued request as its home reads it: the node that queued it and the
+/// op's number after what the request says.
+pub(crate) fn from_node(mut request: Vec<u8>, node: &str, op: u64) -> Vec<u8> {
+    let mut tail = super::Out(Vec::new());
+    tail.text(node);
+    tail.long(op);
+    request.extend_from_slice(&tail.0);
+    request
+}
+
+/// Passes many writes on at once, run in order at the home, and answers once
+/// this node's copy holds them: a node's queue lets an op go only then, since
+/// a read on the copy counts what it holds and what the queue holds.
+pub(crate) fn pass_on_all(store: &Store, file: &str, requests: &[Vec<u8>]) -> Result<()> {
+    let (_, held) = pass_on_held(store, file, batch(requests))?;
+    if held {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorKind::Unavailable,
+        format!("{file}: its home applied the node's queued writes, and its copy does not hold them yet"),
+    ))
+}
+
+/// Runs a node's queued writes of a file it writes itself, as a copy promoted
+/// with writes still queued: each counted once here as its old home would.
+pub(crate) fn run_here(store: &Store, requests: &[Vec<u8>]) -> Result<()> {
+    run_all(store, &batch(requests)).map(drop)
+}
+
+fn batch(requests: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = super::Out(vec![BATCH]);
+    out.count(requests.len());
+    for request in requests {
+        out.bytes(request);
+    }
+    out.0
+}
+
+/// Queues on this node a write of `file` that commutes and changes `subject`,
+/// which answers at once and reaches the home after: its op's number.
+pub(crate) fn enqueue(store: &Store, file: &str, subject: Vec<u8>, request: Vec<u8>) -> Result<u64> {
+    let node = store.node().ok_or_else(|| Error::invalid(format!("{file} is a copy, and the store is no node")))?;
+    node.queue()?.push(file, subject, request)
+}
+
+/// What this node's queue holds of a subject.
+pub(crate) struct Pending {
+    /// The node's id, by which its copy of the file keeps the last of the
+    /// node's ops its home applied: one no later the copy holds already.
+    pub(crate) node: String,
+    pub(crate) ops: Vec<super::queue::Queued>,
+}
+
+/// The writes of `file` that change `subject` queued on this node.
+pub(crate) fn queued(store: &Store, file: &str, subject: &[u8]) -> Result<Pending> {
+    match store.node() {
+        Some(node) => {
+            let queue = node.queue()?;
+            Ok(Pending { node: queue.node.clone(), ops: queue.of_subject(file, subject)? })
+        }
+        None => Ok(Pending { node: String::new(), ops: Vec::new() }),
     }
 }
 

@@ -44,6 +44,9 @@ pub(crate) struct State {
     /// Every link open, shut down at stop so that its threads stop reading.
     links: Mutex<Vec<TcpStream>>,
     pub(crate) listening: Mutex<Option<SocketAddr>>,
+    /// The ops of this node's writes that commute, queued for their home and
+    /// opened with the first.
+    queue: Mutex<Option<Arc<super::queue::Queue>>>,
     /// The TLS its links speak, made from its options.
     #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "a node built without TLS speaks none"))]
     pub(crate) tls: super::transport::Tls,
@@ -59,6 +62,7 @@ impl State {
     pub(crate) fn new(dir: &Path, options: Node) -> Result<State> {
         let tls = super::transport::Tls::of(&options)?;
         Ok(State {
+            queue: Mutex::default(),
             tls,
             dir: dir.to_owned(),
             options,
@@ -90,6 +94,10 @@ impl State {
             self.open_copies_held(store)?;
             super::follow::start(self, store);
         }
+        // writes queued before the store last closed are sent from the start
+        if self.dir.join(DIR).join(super::queue::FILE).exists() {
+            self.queue()?;
+        }
         Ok(())
     }
 
@@ -115,6 +123,23 @@ impl State {
             }
         }
         lock(&self.copies).clear();
+        if let Some(queue) = lock(&self.queue).take() {
+            queue.close();
+        }
+    }
+
+    /// This node's queue of writes that commute, opened and its sender started
+    /// the first time.
+    pub(crate) fn queue(self: &Arc<Self>) -> Result<Arc<super::queue::Queue>> {
+        let mut held = lock(&self.queue);
+        if let Some(queue) = &*held {
+            return Ok(Arc::clone(queue));
+        }
+        let queue = Arc::new(super::queue::Queue::open(&self.dir)?);
+        *held = Some(Arc::clone(&queue));
+        let (state, sending) = (Arc::clone(self), Arc::clone(&queue));
+        self.spawn("tinystore node: queue", move || super::queue::send(&state, &sending));
+        Ok(queue)
     }
 
     /// The store the node is, while it is open.

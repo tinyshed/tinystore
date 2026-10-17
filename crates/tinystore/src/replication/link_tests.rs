@@ -234,6 +234,8 @@ fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once()
     let views = far.counters("views").open().unwrap();
     assert_eq!(views.add("page", 2).unwrap(), 3);
     assert_eq!(views.get("page").unwrap(), 3);
+    let home_views = home.counters("views").open().unwrap();
+    eventually("an add queued two links away reaches the home", || home_views.get("page").unwrap() == 3);
 
     let db = far.database("app").migrations(notes).open().unwrap();
     let done = db.exec(crate::sql!("insert into notes (body) values (?)", "far")).unwrap();
@@ -728,4 +730,68 @@ fn nodes_linked_through_tls_copy_and_pass_writes_on_and_a_stranger_s_certificate
     assert!(copy_point(&other, "kv.db").is_none(), "a certificate it does not trust links nothing");
     other.close().unwrap();
     home.close().unwrap();
+}
+
+#[test]
+fn a_counter_s_adds_on_a_copy_answer_at_once_and_reach_its_home_each_once() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.counters("views").open().unwrap().add("seed", 1).unwrap();
+    let options = Node { from: vec![address.clone()], ..Node::default() };
+    let copy = node_with(copy_dir.path(), options.clone());
+    let views = copy.counters("views").open().unwrap();
+    for i in 1..=50 {
+        assert_eq!(views.add("page", 1).unwrap(), i, "the copy answers its own count at once");
+    }
+    assert_eq!(views.get("page").unwrap(), 50, "what the queue holds counts on the copy before its home has it");
+    let home_views = home.counters("views").open().unwrap();
+    eventually("the home counts every queued add", || home_views.get("page").unwrap() == 50);
+    eventually("the copy holds them from its home, none counted twice", || {
+        views.get("page").unwrap() == 50 && copy.node().unwrap().queue().unwrap().is_empty().unwrap()
+    });
+
+    home.close().unwrap();
+    for _ in 0..3 {
+        views.add("page", 1).unwrap();
+    }
+    assert_eq!(views.get("page").unwrap(), 53, "the copy counts on while its home is gone");
+    drop(views);
+    copy.close().unwrap();
+    let home = node_with(home_dir.path(), Node { serve: Some(address), ..Node::default() });
+    let copy = node_with(copy_dir.path(), options);
+    let home_views = home.counters("views").open().unwrap();
+    eventually("the adds queued before the copy closed reach the home once it opens again", || {
+        home_views.get("page").unwrap() == 53
+    });
+
+    home_views.add_queued("dup", 5, "a node", 7).unwrap();
+    home_views.add_queued("dup", 5, "a node", 7).unwrap();
+    home_views.add_queued("dup", 5, "a node", 6).unwrap();
+    assert_eq!(home_views.get("dup").unwrap(), 5, "an op sent twice, or behind the last, counts once");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_copy_promoted_with_adds_still_queued_counts_them_itself_once() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.counters("views").open().unwrap().add("page", 1).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let views = copy.counters("views").open().unwrap();
+    eventually("the copy holds its home's count", || views.get("page").unwrap() == 1);
+    home.close().unwrap();
+    assert_eq!(views.add("page", 2).unwrap(), 3);
+    drop(views);
+    copy.close().unwrap();
+
+    crate::replication::promote(copy_dir.path(), &[]).unwrap();
+    let promoted = node_with(copy_dir.path(), Node::default());
+    let views = promoted.counters("views").open().unwrap();
+    let queue = promoted.node().unwrap().queue().unwrap();
+    eventually("the promoted copy counts what it had queued, and lets it go", || {
+        views.get("page").unwrap() == 3 && queue.is_empty().unwrap()
+    });
+    assert_eq!(views.get("page").unwrap(), 3, "counted once");
+    promoted.close().unwrap();
 }

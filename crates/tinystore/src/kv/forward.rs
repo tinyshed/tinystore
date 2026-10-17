@@ -88,6 +88,12 @@ pub(crate) enum Call {
     ClearCounters,
     /// Makes the handle's name, which a handle opening on a copy found missing.
     Open,
+    /// An add a copy queued and answered at once, and, as its home reads it,
+    /// the node that queued it and the op's number there.
+    AddQueued {
+        n: i64,
+        from: Option<(String, u64)>,
+    },
     /// Claims a once's key for the node that asked, or answers what is kept.
     OnceClaim,
     /// Keeps what the run a claim handed over answered, none when it failed.
@@ -231,6 +237,14 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
                 raw_out(&mut out, raw);
             }
         }
+        Call::AddQueued { n, from } => {
+            out.byte(15);
+            out.long(*n as u64);
+            if let Some((node, op)) = from {
+                out.text(node);
+                out.long(*op);
+            }
+        }
         Call::PutSealed { raw, key_id, put, options } => {
             out.byte(9);
             raw_out(&mut out, raw);
@@ -300,6 +314,7 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
             let answer = if at.byte()? == 1 { Some(raw_in(&mut at)?) } else { None };
             Call::OnceKeep { token, answer }
         }
+        15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
         9 => {
             let raw = raw_in(&mut at)?;
             let key_id = at.text()?;
@@ -421,6 +436,7 @@ fn call_here(
             let counters: Counters = owners.iter().fold(builder.open()?, |counters, owner| counters.under(owner));
             Ok(match call {
                 Call::Add(n) => Answer::Sum(counters.add(key, n)?),
+                Call::AddQueued { n, from: Some((node, op)) } => Answer::Sum(counters.add_queued(key, n, &node, op)?),
                 Call::DeleteCounter => Answer::Found(counters.delete(key)?),
                 Call::ClearCounters => {
                     counters.clear()?;
@@ -542,6 +558,37 @@ fn claim_here(answers: &Bucket<()>, key: &str) -> Result<Claimed> {
             }
         }
     }
+}
+
+/// What a counter's queued add changes, by which a node's queue finds the
+/// adds a copy's read counts: the counters' name, the branch's owners, the key.
+pub(crate) fn subject(name: &str, owners: &[String], key: &str) -> Vec<u8> {
+    let mut out = Out(Vec::new());
+    out.text(name);
+    out.count(owners.len());
+    for owner in owners {
+        out.text(owner);
+    }
+    out.text(key);
+    out.0
+}
+
+/// What a counter's queued add adds; none for another request.
+pub(crate) fn added(request: &[u8]) -> Option<i64> {
+    let mut at = In { bytes: request.get(1..)?, at: 0 };
+    if at.byte().ok()? != 1 {
+        return None;
+    }
+    let _name = at.text().ok()?;
+    let _ttl = (at.byte().ok()?, at.long().ok()?);
+    for _ in 0..at.count().ok()? {
+        at.text().ok()?;
+    }
+    let _key = at.text().ok()?;
+    if at.byte().ok()? != 15 {
+        return None;
+    }
+    Some(at.long().ok()? as i64)
 }
 
 pub(crate) fn sum(bytes: &[u8]) -> Result<i64> {

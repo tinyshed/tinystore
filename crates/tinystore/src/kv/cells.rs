@@ -329,6 +329,27 @@ pub(crate) fn find_bucket(connection: &Connection, name: &str) -> Result<Option<
         .map_err(|error| sql_error("its record", error))
 }
 
+/// The last op of `node` a home applied of those the node queued.
+#[cfg(feature = "replication")]
+pub(crate) fn queued_applied(connection: &Connection, node: &str) -> Result<Option<i64>> {
+    connection
+        .prepare_cached("select applied from _tinystore_kv_queued where node = ?1")
+        .and_then(|mut select| select.query_row([node], |row| row.get(0)).optional())
+        .map_err(|error| sql_error("a node's last op", error))
+}
+
+/// Keeps `op` as the last of `node` applied.
+#[cfg(feature = "replication")]
+pub(crate) fn keep_queued_applied(connection: &Connection, node: &str, op: i64) -> Result<()> {
+    execute(
+        connection,
+        "insert into _tinystore_kv_queued (node, applied) values (?1, ?2)
+            on conflict (node) do update set applied = excluded.applied",
+        params![node, op],
+        "a node's last op",
+    )
+}
+
 pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<(i64, String)> {
     let found: Option<(i64, String)> = connection
         .prepare_cached(SELECT_BUCKET)

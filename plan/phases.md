@@ -319,8 +319,8 @@ in [scaling.md](scaling.md#order).
   `--node-tls-key` and `--node-tls-roots`, the follower checking its upstream's certificate against the roots
   it trusts, the token still what admits it. Left: a file's checksum that proves
   a copy its home's, and files a home makes after a node linked, which it finds by asking every five seconds.
-- [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
-  Built so far: kv's buckets and counters, and the names their handles open, sql's statements and batches,
+- [x] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
+  Built: kv's buckets and counters, and the names their handles open, sql's statements and batches,
   search's documents set and deleted, on the index as its home holds it, and jobs' adds, sets, updates and
   cancels, on the queue as its home holds it open, blobs' puts, creates, copies, renames, deletes and expiries,
   a copy's upload gathered in memory, 256 MiB at most, and handed over whole at its commit, and an encrypted
@@ -336,9 +336,16 @@ in [scaling.md](scaling.md#order).
   made, the home makes, opening the engine that keeps it;
   the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
   ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Records' and metrics'
-  files are each node's own, and a node that copies another's reads them only. Left: a take of an encrypted
-  bucket, whose value would come back unsealed until links have TLS, and the queue of operations that commute. A write waits ten seconds
-  at most for a link to its home before `unavailable`.
+  files are each node's own, and a node that copies another's reads them only. A write waits ten seconds
+  at most for a link to its home before `unavailable`. A counter's add on a copy is queued on its node, in
+  `log/queue.db`, a file no one copies, and answered at once with the copy's count and what the queue holds of the
+  key, found by an index, that the copy does not; a thread sends the queue's ops in order, 256 at most at a time,
+  each with the node's id and its number, through each node on the way, and the home counts an op only past the last
+  of that node's it applied, keeping the number in the commit, so that an op sent twice counts once. An op leaves
+  the queue once the node's copy holds the commit that counted it; one queued before the store closed is sent when
+  it opens, and a copy promoted with ops still queued counts them itself; an add past an i64 at the home is let go
+  and logged, its caller answered already. Left: a take of an encrypted bucket, whose value would come back unsealed
+  until links have TLS, and a counter's add in a database's file, which passes on as a set does.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
   own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is

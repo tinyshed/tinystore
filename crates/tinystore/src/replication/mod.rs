@@ -18,6 +18,7 @@ mod message;
 mod node;
 mod pack;
 mod promote;
+mod queue;
 mod serve;
 mod snapshot;
 mod status;
@@ -36,7 +37,7 @@ pub(crate) use forward::KV;
 pub(crate) use forward::SEARCH;
 #[cfg(feature = "sql")]
 pub(crate) use forward::SQL;
-pub(crate) use forward::{Lenders, database_file, database_of, make_in, pass_on, tag_of};
+pub(crate) use forward::{Lenders, database_file, database_of, enqueue, make_in, pass_on, queued, tag_of};
 pub(crate) use log::Notify;
 pub(crate) use message::{In, Out};
 pub(crate) use node::State;

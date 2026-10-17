@@ -44,8 +44,9 @@ describe.skipIf(library === undefined)('a node in this process', () => {
 		await sessions.set('far', 'written two links away')
 		expect(await sessions.get('far')).toBe('written two links away')
 		expect(await home.bucket<string>('sessions').get('far')).toBe('written two links away')
+		// an add answers at once from the node's queue, and reaches the home after
 		expect(await far.counters('views').add('page', 2)).toBe(2)
-		expect(await home.counters('views').get('page')).toBe(2)
+		await until(async () => (await home.counters('views').get('page')) === 2)
 
 		await home.bucket<string>('sessions').set('later', 'after the copies')
 		await until(async () => (await sessions.get('later')) !== undefined)
