@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use super::catalog::{Catalog, FILE as CATALOG};
+use super::catalog::{Catalog, Claim, FILE as CATALOG};
 use super::copy::{self, Copy};
 use super::entry::Point;
 use super::follow::{Direct, Upstream, Written};
@@ -296,10 +296,16 @@ impl State {
     /// file.
     pub(crate) fn claim(&self, store: &Store, name: &str) -> Result<Claimed> {
         let catalog = self.catalog(store)?;
+        let (address, epoch) = (self.address(), self.epoch_of(name)?);
+        let claim = Claim { file: name, node: &self.id, address: &address, epoch };
         let home = match catalog.home_of(name)? {
+            // a copy this node promoted claims the route its older home held
+            Some(home) if home.node != self.id && epoch > home.epoch && !address.is_empty() => {
+                catalog.claim(store, &claim)?
+            }
             Some(home) => home,
-            None if self.address().is_empty() || self.served_by_from(name) => return Ok(Claimed::From),
-            None => catalog.claim(store, name, &self.id, &self.address())?,
+            None if address.is_empty() || self.served_by_from(name) => return Ok(Claimed::From),
+            None => catalog.claim(store, &claim)?,
         };
         if home.node == self.id {
             return Ok(Claimed::Here);
@@ -309,6 +315,15 @@ impl State {
             return Ok(Claimed::From);
         }
         Ok(Claimed::At(home.address))
+    }
+
+    /// The epoch of this node's log of `name`: its last entry's, or the
+    /// point a promotion left; 1 for a file it holds no log of.
+    fn epoch_of(&self, name: &str) -> Result<u64> {
+        let dir = self.log_dir(name);
+        let last = super::log::Log::last_in(&dir)?.map(|point| point.epoch);
+        let promoted = super::promote::promoted_at(&dir)?.map(|point| point.epoch);
+        Ok(last.max(promoted).unwrap_or(1))
     }
 
     fn served_by_from(&self, name: &str) -> bool {
@@ -618,7 +633,7 @@ pub(crate) fn files_logged_in(logs: &Path) -> Result<Vec<String>> {
 }
 
 /// Collects the names of the files whose log directories lie under `dir`: a
-/// directory holding a segment or a copy's mark is one.
+/// directory holding a segment, a copy's mark or a promotion's point is one.
 fn walk(dir: &Path, prefix: &str, names: &mut Vec<String>) -> Result<()> {
     let listed = match fs::read_dir(dir) {
         Ok(listed) => listed,
@@ -633,7 +648,9 @@ fn walk(dir: &Path, prefix: &str, names: &mut Vec<String>) -> Result<()> {
         }
         let path = found.path();
         let joined = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
-        let holds_a_log = copy::is_copy(&path) || !segments_in(&path)?.is_empty();
+        // a promoted copy whose log kept no entry since its snapshot holds one too
+        let holds_a_log =
+            copy::is_copy(&path) || !segments_in(&path)?.is_empty() || path.join(super::promote::PROMOTED).exists();
         if holds_a_log {
             names.push(joined);
         } else {

@@ -966,3 +966,38 @@ fn a_node_takes_a_file_its_from_does_not_serve_straight_from_its_home_and_writes
     us.close().unwrap();
     eu.close().unwrap();
 }
+
+#[test]
+fn a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let serving_from = |from: Vec<String>, serve: String| Node { serve: Some(serve), from, ..Node::default() };
+    let us = node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() });
+    let us_address = bound(us.node().unwrap()).unwrap().to_string();
+    let eu = node_with(dirs[1].path(), serving_from(vec![us_address.clone()], "127.0.0.1:0".into()));
+    let eu_address = bound(eu.node().unwrap()).unwrap().to_string();
+    let ru = node_with(dirs[2].path(), serving_from(vec![eu_address], "127.0.0.1:0".into()));
+    let ru_address = bound(ru.node().unwrap()).unwrap().to_string();
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('a european row')")).unwrap();
+    let ru_db = ru.database("users").migrations(NOTES).open().unwrap();
+    eventually("russia copies europe's file through europe", || bodies(&ru_db) == ["a european row"]);
+    let ru_id = ru.node().unwrap().id.clone();
+    drop((eu_db, ru_db));
+    eu.close().unwrap();
+    ru.close().unwrap();
+
+    promote(dirs[2].path(), &["sql/users.db".to_owned()]).unwrap();
+    let ru = node_with(dirs[2].path(), serving_from(vec![us_address], ru_address));
+    let catalog = us.node().unwrap().catalog(&us).unwrap();
+    eventually("russia's promoted file takes the route at its next epoch", || {
+        catalog.home_of("sql/users.db").unwrap().is_some_and(|home| home.node == ru_id && home.epoch == 2)
+    });
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america takes the file from russia", || bodies(&us_db) == ["a european row"]);
+    us_db.exec(crate::sql!("insert into notes (body) values ('written in america')")).unwrap();
+    let ru_db = ru.database("users").migrations(NOTES).open().unwrap();
+    assert_eq!(bodies(&ru_db), ["a european row", "written in america"], "the write went to russia");
+    drop((us_db, ru_db));
+    ru.close().unwrap();
+    us.close().unwrap();
+}

@@ -144,7 +144,8 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
 - `--node-synchronous` makes the home answer a write once a node copying
   its file holds it.
 - When America is gone for good: stop Europe, `tinystore promote ./eu`, start
-  it without `--from`; Russia goes on from it. America comes back with
+  it without `--from`; Russia goes on from it. With a catalog, the promoted
+  file's next epoch moves its route there when Europe starts. America comes back with
   `tinystore demote ./us` and `--from eu:7444`.
 
 ## An example: America, Europe, Russia

@@ -35,9 +35,12 @@ const SCHEMA: &str = "create table if not exists homes (
     address text    not null,
     epoch   integer not null
 ) strict, without rowid";
-// a node that claims a file again, its address moved, keeps it
-const CLAIM: &str = "insert into homes (file, node, address, epoch) values (?1, ?2, ?3, 1)
-    on conflict (file) do update set address = excluded.address where homes.node = excluded.node";
+// a node that claims a file again, its address moved, keeps it; a claim at
+// a later epoch, a promoted copy's, moves the route to its node
+const CLAIM: &str = "insert into homes (file, node, address, epoch) values (?1, ?2, ?3, ?4)
+    on conflict (file) do update
+        set node = excluded.node, address = excluded.address, epoch = max(homes.epoch, excluded.epoch)
+        where homes.node = excluded.node or excluded.epoch > homes.epoch";
 const HOME_OF: &str = "select node, address, epoch from homes where file = ?1";
 
 /// A file's home as the catalog names it.
@@ -79,23 +82,25 @@ impl Catalog {
             .map_err(|error| error.within(format!("catalog: {name}")))
     }
 
-    /// Claims `name` for `node`, at the catalog's home: the home it names
-    /// once the claim committed, `node` if no node held the name, and the
-    /// node that did otherwise.
-    pub(crate) fn claim(&self, store: &Store, name: &str, node: &str, address: &str) -> Result<Home> {
+    /// Claims `name` for `node`, whose log of it is at `epoch`, at the
+    /// catalog's home: the home it names once the claim committed, `node` if
+    /// no node held the name or held it at an older epoch, and the node that
+    /// did otherwise.
+    pub(crate) fn claim(&self, store: &Store, claim: &Claim<'_>) -> Result<Home> {
         if self.file.is_copy() {
-            let answer = super::forward::pass_on(store, FILE, claim_op(name, node, address))?;
-            return decode_home(&answer).map_err(|error| error.within(format!("catalog: {name}")));
+            let answer = super::forward::pass_on(store, FILE, claim_op(claim))?;
+            return decode_home(&answer).map_err(|error| error.within(format!("catalog: {}", claim.file)));
         }
-        self.claim_here(name, node, address)
+        self.claim_here(claim)
     }
 
-    fn claim_here(&self, name: &str, node: &str, address: &str) -> Result<Home> {
-        let (name, node, address) = (name.to_owned(), node.to_owned(), address.to_owned());
+    fn claim_here(&self, claim: &Claim<'_>) -> Result<Home> {
+        let (name, node, address) = (claim.file.to_owned(), claim.node.to_owned(), claim.address.to_owned());
+        let epoch = i64::try_from(claim.epoch).map_err(|_| Error::invalid("an epoch past 2^63"))?;
         let shown = format!("catalog: {name}");
         self.file
             .write(name.len() + address.len(), move |tx| {
-                tx.execute(CLAIM, params![name, node, address]).map_err(|error| sql_error("a claim", error))?;
+                tx.execute(CLAIM, params![name, node, address, epoch]).map_err(|error| sql_error("a claim", error))?;
                 tx.prepare_cached(HOME_OF)
                     .and_then(|mut select| select.query_row([&name], read_home))
                     .map_err(|error| sql_error("a claim", error))
@@ -112,12 +117,23 @@ fn read_home(row: &rusqlite::Row<'_>) -> rusqlite::Result<Home> {
     Ok(Home { node: row.get(0)?, address: row.get(1)?, epoch: row.get::<_, i64>(2)? as u64 })
 }
 
+/// A node's claim of a file's name.
+pub(crate) struct Claim<'a> {
+    pub(crate) file: &'a str,
+    pub(crate) node: &'a str,
+    pub(crate) address: &'a str,
+    /// The epoch of the node's log of the file: 1 for a file it makes, the
+    /// next for a copy a person promoted.
+    pub(crate) epoch: u64,
+}
+
 /// A claim as it passes from a copy of the catalog toward its home.
-fn claim_op(name: &str, node: &str, address: &str) -> Vec<u8> {
+fn claim_op(claim: &Claim<'_>) -> Vec<u8> {
     let mut out = Out(vec![super::forward::CATALOG]);
-    out.text(name);
-    out.text(node);
-    out.text(address);
+    out.text(claim.file);
+    out.text(claim.node);
+    out.text(claim.address);
+    out.long(claim.epoch);
     out.0
 }
 
@@ -125,9 +141,10 @@ fn claim_op(name: &str, node: &str, address: &str) -> Vec<u8> {
 /// the answer's bytes, and the file they wrote.
 pub(crate) fn run(store: &Store, body: &[u8]) -> Result<(Vec<u8>, String)> {
     let mut at = In { bytes: body, at: 0 };
-    let (name, node, address) = (at.text()?, at.text()?, at.text()?);
+    let (file, node, address, epoch) = (at.text()?, at.text()?, at.text()?, at.long()?);
     let catalog = store.node().ok_or_else(|| Error::invalid("a claim for the catalog of a store that is no node"))?;
-    let home = catalog.catalog(store)?.claim(store, &name, &node, &address)?;
+    let claim = Claim { file: &file, node: &node, address: &address, epoch };
+    let home = catalog.catalog(store)?.claim(store, &claim)?;
     Ok((encode_home(&home), FILE.to_owned()))
 }
 

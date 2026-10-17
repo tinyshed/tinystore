@@ -360,8 +360,10 @@ in [scaling.md](scaling.md#order).
   one, `Unavailable`. `--node-catalog` and `--node-address` in the command line. A file whose home the catalog
   names at an address that the nodes of `from` do not serve, a node takes over a link straight to that home,
   one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
-  them, and the address is kept beside the copy's log so that the link is made again at the next start. Left:
-  moving a home that is alive.
+  them, and the address is kept beside the copy's log so that the link is made again at the next start. A claim
+  carries the epoch of the node's log of the file: one at a later epoch, a copy a person promoted, moves the route
+  to its node when it starts, and the others take the file from there. Left: moving a home that is alive, which
+  swaps a file between a copy and a home under engines that hold it open.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
   Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the
