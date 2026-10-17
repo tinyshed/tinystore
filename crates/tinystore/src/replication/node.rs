@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use super::copy::{self, Copy};
 use super::entry::Point;
 use super::follow::Upstream;
+use super::links::Follower;
 use super::log::{Acks, Bounds, Log, Notify, segments_in};
 use super::snapshot::Source;
 use super::{DIR, NODE_LOCAL, Node};
@@ -65,6 +66,33 @@ pub(crate) struct State {
     /// The readers of each engine's file open on a copy, by the copy's name:
     /// a snapshot taken again closes them while it takes the file's place.
     copy_readers: Mutex<HashMap<String, Vec<Weak<Readers>>>>,
+    /// The nodes taking from this one now, by their link: what `log/links`
+    /// says of them.
+    pub(crate) followers: Mutex<HashMap<u64, Follower>>,
+    next_follower: std::sync::atomic::AtomicU64,
+    /// The address of the node this one takes from, while a link reaches it.
+    pub(crate) upstream_at: Mutex<Option<String>>,
+}
+
+/// A node taking from this one, kept among the followers until its link ends.
+pub(crate) struct Following {
+    state: Arc<State>,
+    id: u64,
+}
+
+impl Following {
+    /// The follower holds `file` up to entry `sequence`.
+    pub(crate) fn applied(&self, file: &str, sequence: u64) {
+        if let Some(follower) = lock(&self.state.followers).get_mut(&self.id) {
+            follower.applied.insert(file.to_owned(), sequence);
+        }
+    }
+}
+
+impl Drop for Following {
+    fn drop(&mut self) {
+        lock(&self.state.followers).remove(&self.id);
+    }
 }
 
 /// The readers of a copy's files held closed while a snapshot takes the
@@ -101,6 +129,9 @@ impl State {
             lost: std::sync::atomic::AtomicU64::new(0),
             wanted: AtomicBool::new(false),
             copy_readers: Mutex::default(),
+            followers: Mutex::default(),
+            next_follower: std::sync::atomic::AtomicU64::new(0),
+            upstream_at: Mutex::default(),
         })
     }
 
@@ -115,6 +146,8 @@ impl State {
             self.open_copies_held(store)?;
             super::follow::start(self, store);
         }
+        let writing = Arc::clone(self);
+        self.spawn("tinystore node: links", move || super::links::keep_written(&writing));
         // writes queued before the store last closed are sent from the start
         if self.dir.join(DIR).join(super::queue::FILE).exists() {
             self.queue()?;
@@ -256,6 +289,13 @@ impl State {
             copies = self.copied.wait_timeout(copies, turn).unwrap_or_else(PoisonError::into_inner).0;
         }
         Ok(())
+    }
+
+    /// Keeps a node that linked from `address` among the followers.
+    pub(crate) fn following(self: &Arc<Self>, address: String) -> Following {
+        let id = self.next_follower.fetch_add(1, Ordering::Relaxed);
+        lock(&self.followers).insert(id, Follower { address, applied: Default::default() });
+        Following { state: Arc::clone(self), id }
     }
 
     /// Keeps the readers of an engine's file opened on the copy `name`.

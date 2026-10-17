@@ -513,7 +513,7 @@ fn a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (home, address) = serving(home_dir.path());
     home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
-    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let copy = node_with(copy_dir.path(), Node { from: vec![address.clone()], ..Node::default() });
     copy.bucket::<String>("sessions").open().unwrap();
     caught_up(&home, &copy, &["kv.db"]);
     home.bucket::<String>("sessions").open().unwrap().set("k2", &"v".to_owned()).unwrap();
@@ -529,8 +529,17 @@ fn a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand() {
     assert!(!at_copy[0].home && !at_copy[0].taking);
     assert_eq!(at_copy[0].applied, Some(last.sequence));
     assert_eq!(at_copy[0].entries, Some((last.sequence, last.sequence)), "what it received since its snapshot");
+
+    eventually("a running home says who follows it and what each holds", || {
+        let links = links(home_dir.path()).unwrap().unwrap_or_default();
+        links.followers.len() == 1 && links.followers[0].applied.get("kv.db") == Some(&last.sequence)
+    });
+    eventually("a running copy says whom it takes from", || {
+        links(copy_dir.path()).unwrap().is_some_and(|links| links.from.as_deref() == Some(address.as_str()))
+    });
     copy.close().unwrap();
     home.close().unwrap();
+    assert_eq!(links(home_dir.path()).unwrap(), None, "a node that stopped says no links");
 }
 
 #[test]

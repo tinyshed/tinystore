@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use super::entry::{self, Kind, MAGIC, Point};
 use super::log::{segment_path, segments_in};
 use super::message::{Frames, Message, VERSION, plain_name, timed_out};
-use super::node::{State, lock};
+use super::node::{Following, State, lock};
 use super::pack::Packer;
 use super::snapshot::{self, Part};
 use super::transport::{self, Reading, Writing};
@@ -97,9 +97,12 @@ impl Out {
 struct Asked {
     follows: Vec<(String, Point)>,
     ended: bool,
+    /// The node at the link's other end, among the node's followers.
+    following: Option<Following>,
 }
 
 fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
+    let address = stream.peer_addr().map_or_else(|_| "an unknown address".to_owned(), |at| at.to_string());
     let (mut reading, writing) = transport::accept(state, stream)?;
     reading.set_timeout(Duration::from_secs(1))?;
     writing.set_timeout(SILENT_AT_MOST)?;
@@ -120,7 +123,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     out.send(&Message::Welcome { files: state.files_served()? })?;
     out.pack()?;
     frames.unpack_from_here()?;
-    let asked = Arc::new(Mutex::new(Asked::default()));
+    let asked = Arc::new(Mutex::new(Asked { following: Some(state.following(address)), ..Asked::default() }));
     let sending = (Arc::clone(state), Arc::clone(&out), Arc::clone(&asked));
     state.spawn("tinystore node: send", move || {
         let (state, out, asked) = sending;
@@ -133,7 +136,9 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     });
     let mut following = false;
     let ended = read_requests(state, &mut reading, &mut frames, &out, &asked, &mut following);
-    lock(&asked).ended = true;
+    let mut asked_last = lock(&asked);
+    (asked_last.ended, asked_last.following) = (true, None);
+    drop(asked_last);
     state.notify.appended();
     if following {
         state.acks.unlinked();
@@ -178,7 +183,12 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
-            Message::Applied { file, sequence } => state.acks.held(&file, sequence),
+            Message::Applied { file, sequence } => {
+                state.acks.held(&file, sequence);
+                if let Some(following) = &lock(asked).following {
+                    following.applied(&file, sequence);
+                }
+            }
             #[cfg(feature = "blobs")]
             Message::Fetch { path } => {
                 if !crate::blobs::is_object(&path) {

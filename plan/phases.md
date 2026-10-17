@@ -366,7 +366,9 @@ in [scaling.md](scaling.md#order).
   with the snapshot it takes. A snapshot taken again while engines read the copy closes their readers, holding
   their reads, until the new file has the copy's name. `tinystore node status <dir>` and `replication::status`
   say, from a node's directory, which files it writes, which it copies, the entries each log keeps and where each
-  copy stands. Left: the command line's view of a running node's links.
+  copy stands; a running node writes its links to `log/links` every five seconds, the node it takes from and the
+  nodes taking from it with the entry each holds of each file, and removes them when it stops, and
+  `replication::links` reads them and the command prints them, each follower's distance behind the log.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
   Built so far: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
   commit of a file the node writes wait, the writer held, until a node copying it says it holds the entry, so

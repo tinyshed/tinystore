@@ -119,6 +119,7 @@ fn keep_linked(state: &Arc<State>, store: &WeakStore) {
             }
         }
         state.upstream.linked(None);
+        *lock(&state.upstream_at) = None;
         if began.elapsed() > Duration::from_secs(10) {
             pause = Duration::from_millis(200);
         } else {
@@ -176,6 +177,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
                         frames.unpack_from_here()?;
                         out.pack()?;
                         state.upstream.linked(Some(Arc::clone(&out)));
+                        *lock(&state.upstream_at) = Some(address.to_owned());
                         tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
                         link.follow_new(&files)?;
                         continue;
