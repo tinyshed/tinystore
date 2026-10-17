@@ -13,6 +13,7 @@ use super::entry::{self, Kind, MAGIC, Point};
 use super::log::{segment_path, segments_in};
 use super::message::{Frames, Message, VERSION, plain_name, timed_out};
 use super::node::{State, lock};
+use super::pack::Packer;
 use super::snapshot::{self, Part};
 use crate::{Error, ErrorKind, Result};
 
@@ -55,20 +56,32 @@ fn accept(state: &Arc<State>, listener: &TcpListener) {
 
 /// What a link sends, shared by its threads.
 pub(crate) struct Out {
-    stream: Mutex<TcpStream>,
+    stream: Mutex<(TcpStream, Option<Packer>)>,
     last: Mutex<Instant>,
 }
 
 impl Out {
     pub(crate) fn new(stream: TcpStream) -> Out {
-        Out { stream: Mutex::new(stream), last: Mutex::new(Instant::now()) }
+        Out { stream: Mutex::new((stream, None)), last: Mutex::new(Instant::now()) }
     }
 
     pub(crate) fn send(&self, message: &Message) -> Result<()> {
         let bytes = message.encode();
-        let mut stream = lock(&self.stream);
-        stream.write_all(&bytes).map_err(|error| Error::io("a link", error))?;
+        let mut held = lock(&self.stream);
+        let (stream, packer) = &mut *held;
+        let sent = match packer {
+            Some(packer) => packer.pack(&bytes).and_then(|packed| stream.write_all(&packed)),
+            None => stream.write_all(&bytes),
+        };
+        sent.map_err(|error| Error::io("a link", error))?;
         *lock(&self.last) = Instant::now();
+        Ok(())
+    }
+
+    /// Sends what follows through the link's stream.
+    pub(crate) fn pack(&self) -> Result<()> {
+        let packer = Packer::new().map_err(|error| Error::io("a link's stream", error))?;
+        lock(&self.stream).1 = Some(packer);
         Ok(())
     }
 
@@ -104,6 +117,8 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         return Ok(());
     }
     out.send(&Message::Welcome { files: state.files_served()? })?;
+    out.pack()?;
+    frames.unpack_from_here()?;
     let asked = Arc::new(Mutex::new(Asked::default()));
     let sending = (Arc::clone(state), Arc::clone(&out), Arc::clone(&asked));
     state.spawn("tinystore node: send", move || {

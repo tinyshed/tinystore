@@ -28,7 +28,7 @@ blobs = ["store", "dep:sha2", "dep:libc"]
 # a backup of every engine as one zip, checked by SHA-256, and its restore
 backup = ["store", "dep:sha2"]
 # a store a node: a log of each file's commits, entries chained by SHA-256
-replication = ["store", "dep:sha2"]
+replication = ["store", "dep:sha2", "dep:zstd"]
 # a logger's lines printed, which a store's logger keeps too
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
@@ -66,8 +66,8 @@ sha2 = { version = "0.11.0", default-features = false, optional = true }
 # the values of an encrypted bucket, sealed with the store's encryption key:
 # XChaCha20-Poly1305, RustCrypto's, its key and nonces from the system's source
 chacha20poly1305 = { version = "0.11.0", optional = true }
-# the rows of records: libzstd, built with the crate and linked into it, its
-# frames any Zstandard decoder reads
+# the rows of records, the runs of metrics and a node's links: libzstd, built
+# with the crate and linked into it, its frames any Zstandard decoder reads
 zstd = { version = "0.14.2", optional = true, default-features = false }
 # a config's files, parsed by the core so that no program brings a parser and
 # every language reads them alike: TOML, and YAML 1.2 without the encodings

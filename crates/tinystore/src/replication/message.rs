@@ -13,8 +13,9 @@ use std::io::Read;
 use super::entry::Point;
 use crate::{Error, ErrorKind, Result};
 
-/// The link's version, which a node's hello names.
-pub(crate) const VERSION: u32 = 1;
+/// The link's version, which a node's hello names: the second packs what
+/// follows the welcome through zstd.
+pub(crate) const VERSION: u32 = 2;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
 
@@ -275,6 +276,8 @@ impl Message {
 pub(crate) struct Frames {
     bytes: Vec<u8>,
     start: usize,
+    /// The link's stream, once what arrives is packed.
+    unpacker: Option<super::pack::Unpacker>,
 }
 
 impl Frames {
@@ -287,8 +290,22 @@ impl Frames {
         }
         let mut chunk = [0; 64 << 10];
         let read = from.read(&mut chunk)?;
-        self.bytes.extend_from_slice(&chunk[..read]);
+        match &mut self.unpacker {
+            Some(unpacker) => unpacker.unpack(&chunk[..read], &mut self.bytes)?,
+            None => self.bytes.extend_from_slice(&chunk[..read]),
+        }
         Ok(read > 0)
+    }
+
+    /// Reads what arrives from here on through the link's stream, what
+    /// arrived already past the last message read included.
+    pub(crate) fn unpack_from_here(&mut self) -> Result<()> {
+        let arrived = self.bytes.split_off(self.start);
+        (self.bytes, self.start) = (Vec::new(), 0);
+        let mut unpacker = super::pack::Unpacker::new().map_err(|error| Error::io("a link's stream", error))?;
+        unpacker.unpack(&arrived, &mut self.bytes).map_err(|error| Error::io("a link's stream", error))?;
+        self.unpacker = Some(unpacker);
+        Ok(())
     }
 
     /// The next whole message read, if one is.

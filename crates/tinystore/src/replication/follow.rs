@@ -177,6 +177,8 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
                 match message {
                     Message::Welcome { files } => {
                         welcomed = true;
+                        frames.unpack_from_here()?;
+                        out.pack()?;
                         state.upstream.linked(Some(Arc::clone(&out)));
                         tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
                         link.follow_new(&files)?;

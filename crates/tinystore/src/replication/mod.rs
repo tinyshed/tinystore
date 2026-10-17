@@ -16,6 +16,7 @@ mod forward;
 mod log;
 mod message;
 mod node;
+mod pack;
 mod serve;
 mod snapshot;
 

@@ -138,7 +138,7 @@ runtime.
   tracing, tracing-subscriber's registry for a logger's layer, jiff for a
   cron's zone and a console line's time, sha2 for blobs' hashes, a key's id,
   a series' identity, a backup's files, a table's row in its index and a log's entries, chacha20poly1305 for the values of encrypted
-  buckets, zstd for the rows of records and the runs of metrics, the
+  buckets, zstd for the rows of records, the runs of metrics and a node's links, the
   `metrics` facade, whose recorder the metrics engine is, toml and
   yaml-rust2, without its encodings, for a config's files, fst and
   levenshtein_automata for a misspelt name's nearest words,
