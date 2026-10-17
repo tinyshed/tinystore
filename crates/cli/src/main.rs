@@ -10,6 +10,7 @@ mod backup;
 mod connection;
 mod lines;
 mod local;
+mod node;
 mod promote;
 mod remote;
 mod search;
@@ -25,10 +26,11 @@ const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --s
        tinystore search list <dir>
        tinystore search drop <dir> <name>
        tinystore promote <dir> [<file>...]
-       tinystore demote <dir> [<file>...]";
+       tinystore demote <dir> [<file>...]
+       tinystore node status <dir>";
 
 /// The commands, for a misspelt one's nearest.
-const COMMANDS: [&str; 7] = ["serve", "backup", "restore", "search", "promote", "demote", "version"];
+const COMMANDS: [&str; 8] = ["serve", "backup", "restore", "search", "promote", "demote", "node", "version"];
 
 /// What follows a refusal when a person may have misspelt a command or a
 /// flag: the nearest of `names`, one edit away for three to six letters and
@@ -53,6 +55,7 @@ fn main() -> ExitCode {
         Some("search") => search::run(&args[1..]),
         Some("promote") => promote::run(&args[1..]),
         Some("demote") => promote::demote(&args[1..]),
+        Some("node") => node::run(&args[1..]),
         Some("version" | "--version") => {
             println!("tinystore {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

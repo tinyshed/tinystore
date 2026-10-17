@@ -135,9 +135,5 @@ fn demote_one(file: String, log: &Path) -> Result<Demoted> {
 
 /// The point a promoted copy's log goes on from, if the log in `dir` is one.
 pub(crate) fn promoted_at(dir: &Path) -> Result<Option<Point>> {
-    let path = dir.join(PROMOTED);
-    if !path.exists() {
-        return Ok(None);
-    }
-    Ok(Some(Position::read(path)?.point()))
+    Position::read_point(&dir.join(PROMOTED))
 }

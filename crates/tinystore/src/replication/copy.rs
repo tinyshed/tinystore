@@ -171,19 +171,30 @@ impl Position {
     pub(crate) fn read(path: PathBuf) -> Result<Position> {
         let kept = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path);
         let kept = kept.map_err(|error| io_error(&path, error))?;
-        let bytes = fs::read(&path).map_err(|error| io_error(&path, error))?;
-        let mut position = Position { point: Point::default(), kept, path };
+        let point = Self::read_point(&path)?.unwrap_or_default();
+        Ok(Position { point, kept, path })
+    }
+
+    /// The point kept in `path`, with nothing opened to write: none for a
+    /// file that is not there or holds none yet.
+    pub(crate) fn read_point(path: &Path) -> Result<Option<Point>> {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(path, error)),
+        };
         if bytes.is_empty() {
-            return Ok(position);
+            return Ok(None);
         }
         let sum_holds = bytes.len() == Self::BYTES && bytes[32..] == Self::checksum(&bytes[..32]).to_le_bytes();
         if !sum_holds {
             return Err(Self::corrupt("its position does not read: the copy starts again from a snapshot"));
         }
-        position.point.sequence = u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes"));
-        position.point.epoch = u64::from_le_bytes(bytes[8..16].try_into().expect("eight bytes"));
-        position.point.check.copy_from_slice(&bytes[16..32]);
-        Ok(position)
+        Ok(Some(Point {
+            sequence: u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes")),
+            epoch: u64::from_le_bytes(bytes[8..16].try_into().expect("eight bytes")),
+            check: bytes[16..32].try_into().expect("sixteen bytes"),
+        }))
     }
 
     /// Whether `entry` is the next to apply: `false` for one applied already,

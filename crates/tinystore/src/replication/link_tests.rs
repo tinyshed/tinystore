@@ -454,3 +454,28 @@ fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
     copy.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    home.bucket::<String>("sessions").open().unwrap().set("k2", &"v".to_owned()).unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    let last = home_point(&home, "kv.db");
+
+    let at_home = status(home_dir.path()).unwrap();
+    assert_eq!(at_home.len(), 1);
+    assert!(at_home[0].home && at_home[0].applied.is_none());
+    assert_eq!(at_home[0].entries, Some((1, last.sequence)));
+    let at_copy = status(copy_dir.path()).unwrap();
+    assert_eq!(at_copy.len(), 1);
+    assert!(!at_copy[0].home && !at_copy[0].taking);
+    assert_eq!(at_copy[0].applied, Some(last.sequence));
+    assert_eq!(at_copy[0].entries, Some((last.sequence, last.sequence)), "what it received since its snapshot");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
