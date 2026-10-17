@@ -224,6 +224,8 @@ fn asked(options: &[u8]) -> Result<Asked> {
         token: asked.token,
         synchronous: asked.synchronous,
         tls: None,
+        catalog: false,
+        address: None,
     });
     Ok(Asked {
         durability: durability.transpose()?,

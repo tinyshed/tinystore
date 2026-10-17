@@ -23,6 +23,8 @@ use crate::{Error, ErrorKind, Result, Store};
 pub(crate) const MAKE: u8 = 0;
 /// The tag of many writes in order, a node's queued ops sent at once.
 pub(crate) const BATCH: u8 = 6;
+/// The tag of a claim of a file's name in the catalog.
+pub(crate) const CATALOG: u8 = 7;
 /// The tag of a call of kv's, the first byte of what passes on.
 #[cfg(feature = "kv")]
 pub(crate) const KV: u8 = 1;
@@ -326,6 +328,7 @@ fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
             }
             Ok((Vec::new(), file))
         }
+        CATALOG => super::catalog::run(store, body),
         #[cfg(feature = "kv")]
         KV => crate::kv::forward::run(store, &lenders, body),
         #[cfg(feature = "sql")]

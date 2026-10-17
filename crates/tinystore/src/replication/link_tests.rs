@@ -856,3 +856,84 @@ fn a_copy_promoted_with_adds_still_queued_counts_them_itself_once() {
     assert_eq!(views.get("page").unwrap(), 3, "counted once");
     promoted.close().unwrap();
 }
+
+/// Two nodes each taking from the other, America the catalog's home, with
+/// no list of the files either copies.
+fn meshed(us_dir: &Path, eu_dir: &Path) -> (Store, Store) {
+    let ports =
+        [std::net::TcpListener::bind("127.0.0.1:0").unwrap(), std::net::TcpListener::bind("127.0.0.1:0").unwrap()];
+    let [us_address, eu_address] = ports.map(|port| port.local_addr().unwrap().to_string());
+    let node = |serve: &str, from: &str, catalog: bool| Node {
+        serve: Some(serve.to_owned()),
+        from: vec![from.to_owned()],
+        catalog,
+        ..Node::default()
+    };
+    let us = node_with(us_dir, node(&us_address, &eu_address, true));
+    let eu = node_with(eu_dir, node(&eu_address, &us_address, false));
+    (us, eu)
+}
+
+const NOTES: [(&str, &str); 1] =
+    [("0001_notes.sql", "create table notes (id integer primary key, body text not null);")];
+
+fn bodies(db: &crate::sql::Database) -> Vec<String> {
+    db.all::<String>(crate::sql!("select body from notes order by id")).unwrap()
+}
+
+#[test]
+fn nodes_with_a_catalog_write_the_files_they_made_and_copy_the_others_with_no_list() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (us, eu) = meshed(us_dir.path(), eu_dir.path());
+    let sessions = us.bucket::<String>("sessions").open().unwrap();
+    sessions.set("seed", &"made in america".to_owned()).unwrap();
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('a european row')")).unwrap();
+    assert!(eu.node().unwrap().copy("sql/users.db").is_none(), "europe made sql/users.db, and writes it");
+
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    assert!(us.node().unwrap().copy("sql/users.db").is_some(), "america copies what europe made");
+    eventually("america reads europe's row", || bodies(&us_db) == ["a european row"]);
+    us_db.exec(crate::sql!("insert into notes (body) values ('written in america')")).unwrap();
+    assert_eq!(bodies(&eu_db), ["a european row", "written in america"], "a write goes to the file's home");
+    let eu_sessions = eu.bucket::<String>("sessions").open().unwrap();
+    assert!(eu.node().unwrap().copy("kv.db").is_some(), "europe copies the kv.db america made");
+    assert_eq!(eu_sessions.get("seed").unwrap().as_deref(), Some("made in america"));
+
+    let (us_node, eu_node) = (us.node().unwrap(), eu.node().unwrap());
+    let catalog = us_node.catalog(&us).unwrap();
+    assert_eq!(catalog.home_of("sql/users.db").unwrap().unwrap().node, eu_node.id);
+    assert_eq!(catalog.home_of("kv.db").unwrap().unwrap().node, us_node.id);
+
+    // two nodes making one file in the same moment: the catalog keeps one claim
+    let both = |store: Store| {
+        std::thread::spawn(move || {
+            let db = store.database("both").migrations(NOTES).open().unwrap();
+            let home = store.node().unwrap().copy("sql/both.db").is_none();
+            db.exec(crate::sql!("insert into notes (body) values ('one')")).unwrap();
+            home
+        })
+    };
+    let (in_america, in_europe) = (both(us.clone()), both(eu.clone()));
+    let homes = [in_america.join().unwrap(), in_europe.join().unwrap()];
+    assert_eq!(homes.iter().filter(|home| **home).count(), 1, "one node writes sql/both.db: {homes:?}");
+    let us_both = us.database("both").migrations(NOTES).open().unwrap();
+    let eu_both = eu.database("both").migrations(NOTES).open().unwrap();
+    eventually("each node holds both writes", || bodies(&us_both).len() == 2 && bodies(&eu_both).len() == 2);
+    eu.close().unwrap();
+    us.close().unwrap();
+}
+
+#[test]
+fn a_node_cut_off_from_the_catalog_s_home_writes_its_files_and_makes_no_new_one() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (us, eu) = meshed(us_dir.path(), eu_dir.path());
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    us.close().unwrap();
+
+    eu_db.exec(crate::sql!("insert into notes (body) values ('while america is gone')")).unwrap();
+    assert_eq!(bodies(&eu_db), ["while america is gone"], "europe writes the file it is home of");
+    let refused = eu.database("later").migrations(NOTES).open().unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a new file waits for the catalog: {refused}");
+    eu.close().unwrap();
+}

@@ -56,6 +56,8 @@ fn node_of(node: &args::Node) -> Result<tinystore::replication::Node, String> {
         token,
         synchronous: node.synchronous,
         tls: node.tls.clone(),
+        catalog: node.catalog,
+        address: node.address.clone(),
     })
 }
 

@@ -62,13 +62,13 @@ pub(crate) struct Queue {
 }
 
 impl Queue {
-    /// Opens the queue of the node in `dir`, its id made the first time.
-    pub(crate) fn open(dir: &Path) -> Result<Queue> {
+    /// Opens the queue of the node in `dir`, whose id is `node`.
+    pub(crate) fn open(dir: &Path, node: String) -> Result<Queue> {
         let logs = dir.join(super::DIR);
         std::fs::create_dir_all(&logs).map_err(|error| Error::io(logs.display().to_string(), error))?;
         let file = File::open(logs.join(FILE), Config::default())?;
         file.transaction(|tx| tx.execute_batch(SCHEMA).map_err(|error| sql_error("a node's queue", error)))?;
-        Ok(Queue { file, queued: Mutex::new(false), wake: Condvar::new(), node: node_id(&logs)? })
+        Ok(Queue { file, queued: Mutex::new(false), wake: Condvar::new(), node })
     }
 
     /// Queues `request`, a write of `file` its home applies that changes
@@ -181,7 +181,8 @@ fn send_some(state: &State, store: &Store, queue: &Queue) -> Result<bool> {
 
 /// The node's id, made once from its directory, its process and the time,
 /// and kept in `log/node`.
-fn node_id(logs: &Path) -> Result<String> {
+pub(crate) fn node_id(logs: &Path) -> Result<String> {
+    std::fs::create_dir_all(logs).map_err(|error| Error::io(logs.display().to_string(), error))?;
     let path = logs.join("node");
     if let Ok(kept) = std::fs::read_to_string(&path) {
         let kept = kept.trim();

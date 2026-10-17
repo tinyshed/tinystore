@@ -213,6 +213,9 @@ impl Store {
         let path = self.inner.dir.join(name);
         #[cfg(feature = "replication")]
         if let Some(node) = &self.inner.node {
+            if node.is_new(name) && node.uses_catalog() {
+                return self.open_new_in_the_catalog(node, name, config);
+            }
             if node.takes(name) {
                 node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
                 return Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?));
@@ -223,6 +226,30 @@ impl Store {
             return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
         }
         crate::sqlite::File::open(path, config)
+    }
+
+    /// Opens a file no node of the store's held before it: written here once
+    /// this node's claim in the catalog won, copied from its home otherwise.
+    #[cfg(feature = "replication")]
+    fn open_new_in_the_catalog(
+        &self,
+        node: &Arc<crate::replication::State>,
+        name: &str,
+        config: crate::sqlite::Config,
+    ) -> Result<crate::sqlite::File> {
+        let path = self.inner.dir.join(name);
+        if node.claim(self, name).map_err(|error| error.within(self.describe()))? {
+            return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
+        }
+        if !node.takes(name) {
+            return Err(Error::new(
+                crate::ErrorKind::Unavailable,
+                format!("{name}: the catalog names its home on another node, and this node takes from none"),
+            )
+            .within(self.describe()));
+        }
+        node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
+        Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?))
     }
 
     /// The directory of the log of the store's file `name`; a store that is

@@ -9,6 +9,7 @@
 //!
 //! [plan/scaling.md]: https://github.com/tinyshed/tinystore/blob/rust/plan/scaling.md
 
+mod catalog;
 mod copy;
 mod entry;
 mod follow;
@@ -72,6 +73,15 @@ pub struct Node {
     /// TLS on its links, with the `replication-tls` feature; plain TCP when
     /// none.
     pub tls: Option<NodeTls>,
+    /// This node is the home of the catalog, `catalog.db`, which names each
+    /// file's home: one node of a network, chosen by a person. A network with
+    /// a catalog needs no `files`: a node writes the files it made, each once
+    /// its claim in the catalog won, and copies the others.
+    pub catalog: bool,
+    /// Where other nodes reach this one, `host:port`, which the catalog keeps
+    /// beside the files it is home of; the address `serve` listens on when
+    /// none.
+    pub address: Option<String>,
 }
 
 /// TLS on a node's links: the certificate its server answers with, and the
@@ -96,6 +106,8 @@ impl fmt::Debug for Node {
             .field("token", &self.token.as_ref().map(|_| "hidden"))
             .field("synchronous", &self.synchronous)
             .field("tls", &self.tls)
+            .field("catalog", &self.catalog)
+            .field("address", &self.address)
             .finish()
     }
 }

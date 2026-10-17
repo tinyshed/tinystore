@@ -11,6 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::catalog::{Catalog, FILE as CATALOG};
 use super::copy::{self, Copy};
 use super::entry::Point;
 use super::follow::Upstream;
@@ -72,6 +73,13 @@ pub(crate) struct State {
     next_follower: std::sync::atomic::AtomicU64,
     /// The address of the node this one takes from, while a link reaches it.
     pub(crate) upstream_at: Mutex<Option<String>>,
+    /// The node's id, made once and kept in `log/node`, which the catalog and
+    /// its home's count of its queued ops know it by.
+    pub(crate) id: String,
+    /// The files the node it takes from serves, as its last welcome or list
+    /// said; none until a link said.
+    pub(crate) served: Mutex<Option<Vec<String>>>,
+    catalog: super::catalog::Held,
 }
 
 /// A node taking from this one, kept among the followers until its link ends.
@@ -109,6 +117,9 @@ impl State {
     pub(crate) fn new(dir: &Path, options: Node) -> Result<State> {
         let tls = super::transport::Tls::of(&options)?;
         Ok(State {
+            id: super::queue::node_id(&dir.join(DIR))?,
+            served: Mutex::default(),
+            catalog: Mutex::default(),
             queue: Mutex::default(),
             tls,
             dir: dir.to_owned(),
@@ -139,6 +150,11 @@ impl State {
     /// node it takes its files from.
     pub(crate) fn start(self: &Arc<Self>, store: &Store) -> Result<()> {
         *lock(&self.store) = Some(store.downgrade());
+        // the catalog's home serves it from its first link on, so that no node
+        // takes a network that keeps one for a network that keeps none
+        if self.options.catalog {
+            self.catalog(store)?;
+        }
         if let Some(address) = &self.options.serve {
             super::serve::start(self, address)?;
         }
@@ -148,6 +164,10 @@ impl State {
         }
         let writing = Arc::clone(self);
         self.spawn("tinystore node: links", move || super::links::keep_written(&writing));
+        if self.options.catalog || !self.options.from.is_empty() {
+            let claiming = Arc::clone(self);
+            self.spawn("tinystore node: catalog", move || claiming.claim_its_files());
+        }
         // writes queued before the store last closed are sent from the start
         if self.dir.join(DIR).join(super::queue::FILE).exists() {
             self.queue()?;
@@ -180,6 +200,114 @@ impl State {
         if let Some(queue) = lock(&self.queue).take() {
             queue.close();
         }
+        if let Some(catalog) = lock(&self.catalog).take() {
+            catalog.close();
+        }
+    }
+
+    /// Where other nodes reach this one: the address it was given, or the one
+    /// its server listens on; empty for a node that serves nothing.
+    pub(crate) fn address(&self) -> String {
+        match &self.options.address {
+            Some(address) => address.clone(),
+            None => lock(&self.listening).map(|at| at.to_string()).unwrap_or_default(),
+        }
+    }
+
+    /// This node's catalog, opened the first time: its own on the node that is
+    /// the catalog's home, a copy waited for on the others.
+    pub(crate) fn catalog(&self, store: &Store) -> Result<Arc<Catalog>> {
+        let mut held = lock(&self.catalog);
+        if let Some(catalog) = &*held {
+            return Ok(Arc::clone(catalog));
+        }
+        let catalog = Arc::new(Catalog::open(store)?);
+        *held = Some(Arc::clone(&catalog));
+        Ok(catalog)
+    }
+
+    /// Whether this node's network keeps a catalog: this node is its home,
+    /// holds a copy of it, or the node it takes from serves it. Until its first
+    /// link says what that node serves, a node with `from` waits for it.
+    pub(crate) fn uses_catalog(&self) -> bool {
+        if self.options.catalog || copy::is_copy(&self.log_dir(CATALOG)) {
+            return true;
+        }
+        if self.options.from.is_empty() {
+            return false;
+        }
+        let deadline = Instant::now() + READY_WAIT;
+        loop {
+            if let Some(served) = &*lock(&self.served) {
+                return served.iter().any(|file| file == CATALOG);
+            }
+            if Instant::now() >= deadline || self.stopping() {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Whether this node holds nothing of `name` yet, neither a log of its
+    /// own nor a copy, and names no list of the files it copies to say which
+    /// it will.
+    pub(crate) fn is_new(&self, name: &str) -> bool {
+        if name == CATALOG || self.options.files.is_some() || NODE_LOCAL.contains(&name) {
+            return false;
+        }
+        let dir = self.log_dir(name);
+        !copy::is_copy(&dir)
+            && !dir.join(super::promote::PROMOTED).exists()
+            && segments_in(&dir).is_ok_and(|segments| segments.is_empty())
+    }
+
+    /// Claims `name` in the catalog for this node, which then writes it; false
+    /// when the catalog names another home or the node it takes from serves
+    /// the file, which this node then copies. A node that serves nothing
+    /// claims nothing: the node it takes from makes the file.
+    pub(crate) fn claim(&self, store: &Store, name: &str) -> Result<bool> {
+        let catalog = self.catalog(store)?;
+        if let Some(home) = catalog.home_of(name)? {
+            return Ok(home.node == self.id);
+        }
+        let address = self.address();
+        let served = lock(&self.served).as_ref().is_some_and(|served| served.iter().any(|file| file == name));
+        if address.is_empty() || served {
+            return Ok(false);
+        }
+        Ok(catalog.claim(store, name, &self.id, &address)?.node == self.id)
+    }
+
+    /// Claims in the catalog each file this node already writes, as a node's
+    /// files made before its network kept a catalog: a file the catalog names
+    /// another home of is two homes' now, which a person settles.
+    fn claim_its_files(&self) {
+        if !self.uses_catalog() {
+            return;
+        }
+        let Some(store) = self.store() else {
+            return;
+        };
+        let Ok(logged) = self.files_logged() else {
+            return;
+        };
+        for name in logged {
+            let dir = self.log_dir(&name);
+            if name == CATALOG || NODE_LOCAL.contains(&name.as_str()) || copy::is_copy(&dir) || self.stopping() {
+                continue;
+            }
+            match self.claim(&store, &name) {
+                Ok(true) => {}
+                Ok(false) => tracing::error!(
+                    target: "tinystore",
+                    file = %name,
+                    "the catalog names another home of a file this node writes: two homes write it now"
+                ),
+                Err(error) => {
+                    tracing::debug!(target: "tinystore", file = %name, %error, "a node could not claim a file")
+                }
+            }
+        }
     }
 
     /// This node's queue of writes that commute, opened and its sender started
@@ -189,7 +317,7 @@ impl State {
         if let Some(queue) = &*held {
             return Ok(Arc::clone(queue));
         }
-        let queue = Arc::new(super::queue::Queue::open(&self.dir)?);
+        let queue = Arc::new(super::queue::Queue::open(&self.dir, self.id.clone())?);
         *held = Some(Arc::clone(&queue));
         let (state, sending) = (Arc::clone(self), Arc::clone(&queue));
         self.spawn("tinystore node: queue", move || super::queue::send(&state, &sending));
@@ -243,6 +371,9 @@ impl State {
     pub(crate) fn takes(&self, name: &str) -> bool {
         if self.options.from.is_empty() {
             return false;
+        }
+        if name == CATALOG {
+            return !self.options.catalog;
         }
         // a file whose log is this node's own, as a promoted copy's, it writes
         let dir = self.log_dir(name);

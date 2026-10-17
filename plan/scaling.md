@@ -85,6 +85,29 @@ Three jobs stay apart, because they need different guarantees:
 The catalog routes and never grants the right to write: during a cut of the
 network each side holds its own copy of it, and both would name themselves.
 
+**The catalog** (the owner, 18 October) is `catalog.db`, written by one node
+a person names its home and copied by the others like any file; its home is
+not the node without `from`, since in a mesh every node may write files of
+its own and take from others. A new file's home is the node that makes it,
+once the catalog registered it:
+
+```ts
+// a program on the European node
+const db = await store.database('users').open()
+```
+
+1. Europe asks its copy of the catalog who writes `sql/users.db`: no one.
+2. It claims the name for itself, a write that goes to the catalog's home.
+3. The catalog's home commits the first claim of the name; Europe makes the
+   file and writes it, and the other nodes read its home in their copies.
+
+Of two nodes claiming one name in the same moment, the catalog's home keeps
+one claim, and the other node copies the file from the one that won. While the
+catalog's home is out of reach, the routes the catalog holds go on and no new
+file is made. In the first version a person moves the catalog's home, once its
+old home is surely stopped; moving a file's home takes epochs and fencing, and
+later a lease or a judge, never the catalog alone.
+
 ## Trying it
 
 What phase 7 built so far runs as below; the names are drafts, as
@@ -104,8 +127,11 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
 ```
 
 - A node copies every file the node it takes from serves but its own
-  `records.db` and `metrics.db`, or those `--node-files` names; a file its
-  home never made, the home makes when a copy waits for it.
+  `records.db` and `metrics.db`, or those `--node-files` names. With a
+  catalog, `--node-catalog` on one node, a node writes each file it made once
+  its claim won, and needs no list; without one, a file its home never made,
+  the home makes when a copy waits for it. `--node-address` says where other
+  nodes reach a node that listens on every interface.
 - kv's buckets and counters, encrypted ones sealed on the copy, sql's
   statements, search's documents, jobs' adds and schedules, blobs' files,
   rate limits, quotas and `once` pass from a copy to their home; a
@@ -436,8 +462,10 @@ storage with a restore to a commit or a second; the exporters.
 3. TLS is built behind `replication-tls`, off by default, rustls with
    ring as `crates/cli` uses it: whether it is on by default, and an object
    storage client in the library, are open.
-4. A file's identity across nodes: its name in the catalog with an id made
-   at its creation; two homes claiming one name refused.
+4. A file's identity across nodes: its name in the catalog, its home a node's
+   id made once and kept in `log/node`; two homes claiming one name are
+   refused, and a file two nodes wrote before their network kept a catalog is
+   logged as two homes' for a person to settle.
 5. Collecting nodes' logs and metrics in one place: a node copying others'
    records and metrics, and under what names.
 6. Whether a synchronous write falls back when its copy is gone, and with what

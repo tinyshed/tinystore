@@ -178,6 +178,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
                         out.pack()?;
                         state.upstream.linked(Some(Arc::clone(&out)));
                         *lock(&state.upstream_at) = Some(address.to_owned());
+                        *lock(&state.served) = Some(files.clone());
                         tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
                         link.follow_new(&files)?;
                         continue;
@@ -404,7 +405,10 @@ impl Link<'_> {
                 self.state.upstream.answered(id, Written { outcome, waits });
                 Ok(())
             }
-            Message::Listed { files } => self.follow_new(&files),
+            Message::Listed { files } => {
+                *lock(&self.state.served) = Some(files.clone());
+                self.follow_new(&files)
+            }
             Message::Ping => Ok(()),
             other => Err(Error::invalid(format!("a link said {other:?}, which a follower is not sent"))),
         }

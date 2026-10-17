@@ -349,8 +349,16 @@ in [scaling.md](scaling.md#order).
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
   own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is
-  its own. Left: the catalog, so that what a node copies and where a file's home is need not be listed; routing a
-  write past a node's `from`; moving a home that is alive.
+  its own. The catalog, `catalog.db`, is written by the node `Node::catalog` names, opened at its start so that its
+  first link serves it, and copied by every other node like any file: a home a file, the node's id and address, an
+  epoch. A node opening a file it holds nothing of, in a network that keeps a catalog, reads its copy of it: a
+  file the catalog or the node it takes from names elsewhere it copies; one no node holds it claims, a write that
+  passes to the catalog's home, which commits the first claim of a name, and writes it only once the claim won,
+  the other claimant copying it. A node that serves nothing claims nothing, its file made by the node it takes
+  from; a node claims at its start the files it wrote before, and logs a file the catalog names another home of
+  as two homes'. While the catalog's home is out of reach, a node writes the files it is home of and makes no new
+  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line. Left: a link straight to a file's
+  home that `from` does not serve, a write routed past `from` the same way, and moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
   Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the

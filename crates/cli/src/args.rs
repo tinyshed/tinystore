@@ -56,6 +56,8 @@ pub(crate) struct Node {
     pub(crate) token_file: Option<PathBuf>,
     pub(crate) synchronous: bool,
     pub(crate) tls: Option<tinystore::replication::NodeTls>,
+    pub(crate) catalog: bool,
+    pub(crate) address: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -76,8 +78,10 @@ pub(crate) enum Transport {
 }
 
 /// Every flag `serve` takes, for a misspelt one's nearest.
-const FLAGS: [&str; 23] = [
+const FLAGS: [&str; 25] = [
     "--node",
+    "--node-catalog",
+    "--node-address",
     "--node-tls-cert",
     "--node-tls-key",
     "--node-tls-roots",
@@ -128,6 +132,8 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
             "--node" => node_flags = true,
             "--node-synchronous" => (node.synchronous, node_flags) = (true, true),
+            "--node-catalog" => (node.catalog, node_flags) = (true, true),
+            "--node-address" => (node.address, node_flags) = (Some(value("--node-address")?), true),
             "--node-tls-cert" => {
                 node.tls.get_or_insert_default().cert = Some(PathBuf::from(value("--node-tls-cert")?));
                 node_flags = true;
