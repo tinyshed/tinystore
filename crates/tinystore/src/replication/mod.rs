@@ -57,6 +57,10 @@ pub struct Node {
     /// What this node says to the node it takes from, and asks of the nodes
     /// that take from it; none admits any.
     pub token: Option<String>,
+    /// A write of a file this node writes answers once a node copying it
+    /// holds its commit, while one follows it: losing this node then loses no
+    /// write it answered.
+    pub synchronous: bool,
 }
 
 impl fmt::Debug for Node {
@@ -66,6 +70,7 @@ impl fmt::Debug for Node {
             .field("serve", &self.serve)
             .field("files", &self.files)
             .field("token", &self.token.as_ref().map(|_| "hidden"))
+            .field("synchronous", &self.synchronous)
             .finish()
     }
 }

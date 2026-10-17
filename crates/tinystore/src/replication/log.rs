@@ -9,12 +9,13 @@
 //! A copy keeps a log too, of the entries it applied as they came, so that
 //! the nodes that copy it read the same bytes its home wrote.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
@@ -63,10 +64,71 @@ impl Notify {
     }
 }
 
+/// What a synchronous home's commits wait for: the entry of each file that
+/// a node copying it said it holds.
+#[derive(Default)]
+pub(crate) struct Acks {
+    held: Mutex<HashMap<String, u64>>,
+    changed: Condvar,
+    /// Links that follow a file of this node now: with none, a commit waits
+    /// for no one, and says so once.
+    linked: AtomicUsize,
+    said_alone: AtomicBool,
+}
+
+/// How long a synchronous commit waits for a copy to hold it before it
+/// answers anyway, logged.
+const ACK_WAIT: Duration = Duration::from_secs(5);
+
+impl Acks {
+    /// A node that copies `file` holds its entries up to `sequence`.
+    pub(crate) fn held(&self, file: &str, sequence: u64) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let at = held.entry(file.to_owned()).or_default();
+        if sequence > *at {
+            *at = sequence;
+            self.changed.notify_all();
+        }
+    }
+
+    pub(crate) fn linked(&self) {
+        self.linked.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn unlinked(&self) {
+        self.linked.fetch_sub(1, Ordering::SeqCst);
+        self.changed.notify_all();
+    }
+
+    /// Waits until a node that copies `file` holds entry `sequence`, a bound
+    /// at most, or not at all while none follows it.
+    fn wait(&self, file: &str, sequence: u64) {
+        let deadline = Instant::now() + ACK_WAIT;
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        while held.get(file).copied().unwrap_or(0) < sequence {
+            if self.linked.load(Ordering::SeqCst) == 0 {
+                if !self.said_alone.swap(true, Ordering::SeqCst) {
+                    tracing::warn!(target: "tinystore", file, "a synchronous home commits with no node copying it");
+                }
+                return;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                tracing::warn!(target: "tinystore", file, entry = sequence, "no copy held a synchronous commit in time");
+                return;
+            }
+            held = self.changed.wait_timeout(held, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        self.said_alone.store(false, Ordering::SeqCst);
+    }
+}
+
 pub(crate) struct Log {
     dir: PathBuf,
     bounds: Bounds,
     notify: Arc<Notify>,
+    /// A synchronous home's file and what its commits wait for.
+    synchronous: Option<(String, Arc<Acks>)>,
     /// The writer of a home's file, held to read where the log stands with
     /// no commit between the file and the log.
     writer: Mutex<Option<Weak<Mutex<Connection>>>>,
@@ -110,10 +172,18 @@ impl Log {
             let bytes = fs::metadata(&path).map_err(|error| Error::io(path.display().to_string(), error))?.len();
             tail.segments.push_back(Segment { first, bytes });
         }
-        let log = Log { dir, bounds, notify, writer: Mutex::new(None), tail: Mutex::new(tail) };
+        let log = Log { dir, bounds, notify, synchronous: None, writer: Mutex::new(None), tail: Mutex::new(tail) };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
         Ok(log)
+    }
+
+    /// Makes each commit of the file `name` wait until a node copying it holds
+    /// it, while the writer is held: the commits queued meanwhile share the
+    /// next, and its wait.
+    pub(crate) fn synchronous(mut self, name: &str, acks: Arc<Acks>) -> Log {
+        self.synchronous = Some((name.to_owned(), acks));
+        self
     }
 
     /// Every entry the log in `dir` holds, oldest first.
@@ -257,6 +327,9 @@ impl Log {
         (tail.next, tail.check, tail.last) = (head.sequence + 1, check, Some(position));
         drop(tail);
         self.notify.appended();
+        if let (Kind::Commit, Some((file, acks))) = (kind, &self.synchronous) {
+            acks.wait(file, head.sequence);
+        }
         Ok(())
     }
 

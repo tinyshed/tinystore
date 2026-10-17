@@ -2195,6 +2195,8 @@ export const StoreOptions = message(
 		files: [6, list(str)],
 		/** what it says to the node it takes from, and asks of the nodes that take from it */
 		token: [7, str],
+		/** a write of a file it writes answers once a node copying it holds the commit */
+		synchronous: [8, bool],
 	},
 	{
 		write(w, v) {
@@ -2241,6 +2243,11 @@ export const StoreOptions = message(
 				w.str(v.token)
 				n++
 			}
+			if (v.synchronous !== undefined) {
+				w.field(8)
+				w.bool(v.synchronous)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2251,6 +2258,7 @@ export const StoreOptions = message(
 			let $serve: string | undefined
 			let $files: string[] | undefined
 			let $token: string | undefined
+			let $synchronous: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2286,6 +2294,9 @@ export const StoreOptions = message(
 					case 7:
 						$token = r.str()
 						break
+					case 8:
+						$synchronous = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -2299,6 +2310,7 @@ export const StoreOptions = message(
 				serve: $serve,
 				files: $files,
 				token: $token,
+				synchronous: $synchronous,
 			}
 		},
 	},

@@ -37,6 +37,7 @@ message store.Options {
   5 serve: str?              # where other nodes take files from this one, host:port
   6 files: [str]             # the files it copies, as kv.db or sql/app.db; every file but its own records and metrics when empty
   7 token: str?              # what it says to the node it takes from, and asks of the nodes that take from it
+  8 synchronous: bool        # a write of a file it writes answers once a node copying it holds the commit
 }
 
 # The last frame of a connection.

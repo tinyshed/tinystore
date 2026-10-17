@@ -110,6 +110,8 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   adds pass from a copy to their home; any other write on a copy is refused.
 - Links are TCP with a token and no TLS yet: across machines, a tunnel or a
   private network.
+- `--node-synchronous` makes the home answer a write once a node copying
+  its file holds it.
 - When America is gone for good: stop Europe, `tinystore promote ./eu`, start
   it without `--from`; Russia goes on from it. America comes back with
   `tinystore demote ./us` and `--from eu:7444`.

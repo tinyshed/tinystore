@@ -130,9 +130,13 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         }
         lock(&asked).ended = true;
     });
-    let ended = read_requests(state, &mut reading, &mut frames, &out, &asked);
+    let mut following = false;
+    let ended = read_requests(state, &mut reading, &mut frames, &out, &asked, &mut following);
     lock(&asked).ended = true;
     state.notify.appended();
+    if following {
+        state.acks.unlinked();
+    }
     ended
 }
 
@@ -143,6 +147,7 @@ fn read_requests(
     frames: &mut Frames,
     out: &Arc<Out>,
     asked: &Arc<Mutex<Asked>>,
+    following: &mut bool,
 ) -> Result<()> {
     loop {
         let Some(message) = read_one(state, reading, frames, SILENT_AT_MOST)? else {
@@ -157,6 +162,10 @@ fn read_requests(
                     return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
                 }
                 lock(asked).follows.push((file, at));
+                if !*following {
+                    *following = true;
+                    state.acks.linked();
+                }
                 state.notify.appended();
             }
             Message::List => out.send(&Message::Listed { files: state.files_served()? })?,
@@ -168,6 +177,7 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
+            Message::Applied { file, sequence } => state.acks.held(&file, sequence),
             #[cfg(feature = "blobs")]
             Message::Fetch { path } => {
                 if !crate::blobs::is_object(&path) {

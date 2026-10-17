@@ -267,6 +267,9 @@ function nodeFlags(node: NodeOptions | undefined): string[] {
 	if (node.tokenFile !== undefined) {
 		flags.push('--node-token-file', resolve(node.tokenFile))
 	}
+	if (node.synchronous === true) {
+		flags.push('--node-synchronous')
+	}
 	return flags
 }
 
@@ -514,6 +517,7 @@ export function embedded(
 		serve: node?.serve,
 		files: node?.files ?? [],
 		token,
+		synchronous: node?.synchronous === true,
 	})
 	return async () => {
 		const { openPipe } = await import('./runtime/pipe.ts')

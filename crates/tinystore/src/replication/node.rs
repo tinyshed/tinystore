@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use super::copy::{self, Copy};
 use super::entry::Point;
 use super::follow::Upstream;
-use super::log::{Bounds, Log, Notify, segments_in};
+use super::log::{Acks, Bounds, Log, Notify, segments_in};
 use super::snapshot::Source;
 use super::{DIR, NODE_LOCAL, Node};
 use crate::sqlite::Observe;
@@ -31,6 +31,8 @@ pub(crate) struct State {
     store: Mutex<Option<WeakStore>>,
     bounds: Bounds,
     pub(crate) notify: Arc<Notify>,
+    /// What a synchronous home's commits wait for.
+    pub(crate) acks: Arc<Acks>,
     /// The logs of the files this node writes that are open now.
     logs: Mutex<HashMap<String, Weak<Log>>>,
     /// The copies this node holds whole.
@@ -58,6 +60,7 @@ impl State {
             store: Mutex::default(),
             bounds: Bounds::default(),
             notify: Arc::default(),
+            acks: Arc::default(),
             logs: Mutex::default(),
             copies: Mutex::default(),
             copied: Condvar::new(),
@@ -137,7 +140,11 @@ impl State {
 
     /// The log of the file `name` this node writes, opened for its writer.
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
-        let log = Arc::new(Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?);
+        let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?;
+        if self.options.synchronous {
+            log = log.synchronous(name, Arc::clone(&self.acks));
+        }
+        let log = Arc::new(log);
         lock(&self.logs).insert(name.to_owned(), Arc::downgrade(&log));
         Ok(log)
     }

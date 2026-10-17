@@ -6,7 +6,7 @@
 //! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key              its key kept apart from its data
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
-//! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-token-file t]   a node other nodes copy
+//! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-token-file t] [--node-synchronous]   a node other nodes copy
 //! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-files kv.db,sql/app.db]   a node that copies
 //! ```
 
@@ -54,6 +54,7 @@ pub(crate) struct Node {
     pub(crate) from: Vec<String>,
     pub(crate) files: Option<Vec<String>>,
     pub(crate) token_file: Option<PathBuf>,
+    pub(crate) synchronous: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -74,8 +75,9 @@ pub(crate) enum Transport {
 }
 
 /// Every flag `serve` takes, for a misspelt one's nearest.
-const FLAGS: [&str; 19] = [
+const FLAGS: [&str; 20] = [
     "--node",
+    "--node-synchronous",
     "--node-listen",
     "--from",
     "--node-files",
@@ -121,6 +123,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
             "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
             "--node" => node_flags = true,
+            "--node-synchronous" => (node.synchronous, node_flags) = (true, true),
             "--node-listen" => (node.listen, node_flags) = (Some(value("--node-listen")?), true),
             "--from" => {
                 node.from.push(value("--from")?);

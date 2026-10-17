@@ -977,11 +977,14 @@
         "serve": {
           "str": "serve"
         },
+        "synchronous": {
+          "bool": true
+        },
         "token": {
           "str": "token"
         }
       },
-      "hex": "8701aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e",
+      "hex": "8801aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e08c3",
       "message": "store.Options",
       "name": "store.Options with every field"
     },

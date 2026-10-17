@@ -140,6 +140,8 @@ export interface NodeOptions {
 	token?: string | undefined
 	/** the file of that token, for a server this process starts */
 	tokenFile?: string | undefined
+	/** a write of a file this node writes answers once a node copying it holds the commit */
+	synchronous?: boolean | undefined
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */

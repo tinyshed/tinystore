@@ -93,6 +93,11 @@ pub(crate) enum Message {
         bytes: Vec<u8>,
         last: bool,
     },
+    /// The follower's copy of `file` holds its entries up to `sequence`.
+    Applied {
+        file: String,
+        sequence: u64,
+    },
 }
 
 impl Message {
@@ -191,6 +196,11 @@ impl Message {
                 out.bytes(bytes);
                 out.byte(u8::from(*last));
             }
+            Message::Applied { file, sequence } => {
+                out.byte(17);
+                out.text(file);
+                out.long(*sequence);
+            }
         }
         let length = u32::try_from(out.0.len() - 4).unwrap_or(u32::MAX);
         out.0[..4].copy_from_slice(&length.to_le_bytes());
@@ -261,6 +271,7 @@ impl Message {
                 bytes: at.bytes()?.to_vec(),
                 last: at.byte()? == 1,
             },
+            17 => Message::Applied { file: at.text()?, sequence: at.long()? },
             _ => return Err(corrupt("a message of a kind the link does not have")),
         };
         if at.at != body.len() {
@@ -508,6 +519,7 @@ mod tests {
             Message::Ping,
             Message::Fetch { path: "blobs/objects/1/1a3f".into() },
             Message::Object { path: "blobs/objects/1/1a3f".into(), offset: 4, bytes: vec![7; 3], last: true },
+            Message::Applied { file: "kv.db".into(), sequence: 42 },
         ];
         for message in messages {
             let bytes = message.encode();

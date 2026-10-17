@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --stdio] [--log <file>] [--idle <span>] \
                      [--clock <time>] [--listen tls://<host>:<port> --tls-cert <pem> --tls-key <pem> --tokens <file>] \
-                     [--memory <size>] [--node] [--node-listen <host>:<port>] [--from <host>:<port>]...                      [--node-files <file>,...] [--node-token-file <file>]
+                     [--memory <size>] [--node] [--node-listen <host>:<port>] [--from <host>:<port>]...                      [--node-files <file>,...] [--node-token-file <file>] [--node-synchronous]
        tinystore backup <dir> <file.zip> [--include <name>]... [--include-encryption-key]
        tinystore restore <file.zip> <dir>
        tinystore search list <dir>

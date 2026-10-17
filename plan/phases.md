@@ -342,6 +342,11 @@ in [scaling.md](scaling.md#order).
   new home once it starts with `from` reaching it. Left: counting the commits an old home loses, a client refusing
   an older home than one it has seen, and the command line's view of the links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
+  Built so far: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
+  commit of a file the node writes wait, the writer held, until a node copying it says it holds the entry, so
+  that the commits queued meanwhile share the next and its wait; a follower says what each copy holds after each
+  turn of reading. With no node following, a commit waits for none and says so once; one no copy held in five
+  seconds answers, logged. Left: a chosen copy rather than any, and what a write answers when no copy held it.
 
 **Gate:** a node three links away holds its home's files commit for commit; a
 get after a set sees it on any node; a promotion loses only the commits not

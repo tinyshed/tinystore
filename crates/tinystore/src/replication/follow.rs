@@ -156,6 +156,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
         out: Arc::clone(&out),
         held: HashMap::new(),
         retries: Vec::new(),
+        said: HashMap::new(),
         #[cfg(feature = "blobs")]
         fetching: Fetching::default(),
     };
@@ -185,6 +186,9 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
                 }
             }
             link.take(message)?;
+        }
+        if welcomed {
+            link.say_applied()?;
         }
         match frames.fill(&mut reading) {
             Ok(true) => {}
@@ -231,6 +235,8 @@ struct Link<'a> {
     held: HashMap<String, Held>,
     /// Files whose sending failed, asked for again once their time comes.
     retries: Vec<(String, Instant)>,
+    /// The entry of each copy this link last said it holds.
+    said: HashMap<String, u64>,
     /// The files blobs keeps beside blobs.db, fetched once a copy names them.
     #[cfg(feature = "blobs")]
     fetching: Fetching,
@@ -334,6 +340,21 @@ impl Link<'_> {
             file.sync_all().map_err(io)?;
             self.fetching.under_way.remove(path);
             std::fs::rename(&temp, &target).map_err(io)?;
+        }
+        Ok(())
+    }
+
+    /// Tells the other node the entry each copy holds now, where it moved:
+    /// what a synchronous home's commits wait for.
+    fn say_applied(&mut self) -> Result<()> {
+        for (file, held) in &self.held {
+            if let Held::Whole(copy) = held {
+                let applied = copy.applied();
+                if self.said.get(file).is_none_or(|said| *said < applied) {
+                    self.out.send(&Message::Applied { file: file.clone(), sequence: applied })?;
+                    self.said.insert(file.clone(), applied);
+                }
+            }
         }
         Ok(())
     }
@@ -442,8 +463,10 @@ impl Link<'_> {
             return Err(error);
         }
         let copy = Arc::new(Copy::open(&store, file)?);
-        drop(store);
         self.state.keep_copy(file, Arc::clone(&copy));
+        // what an engine kept of a copy taken again is read again
+        store.applied(file);
+        drop(store);
         self.held.insert(file.to_owned(), Held::Whole(copy));
         tracing::info!(target: "tinystore", %file, "a node holds a whole copy of a file");
         self.blobs_changed(file);

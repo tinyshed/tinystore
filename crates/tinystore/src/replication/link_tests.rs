@@ -430,3 +430,27 @@ fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
     eu.close().unwrap();
     us.close().unwrap();
 }
+
+#[test]
+fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let home =
+        node_with(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), synchronous: true, ..Node::default() });
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    let alone = Instant::now();
+    for i in 0..20 {
+        sessions.set(format!("alone {i}"), &"no copy follows".to_owned()).unwrap();
+    }
+    assert!(alone.elapsed() < Duration::from_secs(4), "with no copy following, a commit waits for none");
+    let address = bound(home.node().unwrap()).unwrap().to_string();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    for i in 0..50 {
+        sessions.set(format!("held {i}"), &"by the copy before it answered".to_owned()).unwrap();
+        let held = copy_point(&copy, "kv.db").unwrap().sequence;
+        assert!(held >= home_point(&home, "kv.db").sequence, "write {i} answered before a copy held it");
+    }
+    copy.close().unwrap();
+    home.close().unwrap();
+}

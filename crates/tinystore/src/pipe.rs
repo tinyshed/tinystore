@@ -211,7 +211,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
     let asked = StoreOptions::decode(options)
         .map_err(|refused| Error::invalid(format!("pipe: its options: {}", refused.message)))?;
     let durability = asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe")));
-    let a_node = asked.node || !asked.from.is_empty() || asked.serve.is_some();
+    let a_node = asked.node || !asked.from.is_empty() || asked.serve.is_some() || asked.synchronous;
     #[cfg(not(feature = "replication"))]
     if a_node {
         return Err(Error::invalid("pipe: a node's options, and the library was built without replication"));
@@ -222,6 +222,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
         serve: asked.serve,
         files: (!asked.files.is_empty()).then_some(asked.files),
         token: asked.token,
+        synchronous: asked.synchronous,
     });
     Ok(Asked {
         durability: durability.transpose()?,

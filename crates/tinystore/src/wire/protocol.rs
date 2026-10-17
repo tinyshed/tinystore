@@ -2024,6 +2024,8 @@ pub(crate) struct StoreOptions {
     pub(crate) files: Vec<String>,
     /// What it says to the node it takes from, and asks of the nodes that take from it.
     pub(crate) token: Option<String>,
+    /// A write of a file it writes answers once a node copying it holds the commit.
+    pub(crate) synchronous: bool,
 }
 
 impl Message for StoreOptions {
@@ -2041,6 +2043,7 @@ impl Message for StoreOptions {
                 5 => message.serve = Some(codec::str(r, "serve")?),
                 6 => message.files = codec::list(r, "files", codec::str)?,
                 7 => message.token = Some(codec::str(r, "token")?),
+                8 => message.synchronous = codec::bool(r, "synchronous")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2077,6 +2080,10 @@ impl Message for StoreOptions {
             map.field(out, 7);
             codec::write_str(out, token);
         }
+        if self.synchronous {
+            map.field(out, 8);
+            codec::write_bool(out, &self.synchronous);
+        }
         map.close(out);
     }
 
@@ -2089,6 +2096,7 @@ impl Message for StoreOptions {
             + self.serve.as_ref().map_or(0, |serve| 1 + 5 + serve.len())
             + 1 + codec::list_size(&self.files, |item| 5 + item.len())
             + self.token.as_ref().map_or(0, |token| 1 + 5 + token.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -2099,6 +2107,7 @@ impl Message for StoreOptions {
             && self.serve.is_none()
             && self.files.is_empty()
             && self.token.is_none()
+            && !self.synchronous
     }
 }
 
