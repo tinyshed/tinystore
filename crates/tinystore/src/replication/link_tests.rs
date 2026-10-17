@@ -1476,3 +1476,33 @@ fn a_node_that_serves_beyond_this_machine_takes_tls_or_says_insecure() {
     let insecure = Node { insecure: true, ..everywhere };
     node_with(dir.path(), insecure).close().unwrap();
 }
+
+#[test]
+fn a_direct_link_takes_nothing_of_a_node_that_is_not_the_home_the_catalog_names() {
+    let dirs: Vec<_> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let keeper =
+        node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() });
+    let keeper_address = bound(keeper.node().unwrap()).unwrap().to_string();
+    let home_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home_node = Node { serve: Some(home_address.clone()), from: vec![keeper_address.clone()], ..Node::default() };
+    let home = node_with(dirs[1].path(), home_node);
+    let db = home.database("tenant").migrations(NOTES).open().unwrap();
+    db.exec(crate::sql!("insert into notes (body) values ('the home''s row')")).unwrap();
+    // a node that takes from the catalog's home takes the database straight from its own
+    let reader = node_with(dirs[2].path(), Node { from: vec![keeper_address], ..Node::default() });
+    let read = reader.database("tenant").migrations(NOTES).open().unwrap();
+    eventually("the reader holds the home's row", || bodies(&read) == ["the home's row"]);
+
+    // the home goes, and a stranger with a database of that name listens at its address
+    drop(db);
+    home.close().unwrap();
+    let stranger = node_with(dirs[3].path(), Node { serve: Some(home_address), ..Node::default() });
+    let theirs = stranger.database("tenant").migrations(NOTES).open().unwrap();
+    theirs.exec(crate::sql!("insert into notes (body) values ('a stranger''s row')")).unwrap();
+    std::thread::sleep(Duration::from_secs(8));
+    assert_eq!(bodies(&read), ["the home's row"], "the reader took nothing of the stranger");
+    drop((read, theirs));
+    stranger.close().unwrap();
+    reader.close().unwrap();
+    keeper.close().unwrap();
+}

@@ -247,10 +247,13 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
             heard = Instant::now();
             if !welcomed {
                 match message {
-                    Message::Welcome { files } => {
+                    Message::Welcome { node, files } => {
                         welcomed = true;
                         frames.unpack_from_here()?;
                         out.pack()?;
+                        if let Scope::Direct(direct) = &link.scope {
+                            link.take_nothing_of_another_home(direct, &node)?;
+                        }
                         link.upstream().linked(Some(Arc::clone(&out)));
                         if matches!(link.scope, Scope::From) {
                             *lock(&state.upstream_at) = Some(address.to_owned());
@@ -341,6 +344,34 @@ struct Fetching {
 
 impl Link<'_> {
     /// The writes of the files this link follows pass on through it.
+    /// Follows no file over a direct link whose node, `node`, is not the home
+    /// the catalog names of it: another node listens at a stale address now.
+    /// The file goes to a link to the address the catalog names, when that is
+    /// another.
+    fn take_nothing_of_another_home(&self, direct: &Direct, node: &str) -> Result<()> {
+        // a network that keeps no catalog names no home to check against
+        let Some(store) = self.store.upgrade().filter(|_| self.state.uses_catalog()) else {
+            return Ok(());
+        };
+        let catalog = self.state.catalog(&store)?;
+        for file in direct.files() {
+            let Some(home) = catalog.home_of(&file)?.filter(|home| home.node != node) else {
+                continue;
+            };
+            direct.remove(&file);
+            tracing::warn!(
+                target: "tinystore",
+                %file,
+                address = %direct.address,
+                "the node at a file's address is not the home the catalog names: this node takes nothing of it there"
+            );
+            if !home.address.is_empty() && home.address != direct.address {
+                self.state.take_directly(&store, &file, &home.address)?;
+            }
+        }
+        Ok(())
+    }
+
     fn upstream(&self) -> &Upstream {
         match &self.scope {
             Scope::From => &self.state.upstream,

@@ -124,7 +124,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         out.send(&Message::Refused { why: "the token is not this node's".to_owned() })?;
         return Ok(());
     }
-    out.send(&Message::Welcome { files: state.files_served()? })?;
+    out.send(&Message::Welcome { node: state.id.clone(), files: state.files_served()? })?;
     out.pack()?;
     frames.unpack_from_here()?;
     // a node is known by the address it said, or where its link comes from
