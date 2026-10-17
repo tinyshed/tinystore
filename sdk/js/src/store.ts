@@ -142,6 +142,16 @@ export interface NodeOptions {
 	tokenFile?: string | undefined
 	/** a write of a file this node writes answers once a node copying it holds the commit */
 	synchronous?: boolean | undefined
+	/** the nodes, by address or id, a synchronous commit waits for one of; any node copying the file when absent */
+	synchronousWith?: string[] | undefined
+	/**
+	 * this node is the home of the catalog, which names each file's home: one
+	 * node of a network, chosen by a person; the others then write each file
+	 * they make once their claim of its name won, and need no `files`
+	 */
+	catalog?: boolean | undefined
+	/** where other nodes reach this one, `host:port`, when `serve` listens on every interface */
+	address?: string | undefined
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */

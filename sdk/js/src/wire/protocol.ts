@@ -2197,6 +2197,12 @@ export const StoreOptions = message(
 		token: [7, str],
 		/** a write of a file it writes answers once a node copying it holds the commit */
 		synchronous: [8, bool],
+		/** it is the home of the catalog, which names each file's home */
+		catalog: [9, bool],
+		/** where other nodes reach it, host:port; the address serve listens on when absent */
+		address: [10, str],
+		/** the nodes, by address or id, a synchronous commit waits for one of; any when empty */
+		synchronousWith: [11, list(str)],
 	},
 	{
 		write(w, v) {
@@ -2248,6 +2254,24 @@ export const StoreOptions = message(
 				w.bool(v.synchronous)
 				n++
 			}
+			if (v.catalog !== undefined) {
+				w.field(9)
+				w.bool(v.catalog)
+				n++
+			}
+			if (v.address !== undefined) {
+				w.field(10)
+				w.str(v.address)
+				n++
+			}
+			if (v.synchronousWith !== undefined) {
+				w.field(11)
+				w.array(v.synchronousWith.length)
+				for (const item0 of v.synchronousWith) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2259,6 +2283,9 @@ export const StoreOptions = message(
 			let $files: string[] | undefined
 			let $token: string | undefined
 			let $synchronous: boolean | undefined
+			let $catalog: boolean | undefined
+			let $address: string | undefined
+			let $synchronousWith: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2297,6 +2324,21 @@ export const StoreOptions = message(
 					case 8:
 						$synchronous = r.bool()
 						break
+					case 9:
+						$catalog = r.bool()
+						break
+					case 10:
+						$address = r.str()
+						break
+					case 11: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$synchronousWith = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -2311,6 +2353,9 @@ export const StoreOptions = message(
 				files: $files,
 				token: $token,
 				synchronous: $synchronous,
+				catalog: $catalog,
+				address: $address,
+				synchronousWith: $synchronousWith,
 			}
 		},
 	},

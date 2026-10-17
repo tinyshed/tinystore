@@ -951,6 +951,12 @@
     },
     {
       "fields": {
+        "address": {
+          "str": "address"
+        },
+        "catalog": {
+          "bool": true
+        },
         "durability": {
           "str": "durability"
         },
@@ -980,11 +986,18 @@
         "synchronous": {
           "bool": true
         },
+        "synchronousWith": {
+          "list": [
+            {
+              "str": "synchronousWith"
+            }
+          ]
+        },
         "token": {
           "str": "token"
         }
       },
-      "hex": "8801aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e08c3",
+      "hex": "8b01aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e08c309c30aa7616464726573730b91af73796e6368726f6e6f757357697468",
       "message": "store.Options",
       "name": "store.Options with every field"
     },

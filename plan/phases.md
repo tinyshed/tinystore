@@ -360,7 +360,8 @@ in [scaling.md](scaling.md#order).
   the other claimant copying it. A node that serves nothing claims nothing, its file made by the node it takes
   from; a node claims at its start the files it wrote before, and logs a file the catalog names another home of
   as two homes'. While the catalog's home is out of reach, a node writes the files it is home of and makes no new
-  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line. A file whose home the catalog
+  one, `Unavailable`. `--node-catalog` and `--node-address` in the command line, and the Bun SDK's `node.catalog`
+  and `node.address`. A file whose home the catalog
   names at an address that the nodes of `from` do not serve, a node takes over a link straight to that home,
   one a home it reaches, which follows those files alone and passes their writes on; the link to `from` leaves
   them, and the address is kept beside the copy's log so that the link is made again at the next start. A claim
@@ -406,7 +407,7 @@ in [scaling.md](scaling.md#order).
   `Node::synchronous_with` and `--node-synchronous-with` name the nodes, by address or id, a commit waits for one
   of; any node copying the file when none. A commit none of them held in five seconds, or made while none of them
   follows, answers all the same, its write in the file already: it is counted, said in the log once an outage,
-  and the count is in `log/links` and `tinystore node status`. The SDK's options name no chosen node yet.
+  and the count is in `log/links` and `tinystore node status`; the Bun SDK's `node.synchronousWith`.
 
 **Gate:** a node three links away holds its home's files commit for commit; a
 get after a set sees it on any node; a promotion loses only the commits not

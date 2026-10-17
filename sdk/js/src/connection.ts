@@ -270,6 +270,15 @@ function nodeFlags(node: NodeOptions | undefined): string[] {
 	if (node.synchronous === true) {
 		flags.push('--node-synchronous')
 	}
+	for (const chosen of node.synchronousWith ?? []) {
+		flags.push('--node-synchronous-with', chosen)
+	}
+	if (node.catalog === true) {
+		flags.push('--node-catalog')
+	}
+	if (node.address !== undefined) {
+		flags.push('--node-address', node.address)
+	}
 	return flags
 }
 
@@ -518,6 +527,9 @@ export function embedded(
 		files: node?.files ?? [],
 		token,
 		synchronous: node?.synchronous === true,
+		catalog: node?.catalog === true,
+		address: node?.address,
+		synchronousWith: node?.synchronousWith ?? [],
 	})
 	return async () => {
 		const { openPipe } = await import('./runtime/pipe.ts')

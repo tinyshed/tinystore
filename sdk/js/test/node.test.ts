@@ -6,7 +6,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { open, type Store } from '../src/index.ts'
+import { type NodeOptions, open, type Store } from '../src/index.ts'
 import { removed, until } from './ways.ts'
 
 const library = process.env.TINYSTORE_LIBRARY
@@ -24,10 +24,14 @@ describe.skipIf(library === undefined)('a node in this process', () => {
 		}
 	})
 
-	const node = async (serve: string | undefined, from: string[]): Promise<Store> => {
+	const node = async (
+		serve: string | undefined,
+		from: string[],
+		more: NodeOptions = {},
+	): Promise<Store> => {
 		const dir = mkdtempSync(join(tmpdir(), 'tinystore-node-'))
 		dirs.push(dir)
-		const store = await open(dir, { embedded: true, library, node: { serve, from } })
+		const store = await open(dir, { embedded: true, library, node: { serve, from, ...more } })
 		stores.push(store)
 		return store
 	}
@@ -53,4 +57,26 @@ describe.skipIf(library === undefined)('a node in this process', () => {
 		expect(await between.bucket<string>('sessions').get('later')).toBe('after the copies')
 		expect(await sessions.get('later')).toBe('after the copies')
 	})
+
+	test('a node with a catalog writes the database it made, and the catalog home takes it straight from it', async () => {
+		const port = 20000 + Math.floor(Math.random() * 20000)
+		const home = await node(`127.0.0.1:${port}`, [], { catalog: true })
+		const europe = await node(`127.0.0.1:${port + 1}`, [`127.0.0.1:${port}`])
+		const migrations = [
+			{
+				name: '0001_notes.sql',
+				sql: 'create table notes (id integer primary key, body text not null)',
+			},
+		]
+		const bodies = async (db: Awaited<ReturnType<Store['database']>>) =>
+			(await db.all`select body from notes order by id`).map(row => row.body)
+
+		const made = await europe.database('users', { migrations })
+		await made.exec`insert into notes (body) values ('a european row')`
+		const read = await home.database('users', { migrations })
+		await until(async () => (await bodies(read)).length === 1)
+		expect(await bodies(read)).toEqual(['a european row'])
+		await read.exec`insert into notes (body) values ('written at the catalog home')`
+		expect(await bodies(made)).toEqual(['a european row', 'written at the catalog home'])
+	}, 20_000)
 })

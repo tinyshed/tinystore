@@ -2026,6 +2026,12 @@ pub(crate) struct StoreOptions {
     pub(crate) token: Option<String>,
     /// A write of a file it writes answers once a node copying it holds the commit.
     pub(crate) synchronous: bool,
+    /// It is the home of the catalog, which names each file's home.
+    pub(crate) catalog: bool,
+    /// Where other nodes reach it, host:port; the address serve listens on when absent.
+    pub(crate) address: Option<String>,
+    /// The nodes, by address or id, a synchronous commit waits for one of; any when empty.
+    pub(crate) synchronous_with: Vec<String>,
 }
 
 impl Message for StoreOptions {
@@ -2044,6 +2050,9 @@ impl Message for StoreOptions {
                 6 => message.files = codec::list(r, "files", codec::str)?,
                 7 => message.token = Some(codec::str(r, "token")?),
                 8 => message.synchronous = codec::bool(r, "synchronous")?,
+                9 => message.catalog = codec::bool(r, "catalog")?,
+                10 => message.address = Some(codec::str(r, "address")?),
+                11 => message.synchronous_with = codec::list(r, "synchronousWith", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2084,6 +2093,18 @@ impl Message for StoreOptions {
             map.field(out, 8);
             codec::write_bool(out, &self.synchronous);
         }
+        if self.catalog {
+            map.field(out, 9);
+            codec::write_bool(out, &self.catalog);
+        }
+        if let Some(address) = &self.address {
+            map.field(out, 10);
+            codec::write_str(out, address);
+        }
+        if !self.synchronous_with.is_empty() {
+            map.field(out, 11);
+            codec::write_list(out, &self.synchronous_with, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -2097,6 +2118,9 @@ impl Message for StoreOptions {
             + 1 + codec::list_size(&self.files, |item| 5 + item.len())
             + self.token.as_ref().map_or(0, |token| 1 + 5 + token.len())
             + 2
+            + 2
+            + self.address.as_ref().map_or(0, |address| 1 + 5 + address.len())
+            + 1 + codec::list_size(&self.synchronous_with, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -2108,6 +2132,9 @@ impl Message for StoreOptions {
             && self.files.is_empty()
             && self.token.is_none()
             && !self.synchronous
+            && !self.catalog
+            && self.address.is_none()
+            && self.synchronous_with.is_empty()
     }
 }
 
