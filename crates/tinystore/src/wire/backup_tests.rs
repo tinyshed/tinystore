@@ -48,7 +48,12 @@ fn a_backup_over_the_wire_is_its_stores_zip_in_pieces_within_the_clients_credit(
     let (mut zip, mut pieces) = (Vec::new(), 0);
     let backed = loop {
         let piece = client.next_on(stream);
-        assert_eq!(piece.flags & frame::END, 0, "a backup's END comes after its pieces");
+        // a busy host may answer later than QUIET after its last piece, once
+        // the credit that piece's grant gave it went unused
+        if piece.flags & frame::END != 0 {
+            assert!(pieces > 0, "a backup's END comes after its pieces");
+            break answered::<BackupWritten>(&piece).unwrap();
+        }
         assert!(piece.body.len() as u64 <= WINDOW, "{} bytes past the credit", piece.body.len());
         zip.extend(BackupPiece::decode(&piece.body).unwrap().bytes);
         pieces += 1;
