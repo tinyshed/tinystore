@@ -10,7 +10,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use std::collections::HashMap;
+
 use super::entry::Point;
+use super::log::Log;
 use super::message::{Frames, LeaseAsk, Message, VERSION, timed_out};
 use super::node::State;
 use super::serve::Out;
@@ -63,6 +66,8 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
     let mut welcomed = false;
     let mut turn = Instant::now();
     let mut sent = None;
+    // what failed of each file's lease, said once until it is acted on again
+    let mut failing: HashMap<String, String> = HashMap::new();
     loop {
         if state.stopping() {
             return Ok(());
@@ -81,10 +86,17 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
                     };
                     for held in holders {
                         let file = held.file;
-                        if let Err(error) =
-                            leased(state, &store, &file, &held.holder, sent.unwrap_or_else(Instant::now))
-                        {
-                            tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
+                        match leased(state, &store, &file, &held.holder, sent.unwrap_or_else(Instant::now)) {
+                            Err(error) if failing.get(&file) != Some(&error.to_string()) => {
+                                tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
+                                failing.insert(file, error.to_string());
+                            }
+                            Err(_) => {}
+                            Ok(()) => {
+                                if failing.remove(&file).is_some() {
+                                    tracing::info!(target: "tinystore", %file, "a node acts on its lease again");
+                                }
+                            }
                         }
                     }
                 }
@@ -133,8 +145,18 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
     if state.epoch_held(file).is_none_or(|ours| holder.epoch <= ours) {
         return Ok(());
     }
-    state.fence(file, holder.epoch)?;
-    let ours = state.point_of(file).ok_or_else(|| Error::not_found(format!("{file}: its log")))?;
+    let dir = state.log_dir(file);
+    if Log::fenced_in(&dir)?.is_none_or(|fenced| fenced < holder.epoch) {
+        state.fence(file, holder.epoch)?;
+    }
+    // a file no engine opened since the node started has no log open: its
+    // directory says where it ends
+    let ours = match state.point_of(file) {
+        Some(point) => point,
+        None => Log::last_in(&dir)?
+            .or(super::promote::promoted_at(&dir)?)
+            .ok_or_else(|| Error::not_found(format!("{file}: its log")))?,
+    };
     super::handover::let_go(state, store, file, &holder.address, ours)
 }
 

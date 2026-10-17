@@ -1285,6 +1285,74 @@ fn a_large_file_reaches_a_copy_before_the_commit_that_names_it() {
     home.close().unwrap();
 }
 
+/// Copies the files of a running store's directory as a crash would leave
+/// them, but its lock, which another process holds.
+fn crashed_image(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            crashed_image(&entry.path(), &target);
+        } else if entry.file_name() != "LOCK" {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_old_home_started_again_after_a_crash_and_a_failover_becomes_a_copy() {
+    let dirs: Vec<_> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let witness =
+        node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), witness: true, ..Node::default() });
+    let judge = Some(bound(witness.node().unwrap()).unwrap().to_string());
+    let home_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home_node = |from: Vec<String>| Node {
+        serve: Some(home_address.clone()),
+        from,
+        catalog: true,
+        failover: judge.clone(),
+        ..Node::default()
+    };
+    let home = node_with(dirs[1].path(), home_node(Vec::new()));
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    eventually("the home writes once its witness leased it the file", || {
+        sessions.set("first", &"leased".to_owned()).is_ok()
+    });
+    let copy_node = Node {
+        serve: Some("127.0.0.1:0".into()),
+        from: vec![home_address.clone()],
+        failover: judge.clone(),
+        ..Node::default()
+    };
+    let copy = node_with(dirs[2].path(), copy_node);
+    let copy_address = bound(copy.node().unwrap()).unwrap().to_string();
+    caught_up(&home, &copy, &["kv.db"]);
+    // the home dies: what it left is its files as they stand, no engine open on them at the next start
+    crashed_image(dirs[1].path(), dirs[3].path());
+    drop(sessions);
+    home.close().unwrap();
+    eventually("the copy takes the file over once the home's lease ran out", || {
+        copy.node().unwrap().copy("kv.db").is_none()
+    });
+    let at_new_home = copy.bucket::<String>("sessions").open().unwrap();
+    eventually("the new home writes", || at_new_home.set("after", &"the failover".to_owned()).is_ok());
+
+    // started again from what the crash left, it hears of the new home and copies it
+    let back = node_with(dirs[3].path(), home_node(vec![copy_address]));
+    eventually("the old home becomes the new one's copy", || {
+        super::copy::is_copy(&back.node().unwrap().log_dir("kv.db"))
+    });
+    // the copy opens once it is whole, which a busy machine takes a while to reach
+    eventually("and reads what the new home wrote", || {
+        let opened = back.bucket::<String>("sessions").open();
+        opened.is_ok_and(|read| read.get("after").is_ok_and(|found| found.is_some()))
+    });
+    back.close().unwrap();
+    copy.close().unwrap();
+    witness.close().unwrap();
+}
+
 #[test]
 fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     use std::sync::Mutex;
