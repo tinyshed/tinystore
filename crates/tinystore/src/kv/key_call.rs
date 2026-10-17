@@ -55,8 +55,8 @@ impl<'a, V: Value> KeyCall<'a, V> {
         self.refuse_expiry("take")?;
         #[cfg(feature = "replication")]
         if self.tx.is_none() && self.bucket.is_copy() {
-            let cell = self.bucket.pass_on(&self.key, forward::Call::Take(self.options))?;
-            return forward::cell(&cell)?.map(|cell| super::bucket::decode::<V>(&cell.raw)).transpose();
+            let cell = self.bucket.take_at_home(&self.key, self.options)?;
+            return cell.map(|cell| super::bucket::decode::<V>(&cell.raw)).transpose();
         }
         let work = self.bucket.take_work(&self.key, self.options)?;
         self.run(0, work)

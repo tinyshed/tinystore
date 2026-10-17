@@ -94,6 +94,12 @@ pub(crate) enum Call {
         n: i64,
         from: Option<(String, u64)>,
     },
+    /// A take of an encrypted bucket for a copy that shares the key `key_id`,
+    /// whose value comes back sealed with it.
+    TakeSealed {
+        options: WriteOptions,
+        key_id: String,
+    },
     /// Claims a once's key for the node that asked, or answers what is kept.
     OnceClaim,
     /// Keeps what the run a claim handed over answered, none when it failed.
@@ -237,6 +243,11 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
                 raw_out(&mut out, raw);
             }
         }
+        Call::TakeSealed { options, key_id } => {
+            out.byte(16);
+            options_out(&mut out, options);
+            out.text(key_id);
+        }
         Call::AddQueued { n, from } => {
             out.byte(15);
             out.long(*n as u64);
@@ -314,6 +325,7 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
             let answer = if at.byte()? == 1 { Some(raw_in(&mut at)?) } else { None };
             Call::OnceKeep { token, answer }
         }
+        16 => Call::TakeSealed { options: options_in(&mut at)?, key_id: at.text()? },
         15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
         9 => {
             let raw = raw_in(&mut at)?;
@@ -373,6 +385,7 @@ fn call_here(
                 }
                 Call::Remove(options) => Answer::Found(bucket.remove(key, options)?),
                 Call::Take(options) => Answer::Cell(bucket.take_cell(key, options)?),
+                Call::TakeSealed { options, key_id } => Answer::Cell(bucket.take_sealed(key, options, &key_id)?),
                 Call::Expire(options) => Answer::Found(bucket.expire_as(key, options)?),
                 Call::Clear => {
                     bucket.clear()?;

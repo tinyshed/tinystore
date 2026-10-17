@@ -553,8 +553,10 @@ fn an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed() {
     assert_eq!(secrets.get("token").unwrap().as_deref(), Some("hunter2"), "the copy opens its own write");
     assert_eq!(home_secrets.get("token").unwrap().as_deref(), Some("hunter2"), "the home opens it with the same key");
     assert!(!secrets.create("token", &"again".to_owned()).unwrap());
-    let refused = secrets.take("token").unwrap_err();
-    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a take would carry the value back unsealed: {refused}");
+    assert_eq!(secrets.take("token").unwrap().as_deref(), Some("hunter2"), "a take's value comes back sealed");
+    assert!(home_secrets.get("token").unwrap().is_none(), "the home took it");
+    assert_eq!(secrets.take("token").unwrap(), None);
+    secrets.set("token", &"again".to_owned()).unwrap();
     assert!(secrets.delete("token").unwrap());
     assert!(home_secrets.get("token").unwrap().is_none());
     copy.close().unwrap();

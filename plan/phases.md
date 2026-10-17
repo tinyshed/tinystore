@@ -344,8 +344,8 @@ in [scaling.md](scaling.md#order).
   of that node's it applied, keeping the number in the commit, so that an op sent twice counts once. An op leaves
   the queue once the node's copy holds the commit that counted it; one queued before the store closed is sent when
   it opens, and a copy promoted with ops still queued counts them itself; an add past an i64 at the home is let go
-  and logged, its caller answered already. Left: a take of an encrypted bucket, whose value would come back unsealed
-  until links have TLS, and a counter's add in a database's file, which passes on as a set does.
+  and logged, its caller answered already. A take of an encrypted bucket on a copy
+  asks for the value sealed with the key it names, which its home checks, and opens it on the copy.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
   own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is

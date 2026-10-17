@@ -280,8 +280,8 @@ impl<V: Value> Bucket<V> {
         let key = key.text();
         #[cfg(feature = "replication")]
         if self.is_copy() {
-            let cell = self.pass_on(&key, forward::Call::Take(WriteOptions::default()))?;
-            return forward::cell(&cell)?.map(|cell| decode::<V>(&cell.raw)).transpose();
+            let cell = self.take_at_home(&key, WriteOptions::default())?;
+            return cell.map(|cell| decode::<V>(&cell.raw)).transpose();
         }
         let work = self.take_work(&key, WriteOptions::default())?;
         self.scope.write(&key, 0, work)
@@ -578,7 +578,11 @@ impl<V> Bucket<V> {
     ) {
         #[cfg(feature = "replication")]
         if self.is_copy() {
-            return self.pass_on_then(key, forward::Call::Take(options), forward::cell, done);
+            match self.unsealer(key) {
+                Ok(read) => self.pass_on_then(key, forward::Call::Take(options), read, done),
+                Err(error) => done(Err(error)),
+            }
+            return;
         }
         self.scope.submit_made(key, 0, self.take_cell_work(key, options), done);
     }
@@ -758,7 +762,7 @@ impl<V> Bucket<V> {
     }
 
     /// The call as it crosses the link: an encrypted bucket's value sealed
-    /// here, and a take refused, whose answer would come back unsealed.
+    /// here, and a take asking for the value sealed on its way back.
     fn sealed(&self, key: &str, call: forward::Call) -> Result<forward::Call> {
         let Some(encrypted) = &self.encrypted else {
             return Ok(call);
@@ -768,24 +772,48 @@ impl<V> Bucket<V> {
                 let raw = encrypted.seal(&self.scope.path(key)?, &raw)?;
                 Ok(forward::Call::PutSealed { raw, key_id: encrypted.key_id(), put, options })
             }
-            forward::Call::Take(_) => Err(Error::new(
-                ErrorKind::Unavailable,
-                "a copy passes no take of an encrypted bucket on: the value would come back unsealed",
-            )),
+            forward::Call::Take(options) => Ok(forward::Call::TakeSealed { options, key_id: encrypted.key_id() }),
             call => Ok(call),
         }
     }
 
-    /// Writes a value a copy sealed with `key_id`, which must be this store's
-    /// key for the bucket, as it is.
-    pub(crate) fn put_sealed(
-        &self,
-        key: &str,
-        raw: Raw,
-        key_id: &str,
-        options: WriteOptions,
-        put: Put,
-    ) -> Result<Stamp> {
+    /// Takes a key at the home of the copy: an encrypted bucket's value comes
+    /// back sealed and opens here.
+    pub(crate) fn take_at_home(&self, key: &str, options: WriteOptions) -> Result<Option<Cell>> {
+        let answer = self.pass_on(key, forward::Call::Take(options))?;
+        self.unsealer(key)?(&answer)
+    }
+
+    /// What reads a take's answer from the home: its cell, opened with the
+    /// bucket's key where it is encrypted.
+    fn unsealer(&self, key: &str) -> Result<impl FnOnce(&[u8]) -> Result<Option<Cell>> + Send + 'static + use<V>> {
+        let (encrypted, path, shown) = (self.encrypted.clone(), self.scope.path(key)?, self.scope.shown_key(key));
+        Ok(move |answer: &[u8]| {
+            let cell = forward::cell(answer)?;
+            cell.map(|cell| opened(encrypted.as_ref(), &path, cell)).transpose().map_err(|error| error.within(shown))
+        })
+    }
+
+    /// Takes a key for a copy that shares this store's key, `key_id`, its
+    /// value sealed again for the way back.
+    pub(crate) fn take_sealed(&self, key: &str, options: WriteOptions, key_id: &str) -> Result<Option<Cell>> {
+        let encrypted = self.shared_key(key, key_id)?;
+        if self.is_copy() {
+            let call = forward::Call::TakeSealed { options, key_id: key_id.to_owned() };
+            return forward::cell(&self.pass_on(key, call)?);
+        }
+        let path = self.scope.path(key)?;
+        let taken = self.scope.write(key, 0, self.take_cell_work(key, options)?)?;
+        let seal = |mut cell: Cell| -> Result<Cell> {
+            cell.raw = encrypted.seal(&path, &cell.raw)?;
+            Ok(cell)
+        };
+        taken.map(seal).transpose().map_err(|error| error.within(self.scope.shown_key(key)))
+    }
+
+    /// This bucket's key, which a copy sealed with `key_id`: a copy and its
+    /// home share one.
+    fn shared_key(&self, key: &str, key_id: &str) -> Result<&Encrypted> {
         let Some(encrypted) = &self.encrypted else {
             return Err(
                 Error::invalid("a sealed value for a bucket that is not encrypted").within(self.scope.shown_key(key))
@@ -798,6 +826,20 @@ impl<V> Bucket<V> {
             ))
             .within(self.scope.shown_key(key)));
         }
+        Ok(encrypted)
+    }
+
+    /// Writes a value a copy sealed with `key_id`, which must be this store's
+    /// key for the bucket, as it is.
+    pub(crate) fn put_sealed(
+        &self,
+        key: &str,
+        raw: Raw,
+        key_id: &str,
+        options: WriteOptions,
+        put: Put,
+    ) -> Result<Stamp> {
+        self.shared_key(key, key_id)?;
         let (bytes, work) = self.put_work_as(key, raw, options, put, false)?;
         self.scope.write(key, bytes, work)
     }
@@ -827,7 +869,7 @@ impl<V> Bucket<V> {
     /// Takes a key's cell, at the home where the bucket's file is a copy.
     pub(crate) fn take_cell(&self, key: &str, options: WriteOptions) -> Result<Option<Cell>> {
         if self.is_copy() {
-            return forward::cell(&self.pass_on(key, forward::Call::Take(options))?);
+            return self.take_at_home(key, options);
         }
         let work = self.take_cell_work(key, options)?;
         self.scope.write(key, 0, work)
