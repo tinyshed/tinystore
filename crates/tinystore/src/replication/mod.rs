@@ -186,3 +186,15 @@ mod copy_tests;
 ))]
 #[path = "link_tests.rs"]
 mod link_tests;
+
+#[cfg(all(
+    test,
+    feature = "jobs",
+    feature = "sql",
+    feature = "search",
+    feature = "blobs",
+    feature = "records",
+    feature = "metrics"
+))]
+#[path = "stress_tests.rs"]
+mod stress_tests;

@@ -192,6 +192,7 @@ fn read_requests(
             }
             Message::Ping => {}
             Message::Lease { node, address, asks } => {
+                tracing::debug!(target: "tinystore", from = %node, asks = asks.len(), "a witness hears a node's asks");
                 let Some(witness) = &state.witness else {
                     return Err(Error::invalid("a lease asked of a node that is no witness"));
                 };

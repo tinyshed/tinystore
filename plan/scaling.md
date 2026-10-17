@@ -276,7 +276,12 @@ lived would make a second home, and the file would split for good.
   lease can be taken, by a margin wider than the clocks' drift; the freshest
   copy allowed to take it does so once it expired, and for a synchronous
   home only the freshest of the copies it waits for, once all of them stand,
-  since only they hold every commit it answered.
+  since only they hold every commit it answered. A home at a later epoch than
+  the holder's, which a move or a promotion made, takes the lease once the
+  holder's ran out and before any copy; a copy takes one only at an epoch past
+  every one a home asked for, so that no two nodes hold one epoch of a file;
+  and a node that took a file by its lease claims it in the catalog. The
+  catalog's own home moves by a person's hand alone and holds no lease.
 - **Epochs fence.** Each change of home raises the file's epoch; a node
   refuses pages of an older epoch, and a client a home older than one it has
   seen.

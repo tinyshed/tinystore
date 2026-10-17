@@ -88,6 +88,9 @@ pub(crate) struct State {
     /// The leases a witness granted this node of copies it takes over, until
     /// when, for their logs to open holding them.
     granted: Mutex<HashMap<String, Instant>>,
+    /// The epoch each file this node writes was last seen at, for a judged
+    /// node's renewal of a file no engine holds open.
+    epochs: Mutex<HashMap<String, u64>>,
     /// The leases this node keeps, when it is a witness.
     pub(crate) witness: Option<super::witness::Witness>,
 }
@@ -168,6 +171,7 @@ impl State {
             direct: Mutex::default(),
             verifying: Mutex::default(),
             granted: Mutex::default(),
+            epochs: Mutex::default(),
             witness: if options.witness { Some(super::witness::Witness::open(dir)?) } else { None },
             queue: Mutex::default(),
             tls,
@@ -636,7 +640,14 @@ impl State {
     }
 
     pub(crate) fn spawn(&self, name: &str, work: impl FnOnce() + Send + 'static) {
-        let thread = thread::Builder::new().name(name.to_owned()).spawn(work);
+        // each line a node's threads log names the node, for a process or a log that holds several
+        let inside = tracing::Span::current().metadata().is_some_and(|span| span.name() == "node");
+        let span = if inside {
+            tracing::Span::none()
+        } else {
+            tracing::info_span!(target: "tinystore", "node", node = %self.id)
+        };
+        let thread = thread::Builder::new().name(name.to_owned()).spawn(move || span.in_scope(work));
         match thread {
             Ok(thread) => lock(&self.threads).push(thread),
             Err(error) => tracing::warn!(target: "tinystore", %error, "a node could not start a thread of its links"),
@@ -656,7 +667,8 @@ impl State {
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
             .followed(name, Arc::clone(&self.acks));
-        if self.options.failover.is_some() {
+        // the catalog's home moves only by a person's hand, never by a lease
+        if self.options.failover.is_some() && name != CATALOG {
             log = log.judged(lock(&self.granted).remove(name).unwrap_or_else(Instant::now));
         }
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {
@@ -832,9 +844,81 @@ impl State {
         lock(&self.granted).insert(file.to_owned(), until);
     }
 
+    /// Names this node the home of `file` in the catalog at `epoch`, once a
+    /// lease made it so: nodes route the file by the catalog, and a direct link
+    /// takes nothing of a node it does not name. A catalog out of reach is
+    /// asked again until it answers.
+    pub(crate) fn claim_taken(self: &Arc<Self>, file: &str, epoch: u64) {
+        let (state, file) = (Arc::clone(self), file.to_owned());
+        self.spawn("tinystore node: claim", move || {
+            if !state.uses_catalog() {
+                return;
+            }
+            while !state.stopping() {
+                let Some(store) = state.store() else { return };
+                let address = state.address();
+                let claim = Claim { file: &file, node: &state.id, address: &address, epoch };
+                match state.catalog(&store).and_then(|catalog| catalog.claim(&store, &claim)) {
+                    Ok(home) if home.node == state.id => return,
+                    Ok(home) => {
+                        tracing::error!(
+                            target: "tinystore",
+                            %file,
+                            epoch,
+                            other = %home.node,
+                            "the catalog names another home of a file this node took by its lease: it becomes that home's copy"
+                        );
+                        state.step_back(&store, &file, &home);
+                        return;
+                    }
+                    Err(error) => tracing::debug!(target: "tinystore", %file, %error, "a node's claim of a file it took waits for the catalog"),
+                }
+                drop(store);
+                let until = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < until && !state.stopping() {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        });
+    }
+
+    /// Takes no more writes of `file`, which the catalog names `home` the home
+    /// of, and becomes that home's copy.
+    fn step_back(self: &Arc<Self>, store: &Store, file: &str, home: &super::catalog::Home) {
+        let stepped = self.fence(file, home.epoch.max(1)).and_then(|()| {
+            let ours = self.point_of(file).ok_or_else(|| Error::not_found(format!("{file}: its log")))?;
+            super::handover::let_go(self, store, file, &home.address, ours)
+        });
+        if let Err(error) = stepped {
+            tracing::error!(target: "tinystore", file, %error, "a node could not become a copy of the home the catalog names");
+        }
+    }
+
     /// The epoch this node's open log of `file` writes at.
     pub(crate) fn epoch_written(&self, file: &str) -> Option<u64> {
         lock(&self.logs).get(file).and_then(Weak::upgrade).map(|log| log.epoch())
+    }
+
+    /// The epoch this node writes `file` at, taking no writer: a write that
+    /// holds one may wait for the lease this epoch renews. A log no engine
+    /// holds open is read once and remembered, its epoch moving only while
+    /// open.
+    pub(crate) fn epoch_held(&self, file: &str) -> Option<u64> {
+        if let Some(epoch) = self.epoch_written(file) {
+            lock(&self.epochs).insert(file.to_owned(), epoch);
+            return Some(epoch);
+        }
+        if let Some(&epoch) = lock(&self.epochs).get(file) {
+            return Some(epoch);
+        }
+        // the epoch a move or a promotion left, which no entry may name yet, read
+        // from the log's files rather than through the writer
+        if !self.log_dir(file).exists() {
+            return None;
+        }
+        let epoch = self.epoch_of(file).ok()?;
+        lock(&self.epochs).insert(file.to_owned(), epoch);
+        Some(epoch)
     }
 
     /// Keeps the lease of `file` this node writes on to `until`.

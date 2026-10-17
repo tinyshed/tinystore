@@ -232,6 +232,8 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
         retries: Vec::new(),
         said: HashMap::new(),
         awaiting: HashMap::new(),
+        peer: String::new(),
+        refused: HashSet::new(),
         #[cfg(feature = "blobs")]
         fetching: Fetching::default(),
     };
@@ -251,9 +253,7 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
                         welcomed = true;
                         frames.unpack_from_here()?;
                         out.pack()?;
-                        if let Scope::Direct(direct) = &link.scope {
-                            link.take_nothing_of_another_home(direct, &node)?;
-                        }
+                        link.peer = node;
                         link.upstream().linked(Some(Arc::clone(&out)));
                         if matches!(link.scope, Scope::From) {
                             *lock(&state.upstream_at) = Some(address.to_owned());
@@ -327,6 +327,11 @@ struct Link<'a> {
     said: HashMap<String, u64>,
     /// The checks whose answer names a point the copy has not reached yet.
     awaiting: HashMap<String, (Point, Vec<u8>)>,
+    /// The node at the other end, by the id its welcome said.
+    peer: String,
+    /// The files a direct link takes nothing of yet, the catalog naming
+    /// another home of each than the node it reaches; each said once.
+    refused: HashSet<String>,
     /// The files blobs keeps beside blobs.db, fetched once a copy names them.
     #[cfg(feature = "blobs")]
     fetching: Fetching,
@@ -344,34 +349,6 @@ struct Fetching {
 
 impl Link<'_> {
     /// The writes of the files this link follows pass on through it.
-    /// Follows no file over a direct link whose node, `node`, is not the home
-    /// the catalog names of it: another node listens at a stale address now.
-    /// The file goes to a link to the address the catalog names, when that is
-    /// another.
-    fn take_nothing_of_another_home(&self, direct: &Direct, node: &str) -> Result<()> {
-        // a network that keeps no catalog names no home to check against
-        let Some(store) = self.store.upgrade().filter(|_| self.state.uses_catalog()) else {
-            return Ok(());
-        };
-        let catalog = self.state.catalog(&store)?;
-        for file in direct.files() {
-            let Some(home) = catalog.home_of(&file)?.filter(|home| home.node != node) else {
-                continue;
-            };
-            direct.remove(&file);
-            tracing::warn!(
-                target: "tinystore",
-                %file,
-                address = %direct.address,
-                "the node at a file's address is not the home the catalog names: this node takes nothing of it there"
-            );
-            if !home.address.is_empty() && home.address != direct.address {
-                self.state.take_directly(&store, &file, &home.address)?;
-            }
-        }
-        Ok(())
-    }
-
     fn upstream(&self) -> &Upstream {
         match &self.scope {
             Scope::From => &self.state.upstream,
@@ -397,11 +374,42 @@ impl Link<'_> {
         let mut wanted: Vec<String> = wanted.into_iter().filter(|name| plain_name(name)).collect();
         wanted.sort_unstable();
         for name in wanted {
-            if !self.held.contains_key(&name) {
+            if !self.held.contains_key(&name) && self.reaches_its_home(&name)? {
                 self.ask(&name)?;
             }
         }
         Ok(())
+    }
+
+    /// Whether this link reaches the home the catalog names of `name`: a
+    /// direct link to a stale address, where another node listens now, takes
+    /// nothing of it until the catalog names that node, and a route the
+    /// catalog moved goes over a link to its new address.
+    fn reaches_its_home(&mut self, name: &str) -> Result<bool> {
+        let Scope::Direct(direct) = &self.scope else {
+            return Ok(true);
+        };
+        let Some(store) = self.store.upgrade().filter(|_| self.state.uses_catalog()) else {
+            return Ok(true);
+        };
+        let Some(home) = self.state.catalog(&store)?.home_of(name)?.filter(|home| home.node != self.peer) else {
+            self.refused.remove(name);
+            return Ok(true);
+        };
+        if !home.address.is_empty() && home.address != direct.address {
+            direct.remove(name);
+            self.refused.remove(name);
+            self.state.take_directly(&store, name, &home.address)?;
+        } else if self.refused.insert(name.to_owned()) {
+            tracing::warn!(
+                target: "tinystore",
+                file = name,
+                address = %direct.address,
+                "the node at a file's address is not the home the catalog names: this node takes nothing of it there \
+                 until the catalog names it"
+            );
+        }
+        Ok(false)
     }
 
     /// Asks for `name` from where this node's copy of it stands.
@@ -509,11 +517,18 @@ impl Link<'_> {
     }
 
     /// Compares the copy's hash with its source's, the copy standing at `stands`.
+    /// An entry is named by its sequence and check: a home moved since names
+    /// the same last entry at its own epoch.
     fn compare(&mut self, file: &str, at: Point, sum: &[u8], stands: Point) {
-        let done = if stands != at {
+        let done = if stands.sequence != at.sequence {
             Err(Error::new(
                 ErrorKind::Conflict,
                 format!("the copy stands at entry {}, past those checked", stands.sequence),
+            ))
+        } else if stands.check != at.check {
+            Err(Error::new(
+                ErrorKind::Conflict,
+                format!("the copy's entry {} is not its source's: another home wrote it", stands.sequence),
             ))
         } else {
             super::verify::of_copy(self.state, file)

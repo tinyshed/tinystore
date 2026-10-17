@@ -95,6 +95,7 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
             turn = Instant::now();
             sent = Some(turn);
             let asks = state.judged_files();
+            tracing::debug!(target: "tinystore", asks = asks.len(), "a node asks its witness for its leases");
             if !asks.is_empty() {
                 out.send(&Message::Lease { node: state.id.clone(), address: state.address(), asks })?;
             }
@@ -114,10 +115,13 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
 fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: Instant) -> Result<()> {
     let until = sent + TTL - MARGIN;
     if holder.node == state.id {
-        if let Some(copy) = state.copy(file) {
+        // a lease granted now is of a later epoch than the copy's: one at its own
+        // or older is what this node held before it became a copy
+        if let Some(copy) = state.copy(file).filter(|copy| holder.epoch > copy.point().epoch) {
             state.granted(file, until);
             state.take_over_at(store, file, copy, holder.epoch)?;
             tracing::info!(target: "tinystore", file, epoch = holder.epoch, "a copy took a file over, its lease granted");
+            state.claim_taken(file, holder.epoch);
         }
         state.lease_until(file, until);
         return Ok(());
@@ -125,12 +129,13 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
     if holder.node.is_empty() || state.copy(file).is_some() || super::copy::is_copy(&state.log_dir(file)) {
         return Ok(());
     }
-    let ours = state.point_of(file).ok_or_else(|| Error::not_found(format!("{file}: its log")))?;
-    if holder.epoch > ours.epoch {
-        state.fence(file, holder.epoch)?;
-        super::handover::let_go(state, store, file, &holder.address, ours)?;
+    // the epoch alone, with no writer, which a write waiting for this lease holds
+    if state.epoch_held(file).is_none_or(|ours| holder.epoch <= ours) {
+        return Ok(());
     }
-    Ok(())
+    state.fence(file, holder.epoch)?;
+    let ours = state.point_of(file).ok_or_else(|| Error::not_found(format!("{file}: its log")))?;
+    super::handover::let_go(state, store, file, &holder.address, ours)
 }
 
 /// What a judged node asks its witness each turn: a renewal of each file it
@@ -142,17 +147,16 @@ impl State {
         };
         let mut asks = Vec::new();
         for file in logged {
-            if super::NODE_LOCAL.contains(&file.as_str()) {
+            if super::NODE_LOCAL.contains(&file.as_str()) || file == super::catalog::FILE {
                 continue;
             }
             let (holding, at) = match self.copy(&file) {
                 Some(copy) => (false, copy.point()),
                 None if super::copy::is_copy(&self.log_dir(&file)) => continue,
-                None => match (self.point_of(&file), self.epoch_written(&file)) {
-                    (Some(at), _) => (true, at),
-                    // a file born here, its log empty, asks for its first lease
-                    (None, Some(epoch)) => (true, Point { epoch, ..Point::default() }),
-                    (None, None) => continue,
+                // a renewal names its epoch alone, as a file born here does for its first
+                None => match self.epoch_held(&file) {
+                    Some(epoch) => (true, Point { epoch, ..Point::default() }),
+                    None => continue,
                 },
             };
             // only the copies it names hold every commit a synchronous home answered

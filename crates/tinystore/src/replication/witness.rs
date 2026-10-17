@@ -16,6 +16,11 @@
 //! knows who held what: it grants nothing for a lease's span, during which a
 //! holder renews what it held, and no epoch goes back.
 //!
+//! A home at a later epoch than the holder's took the file by a move or a
+//! promotion: it takes the lease once the holder's ran out, before any copy
+//! standing for it. A copy takes a lease only at an epoch past every one a
+//! home asked for, so that no two nodes ever hold one epoch of a file.
+//!
 //! A synchronous home says which copies its commits wait for, and the witness
 //! keeps them with the holder: only those copies hold every commit the home
 //! answered, so the lease goes to the freshest of them, once all of them
@@ -80,6 +85,14 @@ struct Lease {
     kept: Kept,
     expires: Instant,
     standing: HashMap<String, Standing>,
+    /// A home at a later epoch waiting for the holder's lease to run out.
+    claimant: Option<Claimant>,
+}
+
+#[derive(Clone)]
+struct Claimant {
+    epoch: u64,
+    asked: Instant,
 }
 
 #[derive(Clone)]
@@ -133,11 +146,17 @@ impl Witness {
                 kept: lock(&self.kept).get(ask.file).cloned().unwrap_or_default(),
                 expires: self.started + TTL,
                 standing: HashMap::new(),
+                claimant: None,
             },
         };
+        let before = lease.kept.holder.clone();
         let changed = if ask.holding { renew(&mut lease, ask, now) } else { stand(&mut lease, ask, now) };
         if changed {
             self.keep(ask.file, &lease.kept)?;
+        }
+        let Holder { node, epoch, .. } = &lease.kept.holder;
+        if *node != before.node || *epoch != before.epoch {
+            tracing::info!(target: "tinystore", file = ask.file, holder = %node, epoch, "a witness granted a file's lease");
         }
         let holder = lease.kept.holder.clone();
         leases.insert(ask.file.to_owned(), lease);
@@ -200,12 +219,20 @@ impl Witness {
 }
 
 /// A home's renewal: its own lease lasts on; a lease no node holds, it takes
-/// at its epoch when that is no older than the witness kept. Whether what the
-/// witness keeps changed: the holder, the epoch or the copies waited for.
+/// at its epoch when that is no older than the witness kept; and one held at
+/// an older epoch, it takes once that ran out. Whether what the witness keeps
+/// changed: the holder, the epoch or the copies waited for.
 fn renew(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
     let holder = &lease.kept.holder;
-    let takes = holder.node.is_empty() && ask.epoch >= holder.epoch;
-    if !takes && (holder.node != ask.node || holder.epoch != ask.epoch) {
+    let renewed = holder.node == ask.node && holder.epoch == ask.epoch;
+    let first = holder.node.is_empty() && ask.epoch >= holder.epoch;
+    let moved_in = !holder.node.is_empty() && ask.epoch > holder.epoch;
+    if moved_in && now < lease.expires {
+        let epoch = lease.claimant.as_ref().map_or(ask.epoch, |claimant| claimant.epoch.max(ask.epoch));
+        lease.claimant = Some(Claimant { epoch, asked: now });
+        return false;
+    }
+    if !renewed && !first && !moved_in {
         return false;
     }
     let kept = Kept {
@@ -213,6 +240,9 @@ fn renew(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
         synchronous: ask.synchronous.to_vec(),
     };
     lease.expires = now + TTL;
+    if !renewed {
+        (lease.claimant, lease.standing) = (None, HashMap::new());
+    }
     let changed = kept != lease.kept;
     lease.kept = kept;
     changed
@@ -230,11 +260,17 @@ fn stand(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
     if now < lease.expires + GATHER || holder.node == ask.node || holder.epoch == 0 {
         return false;
     }
+    // a home at a later epoch, moved in, takes it before any copy
+    if lease.claimant.as_ref().is_some_and(|claimant| now.duration_since(claimant.asked) < TTL) {
+        return false;
+    }
     if freshest(lease).as_deref() != Some(ask.node) {
         return false;
     }
-    let epoch = holder.epoch + 1;
+    let claimed = lease.claimant.as_ref().map_or(0, |claimant| claimant.epoch);
+    let epoch = holder.epoch.max(claimed) + 1;
     let holder = Holder { node: ask.node.to_owned(), address: ask.address.to_owned(), epoch };
+    lease.claimant = None;
     lease.kept = Kept { holder, synchronous: Vec::new() };
     lease.expires = now + TTL;
     lease.standing.clear();

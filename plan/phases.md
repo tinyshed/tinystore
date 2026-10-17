@@ -428,7 +428,12 @@ shipped, counted, and the old home cannot write again.
   where it stands; once a lease ran out and a second passed, the freshest copy standing takes it at the next epoch
   and the file over, as a live move does, and for a synchronous home the freshest of the copies it names, once all
   of them stand, a judged synchronous node naming them; a home that hears another holds its lease at a later epoch
-  becomes that node's copy. Left: a lease in object storage behind an interface, the option in the Bun SDK, and the
-  timings measured by fault injection and over a WAN.
+  becomes that node's copy. A home a move or a promotion made at a later epoch takes the lease before any copy, a
+  copy takes one only past every epoch a home asked for, a takeover claims its file in the catalog, and the
+  catalog's home holds no lease. A stress run by hand, `replication::stress_tests`, puts five nodes, writers on
+  four, restarts, the witness's restarts, moves and a failover of a synchronous home together and checks that every
+  write answered survives, that no two nodes wrote a file as home at one epoch and that every copy is its home page
+  for page; it found the bugs these lines fix. Left: a lease in object storage behind an interface, the option in
+  the Bun SDK, a node's close that can take seconds, and the timings measured by fault injection and over a WAN.
 
 **Gate:** no cut of a simulated network leaves two homes taking writes.
