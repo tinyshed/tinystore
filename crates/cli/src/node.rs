@@ -71,6 +71,9 @@ fn print_links(dir: &Path, files: &[FileStatus]) {
     if let Some(from) = &links.from {
         println!("from      {from}");
     }
+    if links.unheld > 0 {
+        println!("unheld    {} synchronous commits answered with no copy holding them", links.unheld);
+    }
     for follower in &links.followers {
         let held: Vec<String> = follower
             .applied

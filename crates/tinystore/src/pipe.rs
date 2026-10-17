@@ -223,6 +223,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
         files: (!asked.files.is_empty()).then_some(asked.files),
         token: asked.token,
         synchronous: asked.synchronous,
+        synchronous_with: Vec::new(),
         tls: None,
         catalog: false,
         address: None,

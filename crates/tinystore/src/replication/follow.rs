@@ -217,7 +217,12 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
     reading.set_timeout(Duration::from_millis(250))?;
     writing.set_timeout(SILENT_AT_MOST)?;
     let out = Arc::new(Out::new(writing));
-    out.send(&Message::Hello { version: VERSION, token: state.options.token.clone().unwrap_or_default() })?;
+    out.send(&Message::Hello {
+        version: VERSION,
+        token: state.options.token.clone().unwrap_or_default(),
+        node: state.id.clone(),
+        address: state.address(),
+    })?;
     let mut link = Link {
         state,
         store,

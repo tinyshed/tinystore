@@ -395,12 +395,15 @@ in [scaling.md](scaling.md#order).
   copy stands; a running node writes its links to `log/links` every five seconds, the node it takes from and the
   nodes taking from it with the entry each holds of each file, and removes them when it stops, and
   `replication::links` reads them and the command prints them, each follower's distance behind the log.
-- [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
-  Built so far: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
+- [x] The synchronous mode: a home answering once a chosen copy holds the commit.
+  Built: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
   commit of a file the node writes wait, the writer held, until a node copying it says it holds the entry, so
   that the commits queued meanwhile share the next and its wait; a follower says what each copy holds after each
-  turn of reading. With no node following, a commit waits for none and says so once; one no copy held in five
-  seconds answers, logged. Left: a chosen copy rather than any, and what a write answers when no copy held it.
+  turn of reading. A follower says its id and address in its hello, so that each node's hold is its own, and
+  `Node::synchronous_with` and `--node-synchronous-with` name the nodes, by address or id, a commit waits for one
+  of; any node copying the file when none. A commit none of them held in five seconds, or made while none of them
+  follows, answers all the same, its write in the file already: it is counted, said in the log once an outage,
+  and the count is in `log/links` and `tinystore node status`. The SDK's options name no chosen node yet.
 
 **Gate:** a node three links away holds its home's files commit for commit; a
 get after a set sees it on any node; a promotion loses only the commits not

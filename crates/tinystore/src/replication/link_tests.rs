@@ -1054,3 +1054,40 @@ fn a_live_move_hands_a_file_s_home_over_and_loses_no_commit() {
     eu.close().unwrap();
     us.close().unwrap();
 }
+
+#[test]
+fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_held() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let eu_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home_node =
+        Node { serve: Some("127.0.0.1:0".into()), synchronous_with: vec![eu_address.clone()], ..Node::default() };
+    let home = node_with(dirs[0].path(), home_node);
+    let home_address = bound(home.node().unwrap()).unwrap().to_string();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    let eu = node_with(
+        dirs[1].path(),
+        Node { serve: Some(eu_address), from: vec![home_address.clone()], ..Node::default() },
+    );
+    let ru = node_with(dirs[2].path(), Node { from: vec![home_address], ..Node::default() });
+    eu.bucket::<String>("sessions").open().unwrap();
+    ru.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &eu, &["kv.db"]);
+    caught_up(&home, &ru, &["kv.db"]);
+    let unheld = || home.node().unwrap().acks.unheld.load(Relaxed);
+
+    // the commits made before europe followed were held by no copy it chose
+    let (began, counted) = (Instant::now(), unheld());
+    sessions.set("held", &"by europe".to_owned()).unwrap();
+    assert!(began.elapsed() < Duration::from_secs(4), "europe, the copy chosen, holds it at once");
+    assert_eq!(unheld(), counted, "a commit europe held is not counted");
+
+    eu.close().unwrap();
+    eventually("russia alone follows", || sessions.set("probe", &"x".to_owned()).is_ok() && unheld() > 0);
+    let before = unheld();
+    sessions.set("unheld", &"russia holds it, and europe was chosen".to_owned()).unwrap();
+    assert_eq!(unheld(), before + 1, "a commit no chosen copy held is counted");
+    assert_eq!(sessions.get("unheld").unwrap().as_deref(), Some("russia holds it, and europe was chosen"));
+    ru.close().unwrap();
+    home.close().unwrap();
+}

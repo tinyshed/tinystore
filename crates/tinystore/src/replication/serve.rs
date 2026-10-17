@@ -109,7 +109,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     let out = Arc::new(Out::new(writing));
     let mut frames = Frames::default();
     let hello = read_one(state, &mut reading, &mut frames, SILENT_AT_MOST)?;
-    let Some(Message::Hello { version, token }) = hello else {
+    let Some(Message::Hello { version, token, node, address: said }) = hello else {
         return Err(Error::invalid("a link began with no hello"));
     };
     if version != VERSION {
@@ -123,7 +123,9 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     out.send(&Message::Welcome { files: state.files_served()? })?;
     out.pack()?;
     frames.unpack_from_here()?;
-    let asked = Arc::new(Mutex::new(Asked { following: Some(state.following(address)), ..Asked::default() }));
+    // a node is known by the address it said, or where its link comes from
+    let address = if said.is_empty() { address } else { said };
+    let asked = Arc::new(Mutex::new(Asked { following: Some(state.following(node, address)), ..Asked::default() }));
     let sending = (Arc::clone(state), Arc::clone(&out), Arc::clone(&asked));
     state.spawn("tinystore node: send", move || {
         let (state, out, asked) = sending;
@@ -137,12 +139,12 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     let mut following = false;
     let ended = read_requests(state, &mut reading, &mut frames, &out, &asked, &mut following);
     let mut asked_last = lock(&asked);
-    (asked_last.ended, asked_last.following) = (true, None);
+    asked_last.ended = true;
+    if following && let Some(gone) = asked_last.following.take() {
+        state.acks.unlinked(gone.node());
+    }
     drop(asked_last);
     state.notify.appended();
-    if following {
-        state.acks.unlinked();
-    }
     ended
 }
 
@@ -167,11 +169,13 @@ fn read_requests(
                 if !plain_name(&file) {
                     return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
                 }
-                lock(asked).follows.push((file, at));
-                if !*following {
+                let mut held = lock(asked);
+                held.follows.push((file, at));
+                if !*following && let Some(follower) = &held.following {
                     *following = true;
-                    state.acks.linked();
+                    state.acks.linked(follower.node(), follower.address());
                 }
+                drop(held);
                 state.notify.appended();
             }
             Message::List => out.send(&Message::Listed { files: state.files_served()? })?,
@@ -184,8 +188,8 @@ fn read_requests(
             }
             Message::Ping => {}
             Message::Applied { file, sequence } => {
-                state.acks.held(&file, sequence);
                 if let Some(following) = &lock(asked).following {
+                    state.acks.held(following.node(), &file, sequence);
                     following.applied(&file, sequence);
                 }
             }

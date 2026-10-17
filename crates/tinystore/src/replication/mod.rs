@@ -72,6 +72,10 @@ pub struct Node {
     /// holds its commit, while one follows it: losing this node then loses no
     /// write it answered.
     pub synchronous: bool,
+    /// The nodes, by their address or id, whose hold a synchronous commit
+    /// waits for: one of them; any node copying the file when none. Naming one
+    /// makes the node synchronous.
+    pub synchronous_with: Vec<String>,
     /// TLS on its links, with the `replication-tls` feature; plain TCP when
     /// none.
     pub tls: Option<NodeTls>,
@@ -107,6 +111,7 @@ impl fmt::Debug for Node {
             .field("files", &self.files)
             .field("token", &self.token.as_ref().map(|_| "hidden"))
             .field("synchronous", &self.synchronous)
+            .field("synchronous_with", &self.synchronous_with)
             .field("tls", &self.tls)
             .field("catalog", &self.catalog)
             .field("address", &self.address)

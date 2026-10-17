@@ -105,9 +105,20 @@ pub(crate) enum Claimed {
 pub(crate) struct Following {
     state: Arc<State>,
     id: u64,
+    node: String,
+    address: String,
 }
 
 impl Following {
+    /// The node's id, as its hello said.
+    pub(crate) fn node(&self) -> &str {
+        &self.node
+    }
+
+    pub(crate) fn address(&self) -> &str {
+        &self.address
+    }
+
     /// The follower holds `file` up to entry `sequence`.
     pub(crate) fn applied(&self, file: &str, sequence: u64) {
         if let Some(follower) = lock(&self.state.followers).get_mut(&self.id) {
@@ -135,8 +146,10 @@ impl Drop for Paused {
 impl State {
     pub(crate) fn new(dir: &Path, options: Node) -> Result<State> {
         let tls = super::transport::Tls::of(&options)?;
+        let acks = Arc::new(Acks::waiting_for(options.synchronous_with.clone()));
         Ok(State {
             id: super::queue::node_id(&dir.join(DIR))?,
+            acks,
             served: Mutex::default(),
             catalog: Mutex::default(),
             direct: Mutex::default(),
@@ -147,7 +160,6 @@ impl State {
             store: Mutex::default(),
             bounds: Bounds::default(),
             notify: Arc::default(),
-            acks: Arc::default(),
             logs: Mutex::default(),
             copies: Mutex::default(),
             copied: Condvar::new(),
@@ -533,7 +545,7 @@ impl State {
     /// The log of the file `name` this node writes, opened for its writer.
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?;
-        if self.options.synchronous {
+        if self.options.synchronous || !self.options.synchronous_with.is_empty() {
             log = log.synchronous(name, Arc::clone(&self.acks));
         }
         let log = Arc::new(log);
@@ -602,11 +614,12 @@ impl State {
         Ok(())
     }
 
-    /// Keeps a node that linked from `address` among the followers.
-    pub(crate) fn following(self: &Arc<Self>, address: String) -> Following {
+    /// Keeps the node `node`, which linked from `address`, among the
+    /// followers.
+    pub(crate) fn following(self: &Arc<Self>, node: String, address: String) -> Following {
         let id = self.next_follower.fetch_add(1, Ordering::Relaxed);
-        lock(&self.followers).insert(id, Follower { address, applied: Default::default() });
-        Following { state: Arc::clone(self), id }
+        lock(&self.followers).insert(id, Follower { address: address.clone(), applied: Default::default() });
+        Following { state: Arc::clone(self), id, node, address }
     }
 
     /// Keeps what the node holds of an engine's file `name` it opened.

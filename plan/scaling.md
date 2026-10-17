@@ -473,8 +473,9 @@ storage with a restore to a commit or a second; the exporters.
    logged as two homes' for a person to settle.
 5. Collecting nodes' logs and metrics in one place: a node copying others'
    records and metrics, and under what names.
-6. Whether a synchronous write falls back when its copy is gone, and with what
-   alarm; what `once` promises after an asynchronous failover.
+6. What `once` promises after an asynchronous failover. A synchronous write
+   whose chosen copy is gone falls back and answers, counted and said once an
+   outage, as the owner left to the builder on 18 October.
 7. The log's format, TinyStore's own or LTX; a checksum of the whole file
    every commit or now and then.
 8. A backup that leaves the machine: encrypted by default, and the option's

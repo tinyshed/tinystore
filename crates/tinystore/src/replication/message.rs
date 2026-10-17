@@ -15,7 +15,7 @@ use crate::{Error, ErrorKind, Result};
 
 /// The link's version, which a node's hello names: the second packs what
 /// follows the welcome through zstd.
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
 
@@ -26,6 +26,10 @@ pub(crate) enum Message {
     Hello {
         version: u32,
         token: String,
+        /// The node's id, which it keeps in its `log/node`.
+        node: String,
+        /// Where other nodes reach it; empty for a node that serves nothing.
+        address: String,
     },
     /// The files a node serves: its own and its copies that are whole.
     Welcome {
@@ -105,10 +109,12 @@ impl Message {
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Out(vec![0; 4]);
         match self {
-            Message::Hello { version, token } => {
+            Message::Hello { version, token, node, address } => {
                 out.byte(1);
                 out.word(*version);
                 out.text(token);
+                out.text(node);
+                out.text(address);
             }
             Message::Welcome { files } => {
                 out.byte(2);
@@ -229,7 +235,7 @@ impl Message {
     fn decode(body: &[u8]) -> Result<Message> {
         let mut at = In { bytes: body, at: 0 };
         let message = match at.byte()? {
-            1 => Message::Hello { version: at.word()?, token: at.text()? },
+            1 => Message::Hello { version: at.word()?, token: at.text()?, node: at.text()?, address: at.text()? },
             2 => Message::Welcome { files: at.texts()? },
             3 => Message::Refused { why: at.text()? },
             4 => Message::List,
@@ -502,7 +508,7 @@ mod tests {
     fn every_message_reads_back_as_it_was_written() {
         let at = Point { sequence: 7, epoch: 2, check: [3; 16] };
         let messages = [
-            Message::Hello { version: VERSION, token: "t".into() },
+            Message::Hello { version: VERSION, token: "t".into(), node: "9f86d081".into(), address: "eu:7444".into() },
             Message::Welcome { files: vec!["kv.db".into(), "sql/app.db".into()] },
             Message::Refused { why: "no".into() },
             Message::List,

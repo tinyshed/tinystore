@@ -28,6 +28,8 @@ pub struct Links {
     pub from: Option<String>,
     /// The nodes taking from it now.
     pub followers: Vec<Follower>,
+    /// The synchronous commits it answered with no copy holding them.
+    pub unheld: u64,
 }
 
 /// A node taking files from this one.
@@ -57,6 +59,7 @@ fn read(value: &Value) -> Option<Links> {
     let followers = value.get("followers")?.as_array()?.iter().map(read_follower).collect::<Option<Vec<_>>>()?;
     Some(Links {
         written: value.get("written")?.as_u64()?,
+        unheld: value.get("unheld").and_then(Value::as_u64).unwrap_or(0),
         from: value.get("from").and_then(Value::as_str).map(str::to_owned),
         followers,
     })
@@ -100,7 +103,9 @@ fn write(state: &State) -> Result<()> {
             json!({ "address": follower.address, "applied": applied })
         })
         .collect();
-    let links = json!({ "written": written, "from": *lock(&state.upstream_at), "followers": followers });
+    let unheld = state.acks.unheld.load(std::sync::atomic::Ordering::Relaxed);
+    let from = lock(&state.upstream_at).clone();
+    let links = json!({ "written": written, "from": from, "followers": followers, "unheld": unheld });
     let (path, next) = (logs.join(FILE), logs.join(format!("{FILE}.next")));
     std::fs::write(&next, links.to_string()).map_err(|error| Error::io(next.display().to_string(), error))?;
     std::fs::rename(&next, &path).map_err(|error| Error::io(path.display().to_string(), error))

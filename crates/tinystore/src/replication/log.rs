@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
@@ -64,16 +64,29 @@ impl Notify {
     }
 }
 
-/// What a synchronous home's commits wait for: the entry of each file that
-/// a node copying it said it holds.
+/// What a synchronous home's commits wait for: the entry of each file each
+/// node copying it said it holds, from the nodes chosen or any.
 #[derive(Default)]
 pub(crate) struct Acks {
-    held: Mutex<HashMap<String, u64>>,
+    held: Mutex<Held>,
     changed: Condvar,
-    /// Links that follow a file of this node now: with none, a commit waits
-    /// for no one, and says so once.
-    linked: AtomicUsize,
-    said_alone: AtomicBool,
+    /// The nodes whose hold a commit waits for, by their id or address; any
+    /// node copying the file when none.
+    chosen: Vec<String>,
+    /// A commit answered with no copy holding it was said, until one is held
+    /// again: once an outage.
+    said: AtomicBool,
+    /// The synchronous commits answered with no copy holding them.
+    pub(crate) unheld: AtomicU64,
+}
+
+#[derive(Default)]
+struct Held {
+    /// The last entry each node said it holds of each file, by the node's id.
+    entries: HashMap<(String, String), u64>,
+    /// The nodes whose links follow a file of this node now, by id: the
+    /// address each said, and how many links.
+    linked: HashMap<String, (String, usize)>,
 }
 
 /// How long a synchronous commit waits for a copy to hold it before it
@@ -81,45 +94,74 @@ pub(crate) struct Acks {
 const ACK_WAIT: Duration = Duration::from_secs(5);
 
 impl Acks {
-    /// A node that copies `file` holds its entries up to `sequence`.
-    pub(crate) fn held(&self, file: &str, sequence: u64) {
+    /// The acks of a home whose commits wait for the nodes `chosen`, by
+    /// their ids or addresses, or for any node copying the file when none.
+    pub(crate) fn waiting_for(chosen: Vec<String>) -> Acks {
+        Acks { chosen, ..Acks::default() }
+    }
+
+    /// The node `node` holds `file`'s entries up to `sequence`.
+    pub(crate) fn held(&self, node: &str, file: &str, sequence: u64) {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        let at = held.entry(file.to_owned()).or_default();
+        let at = held.entries.entry((node.to_owned(), file.to_owned())).or_default();
         if sequence > *at {
             *at = sequence;
             self.changed.notify_all();
         }
     }
 
-    pub(crate) fn linked(&self) {
-        self.linked.fetch_add(1, Ordering::SeqCst);
+    pub(crate) fn linked(&self, node: &str, address: &str) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.linked.entry(node.to_owned()).or_insert_with(|| (address.to_owned(), 0)).1 += 1;
     }
 
-    pub(crate) fn unlinked(&self) {
-        self.linked.fetch_sub(1, Ordering::SeqCst);
+    pub(crate) fn unlinked(&self, node: &str) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, links)) = held.linked.get_mut(node) {
+            *links -= 1;
+            if *links == 0 {
+                held.linked.remove(node);
+            }
+        }
         self.changed.notify_all();
     }
 
-    /// Waits until a node that copies `file` holds entry `sequence`, a bound
-    /// at most, or not at all while none follows it.
+    /// Waits until a node chosen, or any, holds `file`'s entry `sequence`, a
+    /// bound at most, or not at all while none such follows it: a commit
+    /// answered with no copy holding it is counted, and said once an outage.
     fn wait(&self, file: &str, sequence: u64) {
         let deadline = Instant::now() + ACK_WAIT;
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        while held.get(file).copied().unwrap_or(0) < sequence {
-            if self.linked.load(Ordering::SeqCst) == 0 {
-                if !self.said_alone.swap(true, Ordering::SeqCst) {
-                    tracing::warn!(target: "tinystore", file, "a synchronous home commits with no node copying it");
-                }
+        loop {
+            let counted: Vec<&String> = held
+                .linked
+                .iter()
+                .filter(|(node, (address, _))| self.counts(node, address))
+                .map(|(node, _)| node)
+                .collect();
+            let holding = |node: &&String| {
+                held.entries.get(&((*node).clone(), file.to_owned())).is_some_and(|&at| at >= sequence)
+            };
+            if counted.iter().any(holding) {
+                self.said.store(false, Ordering::SeqCst);
                 return;
             }
             let now = Instant::now();
-            if now >= deadline {
-                tracing::warn!(target: "tinystore", file, entry = sequence, "no copy held a synchronous commit in time");
+            if counted.is_empty() || now >= deadline {
+                self.unheld.fetch_add(1, Ordering::Relaxed);
+                if !self.said.swap(true, Ordering::SeqCst) {
+                    let why =
+                        if counted.is_empty() { "no node it waits for copies it" } else { "none held it in time" };
+                    tracing::warn!(target: "tinystore", file, entry = sequence, why, "a synchronous commit answered with no copy holding it");
+                }
                 return;
             }
             held = self.changed.wait_timeout(held, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
         }
-        self.said_alone.store(false, Ordering::SeqCst);
+    }
+
+    fn counts(&self, node: &str, address: &str) -> bool {
+        self.chosen.is_empty() || self.chosen.iter().any(|chosen| chosen == node || chosen == address)
     }
 }
 
