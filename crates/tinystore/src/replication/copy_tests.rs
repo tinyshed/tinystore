@@ -12,7 +12,7 @@ use crate::{ErrorKind, Options, Store, sql};
 
 /// A file's pages as a reader of it sees them, page 1's change counters,
 /// which each file's own commits move, left out.
-fn pages_seen(path: &Path) -> Vec<u8> {
+pub(super) fn pages_seen(path: &Path) -> Vec<u8> {
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
     let connection = rusqlite::Connection::open_with_flags(path, flags).unwrap();
     let mut select = connection.prepare("select data from sqlite_dbpage order by pgno").unwrap();
@@ -45,7 +45,7 @@ fn ship_checking_each_commit(home: &Path, copy: &Store, names: &[&str]) {
                     image[at..at + page_size].copy_from_slice(page);
                 }
             }
-            shipped.apply(&entry)?;
+            shipped.apply(&entry, None)?;
             if entry.kind == Kind::Commit && entry.sequence > held_already {
                 let mut expected = image.clone();
                 without_change_counters(&mut expected);
@@ -86,10 +86,11 @@ fn a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing()
     let mail = copy.queue::<serde_json::Value>("mail").open().unwrap();
     assert_eq!(mail.add(&serde_json::json!({ "to": "no" })).unwrap_err().kind(), ErrorKind::Invalid);
 
+    // a write that passes to its home finds no link to send it on: this node takes from none
     let refused = sessions.set("new", &"no".to_owned()).unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    assert_eq!(refused.kind(), ErrorKind::Unavailable, "{refused}");
     let refused = db.exec(sql!("insert into notes (body) values (?)", "no")).unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    assert_eq!(refused.kind(), ErrorKind::Unavailable, "{refused}");
     copy.close().unwrap();
     home.close().unwrap();
 }
@@ -138,7 +139,7 @@ fn a_reader_of_a_copy_never_sees_half_a_commit() {
     let done = Arc::new(AtomicBool::new(false));
     let mut reader = None;
     Log::read(&home_dir.path().join(DIR).join("sql/pairs.db"), |entry| {
-        shipped.apply(&entry)?;
+        shipped.apply(&entry, None)?;
         if reader.is_none() && entry.kind == Kind::Commit {
             let read = copy.database("pairs").migrations(pairs).open()?;
             let watching = Arc::clone(&done);
@@ -181,24 +182,24 @@ fn a_copy_refuses_an_entry_that_does_not_follow_and_takes_one_it_has_as_nothing(
         at += used;
     }
     let entry_at = |index: usize| entry::decode(&segment[kept[index].clone()]).unwrap().unwrap().0;
-    shipped.apply(&entry_at(0)).unwrap();
-    let skipped = shipped.apply(&entry_at(2)).unwrap_err();
+    shipped.apply(&entry_at(0), None).unwrap();
+    let skipped = shipped.apply(&entry_at(2), None).unwrap_err();
     assert_eq!(skipped.kind(), ErrorKind::Invalid, "{skipped}");
-    shipped.apply(&entry_at(1)).unwrap();
-    shipped.apply(&entry_at(1)).unwrap();
+    shipped.apply(&entry_at(1), None).unwrap();
+    shipped.apply(&entry_at(1), None).unwrap();
     assert_eq!(shipped.applied(), 2, "an entry it holds is taken as nothing");
     let mut forged = entry_at(2);
     forged.previous = [7; 16];
-    assert_eq!(shipped.apply(&forged).unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(shipped.apply(&forged, None).unwrap_err().kind(), ErrorKind::Conflict);
     let mut other = entry_at(1);
     other.check = [9; 16];
-    assert_eq!(shipped.apply(&other).unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(shipped.apply(&other, None).unwrap_err().kind(), ErrorKind::Conflict);
     drop(shipped);
 
     let again = Copy::start(&copy, "kv.db").unwrap();
     assert_eq!(again.applied(), 2, "a copy opened again goes on from its position");
     for index in 2..kept.len() {
-        again.apply(&entry_at(index)).unwrap();
+        again.apply(&entry_at(index), None).unwrap();
     }
     assert_eq!(copy.bucket::<String>("sessions").open().unwrap().get("4").unwrap().as_deref(), Some("v"));
     copy.close().unwrap();
@@ -222,8 +223,8 @@ fn a_copy_is_not_made_of_a_file_the_store_wrote_nor_from_a_log_begun_on_a_file_w
     let copy_dir = tempfile::tempdir().unwrap();
     let copy = node(copy_dir.path());
     let shipped = Copy::start(&copy, "kv.db").unwrap();
-    let refused = Log::read(&alone.path().join(DIR).join("kv.db"), |entry| shipped.apply(&entry)).unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    let refused = Log::read(&alone.path().join(DIR).join("kv.db"), |entry| shipped.apply(&entry, None)).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Conflict, "a copy starts from a snapshot: {refused}");
 }
 
 #[test]
@@ -237,6 +238,6 @@ fn a_migration_its_home_has_not_shipped_yet_is_unavailable_on_a_copy() {
     let shipped = Copy::start(&copy, "sql/app.db").unwrap();
     let early = copy.database("app").migrations(migrations).open().err().unwrap();
     assert_eq!(early.kind(), ErrorKind::Unavailable, "{early}");
-    Log::read(&home_dir.path().join(DIR).join("sql/app.db"), |entry| shipped.apply(&entry)).unwrap();
+    Log::read(&home_dir.path().join(DIR).join("sql/app.db"), |entry| shipped.apply(&entry, None)).unwrap();
     copy.database("app").migrations(migrations).open().unwrap();
 }

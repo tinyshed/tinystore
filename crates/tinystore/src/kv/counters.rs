@@ -9,6 +9,8 @@ use super::bucket::{Work, clear_work};
 use super::buffer::{Buffer, Change, Live};
 use super::cells;
 use super::engine::next_version;
+#[cfg(feature = "replication")]
+use super::forward;
 use super::path::Key;
 use super::scope::{Kind, Scope};
 use super::value::Raw;
@@ -84,6 +86,10 @@ impl Counters {
     /// the range of an `i64` is `Limit` and changes nothing.
     pub fn add(&self, key: impl Key, n: i64) -> Result<i64> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return forward::sum(&self.pass_on(&key, &forward::Call::Add(n))?);
+        }
         let Some(buffer) = &self.buffer else {
             return self.scope.write(&key, 0, self.add_work(&key, n)?);
         };
@@ -102,7 +108,7 @@ impl Counters {
     /// returns.
     #[cfg(feature = "wire")]
     pub(crate) fn add_then(&self, key: &str, n: i64, done: impl FnOnce(Result<i64>) + Send + 'static) {
-        if self.buffer.is_some() {
+        if self.buffer.is_some() || self.on_a_copy() {
             return done(self.add(key, n));
         }
         self.scope.submit_made(key, 0, self.add_work(key, n), done);
@@ -111,7 +117,7 @@ impl Counters {
     /// `delete` without waiting for its commit.
     #[cfg(feature = "wire")]
     pub(crate) fn delete_then(&self, key: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
-        if self.buffer.is_some() {
+        if self.buffer.is_some() || self.on_a_copy() {
             return done(self.delete(key));
         }
         self.scope.submit_made(key, 0, self.delete_work(key), done);
@@ -132,6 +138,10 @@ impl Counters {
     /// Removes the counter under `key` and says whether it was there.
     pub fn delete(&self, key: impl Key) -> Result<bool> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return forward::found(&self.pass_on(&key, &forward::Call::DeleteCounter)?);
+        }
         let Some(buffer) = &self.buffer else {
             return self.scope.write(&key, 0, self.delete_work(&key)?);
         };
@@ -144,6 +154,10 @@ impl Counters {
     /// Removes every counter of this branch and of the branches under it, at
     /// once for every reader, however many there are.
     pub fn clear(&self) -> Result<()> {
+        #[cfg(feature = "replication")]
+        if self.scope.kv.file().is_copy() {
+            return self.pass_on("", &forward::Call::ClearCounters).map(drop);
+        }
         let work = clear_work(&self.scope)?;
         let prefix = self.scope.branch()?.prefix().to_vec();
         let revision = self.scope.kv.revision();
@@ -154,6 +168,27 @@ impl Counters {
             None => write(),
         };
         cleared.map_err(|error| error.within(self.scope.shown_branch()))
+    }
+
+    /// Whether the counters' file is a copy, whose writes block on their home
+    /// rather than queue for a commit here.
+    #[cfg(feature = "wire")]
+    fn on_a_copy(&self) -> bool {
+        #[cfg(feature = "replication")]
+        return self.scope.kv.file().is_copy();
+        #[cfg(not(feature = "replication"))]
+        false
+    }
+
+    /// Passes a call on `key` to the home of the copy the counters' file is.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
+        let shown = || self.scope.shown_key(key);
+        forward::refuse(false, self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let handle = forward::Handle::Counters { name: self.scope.name().to_owned(), ttl: self.ttl };
+        forward::pass_on(&store, &handle, &owners, key, call)
     }
 
     pub(crate) fn add_work(&self, key: &str, n: i64) -> Result<impl Work<i64> + use<>> {

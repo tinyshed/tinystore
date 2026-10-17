@@ -6,6 +6,8 @@
 //! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key              its key kept apart from its data
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
+//! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-token-file t]   a node other nodes copy
+//! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-files kv.db,sql/app.db]   a node that copies
 //! ```
 
 use std::path::PathBuf;
@@ -40,6 +42,18 @@ pub(crate) struct Serve {
     /// The file of the store's encryption key; `encryption.key` of its directory,
     /// which the store makes, unless said.
     pub(crate) encryption_key_file: Option<PathBuf>,
+    /// The node the store is, when a node's flag says so.
+    pub(crate) node: Option<Node>,
+}
+
+/// What `--node`, `--node-listen`, `--from`, `--node-files` and
+/// `--node-token-file` say of the node the store is.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Node {
+    pub(crate) listen: Option<String>,
+    pub(crate) from: Vec<String>,
+    pub(crate) files: Option<Vec<String>>,
+    pub(crate) token_file: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -60,7 +74,12 @@ pub(crate) enum Transport {
 }
 
 /// Every flag `serve` takes, for a misspelt one's nearest.
-const FLAGS: [&str; 14] = [
+const FLAGS: [&str; 19] = [
+    "--node",
+    "--node-listen",
+    "--from",
+    "--node-files",
+    "--node-token-file",
     "--dir",
     "--stdio",
     "--local",
@@ -83,6 +102,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let (mut log, mut idle, mut clock) = (None, None, None);
     let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
     let (mut durability, mut keep_free, mut encryption_key_file) = (None, None, None);
+    let (mut node, mut node_flags) = (Node::default(), false);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
@@ -100,6 +120,19 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--memory" => memory = Some(size(&value("--memory")?)?),
             "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
             "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
+            "--node" => node_flags = true,
+            "--node-listen" => (node.listen, node_flags) = (Some(value("--node-listen")?), true),
+            "--from" => {
+                node.from.push(value("--from")?);
+                node_flags = true;
+            }
+            "--node-files" => {
+                let files = value("--node-files")?.split(',').map(|file| file.trim().to_owned()).collect();
+                (node.files, node_flags) = (Some(files), true);
+            }
+            "--node-token-file" => {
+                (node.token_file, node_flags) = (Some(PathBuf::from(value("--node-token-file")?)), true)
+            }
             "--durability" => {
                 let word = value("--durability")?;
                 durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
@@ -133,7 +166,11 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free, encryption_key_file })
+    if node.files.is_some() && node.from.is_empty() {
+        return Err("--node-files names what a node copies: --from".to_owned());
+    }
+    let node = node_flags.then_some(node);
+    Ok(Serve { dir, transport, log, idle, clock, remote, memory, durability, keep_free, encryption_key_file, node })
 }
 
 fn remote(

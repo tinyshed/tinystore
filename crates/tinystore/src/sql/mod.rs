@@ -25,6 +25,8 @@
 mod columns;
 mod database;
 mod engine;
+#[cfg(feature = "replication")]
+pub(crate) mod forward;
 mod included;
 mod migrations;
 mod pieces;

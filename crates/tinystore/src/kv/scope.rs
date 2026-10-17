@@ -38,6 +38,14 @@ impl Kind {
         }
     }
 
+    /// The kind a name's row keeps as `role`.
+    #[cfg(feature = "replication")]
+    pub(crate) fn of_role(role: &str) -> Option<Kind> {
+        [Kind::Values, Kind::Encrypted, Kind::Counters, Kind::RateLimit, Kind::Quota, Kind::Once]
+            .into_iter()
+            .find(|kind| kind.role() == role)
+    }
+
     /// What an error calls a handle of this kind: `kv counters hits`.
     fn shown(self) -> &'static str {
         match self {

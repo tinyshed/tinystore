@@ -1,18 +1,24 @@
 //! A file's log: its commits as entries, in segment files of
 //! `log/<file>/`, each named by the sequence of its first entry.
 //!
-//! An entry is appended while the file's writer is held, with no sync of its
-//! own: the WAL holds the commit durably until the capture's checkpoint, and
-//! the checkpoint syncs the log first. A segment's tail torn by a crash is cut
-//! off at open, and the capture hands what it lost again from the WAL.
+//! A home's log is appended while the file's writer is held, with no sync of
+//! its own: the WAL holds the commit durably until the capture's checkpoint,
+//! and the checkpoint syncs the log first. A segment's tail torn by a crash is
+//! cut off at open, and the capture hands what it lost again from the WAL.
+//!
+//! A copy keeps a log too, of the entries it applied as they came, so that
+//! the nodes that copy it read the same bytes its home wrote.
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
 
-use super::entry::{self, Entry, Head, Kind, MAGIC};
+use rusqlite::Connection;
+
+use super::entry::{self, Entry, Head, Kind, MAGIC, Point};
 use crate::sqlite::{Commit, Observe, Position};
 use crate::{Error, ErrorKind, Result};
 
@@ -32,9 +38,38 @@ impl Default for Bounds {
     }
 }
 
+/// What a node's links wait on for the next entry of any of its logs.
+#[derive(Default)]
+pub(crate) struct Notify {
+    appended: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl Notify {
+    /// How many entries were appended so far, to wait past.
+    pub(crate) fn seen(&self) -> u64 {
+        *self.appended.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits until an entry is appended after `seen`, `at_most` long.
+    pub(crate) fn wait_past(&self, seen: u64, at_most: Duration) {
+        let appended = self.appended.lock().unwrap_or_else(PoisonError::into_inner);
+        let _ = self.changed.wait_timeout_while(appended, at_most, |appended| *appended == seen);
+    }
+
+    pub(crate) fn appended(&self) {
+        *self.appended.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.changed.notify_all();
+    }
+}
+
 pub(crate) struct Log {
     dir: PathBuf,
     bounds: Bounds,
+    notify: Arc<Notify>,
+    /// The writer of a home's file, held to read where the log stands with
+    /// no commit between the file and the log.
+    writer: Mutex<Option<Weak<Mutex<Connection>>>>,
     tail: Mutex<Tail>,
 }
 
@@ -58,7 +93,7 @@ struct Segment {
 
 impl Log {
     /// Opens the log in `dir`, its last segment's torn tail cut off.
-    pub(crate) fn open(dir: PathBuf, bounds: Bounds) -> Result<Log> {
+    pub(crate) fn open(dir: PathBuf, bounds: Bounds, notify: Arc<Notify>) -> Result<Log> {
         fs::create_dir_all(&dir).map_err(|error| Error::io(format!("log {}", dir.display()), error))?;
         let mut tail = Tail {
             segments: VecDeque::new(),
@@ -75,13 +110,13 @@ impl Log {
             let bytes = fs::metadata(&path).map_err(|error| Error::io(path.display().to_string(), error))?.len();
             tail.segments.push_back(Segment { first, bytes });
         }
-        let log = Log { dir, bounds, tail: Mutex::new(tail) };
+        let log = Log { dir, bounds, notify, writer: Mutex::new(None), tail: Mutex::new(tail) };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         Ok(log)
     }
 
-    /// Every entry the log holds, oldest first.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the links read the log, phase 7's fourth slice"))]
+    /// Every entry the log in `dir` holds, oldest first.
+    #[cfg(test)]
     pub(crate) fn read(dir: &Path, mut each: impl FnMut(Entry<'_>) -> Result<()>) -> Result<()> {
         for first in segments_in(dir)? {
             let bytes = read_segment(&segment_path(dir, first))?;
@@ -94,6 +129,74 @@ impl Log {
         Ok(())
     }
 
+    /// Where the log in `dir` ends, read from its segments with no writer
+    /// open on it: `None` for a log that holds no entry.
+    pub(crate) fn last_in(dir: &Path) -> Result<Option<Point>> {
+        for first in segments_in(dir)?.into_iter().rev() {
+            let bytes = read_segment(&segment_path(dir, first))?;
+            let mut at = MAGIC.len();
+            let mut last = None;
+            while let Some((entry, used)) = entry::decode(&bytes[at..]).unwrap_or(None) {
+                if last.is_some_and(|point| !entry.follows(&point)) {
+                    break;
+                }
+                last = Some(entry.point());
+                at += used;
+            }
+            if last.is_some() {
+                return Ok(last);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Removes every segment of the log in `dir`, for a copy that starts again
+    /// from a snapshot.
+    pub(crate) fn clear(dir: &Path) -> Result<()> {
+        for first in segments_in(dir)? {
+            let path = segment_path(dir, first);
+            fs::remove_file(&path).map_err(|error| io_error(&path, error))?;
+        }
+        Ok(())
+    }
+
+    /// Where the log ends now. For a home's file the writer is held while it
+    /// reads, so that no commit is in the file and not yet in the log: every
+    /// reader of the file that ended before sees no more than this.
+    pub(crate) fn stable(&self) -> Point {
+        let writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(Weak::upgrade);
+        let _held = writer.as_ref().map(|writer| writer.lock().unwrap_or_else(PoisonError::into_inner));
+        let tail = self.lock();
+        Point { sequence: tail.next - 1, epoch: tail.epoch, check: tail.check }
+    }
+
+    /// Keeps an entry a copy applied, as its home wrote it: the first of an
+    /// empty log, or the one after its last.
+    pub(crate) fn keep(&self, entry: &Entry<'_>, bytes: &[u8]) -> Result<()> {
+        let mut tail = self.lock();
+        let empty = tail.segments.is_empty();
+        if !empty && !entry.follows(&Point { sequence: tail.next - 1, epoch: tail.epoch, check: tail.check }) {
+            return Err(Error::new(
+                ErrorKind::Conflict,
+                format!(
+                    "log {}: entry {} does not follow its last, {}",
+                    self.dir.display(),
+                    entry.sequence,
+                    tail.next - 1
+                ),
+            ));
+        }
+        if empty {
+            tail.next = entry.sequence;
+        }
+        self.write(&mut tail, bytes)?;
+        (tail.next, tail.epoch, tail.check, tail.last) =
+            (entry.sequence + 1, entry.epoch, entry.check, Some(entry.position));
+        drop(tail);
+        self.notify.appended();
+        Ok(())
+    }
+
     /// Reads the last segment that holds an entry to the end of its last
     /// whole one, cuts what follows, and removes the segments after it,
     /// which a crash left before their first entry.
@@ -103,17 +206,15 @@ impl Log {
             let path = segment_path(&self.dir, segment.first);
             let bytes = read_segment(&path)?;
             let mut at = MAGIC.len();
-            let mut last: Option<(u64, u64, [u8; 16], Position)> = None;
+            let mut last: Option<(Point, Position)> = None;
             while let Some((entry, used)) = entry::decode(&bytes[at..]).unwrap_or(None) {
-                let follows = last
-                    .is_none_or(|(sequence, _, check, _)| entry.sequence == sequence + 1 && entry.previous == check);
-                if !follows {
+                if last.is_some_and(|(point, _)| !entry.follows(&point)) {
                     break;
                 }
-                last = Some((entry.sequence, entry.epoch, entry.check, entry.position));
+                last = Some((entry.point(), entry.position));
                 at += used;
             }
-            let Some((sequence, epoch, check, position)) = last else {
+            let Some((point, position)) = last else {
                 fs::remove_file(&path).map_err(|error| Error::io(path.display().to_string(), error))?;
                 tail.segments.pop_back();
                 continue;
@@ -123,7 +224,8 @@ impl Log {
                 file.set_len(at as u64).and_then(|()| file.sync_data()).map_err(|error| io_error(&path, error))?;
             }
             tail.segments.back_mut().expect("the segment just read").bytes = at as u64;
-            (tail.next, tail.epoch, tail.check, tail.last) = (sequence + 1, epoch, check, Some(position));
+            (tail.next, tail.epoch, tail.check, tail.last) =
+                (point.sequence + 1, point.epoch, point.check, Some(position));
             tail.appending = Some(OpenOptions::new().append(true).open(&path).map_err(|error| io_error(&path, error))?);
             return Ok(());
         }
@@ -135,15 +237,25 @@ impl Log {
         let head =
             Head { kind, sequence: tail.next, epoch: tail.epoch, previous: tail.check, position, page_size, size };
         let (bytes, check) = entry::encode(&head, pages);
+        self.write(&mut tail, &bytes)?;
+        (tail.next, tail.check, tail.last) = (head.sequence + 1, check, Some(position));
+        drop(tail);
+        self.notify.appended();
+        Ok(())
+    }
+
+    /// Appends an entry's bytes to the last segment, or to a new one when
+    /// the last is full.
+    fn write(&self, tail: &mut Tail, bytes: &[u8]) -> Result<()> {
         let full = tail.segments.back().is_none_or(|segment| segment.bytes >= self.bounds.segment);
         if full {
-            self.start_segment(&mut tail)?;
+            self.start_segment(tail)?;
         }
         let path = segment_path(&self.dir, tail.segments.back().expect("a segment to append to").first);
         let file = tail.appending.as_mut().expect("the last segment is open");
-        file.write_all(&bytes).map_err(|error| io_error(&path, error))?;
+        file.write_all(bytes).map_err(|error| io_error(&path, error))?;
         tail.segments.back_mut().expect("the segment just written").bytes += bytes.len() as u64;
-        (tail.next, tail.check, tail.last, tail.unsynced) = (head.sequence + 1, check, Some(position), true);
+        tail.unsynced = true;
         Ok(())
     }
 
@@ -211,10 +323,14 @@ impl Observe for Log {
         }
         Ok(())
     }
+
+    fn writer(&self, writer: Weak<Mutex<Connection>>) {
+        *self.writer.lock().unwrap_or_else(PoisonError::into_inner) = Some(writer);
+    }
 }
 
 /// The first sequences of the segments in `dir`, in order.
-fn segments_in(dir: &Path) -> Result<Vec<u64>> {
+pub(crate) fn segments_in(dir: &Path) -> Result<Vec<u64>> {
     let mut firsts = Vec::new();
     let listed = match fs::read_dir(dir) {
         Ok(listed) => listed,
@@ -233,7 +349,7 @@ fn segments_in(dir: &Path) -> Result<Vec<u64>> {
     Ok(firsts)
 }
 
-fn segment_path(dir: &Path, first: u64) -> PathBuf {
+pub(crate) fn segment_path(dir: &Path, first: u64) -> PathBuf {
     dir.join(format!("{first:020}.log"))
 }
 

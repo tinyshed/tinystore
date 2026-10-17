@@ -683,12 +683,18 @@ module defines.
 - a WAL's frames read as SQLite recovers them: a checksum that breaks ends them — `a_wal_header_and_frames_read_as_sqlite_recovers_them` in `sqlite::capture`
 - a log keeps within its bytes, its oldest segments removed, and counts on with no hole — `a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed` in `replication`
 - a copy is its home's file, page for page but page 1's change counters, after each commit of every engine's file, applied through `sqlite_dbpage` — `a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing` in `replication::copy_tests`; a bare file's log with no engine open, `a_copy_takes_a_file_s_log_whole_with_no_engine_open` in `replication`
-- a copy's engines read it and write nothing: a write is `Invalid`, its migrations only checked, its background work its home's — `a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing` in `replication::copy_tests`
+- a copy's engines read it and write nothing: a write of kv's or sql's passes to its home, `Unavailable` on a node that takes from none, any other `Invalid`; its migrations only checked, its background work its home's — `a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing` in `replication::copy_tests`
 - a copy's engines follow what its home writes next, the names they keep read again — `a_copy_takes_what_its_home_writes_next_its_caches_following` in `replication::copy_tests`
 - a reader of a copy never sees half of a commit — `a_reader_of_a_copy_never_sees_half_a_commit` in `replication::copy_tests`
 - a copy refuses an entry that does not follow by its sequence or the check it names, takes one it holds as nothing, and goes on from its position when opened again — `a_copy_refuses_an_entry_that_does_not_follow_and_takes_one_it_has_as_nothing` in `replication::copy_tests`
 - a copy is made neither of a file its store wrote nor from a log begun on a file that had pages — `a_copy_is_not_made_of_a_file_the_store_wrote_nor_from_a_log_begun_on_a_file_with_pages` in `replication::copy_tests`
 - a migration its home has not shipped yet is `Unavailable` on a copy, and opens once it arrives — `a_migration_its_home_has_not_shipped_yet_is_unavailable_on_a_copy` in `replication::copy_tests`
+- a snapshot read in chunks while its home writes between them becomes the home's file page for page once the entries between its two points are written over it — `a_snapshot_read_while_its_home_writes_becomes_the_home_s_file` in `replication::link_tests`
+- a node three links away holds its home's files page for page and follows what the home writes next — `a_node_three_links_away_holds_the_home_s_files_and_follows_its_writes` in `replication::link_tests`
+- a link cut goes on from each copy's position with no snapshot again, and a node reads and opens its copy while no link reaches its home — `a_link_cut_goes_on_from_its_position_and_a_node_reads_its_copy_while_cut` in `replication::link_tests`
+- a node whose token is not its server's takes nothing — `a_node_with_another_token_takes_nothing` in `replication::link_tests`
+- a write on a copy two links away commits at its home and reads back at once on the node that wrote it, the home deciding what is new and what conflicts — `a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once` in `replication::link_tests`
+- every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
 
 ## The server and the wire
 

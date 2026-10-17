@@ -19,6 +19,7 @@ mod group;
 mod memory;
 mod migrate;
 mod mutex;
+mod pages;
 mod prefix;
 mod readers;
 mod settle;
@@ -40,6 +41,7 @@ pub(crate) use given::given;
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
+pub(crate) use pages::{Chunk, Pages};
 pub(crate) use prefix::{TextBytes, prefix_end};
 pub(crate) use settle::{Left, Settle, Settlers};
 

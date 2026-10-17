@@ -1,0 +1,412 @@
+//! A node's server: the nodes that take files from it connect here, and
+//! each link gets a thread that reads what the other node asks and one that
+//! sends it each file's entries as its log grows.
+
+use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use super::entry::{self, Kind, MAGIC, Point};
+use super::log::{segment_path, segments_in};
+use super::message::{Frames, Message, VERSION, plain_name, timed_out};
+use super::node::{State, lock};
+use super::snapshot::{self, Part};
+use crate::{Error, ErrorKind, Result};
+
+/// How long a link may say nothing before its other end pings it.
+pub(crate) const PING_EVERY: Duration = Duration::from_secs(5);
+/// How long a link may stay silent before it is taken for dead.
+pub(crate) const SILENT_AT_MOST: Duration = Duration::from_secs(30);
+/// The bytes of entries a link sends of one file before it turns to the next.
+const TURN: usize = 8 << 20;
+
+/// Listens at `address`, a thread accepting the links of other nodes.
+pub(crate) fn start(state: &Arc<State>, address: &str) -> Result<()> {
+    let listener = TcpListener::bind(address).map_err(|error| Error::io(format!("node: serve {address}"), error))?;
+    let bound = listener.local_addr().map_err(|error| Error::io(format!("node: serve {address}"), error))?;
+    *lock(&state.listening) = Some(bound);
+    tracing::info!(target: "tinystore", address = %bound, "a node serves its files");
+    let accepting = Arc::clone(state);
+    state.spawn("tinystore node: serve", move || accept(&accepting, &listener));
+    Ok(())
+}
+
+fn accept(state: &Arc<State>, listener: &TcpListener) {
+    for stream in listener.incoming() {
+        if state.stopping() {
+            return;
+        }
+        let Ok(stream) = stream else { continue };
+        let peer = stream.peer_addr().ok();
+        state.keep_link(&stream);
+        let serving = Arc::clone(state);
+        state.spawn("tinystore node: link", move || {
+            if let Err(error) = serve_link(&serving, stream)
+                && !serving.stopping()
+            {
+                tracing::info!(target: "tinystore", peer = ?peer, %error, "a node's link ended");
+            }
+        });
+    }
+}
+
+/// What a link sends, shared by its threads.
+pub(crate) struct Out {
+    stream: Mutex<TcpStream>,
+    last: Mutex<Instant>,
+}
+
+impl Out {
+    pub(crate) fn new(stream: TcpStream) -> Out {
+        Out { stream: Mutex::new(stream), last: Mutex::new(Instant::now()) }
+    }
+
+    pub(crate) fn send(&self, message: &Message) -> Result<()> {
+        let bytes = message.encode();
+        let mut stream = lock(&self.stream);
+        stream.write_all(&bytes).map_err(|error| Error::io("a link", error))?;
+        *lock(&self.last) = Instant::now();
+        Ok(())
+    }
+
+    pub(crate) fn idle_for(&self) -> Duration {
+        lock(&self.last).elapsed()
+    }
+}
+
+/// The files a link follows, and the follows it has not begun yet.
+#[derive(Default)]
+struct Asked {
+    follows: Vec<(String, Point)>,
+    ended: bool,
+}
+
+fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
+    stream.set_nodelay(true).map_err(|error| Error::io("a link", error))?;
+    stream.set_read_timeout(Some(Duration::from_secs(1))).map_err(|error| Error::io("a link", error))?;
+    stream.set_write_timeout(Some(SILENT_AT_MOST)).map_err(|error| Error::io("a link", error))?;
+    let mut reading = stream.try_clone().map_err(|error| Error::io("a link", error))?;
+    let out = Arc::new(Out::new(stream));
+    let mut frames = Frames::default();
+    let hello = read_one(state, &mut reading, &mut frames, SILENT_AT_MOST)?;
+    let Some(Message::Hello { version, token }) = hello else {
+        return Err(Error::invalid("a link began with no hello"));
+    };
+    if version != VERSION {
+        out.send(&Message::Refused { why: format!("this node speaks the link's version {VERSION}, not {version}") })?;
+        return Ok(());
+    }
+    if !token_admits(state.options.token.as_deref(), &token) {
+        out.send(&Message::Refused { why: "the token is not this node's".to_owned() })?;
+        return Ok(());
+    }
+    out.send(&Message::Welcome { files: state.files_served()? })?;
+    let asked = Arc::new(Mutex::new(Asked::default()));
+    let sending = (Arc::clone(state), Arc::clone(&out), Arc::clone(&asked));
+    state.spawn("tinystore node: send", move || {
+        let (state, out, asked) = sending;
+        if let Err(error) = send_files(&state, &out, &asked)
+            && !state.stopping()
+        {
+            tracing::info!(target: "tinystore", %error, "a node stopped sending on a link");
+        }
+        lock(&asked).ended = true;
+    });
+    let ended = read_requests(state, &mut reading, &mut frames, &out, &asked);
+    lock(&asked).ended = true;
+    state.notify.appended();
+    ended
+}
+
+/// Reads what the other node asks until the link ends.
+fn read_requests(
+    state: &Arc<State>,
+    reading: &mut TcpStream,
+    frames: &mut Frames,
+    out: &Arc<Out>,
+    asked: &Arc<Mutex<Asked>>,
+) -> Result<()> {
+    loop {
+        let Some(message) = read_one(state, reading, frames, SILENT_AT_MOST)? else {
+            return Ok(());
+        };
+        if lock(asked).ended {
+            return Ok(());
+        }
+        match message {
+            Message::Follow { file, at } => {
+                if !plain_name(&file) {
+                    return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
+                }
+                lock(asked).follows.push((file, at));
+                state.notify.appended();
+            }
+            Message::List => out.send(&Message::Listed { files: state.files_served()? })?,
+            Message::Write { id, op } => {
+                let (state, out) = (Arc::clone(state), Arc::clone(out));
+                state.clone().spawn("tinystore node: write", move || {
+                    let written = super::forward::run(&state, &op);
+                    let _ = out.send(&written.into_message(id));
+                });
+            }
+            Message::Ping => {}
+            other => return Err(Error::invalid(format!("a link said {other:?}, which a server is not asked"))),
+        }
+    }
+}
+
+/// Reads the next message, `None` once the link ended; a link silent for
+/// `at_most` is an error.
+fn read_one(state: &State, reading: &mut TcpStream, frames: &mut Frames, at_most: Duration) -> Result<Option<Message>> {
+    let began = Instant::now();
+    loop {
+        if let Some(message) = frames.next()? {
+            return Ok(Some(message));
+        }
+        if state.stopping() {
+            return Ok(None);
+        }
+        match frames.fill(reading) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(error) if timed_out(&error) => {
+                if began.elapsed() > at_most {
+                    return Err(Error::new(ErrorKind::Unavailable, "a link said nothing for too long"));
+                }
+            }
+            Err(error) => return Err(Error::io("a link", error)),
+        }
+    }
+}
+
+/// Compares the token a node gave with this node's in time that does not
+/// depend on where they differ.
+fn token_admits(expected: Option<&str>, given: &str) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let (expected, given) = (expected.as_bytes(), given.as_bytes());
+    let mut differs = expected.len() ^ given.len();
+    for (index, byte) in expected.iter().enumerate() {
+        differs |= usize::from(byte ^ given.get(index).copied().unwrap_or(0));
+    }
+    differs == 0
+}
+
+/// Where a link stands in sending one file.
+enum Sending {
+    /// Asked from `at`: where to begin is found in the log.
+    Asked(Point),
+    Snapshot,
+    /// The entries after `last`, read from the segment that begins at
+    /// `segment`, `offset` bytes in.
+    Entries {
+        last: Point,
+        segment: u64,
+        offset: u64,
+    },
+    /// The file could not be sent; asked again from `at` once `until` passes.
+    Later {
+        at: Point,
+        until: Instant,
+    },
+}
+
+struct Followed {
+    file: String,
+    sending: Sending,
+}
+
+/// Sends each file followed: a snapshot where needed, then its entries as
+/// its log grows, a turn of each file at a time.
+fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()> {
+    let mut followed: Vec<Followed> = Vec::new();
+    loop {
+        let seen = state.notify.seen();
+        {
+            let mut asked = lock(asked);
+            if asked.ended || state.stopping() {
+                return Ok(());
+            }
+            for (file, at) in asked.follows.drain(..) {
+                followed.retain(|known| known.file != file);
+                followed.push(Followed { file, sending: Sending::Asked(at) });
+            }
+        }
+        let mut sent = false;
+        for one in &mut followed {
+            sent |= send_some(state, out, one)?;
+        }
+        if !sent {
+            if out.idle_for() >= PING_EVERY {
+                out.send(&Message::Ping)?;
+            }
+            state.notify.wait_past(seen, Duration::from_millis(500));
+        }
+    }
+}
+
+/// Sends what is next of one file; whether it sent anything.
+fn send_some(state: &State, out: &Out, followed: &mut Followed) -> Result<bool> {
+    let file = followed.file.clone();
+    let dir = state.log_dir(&file);
+    loop {
+        match followed.sending {
+            Sending::Later { at, until } => {
+                if Instant::now() < until {
+                    return Ok(false);
+                }
+                followed.sending = Sending::Asked(at);
+            }
+            Sending::Asked(at) => {
+                followed.sending = match begin_at(state, &file, &dir, at) {
+                    Ok(sending) => sending,
+                    Err(error) => later(out, &file, at, &error)?,
+                };
+            }
+            Sending::Snapshot => {
+                followed.sending = match send_snapshot(state, out, &file) {
+                    Ok(sending) => sending,
+                    Err(error) if error.kind() == ErrorKind::Io && error.what() == "a link" => return Err(error),
+                    Err(error) => later(out, &file, Point::default(), &error)?,
+                };
+                return Ok(true);
+            }
+            Sending::Entries { last, segment, offset } => {
+                let (sending, sent) = send_entries(out, &file, &dir, last, segment, offset)?;
+                followed.sending = sending;
+                return Ok(sent);
+            }
+        }
+    }
+}
+
+/// Tells the other node the file cannot be sent now, and asks again later.
+fn later(out: &Out, file: &str, at: Point, error: &Error) -> Result<Sending> {
+    out.send(&Message::Failed { file: file.to_owned(), kind: error.kind(), why: error.to_string() })?;
+    Ok(Sending::Later { at, until: Instant::now() + Duration::from_secs(2) })
+}
+
+/// Where to begin sending `file` to a node that holds it up to `at`.
+fn begin_at(state: &State, file: &str, dir: &std::path::Path, at: Point) -> Result<Sending> {
+    let Some(source) = state.source(file) else {
+        return Err(Error::not_found(format!("{file}: this node holds no such file")));
+    };
+    if at.sequence == 0 {
+        return Ok(Sending::Snapshot);
+    }
+    let segments = segments_in(dir)?;
+    let Some(&segment) = segments.iter().rev().find(|&&first| first <= at.sequence + 1) else {
+        return Ok(Sending::Snapshot);
+    };
+    let bytes = read_from(&segment_path(dir, segment), 0)?;
+    let mut offset = MAGIC.len();
+    while let Some((entry, used)) = entry::decode(&bytes[offset..]).unwrap_or(None) {
+        if entry.sequence == at.sequence {
+            if entry.check != at.check {
+                return Ok(Sending::Snapshot);
+            }
+            return Ok(Sending::Entries { last: at, segment, offset: (offset + used) as u64 });
+        }
+        if entry.sequence == at.sequence + 1 {
+            if entry.previous != at.check {
+                return Ok(Sending::Snapshot);
+            }
+            return Ok(Sending::Entries { last: at, segment, offset: offset as u64 });
+        }
+        offset += used;
+    }
+    let stable = source.stable()?;
+    if stable == at {
+        return Ok(Sending::Entries { last: at, segment, offset: offset as u64 });
+    }
+    if stable.sequence < at.sequence && state.copy(file).is_some() {
+        return Err(Error::new(ErrorKind::Unavailable, "this copy is behind the node that asks"));
+    }
+    Ok(Sending::Snapshot)
+}
+
+fn send_snapshot(state: &State, out: &Out, file: &str) -> Result<Sending> {
+    let source = state.source(file).ok_or_else(|| Error::not_found(format!("{file}: this node holds no such file")))?;
+    let at = snapshot::read(source.as_ref(), |part| {
+        let file = file.to_owned();
+        out.send(&match part {
+            Part::Begin { page_size, at } => Message::SnapshotBegin { file, page_size, at },
+            Part::Pages(pages) => Message::SnapshotPages { file, pages },
+            Part::End { ready_at } => Message::SnapshotEnd { file, ready_at },
+        })
+    })?;
+    let dir = state.log_dir(file);
+    let segment = segments_in(&dir)?.into_iter().rev().find(|&first| first <= at.sequence + 1);
+    match segment {
+        Some(segment) => Ok(Sending::Entries { last: at, segment, offset: MAGIC.len() as u64 }),
+        None => Ok(Sending::Entries { last: at, segment: at.sequence + 1, offset: MAGIC.len() as u64 }),
+    }
+}
+
+/// Sends the entries after `last` that the log holds now, a turn's worth.
+fn send_entries(
+    out: &Out,
+    file: &str,
+    dir: &std::path::Path,
+    mut last: Point,
+    mut segment: u64,
+    mut offset: u64,
+) -> Result<(Sending, bool)> {
+    let mut sent = 0;
+    loop {
+        let path = segment_path(dir, segment);
+        if !path.exists() {
+            // Pruned, or the log started again: read from the segment that
+            // holds the next entry, if one does.
+            let segments = segments_in(dir)?;
+            match segments.iter().rev().find(|&&first| first <= last.sequence + 1) {
+                Some(&first) if first != segment => (segment, offset) = (first, MAGIC.len() as u64),
+                _ if segments.iter().any(|&first| first > last.sequence + 1) => {
+                    return Ok((Sending::Snapshot, sent > 0));
+                }
+                _ => return Ok((Sending::Entries { last, segment, offset }, sent > 0)),
+            }
+            continue;
+        }
+        let newer = segments_in(dir)?.into_iter().find(|&first| first > segment);
+        let bytes = read_from(&path, offset)?;
+        let mut at = 0;
+        while let Some((entry, used)) = entry::decode(&bytes[at..])? {
+            if entry.sequence > last.sequence {
+                let restarts = entry.kind == Kind::Gap || (entry.kind == Kind::Begin && entry.size > 1);
+                if !entry.follows(&last) || restarts {
+                    return Ok((Sending::Snapshot, sent > 0));
+                }
+                out.send(&Message::Entry { file: file.to_owned(), bytes: bytes[at..at + used].to_vec() })?;
+                last = entry.point();
+                sent += used;
+            }
+            at += used;
+            if sent >= TURN {
+                return Ok((Sending::Entries { last, segment, offset: offset + at as u64 }, true));
+            }
+        }
+        offset += at as u64;
+        // A segment is appended to no more once a newer one began, so with
+        // the newer seen before the read, this one was read to its end.
+        match newer {
+            Some(next) if next == last.sequence + 1 => (segment, offset) = (next, MAGIC.len() as u64),
+            Some(_) => return Ok((Sending::Snapshot, sent > 0)),
+            None => return Ok((Sending::Entries { last, segment, offset }, sent > 0)),
+        }
+    }
+}
+
+/// The bytes of a segment from `offset` to its end as it stands.
+fn read_from(path: &PathBuf, offset: u64) -> Result<Vec<u8>> {
+    let mut file = fs::File::open(path).map_err(|error| Error::io(path.display().to_string(), error))?;
+    let mut bytes = Vec::new();
+    file.seek(SeekFrom::Start(offset))
+        .and_then(|_| file.read_to_end(&mut bytes))
+        .map_err(|error| Error::io(path.display().to_string(), error))?;
+    Ok(bytes)
+}

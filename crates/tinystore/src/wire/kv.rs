@@ -190,12 +190,9 @@ fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered
         method::KV_DELETE => bucket.remove_then(&key, options, move |found| {
             done(found.map(|found| KvFound { found }.encode()).map_err(Failure::from));
         }),
-        method::KV_EXPIRE => match bucket.expire_work(&key, options) {
-            Ok(work) => bucket.scope.submit(&key, 0, work, move |found| {
-                done(found.map(|found| KvFound { found }.encode()).map_err(Failure::from));
-            }),
-            Err(error) => done(Err(Failure::from(error))),
-        },
+        method::KV_EXPIRE => bucket.expire_then(&key, options, move |found| {
+            done(found.map(|found| KvFound { found }.encode()).map_err(Failure::from));
+        }),
         other => done(Err(Failure::unimplemented(format!("method {other:#06x}")))),
     }
 }

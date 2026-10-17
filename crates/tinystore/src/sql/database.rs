@@ -120,6 +120,10 @@ impl Database {
     /// commit, each in a savepoint of it: one that fails rolls back alone.
     pub fn exec(&self, statement: impl Into<Sql>) -> Result<Done> {
         let statement = statement.into();
+        #[cfg(feature = "replication")]
+        if self.base.file().is_copy() {
+            return self.pass_on(std::slice::from_ref(&statement), false).map(|mut done| done.remove(0));
+        }
         let weight = statement.weight();
         let running = statement.clone();
         self.base
@@ -135,7 +139,12 @@ impl Database {
         I: IntoIterator,
         I::Item: Into<Sql>,
     {
-        let (weight, write) = batch_write(statements.into_iter().map(Into::into).collect());
+        let statements: Vec<Sql> = statements.into_iter().map(Into::into).collect();
+        #[cfg(feature = "replication")]
+        if self.base.file().is_copy() {
+            return self.pass_on(&statements, true);
+        }
+        let (weight, write) = batch_write(statements);
         self.base.file().write(weight, write).map_err(|error| error.within(self.base.describe()))
     }
 
@@ -150,6 +159,14 @@ impl Database {
         let bound = || self.base.within_bound(started);
         let owner = self.base.describe();
         Transaction::run(self.base.file(), &owner, Some(&bound), |transaction| work(&Tx::new(transaction, &self.base)))
+    }
+
+    /// Passes statements to the home of the copy the database's file is, and
+    /// gives what each did once this copy holds their commit.
+    #[cfg(feature = "replication")]
+    fn pass_on(&self, statements: &[Sql], batch: bool) -> Result<Vec<Done>> {
+        let store = self.base.shared.store().map_err(|error| error.within(self.base.describe()))?;
+        super::forward::pass_on(&store, &self.base.name, statements, batch)
     }
 
     /// The file the database lends to the buckets, queues and indexes opened
@@ -168,6 +185,12 @@ impl Database {
     /// `exec` without waiting: `done` is called on the thread that commits it.
     #[cfg(feature = "wire")]
     pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.base.file().is_copy() {
+            let db = self.clone();
+            std::thread::spawn(move || done(db.exec(statement)));
+            return;
+        }
         let (weight, fail) = (statement.weight(), self.failed_by(&statement));
         self.base.file().submit(weight, move |tx| run::exec(tx, &statement), move |ran| done(ran.map_err(fail)));
     }
@@ -175,6 +198,12 @@ impl Database {
     /// `batch` without waiting: `done` is called on the thread that commits it.
     #[cfg(feature = "wire")]
     pub(crate) fn batch_then(&self, statements: Vec<Sql>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.base.file().is_copy() {
+            let db = self.clone();
+            std::thread::spawn(move || done(db.batch(statements)));
+            return;
+        }
         let (weight, write) = batch_write(statements);
         let describe = self.base.describe();
         self.base.file().submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));

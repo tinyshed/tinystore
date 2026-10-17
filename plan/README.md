@@ -36,7 +36,7 @@ and is not the source of truth; these files are.
 | 4. Backup, CLI, guest, SDKs, v0.1.0                | in progress |
 | 5. Channels and locks                              | in progress |
 | 6. Indexes                                         | in progress |
-| 7. Replication                                     | not started |
+| 7. Replication                                     | in progress |
 
 [phases.md](phases.md) has each phase's tasks and gate.
 

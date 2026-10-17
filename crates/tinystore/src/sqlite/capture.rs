@@ -25,7 +25,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use rusqlite::Connection;
 use rusqlite::hooks::Wal;
@@ -97,6 +97,12 @@ pub(crate) trait Observe: Send + Sync {
     /// Makes every commit handed so far durable, before a checkpoint lets the
     /// WAL forget them.
     fn sync(&self) -> Result<()>;
+
+    /// The file's writer, which commits and hands each commit while held:
+    /// holding it, the observer knows that what it keeps is the whole file.
+    fn writer(&self, writer: Weak<Mutex<Connection>>) {
+        let _ = writer;
+    }
 }
 
 /// A file's capture: its writer's hook, and where the last commit it handed

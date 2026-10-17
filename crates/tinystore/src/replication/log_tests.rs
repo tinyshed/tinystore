@@ -10,7 +10,7 @@ fn a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed() {
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join(DIR).join("test.db");
     let bounds = Bounds { segment: 64 << 10, keep: 256 << 10 };
-    let observer: Arc<dyn crate::sqlite::Observe> = Arc::new(Log::open(logs.clone(), bounds).unwrap());
+    let observer: Arc<dyn crate::sqlite::Observe> = Arc::new(Log::open(logs.clone(), bounds, Arc::default()).unwrap());
     let file = File::open_observed(dir.path().join("test.db"), Config::default(), Some(observer)).unwrap();
     file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
         .unwrap();
@@ -45,7 +45,8 @@ fn a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed() {
 fn a_copy_takes_a_file_s_log_whole_with_no_engine_open() {
     let home = tempfile::tempdir().unwrap();
     let logs = home.path().join(DIR).join("test.db");
-    let observer: Arc<dyn crate::sqlite::Observe> = Arc::new(Log::open(logs.clone(), Bounds::default()).unwrap());
+    let observer: Arc<dyn crate::sqlite::Observe> =
+        Arc::new(Log::open(logs.clone(), Bounds::default(), Arc::default()).unwrap());
     let file = File::open_observed(home.path().join("test.db"), Config::default(), Some(observer)).unwrap();
     file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
         .unwrap();
@@ -62,7 +63,7 @@ fn a_copy_takes_a_file_s_log_whole_with_no_engine_open() {
     let options = crate::Options { node: Some(Node::default()), background: false, ..crate::Options::default() };
     let store = crate::Store::open(there.path(), options).unwrap();
     let copy = super::copy::Copy::start(&store, "test.db").unwrap();
-    Log::read(&logs, |entry| copy.apply(&entry)).unwrap();
+    Log::read(&logs, |entry| copy.apply(&entry, None)).unwrap();
     assert_eq!(copy.applied(), 52, "a beginning, the table and each row");
     let read = File::open_copy(there.path().join("test.db"), Config::default()).unwrap();
     let rows: i64 = read

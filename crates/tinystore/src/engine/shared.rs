@@ -24,7 +24,7 @@ pub(crate) struct SharedFile {
     owner: String,
     /// Weak, as an engine holds it, so that a handle never keeps it open.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search")),
+        not(any(feature = "kv", feature = "jobs", feature = "search", feature = "replication")),
         expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
     store: WeakStore,
@@ -39,6 +39,12 @@ impl SharedFile {
     #[cfg(feature = "sql")]
     pub(crate) fn new(file: File, owner: String, store: &Store) -> SharedFile {
         SharedFile { file: Arc::new(file), owner, store: store.downgrade(), guests: Mutex::new(HashMap::new()) }
+    }
+
+    /// The store the file is open in, while it is open.
+    #[cfg(all(feature = "replication", feature = "sql"))]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))
     }
 
     pub(crate) fn file(&self) -> &Arc<File> {

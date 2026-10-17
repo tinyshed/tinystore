@@ -10,6 +10,8 @@ use rusqlite::Connection;
 use super::cells::{self, Cell, MAX_VALUE};
 use super::encrypted::Encrypted;
 use super::engine::next_version;
+#[cfg(feature = "replication")]
+use super::forward;
 use super::key_call::KeyCall;
 use super::path::Key;
 use super::renewals::Renewal;
@@ -142,12 +144,12 @@ pub struct Entry<V> {
 pub struct Version(i64);
 
 impl Version {
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn new(revision: i64) -> Version {
         Version(revision)
     }
 
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn revision(self) -> i64 {
         self.0
     }
@@ -270,6 +272,11 @@ impl<V: Value> Bucket<V> {
     /// type is `Corrupt`, and stays.
     pub fn take(&self, key: impl Key) -> Result<Option<V>> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            let cell = self.pass_on(&key, forward::Call::Take(WriteOptions::default()))?;
+            return forward::cell(&cell)?.map(|cell| decode::<V>(&cell.raw)).transpose();
+        }
         let work = self.take_work(&key, WriteOptions::default())?;
         self.scope.write(&key, 0, work)
     }
@@ -295,6 +302,11 @@ impl<V: Value> Bucket<V> {
     }
 
     fn put(&self, key: &str, value: &V, options: WriteOptions, put: Put) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            let call = forward::Call::Put { raw: self.encode(key, value)?, put, options };
+            return Ok(forward::stamp(&self.pass_on(key, call)?)?.written);
+        }
         let (bytes, work) = self.put_work(key, self.encode(key, value)?, options, put)?;
         Ok(self.scope.write(key, bytes, work)?.written)
     }
@@ -371,6 +383,10 @@ impl<V> Bucket<V> {
 
     /// Gives a live key the expiry `options` names, at the version they name.
     pub(crate) fn expire_as(&self, key: &str, options: WriteOptions) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return forward::found(&self.pass_on(key, forward::Call::Expire(options))?);
+        }
         let work = self.expire_work(key, options)?;
         self.scope.write(key, 0, work)
     }
@@ -378,6 +394,10 @@ impl<V> Bucket<V> {
     /// Removes every key of this branch and of the branches under it, at once
     /// for every reader, however many there are.
     pub fn clear(&self) -> Result<()> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on("", forward::Call::Clear).map(drop);
+        }
         let work = clear_work(&self.scope)?;
         let revision = self.scope.kv.revision();
         let shown = self.scope.shown_branch();
@@ -387,6 +407,10 @@ impl<V> Bucket<V> {
     /// `clear` without waiting for its commit.
     #[cfg(feature = "wire")]
     pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on_then("", forward::Call::Clear, |_| Ok(()), done);
+        }
         let work = match clear_work(&self.scope) {
             Ok(work) => work,
             Err(error) => return done(Err(error)),
@@ -397,8 +421,14 @@ impl<V> Bucket<V> {
     }
 
     /// Writes a row's value under `key`, as `put` says, and stamps it.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn put_raw(&self, key: &str, raw: Raw, options: WriteOptions, put: Put) -> Result<Stamp> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self
+                .pass_on(key, forward::Call::Put { raw, put, options })
+                .and_then(|bytes| forward::stamp(&bytes));
+        }
         let (bytes, work) = self.put_work(key, raw, options, put)?;
         self.scope.write(key, bytes, work)
     }
@@ -411,6 +441,10 @@ impl<V> Bucket<V> {
         (raw, options, put): (Raw, WriteOptions, Put),
         done: impl FnOnce(Result<Stamp>) + Send + 'static,
     ) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on_then(key, forward::Call::Put { raw, put, options }, forward::stamp, done);
+        }
         match self.put_work(key, raw, options, put) {
             Ok((bytes, work)) => self.scope.submit(key, bytes, work, done),
             Err(error) => done(Err(error)),
@@ -461,6 +495,10 @@ impl<V> Bucket<V> {
     /// Removes a live key, at the version asked when one is, and says whether
     /// one was there.
     pub(crate) fn remove(&self, key: &str, options: WriteOptions) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return forward::found(&self.pass_on(key, forward::Call::Remove(options))?);
+        }
         let work = self.remove_work(key, options)?;
         self.scope.write(key, 0, work)
     }
@@ -473,7 +511,26 @@ impl<V> Bucket<V> {
         options: WriteOptions,
         done: impl FnOnce(Result<bool>) + Send + 'static,
     ) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on_then(key, forward::Call::Remove(options), forward::found, done);
+        }
         self.scope.submit_made(key, 0, self.remove_work(key, options), done);
+    }
+
+    /// `expire_as` without waiting: `done` hears once the commit ends.
+    #[cfg(feature = "wire")]
+    pub(crate) fn expire_then(
+        &self,
+        key: &str,
+        options: WriteOptions,
+        done: impl FnOnce(Result<bool>) + Send + 'static,
+    ) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on_then(key, forward::Call::Expire(options), forward::found, done);
+        }
+        self.scope.submit_made(key, 0, self.expire_work(key, options), done);
     }
 
     /// The delete of a key. It reads no value, so a key whose value no longer
@@ -499,6 +556,10 @@ impl<V> Bucket<V> {
         options: WriteOptions,
         done: impl FnOnce(Result<Option<Cell>>) + Send + 'static,
     ) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.pass_on_then(key, forward::Call::Take(options), forward::cell, done);
+        }
         self.scope.submit_made(key, 0, self.take_cell_work(key, options), done);
     }
 
@@ -652,6 +713,51 @@ impl Bucket<()> {
     /// `seen.add(event_id)` is false for an event already handled.
     pub fn add(&self, key: impl Key) -> Result<bool> {
         self.create(key, &())
+    }
+}
+
+/// A write on a copy of the bucket's file, which its home takes.
+#[cfg(feature = "replication")]
+impl<V> Bucket<V> {
+    pub(crate) fn is_copy(&self) -> bool {
+        self.scope.kv.file().is_copy()
+    }
+
+    /// Passes a call on `key` to the home of the copy, and gives its answer's
+    /// bytes once this copy holds the commit that made it.
+    pub(crate) fn pass_on(&self, key: &str, call: forward::Call) -> Result<Vec<u8>> {
+        let shown = || self.scope.shown_key(key);
+        forward::refuse(self.encrypted.is_some(), self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let handle = forward::Handle::Bucket { name: self.scope.name().to_owned(), expiry: self.expiry };
+        forward::pass_on(&store, &handle, &owners, key, &call)
+    }
+
+    /// Takes a key's cell, at the home where the bucket's file is a copy.
+    pub(crate) fn take_cell(&self, key: &str, options: WriteOptions) -> Result<Option<Cell>> {
+        if self.is_copy() {
+            return forward::cell(&self.pass_on(key, forward::Call::Take(options))?);
+        }
+        let work = self.take_cell_work(key, options)?;
+        self.scope.write(key, 0, work)
+    }
+
+    /// `pass_on` without waiting, on a thread of its own: `done` gets what
+    /// `read` makes of the answer.
+    #[cfg(feature = "wire")]
+    fn pass_on_then<T: Send + 'static>(
+        &self,
+        key: &str,
+        call: forward::Call,
+        read: impl FnOnce(&[u8]) -> Result<T> + Send + 'static,
+        done: impl FnOnce(Result<T>) + Send + 'static,
+    ) {
+        let refused = forward::refuse(self.encrypted.is_some(), None);
+        let (bucket, key) = (Bucket::<()>::new(self.scope.clone(), self.expiry), key.to_owned());
+        std::thread::spawn(move || {
+            done(refused.and_then(|()| bucket.pass_on(&key, call)).and_then(|bytes| read(&bytes)));
+        });
     }
 }
 

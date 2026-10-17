@@ -148,9 +148,10 @@ struct Inner {
     /// key and makes none.
     #[cfg(feature = "kv")]
     encryption_key: Mutex<Option<Arc<EncryptionKey>>>,
-    /// Where a node keeps its files' logs; `None` in a store alone.
+    /// The node the store is, its logs, copies and links; `None` in a store
+    /// alone.
     #[cfg(feature = "replication")]
-    logs: Option<crate::replication::Logs>,
+    node: Option<Arc<crate::replication::State>>,
     closed: AtomicBool,
 }
 
@@ -178,11 +179,16 @@ impl Store {
             #[cfg(feature = "kv")]
             encryption_key: Mutex::new(None),
             #[cfg(feature = "replication")]
-            logs: options.node.map(|_| crate::replication::Logs::of_store(&dir)),
+            node: options.node.map(|node| Arc::new(crate::replication::State::new(&dir, node))),
             closed: AtomicBool::new(false),
             dir,
         };
-        Ok(Store { inner: Arc::new(inner) })
+        let store = Store { inner: Arc::new(inner) };
+        #[cfg(feature = "replication")]
+        if let Some(node) = &store.inner.node {
+            node.start(&store)?;
+        }
+        Ok(store)
     }
 
     pub fn dir(&self) -> &Path {
@@ -206,11 +212,15 @@ impl Store {
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
         #[cfg(feature = "replication")]
-        if let Some(logs) = &self.inner.logs {
-            if crate::replication::is_copy(&logs.dir_of(name)) {
+        if let Some(node) = &self.inner.node {
+            if node.takes(name) {
+                node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
                 return crate::sqlite::File::open_copy(path, config);
             }
-            return crate::sqlite::File::open_observed(path, config, Some(logs.open(name)?));
+            if crate::replication::is_copy(&node.log_dir(name)) {
+                return crate::sqlite::File::open_copy(path, config);
+            }
+            return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
         }
         crate::sqlite::File::open(path, config)
     }
@@ -218,18 +228,28 @@ impl Store {
     /// The directory of the log of the store's file `name`; a store that is
     /// no node keeps none.
     #[cfg(feature = "replication")]
-    #[cfg_attr(not(test), expect(dead_code, reason = "a node's links drive its copies, phase 7's fourth slice"))]
     pub(crate) fn log_of(&self, name: &str) -> Result<PathBuf> {
-        let logs = self.inner.logs.as_ref().ok_or_else(|| {
+        let node = self.inner.node.as_ref().ok_or_else(|| {
             Error::invalid(format!("{}: a store that is no node keeps no log: open it with a node", self.describe()))
         })?;
-        Ok(logs.dir_of(name))
+        Ok(node.log_dir(name))
+    }
+
+    /// The node the store is, if it is one.
+    #[cfg(feature = "replication")]
+    pub(crate) fn node(&self) -> Option<&Arc<crate::replication::State>> {
+        self.inner.node.as_ref()
+    }
+
+    /// What a node's links wait on for the next entry of its logs.
+    #[cfg(feature = "replication")]
+    pub(crate) fn node_notify(&self) -> Arc<crate::replication::Notify> {
+        self.inner.node.as_ref().map_or_else(Arc::default, |node| Arc::clone(&node.notify))
     }
 
     /// Tells every engine open that a commit of its home was applied to the
     /// copy `name`.
     #[cfg(feature = "replication")]
-    #[cfg_attr(not(test), expect(dead_code, reason = "a node's links drive its copies, phase 7's fourth slice"))]
     pub(crate) fn applied(&self, name: &str) {
         let engines = lock(&self.inner.engines).clone();
         for engine in engines {
@@ -422,6 +442,10 @@ impl Inner {
     fn close(&self) -> Result<()> {
         if self.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
+        }
+        #[cfg(feature = "replication")]
+        if let Some(node) = &self.node {
+            node.stop();
         }
         self.scheduler.stop();
         let engines = std::mem::take(&mut *lock(&self.engines));

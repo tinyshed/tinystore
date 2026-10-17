@@ -27,7 +27,9 @@ thread_local! {
 /// readers. Every engine's file is one of these.
 pub(crate) struct File {
     path: PathBuf,
-    writer: Mutex<Connection>,
+    /// Shared with the file's log, which holds it to read where the file's
+    /// commits stand while none is under way.
+    writer: Arc<Mutex<Connection>>,
     group: Group,
     readers: Readers,
     closed: AtomicBool,
@@ -67,12 +69,19 @@ impl File {
         }
         let config = Arc::new(Config { keep_wal: observer.is_some(), ..config });
         let writer = connection::open(&path, &config, Role::Writer)?;
-        let capture = observer.map(|observer| Capture::open(&path, &writer, observer).map(Arc::new)).transpose()?;
+        let capture = observer
+            .as_ref()
+            .map(|observer| Capture::open(&path, &writer, Arc::clone(observer)).map(Arc::new))
+            .transpose()?;
+        let writer = Arc::new(Mutex::new(writer));
+        if let Some(observer) = &observer {
+            observer.writer(Arc::downgrade(&writer));
+        }
         let settlers = Arc::new(Settlers::default());
         Ok(Self {
             group: Group::new(config.group, Arc::clone(&settlers), capture.clone()),
             readers: Readers::new(path.clone(), Arc::clone(&config)),
-            writer: Mutex::new(writer),
+            writer,
             path,
             closed: AtomicBool::new(false),
             settlers,

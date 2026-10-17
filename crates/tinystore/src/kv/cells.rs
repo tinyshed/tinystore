@@ -320,6 +320,15 @@ pub(crate) fn keep_revision(connection: &Connection, revision: i64) -> Result<()
 
 /// The row of `name`, made with `role` the first time: its id and the role it
 /// holds.
+/// The id and kind of `name`, if it was made.
+#[cfg(feature = "replication")]
+pub(crate) fn find_bucket(connection: &Connection, name: &str) -> Result<Option<(i64, String)>> {
+    connection
+        .prepare_cached(SELECT_BUCKET)
+        .and_then(|mut select| select.query_row(params![name], |row| Ok((row.get(0)?, row.get(1)?))).optional())
+        .map_err(|error| sql_error("its record", error))
+}
+
 pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<(i64, String)> {
     let found: Option<(i64, String)> = connection
         .prepare_cached(SELECT_BUCKET)

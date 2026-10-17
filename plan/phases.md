@@ -293,9 +293,30 @@ in [scaling.md](scaling.md#order).
   held taken as nothing, the position kept after each commit and the copy going on from it. Engines read again the
   names they keep once a commit applies. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: the
   copy's own log of what it received, which it serves on, and a file's checksum that proves a copy its home's.
-- [ ] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
-- [ ] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
+- [x] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
+  Built: a snapshot reads a file's pages through `sqlite_dbpage` 256 at a time, each chunk in a read transaction of
+  its own, between two points of its log read with the writer held, or a copy's position held; the taker writes
+  them under a name of its own with plain writes, then the entries between the two points over them, and the file
+  takes the copy's name, renamed durably, only once whole, its position kept after. Left: blobs' objects, which a
+  copy reads only where they are inline in `blobs.db`.
+- [x] Links: `from` and `serve` in the core, the files a node chooses, copies of copies, reconnects, a fresh copy for a node behind the log.
+  Built: `Node { from, serve, files, token }`; a node serves over TCP, a thread accepting and two a link, the
+  files it writes and its whole copies, each from where the other node's copy stands; a link follows every file
+  served but the node's own records and metrics, or those `files` names, takes a snapshot where it holds none or
+  its position no longer follows, applies each entry and keeps it in the copy's own log, which it serves on as its
+  home wrote it; a broken link is made again to the next address of `from`, from each copy's position; a silent
+  one is dropped after 30 seconds, pings every five keeping it; a token compared in constant time. A file a node
+  copies opens once its copy is whole, 30 seconds at most, and with no link reads the copy it holds.
+  `tinystore serve` takes `--node`, `--node-listen`, `--from`, `--node-files` and `--node-token-file`. Left: TLS,
+  one zstd stream a link, a file's checksum that proves a copy its home's, and files a home makes after a node
+  linked, which it finds by asking every five seconds.
 - [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
+  Built so far: kv's buckets and counters, and the names their handles open, and sql's statements and batches
+  pass from a copy to its home through each node on the way, each node running the call through the same handle;
+  the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
+  ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Left: the other engines'
+  writes, a transaction, an encrypted bucket's and a bucket's in a database's file, the queue of operations that
+  commute, and writes that wait for a link a bound before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.

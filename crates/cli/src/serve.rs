@@ -38,6 +38,25 @@ const FIRST_CLIENT: Duration = Duration::from_secs(15);
 #[cfg(unix)]
 const AGAIN: Duration = Duration::from_millis(10);
 
+/// The node the flags make the store, its token read from its file.
+fn node_of(node: &args::Node) -> Result<tinystore::replication::Node, String> {
+    let token = match &node.token_file {
+        Some(file) => Some(
+            std::fs::read_to_string(file)
+                .map_err(|error| format!("--node-token-file {}: {error}", file.display()))?
+                .trim()
+                .to_owned(),
+        ),
+        None => None,
+    };
+    Ok(tinystore::replication::Node {
+        from: node.from.clone(),
+        serve: node.listen.clone(),
+        files: node.files.clone(),
+        token,
+    })
+}
+
 pub(crate) fn run(args: &[String]) -> ExitCode {
     let started = Instant::now();
     let serve = match args::serve(args) {
@@ -64,12 +83,20 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         }
     };
     let clock = serve.clock.map(|start| Arc::new(TestClock::new(start)));
+    let node = match serve.node.as_ref().map(node_of).transpose() {
+        Ok(node) => node,
+        Err(refused) => {
+            console.fail(&refused);
+            return ExitCode::FAILURE;
+        }
+    };
     let options = Options {
         memory: serve.memory,
         clock: clock.clone().map(|clock| clock as Arc<dyn Clock>),
         durability: serve.durability,
         keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
         encryption_key_file: serve.encryption_key_file.clone(),
+        node,
         ..Options::default()
     };
     let store = match open(&serve.dir, options) {

@@ -42,9 +42,17 @@ pub(crate) enum Kind {
     Gap = 2,
 }
 
+/// Where a file's log stands: the entry last kept or applied, by its
+/// sequence, epoch and check. The point of no entry is all zeros.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Point {
+    pub(crate) sequence: u64,
+    pub(crate) epoch: u64,
+    pub(crate) check: [u8; CHECK],
+}
+
 /// An entry read back, its pages borrowed from the bytes it was read from.
 #[derive(Debug)]
-#[cfg_attr(not(test), expect(dead_code, reason = "the links read entries whole, phase 7's fourth slice"))]
 pub(crate) struct Entry<'a> {
     pub(crate) kind: Kind,
     pub(crate) sequence: u64,
@@ -55,6 +63,18 @@ pub(crate) struct Entry<'a> {
     pub(crate) page_size: u32,
     pub(crate) size: u32,
     pub(crate) pages: Vec<(u32, &'a [u8])>,
+}
+
+impl Entry<'_> {
+    /// The point the log stands at once it keeps this entry.
+    pub(crate) fn point(&self) -> Point {
+        Point { sequence: self.sequence, epoch: self.epoch, check: self.check }
+    }
+
+    /// Whether this entry is the one after `point`.
+    pub(crate) fn follows(&self, point: &Point) -> bool {
+        self.sequence == point.sequence + 1 && self.previous == point.check && self.epoch >= point.epoch
+    }
 }
 
 /// What an entry says besides its pages, which [`encode`] writes.

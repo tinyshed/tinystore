@@ -47,6 +47,12 @@ impl Branch {
         Ok(branch)
     }
 
+    /// The owners above the branch's keys, outermost first.
+    #[cfg(feature = "replication")]
+    pub(crate) fn owners(&self) -> &[String] {
+        &self.owners
+    }
+
     /// The path of `key` in this branch.
     pub(crate) fn path(&self, key: &str) -> Result<Vec<u8>> {
         if key.is_empty() {

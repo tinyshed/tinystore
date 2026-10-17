@@ -27,6 +27,8 @@ mod encrypted;
 mod engine;
 #[cfg(test)]
 mod fixture;
+#[cfg(feature = "replication")]
+pub(crate) mod forward;
 mod key_call;
 #[cfg(feature = "locks")]
 pub mod locks;

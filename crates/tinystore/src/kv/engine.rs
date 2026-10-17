@@ -123,6 +123,12 @@ impl Kv {
         Ok(kv)
     }
 
+    /// The store kv opened in, while it is open.
+    #[cfg(feature = "replication")]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.store.upgrade().ok_or_else(|| Error::closed("the store"))
+    }
+
     pub(crate) fn file(&self) -> &File {
         &self.file
     }
@@ -181,6 +187,8 @@ impl Kv {
         let known = lock(&self.names).get(name).copied();
         let (id, role) = match known {
             Some((id, held)) => (id, held.role().to_owned()),
+            #[cfg(feature = "replication")]
+            None if self.file.is_copy() => self.name_from_home(name, kind)?,
             None => self.file.transaction(|tx| cells::bucket(tx, name, kind.role()))?,
         };
         if role != kind.role() {
@@ -188,6 +196,21 @@ impl Kv {
         }
         lock(&self.names).insert(name.to_owned(), (id, kind));
         Ok(id)
+    }
+
+    /// The id of `name` in a copy of kv's file: the copy's, or the one its
+    /// home makes when the name is new.
+    #[cfg(feature = "replication")]
+    fn name_from_home(&self, name: &str, kind: Kind) -> Result<(i64, String)> {
+        if let Some(found) = self.file.read(|connection| cells::find_bucket(connection, name))? {
+            return Ok(found);
+        }
+        super::forward::refuse(false, self.lent_by.as_deref())?;
+        let handle = super::forward::Handle::Name { name: name.to_owned(), role: kind.role().to_owned() };
+        super::forward::pass_on(&self.store()?, &handle, &[], "", &super::forward::Call::Open)?;
+        self.file.read(|connection| cells::find_bucket(connection, name))?.ok_or_else(|| {
+            Error::new(crate::ErrorKind::Unavailable, "its home made the name, and this copy does not hold it yet")
+        })
     }
 
     /// The buffer that the counters of `id` keep in this process, or none when

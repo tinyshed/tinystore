@@ -2,6 +2,8 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use super::bucket::{Bucket, Put, Version, Work, WriteOptions};
+#[cfg(feature = "replication")]
+use super::forward;
 use super::tx;
 use super::value::Value;
 use crate::{Error, Result, Transaction};
@@ -51,6 +53,11 @@ impl<'a, V: Value> KeyCall<'a, V> {
 
     pub fn take(self) -> Result<Option<V>> {
         self.refuse_expiry("take")?;
+        #[cfg(feature = "replication")]
+        if self.tx.is_none() && self.bucket.is_copy() {
+            let cell = self.bucket.pass_on(&self.key, forward::Call::Take(self.options))?;
+            return forward::cell(&cell)?.map(|cell| super::bucket::decode::<V>(&cell.raw)).transpose();
+        }
         let work = self.bucket.take_work(&self.key, self.options)?;
         self.run(0, work)
     }
@@ -58,6 +65,10 @@ impl<'a, V: Value> KeyCall<'a, V> {
     /// Removes the key and says whether a live key was there.
     pub fn delete(self) -> Result<bool> {
         self.refuse_expiry("delete")?;
+        #[cfg(feature = "replication")]
+        if self.tx.is_none() && self.bucket.is_copy() {
+            return forward::found(&self.bucket.pass_on(&self.key, forward::Call::Remove(self.options))?);
+        }
         let work = self.bucket.remove_work(&self.key, self.options)?;
         self.run(0, work)
     }
@@ -65,12 +76,21 @@ impl<'a, V: Value> KeyCall<'a, V> {
     /// Gives a live key the expiry `ttl` or `expires_at` named, keeping its
     /// value and version, and says whether it was there.
     pub fn expire(self) -> Result<bool> {
+        #[cfg(feature = "replication")]
+        if self.tx.is_none() && self.bucket.is_copy() {
+            return forward::found(&self.bucket.pass_on(&self.key, forward::Call::Expire(self.options))?);
+        }
         let work = self.bucket.expire_work(&self.key, self.options)?;
         self.run(0, work)
     }
 
     fn put(self, value: &V, put: Put) -> Result<bool> {
         let raw = self.bucket.encode(&self.key, value)?;
+        #[cfg(feature = "replication")]
+        if self.tx.is_none() && self.bucket.is_copy() {
+            let call = forward::Call::Put { raw, put, options: self.options };
+            return Ok(forward::stamp(&self.bucket.pass_on(&self.key, call)?)?.written);
+        }
         let (bytes, work) = self.bucket.put_work(&self.key, raw, self.options, put)?;
         Ok(self.run(bytes, work)?.written)
     }

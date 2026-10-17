@@ -58,8 +58,9 @@ impl Sql {
         self
     }
 
-    /// A statement whose values arrived as SQLite keeps them, from the wire.
-    #[cfg(feature = "wire")]
+    /// A statement whose values arrived as SQLite keeps them, from the wire
+    /// or from a node that passed it on.
+    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn with_values(text: String, values: Vec<Value>) -> Sql {
         Sql { text, values, refused: None, bare: false }
     }
