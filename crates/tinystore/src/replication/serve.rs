@@ -3,7 +3,7 @@
 //! sends it each file's entries as its log grows.
 
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,7 @@ use super::message::{Frames, Message, VERSION, plain_name, timed_out};
 use super::node::{State, lock};
 use super::pack::Packer;
 use super::snapshot::{self, Part};
+use super::transport::{self, Reading, Writing};
 use crate::{Error, ErrorKind, Result};
 
 /// How long a link may say nothing before its other end pings it.
@@ -56,12 +57,12 @@ fn accept(state: &Arc<State>, listener: &TcpListener) {
 
 /// What a link sends, shared by its threads.
 pub(crate) struct Out {
-    stream: Mutex<(TcpStream, Option<Packer>)>,
+    stream: Mutex<(Writing, Option<Packer>)>,
     last: Mutex<Instant>,
 }
 
 impl Out {
-    pub(crate) fn new(stream: TcpStream) -> Out {
+    pub(crate) fn new(stream: Writing) -> Out {
         Out { stream: Mutex::new((stream, None)), last: Mutex::new(Instant::now()) }
     }
 
@@ -98,11 +99,10 @@ struct Asked {
 }
 
 fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
-    stream.set_nodelay(true).map_err(|error| Error::io("a link", error))?;
-    stream.set_read_timeout(Some(Duration::from_secs(1))).map_err(|error| Error::io("a link", error))?;
-    stream.set_write_timeout(Some(SILENT_AT_MOST)).map_err(|error| Error::io("a link", error))?;
-    let mut reading = stream.try_clone().map_err(|error| Error::io("a link", error))?;
-    let out = Arc::new(Out::new(stream));
+    let (mut reading, writing) = transport::accept(state, stream)?;
+    reading.set_timeout(Duration::from_secs(1))?;
+    writing.set_timeout(SILENT_AT_MOST)?;
+    let out = Arc::new(Out::new(writing));
     let mut frames = Frames::default();
     let hello = read_one(state, &mut reading, &mut frames, SILENT_AT_MOST)?;
     let Some(Message::Hello { version, token }) = hello else {
@@ -143,7 +143,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
 /// Reads what the other node asks until the link ends.
 fn read_requests(
     state: &Arc<State>,
-    reading: &mut TcpStream,
+    reading: &mut Reading,
     frames: &mut Frames,
     out: &Arc<Out>,
     asked: &Arc<Mutex<Asked>>,
@@ -223,7 +223,7 @@ fn send_object(state: &State, out: &Out, path: &str) -> Result<()> {
 
 /// Reads the next message, `None` once the link ended; a link silent for
 /// `at_most` is an error.
-fn read_one(state: &State, reading: &mut TcpStream, frames: &mut Frames, at_most: Duration) -> Result<Option<Message>> {
+fn read_one(state: &State, reading: &mut Reading, frames: &mut Frames, at_most: Duration) -> Result<Option<Message>> {
     let began = Instant::now();
     loop {
         if let Some(message) = frames.next()? {

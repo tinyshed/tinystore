@@ -29,6 +29,9 @@ blobs = ["store", "dep:sha2", "dep:libc"]
 backup = ["store", "dep:sha2"]
 # a store a node: a log of each file's commits, entries chained by SHA-256
 replication = ["store", "dep:sha2", "dep:zstd"]
+# a node's links through TLS, rustls with ring's cryptography: off unless asked,
+# a dependency every program linking it would pay for
+replication-tls = ["replication", "dep:rustls"]
 # a logger's lines printed, which a store's logger keeps too
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
@@ -69,6 +72,9 @@ chacha20poly1305 = { version = "0.11.0", optional = true }
 # the rows of records, the runs of metrics and a node's links: libzstd, built
 # with the crate and linked into it, its frames any Zstandard decoder reads
 zstd = { version = "0.14.2", optional = true, default-features = false }
+# a node's links through TLS, with replication-tls: the rustls the command line
+# speaks to its remote clients
+rustls = { version = "0.23.45", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
 # a config's files, parsed by the core so that no program brings a parser and
 # every language reads them alike: TOML, and YAML 1.2 without the encodings
 # that would cost a megabyte
@@ -96,6 +102,8 @@ libc = { version = "0.2.190", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3.27"
+# a certificate for a test of TLS between nodes
+rcgen = "0.14.10"
 serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]

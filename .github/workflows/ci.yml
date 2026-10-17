@@ -52,12 +52,15 @@ jobs:
       - name: Lint the library's features alone
         shell: bash
         run: |
-          for features in console kv config locks channels jobs sql blobs records metrics search wire kv,backup kv,channels kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup; do
+          for features in console kv config locks channels jobs sql blobs records metrics search wire kv,backup kv,channels kv,replication kv,replication,replication-tls kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication; do
             cargo clippy -p tinystore --no-default-features --features "$features" --all-targets --locked -- -D warnings
           done
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Test nodes linked through TLS
+        run: cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked
 
       - name: Build the core's library and tinystore
         run: cargo build --release --locked -p tinystore-ffi -p tinystore-cli

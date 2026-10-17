@@ -314,7 +314,10 @@ in [scaling.md](scaling.md#order).
   What follows a link's hello and welcome goes through one zstd stream each way, a 4 MiB window, each send
   flushed. `tinystore serve` takes `--node`, `--node-listen`, `--from`, `--node-files` and `--node-token-file`; the Bun
   SDK's `open(dir, { node: { from, serve, files, token } })` makes a store in the program's own process a node
-  through the pipe's options, and a server it starts through those flags. Left: TLS, a file's checksum that proves
+  through the pipe's options, and a server it starts through those flags. With the `replication-tls` feature, off
+  unless asked, a link goes through TLS, rustls with ring's cryptography: `Node::tls` and `--node-tls-cert`,
+  `--node-tls-key` and `--node-tls-roots`, the follower checking its upstream's certificate against the roots
+  it trusts, the token still what admits it. Left: a file's checksum that proves
   a copy its home's, and files a home makes after a node linked, which it finds by asking every five seconds.
 - [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.
   Built so far: kv's buckets and counters, and the names their handles open, sql's statements and batches,

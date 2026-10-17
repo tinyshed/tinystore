@@ -144,11 +144,10 @@ enum Held {
 fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
     let stream = connect(address)?;
     state.keep_link(&stream);
-    stream.set_nodelay(true).map_err(|error| Error::io("a link", error))?;
-    stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|error| Error::io("a link", error))?;
-    stream.set_write_timeout(Some(SILENT_AT_MOST)).map_err(|error| Error::io("a link", error))?;
-    let mut reading = stream.try_clone().map_err(|error| Error::io("a link", error))?;
-    let out = Arc::new(Out::new(stream));
+    let (mut reading, writing) = super::transport::connect(state, address, stream)?;
+    reading.set_timeout(Duration::from_millis(250))?;
+    writing.set_timeout(SILENT_AT_MOST)?;
+    let out = Arc::new(Out::new(writing));
     out.send(&Message::Hello { version: VERSION, token: state.options.token.clone().unwrap_or_default() })?;
     let mut link = Link {
         state,

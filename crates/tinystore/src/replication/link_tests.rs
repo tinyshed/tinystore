@@ -691,3 +691,41 @@ fn once_on_two_copies_runs_a_key_s_function_once_across_the_nodes() {
     first.close().unwrap();
     home.close().unwrap();
 }
+
+#[cfg(feature = "replication-tls")]
+#[test]
+fn nodes_linked_through_tls_copy_and_pass_writes_on_and_a_stranger_s_certificate_links_none() {
+    let (home_dir, copy_dir, certs) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let write_pair = |name: &str| {
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let (cert, key) = (certs.path().join(format!("{name}.pem")), certs.path().join(format!("{name}.key")));
+        std::fs::write(&cert, certified.cert.pem()).unwrap();
+        std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
+        (cert, key)
+    };
+    let (cert, key) = write_pair("home");
+    let (stranger, _) = write_pair("stranger");
+    let tls = NodeTls { cert: Some(cert.clone()), key: Some(key), roots: None };
+    let home =
+        node_with(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), tls: Some(tls), ..Node::default() });
+    let port = bound(home.node().unwrap()).unwrap().port();
+    home.bucket::<String>("sessions").open().unwrap().set("seed", &"over tls".to_owned()).unwrap();
+
+    let trusting = NodeTls { roots: Some(cert), ..NodeTls::default() };
+    let from = vec![format!("localhost:{port}")];
+    let copy = node_with(copy_dir.path(), Node { from: from.clone(), tls: Some(trusting), ..Node::default() });
+    let sessions = copy.bucket::<String>("sessions").open().unwrap();
+    assert_eq!(sessions.get("seed").unwrap().as_deref(), Some("over tls"));
+    sessions.set("back", &"through tls".to_owned()).unwrap();
+    assert_eq!(home.bucket::<String>("sessions").open().unwrap().get("back").unwrap().as_deref(), Some("through tls"));
+    copy.close().unwrap();
+
+    let other_dir = tempfile::tempdir().unwrap();
+    let wary = NodeTls { roots: Some(stranger), ..NodeTls::default() };
+    let other = node_with(other_dir.path(), Node { from, tls: Some(wary), ..Node::default() });
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(copy_point(&other, "kv.db").is_none(), "a certificate it does not trust links nothing");
+    other.close().unwrap();
+    home.close().unwrap();
+}

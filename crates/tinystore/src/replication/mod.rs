@@ -21,6 +21,7 @@ mod promote;
 mod serve;
 mod snapshot;
 mod status;
+mod transport;
 
 use std::fmt;
 
@@ -65,6 +66,22 @@ pub struct Node {
     /// holds its commit, while one follows it: losing this node then loses no
     /// write it answered.
     pub synchronous: bool,
+    /// TLS on its links, with the `replication-tls` feature; plain TCP when
+    /// none.
+    pub tls: Option<NodeTls>,
+}
+
+/// TLS on a node's links: the certificate its server answers with, and the
+/// roots it trusts of the node it takes from. A draft, as its names are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NodeTls {
+    /// Its certificate chain, PEM, which the nodes that take from it check.
+    pub cert: Option<std::path::PathBuf>,
+    /// The chain's private key, PEM.
+    pub key: Option<std::path::PathBuf>,
+    /// The certificates it trusts of the node it takes from, PEM: a CA's, or
+    /// that node's own.
+    pub roots: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for Node {
@@ -75,6 +92,7 @@ impl fmt::Debug for Node {
             .field("files", &self.files)
             .field("token", &self.token.as_ref().map(|_| "hidden"))
             .field("synchronous", &self.synchronous)
+            .field("tls", &self.tls)
             .finish()
     }
 }

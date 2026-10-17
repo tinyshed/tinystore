@@ -104,7 +104,7 @@ separate artifact: `crates/ffi` and `crates/cli` today, `crates/node` and
 ships in nothing. Only `crates/cli` runs tokio; the library runs no async
 runtime.
 
-- **Each engine is a cargo feature**, `kv`, `config`, `locks`, `channels`, `jobs`, `sql`, `blobs`, `records`, `metrics` and `search` the defaults today, and `backup` and `replication` beside them. A program links
+- **Each engine is a cargo feature**, `kv`, `config`, `locks`, `channels`, `jobs`, `sql`, `blobs`, `records`, `metrics` and `search` the defaults today, and `backup`, `replication` and `replication-tls` beside them. A program links
   the engines it opens and nothing else. Each turns on `store`, the store and
   the SQLite under it; `config` turns on kv, whose file keeps its changes,
   and `locks` kv too, whose file keeps their epoch;
@@ -137,7 +137,8 @@ runtime.
   it: rusqlite pinned to one release with SQLite bundled, serde, serde_json,
   tracing, tracing-subscriber's registry for a logger's layer, jiff for a
   cron's zone and a console line's time, sha2 for blobs' hashes, a key's id,
-  a series' identity, a backup's files, a table's row in its index and a log's entries, chacha20poly1305 for the values of encrypted
+  a series' identity, a backup's files, a table's row in its index and a log's entries, rustls, with `replication-tls` alone, for a node's links,
+  chacha20poly1305 for the values of encrypted
   buckets, zstd for the rows of records, the runs of metrics and a node's links, the
   `metrics` facade, whose recorder the metrics engine is, toml and
   yaml-rust2, without its encodings, for a config's files, fst and

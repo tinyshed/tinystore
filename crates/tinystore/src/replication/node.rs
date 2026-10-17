@@ -44,6 +44,9 @@ pub(crate) struct State {
     /// Every link open, shut down at stop so that its threads stop reading.
     links: Mutex<Vec<TcpStream>>,
     pub(crate) listening: Mutex<Option<SocketAddr>>,
+    /// The TLS its links speak, made from its options.
+    #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "a node built without TLS speaks none"))]
+    pub(crate) tls: super::transport::Tls,
     /// How many snapshots this node began taking, the first copies and those
     /// taken again.
     pub(crate) snapshots: std::sync::atomic::AtomicU64,
@@ -53,8 +56,10 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(dir: &Path, options: Node) -> State {
-        State {
+    pub(crate) fn new(dir: &Path, options: Node) -> Result<State> {
+        let tls = super::transport::Tls::of(&options)?;
+        Ok(State {
+            tls,
             dir: dir.to_owned(),
             options,
             store: Mutex::default(),
@@ -71,7 +76,7 @@ impl State {
             listening: Mutex::default(),
             snapshots: std::sync::atomic::AtomicU64::new(0),
             wanted: AtomicBool::new(false),
-        }
+        })
     }
 
     /// Starts the node's links: a server where it serves, and the link to the

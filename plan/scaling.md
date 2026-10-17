@@ -110,8 +110,9 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   statements, search's documents, jobs' adds and schedules, blobs' files,
   rate limits, quotas and `once` pass from a copy to their home; a
   transaction on a copy is refused: run it at the home.
-- Links are TCP with a token and no TLS yet: across machines, a tunnel or a
-  private network.
+- Links are TCP with a token, or TLS with the `replication-tls` feature:
+  `--node-tls-cert` and `--node-tls-key` where a node serves, and
+  `--node-tls-roots` where one takes.
 - `--node-synchronous` makes the home answer a write once a node copying
   its file holds it.
 - When America is gone for good: stop Europe, `tinystore promote ./eu`, start
@@ -432,8 +433,9 @@ storage with a restore to a commit or a second; the exporters.
 1. The names: `from`, `serve`, `promote`, the move, the queue's set, the
    synchronous mode, the log's directory.
 2. The judge: a lease in object storage, a witness process, or both.
-3. TLS and an object storage client in the library behind the feature:
-   rustls, which `crates/cli` uses, would move into the core.
+3. TLS is built behind `replication-tls`, off by default, rustls with
+   ring as `crates/cli` uses it: whether it is on by default, and an object
+   storage client in the library, are open.
 4. A file's identity across nodes: its name in the catalog with an id made
    at its creation; two homes claiming one name refused.
 5. Collecting nodes' logs and metrics in one place: a node copying others'
