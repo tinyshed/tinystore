@@ -698,6 +698,7 @@ module defines.
 - a job added on a copy runs at its home, its id the home's to keep, an update and a cancel passed on alike, and jobs.db made at the home for the copy that waited for it — `a_job_added_on_a_copy_runs_at_its_home` in `replication::link_tests`
 - a file blobs keeps too large to be inline reaches a copy of a copy byte for byte, one put after the copy began alike — `a_file_too_large_to_keep_inline_reaches_a_copy_of_a_copy` in `replication::link_tests`
 - a copy promoted once its home stopped is the home the nodes behind it go on from, at the next epoch and with no snapshot, and takes their writes; a home's own file is no copy to promote; the old home, demoted, takes its files from the new one and passes its writes to it — `a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_from` in `replication::link_tests`
+- two nodes each taking from the other write their own databases, copy each other's and pass a write on a copy to its home — `two_nodes_write_their_own_databases_and_copy_each_other_s` in `replication::link_tests`
 - every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
 - a store in a Bun program's own process is a node: a copy of a copy there reads its home's writes and passes its own to the home — `a node in this process` in `sdk/js/test/node.test.ts`
 

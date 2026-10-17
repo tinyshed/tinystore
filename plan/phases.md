@@ -327,6 +327,10 @@ in [scaling.md](scaling.md#order).
   search, a schedule, rate limits, quotas and `once`, the queue of operations that commute, and writes that wait
   for a link a bound before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
+  Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their
+  own and copy each other's, and a write on a copy goes to its home; a node copies none of the files whose log is
+  its own. Left: the catalog, so that what a node copies and where a file's home is need not be listed; routing a
+  write past a node's `from`; moving a home that is alive.
 - [ ] Promote: epochs, `tinystore promote`, an old home back as a copy, the command line's view of the links.
   Built so far: `tinystore promote <dir> [<file>...]` and `replication::promote` on a stopped node make each whole
   copy, or those named, its own file: its mark goes, and its log goes on after the last entry it applied at the

@@ -395,3 +395,38 @@ fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_f
     russia.close().unwrap();
     europe.close().unwrap();
 }
+
+#[test]
+fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let ports =
+        [std::net::TcpListener::bind("127.0.0.1:0").unwrap(), std::net::TcpListener::bind("127.0.0.1:0").unwrap()];
+    let [us_address, eu_address] = ports.map(|port| port.local_addr().unwrap().to_string());
+    let node = |serve: &str, from: &str, copies: &str| Node {
+        serve: Some(serve.to_owned()),
+        from: vec![from.to_owned()],
+        files: Some(vec![copies.to_owned()]),
+        ..Node::default()
+    };
+    let us = node_with(us_dir.path(), node(&us_address, &eu_address, "sql/eu.db"));
+    let eu = node_with(eu_dir.path(), node(&eu_address, &us_address, "sql/us.db"));
+    let notes = [("0001_notes.sql", "create table notes (id integer primary key, body text not null);")];
+    let us_db = us.database("us").migrations(notes).open().unwrap();
+    let eu_db = eu.database("eu").migrations(notes).open().unwrap();
+    us_db.exec(crate::sql!("insert into notes (body) values ('an american row')")).unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('a european row')")).unwrap();
+
+    let us_reads_eu = us.database("eu").migrations(notes).open().unwrap();
+    let eu_reads_us = eu.database("us").migrations(notes).open().unwrap();
+    let bodies =
+        |db: &crate::sql::Database| db.all::<String>(crate::sql!("select body from notes order by id")).unwrap();
+    eventually("each node reads the other's rows", || {
+        bodies(&us_reads_eu) == ["a european row"] && bodies(&eu_reads_us) == ["an american row"]
+    });
+    us_reads_eu.exec(crate::sql!("insert into notes (body) values ('written in america')")).unwrap();
+    assert_eq!(bodies(&eu_db), ["a european row", "written in america"], "a write goes to the file's home");
+    assert_eq!(bodies(&us_reads_eu), ["a european row", "written in america"], "and reads back where it was made");
+    assert!(us.node().unwrap().copy("sql/us.db").is_none(), "a node copies none of its own files");
+    eu.close().unwrap();
+    us.close().unwrap();
+}
