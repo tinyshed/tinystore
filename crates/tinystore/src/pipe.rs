@@ -29,6 +29,10 @@ pub type Prove = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// What `server.stop` does, called once its answer has left.
 pub type Stop = Arc<dyn Fn() + Send + Sync>;
 
+/// Told the client's name, as its HELLO gives it, once the connection is
+/// welcomed: a server logs who came.
+pub type Greeted = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// What a remote server lets a connection do by the token its HELLO carries:
 /// none for a token it does not know. It compares every token it knows in
 /// constant time, so that the time taken says nothing of which matched.
@@ -65,6 +69,8 @@ pub struct Connect {
     /// A remote server's tokens; a connection without it admits every client
     /// as `Admin`, as a local endpoint and an embedded store do.
     pub admit: Option<Admit>,
+    /// Told who came, once the connection is welcomed.
+    pub greeted: Option<Greeted>,
 }
 
 impl fmt::Debug for Connect {
@@ -75,6 +81,7 @@ impl fmt::Debug for Connect {
             .field("stop", &self.stop.is_some())
             .field("clock", &self.clock)
             .field("admit", &self.admit.is_some())
+            .field("greeted", &self.greeted.is_some())
             .finish()
     }
 }

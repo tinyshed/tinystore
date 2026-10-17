@@ -438,6 +438,9 @@ impl Shared {
         input.stream_credit = stream_credit;
         let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
         self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, capability, proof))]);
+        if let Some(greeted) = &self.connect.greeted {
+            greeted(&hello.client);
+        }
     }
 
     fn welcome_body(&self, max_body: u64, capability: Capability, proof: Option<Vec<u8>>) -> Vec<u8> {
