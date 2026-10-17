@@ -131,3 +131,29 @@ impl fmt::Debug for Claim {
         write!(f, "Claim({})", self.path.display())
     }
 }
+
+/// Migrates an engine's tables in `file`. On a copy kept in a database's
+/// file whose home has not made those tables yet, it asks the home to make
+/// them, then checks again: a copy's migrations are its home's.
+#[cfg(any(feature = "kv", feature = "jobs"))]
+pub(crate) fn migrate_in(
+    store: &crate::Store,
+    file: &crate::sqlite::File,
+    history: &str,
+    migrations: &[crate::sqlite::Migration],
+    lent_by: Option<&str>,
+) -> Result<()> {
+    let migrated = file.migrate(history, migrations);
+    #[cfg(feature = "replication")]
+    if let Err(error) = &migrated
+        && error.kind() == crate::ErrorKind::Unavailable
+        && file.is_copy()
+        && let Some(database) = lent_by.and_then(crate::replication::database_of)
+        && let Some(tag) = crate::replication::tag_of(history)
+    {
+        crate::replication::make_in(store, &crate::replication::database_file(database), tag)?;
+        return file.migrate(history, migrations);
+    }
+    let _ = (store, lent_by);
+    migrated
+}

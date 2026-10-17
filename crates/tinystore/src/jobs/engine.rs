@@ -69,7 +69,7 @@ impl Jobs {
     /// leases a process that died held, counting their attempts, and starts
     /// maintenance on the store's background thread.
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Jobs>> {
-        file.migrate("jobs", MIGRATIONS)?;
+        crate::engine::migrate_in(store, &file, "jobs", MIGRATIONS, lent_by.as_deref())?;
         // A copy's leases are its home's workers', and its home ends them.
         if !file.is_copy() {
             file.transaction(|tx| rows::end_dead_leases(tx))?;
@@ -112,6 +112,12 @@ impl Jobs {
             return Ok(Arc::clone(state));
         }
         self.queue(name, kind, Policy::default())
+    }
+
+    /// The engine whose file jobs are kept in, when it is not jobs.db.
+    #[cfg(feature = "replication")]
+    pub(crate) fn lent_by(&self) -> Option<&str> {
+        self.lent_by.as_deref()
     }
 
     pub(crate) fn file(&self) -> &File {
@@ -184,16 +190,11 @@ impl Jobs {
         if let Some(found) = found(self)? {
             return Ok(found);
         }
-        if self.lent_by.is_some() {
-            return Err(Error::new(
-                crate::ErrorKind::Unavailable,
-                "a copy passes no queue of a database's file to its home yet",
-            ));
-        }
         if kind != Kind::Queue {
             return Err(Error::new(crate::ErrorKind::Unavailable, "a copy passes no schedule to its home yet"));
         }
-        super::forward::pass_on_open(&self.store()?, name)?;
+        let database = self.lent_by.as_deref().and_then(crate::replication::database_of);
+        super::forward::pass_on_open(&self.store()?, (name, database))?;
         found(self)?.ok_or_else(|| {
             Error::new(
                 crate::ErrorKind::Unavailable,

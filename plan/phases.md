@@ -291,7 +291,8 @@ in [scaling.md](scaling.md#order).
   they arrive; no engine's background work on it. Its entries are applied in order, each in one transaction of the
   applier's own connection, page 1 last and a truncation the last row, an entry that does not follow refused, one
   held taken as nothing, the position kept after each commit and the copy going on from it. Engines read again the
-  names they keep once a commit applies. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: the
+  names they keep once a commit applies; the applier's connection is opened again after a commit that wrote page
+  1, whose schema and size it would read stale. SQLite is built with `SQLITE_ENABLE_DBPAGE_VTAB`. Left for the links: the
   copy's own log of what it received, which it serves on, and a file's checksum that proves a copy its home's.
 - [x] The first copy: a page-exact snapshot in short reads; blobs' objects before the commit that names them.
   Built: a snapshot reads a file's pages through `sqlite_dbpage` 256 at a time, each chunk in a read transaction of
@@ -322,14 +323,15 @@ in [scaling.md](scaling.md#order).
   a copy's upload gathered in memory, 256 MiB at most, and handed over whole at its commit, and an encrypted
   bucket's writes, its values sealed on the copy with the key it shares with its home, which writes them as they
   are and refuses another key's, and the decisions of rate limits and quotas, one limit for every node, pass from
-  a copy to its home through each node on the way,
+  a copy to its home through each node on the way, and so do a bucket's and a queue's kept in a database's file,
+  run where the home's database lends them, the tables of an engine a copy found missing there made by its home,
   each node running the call through the same handle; a file a copy waits for half a second that its home never
   made, the home makes, opening the engine that keeps it;
   the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
   ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Records' and metrics'
   files are each node's own, and a node that copies another's reads them only. Left: a transaction, a take of an
-  encrypted bucket, whose value would come back unsealed until links have TLS, what a database's file keeps of
-  kv, jobs and search, a schedule and `once`, and the queue of operations that commute. A write waits ten seconds
+  encrypted bucket, whose value would come back unsealed until links have TLS, a schedule and `once`, and the
+  queue of operations that commute. A write waits ten seconds
   at most for a link to its home before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their

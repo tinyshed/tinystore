@@ -93,7 +93,7 @@ impl Kv {
     /// Makes kv's tables in `file` when it has none, and starts its
     /// maintenance and its renewals on the store's background thread.
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Kv>> {
-        file.migrate("kv", MIGRATIONS)?;
+        crate::engine::migrate_in(store, &file, "kv", MIGRATIONS, lent_by.as_deref())?;
         let revision = file.read(cells::revision)?;
         let tasks = lent_by.as_ref().map_or_else(|| "kv".to_owned(), |owner| format!("kv in {owner}"));
         let kv = Arc::new(Kv {
@@ -205,8 +205,8 @@ impl Kv {
         if let Some(found) = self.file.read(|connection| cells::find_bucket(connection, name))? {
             return Ok(found);
         }
-        super::forward::refuse(self.lent_by.as_deref())?;
-        let handle = super::forward::Handle::Name { name: name.to_owned(), role: kind.role().to_owned() };
+        let database = self.lent_by.as_deref().and_then(crate::replication::database_of).map(str::to_owned);
+        let handle = super::forward::Handle::Name { name: name.to_owned(), role: kind.role().to_owned(), database };
         super::forward::pass_on(&self.store()?, &handle, &[], "", &super::forward::Call::Open)?;
         self.file.read(|connection| cells::find_bucket(connection, name))?.ok_or_else(|| {
             Error::new(crate::ErrorKind::Unavailable, "its home made the name, and this copy does not hold it yet")

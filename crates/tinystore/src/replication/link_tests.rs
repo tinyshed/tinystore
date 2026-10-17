@@ -598,3 +598,29 @@ fn a_copy_s_rate_limits_and_quotas_are_decided_at_their_home() {
     copy.close().unwrap();
     home.close().unwrap();
 }
+
+#[test]
+fn a_bucket_and_a_queue_kept_in_a_database_s_file_pass_a_copy_s_writes_to_its_home() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let notes = [("0001_notes.sql", "create table notes (id integer primary key, body text not null);")];
+    let home_db = home.database("tenant").migrations(notes).open().unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let db = copy.database("tenant").migrations(notes).open().unwrap();
+
+    let prefs = db.bucket::<String>("prefs").open().unwrap();
+    prefs.set("theme", &"dark".to_owned()).unwrap();
+    assert_eq!(prefs.get("theme").unwrap().as_deref(), Some("dark"), "the copy reads its own write at once");
+    let home_prefs = home_db.bucket::<String>("prefs").open().unwrap();
+    assert_eq!(home_prefs.get("theme").unwrap().as_deref(), Some("dark"), "kept in the tenant's file at its home");
+    assert!(!home_dir.path().join("kv.db").exists(), "nothing went to kv.db");
+    caught_up(&home, &copy, &["sql/tenant.db"]);
+
+    let tasks = db.queue::<serde_json::Value>("tasks").open().unwrap();
+    assert!(tasks.id("t1").add(&serde_json::json!({ "do": "it" })).unwrap());
+    assert!(tasks.get("t1").unwrap().is_some());
+    let home_tasks = home_db.queue::<serde_json::Value>("tasks").open().unwrap();
+    assert!(home_tasks.get("t1").unwrap().is_some(), "the job is in the tenant's file at its home");
+    copy.close().unwrap();
+    home.close().unwrap();
+}

@@ -86,6 +86,46 @@ pub(crate) fn make(node: &State, name: &str) -> Result<()> {
     written.outcome.map(drop).map_err(|(kind, why)| Error::new(kind, why))
 }
 
+/// The tag of the engine whose migrations' history is `history`, which a
+/// database's file may keep the tables of.
+pub(crate) fn tag_of(history: &str) -> Option<u8> {
+    match history {
+        #[cfg(feature = "kv")]
+        "kv" => Some(KV),
+        #[cfg(feature = "jobs")]
+        "jobs" => Some(JOBS),
+        _ => None,
+    }
+}
+
+/// Asks the home of a database's file `file` to open the engine `tag` names
+/// in it, whose tables a copy found its home had not made yet.
+pub(crate) fn make_in(store: &Store, file: &str, tag: u8) -> Result<()> {
+    let mut out = super::Out(vec![MAKE]);
+    out.text(file);
+    out.byte(tag);
+    pass_on(store, file, out.0).map(drop)
+}
+
+/// Opens the engine `tag` names in a database's file `file`, which makes its
+/// tables there.
+fn make_in_here(lenders: Lenders<'_>, file: &str, tag: u8) -> Result<()> {
+    let Some(database) = file.strip_prefix("sql/").and_then(|name| name.strip_suffix(".db")) else {
+        return Err(Error::invalid(format!("{file} is no database's file to keep an engine's tables")));
+    };
+    let home = lenders(database)?;
+    match tag {
+        #[cfg(feature = "kv")]
+        KV => crate::kv::forward::make_in(&home),
+        #[cfg(feature = "jobs")]
+        JOBS => crate::jobs::forward::make_in(&home),
+        _ => {
+            let _ = home;
+            Err(Error::invalid(format!("an engine this node keeps in no database's file, tag {tag}")))
+        }
+    }
+}
+
 /// Waits until this node's copy of `name` holds entry `sequence`, a bound at
 /// most.
 fn wait_applied(node: &State, name: &str, sequence: u64) {
@@ -149,24 +189,54 @@ fn make_here(store: &Store, name: &str) -> Result<()> {
     Err(Error::not_found(format!("{name}: no engine of this node keeps such a file")))
 }
 
+/// Where a database's file lends kv and jobs their tables, by the
+/// database's name: what a write passed on of a bucket or a queue kept there
+/// opens in.
+pub(crate) type Lenders<'a> = &'a dyn Fn(&str) -> Result<crate::engine::Home>;
+
+/// The file a database's name keeps, as a node names it.
+pub(crate) fn database_file(name: &str) -> String {
+    format!("sql/{name}.db")
+}
+
+/// The database's name a lending file's owner says, `sql app` for `app`.
+pub(crate) fn database_of(owner: &str) -> Option<&str> {
+    owner.strip_prefix("sql ")
+}
+
 fn run_on(store: &Store, op: &[u8]) -> Result<(Vec<u8>, String)> {
+    #[cfg(feature = "sql")]
+    let lenders = |name: &str| -> Result<crate::engine::Home> {
+        let database = store.database(name).open()?;
+        Ok(crate::engine::Home::Shared(std::sync::Arc::clone(database.shared())))
+    };
+    #[cfg(not(feature = "sql"))]
+    let lenders = |name: &str| -> Result<crate::engine::Home> {
+        Err(Error::invalid(format!("a write of database {name}'s file, and this node has no sql")))
+    };
+    let _ = &lenders;
     let Some((&tag, body)) = op.split_first() else {
         return Err(Error::corrupt("a write passed on holds nothing"));
     };
     match tag {
         MAKE => {
-            let file = super::In { bytes: body, at: 0 }.text()?;
-            make_here(store, &file)?;
+            let mut at = super::In { bytes: body, at: 0 };
+            let file = at.text()?;
+            if at.done() {
+                make_here(store, &file)?;
+            } else {
+                make_in_here(&lenders, &file, at.byte()?)?;
+            }
             Ok((Vec::new(), file))
         }
         #[cfg(feature = "kv")]
-        KV => crate::kv::forward::run(store, body).map(|answer| (answer, crate::kv::forward::FILE.to_owned())),
+        KV => crate::kv::forward::run(store, &lenders, body),
         #[cfg(feature = "sql")]
         SQL => crate::sql::forward::run(store, body),
         #[cfg(feature = "blobs")]
         BLOBS => crate::blobs::forward::run(store, body).map(|answer| (answer, crate::blobs::forward::FILE.to_owned())),
         #[cfg(feature = "jobs")]
-        JOBS => crate::jobs::forward::run(store, body).map(|answer| (answer, crate::jobs::forward::FILE.to_owned())),
+        JOBS => crate::jobs::forward::run(store, &lenders, body),
         #[cfg(feature = "search")]
         SEARCH => {
             crate::search::forward::run(store, body).map(|answer| (answer, crate::search::forward::FILE.to_owned()))

@@ -170,7 +170,14 @@ where
     #[cfg(feature = "replication")]
     fn pass_on(&self, change: Change, asked: &Asked, value: &V) -> Result<bool> {
         let store = self.jobs.store()?;
-        super::forward::pass_on_write(&store, &self.state.name, change, asked, value)
+        super::forward::pass_on_write(&store, self.passed_as(), change, asked, value)
+    }
+
+    /// The queue as a write passed on names it: its name, and the database
+    /// whose file keeps it.
+    #[cfg(feature = "replication")]
+    fn passed_as(&self) -> (&str, Option<&str>) {
+        (&self.state.name, self.jobs.lent_by().and_then(crate::replication::database_of))
     }
 
     pub(crate) fn open(home: &Home, name: &str, kind: Kind, policy: Policy) -> Result<Queue<V>> {
@@ -212,7 +219,7 @@ where
         #[cfg(feature = "replication")]
         if tx.is_none() && self.jobs.file().is_copy() {
             let store = self.jobs.store().map_err(|error| self.fail(Some(id), error))?;
-            return super::forward::pass_on_cancel(&store, &self.state.name, id)
+            return super::forward::pass_on_cancel(&store, self.passed_as(), id)
                 .map_err(|error| self.fail(Some(id), error));
         }
         let (queue, key) = (Arc::clone(&self.state), id.to_owned());

@@ -28,6 +28,11 @@ pub(crate) fn make(store: &Store) -> Result<()> {
     super::engine::Kv::of(store).map(drop)
 }
 
+/// Opens kv in the file `home` lends, which makes its tables there.
+pub(crate) fn make_in(home: &crate::engine::Home) -> Result<()> {
+    Kv::at(home).map(drop)
+}
+
 /// What kv's file is called where its home passes writes.
 pub(crate) const FILE: &str = "kv.db";
 
@@ -37,6 +42,8 @@ pub(crate) enum Handle {
         name: String,
         expiry: Expiry,
         encrypted: bool,
+        /// The database whose file keeps the bucket; kv.db when none.
+        database: Option<String>,
     },
     Counters {
         name: String,
@@ -57,6 +64,7 @@ pub(crate) enum Handle {
     Name {
         name: String,
         role: String,
+        database: Option<String>,
     },
 }
 
@@ -106,7 +114,7 @@ pub(crate) enum Answer {
 pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call) -> Vec<u8> {
     let mut out = Out(vec![crate::replication::KV]);
     match handle {
-        Handle::Bucket { name, expiry, encrypted } => {
+        Handle::Bucket { name, expiry, encrypted, database } => {
             out.byte(0);
             out.text(name);
             let (kind, span) = match expiry {
@@ -117,6 +125,7 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             out.byte(kind);
             out.long(millis(span));
             out.byte(u8::from(*encrypted));
+            database_out(&mut out, database.as_deref());
         }
         Handle::Counters { name, ttl } => {
             out.byte(1);
@@ -124,10 +133,11 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             out.byte(u8::from(ttl.is_some()));
             out.long(ttl.map_or(0, millis));
         }
-        Handle::Name { name, role } => {
+        Handle::Name { name, role, database } => {
             out.byte(2);
             out.text(name);
             out.text(role);
+            database_out(&mut out, database.as_deref());
         }
         Handle::RateLimit { name, interval, burst } => {
             out.byte(3);
@@ -199,8 +209,8 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
 }
 
 /// Runs at the home a call another node passed on, and gives its answer's
-/// bytes.
-pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
+/// bytes and the file it wrote: kv.db, or the database's that keeps it.
+pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes: &[u8]) -> Result<(Vec<u8>, String)> {
     let mut at = In { bytes, at: 0 };
     let handle = match at.byte()? {
         0 => {
@@ -212,14 +222,14 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
                 2 => Expiry::Idle(span),
                 _ => return Err(corrupt("a bucket's expiry")),
             };
-            Handle::Bucket { name, expiry, encrypted: at.byte()? == 1 }
+            Handle::Bucket { name, expiry, encrypted: at.byte()? == 1, database: database_in(&mut at)? }
         }
         1 => {
             let name = at.text()?;
             let ttl = (at.byte()? == 1).then_some(Duration::from_millis(at.long()?));
             Handle::Counters { name, ttl }
         }
-        2 => Handle::Name { name: at.text()?, role: at.text()? },
+        2 => Handle::Name { name: at.text()?, role: at.text()?, database: database_in(&mut at)? },
         3 => Handle::RateLimit { name: at.text()?, interval: at.long()? as i64, burst: at.long()? as i64 },
         4 => {
             let name = at.text()?;
@@ -260,19 +270,39 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     if !at.done() {
         return Err(corrupt("a call that holds more than its fields"));
     }
-    Ok(answer_bytes(&call_here(store, handle, &owners, &key, call)?))
+    let file = match &handle {
+        Handle::Bucket { database: Some(database), .. } | Handle::Name { database: Some(database), .. } => {
+            crate::replication::database_file(database)
+        }
+        _ => FILE.to_owned(),
+    };
+    Ok((answer_bytes(&call_here(store, lenders, handle, &owners, &key, call)?), file))
 }
 
-fn call_here(store: &Store, handle: Handle, owners: &[String], key: &str, call: Call) -> Result<Answer> {
+fn call_here(
+    store: &Store,
+    lenders: crate::replication::Lenders<'_>,
+    handle: Handle,
+    owners: &[String],
+    key: &str,
+    call: Call,
+) -> Result<Answer> {
     match handle {
-        Handle::Name { name, role } => {
+        Handle::Name { name, role, database } => {
             let kind = Kind::of_role(&role).ok_or_else(|| corrupt("a name's kind"))?;
             super::scope::check_name(&name)?;
-            Kv::of(store)?.name(&name, kind)?;
+            let kv = match database {
+                Some(database) => Kv::at(&lenders(&database)?)?,
+                None => Kv::of(store)?,
+            };
+            kv.name(&name, kind)?;
             Ok(Answer::Done)
         }
-        Handle::Bucket { name, expiry, encrypted } => {
-            let builder = store.bucket::<()>(&name);
+        Handle::Bucket { name, expiry, encrypted, database } => {
+            let builder = match database {
+                Some(database) => super::bucket::BucketBuilder::<()>::lent(lenders(&database)?, &name),
+                None => store.bucket::<()>(&name),
+            };
             let builder = match expiry {
                 Expiry::Never => builder,
                 Expiry::Ttl(span) => builder.ttl(span),
@@ -438,6 +468,17 @@ pub(crate) fn refuse(lent_by: Option<&str>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn database_out(out: &mut Out, database: Option<&str>) {
+    out.byte(u8::from(database.is_some()));
+    out.text(database.unwrap_or(""));
+}
+
+fn database_in(at: &mut In<'_>) -> Result<Option<String>> {
+    let there = at.byte()? == 1;
+    let database = at.text()?;
+    Ok(there.then_some(database))
 }
 
 fn raw_out(out: &mut Out, raw: &Raw) {

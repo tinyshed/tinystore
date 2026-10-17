@@ -66,6 +66,12 @@ impl Store {
 }
 
 impl<V: Value> BucketBuilder<V> {
+    /// A bucket kept where `home` says, which a write passed on names.
+    #[cfg(feature = "replication")]
+    pub(crate) fn lent(home: Home, name: &str) -> Self {
+        BucketBuilder::new(home, name)
+    }
+
     fn new(home: Home, name: &str) -> Self {
         BucketBuilder { home, name: name.to_owned(), expiry: Expiry::Never, encrypted: false, _value: PhantomData }
     }
@@ -741,12 +747,13 @@ impl<V> Bucket<V> {
     /// bytes once this copy holds the commit that made it.
     pub(crate) fn pass_on(&self, key: &str, call: forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
-        forward::refuse(self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
         let call = self.sealed(key, call).map_err(|error| error.within(shown()))?;
         let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
         let owners = self.scope.branch()?.owners().to_vec();
         let name = self.scope.name().to_owned();
-        let handle = forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some() };
+        let database = self.scope.kv.lent_by().and_then(crate::replication::database_of).map(str::to_owned);
+        let handle =
+            forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database };
         forward::pass_on(&store, &handle, &owners, key, &call)
     }
 
