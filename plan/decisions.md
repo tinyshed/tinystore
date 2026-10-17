@@ -174,4 +174,5 @@ same node as a server; a node's logs and metrics stay its own.
 - Whether the Rust API is blocking only or also offers `async` wrappers.
 - Crate names on crates.io, the npm scope and the PyPI name, checked free
   before the first release.
-- Replication: the calls under [scaling.md](scaling.md)'s Open.
+- Replication: the calls under [scaling.md](scaling.md)'s Open; those the
+  owner took on 18 October are under its Decided.

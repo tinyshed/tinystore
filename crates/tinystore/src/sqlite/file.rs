@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use rusqlite::Connection;
 
-use super::capture::{Capture, Logged, Observe, logged};
+use super::capture::{Capture, Logged, Observe, in_the_file, logged, own_work};
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
@@ -258,9 +258,11 @@ impl File {
         let value = work(&tx)?;
         tx.settle(Left::Here)?;
         open.finished = true;
-        self.commit(connection)?;
-        committed.run();
-        Ok(value)
+        let handed = self.commit(connection);
+        if in_the_file(&handed) {
+            committed.run();
+        }
+        handed.map(|()| value).map_err(E::from)
     }
 
     /// Commits the transaction on `connection`; a commit that fails may or may
@@ -268,7 +270,7 @@ impl File {
     fn commit(&self, connection: &Connection) -> Result<()> {
         let capture = logged(&self.capture);
         if let Some(capture) = &capture {
-            capture.arm();
+            capture.arm(!super::capture::is_own_work());
         }
         execute(connection, COMMIT).map_err(|error| {
             if !connection.is_autocommit() {
@@ -343,7 +345,8 @@ impl File {
         if self.migrated(history, migrations)? {
             return Ok(());
         }
-        self.transaction(|tx| migrate::apply(tx, history, migrations)).map_err(|error| error.within(self.describe()))
+        own_work(|| self.transaction(|tx| migrate::apply(tx, history, migrations)))
+            .map_err(|error| error.within(self.describe()))
     }
 
     /// Whether the file holds every step of `history` already: a reader then
@@ -381,9 +384,11 @@ impl File {
         let what = || format!("{}: {history}: foreign keys", self.describe());
         // foreign_keys cannot change inside a transaction, so it changes around one.
         execute(&connection, FOREIGN_KEYS_OFF).map_err(|error| sql_error(what(), error))?;
-        let applied = self.transaction_on(&connection, |tx| {
-            migrate::apply(tx, history, migrations)?;
-            migrate::check_foreign_keys(tx, history)
+        let applied = own_work(|| {
+            self.transaction_on(&connection, |tx| {
+                migrate::apply(tx, history, migrations)?;
+                migrate::check_foreign_keys(tx, history)
+            })
         });
         let restored = execute(&connection, FOREIGN_KEYS_ON).map_err(|error| sql_error(what(), error));
         applied.map_err(|error| error.within(self.describe())).and(restored)
@@ -559,9 +564,11 @@ impl Begun<'_> {
     pub(crate) fn commit(mut self) -> Result<()> {
         self.tx().settle(Left::Here)?;
         self.committed = true;
-        self.file.commit(&self.connection)?;
-        self.hooks.run();
-        Ok(())
+        let handed = self.file.commit(&self.connection);
+        if in_the_file(&handed) {
+            self.hooks.run();
+        }
+        handed
     }
 }
 

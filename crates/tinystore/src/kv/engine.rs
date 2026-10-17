@@ -10,7 +10,7 @@ use super::renewals::Renewals;
 use super::scope::Kind;
 use crate::encryption::EncryptionKey;
 use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
-use crate::sqlite::{Config, File, Migration, Tx};
+use crate::sqlite::{Config, File, Migration, Tx, own_work};
 use crate::store::WeakStore;
 use crate::{Clock, Error, Result, Store, unix_millis};
 
@@ -220,7 +220,7 @@ impl Kv {
             // a name made before is read, so that opening it takes no writer
             None => match self.file.read(|connection| cells::find_bucket(connection, name))? {
                 Some(found) => found,
-                None => self.file.transaction(|tx| cells::bucket(tx, name, kind.role()))?,
+                None => own_work(|| self.file.transaction(|tx| cells::bucket(tx, name, kind.role())))?,
             },
         };
         if role != kind.role() {

@@ -148,7 +148,8 @@ impl Shared {
     fn run_task<'a>(&'a self, mut state: MutexGuard<'a, State>, due: usize) -> MutexGuard<'a, State> {
         let mut work = state.tasks[due].work.take().expect("a due task holds its work");
         drop(state);
-        let outcome = catch_unwind(AssertUnwindSafe(&mut work)).unwrap_or_else(|_| Err(Error::internal("it panicked")));
+        let outcome = crate::sqlite::own_work(|| catch_unwind(AssertUnwindSafe(&mut work)))
+            .unwrap_or_else(|_| Err(Error::internal("it panicked")));
         let mut state = self.lock();
         let task = &mut state.tasks[due];
         task.report(outcome);

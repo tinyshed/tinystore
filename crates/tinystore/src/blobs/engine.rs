@@ -19,7 +19,7 @@ use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
 use super::scrub::Scrubbing;
 use crate::engine::{Claim, Copied, Engine, Host, copy_file};
-use crate::sqlite::{Config, File, Migration, Tx, sql_error};
+use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -258,10 +258,12 @@ impl Blobs {
     /// open walks only the directories of the ids reserved since.
     pub(crate) fn settle(&self) -> Result<()> {
         let mark = self.ids.settled_mark();
-        self.file.write(0, move |tx| {
-            tx.execute("update meta set value = ?1 where name = 'settled' and value < ?1", [mark])
-                .map(drop)
-                .map_err(|error| sql_error("blobs: settle the content ids", error))
+        own_work(|| {
+            self.file.write(0, move |tx| {
+                tx.execute("update meta set value = ?1 where name = 'settled' and value < ?1", [mark])
+                    .map(drop)
+                    .map_err(|error| sql_error("blobs: settle the content ids", error))
+            })
         })
     }
 
@@ -269,11 +271,12 @@ impl Blobs {
     /// in a write of its own when the last one is spent.
     pub(crate) fn take_id(&self) -> Result<i64> {
         self.ids.take(|block| {
-            self.file.write(0, move |tx| {
-                tx.query_row("update meta set value = value + ?1 where name = 'ids' returning value", [block], |row| {
-                    row.get(0)
+            own_work(|| {
+                self.file.write(0, move |tx| {
+                    let reserve = "update meta set value = value + ?1 where name = 'ids' returning value";
+                    tx.query_row(reserve, [block], |row| row.get(0))
+                        .map_err(|error| sql_error("blobs: reserve content ids", error))
                 })
-                .map_err(|error| sql_error("blobs: reserve content ids", error))
             })
         })
     }
@@ -312,15 +315,18 @@ impl Blobs {
         let owned = name.to_owned();
         // Found before it is made, so that a copy, which writes nothing,
         // opens a set its home made.
-        let id = self.file.write(0, move |tx| {
-            let failed = |error| sql_error("blobs: a set of files", error);
-            let found = tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).optional().map_err(failed)?;
-            if let Some(id) = found {
-                return Ok(id);
-            }
-            tx.execute(INSERT_SET, [&owned]).map_err(failed)?;
-            tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).map_err(failed)
-        })?;
+        let made = own_work(|| {
+            self.file.write(0, move |tx| {
+                let failed = |error| sql_error("blobs: a set of files", error);
+                let found = tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).optional().map_err(failed)?;
+                if let Some(id) = found {
+                    return Ok(id);
+                }
+                tx.execute(INSERT_SET, [&owned]).map_err(failed)?;
+                tx.query_row(SELECT_SET, [&owned], |row| row.get(0)).map_err(failed)
+            })
+        });
+        let id = made?;
         lock(&self.sets).insert(name.to_owned(), id);
         Ok(id)
     }

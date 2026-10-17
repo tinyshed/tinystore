@@ -449,7 +449,10 @@ fn call_here(
             let counters: Counters = owners.iter().fold(builder.open()?, |counters, owner| counters.under(owner));
             Ok(match call {
                 Call::Add(n) => Answer::Sum(counters.add(key, n)?),
-                Call::AddQueued { n, from: Some((node, op)) } => Answer::Sum(counters.add_queued(key, n, &node, op)?),
+                // the node that queued it answered its caller already
+                Call::AddQueued { n, from: Some((node, op)) } => {
+                    Answer::Sum(crate::sqlite::own_work(|| counters.add_queued(key, n, &node, op))?)
+                }
                 Call::DeleteCounter => Answer::Found(counters.delete(key)?),
                 Call::ClearCounters => {
                     counters.clear()?;

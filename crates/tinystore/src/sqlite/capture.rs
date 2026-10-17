@@ -15,7 +15,9 @@
 //!
 //! A commit SQLite made and the capture could not hand is in the file but not
 //! in the observer's keeping. Its write answers `OutcomeUnknown`, and the file
-//! takes no write until it is opened again and its WAL handed.
+//! takes no write until it is opened again and its WAL handed. A commit the
+//! observer kept and no copy held in time answers `CommittedLocally`: it is in
+//! the file and the log alike, and the file takes writes on.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -44,6 +46,35 @@ thread_local! {
     /// Where the WAL ends after the commit this thread just made, left by the
     /// writer's hook for the code that called the commit.
     static WAL_END: Cell<Option<u32>> = const { Cell::new(None) };
+    /// The commit this thread is making answers a caller, whom a synchronous
+    /// home answers once a copy holds it.
+    static ANSWERING: Cell<bool> = const { Cell::new(false) };
+    /// This thread does the store's own work, as [`own_work`] runs it.
+    static OWN_WORK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `work` as the store's own: an engine's opening, its migrations, the
+/// names it makes and its maintenance. Its commits answer no caller, so a
+/// synchronous home ships them without waiting for a copy, and none of it
+/// fails for want of one.
+pub(crate) fn own_work<T>(work: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OWN_WORK.set(self.0);
+        }
+    }
+    let _restore = Restore(OWN_WORK.replace(true));
+    work()
+}
+
+pub(crate) fn is_own_work() -> bool {
+    OWN_WORK.get()
+}
+
+/// Whether the commit being handed answers a caller.
+pub(crate) fn answering() -> bool {
+    ANSWERING.get()
 }
 
 /// Where a file's WAL stood: its generation, which each start of the WAL
@@ -88,6 +119,7 @@ pub(crate) trait Observe: Send + Sync {
     /// what came before is kept nowhere.
     fn begin(&self, position: Position, size: u32) -> Result<()>;
 
+    /// Keeps a commit; `CommittedLocally` keeps it and says no copy held it.
     fn committed(&self, commit: &Commit<'_>) -> Result<()>;
 
     /// The WAL started over without the capture's checkpoint: what a writer
@@ -115,6 +147,12 @@ pub(crate) trait Observe: Send + Sync {
 /// group: a node sets it and takes it away as the file's home moves, and a
 /// file no log keeps holds none.
 pub(crate) type Logged = Arc<std::sync::RwLock<Option<Arc<Capture>>>>;
+
+/// Whether a commit's outcome leaves it in the file, its hooks to run: kept,
+/// or kept with no copy holding it in time.
+pub(crate) fn in_the_file(outcome: &Result<()>) -> bool {
+    outcome.as_ref().err().is_none_or(|error| error.kind() == ErrorKind::CommittedLocally)
+}
 
 /// The capture a file's commits go through now, if any.
 pub(crate) fn logged(cell: &Logged) -> Option<Arc<Capture>> {
@@ -167,9 +205,11 @@ impl Capture {
         self.observer.refuse()
     }
 
-    /// Readies the hook for a commit this thread is about to make.
-    pub(crate) fn arm(&self) {
+    /// Readies the hook for a commit this thread is about to make, which
+    /// answers a caller or is the store's own.
+    pub(crate) fn arm(&self, answering: bool) {
         WAL_END.set(None);
+        ANSWERING.set(answering);
     }
 
     /// Hands the commit this thread just made to the observer, the writer
@@ -179,10 +219,17 @@ impl Capture {
         let Some(end) = WAL_END.take() else {
             return Ok(());
         };
-        self.hand(end).and_then(|()| self.checkpoint_when_long(writer, end)).map_err(|error| {
+        let handed = self.hand(end);
+        ANSWERING.set(false);
+        let broken = |error: Error| {
             self.broken.store(true, Ordering::SeqCst);
             Error::new(ErrorKind::OutcomeUnknown, "a commit is in the file and not in its log").with_source(error)
-        })
+        };
+        if !in_the_file(&handed) {
+            return handed.map_err(broken);
+        }
+        self.checkpoint_when_long(writer, end).map_err(broken)?;
+        handed
     }
 
     /// Makes what was handed durable before the file's last checkpoint,
@@ -213,10 +260,12 @@ impl Capture {
         }
         let frames = read_frames(wal, &header, from, end)?;
         let commit = commit_of(&header, end, &frames)?;
-        self.observer.committed(&commit)?;
-        *at = commit.position;
-        *restart_expected = false;
-        Ok(())
+        let kept = self.observer.committed(&commit);
+        if in_the_file(&kept) {
+            *at = commit.position;
+            *restart_expected = false;
+        }
+        kept
     }
 
     /// Checkpoints each time the WAL grew by as many frames as SQLite's own

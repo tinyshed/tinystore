@@ -27,6 +27,9 @@ pub enum ErrorKind {
     /// A commit failed after the write ran: it may or may not be in the file,
     /// and the caller reconciles before retrying.
     OutcomeUnknown,
+    /// A synchronous commit is in its home's file, and no copy it waits for
+    /// held it in time: it stands, and losing that home's disk would lose it.
+    CommittedLocally,
     /// A lease ran out or was revoked while its holder worked: another holder
     /// may have run beside it.
     Lost,
@@ -50,6 +53,7 @@ impl ErrorKind {
             Self::Unavailable => "unavailable",
             Self::Cancelled => "cancelled",
             Self::OutcomeUnknown => "outcome unknown",
+            Self::CommittedLocally => "committed locally",
             Self::Lost => "lost",
             Self::Io => "io",
             Self::Internal => "internal",

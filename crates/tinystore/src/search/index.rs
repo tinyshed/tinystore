@@ -151,7 +151,7 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     fn opened(self, reindex: bool) -> Result<Index<T>> {
         let within = |error: Error| error.within(format!("index {}", self.name));
         let search = Search::of(self.store).map_err(within)?;
-        let open = search.open_index(&self.name, &self.wanted, reindex).map_err(within)?;
+        let open = crate::sqlite::own_work(|| search.open_index(&self.name, &self.wanted, reindex)).map_err(within)?;
         Ok(Index::of_documents(search, open))
     }
 }

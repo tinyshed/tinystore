@@ -507,9 +507,11 @@ fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
     let sessions = home.bucket::<String>("sessions").open().unwrap();
     let alone = Instant::now();
     for i in 0..20 {
-        sessions.set(format!("alone {i}"), &"no copy follows".to_owned()).unwrap();
+        let unheld = sessions.set(format!("alone {i}"), &"no copy follows".to_owned()).unwrap_err();
+        assert_eq!(unheld.kind(), crate::ErrorKind::CommittedLocally, "{unheld}");
     }
     assert!(alone.elapsed() < Duration::from_secs(4), "with no copy following, a commit waits for none");
+    assert_eq!(sessions.get("alone 19").unwrap().as_deref(), Some("no copy follows"), "a commit no copy held stands");
     let address = bound(home.node().unwrap()).unwrap().to_string();
     let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
     copy.bucket::<String>("sessions").open().unwrap();
@@ -520,6 +522,42 @@ fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
         assert!(held >= home_point(&home, "kv.db").sequence, "write {i} answered before a copy held it");
     }
     copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_synchronous_home_with_no_copy_does_its_own_work_and_says_of_each_write_that_no_copy_holds_it() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let home = node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), synchronous: true, ..Node::default() });
+    // each engine opens, its migrations run and its names are made, with no copy to hold them
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    let mail = home.queue::<serde_json::Value>("mail").open().unwrap();
+    let notes = [("0001_notes.sql", "create table notes (id integer primary key, body text not null);")];
+    let db = home.database("app").migrations(notes).open().unwrap();
+    let docs = home.index::<serde_json::Value>("docs").field("title", 1.0).open().unwrap();
+    let files = home.files("docs").open().unwrap();
+
+    let no_copy_held = |error: crate::Error| assert_eq!(error.kind(), crate::ErrorKind::CommittedLocally, "{error}");
+    no_copy_held(sessions.set("k", &"v".to_owned()).unwrap_err());
+    no_copy_held(mail.add(&json!({ "to": 1 })).unwrap_err());
+    no_copy_held(db.exec(crate::sql!("insert into notes (body) values (?)", "grouped")).unwrap_err());
+    let in_a_transaction = db.tx(|tx| tx.exec(crate::sql!("insert into notes (body) values (?)", "alone")));
+    no_copy_held(in_a_transaction.unwrap_err());
+    no_copy_held(docs.set("d", &json!({ "title": "a page" })).unwrap_err());
+    no_copy_held(files.put("a.txt", vec![b'x'; 10]).unwrap_err());
+
+    // and each stands
+    assert_eq!(sessions.get("k").unwrap().as_deref(), Some("v"));
+    let bodies: Vec<String> = db.all(crate::sql!("select body from notes order by id")).unwrap();
+    assert_eq!(bodies, ["grouped", "alone"]);
+    assert!(docs.get("d").unwrap().is_some());
+    assert!(files.get("a.txt").unwrap().is_some());
+    // the store's own work goes on
+    crate::kv::maintain(&home).unwrap();
+    crate::jobs::maintain(&home).unwrap();
+    crate::search::maintain(&home).unwrap();
+    crate::blobs::maintain(&home).unwrap();
     home.close().unwrap();
 }
 
@@ -1083,9 +1121,10 @@ fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_he
     assert_eq!(unheld(), counted, "a commit europe held is not counted");
 
     eu.close().unwrap();
-    eventually("russia alone follows", || sessions.set("probe", &"x".to_owned()).is_ok() && unheld() > 0);
+    eventually("russia alone follows", || sessions.set("probe", &"x".to_owned()).is_err());
     let before = unheld();
-    sessions.set("unheld", &"russia holds it, and europe was chosen".to_owned()).unwrap();
+    let said = sessions.set("unheld", &"russia holds it, and europe was chosen".to_owned()).unwrap_err();
+    assert_eq!(said.kind(), crate::ErrorKind::CommittedLocally, "{said}");
     assert_eq!(unheld(), before + 1, "a commit no chosen copy held is counted");
     assert_eq!(sessions.get("unheld").unwrap().as_deref(), Some("russia holds it, and europe was chosen"));
     ru.close().unwrap();

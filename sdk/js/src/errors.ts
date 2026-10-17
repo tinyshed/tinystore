@@ -15,6 +15,7 @@ export type Code =
 	| 'too_new'
 	| 'suspended'
 	| 'outcome_unknown'
+	| 'committed_locally'
 	| 'lost'
 	| 'permission'
 	| 'unimplemented'
@@ -206,6 +207,16 @@ export class OutcomeUnknownError extends TinystoreError {
 	}
 }
 
+/**
+ * A synchronous commit its home made that no copy it waits for held in time:
+ * the write stands, and losing that home's disk would lose it.
+ */
+export class CommittedLocallyError extends TinystoreError {
+	constructor(message: string, what?: What) {
+		super('committed_locally', message, what)
+	}
+}
+
 /** The connection's capability does not allow it: a data token changing a schema. */
 export class PermissionDeniedError extends TinystoreError {
 	constructor(message: string, what?: What) {
@@ -278,6 +289,7 @@ const classes: Record<Code, new (message: string, what?: What) => TinystoreError
 	too_new: TooNewError,
 	suspended: SuspendedError,
 	outcome_unknown: OutcomeUnknownError,
+	committed_locally: CommittedLocallyError,
 	lost: LostError,
 	permission: PermissionDeniedError,
 	unimplemented: UnimplementedError,

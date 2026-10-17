@@ -114,11 +114,13 @@ pub fn list(store: &Store) -> Result<Vec<Listed>> {
 /// in search.db and in each database a table's index was opened in, and a
 /// table's rows read the first time.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
-    let mut done = engine::Search::of(store)?.maintain(true)?;
-    for search in engine::InFiles::of(store)?.engines() {
-        let more = search.maintain(true)?;
-        done.packed += more.packed;
-        done.purged += more.purged;
-    }
-    Ok(done)
+    crate::sqlite::own_work(|| {
+        let mut done = engine::Search::of(store)?.maintain(true)?;
+        for search in engine::InFiles::of(store)?.engines() {
+            let more = search.maintain(true)?;
+            done.packed += more.packed;
+            done.purged += more.purged;
+        }
+        Ok(done)
+    })
 }

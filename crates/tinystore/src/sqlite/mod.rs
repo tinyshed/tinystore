@@ -31,7 +31,7 @@ use std::ops::Deref;
 use rusqlite::Connection;
 
 pub(crate) use apply::Applier;
-pub(crate) use capture::{Commit, Observe, Position};
+pub(crate) use capture::{Commit, Observe, Position, answering, own_work};
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};
 pub(crate) use connection::{copy, execute, read_copy, sql_error};

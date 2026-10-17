@@ -162,16 +162,16 @@ impl Jobs {
             let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
             return Ok(Arc::clone(lock(&self.queues).entry(name.to_owned()).or_insert(state)));
         }
-        let (id, stored) = self
-            .file
-            .transaction(|tx| {
+        let made = crate::sqlite::own_work(|| {
+            self.file.transaction(|tx| {
                 let (id, stored, in_group) = rows::queue(tx, name, kind.as_str())?;
                 if stored == kind.as_str() {
                     rows::keep_group_bound(tx, id, in_group, bound)?;
                 }
                 Ok::<_, Error>((id, stored))
             })
-            .map_err(|error| error.within(describe()))?;
+        });
+        let (id, stored) = made.map_err(|error| error.within(describe()))?;
         if stored != kind.as_str() {
             return Err(Error::invalid(format!("the name is a {stored}")).within(describe()));
         }

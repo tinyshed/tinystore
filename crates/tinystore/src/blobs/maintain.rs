@@ -50,7 +50,8 @@ pub struct Maintenance {
 /// any more, and scrubs a slice of the stored bytes. The store runs it every
 /// minute; a store opened without background work leaves it to the caller.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
-    Blobs::of(store)?.maintain()
+    let blobs = Blobs::of(store)?;
+    crate::sqlite::own_work(|| blobs.maintain())
 }
 
 impl Blobs {

@@ -72,5 +72,6 @@ use crate::{Result, Store};
 /// clears hid. The store runs it every minute, and writes memory every second;
 /// a store opened without background work leaves both to the caller.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
-    engine::Kv::of(store)?.maintain()
+    let kv = engine::Kv::of(store)?;
+    crate::sqlite::own_work(|| kv.maintain())
 }

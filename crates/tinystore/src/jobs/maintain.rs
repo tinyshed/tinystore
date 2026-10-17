@@ -45,7 +45,7 @@ pub struct Maintenance {
 /// background work leaves it to the caller.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
     let jobs = Jobs::of(store)?;
-    run(&jobs)
+    crate::sqlite::own_work(|| run(&jobs))
 }
 
 pub(crate) fn run(jobs: &Jobs) -> Result<Maintenance> {

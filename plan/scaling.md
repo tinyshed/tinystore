@@ -5,7 +5,8 @@ without rewriting it, and how the application leaves when it outgrows
 TinyStore. Written on 14 October 2026 from a conversation with the owner;
 the model of nodes and homes was accepted on 17 October
 ([decisions.md](decisions.md), entry 20) and is built in phase 7
-([phases.md](phases.md)). The calls still open are under [Open](#open).
+([phases.md](phases.md)). The owner's calls are under [Decided](#decided), and
+those still open under [Open](#open).
 
 ## The promise
 
@@ -111,7 +112,7 @@ later a lease or a judge, never the catalog alone.
 ## Trying it
 
 What phase 7 built so far runs as below; the names are drafts, as
-[Open](#open) says.
+[Decided](#decided) says.
 
 ```sh
 tinystore serve ./us --node-listen 0.0.0.0:7444 --node-token-file token   # America, the home
@@ -236,8 +237,12 @@ command line; a write never waits without a bound.
 
 **The synchronous mode.** By default a home answers a write after its own
 commit and its copies trail. As an option, a home answers only once a chosen
-copy holds the commit, so that losing the home loses nothing it answered; a
-grouped commit pays one round trip for the whole group.
+copy holds the commit on its disk, so that losing the home loses nothing it
+answered; a grouped commit pays one round trip for the whole group. A commit
+no such copy held within five seconds stands in the home's file and log, and
+answers `committed_locally`, counted: never a plain success, since losing the
+home's disk would lose it. The store's own writes, an engine's opening, its
+migrations, the names it makes and its maintenance, wait for no copy.
 
 ## Changing a file's home
 
@@ -459,30 +464,58 @@ After it: the judge and a home that moves by itself, whose gate is that no
 cut of a simulated network leaves two homes taking writes; the log in object
 storage with a restore to a commit or a second; the exporters.
 
+## Decided
+
+The owner took these on 18 October, from a review they brought.
+
+1. **Names** stay as they are until the API review before the SDKs and the
+   command line, but two: `address` becomes `advertise`, the address the
+   other nodes reach a node at, and `judge` becomes `failover`, the witness
+   that decides; `Judge` stays inside, and `witness` stays.
+2. **`once`** runs a key at most once while its answer stands, never an
+   effect exactly once: a run whose answer a lost home had not shipped runs
+   again. What the function writes in the store's own transaction is atomic
+   with its answer; what it does outside needs its key passed on.
+3. **A node's logs and metrics** stay its own; sending them to one place is an
+   export for later, each node named by its id, and their files are copied
+   only when asked for.
+4. **A backup that leaves the machine** is encrypted by the core before it
+   leaves, never with its key inside; S3 and the like are adapters of the
+   SDKs and the command line, not a client in the library. A local backup
+   may stay plain.
+5. **TLS**: a link beyond loopback needs TLS unless a node says `insecure`;
+   a build without `replication-tls` refuses such a link rather than send it
+   plain, and nodes prove who they are.
+6. **The log's format** stays TinyStore's own, its version, checksums,
+   recovery rules and invariants written down; LTX waits for a measured gain
+   or a real need to interoperate.
+7. **Failover** is optional: without a witness, `promote` decides. A witness
+   is a small process or a role of a node, its leases and epochs kept across
+   its restarts; on a node it decides nothing that node's failure needs
+   decided. Renewals go in batches, a lease in object storage waits behind an
+   interface for later, the timings are an experiment until fault injection
+   and a WAN measure them, and in the synchronous mode no copy behind what a
+   home answered takes its lease.
+8. **The synchronous mode** answers `committed_locally` for a commit no copy
+   held in time, and a copy holds a commit once it is on its disk.
+9. **An old home** stays fenced across restarts until `demote`; it reads.
+10. **`move_home`** may be called off until the new home takes the file, and
+    never after: an old home whose move went silent stays fenced.
+11. **The log's bound** stays, with a budget a node and an age later; what a
+    synchronous home answered is never cut before a copy holds it.
+12. **Direct links** check the node they reach is the one the catalog names,
+    at the epoch it names.
+13. **A file born under failover** takes its first lease from the witness,
+    kept there before its first write.
+
 ## Open
 
-1. The names: `from`, `serve`, `promote`, the move, the queue's set, the
-   synchronous mode, the log's directory.
-2. The judge: a witness process is built first, as a draft, and a lease in
-   object storage is a second backend after it, as a review the owner brought on
-   18 October advised; a home that loses its witness stops writing rather than
-   risk a second home.
-3. TLS is built behind `replication-tls`, off by default, rustls with
-   ring as `crates/cli` uses it: whether it is on by default, and an object
-   storage client in the library, are open.
-4. A file's identity across nodes: its name in the catalog, its home a node's
+1. A file's identity across nodes: its name in the catalog, its home a node's
    id made once and kept in `log/node`; two homes claiming one name are
    refused, and a file two nodes wrote before their network kept a catalog is
    logged as two homes' for a person to settle.
-5. Collecting nodes' logs and metrics in one place: a node copying others'
-   records and metrics, and under what names.
-6. What `once` promises after an asynchronous failover. A synchronous write
-   whose chosen copy is gone falls back and answers, counted and said once an
-   outage, as the owner left to the builder on 18 October.
-7. The log's format, TinyStore's own or LTX. A checksum of the whole file is
-   taken when a program asks, `replication::verify`, rather than every commit.
-8. A backup that leaves the machine: encrypted by default, and the option's
-   name.
+2. A checksum of the whole file is taken when a program asks,
+   `replication::verify`, rather than every commit.
 
 ## Prior art
 

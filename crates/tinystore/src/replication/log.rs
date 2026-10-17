@@ -112,7 +112,7 @@ struct Held {
 }
 
 /// How long a synchronous commit waits for a copy to hold it before it
-/// answers anyway, logged.
+/// answers `CommittedLocally`.
 const ACK_WAIT: Duration = Duration::from_secs(5);
 
 impl Acks {
@@ -156,9 +156,9 @@ impl Acks {
     }
 
     /// Waits until a node chosen, or any, holds `file`'s entry `sequence`, a
-    /// bound at most, or not at all while none such follows it: a commit
-    /// answered with no copy holding it is counted, and said once an outage.
-    fn wait(&self, file: &str, sequence: u64) {
+    /// bound at most, or not at all while none such follows it: a commit no
+    /// copy held is `CommittedLocally`, counted, and said once an outage.
+    fn wait(&self, file: &str, sequence: u64) -> Result<()> {
         let deadline = Instant::now() + ACK_WAIT;
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
@@ -173,17 +173,19 @@ impl Acks {
             };
             if counted.iter().any(holding) {
                 self.said.store(false, Ordering::SeqCst);
-                return;
+                return Ok(());
             }
             let now = Instant::now();
             if counted.is_empty() || now >= deadline {
                 self.unheld.fetch_add(1, Ordering::Relaxed);
+                let why = if counted.is_empty() { "no node it waits for copies it" } else { "none held it in time" };
                 if !self.said.swap(true, Ordering::SeqCst) {
-                    let why =
-                        if counted.is_empty() { "no node it waits for copies it" } else { "none held it in time" };
-                    tracing::warn!(target: "tinystore", file, entry = sequence, why, "a synchronous commit answered with no copy holding it");
+                    tracing::warn!(target: "tinystore", file, entry = sequence, why, "a synchronous commit no copy held");
                 }
-                return;
+                return Err(Error::new(
+                    ErrorKind::CommittedLocally,
+                    format!("{file}: a synchronous commit, entry {sequence}, is in its home's file alone: {why}"),
+                ));
             }
             held = self.changed.wait_timeout(held, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
         }
@@ -512,8 +514,9 @@ impl Log {
         (tail.next, tail.check, tail.last) = (head.sequence + 1, check, Some(position));
         drop(tail);
         self.notify.appended();
-        if let (Kind::Commit, true, Some((file, acks))) = (kind, self.synchronous, &self.followers) {
-            acks.wait(file, head.sequence);
+        let answering = crate::sqlite::answering();
+        if let (Kind::Commit, true, true, Some((file, acks))) = (kind, self.synchronous, answering, &self.followers) {
+            acks.wait(file, head.sequence)?;
         }
         Ok(())
     }

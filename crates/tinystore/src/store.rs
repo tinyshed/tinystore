@@ -444,7 +444,7 @@ impl Host for Store {
             let engine = Arc::clone(engine);
             return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
         }
-        let engine = open(self)?;
+        let engine = crate::sqlite::own_work(|| open(self))?;
         self.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
         engines.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
         Ok(engine)

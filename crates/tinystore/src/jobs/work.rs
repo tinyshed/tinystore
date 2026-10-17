@@ -740,7 +740,7 @@ fn run_loop(
     let looping = thread::Builder::new()
         .name(format!("tinystore-jobs-{}", queue.name))
         .spawn(move || {
-            let ran = looped.run();
+            let ran = crate::sqlite::own_work(|| looped.run());
             if let Err(error) = &ran {
                 tracing::warn!(target: "tinystore", queue = %describe, %error, "a worker stopped on an error");
             }

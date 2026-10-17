@@ -65,7 +65,9 @@ impl Catalog {
     pub(crate) fn open(store: &Store) -> Result<Catalog> {
         let file = store.open_file(FILE, Config::default())?;
         if !file.is_copy() {
-            file.transaction(|tx| tx.execute_batch(SCHEMA).map_err(|error| sql_error("the catalog", error)))?;
+            let made =
+                || file.transaction(|tx| tx.execute_batch(SCHEMA).map_err(|error| sql_error("the catalog", error)));
+            crate::sqlite::own_work(made)?;
         }
         Ok(Catalog { file })
     }
@@ -98,14 +100,15 @@ impl Catalog {
         let (name, node, address) = (claim.file.to_owned(), claim.node.to_owned(), claim.address.to_owned());
         let epoch = i64::try_from(claim.epoch).map_err(|_| Error::invalid("an epoch past 2^63"))?;
         let shown = format!("catalog: {name}");
-        self.file
-            .write(name.len() + address.len(), move |tx| {
+        let claimed = crate::sqlite::own_work(|| {
+            self.file.write(name.len() + address.len(), move |tx| {
                 tx.execute(CLAIM, params![name, node, address, epoch]).map_err(|error| sql_error("a claim", error))?;
                 tx.prepare_cached(HOME_OF)
                     .and_then(|mut select| select.query_row([&name], read_home))
                     .map_err(|error| sql_error("a claim", error))
             })
-            .map_err(|error| error.within(shown))
+        });
+        claimed.map_err(|error| error.within(shown))
     }
 
     pub(crate) fn close(&self) {

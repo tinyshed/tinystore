@@ -233,7 +233,7 @@ impl<T: DeserializeOwned> TableIndexBuilder<T> {
         let read: Vec<&str> = read.into_iter().chain(self.wanted.filters.iter().map(String::as_str)).collect();
         let table = search.file.read(|connection| resolve(connection, &asked, &read)).map_err(within)?;
         self.wanted.table = Some(table);
-        let open = search.open_index(&self.name, &self.wanted, reindex).map_err(within)?;
+        let open = crate::sqlite::own_work(|| search.open_index(&self.name, &self.wanted, reindex)).map_err(within)?;
         Ok(TableIndex { index: Index::of_table(search, open, self.read_row) })
     }
 }

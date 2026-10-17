@@ -437,7 +437,7 @@ pub(crate) fn plain_name(name: &str) -> bool {
 
 /// The error kind `name` spells, as [`ErrorKind::as_str`] writes it.
 pub(crate) fn kind_of(name: &str) -> ErrorKind {
-    const KINDS: [ErrorKind; 16] = [
+    const KINDS: [ErrorKind; 17] = [
         ErrorKind::Invalid,
         ErrorKind::NotFound,
         ErrorKind::Conflict,
@@ -451,6 +451,7 @@ pub(crate) fn kind_of(name: &str) -> ErrorKind {
         ErrorKind::Unavailable,
         ErrorKind::Cancelled,
         ErrorKind::OutcomeUnknown,
+        ErrorKind::CommittedLocally,
         ErrorKind::Lost,
         ErrorKind::Io,
         ErrorKind::Internal,

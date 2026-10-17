@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use super::capture::{Capture, Logged, logged};
+use super::capture::{Capture, Logged, in_the_file, logged};
 use super::connection::{execute, sql_error};
 use super::given::own;
 use super::{Committed, GroupLimits, Left, Settlers, Tx};
@@ -78,6 +78,8 @@ struct Queue {
 /// One caller's write, from its queueing to its answer.
 struct Write {
     bytes: usize,
+    /// Queued by a caller who waits for it, not by the store's own work.
+    for_a_caller: bool,
     work: Mutex<Option<Work>>,
     /// A submitted write's answer goes here rather than to a waiting caller.
     done: Mutex<Option<Done>>,
@@ -258,7 +260,8 @@ impl Group {
 impl Write {
     fn new(bytes: usize, work: Work) -> Self {
         let (done, turn) = (Mutex::new(None), Mutex::new(Turn::Waiting));
-        Self { bytes, work: Mutex::new(Some(work)), done, turn, changed: Condvar::new() }
+        let for_a_caller = !super::capture::is_own_work();
+        Self { bytes, for_a_caller, work: Mutex::new(Some(work)), done, turn, changed: Condvar::new() }
     }
 
     fn submitted(bytes: usize, work: Work, done: Done) -> Self {
@@ -386,14 +389,23 @@ fn commit(
     let answers: Vec<Result<()>> =
         batch.iter().map(|write| run(connection, write.take_work(), (&committed, settlers))).collect();
     if let Some(capture) = capture {
-        capture.arm();
+        capture.arm(batch.iter().any(|write| write.for_a_caller));
     }
     let Err(error) = execute(connection, COMMIT) else {
-        if let Some(Err(unlogged)) = capture.map(|capture| capture.committed(connection)) {
-            return answers.into_iter().map(|answer| answer.and_then(|()| Err(unlogged.duplicate()))).collect();
+        let handed = capture.map_or(Ok(()), |capture| capture.committed(connection));
+        if in_the_file(&handed) {
+            committed.run();
         }
-        committed.run();
-        return answers;
+        let Err(handed) = handed else {
+            return answers;
+        };
+        // the store's own writes take a commit no copy held as done, as they never waited for one
+        let unheld = handed.kind() == ErrorKind::CommittedLocally;
+        let answer_of = |(write, answer): (&Arc<Write>, Result<()>)| match answer {
+            Ok(()) if unheld && !write.for_a_caller => Ok(()),
+            answer => answer.and_then(|()| Err(handed.duplicate())),
+        };
+        return batch.iter().zip(answers).map(answer_of).collect();
     };
     if !connection.is_autocommit() {
         // The commit failed and left the transaction open: nothing of it stays.
