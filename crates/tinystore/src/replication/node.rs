@@ -86,6 +86,9 @@ pub(crate) struct State {
     direct: Mutex<HashMap<String, Arc<Direct>>>,
     /// The checks of copies a program asked for, by file.
     verifying: Mutex<HashMap<String, Verifying>>,
+    /// The leases a witness granted this node of copies it takes over, until
+    /// when, for their logs to open holding them.
+    granted: Mutex<HashMap<String, Instant>>,
     /// The leases this node keeps, when it is a witness.
     pub(crate) witness: Option<super::witness::Witness>,
 }
@@ -165,6 +168,7 @@ impl State {
             catalog: Mutex::default(),
             direct: Mutex::default(),
             verifying: Mutex::default(),
+            granted: Mutex::default(),
             witness: if options.witness { Some(super::witness::Witness::open(dir)?) } else { None },
             queue: Mutex::default(),
             tls,
@@ -194,6 +198,12 @@ impl State {
     /// Starts the node's links: a server where it serves, and the link to the
     /// node it takes its files from.
     pub(crate) fn start(self: &Arc<Self>, store: &Store) -> Result<()> {
+        if self.options.judge.is_some() && self.options.synchronous && self.options.synchronous_with.is_empty() {
+            return Err(Error::invalid(
+                "a synchronous node a witness judges names the copies its commits wait for, synchronous_with: only \
+                 they hold every commit it answered, and the witness gives its lease to one of them",
+            ));
+        }
         *lock(&self.store) = Some(store.downgrade());
         // the catalog's home serves it from its first link on, so that no node
         // takes a network that keeps one for a network that keeps none
@@ -640,7 +650,7 @@ impl State {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
             .followed(name, Arc::clone(&self.acks));
         if self.options.judge.is_some() {
-            log = log.judged();
+            log = log.judged(lock(&self.granted).remove(name).unwrap_or_else(Instant::now));
         }
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {
             log = log.synchronous();
@@ -796,8 +806,28 @@ impl State {
     }
 
     /// Every file with a log directory now, for a judged node's turn.
+    /// Every file with a directory in `log/`, and each whose log opened with
+    /// no entry yet: a file born here asks its witness for its first lease
+    /// before its first commit.
     pub(crate) fn files_logged_now(&self) -> Result<Vec<String>> {
-        self.files_logged()
+        let mut files = self.files_logged()?;
+        for name in lock(&self.logs).keys() {
+            if !files.contains(name) {
+                files.push(name.clone());
+            }
+        }
+        Ok(files)
+    }
+
+    /// Keeps the lease a witness granted of the copy `file` until its log
+    /// opens, as the copy is taken over.
+    pub(crate) fn granted(&self, file: &str, until: Instant) {
+        lock(&self.granted).insert(file.to_owned(), until);
+    }
+
+    /// The epoch this node's open log of `file` writes at.
+    pub(crate) fn epoch_written(&self, file: &str) -> Option<u64> {
+        lock(&self.logs).get(file).and_then(Weak::upgrade).map(|log| log.epoch())
     }
 
     /// Keeps the lease of `file` this node writes on to `until`.

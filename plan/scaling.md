@@ -263,11 +263,15 @@ lived would make a second home, and the file would split for good.
 
 - **In the first version a person decides**: `tinystore promote` on the
   freshest copy, once the old home is known to be stopped.
-- **Later, a judge outside the nodes decides**: a lease in object storage
-  renewed by a conditional write (`If-Match`), as Litestream 0.5 holds its, or
-  a small witness process. A home that cannot renew stops writing before its
+- **As an option, a witness outside the nodes decides**, a small process or
+  a role of a node, and later a lease in object storage renewed by a
+  conditional write (`If-Match`), as Litestream 0.5 holds its. The witness
+  keeps each lease's holder durably before it answers, a file born on a node
+  waiting for its first. A home that cannot renew stops writing before its
   lease can be taken, by a margin wider than the clocks' drift; the freshest
-  copy allowed to take it does so once it expired.
+  copy allowed to take it does so once it expired, and for a synchronous
+  home only the freshest of the copies it waits for, once all of them stand,
+  since only they hold every commit it answered.
 - **Epochs fence.** Each change of home raises the file's epoch; a node
   refuses pages of an older epoch, and a client a home older than one it has
   seen.

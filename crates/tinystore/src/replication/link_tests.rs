@@ -1325,7 +1325,7 @@ fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     eventually("the copy takes the file over once the home's lease ran out", || {
         copy.node().unwrap().copy("kv.db").is_none()
     });
-    std::thread::sleep(Duration::from_secs(1));
+    eventually("the new home writes", || !copy_times.lock().unwrap().is_empty());
     stop.store(true, Relaxed);
     at_home.join().unwrap();
     at_copy.join().unwrap();
@@ -1341,4 +1341,120 @@ fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     copy.close().unwrap();
     home.close().unwrap();
     witness.close().unwrap();
+}
+
+#[test]
+fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_born_on_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home =
+        node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), judge: Some(nobody), ..Node::default() });
+    let began = Instant::now();
+    let refused = home.bucket::<String>("sessions").open().unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
+    assert!(began.elapsed() < Duration::from_secs(10), "a write waits for a lease a bound, not for good");
+    home.close().unwrap();
+}
+
+#[test]
+fn a_witness_that_starts_again_keeps_each_lease_s_holder_and_its_home_writes_on() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let witness_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let witness_node = || Node { serve: Some(witness_address.clone()), witness: true, ..Node::default() };
+    let witness = node_with(dirs[0].path(), witness_node());
+    let judge = Some(witness_address.clone());
+    let home =
+        node_with(dirs[1].path(), Node { serve: Some("127.0.0.1:0".into()), judge: judge.clone(), ..Node::default() });
+    let home_address = bound(home.node().unwrap()).unwrap().to_string();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    sessions.set("before", &"leased".to_owned()).unwrap();
+    let copy_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![home_address], judge, ..Node::default() };
+    let copy = node_with(dirs[2].path(), copy_node);
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+
+    witness.close().unwrap();
+    let home_id = home.node().unwrap().id.clone();
+    let kept = std::fs::read_to_string(dirs[0].path().join(DIR).join("witness")).unwrap();
+    assert!(kept.lines().any(|line| line.starts_with(&format!("1 {home_id} ")) && line.ends_with(" kv.db")), "{kept}");
+
+    let witness = node_with(dirs[0].path(), witness_node());
+    eventually("the home writes on once it renewed its lease", || sessions.set("after", &"renewed".to_owned()).is_ok());
+    // past a lease's span and the gathering, no copy took what the home renews
+    std::thread::sleep(super::witness::TTL + Duration::from_secs(2));
+    assert!(copy.node().unwrap().copy("kv.db").is_some(), "the copy took no lease the home held");
+    sessions.set("later", &"still the home".to_owned()).unwrap();
+    let judging = witness.node().unwrap().witness.as_ref().unwrap();
+    assert_eq!(judging.holder("kv.db").map(|holder| (holder.node, holder.epoch)), Some((home_id, 1)));
+    copy.close().unwrap();
+    home.close().unwrap();
+    witness.close().unwrap();
+}
+
+#[test]
+fn a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_stands() {
+    let dirs: Vec<_> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let witness =
+        node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), witness: true, ..Node::default() });
+    let judge = Some(bound(witness.node().unwrap()).unwrap().to_string());
+    let eu_address = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home_node = Node {
+        serve: Some("127.0.0.1:0".into()),
+        judge: judge.clone(),
+        synchronous_with: vec![eu_address.clone()],
+        ..Node::default()
+    };
+    let home = node_with(dirs[1].path(), home_node);
+    let home_address = bound(home.node().unwrap()).unwrap().to_string();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    let eu_node = || Node {
+        serve: Some(eu_address.clone()),
+        from: vec![home_address.clone()],
+        judge: judge.clone(),
+        ..Node::default()
+    };
+    let eu = node_with(dirs[2].path(), eu_node());
+    let ru_node = Node {
+        serve: Some("127.0.0.1:0".into()),
+        from: vec![home_address.clone()],
+        judge: judge.clone(),
+        ..Node::default()
+    };
+    let ru = node_with(dirs[3].path(), ru_node);
+    eu.bucket::<String>("sessions").open().unwrap();
+    ru.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &eu, &["kv.db"]);
+    caught_up(&home, &ru, &["kv.db"]);
+    sessions.set("held", &"by europe".to_owned()).unwrap();
+
+    // europe, the copy the home waits for, goes; then the home falls silent at its witness
+    eu.close().unwrap();
+    let judging = witness.node().unwrap().witness.as_ref().unwrap();
+    let home_id = home.node().unwrap().id.clone();
+    eventually("the witness holds the home's lease", || {
+        judging.holder("kv.db").is_some_and(|holder| holder.node == home_id)
+    });
+    judging.cut(&home_id);
+    std::thread::sleep(super::witness::TTL + Duration::from_secs(3));
+    assert!(ru.node().unwrap().copy("kv.db").is_some(), "russia, which the home never waited for, takes no lease");
+
+    // europe comes back and takes it, holding what the home answered
+    let eu = node_with(dirs[2].path(), eu_node());
+    eventually("europe takes the lease the home lost", || eu.node().unwrap().copy("kv.db").is_none());
+    let at_europe = eu.bucket::<String>("sessions").open().unwrap();
+    assert_eq!(at_europe.get("held").unwrap().as_deref(), Some("by europe"));
+    assert!(ru.node().unwrap().copy("kv.db").is_some());
+    eu.close().unwrap();
+    ru.close().unwrap();
+    home.close().unwrap();
+    witness.close().unwrap();
+}
+
+#[test]
+fn a_synchronous_node_a_witness_judges_names_the_copies_it_waits_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Node { judge: Some("127.0.0.1:1".into()), synchronous: true, ..Node::default() };
+    let options = Options { node: Some(node), background: false, ..Options::default() };
+    let refused = Store::open(dir.path(), options).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
 }

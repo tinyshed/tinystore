@@ -12,12 +12,11 @@ use std::time::{Duration, Instant};
 
 use super::entry::{self, Kind, MAGIC, Point};
 use super::log::{segment_path, segments_in};
-use super::message::{Frames, Message, VERSION, plain_name, timed_out};
+use super::message::{Frames, LeaseAsk, LeaseHolder, Message, VERSION, plain_name, timed_out};
 use super::node::{Following, State, lock};
 use super::pack::Packer;
 use super::snapshot::{self, Part};
 use super::transport::{self, Reading, Writing};
-use super::witness::Holder;
 use crate::{Error, ErrorKind, Result};
 
 /// How long a link may say nothing before its other end pings it.
@@ -188,14 +187,21 @@ fn read_requests(
                 });
             }
             Message::Ping => {}
-            Message::Lease { file, node, address, epoch, position, holding } => {
+            Message::Lease { node, address, asks } => {
                 let Some(witness) = &state.witness else {
                     return Err(Error::invalid("a lease asked of a node that is no witness"));
                 };
-                let ask = super::witness::Ask { file: &file, node: &node, address: &address, epoch, position, holding };
-                if let Some(holder) = witness.ask(&ask)? {
-                    let Holder { node: holder, address, epoch } = holder;
-                    out.send(&Message::Leased { file, holder, address, epoch })?;
+                let mut holders = Vec::with_capacity(asks.len());
+                for asked in asks {
+                    let LeaseAsk { file, epoch, position, holding, synchronous } = asked;
+                    let (node, address, synchronous) = (&node, &address, &synchronous);
+                    let ask = super::witness::Ask { file: &file, node, address, epoch, position, holding, synchronous };
+                    if let Some(holder) = witness.ask(&ask)? {
+                        holders.push(LeaseHolder { file, holder });
+                    }
+                }
+                if !holders.is_empty() {
+                    out.send(&Message::Leased { holders })?;
                 }
             }
             Message::Verify { file } => {

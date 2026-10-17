@@ -215,7 +215,13 @@ pub(crate) struct Log {
     /// Until when a judged home holds its lease of the file, by its own clock:
     /// its writes are refused past it. None for a node no witness judges.
     lease: Mutex<Option<Instant>>,
+    /// Told each renewal, for the writes waiting for a lease.
+    leased: Condvar,
 }
+
+/// How long a judged home's write waits for a lease it holds not now: two
+/// turns of its renewals and their round trips.
+const LEASE_WAIT: Duration = Duration::from_secs(3);
 
 /// The file in a home's log directory that keeps the later epoch it learned
 /// another node writes the file at: its writes are refused from then on, and
@@ -270,6 +276,7 @@ impl Log {
             tail: Mutex::new(tail),
             fenced,
             lease: Mutex::new(None),
+            leased: Condvar::new(),
         };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
@@ -283,16 +290,18 @@ impl Log {
         self
     }
 
-    /// Makes the file's writes wait for a lease its witness grants: refused
-    /// until the first renewal, and past each one's end. A file born here, its
-    /// log with no entry and no promotion's point, is written for a lease's
-    /// span before it: no witness grants another node a lease no node held.
-    pub(crate) fn judged(self) -> Log {
-        let born = self.lock().next == 1;
-        let now = Instant::now();
-        let until = if born { now + super::witness::TTL - super::judge::MARGIN } else { now };
+    /// Makes the file's writes wait for a lease its witness grants, held
+    /// until `until`: a write waits for one a bound, then is refused, and so
+    /// past each one's end. A file born here waits for its first as any
+    /// other: the witness keeps who holds it before it answers.
+    pub(crate) fn judged(self, until: Instant) -> Log {
         *self.lease.lock().unwrap_or_else(PoisonError::into_inner) = Some(until);
         self
+    }
+
+    /// The epoch the log's next entry takes.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.lock().epoch
     }
 
     /// Keeps the lease of a judged home's file on to `until`.
@@ -300,7 +309,30 @@ impl Log {
         let mut lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
         if lease.is_some_and(|held| held < until) {
             *lease = Some(until);
+            self.leased.notify_all();
         }
+    }
+
+    /// Waits a bound for a lease while a judged home holds none now: its
+    /// first, as the node starts or the file is born, or one renewed once a
+    /// cut healed. A node no witness judges waits for none.
+    fn wait_for_a_lease(&self) -> Result<()> {
+        let deadline = Instant::now() + LEASE_WAIT;
+        let mut lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
+        while let Some(until) = *lease {
+            let now = Instant::now();
+            if now < until {
+                return Ok(());
+            }
+            if now >= deadline {
+                return Err(Error::new(
+                    ErrorKind::Unavailable,
+                    "this node holds no lease of this file from its witness now: it writes again once it renews one",
+                ));
+            }
+            lease = self.leased.wait_timeout(lease, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        Ok(())
     }
 
     /// Makes each commit of the file wait until a node copying it holds it,
@@ -634,12 +666,7 @@ impl Observe for Log {
     }
 
     fn refuse(&self) -> Result<()> {
-        if self.lease.lock().unwrap_or_else(PoisonError::into_inner).is_some_and(|until| Instant::now() >= until) {
-            return Err(Error::new(
-                ErrorKind::Unavailable,
-                "this node holds no lease of this file from its witness now: it writes again once it renews one",
-            ));
-        }
+        self.wait_for_a_lease()?;
         let epoch = self.fenced.load(Ordering::SeqCst);
         if epoch == 0 {
             return Ok(());

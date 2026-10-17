@@ -11,11 +11,18 @@
 //!
 //! The home stops writing before its lease can run out here, by its own
 //! clock and a margin; the witness counts from when a renewal reached it, so
-//! the two never overlap. A witness that starts again grants nothing for a
-//! lease's span, during which the home renews what it held, and it keeps each
-//! file's epoch so that one never goes back.
+//! the two never overlap. Each lease's holder and epoch are kept durably
+//! before the witness answers a grant, so that a witness that starts again
+//! knows who held what: it grants nothing for a lease's span, during which a
+//! holder renews what it held, and no epoch goes back.
+//!
+//! A synchronous home says which copies its commits wait for, and the witness
+//! keeps them with the holder: only those copies hold every commit the home
+//! answered, so the lease goes to the freshest of them, once all of them
+//! stand, and to no other copy.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -31,8 +38,10 @@ pub(crate) const TTL: Duration = Duration::from_secs(5);
 const GATHER: Duration = Duration::from_secs(1);
 /// A copy silent this long stands no more.
 const STANDING: Duration = Duration::from_secs(3);
-/// The file in a witness's `log/` that keeps each file's epoch.
-const EPOCHS: &str = "witness";
+/// The file in a witness's `log/` that keeps each lease's holder, a line a
+/// file: `epoch node address copies file`, its copies those a synchronous
+/// home waits for, by their ids or addresses and split by commas, or `-`.
+const HOLDERS: &str = "witness";
 
 /// What a judged node asks of its witness for a file.
 pub(crate) struct Ask<'a> {
@@ -45,6 +54,9 @@ pub(crate) struct Ask<'a> {
     pub(crate) position: u64,
     /// It writes the file and renews its lease, rather than stand for it.
     pub(crate) holding: bool,
+    /// The copies a synchronous home's commits wait for, by their ids or
+    /// addresses; none for another home or a copy.
+    pub(crate) synchronous: &'a [String],
 }
 
 /// The holder of a file's lease, as the witness answers it: none while no
@@ -56,20 +68,31 @@ pub(crate) struct Holder {
     pub(crate) epoch: u64,
 }
 
-struct Lease {
+/// What the witness keeps of a file's lease on disk.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Kept {
     holder: Holder,
+    synchronous: Vec<String>,
+}
+
+#[derive(Clone)]
+struct Lease {
+    kept: Kept,
     expires: Instant,
     standing: HashMap<String, Standing>,
 }
 
+#[derive(Clone)]
 struct Standing {
+    address: String,
     position: u64,
     seen: Instant,
 }
 
 pub(crate) struct Witness {
     leases: Mutex<HashMap<String, Lease>>,
-    epochs: Mutex<HashMap<String, u64>>,
+    /// Each lease as kept on disk.
+    kept: Mutex<HashMap<String, Kept>>,
     path: PathBuf,
     started: Instant,
     /// The nodes a test cut off: their asks go unanswered.
@@ -77,21 +100,17 @@ pub(crate) struct Witness {
 }
 
 impl Witness {
-    /// Opens the witness of the node in `dir`, the epochs it kept read again.
+    /// Opens the witness of the node in `dir`, the holders it kept read again.
     pub(crate) fn open(dir: &Path) -> Result<Witness> {
-        let path = dir.join(DIR).join(EPOCHS);
-        let epochs = match std::fs::read_to_string(&path) {
-            Ok(kept) => kept
-                .lines()
-                .filter_map(|line| line.split_once(' '))
-                .filter_map(|(epoch, file)| Some((file.to_owned(), epoch.parse().ok()?)))
-                .collect(),
+        let path = dir.join(DIR).join(HOLDERS);
+        let kept = match std::fs::read_to_string(&path) {
+            Ok(kept) => kept.lines().filter_map(read_holder).collect(),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
             Err(error) => return Err(Error::io(path.display().to_string(), error)),
         };
         Ok(Witness {
             leases: Mutex::default(),
-            epochs: Mutex::new(epochs),
+            kept: Mutex::new(kept),
             path,
             started: Instant::now(),
             cut: Mutex::default(),
@@ -100,49 +119,75 @@ impl Witness {
 
     /// Answers a node's ask with the file's holder now: renewed when the node
     /// holds it, granted to the freshest copy standing once it ran out; none
-    /// for a node a test cut off.
+    /// for a node a test cut off. A grant is kept on disk before it answers,
+    /// and one that cannot be kept is not made.
     pub(crate) fn ask(&self, ask: &Ask<'_>) -> Result<Option<Holder>> {
         if lock(&self.cut).contains(ask.node) {
             return Ok(None);
         }
         let now = Instant::now();
-        let kept = lock(&self.epochs).get(ask.file).copied().unwrap_or(0);
         let mut leases = lock(&self.leases);
-        let lease = leases.entry(ask.file.to_owned()).or_insert_with(|| Lease {
-            holder: Holder { epoch: kept, ..Holder::default() },
-            expires: self.started + TTL,
-            standing: HashMap::new(),
-        });
-        let granted = if ask.holding { renew(lease, ask, now) } else { stand(lease, ask, now) };
-        let holder = lease.holder.clone();
-        drop(leases);
-        if granted {
-            self.keep_epoch(ask.file, holder.epoch)?;
+        let mut lease = match leases.get(ask.file) {
+            Some(lease) => lease.clone(),
+            None => Lease {
+                kept: lock(&self.kept).get(ask.file).cloned().unwrap_or_default(),
+                expires: self.started + TTL,
+                standing: HashMap::new(),
+            },
+        };
+        let changed = if ask.holding { renew(&mut lease, ask, now) } else { stand(&mut lease, ask, now) };
+        if changed {
+            self.keep(ask.file, &lease.kept)?;
         }
+        let holder = lease.kept.holder.clone();
+        leases.insert(ask.file.to_owned(), lease);
         Ok(Some(holder))
     }
 
-    /// Keeps durably the epoch a file's lease reached.
-    fn keep_epoch(&self, file: &str, epoch: u64) -> Result<()> {
-        let mut epochs = lock(&self.epochs);
-        if epochs.get(file).is_some_and(|&kept| kept >= epoch) {
-            return Ok(());
-        }
-        epochs.insert(file.to_owned(), epoch);
-        let kept: String = epochs.iter().map(|(file, epoch)| format!("{epoch} {file}\n")).collect();
+    /// Keeps durably the holder a file's lease was granted to: written beside
+    /// the file, synced and put in its place, so that a crash leaves the old
+    /// holders or the new, whole.
+    fn keep(&self, file: &str, lease: &Kept) -> Result<()> {
+        let mut kept = lock(&self.kept).clone();
+        kept.insert(file.to_owned(), lease.clone());
+        let lines: String = kept.iter().map(|(file, kept)| written(file, kept)).collect();
         let io = |error| Error::io(self.path.display().to_string(), error);
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(io)?;
-        }
-        std::fs::write(&self.path, kept).map_err(io)
+        let parent = self.path.parent().expect("the witness's file lies in log/");
+        std::fs::create_dir_all(parent).map_err(io)?;
+        let beside = self.path.with_extension("new");
+        let mut written = std::fs::File::create(&beside).map_err(io)?;
+        written.write_all(lines.as_bytes()).and_then(|()| written.sync_all()).map_err(io)?;
+        drop(written);
+        std::fs::rename(&beside, &self.path).map_err(io)?;
+        crate::durable::sync_directory(parent).map_err(io)?;
+        *lock(&self.kept) = kept;
+        Ok(())
     }
+}
+
+/// A lease's line in the witness's file.
+fn written(file: &str, kept: &Kept) -> String {
+    let Holder { node, address, epoch } = &kept.holder;
+    let copies = if kept.synchronous.is_empty() { "-".to_owned() } else { kept.synchronous.join(",") };
+    format!("{epoch} {node} {address} {copies} {file}\n")
+}
+
+/// A lease the witness's file keeps, and its file.
+fn read_holder(line: &str) -> Option<(String, Kept)> {
+    let (epoch, rest) = line.split_once(' ')?;
+    let (node, rest) = rest.split_once(' ')?;
+    let (address, rest) = rest.split_once(' ')?;
+    let (copies, file) = rest.split_once(' ')?;
+    let holder = Holder { node: node.to_owned(), address: address.to_owned(), epoch: epoch.parse().ok()? };
+    let synchronous = if copies == "-" { Vec::new() } else { copies.split(',').map(str::to_owned).collect() };
+    Some((file.to_owned(), Kept { holder, synchronous }))
 }
 
 #[cfg(test)]
 #[allow(dead_code, reason = "the link tests call them, and they build only with every engine")]
 impl Witness {
     pub(crate) fn holder(&self, file: &str) -> Option<Holder> {
-        lock(&self.leases).get(file).map(|lease| lease.holder.clone())
+        lock(&self.leases).get(file).map(|lease| lease.kept.holder.clone())
     }
 
     pub(crate) fn cut(&self, node: &str) {
@@ -155,39 +200,62 @@ impl Witness {
 }
 
 /// A home's renewal: its own lease lasts on; a lease no node holds, it takes
-/// at its epoch when that is no older than the witness kept. Whether the
-/// holder or the epoch changed.
+/// at its epoch when that is no older than the witness kept. Whether what the
+/// witness keeps changed: the holder, the epoch or the copies waited for.
 fn renew(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
-    if lease.holder.node == ask.node && lease.holder.epoch == ask.epoch {
-        lease.expires = now + TTL;
+    let holder = &lease.kept.holder;
+    let takes = holder.node.is_empty() && ask.epoch >= holder.epoch;
+    if !takes && (holder.node != ask.node || holder.epoch != ask.epoch) {
         return false;
     }
-    if lease.holder.node.is_empty() && ask.epoch >= lease.holder.epoch {
-        lease.holder = Holder { node: ask.node.to_owned(), address: ask.address.to_owned(), epoch: ask.epoch };
-        lease.expires = now + TTL;
-        return true;
-    }
-    false
+    let kept = Kept {
+        holder: Holder { node: ask.node.to_owned(), address: ask.address.to_owned(), epoch: ask.epoch },
+        synchronous: ask.synchronous.to_vec(),
+    };
+    lease.expires = now + TTL;
+    let changed = kept != lease.kept;
+    lease.kept = kept;
+    changed
 }
 
 /// A copy standing for the lease: it takes it at the next epoch once the
 /// lease ran out and the gathering passed, when it is the freshest copy
 /// standing. Whether it took it.
 fn stand(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
-    let standing = Standing { position: ask.position, seen: now };
+    let standing = Standing { address: ask.address.to_owned(), position: ask.position, seen: now };
     lease.standing.insert(ask.node.to_owned(), standing);
     lease.standing.retain(|_, standing| now.duration_since(standing.seen) < STANDING);
+    let holder = &lease.kept.holder;
     // a lease no node held is its home's to take first, as a file born there
-    if now < lease.expires + GATHER || lease.holder.node == ask.node || lease.holder.epoch == 0 {
+    if now < lease.expires + GATHER || holder.node == ask.node || holder.epoch == 0 {
         return false;
     }
-    let freshest = lease.standing.iter().max_by_key(|(_, standing)| standing.position).map(|(node, _)| node.clone());
-    if freshest.as_deref() != Some(ask.node) {
+    if freshest(lease).as_deref() != Some(ask.node) {
         return false;
     }
-    let epoch = lease.holder.epoch + 1;
-    lease.holder = Holder { node: ask.node.to_owned(), address: ask.address.to_owned(), epoch };
+    let epoch = holder.epoch + 1;
+    let holder = Holder { node: ask.node.to_owned(), address: ask.address.to_owned(), epoch };
+    lease.kept = Kept { holder, synchronous: Vec::new() };
     lease.expires = now + TTL;
     lease.standing.clear();
     true
+}
+
+/// The copy that may take a lease that ran out: the freshest standing, or,
+/// for a synchronous home's, the freshest of the copies it waited for, once
+/// every one of them stands.
+fn freshest(lease: &Lease) -> Option<String> {
+    let waited = &lease.kept.synchronous;
+    let names = |node: &str, standing: &Standing, name: &String| *name == node || *name == standing.address;
+    let candidates: Vec<(&String, &Standing)> = lease
+        .standing
+        .iter()
+        .filter(|(node, standing)| waited.is_empty() || waited.iter().any(|name| names(node, standing, name)))
+        .collect();
+    let every_one_stands =
+        waited.iter().all(|name| candidates.iter().any(|(node, standing)| names(node, standing, name)));
+    if !every_one_stands {
+        return None;
+    }
+    candidates.into_iter().max_by_key(|(_, standing)| standing.position).map(|(node, _)| node.clone())
 }

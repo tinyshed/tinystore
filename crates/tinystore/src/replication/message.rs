@@ -11,6 +11,7 @@
 use std::io::Read;
 
 use super::entry::Point;
+use super::witness::Holder;
 use crate::{Error, ErrorKind, Result};
 
 /// The link's version, which a node's hello names: the second packs what
@@ -18,6 +19,25 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) const VERSION: u32 = 4;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
+
+/// One file's ask in a judged node's lease: a renewal of the lease of a file
+/// it writes at `epoch`, or a stand for one it copies, at `position`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeaseAsk {
+    pub(crate) file: String,
+    pub(crate) epoch: u64,
+    pub(crate) position: u64,
+    pub(crate) holding: bool,
+    /// The copies a synchronous home's commits wait for.
+    pub(crate) synchronous: Vec<String>,
+}
+
+/// The holder of a file's lease, as the witness answers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeaseHolder {
+    pub(crate) file: String,
+    pub(crate) holder: Holder,
+}
 
 /// A message of the link.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,23 +122,15 @@ pub(crate) enum Message {
         file: String,
         sequence: u64,
     },
-    /// A judged node's ask of its witness: a renewal of the lease of a file
-    /// it writes at `epoch`, or a stand for one it copies, at `position`.
+    /// A judged node's asks of its witness, all its files' in one message.
     Lease {
-        file: String,
         node: String,
         address: String,
-        epoch: u64,
-        position: u64,
-        holding: bool,
+        asks: Vec<LeaseAsk>,
     },
-    /// The holder of a file's lease, as the witness answers it; an empty
-    /// `holder` while none holds it.
+    /// The holder of each file's lease the asks named, as the witness answers.
     Leased {
-        file: String,
-        holder: String,
-        address: String,
-        epoch: u64,
+        holders: Vec<LeaseHolder>,
     },
     /// Asks for the point the node holds `file` at and the hash of its pages.
     Verify {
@@ -236,21 +248,28 @@ impl Message {
                 out.byte(18);
                 out.text(file);
             }
-            Message::Lease { file, node, address, epoch, position, holding } => {
+            Message::Lease { node, address, asks } => {
                 out.byte(20);
-                out.text(file);
                 out.text(node);
                 out.text(address);
-                out.long(*epoch);
-                out.long(*position);
-                out.byte(u8::from(*holding));
+                out.count(asks.len());
+                for ask in asks {
+                    out.text(&ask.file);
+                    out.long(ask.epoch);
+                    out.long(ask.position);
+                    out.byte(u8::from(ask.holding));
+                    out.texts(&ask.synchronous);
+                }
             }
-            Message::Leased { file, holder, address, epoch } => {
+            Message::Leased { holders } => {
                 out.byte(21);
-                out.text(file);
-                out.text(holder);
-                out.text(address);
-                out.long(*epoch);
+                out.count(holders.len());
+                for held in holders {
+                    out.text(&held.file);
+                    out.text(&held.holder.node);
+                    out.text(&held.holder.address);
+                    out.long(held.holder.epoch);
+                }
             }
             Message::Verified { file, at, sum, why } => {
                 out.byte(19);
@@ -336,15 +355,26 @@ impl Message {
             },
             17 => Message::Applied { file: at.text()?, sequence: at.long()? },
             18 => Message::Verify { file: at.text()? },
-            20 => Message::Lease {
-                file: at.text()?,
-                node: at.text()?,
-                address: at.text()?,
-                epoch: at.long()?,
-                position: at.long()?,
-                holding: at.byte()? == 1,
-            },
-            21 => Message::Leased { file: at.text()?, holder: at.text()?, address: at.text()?, epoch: at.long()? },
+            20 => {
+                let (node, address) = (at.text()?, at.text()?);
+                let asks = (0..at.count()?)
+                    .map(|_| {
+                        let (file, epoch, position, holding) = (at.text()?, at.long()?, at.long()?, at.byte()? == 1);
+                        Ok(LeaseAsk { file, epoch, position, holding, synchronous: at.texts()? })
+                    })
+                    .collect::<Result<_>>()?;
+                Message::Lease { node, address, asks }
+            }
+            21 => {
+                let holders = (0..at.count()?)
+                    .map(|_| {
+                        let file = at.text()?;
+                        let holder = Holder { node: at.text()?, address: at.text()?, epoch: at.long()? };
+                        Ok(LeaseHolder { file, holder })
+                    })
+                    .collect::<Result<_>>()?;
+                Message::Leased { holders }
+            }
             19 => Message::Verified { file: at.text()?, at: at.point()?, sum: at.bytes()?.to_vec(), why: at.text()? },
             _ => return Err(corrupt("a message of a kind the link does not have")),
         };
@@ -597,14 +627,25 @@ mod tests {
             Message::Applied { file: "kv.db".into(), sequence: 42 },
             Message::Verify { file: "kv.db".into() },
             Message::Lease {
-                file: "kv.db".into(),
                 node: "9f86d081".into(),
                 address: "eu:7444".into(),
-                epoch: 3,
-                position: 90,
-                holding: true,
+                asks: vec![
+                    LeaseAsk {
+                        file: "kv.db".into(),
+                        epoch: 3,
+                        position: 90,
+                        holding: true,
+                        synchronous: vec!["eu:7444".into()],
+                    },
+                    LeaseAsk { file: "jobs.db".into(), epoch: 1, position: 7, holding: false, synchronous: vec![] },
+                ],
             },
-            Message::Leased { file: "kv.db".into(), holder: "9f86d081".into(), address: "eu:7444".into(), epoch: 3 },
+            Message::Leased {
+                holders: vec![LeaseHolder {
+                    file: "kv.db".into(),
+                    holder: Holder { node: "9f86d081".into(), address: "eu:7444".into(), epoch: 3 },
+                }],
+            },
             Message::Verified { file: "kv.db".into(), at, sum: vec![7; 32], why: String::new() },
         ];
         for message in messages {

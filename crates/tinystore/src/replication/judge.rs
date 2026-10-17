@@ -10,7 +10,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::message::{Frames, Message, VERSION, timed_out};
+use super::entry::Point;
+use super::message::{Frames, LeaseAsk, Message, VERSION, timed_out};
 use super::node::State;
 use super::serve::Out;
 use super::witness::{Holder, TTL};
@@ -74,13 +75,17 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
                     out.pack()?;
                 }
                 Message::Refused { why } => return Err(Error::new(ErrorKind::Invalid, format!("refused: {why}"))),
-                Message::Leased { file, holder, address, epoch } => {
+                Message::Leased { holders } => {
                     let Some(store) = store.upgrade() else {
                         return Ok(());
                     };
-                    let holder = Holder { node: holder, address, epoch };
-                    if let Err(error) = leased(state, &store, &file, &holder, sent.unwrap_or_else(Instant::now)) {
-                        tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
+                    for held in holders {
+                        let file = held.file;
+                        if let Err(error) =
+                            leased(state, &store, &file, &held.holder, sent.unwrap_or_else(Instant::now))
+                        {
+                            tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
+                        }
                     }
                 }
                 _ => {}
@@ -89,8 +94,9 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
         if welcomed && turn.elapsed() >= RENEW || welcomed && sent.is_none() {
             turn = Instant::now();
             sent = Some(turn);
-            for ask in state.judged_files() {
-                out.send(&ask)?;
+            let asks = state.judged_files();
+            if !asks.is_empty() {
+                out.send(&Message::Lease { node: state.id.clone(), address: state.address(), asks })?;
             }
         }
         match frames.fill(&mut reading) {
@@ -109,6 +115,7 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
     let until = sent + TTL - MARGIN;
     if holder.node == state.id {
         if let Some(copy) = state.copy(file) {
+            state.granted(file, until);
             state.take_over_at(store, file, copy, holder.epoch)?;
             tracing::info!(target: "tinystore", file, epoch = holder.epoch, "a copy took a file over, its lease granted");
         }
@@ -129,11 +136,10 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
 /// What a judged node asks its witness each turn: a renewal of each file it
 /// writes, a stand for each copy it holds whole.
 impl State {
-    pub(crate) fn judged_files(&self) -> Vec<Message> {
+    pub(crate) fn judged_files(&self) -> Vec<LeaseAsk> {
         let Ok(logged) = self.files_logged_now() else {
             return Vec::new();
         };
-        let address = self.address();
         let mut asks = Vec::new();
         for file in logged {
             if super::NODE_LOCAL.contains(&file.as_str()) {
@@ -142,21 +148,16 @@ impl State {
             let (holding, at) = match self.copy(&file) {
                 Some(copy) => (false, copy.point()),
                 None if super::copy::is_copy(&self.log_dir(&file)) => continue,
-                None => match self.point_of(&file) {
-                    Some(at) => (true, at),
-                    None => continue,
+                None => match (self.point_of(&file), self.epoch_written(&file)) {
+                    (Some(at), _) => (true, at),
+                    // a file born here, its log empty, asks for its first lease
+                    (None, Some(epoch)) => (true, Point { epoch, ..Point::default() }),
+                    (None, None) => continue,
                 },
             };
-            let node = self.id.clone();
-            let ask = Message::Lease {
-                file,
-                node,
-                address: address.clone(),
-                epoch: at.epoch,
-                position: at.sequence,
-                holding,
-            };
-            asks.push(ask);
+            // only the copies it names hold every commit a synchronous home answered
+            let synchronous = if holding { self.options.synchronous_with.clone() } else { Vec::new() };
+            asks.push(LeaseAsk { file, epoch: at.epoch, position: at.sequence, holding, synchronous });
         }
         asks
     }
