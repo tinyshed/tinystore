@@ -132,8 +132,10 @@ impl Report {
         let size_width = sizes.iter().map(String::len).chain([total.len()]).max().unwrap_or(0);
         for ((file, status), size) in self.files.iter().zip(&sizes) {
             let role = if self.node { role(file, status.as_ref(), self.links.as_ref()) } else { String::new() };
-            let line = format!("  {:name_width$}  {size:>size_width$}   {}", file.name, paint(dim, &role));
-            text.push_str(line.trim_end());
+            text.push_str(&format!("  {:name_width$}  {size:>size_width$}", file.name));
+            if !role.is_empty() {
+                text.push_str(&format!("   {}", paint(dim, &role)));
+            }
             text.push('\n');
         }
         text.push_str(&format!("  {}\n", paint(dim, &"─".repeat(name_width + 2 + size_width))));
