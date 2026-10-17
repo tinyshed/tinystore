@@ -17,12 +17,15 @@ use super::follow::Upstream;
 use super::log::{Acks, Bounds, Log, Notify, segments_in};
 use super::snapshot::Source;
 use super::{DIR, NODE_LOCAL, Node};
-use crate::sqlite::Observe;
+use crate::sqlite::{File, Observe, Readers};
 use crate::store::WeakStore;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// How long opening a file a node copies waits for its first copy.
 pub(crate) const READY_WAIT: Duration = Duration::from_secs(30);
+/// How long a snapshot taken again waits for the reads of the copy it
+/// replaces to end.
+const PAUSE_AT_MOST: Duration = Duration::from_secs(5);
 
 pub(crate) struct State {
     pub(crate) dir: PathBuf,
@@ -53,9 +56,25 @@ pub(crate) struct State {
     /// How many snapshots this node began taking, the first copies and those
     /// taken again.
     pub(crate) snapshots: std::sync::atomic::AtomicU64,
+    /// The commits of an old home that the nodes taking from this one held
+    /// past the point its promotion went on from, which they lost.
+    pub(crate) lost: std::sync::atomic::AtomicU64,
     /// A file is being opened that no copy holds yet: the link asks for the
     /// files served now rather than at its next turn.
     pub(crate) wanted: AtomicBool,
+    /// The readers of each engine's file open on a copy, by the copy's name:
+    /// a snapshot taken again closes them while it takes the file's place.
+    copy_readers: Mutex<HashMap<String, Vec<Weak<Readers>>>>,
+}
+
+/// The readers of a copy's files held closed while a snapshot takes the
+/// file's place, open to reads again once it drops.
+pub(crate) struct Paused(Vec<Arc<Readers>>);
+
+impl Drop for Paused {
+    fn drop(&mut self) {
+        self.0.iter().for_each(|readers| readers.resume());
+    }
 }
 
 impl State {
@@ -79,7 +98,9 @@ impl State {
             links: Mutex::default(),
             listening: Mutex::default(),
             snapshots: std::sync::atomic::AtomicU64::new(0),
+            lost: std::sync::atomic::AtomicU64::new(0),
             wanted: AtomicBool::new(false),
+            copy_readers: Mutex::default(),
         })
     }
 
@@ -235,6 +256,30 @@ impl State {
             copies = self.copied.wait_timeout(copies, turn).unwrap_or_else(PoisonError::into_inner).0;
         }
         Ok(())
+    }
+
+    /// Keeps the readers of an engine's file opened on the copy `name`.
+    pub(crate) fn opened_copy(&self, name: &str, file: File) -> File {
+        let mut held = lock(&self.copy_readers);
+        let readers = held.entry(name.to_owned()).or_default();
+        readers.retain(|readers| readers.strong_count() > 0);
+        readers.push(Arc::downgrade(file.readers()));
+        file
+    }
+
+    /// Closes the readers of every engine's file open on the copy `name`, and
+    /// holds its reads waiting until what it gives back drops.
+    pub(crate) fn pause_readers(&self, name: &str) -> Result<Paused> {
+        let open: Vec<Arc<Readers>> = lock(&self.copy_readers)
+            .get(name)
+            .map(|readers| readers.iter().filter_map(Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut paused = Paused(Vec::new());
+        for readers in open {
+            readers.pause(PAUSE_AT_MOST)?;
+            paused.0.push(readers);
+        }
+        Ok(paused)
     }
 
     pub(crate) fn copy(&self, name: &str) -> Option<Arc<Copy>> {

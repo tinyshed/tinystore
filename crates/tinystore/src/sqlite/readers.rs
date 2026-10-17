@@ -43,6 +43,9 @@ struct Pool {
     /// When a reader that comes back next goes to the longest waiting read.
     fair_from: Option<Instant>,
     closed: bool,
+    /// The file is being replaced, a copy by a snapshot: no reader opens, one
+    /// that comes back closes, and reads wait.
+    paused: bool,
 }
 
 struct Idle {
@@ -107,6 +110,46 @@ impl Readers {
         self.lock().open
     }
 
+    /// Closes every reader, the idle at once and those in use as they come
+    /// back, and holds new reads waiting until `resume`: a copy's file is then
+    /// open nowhere, and a snapshot can take its place. A read still under way
+    /// after `at_most` fails the pause, and the readers go on.
+    #[cfg(feature = "replication")]
+    pub(crate) fn pause(&self, at_most: std::time::Duration) -> Result<()> {
+        let (idle, handed) = {
+            let mut pool = self.lock();
+            pool.paused = true;
+            let idle = std::mem::take(&mut pool.idle);
+            let handed = std::mem::take(&mut pool.handed);
+            pool.open -= idle.len() + handed.len();
+            (idle, handed)
+        };
+        drop((idle, handed));
+        let deadline = Instant::now() + at_most;
+        while self.lock().open > 0 {
+            if Instant::now() >= deadline {
+                self.resume();
+                return Err(Error::new(
+                    ErrorKind::Unavailable,
+                    format!("{}: a read went on past the pause of its readers", self.path.display()),
+                ));
+            }
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
+    /// Lets reads open readers again after a `pause`.
+    #[cfg(feature = "replication")]
+    pub(crate) fn resume(&self) {
+        let waiting: Vec<Thread> = {
+            let mut pool = self.lock();
+            pool.paused = false;
+            pool.waiting.iter().map(|waiter| waiter.thread.clone()).collect()
+        };
+        waiting.iter().for_each(Thread::unpark);
+    }
+
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
         self.lock().waiting.len()
@@ -133,7 +176,7 @@ impl Readers {
                 pool.leave(ticket);
                 return Ok(idle.connection);
             }
-            if pool.open < self.config.readers {
+            if pool.open < self.config.readers && !pool.paused {
                 pool.leave(ticket);
                 pool.open += 1;
                 drop(pool);
@@ -162,7 +205,7 @@ impl Readers {
 
     fn give_back(&self, connection: Connection) {
         let mut pool = self.lock();
-        if pool.closed {
+        if pool.closed || pool.paused {
             pool.open -= 1;
             drop(pool);
             drop(connection);

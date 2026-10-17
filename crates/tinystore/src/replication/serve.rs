@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -355,6 +356,50 @@ fn later(out: &Out, file: &str, at: Point, error: &Error) -> Result<Sending> {
 
 /// Where to begin sending `file` to a node that holds it up to `at`.
 fn begin_at(state: &State, file: &str, dir: &std::path::Path, at: Point) -> Result<Sending> {
+    let sending = where_to_begin(state, file, dir, at)?;
+    if matches!(sending, Sending::Snapshot) && at.sequence > 0 {
+        check_epochs(state, file, dir, at)?;
+    }
+    Ok(sending)
+}
+
+/// A node that applied entries of `file` takes no snapshot of it from a node
+/// holding an older epoch than it has seen: that node's file is an old home's,
+/// come back without its demotion. What a node held of the old home past the
+/// point a promotion went on from, the new home counts as lost.
+fn check_epochs(state: &State, file: &str, dir: &std::path::Path, at: Point) -> Result<()> {
+    let Some(source) = state.source(file) else {
+        return Ok(());
+    };
+    let held = source.stable()?;
+    if at.epoch > held.epoch {
+        return Err(Error::new(
+            ErrorKind::Conflict,
+            format!(
+                "{file}: the node that asks has applied epoch {} of it, and this node holds epoch {}: an old home's file",
+                at.epoch, held.epoch
+            ),
+        ));
+    }
+    if let Some(promoted) = super::promote::promoted_at(dir)?
+        && at.epoch < promoted.epoch
+        && at.sequence > promoted.sequence
+    {
+        let lost = at.sequence - promoted.sequence;
+        state.lost.fetch_add(lost, Ordering::Relaxed);
+        tracing::warn!(
+            target: "tinystore",
+            file,
+            lost,
+            epoch = at.epoch,
+            "a node held commits of the old home that this home never had: they are lost, and it takes a snapshot"
+        );
+    }
+    Ok(())
+}
+
+/// Where to begin by the entries this node keeps of `file`.
+fn where_to_begin(state: &State, file: &str, dir: &std::path::Path, at: Point) -> Result<Sending> {
     let Some(source) = state.source(file) else {
         return Err(Error::not_found(format!("{file}: this node holds no such file")));
     };

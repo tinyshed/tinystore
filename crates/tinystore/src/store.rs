@@ -215,10 +215,10 @@ impl Store {
         if let Some(node) = &self.inner.node {
             if node.takes(name) {
                 node.wait_ready(name).map_err(|error| error.within(self.describe()))?;
-                return crate::sqlite::File::open_copy(path, config);
+                return Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?));
             }
             if crate::replication::is_copy(&node.log_dir(name)) {
-                return crate::sqlite::File::open_copy(path, config);
+                return Ok(node.opened_copy(name, crate::sqlite::File::open_copy(path, config)?));
             }
             return crate::sqlite::File::open_observed(path, config, Some(node.open_log(name)?));
         }

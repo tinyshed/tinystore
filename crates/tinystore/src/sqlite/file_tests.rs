@@ -573,3 +573,40 @@ fn what_a_write_asks_to_run_after_its_commit_runs_in_commit_order_and_never_afte
     begun.commit().unwrap();
     assert_eq!(*said.lock().unwrap(), ["begun"], "a transaction dropped before its commit runs nothing");
 }
+
+#[cfg(feature = "replication")]
+#[test]
+fn a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_what_replaces_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let filled = |name: &str, rows: &[&str]| {
+        let file = File::open(dir.path().join(name), Config::default()).unwrap();
+        file.transaction(|tx| {
+            tx.execute_batch("create table t (id integer primary key, v text not null unique)")
+                .map_err(|error| sql_error("create t", error))
+        })
+        .unwrap();
+        for row in rows {
+            insert(&file, row).unwrap();
+        }
+        file.close().unwrap();
+    };
+    filled("copy.db", &["old"]);
+    filled("snapshot.db", &["new", "newer"]);
+    let copy = Arc::new(File::open_copy(dir.path().join("copy.db"), Config::default()).unwrap());
+    assert_eq!(count(&copy), 1);
+
+    copy.readers().pause(Duration::from_secs(1)).unwrap();
+    assert_eq!(copy.readers_open(), 0);
+    let reading = {
+        let copy = Arc::clone(&copy);
+        thread::spawn(move || count(&copy))
+    };
+    wait_until(|| copy.readers_waiting() == 1);
+    for left in ["copy.db-wal", "copy.db-shm"] {
+        let _ = std::fs::remove_file(dir.path().join(left));
+    }
+    // fails on Windows while any connection holds the copy open
+    std::fs::rename(dir.path().join("snapshot.db"), dir.path().join("copy.db")).unwrap();
+    copy.readers().resume();
+    assert_eq!(reading.join().unwrap(), 2, "the read that waited reads the file that took the copy's place");
+}

@@ -400,6 +400,56 @@ fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_f
 }
 
 #[test]
+fn an_old_home_back_without_its_demotion_hands_no_node_of_a_later_epoch_its_file() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, home_address) = serving(dirs[0].path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    sessions.set("first", &"from the first home".to_owned()).unwrap();
+    let europe_node = |from: Vec<String>, serve: String| Node { from, serve: Some(serve), ..Node::default() };
+    let europe = node_with(dirs[1].path(), europe_node(vec![home_address.clone()], "127.0.0.1:0".into()));
+    let europe_address = bound(europe.node().unwrap()).unwrap().to_string();
+    let russia_node = Node { from: vec![home_address.clone(), europe_address.clone()], ..Node::default() };
+    let russia = node_with(dirs[2].path(), russia_node.clone());
+    let read = russia.bucket::<String>("sessions").open().unwrap();
+    europe.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &europe, &["kv.db"]);
+    // europe stops while russia takes on: what russia holds past europe's point is lost
+    europe.close().unwrap();
+    for i in 0..3 {
+        sessions.set(format!("late {i}"), &"europe never had it".to_owned()).unwrap();
+    }
+    caught_up(&home, &russia, &["kv.db"]);
+    home.close().unwrap();
+    drop(sessions);
+
+    promote(dirs[1].path(), &[]).unwrap();
+    let europe = node_with(dirs[1].path(), europe_node(Vec::new(), europe_address));
+    let written = europe.bucket::<String>("sessions").open().unwrap();
+    written.set("after", &"the new home".to_owned()).unwrap();
+    eventually("russia takes the new home's file", || read.get("after").unwrap().as_deref() == Some("the new home"));
+    assert_eq!(read.get("late 0").unwrap(), None, "what europe never had is gone from russia");
+    assert_eq!(europe.node().unwrap().lost.load(Relaxed), 3, "the new home counts the commits russia lost");
+    drop(read);
+    russia.close().unwrap();
+
+    // the old home comes back as a home, never demoted, and writes on
+    let old = node_with(dirs[0].path(), Node { serve: Some(home_address), ..Node::default() });
+    old.bucket::<String>("sessions").open().unwrap().set("split", &"the old home wrote on".to_owned()).unwrap();
+    let russia = node_with(dirs[2].path(), russia_node);
+    let read = russia.bucket::<String>("sessions").open().unwrap();
+    written.set("later", &"the new home again".to_owned()).unwrap();
+    eventually("russia goes on from the new home", || {
+        read.get("later").unwrap().as_deref() == Some("the new home again")
+    });
+    assert_eq!(read.get("split").unwrap(), None, "no snapshot of the old home's file reached russia");
+    assert_eq!(russia.node().unwrap().snapshots.load(Relaxed), 0, "russia went on from its position");
+    russia.close().unwrap();
+    old.close().unwrap();
+    europe.close().unwrap();
+}
+
+#[test]
 fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
     let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let ports =

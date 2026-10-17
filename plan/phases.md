@@ -359,10 +359,14 @@ in [scaling.md](scaling.md#order).
   whose log is its own. A snapshot is put together beside the copy it replaces, which its readers read until it
   is whole, and a node at the point its source stands at takes none. `tinystore demote` and `replication::demote`
   make a stopped old home's files copies again, its log's last point said and logged, and it takes each from its
-  new home once it starts with `from` reaching it. Left: counting the commits an old home loses, a client refusing
-  an older home than one it has seen, and the command line's view of a running node's links. `tinystore node
-  status <dir>` and `replication::status` say, from a node's directory, which files it writes, which it copies,
-  the entries each log keeps and where each copy stands.
+  new home once it starts with `from` reaching it. A node that applied an epoch of a file takes no snapshot of it
+  from a node holding an older one, an old home come back without its demotion: that node refuses it, the link
+  goes on to the next address, and the copy refuses one at an older epoch than its own. The new home counts and
+  logs the commits a node held of the old home past the point its promotion went on from, which that node loses
+  with the snapshot it takes. A snapshot taken again while engines read the copy closes their readers, holding
+  their reads, until the new file has the copy's name. `tinystore node status <dir>` and `replication::status`
+  say, from a node's directory, which files it writes, which it copies, the entries each log keeps and where each
+  copy stands. Left: the command line's view of a running node's links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
   Built so far: `Node { synchronous: true }`, `--node-synchronous` and the SDK's `node.synchronous` make each
   commit of a file the node writes wait, the writer held, until a node copying it says it holds the entry, so

@@ -31,7 +31,7 @@ pub(crate) struct File {
     /// commits stand while none is under way.
     writer: Arc<Mutex<Connection>>,
     group: Group,
-    readers: Readers,
+    readers: Arc<Readers>,
     closed: AtomicBool,
     settlers: Arc<Settlers>,
     capture: Option<Arc<Capture>>,
@@ -48,8 +48,21 @@ impl File {
     /// Opens a copy of a file another node writes: its engines read it, a
     /// migration only checks that its home applied the steps, and a write is
     /// refused as `Invalid`.
+    ///
+    /// Its writer, which nothing of a copy writes through, is in memory: the
+    /// copy's file is then open only through its readers, which a snapshot
+    /// taken again closes while it takes the file's place.
     pub(crate) fn open_copy(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
-        Ok(Self { copy: true, ..Self::open_observed(path, config, None)? })
+        let file = Self::open_observed(path, config, None)?;
+        let writer = Connection::open_in_memory().map_err(|error| sql_error(file.describe(), error))?;
+        Ok(Self { copy: true, writer: Arc::new(Mutex::new(writer)), ..file })
+    }
+
+    /// The file's readers, which a copy's node pauses while a snapshot takes
+    /// the file's place.
+    #[cfg(feature = "replication")]
+    pub(crate) fn readers(&self) -> &Arc<Readers> {
+        &self.readers
     }
 
     pub(crate) fn is_copy(&self) -> bool {
@@ -80,7 +93,7 @@ impl File {
         let settlers = Arc::new(Settlers::default());
         Ok(Self {
             group: Group::new(config.group, Arc::clone(&settlers), capture.clone()),
-            readers: Readers::new(path.clone(), Arc::clone(&config)),
+            readers: Arc::new(Readers::new(path.clone(), Arc::clone(&config))),
             writer,
             path,
             closed: AtomicBool::new(false),

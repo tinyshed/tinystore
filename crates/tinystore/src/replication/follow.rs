@@ -390,6 +390,8 @@ impl Link<'_> {
             }
             #[cfg(feature = "blobs")]
             Message::Object { path, offset, bytes, last } => self.object(&path, offset, &bytes, last),
+            // a node holding an old home's file: the link goes on to the next node
+            Message::Failed { kind: ErrorKind::Conflict, why, .. } => Err(Error::new(ErrorKind::Conflict, why)),
             Message::Failed { file, kind, why } => {
                 tracing::debug!(target: "tinystore", %file, %kind, %why, "a node's file could not be sent yet");
                 self.held.remove(&file);
@@ -412,11 +414,28 @@ impl Link<'_> {
         if !plain_name(file) {
             return Err(Error::invalid(format!("a link sent {file:?}, which is no file's name")));
         }
+        let applied = self.epoch_applied(file)?;
+        if at.epoch < applied {
+            return Err(Error::new(
+                ErrorKind::Conflict,
+                format!(
+                    "{file}: a snapshot at epoch {} from a node, and this copy applied epoch {applied}: an old home's file",
+                    at.epoch
+                ),
+            ));
+        }
         self.state.snapshots.fetch_add(1, Ordering::Relaxed);
         let dir = self.state.log_dir(file);
         let taking = Box::new(Taking::begin(&dir, &self.state.dir.join(file), page_size, at)?);
         self.held.insert(file.to_owned(), Held::Taking(taking));
         Ok(())
+    }
+
+    /// The epoch of the last entry this node's copy of `file` applied, kept
+    /// until a snapshot replaces the copy.
+    fn epoch_applied(&self, file: &str) -> Result<u64> {
+        let kept = copy::Position::read_point(&self.state.log_dir(file).join(copy::Position::FILE))?;
+        Ok(kept.map_or(0, |point| point.epoch))
     }
 
     fn apply(&mut self, file: &str, bytes: &[u8]) -> Result<()> {
@@ -449,11 +468,15 @@ impl Link<'_> {
         if !whole {
             return Ok(());
         }
+        let store = self.store.upgrade().ok_or_else(|| Error::closed("the node's store"))?;
+        // the engines reading the copy held before let go of its file, and the
+        // copy its writer, so that the snapshot takes its name: an open file
+        // keeps its name on Windows, and elsewhere a reader would go on
+        // reading the file it replaced
+        let paused = self.state.pause_readers(file)?;
         let Some(Held::Taking(taking)) = self.held.remove(file) else {
             return Ok(());
         };
-        let store = self.store.upgrade().ok_or_else(|| Error::closed("the node's store"))?;
-        // the copy held before closes its writer, so that the snapshot takes its name
         self.state.drop_copy(file);
         if let Err(error) = (*taking).finish() {
             if copy::is_ready(&self.state.log_dir(file), &self.state.dir.join(file)) {
@@ -463,6 +486,7 @@ impl Link<'_> {
         }
         let copy = Arc::new(Copy::open(&store, file)?);
         self.state.keep_copy(file, Arc::clone(&copy));
+        drop(paused);
         // what an engine kept of a copy taken again is read again
         store.applied(file);
         drop(store);
