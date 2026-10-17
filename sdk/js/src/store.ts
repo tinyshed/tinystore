@@ -117,6 +117,29 @@ export interface OpenOptions {
 	 * running keeps the key it was started with.
 	 */
 	encryptionKeyFile?: string
+	/**
+	 * Makes the store a node: it keeps a log of each file it writes, serves
+	 * its files to other nodes, and copies the files of the node it takes
+	 * from, reading them here and passing their writes to their home. A draft,
+	 * as its names are:
+	 *
+	 *     const store = await open('./data', { embedded: true, node: { from: ['eu.internal:7444'] } })
+	 */
+	node?: NodeOptions | undefined
+}
+
+/** What a store's node is: whom it copies, and where it serves. */
+export interface NodeOptions {
+	/** where this node takes the files it copies, `host:port`, tried in order */
+	from?: string[] | undefined
+	/** where other nodes take files from this one, `host:port` */
+	serve?: string | undefined
+	/** the files it copies, as `kv.db` or `sql/app.db`; every file but its own records and metrics when absent */
+	files?: string[] | undefined
+	/** what it says to the node it takes from, and asks of the nodes that take from it; embedded alone */
+	token?: string | undefined
+	/** the file of that token, for a server this process starts */
+	tokenFile?: string | undefined
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */
@@ -501,7 +524,7 @@ export async function openWith(
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const durability = options.durability
 	checkDurability(durability, 'open')
-	const started = { durability, encryptionKeyFile: options.encryptionKeyFile }
+	const started = { durability, encryptionKeyFile: options.encryptionKeyFile, node: options.node }
 	const dial =
 		options.embedded === true
 			? embedded(runtime, dir, () => findLibrary(options.library), started)

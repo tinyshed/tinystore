@@ -4,6 +4,7 @@
 // remote server.
 
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import manifest from '../package.json' with { type: 'json' }
@@ -17,6 +18,7 @@ import {
 } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import { ConnectionLostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
+import type { NodeOptions } from './store.ts'
 import { Empty, methods, StoreOptions } from './wire/protocol.ts'
 
 /**
@@ -229,13 +231,43 @@ export interface Started {
 	durability?: Durability | undefined
 	/** the file of the store's encryption key, when it is not the store's own */
 	encryptionKeyFile?: string | undefined
+	/** the node the store is, when it is one */
+	node?: NodeOptions | undefined
 }
 
 /** The flags of `tinystore serve` that say how its store opens. */
 function storeFlags(started: Started): string[] {
 	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
 	const key = started.encryptionKeyFile
-	return key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
+	const keyed =
+		key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
+	return [...keyed, ...nodeFlags(started.node)]
+}
+
+/** A node's options as `tinystore serve` takes them. */
+function nodeFlags(node: NodeOptions | undefined): string[] {
+	if (node === undefined) {
+		return []
+	}
+	if (node.token !== undefined) {
+		throw new InvalidError(
+			"a node's token reaches a server this process starts through a file: give tokenFile, or open embedded",
+		)
+	}
+	const flags = ['--node']
+	for (const from of node.from ?? []) {
+		flags.push('--from', from)
+	}
+	if (node.serve !== undefined) {
+		flags.push('--node-listen', node.serve)
+	}
+	if (node.files !== undefined) {
+		flags.push('--node-files', node.files.join(','))
+	}
+	if (node.tokenFile !== undefined) {
+		flags.push('--node-token-file', resolve(node.tokenFile))
+	}
+	return flags
 }
 
 /**
@@ -468,7 +500,21 @@ export function embedded(
 ): Dialer {
 	const encryptionKeyFile =
 		started.encryptionKeyFile === undefined ? undefined : resolve(started.encryptionKeyFile)
-	const options = StoreOptions.encode({ durability: started.durability, encryptionKeyFile })
+	const node = started.node
+	const token =
+		node?.token ??
+		(node?.tokenFile === undefined
+			? undefined
+			: readFileSync(resolve(node.tokenFile), 'utf8').trim())
+	const options = StoreOptions.encode({
+		durability: started.durability,
+		encryptionKeyFile,
+		node: node !== undefined,
+		from: node?.from ?? [],
+		serve: node?.serve,
+		files: node?.files ?? [],
+		token,
+	})
 	return async () => {
 		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined

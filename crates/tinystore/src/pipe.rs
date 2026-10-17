@@ -194,12 +194,14 @@ impl fmt::Debug for Pipe {
     }
 }
 
-/// What a host's options ask of its store: its files' durability, and the
-/// file of its encryption key.
+/// What a host's options ask of its store: its files' durability, the file
+/// of its encryption key, and the node it is.
 #[derive(Default)]
 struct Asked {
     durability: Option<Durability>,
     encryption_key_file: Option<PathBuf>,
+    #[cfg(feature = "replication")]
+    node: Option<crate::replication::Node>,
 }
 
 fn asked(options: &[u8]) -> Result<Asked> {
@@ -209,7 +211,24 @@ fn asked(options: &[u8]) -> Result<Asked> {
     let asked = StoreOptions::decode(options)
         .map_err(|refused| Error::invalid(format!("pipe: its options: {}", refused.message)))?;
     let durability = asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe")));
-    Ok(Asked { durability: durability.transpose()?, encryption_key_file: asked.encryption_key_file.map(PathBuf::from) })
+    let a_node = asked.node || !asked.from.is_empty() || asked.serve.is_some();
+    #[cfg(not(feature = "replication"))]
+    if a_node {
+        return Err(Error::invalid("pipe: a node's options, and the library was built without replication"));
+    }
+    #[cfg(feature = "replication")]
+    let node = a_node.then(|| crate::replication::Node {
+        from: asked.from,
+        serve: asked.serve,
+        files: (!asked.files.is_empty()).then_some(asked.files),
+        token: asked.token,
+    });
+    Ok(Asked {
+        durability: durability.transpose()?,
+        encryption_key_file: asked.encryption_key_file.map(PathBuf::from),
+        #[cfg(feature = "replication")]
+        node,
+    })
 }
 
 /// The store of `dir`, opened as asked, or the one this process has open
@@ -233,11 +252,20 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
                 asked.display()
             )));
         }
+        #[cfg(feature = "replication")]
+        if asked.node.is_some() && store.node().is_none() {
+            return Err(Error::invalid("pipe: the store is open as no node, and asked to be one"));
+        }
         *pipes += 1;
         return Ok(store.clone());
     }
-    let options =
-        Options { durability: asked.durability, encryption_key_file: asked.encryption_key_file, ..Options::default() };
+    let options = Options {
+        durability: asked.durability,
+        encryption_key_file: asked.encryption_key_file,
+        #[cfg(feature = "replication")]
+        node: asked.node,
+        ..Options::default()
+    };
     let store = Store::open(dir, options)?;
     stores.insert(dir.to_path_buf(), (store.clone(), 1));
     Ok(store)

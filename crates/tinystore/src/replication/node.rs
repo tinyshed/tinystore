@@ -45,6 +45,9 @@ pub(crate) struct State {
     /// How many snapshots this node began taking, the first copies and those
     /// taken again.
     pub(crate) snapshots: std::sync::atomic::AtomicU64,
+    /// A file is being opened that no copy holds yet: the link asks for the
+    /// files served now rather than at its next turn.
+    pub(crate) wanted: AtomicBool,
 }
 
 impl State {
@@ -64,6 +67,7 @@ impl State {
             links: Mutex::default(),
             listening: Mutex::default(),
             snapshots: std::sync::atomic::AtomicU64::new(0),
+            wanted: AtomicBool::new(false),
         }
     }
 
@@ -170,7 +174,9 @@ impl State {
                     ),
                 ));
             }
-            copies = self.copied.wait_timeout(copies, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
+            self.wanted.store(true, Ordering::SeqCst);
+            let turn = (deadline - now).min(Duration::from_millis(250));
+            copies = self.copied.wait_timeout(copies, turn).unwrap_or_else(PoisonError::into_inner).0;
         }
         Ok(())
     }

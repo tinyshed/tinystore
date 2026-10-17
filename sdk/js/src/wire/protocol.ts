@@ -2185,6 +2185,16 @@ export const StoreOptions = message(
 		durability: [1, str],
 		/** the file of the store's encryption key, which the store only reads; encryption.key of its directory, made when needed, when absent */
 		encryptionKeyFile: [2, str],
+		/** makes the store a node, which keeps a log of each file it writes; from or serve make it one too */
+		node: [3, bool],
+		/** where the node takes the files it copies, host:port, tried in order */
+		from: [4, list(str)],
+		/** where other nodes take files from this one, host:port */
+		serve: [5, str],
+		/** the files it copies, as kv.db or sql/app.db; every file but its own records and metrics when empty */
+		files: [6, list(str)],
+		/** what it says to the node it takes from, and asks of the nodes that take from it */
+		token: [7, str],
 	},
 	{
 		write(w, v) {
@@ -2200,11 +2210,47 @@ export const StoreOptions = message(
 				w.str(v.encryptionKeyFile)
 				n++
 			}
+			if (v.node !== undefined) {
+				w.field(3)
+				w.bool(v.node)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(4)
+				w.array(v.from.length)
+				for (const item0 of v.from) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.serve !== undefined) {
+				w.field(5)
+				w.str(v.serve)
+				n++
+			}
+			if (v.files !== undefined) {
+				w.field(6)
+				w.array(v.files.length)
+				for (const item0 of v.files) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.token !== undefined) {
+				w.field(7)
+				w.str(v.token)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $durability: string | undefined
 			let $encryptionKeyFile: string | undefined
+			let $node: boolean | undefined
+			let $from: string[] | undefined
+			let $serve: string | undefined
+			let $files: string[] | undefined
+			let $token: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2213,12 +2259,47 @@ export const StoreOptions = message(
 					case 2:
 						$encryptionKeyFile = r.str()
 						break
+					case 3:
+						$node = r.bool()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$from = items0
+						break
+					}
+					case 5:
+						$serve = r.str()
+						break
+					case 6: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$files = items0
+						break
+					}
+					case 7:
+						$token = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { durability: $durability, encryptionKeyFile: $encryptionKeyFile }
+			return {
+				durability: $durability,
+				encryptionKeyFile: $encryptionKeyFile,
+				node: $node,
+				from: $from,
+				serve: $serve,
+				files: $files,
+				token: $token,
+			}
 		},
 	},
 )

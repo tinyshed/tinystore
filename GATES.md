@@ -695,6 +695,7 @@ module defines.
 - a node whose token is not its server's takes nothing — `a_node_with_another_token_takes_nothing` in `replication::link_tests`
 - a write on a copy two links away commits at its home and reads back at once on the node that wrote it, the home deciding what is new and what conflicts — `a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once` in `replication::link_tests`
 - every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
+- a store in a Bun program's own process is a node: a copy of a copy there reads its home's writes and passes its own to the home — `a node in this process` in `sdk/js/test/node.test.ts`
 
 ## The server and the wire
 

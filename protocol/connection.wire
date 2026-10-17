@@ -32,6 +32,11 @@ message Welcome {
 message store.Options {
   1 durability: str?         # full or os: how far a commit of the store's files goes before it returns; each engine's own when absent
   2 encryptionKeyFile: str?  # the file of the store's encryption key, which the store only reads; encryption.key of its directory, made when needed, when absent
+  3 node: bool               # makes the store a node, which keeps a log of each file it writes; from or serve make it one too
+  4 from: [str]              # where the node takes the files it copies, host:port, tried in order
+  5 serve: str?              # where other nodes take files from this one, host:port
+  6 files: [str]             # the files it copies, as kv.db or sql/app.db; every file but its own records and metrics when empty
+  7 token: str?              # what it says to the node it takes from, and asks of the nodes that take from it
 }
 
 # The last frame of a connection.

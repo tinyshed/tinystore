@@ -191,7 +191,8 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str) -> Result<()> {
         }
         if welcomed {
             link.retry_due()?;
-            if state.options.files.is_none() && listed.elapsed() > LIST_EVERY {
+            let wanted = state.wanted.swap(false, Ordering::SeqCst);
+            if wanted || (state.options.files.is_none() && listed.elapsed() > LIST_EVERY) {
                 out.send(&Message::List)?;
                 listed = Instant::now();
             } else if out.idle_for() >= PING_EVERY {

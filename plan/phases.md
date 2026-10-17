@@ -307,7 +307,9 @@ in [scaling.md](scaling.md#order).
   home wrote it; a broken link is made again to the next address of `from`, from each copy's position; a silent
   one is dropped after 30 seconds, pings every five keeping it; a token compared in constant time. A file a node
   copies opens once its copy is whole, 30 seconds at most, and with no link reads the copy it holds.
-  `tinystore serve` takes `--node`, `--node-listen`, `--from`, `--node-files` and `--node-token-file`. Left: TLS,
+  `tinystore serve` takes `--node`, `--node-listen`, `--from`, `--node-files` and `--node-token-file`; the Bun
+  SDK's `open(dir, { node: { from, serve, files, token } })` makes a store in the program's own process a node
+  through the pipe's options, and a server it starts through those flags. Left: TLS,
   one zstd stream a link, a file's checksum that proves a copy its home's, and files a home makes after a node
   linked, which it finds by asking every five seconds.
 - [ ] Writes: a write passed to its file's home, read your writes, a local queue of operations that commute, `unavailable` after a bound.

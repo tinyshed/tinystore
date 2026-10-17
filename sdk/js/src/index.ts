@@ -199,6 +199,7 @@ export {
 export {
 	type ConnectOptions,
 	connect,
+	type NodeOptions,
 	type OpenOptions,
 	open,
 	type Status,

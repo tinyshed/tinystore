@@ -2014,6 +2014,16 @@ pub(crate) struct StoreOptions {
     pub(crate) durability: Option<String>,
     /// The file of the store's encryption key, which the store only reads; encryption.key of its directory, made when needed, when absent.
     pub(crate) encryption_key_file: Option<String>,
+    /// Makes the store a node, which keeps a log of each file it writes; from or serve make it one too.
+    pub(crate) node: bool,
+    /// Where the node takes the files it copies, host:port, tried in order.
+    pub(crate) from: Vec<String>,
+    /// Where other nodes take files from this one, host:port.
+    pub(crate) serve: Option<String>,
+    /// The files it copies, as kv.db or sql/app.db; every file but its own records and metrics when empty.
+    pub(crate) files: Vec<String>,
+    /// What it says to the node it takes from, and asks of the nodes that take from it.
+    pub(crate) token: Option<String>,
 }
 
 impl Message for StoreOptions {
@@ -2026,6 +2036,11 @@ impl Message for StoreOptions {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.durability = Some(codec::str(r, "durability")?),
                 2 => message.encryption_key_file = Some(codec::str(r, "encryptionKeyFile")?),
+                3 => message.node = codec::bool(r, "node")?,
+                4 => message.from = codec::list(r, "from", codec::str)?,
+                5 => message.serve = Some(codec::str(r, "serve")?),
+                6 => message.files = codec::list(r, "files", codec::str)?,
+                7 => message.token = Some(codec::str(r, "token")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2042,6 +2057,26 @@ impl Message for StoreOptions {
             map.field(out, 2);
             codec::write_str(out, encryption_key_file);
         }
+        if self.node {
+            map.field(out, 3);
+            codec::write_bool(out, &self.node);
+        }
+        if !self.from.is_empty() {
+            map.field(out, 4);
+            codec::write_list(out, &self.from, codec::write_str);
+        }
+        if let Some(serve) = &self.serve {
+            map.field(out, 5);
+            codec::write_str(out, serve);
+        }
+        if !self.files.is_empty() {
+            map.field(out, 6);
+            codec::write_list(out, &self.files, codec::write_str);
+        }
+        if let Some(token) = &self.token {
+            map.field(out, 7);
+            codec::write_str(out, token);
+        }
         map.close(out);
     }
 
@@ -2049,11 +2084,21 @@ impl Message for StoreOptions {
         3
             + self.durability.as_ref().map_or(0, |durability| 1 + 5 + durability.len())
             + self.encryption_key_file.as_ref().map_or(0, |encryption_key_file| 1 + 5 + encryption_key_file.len())
+            + 2
+            + 1 + codec::list_size(&self.from, |item| 5 + item.len())
+            + self.serve.as_ref().map_or(0, |serve| 1 + 5 + serve.len())
+            + 1 + codec::list_size(&self.files, |item| 5 + item.len())
+            + self.token.as_ref().map_or(0, |token| 1 + 5 + token.len())
     }
 
     fn is_zero(&self) -> bool {
         self.durability.is_none()
             && self.encryption_key_file.is_none()
+            && !self.node
+            && self.from.is_empty()
+            && self.serve.is_none()
+            && self.files.is_empty()
+            && self.token.is_none()
     }
 }
 
