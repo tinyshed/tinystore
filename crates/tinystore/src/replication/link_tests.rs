@@ -1446,10 +1446,13 @@ fn a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_s
 
     // europe comes back and takes it, holding what the home answered
     let eu = node_with(dirs[2].path(), eu_node());
-    eventually("europe takes the lease the home lost", || eu.node().unwrap().copy("kv.db").is_none());
+    let eu_id = eu.node().unwrap().id.clone();
+    eventually("europe takes the lease the home lost", || {
+        judging.holder("kv.db").is_some_and(|holder| holder.node == eu_id)
+    });
+    eventually("and writes the file", || eu.node().unwrap().copy("kv.db").is_none());
     let at_europe = eu.bucket::<String>("sessions").open().unwrap();
     assert_eq!(at_europe.get("held").unwrap().as_deref(), Some("by europe"));
-    assert!(ru.node().unwrap().copy("kv.db").is_some());
     eu.close().unwrap();
     ru.close().unwrap();
     home.close().unwrap();

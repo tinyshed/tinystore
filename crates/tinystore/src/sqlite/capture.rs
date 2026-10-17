@@ -87,7 +87,7 @@ pub(crate) struct Position {
 }
 
 impl Position {
-    fn same_generation(&self, other: &Position) -> bool {
+    pub(crate) fn same_generation(&self, other: &Position) -> bool {
         self.checkpoints == other.checkpoints && self.salts == other.salts
     }
 
@@ -334,6 +334,52 @@ impl Capture {
 
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Hooks a writer no capture keeps, a copy's applier: each commit leaves
+/// where the WAL ends for [`take_wal_end`], and SQLite's own checkpoints stop,
+/// the writer's to run.
+pub(crate) fn hook_wal(writer: &Connection) {
+    writer.wal_hook(Some(remember_the_end));
+}
+
+/// Where the WAL ended after the commit this thread made last, once.
+pub(crate) fn take_wal_end() -> Option<u32> {
+    WAL_END.take()
+}
+
+/// The WAL beside `path` at `frame`: its generation as its header says it.
+pub(crate) fn wal_at(path: &Path, frame: u32) -> Result<Position> {
+    let wal = wal_of(path);
+    let mut file = fs::File::open(&wal).map_err(|error| Error::io(wal.display().to_string(), error))?;
+    Ok(read_header(&mut file)?.at(frame))
+}
+
+/// Where the WAL beside `path` stands: its generation and the frame its last
+/// commit ends at; the default when it holds none.
+pub(crate) fn wal_end(path: &Path) -> Result<Position> {
+    Ok(commits_in(path)?.map_or_else(Position::default, |wal| wal.header.at(wal.end)))
+}
+
+/// Where each commit the WAL beside `path` holds past `mark` ends: those after
+/// its frame in its generation, or every one of a later generation, which
+/// began after `mark`.
+pub(crate) fn commits_past(path: &Path, mark: Position) -> Result<Vec<Position>> {
+    let Some(wal) = commits_in(path)? else {
+        return Ok(Vec::new());
+    };
+    let after = if mark.same_generation(&wal.header.at(0)) { mark.frame } else { 0 };
+    Ok(wal.commit_ends.iter().filter(|&&end| end > after).map(|&end| wal.header.at(end)).collect())
+}
+
+/// The commits the WAL beside `path` holds, as SQLite would recover them.
+fn commits_in(path: &Path) -> Result<Option<Committed>> {
+    let wal = wal_of(path);
+    match fs::read(&wal) {
+        Ok(bytes) => Ok(Committed::read(&bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::io(wal.display().to_string(), error)),
     }
 }
 

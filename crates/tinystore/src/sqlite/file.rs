@@ -66,7 +66,8 @@ impl File {
     /// copy's file is then open only through its readers, which a snapshot
     /// taken again closes while it takes the file's place.
     pub(crate) fn open_copy(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
-        let file = Self::open_observed(path, config, None)?;
+        // a copy's applier checkpoints its WAL, once its position is synced
+        let file = Self::open_observed(path, Config { keep_wal: true, ..config }, None)?;
         let writer = no_writer(&file.describe())?;
         Ok(Self { copy: Arc::new(AtomicBool::new(true)), writer: Arc::new(Mutex::new(writer)), ..file })
     }
@@ -110,7 +111,7 @@ impl File {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| Error::io(path.display().to_string(), error))?;
         }
-        let config = Arc::new(Config { keep_wal: observer.is_some(), ..config });
+        let config = Arc::new(Config { keep_wal: config.keep_wal || observer.is_some(), ..config });
         let writer = connection::open(&path, &config, Role::Writer)?;
         let capture = observer
             .as_ref()

@@ -354,6 +354,20 @@ commit applies.
 A copy judges a key's time to live by its own clock, as its home does; the
 two clocks agree within the skew the engines accept already.
 
+**A crash leaves no copy behind its own file.** A copy keeps its position
+after the commit it names, so a process killed between the two, or a power
+loss that took the position's last write, leaves the file holding commits the
+position does not name. The position keeps where the file's WAL ended after
+its commit, the applier runs the WAL's checkpoints itself, each only once the
+position is synced, and no connection to a copy's file checkpoints as it
+closes: the WAL holds every commit past the position. A copy that opens
+counts them, takes those its own log names as applied, and names the rest as
+its home sends them again, writing none of their pages twice; one of a later
+epoch while some remain means another home, and a snapshot. A promotion that
+cannot name them begins its log again past them, after a check no copy holds,
+so that each copy takes a snapshot; it keeps its point before it empties the
+copy's WAL into the file, and one a crash cut goes on from that point.
+
 ## The first copy
 
 A copy applies later pages on top of its first copy, so that copy must be the

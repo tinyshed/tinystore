@@ -221,7 +221,9 @@ pub(crate) fn let_go(state: &Arc<State>, store: &Store, file: &str, address: &st
     Log::unfence_in(&dir)?;
     super::promote::forget_promotion(&dir)?;
     copy::mark(&dir)?;
-    Position::read(dir.join(Position::FILE))?.keep_durably(last)?;
+    // the file's WAL holds the commits it made as the home, all named by `last`
+    let wal = crate::sqlite::wal_end(&store.dir().join(file))?;
+    Position::read(dir.join(Position::FILE))?.keep_durably_at(last, wal)?;
     state.keep_copy(file, Arc::new(Copy::open(store, file)?));
     drop(paused);
     store.applied(file);

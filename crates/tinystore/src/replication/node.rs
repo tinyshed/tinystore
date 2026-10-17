@@ -424,7 +424,7 @@ impl State {
             thread::sleep(Duration::from_millis(10));
         }
         drop(copy);
-        super::promote::promote_one(name.to_owned(), &self.log_dir(name), at_least)?;
+        super::promote::promote_one(name.to_owned(), &self.dir.join(name), &self.log_dir(name), at_least)?;
         let log = self.open_log(name)?;
         self.switch_each(name, |switch| switch.become_home(Arc::clone(&log)))?;
         drop(paused);

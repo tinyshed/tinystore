@@ -344,7 +344,6 @@ impl Log {
     }
 
     /// Every entry the log in `dir` holds, oldest first.
-    #[cfg(test)]
     pub(crate) fn read(dir: &Path, mut each: impl FnMut(Entry<'_>) -> Result<()>) -> Result<()> {
         for first in segments_in(dir)? {
             let bytes = read_segment(&segment_path(dir, first))?;

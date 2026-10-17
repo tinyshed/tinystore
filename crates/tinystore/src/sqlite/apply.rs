@@ -8,12 +8,19 @@
 //! all written yet. A truncation is a row of its own, `(n, NULL)`, which
 //! drops page `n` and those after it, and only the last row may be one, since
 //! a page written after it cancels it.
+//!
+//! The applier runs the WAL's checkpoints itself, as a home's capture does:
+//! each commit says where the WAL ends, which the copy keeps with its
+//! position, and a checkpoint runs only once the copy synced that position.
+//! A WAL starts over only after a checkpoint, so what it holds past the
+//! position kept is exactly what a crash left unnamed.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rusqlite::Connection;
 
+use super::capture::{self, Position};
 use super::connection::{self, Role, execute, sql_error};
 use super::group::{BEGIN, COMMIT, ROLLBACK};
 use super::{Config, Durability};
@@ -23,6 +30,10 @@ const WRITE_PAGE: &str = "insert into sqlite_dbpage (pgno, data) values (?1, ?2)
 const WRITE_FIRST: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1)";
 const WRITE_FIRST_AND_CUT: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1), (?2, null)";
 const PAGES: &str = "pragma page_count";
+const CHECKPOINT: &str = super::given::own!("pragma wal_checkpoint(passive)");
+/// What SQLite's own automatic checkpoint waits for.
+const CHECKPOINT_AT: u32 = 1000;
+const TRUNCATE: &str = super::given::own!("pragma wal_checkpoint(truncate)");
 const PAGE_SIZE: &str = "pragma page_size";
 
 /// The connection that writes a copy, opened at its first commit, whose
@@ -31,18 +42,30 @@ pub(crate) struct Applier {
     path: PathBuf,
     durability: Durability,
     connection: Mutex<Option<Connection>>,
+    wal: Mutex<Wal>,
+}
+
+/// Where the WAL stood after the applier's last commit.
+#[derive(Default)]
+struct Wal {
+    at: Position,
+    /// The frame the last checkpoint reached in this generation.
+    checkpointed: u32,
+    /// A checkpoint ran since: the next commit may begin a generation.
+    restarted: bool,
 }
 
 impl Applier {
     pub(crate) fn new(path: impl Into<PathBuf>, durability: Durability) -> Applier {
-        Applier { path: path.into(), durability, connection: Mutex::new(None) }
+        Applier { path: path.into(), durability, connection: Mutex::new(None), wal: Mutex::default() }
     }
 
     /// Writes `pages` of `page_size` bytes and leaves the file `size` pages,
-    /// in one transaction.
-    pub(crate) fn apply(&self, page_size: u32, size: u32, pages: &[(u32, &[u8])]) -> Result<()> {
+    /// in one transaction; where the WAL ends after it.
+    pub(crate) fn apply(&self, page_size: u32, size: u32, pages: &[(u32, &[u8])]) -> Result<Position> {
         let mut held = self.lock();
         let connection = self.connection(&mut held, page_size)?;
+        capture::take_wal_end();
         execute(connection, BEGIN).map_err(|error| sql_error("a copy's commit: its transaction", error))?;
         let written = write(connection, page_size, size, pages);
         let committed =
@@ -56,7 +79,45 @@ impl Applier {
         if pages.first().is_some_and(|&(number, _)| number == 1) || committed.is_err() {
             held.take();
         }
-        committed.map_err(|error| error.within(self.path.display()))
+        committed.map_err(|error| error.within(self.path.display()))?;
+        self.ended(capture::take_wal_end()).map_err(|error| error.within(self.path.display()))
+    }
+
+    /// Where the WAL ends after the commit that ended at `frame`.
+    fn ended(&self, frame: Option<u32>) -> Result<Position> {
+        let mut wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(frame) = frame else {
+            return Ok(wal.at);
+        };
+        let follows = !wal.restarted && wal.at != Position::default() && frame > wal.at.frame;
+        let at = if follows { Position { frame, ..wal.at } } else { capture::wal_at(&self.path, frame)? };
+        if !at.same_generation(&wal.at) {
+            wal.checkpointed = 0;
+        }
+        (wal.at, wal.restarted) = (at, false);
+        Ok(at)
+    }
+
+    /// Whether the WAL grew by as many frames as SQLite's own checkpoint waits
+    /// for since the last one.
+    pub(crate) fn is_long(&self) -> bool {
+        let wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
+        wal.at.frame >= wal.checkpointed + CHECKPOINT_AT
+    }
+
+    /// Checkpoints the WAL, once the copy synced the position that names
+    /// where it ends.
+    pub(crate) fn checkpoint(&self) -> Result<()> {
+        let held = self.lock();
+        let Some(connection) = held.as_ref() else {
+            return Ok(());
+        };
+        connection
+            .query_row(CHECKPOINT, [], |_| Ok(()))
+            .map_err(|error| sql_error(self.path.display().to_string(), error))?;
+        let mut wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
+        (wal.checkpointed, wal.restarted) = (wal.at.frame, true);
+        Ok(())
     }
 
     /// Closes the connection, so that the file can be closed or removed.
@@ -66,8 +127,10 @@ impl Applier {
 
     fn connection<'a>(&self, held: &'a mut Option<Connection>, page_size: u32) -> Result<&'a Connection> {
         if held.is_none() {
-            let config = Config { page_size, durability: self.durability, ..Config::default() };
-            *held = Some(open(&self.path, &config)?);
+            let config = Config { page_size, durability: self.durability, keep_wal: true, ..Config::default() };
+            let connection = open(&self.path, &config)?;
+            capture::hook_wal(&connection);
+            *held = Some(connection);
         }
         Ok(held.as_ref().expect("opened just above"))
     }
@@ -75,6 +138,29 @@ impl Applier {
     fn lock(&self) -> MutexGuard<'_, Option<Connection>> {
         self.connection.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Copies every commit the WAL beside `path` holds into the file and empties
+/// it: a copy's, each named, as the copy becomes a home whose capture would
+/// take what its WAL holds for commits of its own.
+pub(crate) fn checkpoint_away(path: &Path) -> Result<()> {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    if !Path::new(&wal).exists() {
+        return Ok(());
+    }
+    let config = Config { keep_wal: true, ..Config::default() };
+    let connection = connection::open(path, &config, Role::Writer)?;
+    let busy: i64 = connection
+        .query_row(TRUNCATE, [], |row| row.get(0))
+        .map_err(|error| sql_error(path.display().to_string(), error))?;
+    if busy != 0 {
+        return Err(Error::new(
+            ErrorKind::Unavailable,
+            format!("{}: a reader holds its WAL, which a copy that becomes a home empties first", path.display()),
+        ));
+    }
+    Ok(())
 }
 
 fn open(path: &Path, config: &Config) -> Result<Connection> {

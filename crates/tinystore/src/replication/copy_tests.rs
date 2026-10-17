@@ -241,3 +241,93 @@ fn a_migration_its_home_has_not_shipped_yet_is_unavailable_on_a_copy() {
     Log::read(&home_dir.path().join(DIR).join("sql/app.db"), |entry| shipped.apply(&entry, None)).unwrap();
     copy.database("app").migrations(migrations).open().unwrap();
 }
+
+/// A home's kv.db of twenty sessions, the copy store beside it, and the last
+/// entry of the home's log.
+fn a_home_and_a_copy() -> (tempfile::TempDir, tempfile::TempDir, u64) {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let home = node(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..20 {
+        sessions.set(format!("k{i}"), &format!("v{i}")).unwrap();
+    }
+    home.close().unwrap();
+    let last = Log::last_in(&home_dir.path().join(DIR).join("kv.db")).unwrap().unwrap().sequence;
+    (home_dir, copy_dir, last)
+}
+
+/// Applies the home's entries to `copy` through `apply`, each with its
+/// sequence.
+fn each_entry(home: &Path, mut apply: impl FnMut(&entry::Entry<'_>) -> crate::Result<()>) {
+    Log::read(&home.join(DIR).join("kv.db"), |entry| apply(&entry)).unwrap();
+}
+
+#[test]
+fn a_copy_killed_between_a_commit_and_its_position_names_what_its_file_holds_and_writes_none_of_it_again() {
+    let (home_dir, copy_dir, last) = a_home_and_a_copy();
+    let copy = node(copy_dir.path());
+    let shipped = Copy::start(&copy, "kv.db").unwrap();
+    each_entry(home_dir.path(), |entry| {
+        if entry.sequence + 3 > last { shipped.commit_and_die(entry) } else { shipped.apply(entry, None) }
+    });
+    drop(shipped);
+
+    let opened = Copy::open(&copy, "kv.db").unwrap();
+    assert_eq!((opened.applied(), opened.unnamed()), (last - 3, 3), "three commits its position does not name");
+    let wal = crate::sqlite::wal_end(&copy_dir.path().join("kv.db")).unwrap();
+    each_entry(home_dir.path(), |entry| opened.apply(entry, None));
+    assert_eq!((opened.applied(), opened.unnamed()), (last, 0));
+    assert_eq!(crate::sqlite::wal_end(&copy_dir.path().join("kv.db")).unwrap(), wal, "no page written twice");
+    let home_pages = pages_seen(&home_dir.path().join("kv.db"));
+    assert!(pages_seen(&copy_dir.path().join("kv.db")) == home_pages, "the copy is its home's file");
+}
+
+#[test]
+fn a_copy_whose_last_position_a_power_loss_took_names_what_its_file_holds() {
+    let (home_dir, copy_dir, last) = a_home_and_a_copy();
+    let copy = node(copy_dir.path());
+    let shipped = Copy::start(&copy, "kv.db").unwrap();
+    let position = copy_dir.path().join(DIR).join("kv.db").join(super::copy::Position::FILE);
+    let mut synced = Vec::new();
+    each_entry(home_dir.path(), |entry| {
+        shipped.apply(entry, None)?;
+        if entry.sequence + 3 == last {
+            synced = fs::read(&position).unwrap();
+        }
+        Ok(())
+    });
+    drop(shipped);
+    // what a power loss leaves of writes it took before they were synced
+    fs::write(&position, &synced).unwrap();
+
+    let opened = Copy::open(&copy, "kv.db").unwrap();
+    assert_eq!((opened.applied(), opened.unnamed()), (last - 3, 3));
+    each_entry(home_dir.path(), |entry| opened.apply(entry, None));
+    assert_eq!((opened.applied(), opened.unnamed()), (last, 0));
+    assert!(pages_seen(&copy_dir.path().join("kv.db")) == pages_seen(&home_dir.path().join("kv.db")));
+}
+
+#[test]
+fn a_copy_promoted_with_commits_it_cannot_name_begins_its_log_again_past_them() {
+    let (home_dir, copy_dir, last) = a_home_and_a_copy();
+    let copy = node(copy_dir.path());
+    let shipped = Copy::start(&copy, "kv.db").unwrap();
+    each_entry(home_dir.path(), |entry| {
+        if entry.sequence + 3 > last { shipped.commit_and_die(entry) } else { shipped.apply(entry, None) }
+    });
+    drop(shipped);
+    copy.close().unwrap();
+
+    let promoted = promote(copy_dir.path(), &["kv.db".to_owned()]).unwrap();
+    assert_eq!((promoted[0].sequence, promoted[0].epoch), (last, 2), "the commits its file holds are the home's");
+    let log = copy_dir.path().join(DIR).join("kv.db");
+    let point = super::promote::promoted_at(&log).unwrap().unwrap();
+    assert_eq!(point.check, [0; 16], "a check no copy holds, so that each takes a snapshot");
+    assert!(Log::last_in(&log).unwrap().is_none(), "its log begins again");
+
+    let home = node(copy_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    assert_eq!(sessions.get("k19").unwrap().as_deref(), Some("v19"));
+    sessions.set("after", &"the promotion".to_owned()).unwrap();
+    assert_eq!(Log::last_in(&log).unwrap().unwrap().sequence, last + 1);
+}

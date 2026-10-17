@@ -59,28 +59,65 @@ pub fn promote(dir: &Path, files: &[String]) -> Result<Vec<Promoted>> {
         }
         promoting.push((name, log));
     }
-    promoting.into_iter().map(|(name, log)| promote_one(name, &log, 0).map_err(|error| error.within(what()))).collect()
+    promoting
+        .into_iter()
+        .map(|(name, log)| promote_one(name.clone(), &dir.join(&name), &log, 0).map_err(|error| error.within(what())))
+        .collect()
 }
 
-/// Makes the copy whose log is in `log` its node's own, at the epoch after
-/// the last it applied, or at `at_least` when that is later, as a lease a
-/// witness granted names it.
-pub(crate) fn promote_one(file: String, log: &Path, at_least: u64) -> Result<Promoted> {
-    let applied = Position::read(log.join(Position::FILE))?.point();
-    let point = Point { epoch: (applied.epoch + 1).max(at_least), ..applied };
-    let mut promoted = Position::read(log.join(PROMOTED))?;
-    promoted.keep_durably(point)?;
-    for gone in [copy::MARK, Position::FILE] {
-        fs::remove_file(log.join(gone)).map_err(|error| io_error(&log.join(gone), error))?;
+/// Makes the copy at `path`, whose log is in `log`, its node's own, at the
+/// epoch after the last it applied, or at `at_least` when that is later, as a
+/// lease a witness granted names it.
+///
+/// A crash may have left the file holding commits its position does not name
+/// and its own log does not keep. Its log then begins again past them, after a
+/// check no copy holds, so that each copy takes a snapshot rather than go on
+/// from entries that lack them.
+///
+/// The point is kept before the copy's WAL goes into the file, which a home's
+/// capture would take for commits of its own; a promotion a crash cut goes on
+/// from the point it kept, since the WAL that counted its commits may be gone.
+pub(crate) fn promote_one(file: String, path: &Path, log: &Path, at_least: u64) -> Result<Promoted> {
+    let point = match promoted_at(log)? {
+        Some(point) => point,
+        None => promoted_point(&file, path, log, at_least)?,
+    };
+    if point.check == [0; 16] {
+        super::log::Log::clear(log)?;
     }
+    crate::sqlite::checkpoint_away(path)?;
     // a copy a direct link took is taken from no node once it is a home
-    match fs::remove_file(log.join("from")) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(&log.join("from"), error)),
+    for gone in [copy::MARK, Position::FILE, "from"] {
+        match fs::remove_file(log.join(gone)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(&log.join(gone), error)),
+        }
     }
     crate::durable::sync_directory(log).map_err(|error| io_error(log, error))?;
     Ok(Promoted { file, sequence: point.sequence, epoch: point.epoch })
+}
+
+/// The point the promoted copy's log goes on from, kept durably: after the
+/// last commit its file holds, at the next epoch.
+fn promoted_point(file: &str, path: &Path, log: &Path, at_least: u64) -> Result<Point> {
+    let mut position = Position::read(log.join(Position::FILE))?;
+    let unnamed = position.settle(path, log)?.len() as u64;
+    let applied = position.point();
+    drop(position);
+    let mut point = Point { epoch: (applied.epoch + 1).max(at_least), ..applied };
+    if unnamed > 0 {
+        point = Point { sequence: point.sequence + unnamed, check: [0; 16], ..point };
+        tracing::warn!(
+            target: "tinystore",
+            file,
+            unnamed,
+            "a copy promoted holds commits no entry it keeps names: its log begins again, and each copy of it takes a \
+             snapshot"
+        );
+    }
+    Position::read(log.join(PROMOTED))?.keep_durably(point)?;
+    Ok(point)
 }
 
 /// A file a demotion made a copy again.
