@@ -150,6 +150,9 @@ fn wait_applied(node: &State, name: &str, sequence: u64) -> bool {
             None => return true,
             Some(_) => {}
         }
+        if node.stopping() {
+            return false;
+        }
         let now = Instant::now();
         if now >= deadline {
             tracing::warn!(

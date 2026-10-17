@@ -248,6 +248,9 @@ impl State {
         if self.stopping.swap(true, Ordering::SeqCst) {
             return;
         }
+        for log in lock(&self.logs).values().filter_map(Weak::upgrade) {
+            log.stop_waiting();
+        }
         if let Some(mut address) = *lock(&self.listening) {
             // wakes the accepting thread, which then sees the node stopping; a
             // server on every interface is reached on loopback, since Windows

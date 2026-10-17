@@ -66,9 +66,13 @@ impl Peer {
 
     fn restart(&self) {
         if let Some(store) = self.store.write().unwrap().take() {
+            let closing = Instant::now();
             store.close().unwrap_or_else(|error| panic!("{} closing: {error}", self.name));
+            println!("{} closed in {:?}", self.name, closing.elapsed());
         }
+        let opening = Instant::now();
         *self.store.write().unwrap() = Some(self.open());
+        println!("{} opened in {:?}", self.name, opening.elapsed());
     }
 
     /// Whether this node writes `file` itself now.

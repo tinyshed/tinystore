@@ -217,6 +217,8 @@ pub(crate) struct Log {
     lease: Mutex<Option<Instant>>,
     /// Told each renewal, for the writes waiting for a lease.
     leased: Condvar,
+    /// The node stops: a write waits for no lease.
+    stopping: AtomicBool,
 }
 
 /// How long a judged home's write waits for a lease it holds not now: two
@@ -277,6 +279,7 @@ impl Log {
             fenced,
             lease: Mutex::new(None),
             leased: Condvar::new(),
+            stopping: AtomicBool::new(false),
         };
         log.find_the_end().map_err(|error| error.within(format!("log {}", log.dir.display())))?;
         log.go_on_from_a_promotion()?;
@@ -304,6 +307,14 @@ impl Log {
         self.lock().epoch
     }
 
+    /// Wakes the writes waiting for a lease, the node stopping: each is refused
+    /// at once rather than hold the writer the store's close waits for.
+    pub(crate) fn stop_waiting(&self) {
+        let _held = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
+        self.stopping.store(true, Ordering::SeqCst);
+        self.leased.notify_all();
+    }
+
     /// Keeps the lease of a judged home's file on to `until`.
     pub(crate) fn lease_until(&self, until: Instant) {
         let mut lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
@@ -324,7 +335,7 @@ impl Log {
             if now < until {
                 return Ok(());
             }
-            if now >= deadline {
+            if now >= deadline || self.stopping.load(Ordering::SeqCst) {
                 return Err(Error::new(
                     ErrorKind::Unavailable,
                     "this node holds no lease of this file from its witness now: it writes again once it renews one",

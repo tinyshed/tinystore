@@ -1509,3 +1509,20 @@ fn a_direct_link_takes_nothing_of_a_node_that_is_not_the_home_the_catalog_names(
     reader.close().unwrap();
     keeper.close().unwrap();
 }
+
+#[test]
+fn a_node_that_stops_refuses_at_once_the_writes_waiting_for_a_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home =
+        node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), failover: Some(nobody), ..Node::default() });
+    let waiting = {
+        let home = home.clone();
+        std::thread::spawn(move || home.bucket::<String>("sessions").open().map(drop))
+    };
+    std::thread::sleep(Duration::from_millis(500));
+    let began = Instant::now();
+    home.close().unwrap();
+    assert!(began.elapsed() < Duration::from_secs(2), "the close waited {:?} for a lease", began.elapsed());
+    assert!(waiting.join().unwrap().is_err(), "a write no lease holds is refused");
+}

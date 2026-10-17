@@ -434,6 +434,6 @@ shipped, counted, and the old home cannot write again.
   four, restarts, the witness's restarts, moves and a failover of a synchronous home together and checks that every
   write answered survives, that no two nodes wrote a file as home at one epoch and that every copy is its home page
   for page; it found the bugs these lines fix. Left: a lease in object storage behind an interface, the option in
-  the Bun SDK, a node's close that can take seconds, and the timings measured by fault injection and over a WAN.
+  the Bun SDK, and the timings measured by fault injection and over a WAN.
 
 **Gate:** no cut of a simulated network leaves two homes taking writes.
