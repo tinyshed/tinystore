@@ -111,6 +111,9 @@ impl Transaction<'_> {
         bound: Option<&dyn Fn() -> Result<()>>,
         work: impl FnOnce(&Transaction<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
+        if file.is_copy() {
+            return Err(crate::sqlite::a_copy_takes_no_transaction(owner).into());
+        }
         let ended = Ended::default();
         let outcome = file.transaction(|raw| {
             let writer = OneFile { raw, file, owner };

@@ -11,9 +11,12 @@
 
 use serde::Serialize;
 
+use std::sync::Arc;
+
 use super::call::Asked;
 use super::engine::Jobs;
 use super::queue::{Change, Queue};
+use super::repeat::Asked as RepeatAsked;
 use super::state::Kind;
 use crate::replication::{In, Out};
 use crate::{Error, ErrorKind, Result, Store};
@@ -62,6 +65,24 @@ pub(crate) fn pass_on_cancel(store: &Store, queue: (&str, Option<&str>), id: &st
     answered(store, out)
 }
 
+/// Passes a schedule's repeat, which the code on a copy opened it with, to
+/// the home, which keeps its job: a schedule runs where its file is written.
+pub(crate) fn pass_on_schedule(store: &Store, name: &str, repeat: &RepeatAsked) -> Result<()> {
+    let mut out = head((name, None), 5);
+    match repeat {
+        RepeatAsked::Every(span) => {
+            out.byte(1);
+            out.long(u64::try_from(span.as_millis()).unwrap_or(u64::MAX));
+        }
+        RepeatAsked::Cron { expr, zone } => {
+            out.byte(2);
+            out.text(expr);
+            out.text(zone);
+        }
+    }
+    answered(store, out).map(drop)
+}
+
 /// Asks the home to register the queue `name`, which a copy found missing.
 pub(crate) fn pass_on_open(store: &Store, queue: (&str, Option<&str>)) -> Result<()> {
     answered(store, head(queue, 4)).map(drop)
@@ -96,8 +117,9 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
     } else {
         (Jobs::of(store)?, FILE.to_owned())
     };
-    let state = jobs.queue_as_open(&name, Kind::Queue)?;
-    let queue: Queue<serde_json::Value> = Queue::of_state(jobs, state);
+    let kind = if call == 5 { Kind::Schedule } else { Kind::Queue };
+    let state = jobs.queue_as_open(&name, kind)?;
+    let queue: Queue<serde_json::Value> = Queue::of_state(Arc::clone(&jobs), state);
     let changed = match call {
         0..=2 => {
             let asked = Asked::read(&mut at)?;
@@ -107,6 +129,15 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         }
         3 => queue.cancel(at.text()?)?,
         4 => true,
+        5 => {
+            let repeat = match at.byte()? {
+                1 => RepeatAsked::Every(std::time::Duration::from_millis(at.long()?)),
+                2 => RepeatAsked::Cron { expr: at.text()?, zone: at.text()? },
+                _ => return Err(corrupt("a schedule's repeat")),
+            };
+            super::schedule::keep_repeat(&queue, &repeat.of(&name)?)?;
+            true
+        }
         _ => return Err(corrupt("a call")),
     };
     if !at.done() {

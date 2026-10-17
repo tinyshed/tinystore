@@ -6,11 +6,11 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use super::bucket::{Bucket, Expiry};
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 use super::bucket::{Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 use super::value::Raw;
 use super::value::Value;
 use crate::engine::Home;
@@ -52,7 +52,7 @@ impl<V: Value> OnceBuilder<V> {
 
 /// Once's answers as rows, for the wire: a client runs the function, and the
 /// store keeps what it answered under the key for `keep`.
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) fn rows(store: &Store, name: &str, keep: Option<Duration>) -> Result<Bucket<()>> {
     answers(store, name, keep.unwrap_or(KEEP))
 }
@@ -67,7 +67,7 @@ fn answers<T>(store: &Store, name: &str, keep: Duration) -> Result<Bucket<T>> {
 }
 
 /// What a client's run of a key starts with.
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) enum Hand {
     /// The answer kept under the key.
     Kept(Raw),
@@ -80,7 +80,7 @@ pub(crate) enum Hand {
 /// Starts a client's run of `key` on once's rows: the answer kept, or the run
 /// handed over, or, while another run holds the key, a wait that calls `waiter`
 /// once it ends, when the client asks again.
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Hand> {
     if let Some(cell) = answers.read_cell(key)? {
         return Ok(Hand::Kept(cell.raw));
@@ -98,14 +98,14 @@ pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Ha
 
 /// A run of a key a client was handed; dropping it lets the runs waiting for
 /// the key go on, keeping nothing.
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 pub(crate) struct Handed {
     answers: Bucket<()>,
     key: String,
     running: (i64, Vec<u8>),
 }
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 impl Handed {
     /// Keeps the client's answer, or nothing when its function failed, and
     /// lets the key go.
@@ -117,14 +117,14 @@ impl Handed {
     }
 }
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 impl Drop for Handed {
     fn drop(&mut self) {
         self.answers.scope.kv.runs().release(&self.running);
     }
 }
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "replication"))]
 impl fmt::Debug for Handed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Handed({})", self.answers.scope.shown_key(&self.key))
@@ -152,6 +152,10 @@ impl<V: Value> Once<V> {
     /// kept is still returned, and the failure logged.
     pub fn run<E: From<Error>>(&self, key: impl Key, work: impl FnOnce() -> Result<V, E>) -> Result<V, E> {
         let key = key.text();
+        #[cfg(feature = "replication")]
+        if self.answers.is_copy() {
+            return self.run_at_home(&key, work);
+        }
         let claimed = loop {
             if let Some(answer) = self.answers.get(&*key)? {
                 return Ok(answer);
@@ -170,6 +174,28 @@ impl<V: Value> Once<V> {
         }
         drop(claimed);
         Ok(answer)
+    }
+
+    /// A run on a copy: its home holds the key, so that one run of it goes
+    /// on across every node, and keeps what this one answered.
+    #[cfg(feature = "replication")]
+    fn run_at_home<E: From<Error>>(&self, key: &str, work: impl FnOnce() -> Result<V, E>) -> Result<V, E> {
+        if let Some(answer) = self.answers.get(key)? {
+            return Ok(answer);
+        }
+        let token = match self.answers.once_claim(key)? {
+            super::forward::Claimed::Kept(raw) => return Ok(super::bucket::decode(&raw)?),
+            super::forward::Claimed::Yours(token) => token,
+        };
+        let answer = work();
+        let raw = match &answer {
+            Ok(value) => Some(self.answers.encode(key, value)?),
+            Err(_) => None,
+        };
+        if let Err(error) = self.answers.once_keep(key, token, raw) {
+            tracing::warn!(target: "tinystore", %error, "a once answer was not kept at its home; the next run of its key runs again");
+        }
+        answer
     }
 
     /// The answer kept under `key`.

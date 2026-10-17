@@ -324,14 +324,17 @@ in [scaling.md](scaling.md#order).
   bucket's writes, its values sealed on the copy with the key it shares with its home, which writes them as they
   are and refuses another key's, and the decisions of rate limits and quotas, one limit for every node, pass from
   a copy to its home through each node on the way, and so do a bucket's and a queue's kept in a database's file,
-  run where the home's database lends them, the tables of an engine a copy found missing there made by its home,
+  run where the home's database lends them, the tables of an engine a copy found missing there made by its home;
+  a schedule a copy opens is kept at its home, which runs it, and a copy's worker of it is refused; `once` on a
+  copy claims its key at the home, which answers what is kept or hands the run over by a token, the function
+  running on the copy and its answer kept at the home, a claim a node never answers let go after ten minutes; a
+  transaction on a copy is refused `Unavailable`, its code deciding on a writer only the home holds,
   each node running the call through the same handle; a file a copy waits for half a second that its home never
   made, the home makes, opening the engine that keeps it;
   the answer comes back with where the file's log stood, and each node answers once its own copy holds that entry,
   ten seconds at most. The home's error comes back as it said it, a conflict a conflict. Records' and metrics'
-  files are each node's own, and a node that copies another's reads them only. Left: a transaction, a take of an
-  encrypted bucket, whose value would come back unsealed until links have TLS, a schedule and `once`, and the
-  queue of operations that commute. A write waits ten seconds
+  files are each node's own, and a node that copies another's reads them only. Left: a take of an encrypted
+  bucket, whose value would come back unsealed until links have TLS, and the queue of operations that commute. A write waits ten seconds
   at most for a link to its home before `unavailable`.
 - [ ] Several homes: the catalog, files homed on different nodes, routing, moving a home that is alive.
   Built so far: two nodes each taking from the other, each naming in `files` the databases it copies, write their

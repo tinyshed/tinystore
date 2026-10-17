@@ -259,10 +259,7 @@ impl File {
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
         if self.copy {
-            return Err(Error::invalid(format!(
-                "{}: a copy takes no transaction: its home writes it",
-                self.describe()
-            )));
+            return Err(a_copy_takes_no_transaction(&self.describe()));
         }
         let connection = lock(&self.writer);
         self.refuse_when_unlogged()?;
@@ -440,6 +437,16 @@ impl Drop for Begun<'_> {
             let _ = execute(&self.connection, ROLLBACK);
         }
     }
+}
+
+/// Why a transaction of a copy is refused: its code reads and decides on the
+/// writer, which only the file's home holds, and code is not sent where a
+/// write passes on.
+pub(crate) fn a_copy_takes_no_transaction(owner: &str) -> Error {
+    Error::new(
+        ErrorKind::Unavailable,
+        format!("{owner}: a transaction holds its file's writer, which a copy has not: run it at the file's home"),
+    )
 }
 
 /// Whether this thread holds any file's writer in a transaction, or is marked

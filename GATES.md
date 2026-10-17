@@ -705,6 +705,9 @@ module defines.
 - an encrypted bucket's value written on a copy crosses the link sealed with the key copy and home share, another key's refused, a take refused — `an_encrypted_bucket_s_value_written_on_a_copy_crosses_the_link_sealed` in `replication::link_tests`
 - a copy's rate limits and quotas are decided at their home, one limit for every node — `a_copy_s_rate_limits_and_quotas_are_decided_at_their_home` in `replication::link_tests`
 - a bucket and a queue kept in a database's file pass a copy's writes to that database's home, the copy page for page its home's after a schema that grew the file — `a_bucket_and_a_queue_kept_in_a_database_s_file_pass_a_copy_s_writes_to_its_home` in `replication::link_tests`
+- a schedule a copy opens is kept and run at its home, a copy's worker of it refused and its cancel passed on — `a_schedule_a_copy_opens_is_kept_and_run_at_its_home` in `replication::link_tests`
+- once on two copies runs a key's function once across the nodes, both callers getting its answer, and a failed run keeps nothing — `once_on_two_copies_runs_a_key_s_function_once_across_the_nodes` in `replication::link_tests`
+- a transaction on a copy is refused `Unavailable`, its home's to run — `a_bucket_and_a_queue_kept_in_a_database_s_file_pass_a_copy_s_writes_to_its_home` in `replication::link_tests`
 - every message of a link reads back as it was written — `every_message_reads_back_as_it_was_written` in `replication::message`
 - a store in a Bun program's own process is a node: a copy of a copy there reads its home's writes and passes its own to the home — `a node in this process` in `sdk/js/test/node.test.ts`
 

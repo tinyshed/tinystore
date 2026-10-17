@@ -49,6 +49,11 @@ pub(crate) enum Handle {
         name: String,
         ttl: Option<Duration>,
     },
+    /// Once's answers, each kept for `keep` milliseconds.
+    Once {
+        name: String,
+        keep: u64,
+    },
     /// A rate limit, its rate as the nanoseconds one request takes.
     RateLimit {
         name: String,
@@ -83,6 +88,13 @@ pub(crate) enum Call {
     ClearCounters,
     /// Makes the handle's name, which a handle opening on a copy found missing.
     Open,
+    /// Claims a once's key for the node that asked, or answers what is kept.
+    OnceClaim,
+    /// Keeps what the run a claim handed over answered, none when it failed.
+    OnceKeep {
+        token: u64,
+        answer: Option<Raw>,
+    },
     /// Asks a rate limit or a quota for `n` of a key.
     Allow(u64),
     /// Gives `n` uses of a quota's key back.
@@ -107,7 +119,15 @@ pub(crate) enum Answer {
     Cell(Option<Cell>),
     Sum(i64),
     Allowance(Allowance),
+    Claimed(Claimed),
     Done,
+}
+
+/// What a claim of a once's key answers a copy.
+pub(crate) enum Claimed {
+    Kept(Raw),
+    /// The run is the copy's, by this token, which its keep names.
+    Yours(u64),
 }
 
 /// The bytes of a call on `key` of `handle` under `owners`.
@@ -138,6 +158,11 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             out.text(name);
             out.text(role);
             database_out(&mut out, database.as_deref());
+        }
+        Handle::Once { name, keep } => {
+            out.byte(5);
+            out.text(name);
+            out.long(*keep);
         }
         Handle::RateLimit { name, interval, burst } => {
             out.byte(3);
@@ -197,6 +222,15 @@ pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call)
             out.long(*n);
         }
         Call::Reset => out.byte(12),
+        Call::OnceClaim => out.byte(13),
+        Call::OnceKeep { token, answer } => {
+            out.byte(14);
+            out.long(*token);
+            out.byte(u8::from(answer.is_some()));
+            if let Some(raw) = answer {
+                raw_out(&mut out, raw);
+            }
+        }
         Call::PutSealed { raw, key_id, put, options } => {
             out.byte(9);
             raw_out(&mut out, raw);
@@ -230,6 +264,7 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
             Handle::Counters { name, ttl }
         }
         2 => Handle::Name { name: at.text()?, role: at.text()?, database: database_in(&mut at)? },
+        5 => Handle::Once { name: at.text()?, keep: at.long()? },
         3 => Handle::RateLimit { name: at.text()?, interval: at.long()? as i64, burst: at.long()? as i64 },
         4 => {
             let name = at.text()?;
@@ -259,6 +294,12 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         10 => Call::Allow(at.long()?),
         11 => Call::Refund(at.long()?),
         12 => Call::Reset,
+        13 => Call::OnceClaim,
+        14 => {
+            let token = at.long()?;
+            let answer = if at.byte()? == 1 { Some(raw_in(&mut at)?) } else { None };
+            Call::OnceKeep { token, answer }
+        }
         9 => {
             let raw = raw_in(&mut at)?;
             let key_id = at.text()?;
@@ -324,6 +365,21 @@ fn call_here(
                 }
                 _ => return Err(Error::invalid("a counter's call on a bucket")),
             })
+        }
+        Handle::Once { name, keep } => {
+            let answers = super::once::rows(store, &name, Some(Duration::from_millis(keep)))?;
+            let answers: Bucket<()> = owners.iter().fold(answers, |answers, owner| answers.under(owner));
+            match call {
+                Call::OnceClaim => Ok(Answer::Claimed(claim_here(&answers, key)?)),
+                Call::OnceKeep { token, answer } => {
+                    let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
+                        Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
+                    })?;
+                    handed.keep(answer)?;
+                    Ok(Answer::Done)
+                }
+                _ => Err(Error::invalid("a call once's answers do not take")),
+            }
         }
         Handle::RateLimit { name, interval, burst } => {
             let per = Duration::from_nanos(u64::try_from(interval).map_err(|_| corrupt("a rate"))?);
@@ -395,6 +451,14 @@ fn answer_bytes(answer: &Answer) -> Vec<u8> {
             None => out.byte(0),
         },
         Answer::Sum(sum) => out.long(*sum as u64),
+        Answer::Claimed(Claimed::Kept(raw)) => {
+            out.byte(0);
+            raw_out(&mut out, raw);
+        }
+        Answer::Claimed(Claimed::Yours(token)) => {
+            out.byte(1);
+            out.long(*token);
+        }
         Answer::Allowance(allowance) => {
             out.byte(u8::from(allowance.ok));
             out.long(allowance.left);
@@ -447,6 +511,37 @@ pub(crate) fn allowance(bytes: &[u8]) -> Result<Allowance> {
         windows.push(WindowUse { name, used, limit, left, resets_at: expires_in(&mut at)?.map(from_unix_millis) });
     }
     Ok(Allowance { ok, left, retry_at, windows })
+}
+
+pub(crate) fn claimed(bytes: &[u8]) -> Result<Claimed> {
+    let mut at = In { bytes, at: 0 };
+    match at.byte()? {
+        0 => Ok(Claimed::Kept(raw_in(&mut at)?)),
+        1 => Ok(Claimed::Yours(at.long()?)),
+        _ => Err(corrupt("a claim's answer")),
+    }
+}
+
+/// Claims `key` at the home for the node that asked: the answer kept, or the
+/// run handed over and kept by a token, waiting meanwhile for a run under way.
+fn claim_here(answers: &Bucket<()>, key: &str) -> Result<Claimed> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let (ended, waiting) = std::sync::mpsc::channel::<()>();
+        let waiter = Box::new(move || {
+            let _ = ended.send(());
+        });
+        match super::once::hand(answers, key, waiter)? {
+            super::once::Hand::Kept(raw) => return Ok(Claimed::Kept(raw)),
+            super::once::Hand::Yours(handed) => return Ok(Claimed::Yours(answers.scope.kv.keep_passed(handed))),
+            super::once::Hand::Wait => {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() || waiting.recv_timeout(left).is_err() && std::time::Instant::now() >= deadline {
+                    return Err(Error::new(ErrorKind::Unavailable, "another run of the key held it too long"));
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn sum(bytes: &[u8]) -> Result<i64> {

@@ -107,8 +107,9 @@ await store.bucket('sessions').set(id, session) // committed in America, answere
   `records.db` and `metrics.db`, or those `--node-files` names; a file its
   home never made, the home makes when a copy waits for it.
 - kv's buckets and counters, encrypted ones sealed on the copy, sql's
-  statements, search's documents, jobs' adds and blobs' files pass from a
-  copy to their home; a transaction on a copy is refused.
+  statements, search's documents, jobs' adds and schedules, blobs' files,
+  rate limits, quotas and `once` pass from a copy to their home; a
+  transaction on a copy is refused: run it at the home.
 - Links are TCP with a token and no TLS yet: across machines, a tunnel or a
   private network.
 - `--node-synchronous` makes the home answer a write once a node copying

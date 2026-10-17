@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::copy::Copy;
@@ -621,6 +622,72 @@ fn a_bucket_and_a_queue_kept_in_a_database_s_file_pass_a_copy_s_writes_to_its_ho
     assert!(tasks.get("t1").unwrap().is_some());
     let home_tasks = home_db.queue::<serde_json::Value>("tasks").open().unwrap();
     assert!(home_tasks.get("t1").unwrap().is_some(), "the job is in the tenant's file at its home");
+
+    // a transaction is code deciding on the writer, which a copy has not
+    let refused = db.tx(|tx| tx.exec(crate::sql!("insert into notes (body) values ('in a tx')"))).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
+    let sessions = copy.bucket::<String>("sessions").open().unwrap();
+    let refused = copy.tx(|tx| -> crate::Result<()> { tx.with(&sessions).set("k", &"v".to_owned()) }).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
     copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_schedule_a_copy_opens_is_kept_and_run_at_its_home() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.queue::<serde_json::Value>("warm").open().unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let hour = Duration::from_secs(3600);
+    let report = copy.schedule("report").every(hour).open().unwrap();
+    let job = report.get().unwrap().expect("the copy holds the job its home keeps");
+    assert!(job.at > std::time::SystemTime::now(), "due within the next hour");
+    let home_report = home.schedule("report").every(hour).open().unwrap();
+    assert!(home_report.get().unwrap().is_some(), "its home keeps it");
+    let refused = copy.schedule("report").every(hour).work(|_: &crate::jobs::Run| Ok::<_, String>(())).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a copy's worker takes no job: {refused}");
+    assert!(report.cancel().unwrap());
+    assert!(home_report.get().unwrap().is_none(), "the cancel reached its home");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn once_on_two_copies_runs_a_key_s_function_once_across_the_nodes() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, address) = serving(dirs[0].path());
+    home.once::<i64>("charges").open().unwrap();
+    let first = node_with(dirs[1].path(), Node { from: vec![address.clone()], ..Node::default() });
+    let second = node_with(dirs[2].path(), Node { from: vec![address], ..Node::default() });
+    let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let runs: Vec<_> = [first.clone(), second.clone()]
+        .into_iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let ran = Arc::clone(&ran);
+            std::thread::spawn(move || {
+                let charges = node.once::<i64>("charges").open().unwrap();
+                charges
+                    .run("charge-1", || {
+                        ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(300));
+                        Ok::<_, crate::Error>(10 + i as i64)
+                    })
+                    .unwrap()
+            })
+        })
+        .collect();
+    let answers: Vec<i64> = runs.into_iter().map(|run| run.join().unwrap()).collect();
+    assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 1, "the function ran once across both copies");
+    assert_eq!(answers[0], answers[1], "both callers got the one answer");
+    assert_eq!(home.once::<i64>("charges").open().unwrap().get("charge-1").unwrap(), Some(answers[0]));
+
+    let charges = first.once::<i64>("charges").open().unwrap();
+    let failed = charges.run("charge-2", || Err::<i64, _>(crate::Error::invalid("declined")));
+    assert!(failed.is_err());
+    assert_eq!(charges.run("charge-2", || Ok::<_, crate::Error>(7)).unwrap(), 7, "a failed run keeps nothing");
+    second.close().unwrap();
+    first.close().unwrap();
     home.close().unwrap();
 }

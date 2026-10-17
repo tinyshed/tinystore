@@ -47,12 +47,20 @@ pub(crate) struct Kv {
     counting: Mutex<HashMap<i64, Option<Arc<Buffer>>>>,
     renewals: Renewals,
     runs: Runs,
+    /// Once's runs this home handed to other nodes, by token, and when.
+    #[cfg(feature = "replication")]
+    passed: Mutex<Passed>,
     /// The configs open in this process, a hub each, which every handle of
     /// one name shares.
     #[cfg(feature = "config")]
     configs: Mutex<HashMap<String, Weak<super::config::Hub>>>,
     _claim: Option<Claim>,
 }
+
+/// Once's runs a home handed to other nodes: the last token given, and each
+/// run held by its token with when it was handed.
+#[cfg(feature = "replication")]
+type Passed = (u64, HashMap<u64, (super::once::Handed, std::time::Instant)>);
 
 /// What one maintenance pass did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,6 +114,8 @@ impl Kv {
             counting: Mutex::new(HashMap::new()),
             renewals: Renewals::default(),
             runs: Runs::default(),
+            #[cfg(feature = "replication")]
+            passed: Mutex::default(),
             #[cfg(feature = "config")]
             configs: Mutex::new(HashMap::new()),
             _claim: claim,
@@ -121,6 +131,25 @@ impl Kv {
         let renew = move || with(&weak, |kv| kv.renewals.flush(&kv.file).map(drop));
         store.every(&format!("{tasks}: renewals"), RENEWALS, renew)?;
         Ok(kv)
+    }
+
+    /// Keeps a run of once handed to another node, and gives its token; runs
+    /// handed longer ago than a node may take are let go, their keys free.
+    #[cfg(feature = "replication")]
+    pub(crate) fn keep_passed(&self, handed: super::once::Handed) -> u64 {
+        const TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(600);
+        let mut passed = lock(&self.passed);
+        passed.1.retain(|_, (_, since)| since.elapsed() < TAKES_AT_MOST);
+        passed.0 += 1;
+        let token = passed.0;
+        passed.1.insert(token, (handed, std::time::Instant::now()));
+        token
+    }
+
+    /// The run handed over by `token`, if it is still held.
+    #[cfg(feature = "replication")]
+    pub(crate) fn take_passed(&self, token: u64) -> Option<super::once::Handed> {
+        lock(&self.passed).1.remove(&token).map(|(handed, _)| handed)
     }
 
     /// The store kv opened in, while it is open.

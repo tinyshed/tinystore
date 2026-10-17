@@ -82,6 +82,14 @@ impl ScheduleBuilder {
         E: fmt::Display,
     {
         let mut schedule = self.open()?;
+        #[cfg(feature = "replication")]
+        if schedule.queue.jobs.file().is_copy() {
+            return Err(Error::new(
+                crate::ErrorKind::Unavailable,
+                "a copy runs no schedule: its home's workers run it, as its file is written there",
+            )
+            .within(schedule.queue.state.describe()));
+        }
         schedule.worker = Some(schedule.queue.work(move |(): (), run: &Run| handler(run))?);
         Ok(schedule)
     }
@@ -92,7 +100,18 @@ impl ScheduleBuilder {
         let describe = || format!("jobs schedule {}", self.name);
         let asked = self.repeat.ok_or_else(|| Error::invalid("a schedule needs every or cron").within(describe()))?;
         let repeat = asked.of(&self.name).map_err(|error| error.within(describe()))?;
+        #[cfg(feature = "replication")]
+        let copy = super::engine::Jobs::of(&self.store)?.file().is_copy();
+        #[cfg(feature = "replication")]
+        if copy {
+            super::forward::pass_on_schedule(&self.store, &self.name, &asked)
+                .map_err(|error| error.within(describe()))?;
+        }
         let queue = Queue::<()>::open(&Home::Store(self.store.clone()), &self.name, Kind::Schedule, self.policy)?;
+        #[cfg(feature = "replication")]
+        if copy {
+            return Ok(Schedule { queue, worker: None });
+        }
         keep_repeat(&queue, &repeat)?;
         Ok(Schedule { queue, worker: None })
     }
@@ -149,7 +168,10 @@ impl fmt::Debug for Schedule {
 /// Makes the schedule's one job repeat as the code says: added at its next
 /// time when it is not there, given the code's repeat when it keeps another.
 /// A job a run holds keeps its row, the new repeat taking over after the run.
-fn keep_repeat(queue: &Queue<()>, repeat: &Repeat) -> Result<()> {
+pub(super) fn keep_repeat<V>(queue: &Queue<V>, repeat: &Repeat) -> Result<()>
+where
+    V: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+{
     let now = queue.jobs.now();
     let next = repeat.next(now).ok_or_else(|| Error::invalid("the repeat never runs again"))?;
     let (text, value) = (repeat.text(), Kept::of(values::encode(&())?));

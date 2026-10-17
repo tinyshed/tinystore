@@ -802,6 +802,28 @@ impl<V> Bucket<V> {
         self.scope.write(key, bytes, work)
     }
 
+    /// Claims a once's key at the home of the copy these answers are kept in.
+    pub(crate) fn once_claim(&self, key: &str) -> Result<forward::Claimed> {
+        forward::claimed(&self.pass_on_once(key, &forward::Call::OnceClaim)?)
+    }
+
+    /// Keeps at the home what a run it handed over answered.
+    pub(crate) fn once_keep(&self, key: &str, token: u64, answer: Option<Raw>) -> Result<()> {
+        self.pass_on_once(key, &forward::Call::OnceKeep { token, answer }).map(drop)
+    }
+
+    fn pass_on_once(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
+        let shown = || self.scope.shown_key(key);
+        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
+        let owners = self.scope.branch()?.owners().to_vec();
+        let keep = match self.expiry {
+            Expiry::Ttl(keep) => u64::try_from(keep.as_millis()).unwrap_or(u64::MAX),
+            _ => return Err(Error::internal("once's answers kept for no span").within(shown())),
+        };
+        let handle = forward::Handle::Once { name: self.scope.name().to_owned(), keep };
+        forward::pass_on(&store, &handle, &owners, key, call).map_err(|error| error.within(shown()))
+    }
+
     /// Takes a key's cell, at the home where the bucket's file is a copy.
     pub(crate) fn take_cell(&self, key: &str, options: WriteOptions) -> Result<Option<Cell>> {
         if self.is_copy() {
