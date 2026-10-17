@@ -99,6 +99,10 @@ pub struct Node {
     pub failover: Option<String>,
     /// This node is a witness, which keeps the leases of the nodes it judges.
     pub witness: bool,
+    /// Plain TCP on links beyond this machine, which anyone on the way reads
+    /// and changes: without it such a link needs TLS, and a build without the
+    /// `replication-tls` feature refuses it rather than send it plain.
+    pub insecure: bool,
 }
 
 /// TLS on a node's links: the certificate its server answers with, and the
@@ -128,6 +132,7 @@ impl fmt::Debug for Node {
             .field("advertise", &self.advertise)
             .field("failover", &self.failover)
             .field("witness", &self.witness)
+            .field("insecure", &self.insecure)
             .finish()
     }
 }

@@ -152,6 +152,8 @@ export interface NodeOptions {
 	catalog?: boolean | undefined
 	/** where other nodes reach this one, `host:port`, when `serve` listens on every interface */
 	advertise?: string | undefined
+	/** plain TCP on links beyond this machine, which anyone on the way reads; without it such a link takes TLS */
+	insecure?: boolean | undefined
 }
 
 /** What a server is, as its WELCOME said it to this store's connection. */

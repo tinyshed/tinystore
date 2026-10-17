@@ -30,6 +30,10 @@ const TURN: usize = 8 << 20;
 pub(crate) fn start(state: &Arc<State>, address: &str) -> Result<()> {
     let listener = TcpListener::bind(address).map_err(|error| Error::io(format!("node: serve {address}"), error))?;
     let bound = listener.local_addr().map_err(|error| Error::io(format!("node: serve {address}"), error))?;
+    if !bound.ip().is_loopback() && !state.tls.serves() && !state.options.insecure {
+        let why = super::transport::plain_refused();
+        return Err(Error::invalid(format!("node: serve {address}: {why}")));
+    }
     *lock(&state.listening) = Some(bound);
     tracing::info!(target: "tinystore", address = %bound, "a node serves its files");
     let accepting = Arc::clone(state);

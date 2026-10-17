@@ -41,6 +41,7 @@ message store.Options {
   9 catalog: bool            # it is the home of the catalog, which names each file's home
   10 advertise: str?         # where other nodes reach it, host:port; the address serve listens on when absent
   11 synchronousWith: [str]  # the nodes, by address or id, a synchronous commit waits for one of; any when empty
+  12 insecure: bool          # plain TCP on links beyond this machine, which anyone on the way reads
 }
 
 # The last frame of a connection.

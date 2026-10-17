@@ -6,7 +6,7 @@
 //! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                      a person's server
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key              its key kept apart from its data
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
-//! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-token-file t] [--node-synchronous]   a node other nodes copy
+//! tinystore serve <dir> --node-listen 0.0.0.0:7444 --node-insecure [--node-token-file t]   a node other nodes copy
 //! tinystore serve <dir> --from eu:7444 --from us:7444 [--node-files kv.db,sql/app.db]   a node that copies
 //! ```
 
@@ -58,6 +58,7 @@ pub(crate) struct Node {
     pub(crate) synchronous_with: Vec<String>,
     pub(crate) tls: Option<tinystore::replication::NodeTls>,
     pub(crate) catalog: bool,
+    pub(crate) insecure: bool,
     pub(crate) advertise: Option<String>,
     pub(crate) failover: Option<String>,
     pub(crate) witness: bool,
@@ -81,8 +82,9 @@ pub(crate) enum Transport {
 }
 
 /// Every flag `serve` takes, for a misspelt one's nearest.
-const FLAGS: [&str; 28] = [
+const FLAGS: [&str; 29] = [
     "--node",
+    "--node-insecure",
     "--node-failover",
     "--node-witness",
     "--node-synchronous-with",
@@ -139,6 +141,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
             "--node" => node_flags = true,
             "--node-synchronous" => (node.synchronous, node_flags) = (true, true),
             "--node-catalog" => (node.catalog, node_flags) = (true, true),
+            "--node-insecure" => (node.insecure, node_flags) = (true, true),
             "--node-witness" => (node.witness, node_flags) = (true, true),
             "--node-failover" => (node.failover, node_flags) = (Some(value("--node-failover")?), true),
             "--node-synchronous-with" => {

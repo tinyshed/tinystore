@@ -716,6 +716,7 @@ module defines.
 - a witness that starts again keeps each lease's holder: its home writes on and no copy takes the lease — `a_witness_that_starts_again_keeps_each_lease_s_holder_and_its_home_writes_on` in `replication::link_tests`
 - a synchronous home's lease goes only to a copy it waited for, once every one stands — `a_synchronous_home_s_lease_goes_only_to_a_copy_it_waited_for_once_every_one_stands` in `replication::link_tests`
 - a synchronous node a witness judges names the copies it waits for — `a_synchronous_node_a_witness_judges_names_the_copies_it_waits_for` in `replication::link_tests`
+- a node that serves beyond this machine takes TLS or says `insecure`, and a plain link to another machine is refused the same — `a_node_that_serves_beyond_this_machine_takes_tls_or_says_insecure` in `replication::link_tests`
 - a node cut off from the catalog's home writes its files and makes no new one — `a_node_cut_off_from_the_catalog_s_home_writes_its_files_and_makes_no_new_one` in `replication::link_tests`
 - two nodes each taking from the other write their own databases, copy each other's and pass a write on a copy to its home — `two_nodes_write_their_own_databases_and_copy_each_other_s` in `replication::link_tests`
 - a synchronous home waits for the copy it chose, and counts each commit none of them held, answered `committed_locally` — `a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_held` in `replication::link_tests`

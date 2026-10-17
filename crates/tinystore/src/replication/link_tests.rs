@@ -1464,3 +1464,15 @@ fn a_synchronous_node_a_witness_judges_names_the_copies_it_waits_for() {
     let refused = Store::open(dir.path(), options).unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
 }
+
+#[test]
+fn a_node_that_serves_beyond_this_machine_takes_tls_or_says_insecure() {
+    let dir = tempfile::tempdir().unwrap();
+    let everywhere = Node { serve: Some("0.0.0.0:0".into()), ..Node::default() };
+    let options = Options { node: Some(everywhere.clone()), background: false, ..Options::default() };
+    let refused = Store::open(dir.path(), options).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
+    assert!(refused.to_string().contains("insecure"), "{refused}");
+    let insecure = Node { insecure: true, ..everywhere };
+    node_with(dir.path(), insecure).close().unwrap();
+}

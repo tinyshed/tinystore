@@ -273,6 +273,9 @@ function nodeFlags(node: NodeOptions | undefined): string[] {
 	for (const chosen of node.synchronousWith ?? []) {
 		flags.push('--node-synchronous-with', chosen)
 	}
+	if (node.insecure === true) {
+		flags.push('--node-insecure')
+	}
 	if (node.catalog === true) {
 		flags.push('--node-catalog')
 	}
@@ -528,6 +531,7 @@ export function embedded(
 		token,
 		synchronous: node?.synchronous === true,
 		catalog: node?.catalog === true,
+		insecure: node?.insecure === true,
 		advertise: node?.advertise,
 		synchronousWith: node?.synchronousWith ?? [],
 	})

@@ -115,10 +115,15 @@ What phase 7 built so far runs as below; the names are drafts, as
 [Decided](#decided) says.
 
 ```sh
-tinystore serve ./us --node-listen 0.0.0.0:7444 --node-token-file token   # America, the home
-tinystore serve ./eu --from us:7444 --node-listen 0.0.0.0:7444 --node-token-file token
-tinystore serve ./ru --from eu:7444 --from us:7444 --node-token-file token
+tinystore serve ./us --node-listen 0.0.0.0:7444 --node-token-file token --node-insecure   # America, the home
+tinystore serve ./eu --from us:7444 --node-listen 0.0.0.0:7444 --node-token-file token --node-insecure
+tinystore serve ./ru --from eu:7444 --from us:7444 --node-token-file token --node-insecure
 ```
+
+A link beyond one machine takes TLS, `--node-tls-cert`, `--node-tls-key` and
+`--node-tls-roots` with the `replication-tls` feature, and the commands above
+say `--node-insecure` to send plain TCP instead; a link on loopback needs
+neither.
 
 ```ts
 // a program in Russia, its store inside it, copying Europe's files

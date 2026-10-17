@@ -61,6 +61,7 @@ fn node_of(node: &args::Node) -> Result<tinystore::replication::Node, String> {
         advertise: node.advertise.clone(),
         failover: node.failover.clone(),
         witness: node.witness,
+        insecure: node.insecure,
     })
 }
 

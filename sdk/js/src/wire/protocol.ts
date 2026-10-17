@@ -2203,6 +2203,8 @@ export const StoreOptions = message(
 		advertise: [10, str],
 		/** the nodes, by address or id, a synchronous commit waits for one of; any when empty */
 		synchronousWith: [11, list(str)],
+		/** plain TCP on links beyond this machine, which anyone on the way reads */
+		insecure: [12, bool],
 	},
 	{
 		write(w, v) {
@@ -2272,6 +2274,11 @@ export const StoreOptions = message(
 				}
 				n++
 			}
+			if (v.insecure !== undefined) {
+				w.field(12)
+				w.bool(v.insecure)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2286,6 +2293,7 @@ export const StoreOptions = message(
 			let $catalog: boolean | undefined
 			let $advertise: string | undefined
 			let $synchronousWith: string[] | undefined
+			let $insecure: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2339,6 +2347,9 @@ export const StoreOptions = message(
 						$synchronousWith = items0
 						break
 					}
+					case 12:
+						$insecure = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -2356,6 +2367,7 @@ export const StoreOptions = message(
 				catalog: $catalog,
 				advertise: $advertise,
 				synchronousWith: $synchronousWith,
+				insecure: $insecure,
 			}
 		},
 	},

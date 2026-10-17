@@ -2032,6 +2032,8 @@ pub(crate) struct StoreOptions {
     pub(crate) advertise: Option<String>,
     /// The nodes, by address or id, a synchronous commit waits for one of; any when empty.
     pub(crate) synchronous_with: Vec<String>,
+    /// Plain TCP on links beyond this machine, which anyone on the way reads.
+    pub(crate) insecure: bool,
 }
 
 impl Message for StoreOptions {
@@ -2053,6 +2055,7 @@ impl Message for StoreOptions {
                 9 => message.catalog = codec::bool(r, "catalog")?,
                 10 => message.advertise = Some(codec::str(r, "advertise")?),
                 11 => message.synchronous_with = codec::list(r, "synchronousWith", codec::str)?,
+                12 => message.insecure = codec::bool(r, "insecure")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2105,6 +2108,10 @@ impl Message for StoreOptions {
             map.field(out, 11);
             codec::write_list(out, &self.synchronous_with, codec::write_str);
         }
+        if self.insecure {
+            map.field(out, 12);
+            codec::write_bool(out, &self.insecure);
+        }
         map.close(out);
     }
 
@@ -2121,6 +2128,7 @@ impl Message for StoreOptions {
             + 2
             + self.advertise.as_ref().map_or(0, |advertise| 1 + 5 + advertise.len())
             + 1 + codec::list_size(&self.synchronous_with, |item| 5 + item.len())
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -2135,6 +2143,7 @@ impl Message for StoreOptions {
             && !self.catalog
             && self.advertise.is_none()
             && self.synchronous_with.is_empty()
+            && !self.insecure
     }
 }
 

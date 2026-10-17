@@ -53,7 +53,6 @@ pub(crate) struct State {
     /// opened with the first.
     queue: Mutex<Option<Arc<super::queue::Queue>>>,
     /// The TLS its links speak, made from its options.
-    #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "a node built without TLS speaks none"))]
     pub(crate) tls: super::transport::Tls,
     /// How many snapshots this node began taking, the first copies and those
     /// taken again.

@@ -64,8 +64,29 @@ pub(crate) fn connect(state: &State, address: &str, tcp: TcpStream) -> Result<(R
         let connection = rustls::ClientConnection::new(Arc::clone(config), name).map_err(tls_error)?;
         return ends(tcp, Some(rustls::Connection::Client(connection)));
     }
-    let _ = (state, address);
+    refuse_plain_beyond_this_machine(state, &tcp, address)?;
     ends(tcp, None)
+}
+
+/// Refuses a plain link to another machine, which anyone on the way reads and
+/// changes, unless the node said `insecure`: a link to loopback stays on it.
+fn refuse_plain_beyond_this_machine(state: &State, tcp: &TcpStream, address: &str) -> Result<()> {
+    let peer = tcp.peer_addr().map_err(|error| Error::io(format!("a link to {address}"), error))?;
+    if peer.ip().is_loopback() || state.options.insecure {
+        return Ok(());
+    }
+    Err(Error::invalid(format!("a link to {address}: {}", plain_refused())))
+}
+
+/// Why a plain link beyond this machine is refused, and what lets it through.
+pub(crate) fn plain_refused() -> &'static str {
+    if cfg!(feature = "replication-tls") {
+        "a link beyond this machine takes TLS, whose roots and certificate a node names, or a node that says \
+         insecure for plain TCP that anyone on the way reads"
+    } else {
+        "a link beyond this machine takes TLS, which this build leaves out: build with the replication-tls feature, \
+         or say insecure for plain TCP that anyone on the way reads"
+    }
 }
 
 #[cfg(feature = "replication-tls")]
@@ -165,6 +186,14 @@ pub(crate) struct Tls {
 }
 
 impl Tls {
+    /// Whether the node's server answers over TLS.
+    pub(crate) fn serves(&self) -> bool {
+        #[cfg(feature = "replication-tls")]
+        return self.server.is_some();
+        #[cfg(not(feature = "replication-tls"))]
+        false
+    }
+
     /// The TLS `node` asks for: a server's with its certificate and key, a
     /// follower's with the roots it trusts. Without the feature, any is
     /// refused rather than links left plain.

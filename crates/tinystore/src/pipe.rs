@@ -216,6 +216,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
         || asked.serve.is_some()
         || asked.synchronous
         || asked.catalog
+        || asked.insecure
         || !asked.synchronous_with.is_empty();
     #[cfg(not(feature = "replication"))]
     if a_node {
@@ -234,6 +235,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
         advertise: asked.advertise,
         failover: None,
         witness: false,
+        insecure: asked.insecure,
     });
     Ok(Asked {
         durability: durability.transpose()?,
