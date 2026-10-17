@@ -1094,6 +1094,86 @@ fn a_live_move_hands_a_file_s_home_over_and_loses_no_commit() {
 }
 
 #[test]
+fn a_move_its_new_home_never_claimed_is_called_off_and_a_later_move_goes_on_past_it() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let us = node_with(us_dir.path(), Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() });
+    let us_address = bound(us.node().unwrap()).unwrap().to_string();
+    let eu_node = Node { serve: Some("127.0.0.1:0".into()), from: vec![us_address], ..Node::default() };
+    let eu = node_with(eu_dir.path(), eu_node);
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('before')")).unwrap();
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america holds europe's row", || bodies(&us_db).len() == 1);
+
+    // america asks europe to hand the file over, and never claims it
+    let copy = us.node().unwrap().copy("sql/users.db").unwrap();
+    let last = super::handover::hand_over(&us, us.node().unwrap(), "sql/users.db", &copy).unwrap();
+    drop(copy);
+    let fenced = eu_db.exec(crate::sql!("insert into notes (body) values ('during the move')")).unwrap_err();
+    assert_eq!(fenced.kind(), crate::ErrorKind::Conflict, "{fenced}");
+    eventually("europe calls the move off and writes again", || {
+        eu_db.exec(crate::sql!("insert into notes (body) values ('after the move went silent')")).is_ok()
+    });
+    let catalog = us.node().unwrap().catalog(&us).unwrap();
+    let home = catalog.home_of("sql/users.db").unwrap().unwrap();
+    assert_eq!((home.node.as_str(), home.epoch), (eu.node().unwrap().id.as_str(), last.epoch + 1));
+
+    // america's claim at that epoch comes too late
+    let address = us.node().unwrap().address();
+    let late = super::catalog::Claim {
+        file: "sql/users.db",
+        node: &us.node().unwrap().id,
+        address: &address,
+        epoch: last.epoch + 1,
+    };
+    let kept = catalog.claim(&us, &late).unwrap();
+    assert_eq!(kept.node, eu.node().unwrap().id, "the catalog kept the old home's claim");
+
+    // a move made again goes on past the epoch the call took
+    eventually("america holds europe's rows", || bodies(&us_db).len() == 2);
+    let moved = crate::replication::move_home(&us, "sql/users.db").unwrap();
+    assert_eq!(moved.epoch, last.epoch + 2);
+    us_db.exec(crate::sql!("insert into notes (body) values ('at the new home')")).unwrap();
+    eventually("europe reads the new home's write", || bodies(&eu_db).len() == 3);
+    drop((us_db, eu_db));
+    eu.close().unwrap();
+    us.close().unwrap();
+}
+
+#[test]
+fn an_old_home_whose_move_went_silent_stays_fenced_while_the_catalog_is_out_of_reach() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let catalog_node = Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() };
+    let keeper = node_with(dirs[0].path(), catalog_node);
+    let keeper_address = bound(keeper.node().unwrap()).unwrap().to_string();
+    let eu = node_with(
+        dirs[1].path(),
+        Node { serve: Some("127.0.0.1:0".into()), from: vec![keeper_address], ..Node::default() },
+    );
+    let eu_address = bound(eu.node().unwrap()).unwrap().to_string();
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('before')")).unwrap();
+    let us = node_with(
+        dirs[2].path(),
+        Node { serve: Some("127.0.0.1:0".into()), from: vec![eu_address], ..Node::default() },
+    );
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america holds europe's row", || bodies(&us_db).len() == 1);
+
+    let copy = us.node().unwrap().copy("sql/users.db").unwrap();
+    super::handover::hand_over(&us, us.node().unwrap(), "sql/users.db", &copy).unwrap();
+    drop(copy);
+    keeper.close().unwrap();
+    // past the wait, europe cannot tell whether america took the file
+    std::thread::sleep(Duration::from_secs(4));
+    let fenced = eu_db.exec(crate::sql!("insert into notes (body) values ('two homes')")).unwrap_err();
+    assert_eq!(fenced.kind(), crate::ErrorKind::Conflict, "{fenced}");
+    drop((us_db, eu_db));
+    us.close().unwrap();
+    eu.close().unwrap();
+}
+
+#[test]
 fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_held() {
     use std::sync::atomic::Ordering::Relaxed;
     let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();

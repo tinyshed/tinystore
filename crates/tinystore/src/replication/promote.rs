@@ -133,13 +133,20 @@ fn demote_one(file: String, log: &Path) -> Result<Demoted> {
         "a file becomes a copy again: the commits its new home never had are lost"
     );
     super::log::Log::clear(log)?;
-    match fs::remove_file(log.join(PROMOTED)) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(io_error(&log.join(PROMOTED), error)),
-    }
+    forget_promotion(log)?;
     copy::mark(log)?;
     Ok(Demoted { file, last })
+}
+
+/// Removes the point a promotion left in the log `log`, whose file becomes a
+/// copy: a log that keeps one is its node's own, and its file is taken from
+/// no node.
+pub(crate) fn forget_promotion(log: &Path) -> Result<()> {
+    match fs::remove_file(log.join(PROMOTED)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(&log.join(PROMOTED), error)),
+    }
 }
 
 /// The point a promoted copy's log goes on from, if the log in `dir` is one.

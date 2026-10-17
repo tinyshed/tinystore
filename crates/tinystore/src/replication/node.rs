@@ -381,16 +381,11 @@ impl State {
         Ok(())
     }
 
-    /// Makes the copy `name` this running node's own at the next epoch: its
+    /// Makes the copy `name` this running node's own at the next epoch, or at
+    /// `at_least` when that is later, as a claim or a lease names it: its
     /// readers paused, its applier closed once no link holds it, its log going
     /// on after the last entry it applied, and each engine's file of it given
     /// a writer.
-    pub(crate) fn take_over(self: &Arc<Self>, store: &Store, name: &str, copy: Arc<Copy>) -> Result<()> {
-        self.take_over_at(store, name, copy, 0)
-    }
-
-    /// `take_over` at `at_least`, the epoch a lease a witness granted names,
-    /// when it is later than the one after the copy's own.
     pub(crate) fn take_over_at(
         self: &Arc<Self>,
         store: &Store,
@@ -421,6 +416,17 @@ impl State {
     }
 
     /// Takes writes of `name` again, after a move that did not finish.
+    /// Writes `name` again at `epoch`, the catalog naming this node its home
+    /// there once a move away from it was called off: its log goes on at the
+    /// epoch, and its fence goes.
+    pub(crate) fn go_on_at(&self, name: &str, epoch: u64) -> Result<()> {
+        match lock(&self.logs).get(name).and_then(Weak::upgrade) {
+            Some(log) => log.go_on_at(epoch)?,
+            None => Log::go_on_at_in(&self.log_dir(name), epoch)?,
+        }
+        self.unfence(name)
+    }
+
     pub(crate) fn unfence(&self, name: &str) -> Result<()> {
         match lock(&self.logs).get(name).and_then(Weak::upgrade) {
             Some(log) => log.unfence(),
@@ -555,6 +561,12 @@ impl State {
             let epoch = self.epoch_of(&name).unwrap_or(1);
             let claim = Claim { file: &name, node: &self.id, address: &address, epoch };
             match catalog.claim(&store, &claim) {
+                // a move away from it called off while this node was down
+                Ok(home) if home.node == self.id && home.epoch > epoch => {
+                    if let Err(error) = self.go_on_at(&name, home.epoch) {
+                        tracing::warn!(target: "tinystore", file = %name, %error, "a node could not write a file again");
+                    }
+                }
                 Ok(home) if home.node == self.id => {}
                 Ok(home) => self.found_another_home(&name, epoch, home.epoch),
                 Err(error) => {

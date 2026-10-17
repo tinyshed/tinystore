@@ -455,6 +455,23 @@ impl Log {
         Ok(())
     }
 
+    /// Goes on at `epoch` from the last entry, kept as a promotion's point so
+    /// that the log opens at it again: a home whose move away was called off.
+    pub(crate) fn go_on_at(&self, epoch: u64) -> Result<()> {
+        let mut tail = self.lock();
+        let point = Point { sequence: tail.next - 1, epoch, check: tail.check };
+        super::copy::Position::read(self.dir.join(super::promote::PROMOTED))?.keep_durably(point)?;
+        tail.epoch = tail.epoch.max(epoch);
+        Ok(())
+    }
+
+    /// `go_on_at` for the log in `dir`, which no node holds open.
+    pub(crate) fn go_on_at_in(dir: &Path, epoch: u64) -> Result<()> {
+        let last = Self::last_in(dir)?.or(super::promote::promoted_at(dir)?).unwrap_or_default();
+        let point = Point { epoch, ..last };
+        super::copy::Position::read(dir.join(super::promote::PROMOTED))?.keep_durably(point)
+    }
+
     /// Goes on from the point a promoted copy stood at, at its new epoch: a
     /// copy whose log kept no entry since its snapshot goes on after its
     /// position, and the WAL it holds is no generation of its old home's.

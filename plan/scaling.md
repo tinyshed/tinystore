@@ -250,7 +250,12 @@ migrations, the names it makes and its maintenance, wait for no copy.
 writes, ships its last commits, and the new home opens its writer at the next
 epoch. `replication::move_home`, called on the node that takes the file over,
 does it through the catalog, the old home becoming the new one's copy once
-the catalog names it.
+the catalog names it. The catalog keeps the first claim at an epoch, and the
+new home's is the move's point of no return: until it is there, the old home
+calls the move off by a claim of its own at that epoch, once a minute passes
+or the new home asks, and writes again at it. An old home that cannot reach
+the catalog stays fenced, since it cannot tell a new home that took the file
+from one that never will.
 
 **When a home dies**, no node can tell a dead home from a cut cable: both are
 silence. A copy that guessed wrong and opened a writer while the old home
