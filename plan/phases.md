@@ -333,8 +333,10 @@ in [scaling.md](scaling.md#order).
   next epoch, so that the nodes behind it go on from where they stand once their `from` reaches it, and one that
   holds an entry of the old epoch it never had conflicts and takes a snapshot. A node with `from` writes the files
   whose log is its own. A snapshot is put together beside the copy it replaces, which its readers read until it
-  is whole, and a node at the point its source stands at takes none. Left: an old home back as a copy, a client
-  refusing an older home than one it has seen, and the command line's view of the links.
+  is whole, and a node at the point its source stands at takes none. `tinystore demote` and `replication::demote`
+  make a stopped old home's files copies again, its log's last point said and logged, and it takes each from its
+  new home once it starts with `from` reaching it. Left: counting the commits an old home loses, a client refusing
+  an older home than one it has seen, and the command line's view of the links.
 - [ ] The synchronous mode: a home answering once a chosen copy holds the commit.
 
 **Gate:** a node three links away holds its home's files commit for commit; a

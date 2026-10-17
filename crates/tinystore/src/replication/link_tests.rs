@@ -362,6 +362,8 @@ fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_f
     let before = copy_point(&russia, "kv.db").unwrap();
 
     home.close().unwrap();
+    // a stopped home holds nothing open: its handles go with its process
+    drop(sessions);
     europe.close().unwrap();
     let refused = promote(dirs[0].path(), &["kv.db".to_owned()]).unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "a home's own file is no copy: {refused}");
@@ -378,6 +380,18 @@ fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_f
     read.set("from russia", &"to the new home".to_owned()).unwrap();
     assert_eq!(written.get("from russia").unwrap().as_deref(), Some("to the new home"));
     caught_up(&europe, &russia, &["kv.db"]);
+
+    // the old home comes back as a copy of the new one
+    let demoted = demote(dirs[0].path(), &[]).unwrap();
+    assert_eq!(demoted.len(), 1);
+    assert_eq!(demoted[0].file, "kv.db");
+    let europe_address = bound(europe.node().unwrap()).unwrap().to_string();
+    let old = node_with(dirs[0].path(), Node { from: vec![europe_address], ..Node::default() });
+    let old_read = old.bucket::<String>("sessions").open().unwrap();
+    assert_eq!(old_read.get("from russia").unwrap().as_deref(), Some("to the new home"));
+    old_read.set("from the old home", &"now a copy".to_owned()).unwrap();
+    assert_eq!(written.get("from the old home").unwrap().as_deref(), Some("now a copy"));
+    old.close().unwrap();
     russia.close().unwrap();
     europe.close().unwrap();
 }

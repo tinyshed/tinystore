@@ -24,10 +24,11 @@ const USAGE: &str = "usage: tinystore serve [<dir> | --dir <dir>] [--local | --s
        tinystore restore <file.zip> <dir>
        tinystore search list <dir>
        tinystore search drop <dir> <name>
-       tinystore promote <dir> [<file>...]";
+       tinystore promote <dir> [<file>...]
+       tinystore demote <dir> [<file>...]";
 
 /// The commands, for a misspelt one's nearest.
-const COMMANDS: [&str; 6] = ["serve", "backup", "restore", "search", "promote", "version"];
+const COMMANDS: [&str; 7] = ["serve", "backup", "restore", "search", "promote", "demote", "version"];
 
 /// What follows a refusal when a person may have misspelt a command or a
 /// flag: the nearest of `names`, one edit away for three to six letters and
@@ -51,6 +52,7 @@ fn main() -> ExitCode {
         Some("restore") => backup::restore(&args[1..]),
         Some("search") => search::run(&args[1..]),
         Some("promote") => promote::run(&args[1..]),
+        Some("demote") => promote::demote(&args[1..]),
         Some("version" | "--version") => {
             println!("tinystore {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

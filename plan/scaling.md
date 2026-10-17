@@ -85,6 +85,35 @@ Three jobs stay apart, because they need different guarantees:
 The catalog routes and never grants the right to write: during a cut of the
 network each side holds its own copy of it, and both would name themselves.
 
+## Trying it
+
+What phase 7 built so far runs as below; the names are drafts, as
+[Open](#open) says.
+
+```sh
+tinystore serve ./us --node-listen 0.0.0.0:7444 --node-token-file token   # America, the home
+tinystore serve ./eu --from us:7444 --node-listen 0.0.0.0:7444 --node-token-file token
+tinystore serve ./ru --from eu:7444 --from us:7444 --node-token-file token
+```
+
+```ts
+// a program in Russia, its store inside it, copying Europe's files
+const store = await open('./data', { embedded: true, node: { from: ['eu:7444'], token } })
+await store.bucket('sessions').get(id)          // read here
+await store.bucket('sessions').set(id, session) // committed in America, answered once here
+```
+
+- A node copies every file the node it takes from serves but its own
+  `records.db` and `metrics.db`, or those `--node-files` names; a file its
+  home never made, the home makes when a copy waits for it.
+- kv's buckets and counters, sql's statements, search's documents and jobs'
+  adds pass from a copy to their home; any other write on a copy is refused.
+- Links are TCP with a token and no TLS yet: across machines, a tunnel or a
+  private network.
+- When America is gone for good: stop Europe, `tinystore promote ./eu`, start
+  it without `--from`; Russia goes on from it. America comes back with
+  `tinystore demote ./us` and `--from eu:7444`.
+
 ## An example: America, Europe, Russia
 
 The application's backend runs in America, where it is deployed and where its
