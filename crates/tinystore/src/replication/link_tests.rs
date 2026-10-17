@@ -55,6 +55,17 @@ fn caught_up(home: &Store, copy: &Store, names: &[&str]) {
 }
 
 #[test]
+fn a_node_asked_says_the_files_it_serves_and_an_address_with_no_node_says_none() {
+    let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    let (home, address) = serving(dirs[0].path());
+    home.bucket::<String>("sessions").open().unwrap().set("42", &"x".to_owned()).unwrap();
+    let served = served_at(dirs[1].path(), Node::default(), &address).unwrap().unwrap();
+    assert!(served.contains(&"kv.db".to_owned()), "{served:?}");
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    assert_eq!(served_at(dirs[1].path(), Node::default(), &silent).unwrap(), None, "nothing listens there");
+}
+
+#[test]
 fn a_snapshot_read_while_its_home_writes_becomes_the_home_s_file() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let home = node_with(home_dir.path(), Node::default());

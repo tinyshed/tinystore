@@ -9,6 +9,7 @@
 //!
 //! [plan/scaling.md]: https://github.com/tinyshed/tinystore/blob/rust/plan/scaling.md
 
+mod ask;
 mod catalog;
 mod copy;
 mod entry;
@@ -32,6 +33,7 @@ mod witness;
 
 use std::fmt;
 
+pub use ask::served_at;
 pub(crate) use copy::is_copy;
 #[cfg(feature = "blobs")]
 pub(crate) use forward::BLOBS;
