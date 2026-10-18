@@ -7,6 +7,7 @@
         await sessions.under(user.id).set(digest(token), session)
 """
 
+from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
 from .clock import Clock
 from .errors import (
     CallCancelledError,
@@ -57,6 +58,10 @@ __all__ = [
     "Database",
     "Done",
     "Entry",
+    "FileBytes",
+    "FileInfo",
+    "FilePage",
+    "Files",
     "InUseError",
     "InternalError",
     "InvalidError",
@@ -84,6 +89,7 @@ __all__ = [
     "Status",
     "Store",
     "StoreTxQueue",
+    "StoredFile",
     "SuspendedError",
     "Table",
     "TinystoreError",
@@ -96,6 +102,8 @@ __all__ = [
     "UnauthenticatedError",
     "UnavailableError",
     "UnimplementedError",
+    "Upload",
+    "Usage",
     "WindowUse",
     "Worker",
     "connect",

@@ -28,6 +28,7 @@ from ._connection import (
 )
 from ._time import Duration, ms, spelled
 from ._values import json_values, values_of
+from .blobs import Files, Size, open_files
 from .clock import Clock
 from .errors import InvalidError
 from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Schedule, Worker, open_queue, open_schedule
@@ -227,6 +228,14 @@ class Store:
             backoff=backoff,
             timeout=timeout,
         )
+
+    def files(self, name: str, *, ttl: Duration | None = None, max_file_size: Size | None = None) -> Files:
+        """A named set of files by path, written whole and replaced whole::
+
+        avatars = store.files("avatars")
+        reports = store.files("reports", ttl="24h", max_file_size="2GiB")
+        """
+        return open_files(self._link, name, ttl, max_file_size)
 
     async def database(
         self, name: str, *, migrations: Migrations | None = None, durability: Durability | None = None
