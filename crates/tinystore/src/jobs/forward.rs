@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! name         the queue's
-//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open
+//! u8 call      0 add, 1 set, 2 update, 3 cancel, 4 open, 5 schedule
 //! add, set and update: what was asked, then the job's JSON
 //! cancel:      the id
 //! ```
@@ -33,7 +33,7 @@ pub(crate) fn make_in(home: &crate::engine::Home) -> Result<()> {
 }
 
 /// jobs' file, where its home passes writes.
-pub(crate) const FILE: &str = "jobs.db";
+pub(crate) use super::engine::FILE;
 
 /// Passes an add, a set or an update of a job of the queue `name` to the
 /// home of the copy jobs' file is, and says whether it changed a job.

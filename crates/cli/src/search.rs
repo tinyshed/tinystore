@@ -34,8 +34,8 @@ fn search(asked: Asked) -> Done {
     match (verb.as_str(), &around[..], &asked.dir) {
         ("list", [], dir) => list(dir.as_deref().unwrap_or(Path::new("."))),
         ("list", [dir], None) => list(Path::new(dir)),
-        ("drop", [name], Some(dir)) => drop(dir, name),
-        ("drop", [dir, name], None) => drop(Path::new(dir), name),
+        ("drop", [name], Some(dir)) => drop_index(dir, name),
+        ("drop", [dir, name], None) => drop_index(Path::new(dir), name),
         ("drop", ..) => Err(wrong("drop takes a directory and an index: search drop ./data posts")),
         _ => Err(wrong("list takes a directory at most: search list ./data")),
     }
@@ -76,7 +76,7 @@ fn line(index: &Listed) -> String {
 }
 
 /// Drops an index, in a store that no server or program may hold meanwhile.
-fn drop(dir: &Path, name: &str) -> Done {
+fn drop_index(dir: &Path, name: &str) -> Done {
     asked::existing(dir)?;
     let store = match Store::open(dir, Options { background: false, ..Options::default() }) {
         Ok(store) => store,
@@ -120,8 +120,8 @@ mod tests {
         posts.set("a", &"hello".to_owned()).unwrap();
         assert!(list(dir.path()).is_ok(), "beside the program that holds it");
         store.close().unwrap();
-        assert!(drop(dir.path(), "posts").is_ok());
-        assert!(drop(dir.path(), "posts").is_err());
+        assert!(drop_index(dir.path(), "posts").is_ok());
+        assert!(drop_index(dir.path(), "posts").is_err());
         let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
         assert!(tinystore::search::list(&store).unwrap().is_empty());
     }

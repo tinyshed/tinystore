@@ -1,7 +1,9 @@
 //! The tinystore command: the one command a person types. `serve` gives a
 //! store's directory to other processes and machines over the wire protocol;
-//! `status`, `logs`, `kv`, `sql` and `mcp` read a store beside whoever holds
-//! it; `backup` and `restore` keep it; `node` and `witness` run the nodes of
+//! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
+//! beside whoever holds it; `sql --write`, `migrate` and `search drop` change
+//! one nothing holds; `stop` ends a server and `token` makes its tokens;
+//! `backup` and `restore` keep a store; `node` and `witness` run the nodes of
 //! a network. `help` lists them all, and plan/api/cli.md is their book.
 
 mod args;

@@ -28,7 +28,8 @@ pub(crate) struct Alarm {
 }
 
 struct State {
-    /// Unix milliseconds; `i64::MAX` when nothing waits.
+    /// Unix milliseconds; `i64::MAX` when nothing waits, and `i64::MIN` until
+    /// the first worker reads the file, so that it rings at once.
     at: i64,
     /// Each read of the file under way, and the earliest time a write committed
     /// while it read, which the read may not have seen.

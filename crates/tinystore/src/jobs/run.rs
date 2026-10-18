@@ -38,8 +38,8 @@ impl Run {
         self.lease.key.as_deref()
     }
 
-    /// When the run was due: "thirty days ago" is counted from it even when the
-    /// run starts late.
+    /// When the run was due, which is earlier than now when it started late: a
+    /// handler that reads "the last day" counts it from here.
     pub fn at(&self) -> SystemTime {
         from_unix_millis(self.lease.at)
     }
@@ -90,8 +90,9 @@ impl Run {
         steps::run(self, name, work)
     }
 
-    /// The answer of a handler whose job is done, for a handler that answers
-    /// otherwise elsewhere; one that never does returns `Ok(())`.
+    /// The answer that says the job is done, for a handler whose other
+    /// branches answer `retry` or `fail`; a handler that answers nothing else
+    /// returns `Ok(())` instead.
     #[must_use = "an answer does nothing unless the handler returns it"]
     pub fn done(&self) -> Outcome {
         Outcome(Answer::Done)

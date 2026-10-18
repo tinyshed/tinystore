@@ -18,7 +18,7 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// jobs' own file in the store's directory.
-const FILE: &str = "jobs.db";
+pub(crate) const FILE: &str = "jobs.db";
 
 /// How often the store removes what the queues keep no longer.
 const MAINTENANCE: Duration = Duration::from_secs(60);

@@ -15,10 +15,11 @@ use crate::{Error, Result};
 /// `ahead` counts this far: a job further back reads it.
 const MAX_AHEAD: usize = 10_000;
 
-/// Jobs a page holds unless a filter says, and at most; and the value bytes it
-/// holds at most.
+/// The most jobs a page holds.
 pub const PAGE_JOBS: usize = 1000;
+/// The jobs a page holds unless a call says.
 const DEFAULT_PAGE: usize = 100;
+/// The most value bytes a page holds.
 const PAGE_BYTES: usize = 4 << 20;
 
 /// Where a job is in its life.
@@ -373,8 +374,9 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
     })
 }
 
-/// The jobs that run before a waiting one: the rows before it, at most
-/// `MAX_AHEAD` past those a handler runs, which wait before nothing.
+/// How many jobs run before a waiting one: the waiting rows due before it,
+/// counted up to `MAX_AHEAD`; those a handler runs now wait for nothing and
+/// are not counted.
 fn ahead(c: &Connection, queue: &QueueState, found: &Found, now: i64) -> Result<u32> {
     if found.leased.is_some() {
         return Ok(0); // held for a busy handler, which runs it next

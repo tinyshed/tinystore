@@ -74,7 +74,7 @@ impl Policy {
         } else if self.rate.is_some_and(|(count, per)| count == 0 || per < Duration::from_millis(1)) {
             Some("a rate of nothing a span".to_owned())
         } else if self.max_waiting == 0 {
-            Some("a maxWaiting of 0, which would refuse every add".to_owned())
+            Some("a max_waiting of 0, which would refuse every add".to_owned())
         } else {
             None
         };

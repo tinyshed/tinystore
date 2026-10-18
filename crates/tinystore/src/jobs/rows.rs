@@ -61,9 +61,9 @@ const INSERT_KEY: &str = "insert into _tinystore_jobs_keys (queue, key, next, id
     on conflict (queue, key) do update set next = excluded.next, id = excluded.id";
 const MOVE_KEY: &str = "update _tinystore_jobs_keys set next = ?3 where queue = ?1 and key = ?2";
 const DROP_KEY: &str = "delete from _tinystore_jobs_keys where queue = ?1 and key = ?2";
-/// A set's job made new: its value and time, its attempts from one and
-/// nothing of what its last run left; a repeat or a group the set does not name
-/// stays.
+/// A set's job made new: its value and time, its attempts from one, its
+/// retry and error gone; the times of its last run stay, and so does a repeat
+/// or a group the set does not name.
 const RENEW_JOB: &str = "update _tinystore_jobs
     set next = ?4, at = ?4, attempt = 0, again = null, error = null, value = ?5, spill = ?6,
         repeat = coalesce(?7, repeat), grp = coalesce(?8, grp)
@@ -124,8 +124,6 @@ pub(crate) struct Change<'a> {
     pub(crate) value: &'a Kept,
 }
 
-/// Registers a queue on its first open, and answers its id, its kind and the
-/// group bound it was last opened with.
 /// The id and kind of the queue `name`, if it was registered.
 #[cfg(feature = "replication")]
 pub(crate) fn find_queue(c: &Connection, name: &str) -> Result<Option<(i64, String)>> {
@@ -134,6 +132,8 @@ pub(crate) fn find_queue(c: &Connection, name: &str) -> Result<Option<(i64, Stri
         .map_err(|error| sql_error("a queue's registration", error))
 }
 
+/// Registers a queue on its first open, and answers its id, its kind and the
+/// group bound it was last opened with.
 pub(crate) fn queue(c: &Connection, name: &str, kind: &str) -> Result<(i64, String, i64)> {
     let named = || {
         c.prepare_cached(QUEUE_NAMED)
@@ -209,7 +209,7 @@ pub(crate) fn done_key(c: &Connection, queue: i64, key: &str, now: i64) -> Resul
     exists(c, DONE_KEY, params![queue, key, now])
 }
 
-/// Refuses a job past the queue's `maxWaiting`. The count is the queue's row,
+/// Refuses a job past the queue's `max_waiting`. The count is the queue's row,
 /// which triggers keep, so that a transaction sees its own adds.
 pub(crate) fn check_room(c: &Connection, queue: i64, max_waiting: u64) -> Result<()> {
     let waiting: i64 = c
@@ -217,7 +217,7 @@ pub(crate) fn check_room(c: &Connection, queue: i64, max_waiting: u64) -> Result
         .and_then(|mut select| select.query_row([queue], |row| row.get(0)))
         .map_err(|error| sql_error("the jobs a queue holds", error))?;
     if u64::try_from(waiting).unwrap_or(0) >= max_waiting {
-        return Err(Error::limit(format!("the queue holds {waiting} jobs, its maxWaiting")));
+        return Err(Error::limit(format!("the queue holds {waiting} jobs, its max_waiting")));
     }
     Ok(())
 }

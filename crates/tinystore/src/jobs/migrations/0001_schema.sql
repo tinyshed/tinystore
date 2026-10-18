@@ -137,7 +137,7 @@ create trigger _tinystore_jobs_steps_go after delete on _tinystore_jobs begin
     delete from _tinystore_jobs_steps where job = old.id;
 end;
 
--- ids: the high-water mark of job ids, reserved a block at a time, never repeated
+-- ids: the high-water mark of job ids, one taken inside each write that adds, never repeated
 create table _tinystore_jobs_meta (
     name  text    primary key,
     value integer not null

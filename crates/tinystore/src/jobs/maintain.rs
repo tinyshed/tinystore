@@ -17,7 +17,7 @@ const EXPIRE_FAILED: &str = "delete from _tinystore_jobs_failed where (queue, id
         select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2
         order by failed limit cast(?3 as integer))
     returning spill";
-const FORGET_DONE: &str = "delete from _tinystore_jobs_done where (queue, key) in (
+const EXPIRE_DONE: &str = "delete from _tinystore_jobs_done where (queue, key) in (
         select queue, key from _tinystore_jobs_done where until <= ?1 order by until limit cast(?2 as integer))
     returning spill";
 /// How many ids a slice of a queue's holds, in their order after a place,
@@ -57,7 +57,7 @@ pub(crate) fn run(jobs: &Jobs) -> Result<Maintenance> {
         done.failed += batches(jobs, move |tx| expire(tx, EXPIRE_FAILED, params![id, cutoff, BATCH as i64]))?;
         done.ids += drop_keys_left(jobs, id, &queue.keys_after)?;
     }
-    done.done += batches(jobs, move |tx| expire(tx, FORGET_DONE, params![now, BATCH as i64]))?;
+    done.done += batches(jobs, move |tx| expire(tx, EXPIRE_DONE, params![now, BATCH as i64]))?;
     jobs.file().sweep();
     Ok(done)
 }

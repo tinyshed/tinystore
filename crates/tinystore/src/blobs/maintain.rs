@@ -122,7 +122,7 @@ impl Blobs {
                 Ok((deleted, change.freed))
             })?;
             total += deleted;
-            self.let_files_go(&freed);
+            self.remove_freed(&freed);
             if deleted < usize::try_from(BATCH).unwrap_or(usize::MAX) {
                 break;
             }

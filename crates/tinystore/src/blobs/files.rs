@@ -257,7 +257,7 @@ impl Files {
             }
             Ok((Some(version.info(&files.folder, &path)?), change.freed))
         })?;
-        self.blobs.let_files_go(&freed);
+        self.blobs.remove_freed(&freed);
         Ok(info)
     }
 
@@ -293,7 +293,7 @@ impl Files {
             }
             Ok((version.info(&files.folder, &to)?, change.freed))
         })?;
-        self.blobs.let_files_go(&freed);
+        self.blobs.remove_freed(&freed);
         Ok(info)
     }
 
@@ -317,7 +317,7 @@ impl Files {
             change.remove(set, &path)?;
             Ok(change.freed)
         })?;
-        self.blobs.let_files_go(&freed);
+        self.blobs.remove_freed(&freed);
         Ok(())
     }
 

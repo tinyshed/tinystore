@@ -1,6 +1,7 @@
 //! `tinystore status`: what a store's directory holds, which server serves it,
-//! and, for a node, which files it writes and which it copies. It reads files
-//! alone, so a store served meanwhile is read as it stands.
+//! and, for a node, which files it writes and which it copies. It reads the
+//! store's files as they stand, and says HELLO on the server's endpoint to
+//! learn whether a server still answers there.
 //!
 //! ```text
 //! ● ./data  served by tinystore 0.1.0 · pid 37420 · up 12m

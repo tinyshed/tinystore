@@ -32,8 +32,9 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) const LEASE: Duration = Duration::from_secs(30);
 
 /// How long a stopping worker waits for its handlers past their timeout
-/// before it lets them go, and how long a failed write waits to try again.
+/// before it lets them go.
 const GRACE: Duration = Duration::from_secs(10);
+/// How long a failed write waits to try again.
 const RETRY_WRITE: Duration = Duration::from_secs(1);
 
 const SPILLED_VALUE: &str = "select value from _tinystore_jobs_spilled where id = ?1";

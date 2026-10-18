@@ -114,7 +114,7 @@ impl Files {
                 Ok(change.freed)
             })
             .map_err(|error| self.fail(&folder, error))?;
-        self.blobs.let_files_go(&freed);
+        self.blobs.remove_freed(&freed);
         Ok(())
     }
 

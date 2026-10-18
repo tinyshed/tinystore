@@ -47,8 +47,8 @@ pub(crate) enum Column {
     Values(Vec<Value>),
 }
 
-/// The rows of a packed column that hold NULL: empty when none does, else a
-/// mark a row.
+/// The rows of a packed column that hold NULL: one flag a row, or empty when
+/// no row is NULL.
 pub(crate) type Nulls = Vec<bool>;
 
 impl Columns {

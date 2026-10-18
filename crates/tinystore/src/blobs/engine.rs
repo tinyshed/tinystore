@@ -352,7 +352,7 @@ impl Blobs {
 
     /// Removes the files of the contents a commit left without names. One that
     /// will not go stays listed, and maintenance tries it again.
-    pub(crate) fn let_files_go(&self, ids: &[i64]) {
+    pub(crate) fn remove_freed(&self, ids: &[i64]) {
         for &id in ids {
             if let Err(error) = self.disk.remove_object(id) {
                 tracing::debug!(target: "tinystore", %error, "blobs: a file maintenance removes later");

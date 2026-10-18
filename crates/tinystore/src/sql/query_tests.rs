@@ -257,11 +257,7 @@ fn an_update_or_a_delete_changes_what_its_condition_says_and_refuses_every_row()
     assert_eq!(notes.filter(sql::eq("done", &true)).delete().unwrap().changes, 1);
     assert_eq!(notes.count().unwrap(), 1);
     let short = notes.filter(sql!("id = ? and author_id = ?", "n2")).all().unwrap_err();
-    assert!(
-        short.to_string().contains("1 placeholders and 0 values")
-            || short.to_string().contains("2 placeholders and 1 values"),
-        "{short}"
-    );
+    assert!(short.to_string().contains("2 placeholders and 1 values"), "{short}");
 }
 
 #[test]

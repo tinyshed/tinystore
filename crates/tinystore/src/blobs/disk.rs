@@ -297,8 +297,8 @@ pub(crate) fn being_removed(_: &io::Error) -> bool {
     false
 }
 
-/// Reads at `offset` without moving the file's own position, from several
-/// threads at once.
+/// Reads at `offset`, from several threads at once. On Unix the file's own
+/// position stays; on Windows it moves, and no reader here uses it.
 #[cfg(unix)]
 pub(crate) fn read_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
     std::os::unix::fs::FileExt::read_at(file, bytes, offset)

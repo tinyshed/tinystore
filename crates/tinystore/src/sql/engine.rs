@@ -179,8 +179,8 @@ impl Base {
     }
 }
 
-/// A database's connections: every file's, with room for an application's
-/// statements.
+/// A database's connections: every file's, their cache of prepared statements
+/// 128 deep, with room for an application's.
 fn config(durability: Option<Durability>) -> Config {
     Config { statements: 128, ..Config::committing(durability) }
 }

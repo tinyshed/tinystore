@@ -6,8 +6,7 @@ use serde::de::DeserializeOwned;
 
 use crate::{Error, Result};
 
-/// The most a value may be; larger bytes are the blobs engine's, with their
-/// key in the value.
+/// The most a value may be; a larger one is refused `limit`.
 pub(crate) const MAX_VALUE: usize = 1 << 20;
 
 /// A value past this lives in a row of its own, where a claim of the jobs

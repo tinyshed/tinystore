@@ -5,8 +5,8 @@ use jiff::civil::{Date, DateTime};
 use jiff::tz::{AmbiguousOffset, TimeZone};
 
 /// How far ahead a search for the next time looks: an expression that runs at
-/// all runs within it. A 29th of February is eight years from the last where
-/// a century's year is no leap year, as 2100.
+/// all runs within it. The longest wait is for a 29th of February across a
+/// century that is no leap year: eight years, from 2096 to 2104.
 const YEARS: i16 = 8;
 
 /// A parsed expression: a bit for each value a field accepts, and whether the

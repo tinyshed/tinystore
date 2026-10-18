@@ -27,12 +27,12 @@ use tracing_subscriber::registry::LookupSpan;
 /// Whether a terminal's lines are coloured, by the conventions every tool
 /// keeps, and whether there is a terminal at all.
 ///
-/// | `NO_COLOR` | `FORCE_COLOR` | `TERM=dumb` | a terminal | colours |
-/// |------------|---------------|-------------|------------|---------|
-/// | set        | any           | any         | any        | no      |
-/// | unset      | set           | any         | any        | yes     |
-/// | unset      | unset         | yes         | any        | no      |
-/// | unset      | unset         | no          | yes        | yes     |
+/// | `NO_COLOR` | `FORCE_COLOR` or `CLICOLOR_FORCE` | `TERM=dumb` | a terminal | colours |
+/// |------------|-----------------------------------|-------------|------------|---------|
+/// | set        | any                               | any         | any        | no      |
+/// | unset      | set                               | any         | any        | yes     |
+/// | unset      | unset                             | yes         | any        | no      |
+/// | unset      | unset                             | no          | yes        | yes     |
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Terminal {
     no_color: bool,
@@ -62,13 +62,13 @@ impl Terminal {
     }
 
     pub(crate) fn colours(self) -> bool {
-        !self.no_color && (self.force_color || (!self.dumb && self.terminal)) && ansi_shown()
+        !self.no_color && (self.force_color || (!self.dumb && self.terminal)) && enable_ansi()
     }
 }
 
 /// A Windows console shows ANSI colours once a program asks it to; elsewhere
 /// a terminal does.
-fn ansi_shown() -> bool {
+fn enable_ansi() -> bool {
     #[cfg(windows)]
     {
         nu_ansi_term::enable_ansi_support().is_ok()

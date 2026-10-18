@@ -79,7 +79,8 @@ impl Shown {
     }
 }
 
-/// The capability that begins each line of a tokens file, but its comments.
+/// The first word of each line of a tokens file that is not blank or a
+/// comment: the capability it gives.
 fn capabilities(tokens: &Path) -> Vec<String> {
     let read = std::fs::read_to_string(tokens).unwrap_or_default();
     let lines = read.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#'));
