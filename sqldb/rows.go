@@ -215,6 +215,11 @@ func rowFields(row any) ([]string, map[string]any, error) {
 	return nil, nil, core.Errorf(core.Invalid, "a row is a struct or a map, not a %T", row)
 }
 
+// ReadRow is a row of these columns and cells as a query reads it into T:
+// a struct by its fields' columns, a map, or a single column's value. A table's
+// search index reads its hits' rows with it.
+func ReadRow[T any](columns []string, cells []any) (T, error) { return readRow[T](columns, cells) }
+
 // readRow reads a row into a value of type T.
 func readRow[T any](columns []string, values []any) (T, error) {
 	var out T
