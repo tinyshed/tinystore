@@ -21,8 +21,8 @@ contract from the documents, not from the Go client in
   methods' numbers and the errors' codes.
 
 One commit changes the protocol, the server, both SDKs and the vectors. The
-SDKs live in `sdk/js` (Bun and Node) and `sdk/python`, and `sdk/go.mod`
-keeps them out of the Go module's zip. What they look like to an application,
+SDKs live in `sdk/js` (Bun and Node), `sdk/python` and `sdk/go`, the Go
+module `tinyshed.org/tinystore`. What they look like to an application,
 beside Go, is the guides in `docs/`, three languages a page; the rules every
 call follows, and any change to what a program writes, are the `api-change`
 skill's, since it reaches all three.

@@ -1,6 +1,6 @@
 //! The Go side: a struct a message, read and written a field at a time
-//! through internal/wire's reader and writer, a constant a method, laid out as
-//! gofmt lays it out, so that the file needs no formatter after it.
+//! through sdk/go/internal/wire's reader and writer, a constant a method,
+//! laid out as gofmt lays it out, so that the file needs no formatter after it.
 //!
 //! ```text
 //! kv.Branch { 1 handle: uint, 2 under: [key] }

@@ -102,8 +102,8 @@ constraint's `constraint`, `table`, `columns` (as SQLite writes them,
 | `crates/tinystore/src/wire/protocol.rs` | the session's request and answer types, decoded whole or refused; built                                                  |
 | `sdk/js/src/wire/protocol.ts`           | the Bun and Node SDK; built                                                                                              |
 | `testdata/wire/protocol.json`           | a vector of every message, each field at a value of its type and then none at all, which Rust and every SDK's suite read |
-| `sdk/python/…/protocol.py`              | the Python SDK, on its codec's `Message`; built, its SDK not                                                             |
-| `internal/wire/protocol.go`             | the Go SDK, on the module at the root, `github.com/tinyshed/tinystore`; built, its SDK not                               |
+| `sdk/python/…/protocol.py`              | the Python SDK, on its codec's `Message`; built                                                                          |
+| `sdk/go/internal/wire/protocol.go`      | the Go SDK, the module `tinyshed.org/tinystore`; built                                                                   |
 | the method tables of `docs/wire.md`     | the guide to the protocol, when it is rewritten                                                                          |
 
 Every output is committed, `just protocol` writes them again, and CI fails when

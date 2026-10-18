@@ -65,38 +65,38 @@ Do not describe unbuilt behaviour as though it works.
 
 ## Shape
 
-| Path                                | What it is                                                                                                                                            |
-|-------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/tinystore/`                 | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features                                                      |
-| `crates/tinystore/src/sqlite/`      | the SQLite every engine stands on; no engine vocabulary                                                                                               |
-| `crates/tinystore/src/kv/`          | kv: buckets, counters, rate limits, quotas, `once`, transactions, locks and semaphores                                                                |
-| `crates/tinystore/src/jobs/`        | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                                                                        |
-| `crates/tinystore/src/sql/`         | sql: the application's databases, their migrations, reads, writes, batches and transactions                                                           |
-| `crates/tinystore/src/search/`      | search: indexes, their words and postings, the head and its packing, vectors, their codes and clusters, filters, searches, the purge of the gone      |
-| `crates/tinystore/src/blobs/`       | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory                                                         |
-| `crates/tinystore/src/channels/`    | channels: the logs of the branches listened to, subscriptions, their delivery threads                                                                 |
-| `crates/tinystore/src/records/`     | records: streams of events, their rows, reads a page at a time, what a stream keeps                                                                   |
-| `crates/tinystore/src/console/`     | a logger's lines printed and its `tracing` layer; no store                                                                                            |
-| `crates/tinystore/src/metrics/`     | metrics: series and their labels, heads and blocks, reads, aggregates, instruments, what a name keeps                                                 |
-| `crates/tinystore/src/backup/`      | backup: a store's snapshot, the zip and its manifest, the restore                                                                                     |
-| `crates/tinystore/src/replication/` | replication: a node's log of each file's commits, its entries and segments, snapshots, links and the writes it passes on                              |
-| `crates/tinystore/src/compress/`    | what records and metrics both pack with: varints, bits read a word at a time, rice codes, zstd, CRC-32                                                |
-| `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                                |
-| `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                              |
-| `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`                                                   |
-| `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                               |
-| `fuzz/`                             | the fuzz targets, built on nightly through cargo-fuzz and run by hand                                                                                 |
-| `crates/protocol/`                  | the `.wire` language's parser and layout, and what writes every codec and vector; nothing ships it                                                    |
-| `sdk/js/`, `sdk/python/`            | the clients of the protocol for Bun and Node, and Python                                                                                              |
-| `go.mod`, `*.go`, `internal/`       | the Go SDK: its module at the root path the Go engine's was, a package an engine, and `internal/` its core, its codec of the protocol and its console |
-| `protocol/`                         | the wire protocol's schema, a file an engine, which every codec and vector is written from                                                            |
-| `editors/wire/`                     | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover                                                        |
-| `testdata/wire/`                    | the protocol's vectors, which Rust and every SDK read                                                                                                 |
-| `testdata/console/`                 | a logger's console lines, which Rust and every SDK print byte for byte                                                                                |
-| `plan/`                             | the rewrite: decisions, evidence, architecture, the API books, phases                                                                                 |
-| `docs/`, `web/`                     | the guides and the docs site, built from `main`                                                                                                       |
-| `tools/`                            | scripts the justfile runs: `quick.ts`, the checks of what changed                                                                                     |
-| `.agents/skills/`                   | how recurring work is done; `.claude/skills/` points to it                                                                                            |
+| Path                                | What it is                                                                                                                                       |
+|-------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| `crates/tinystore/`                 | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features                                                 |
+| `crates/tinystore/src/sqlite/`      | the SQLite every engine stands on; no engine vocabulary                                                                                          |
+| `crates/tinystore/src/kv/`          | kv: buckets, counters, rate limits, quotas, `once`, transactions, locks and semaphores                                                           |
+| `crates/tinystore/src/jobs/`        | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                                                                   |
+| `crates/tinystore/src/sql/`         | sql: the application's databases, their migrations, reads, writes, batches and transactions                                                      |
+| `crates/tinystore/src/search/`      | search: indexes, their words and postings, the head and its packing, vectors, their codes and clusters, filters, searches, the purge of the gone |
+| `crates/tinystore/src/blobs/`       | blobs: files by path, uploads, checked reads, the scrub, in `blobs/` of the store's directory                                                    |
+| `crates/tinystore/src/channels/`    | channels: the logs of the branches listened to, subscriptions, their delivery threads                                                            |
+| `crates/tinystore/src/records/`     | records: streams of events, their rows, reads a page at a time, what a stream keeps                                                              |
+| `crates/tinystore/src/console/`     | a logger's lines printed and its `tracing` layer; no store                                                                                       |
+| `crates/tinystore/src/metrics/`     | metrics: series and their labels, heads and blocks, reads, aggregates, instruments, what a name keeps                                            |
+| `crates/tinystore/src/backup/`      | backup: a store's snapshot, the zip and its manifest, the restore                                                                                |
+| `crates/tinystore/src/replication/` | replication: a node's log of each file's commits, its entries and segments, snapshots, links and the writes it passes on                         |
+| `crates/tinystore/src/compress/`    | what records and metrics both pack with: varints, bits read a word at a time, rice codes, zstd, CRC-32                                           |
+| `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                           |
+| `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                         |
+| `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`                                              |
+| `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                          |
+| `fuzz/`                             | the fuzz targets, built on nightly through cargo-fuzz and run by hand                                                                            |
+| `crates/protocol/`                  | the `.wire` language's parser and layout, and what writes every codec and vector; nothing ships it                                               |
+| `sdk/js/`, `sdk/python/`            | the clients of the protocol for Bun and Node, and Python                                                                                         |
+| `sdk/go/`                           | the Go SDK, module `tinyshed.org/tinystore`: a package an engine, and `internal/` its core, its codec of the protocol and its console            |
+| `protocol/`                         | the wire protocol's schema, a file an engine, which every codec and vector is written from                                                       |
+| `editors/wire/`                     | the `.wire` schema's highlighting and snippets: one TextMate grammar for VS Code and RustRover                                                   |
+| `testdata/wire/`                    | the protocol's vectors, which Rust and every SDK read                                                                                            |
+| `testdata/console/`                 | a logger's console lines, which Rust and every SDK print byte for byte                                                                           |
+| `plan/`                             | the rewrite: decisions, evidence, architecture, the API books, phases                                                                            |
+| `docs/`, `web/`                     | the guides and the docs site, built from `main`                                                                                                  |
+| `tools/`                            | scripts the justfile runs: `quick.ts`, the checks of what changed                                                                                |
+| `.agents/skills/`                   | how recurring work is done; `.claude/skills/` points to it                                                                                       |
 
 ## Crates
 

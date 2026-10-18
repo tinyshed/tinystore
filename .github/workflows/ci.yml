@@ -86,7 +86,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: sdk/go/go.mod
 
       # the Go SDK through the core in its own process, a private child, a sidecar and a remote server:
       # the core through syscall on Windows and cgo elsewhere
@@ -100,6 +100,7 @@ jobs:
           esac
           export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
+          cd sdk/go
           test -z "$(gofmt -l .)"
           go vet ./...
           go test ./...
@@ -145,7 +146,7 @@ jobs:
       # the Go and Python codecs read and write every vector; the runner has Go
       - name: Codecs
         run: |
-          (cd internal/wire && go vet . && go test .)
+          (cd sdk/go/internal/wire && go vet . && go test .)
           (cd sdk/python && uv run --frozen pytest tests/test_protocol.py --noconftest -q)
 
       - uses: oven-sh/setup-bun@v2

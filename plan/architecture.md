@@ -68,8 +68,8 @@ only where a separate artifact does.
 crates allow it, each block with a SAFETY comment.
 
 The SDKs stay where they are: `sdk/js` and `sdk/python` gain the pipe as a
-transport, and the Go SDK takes the root module path,
-`github.com/tinyshed/tinystore`, so `go get` does not change.
+transport, and the Go SDK lives beside them in `sdk/go` as the module
+`tinyshed.org/tinystore`, which the site resolves to that directory.
 
 ## The stack
 

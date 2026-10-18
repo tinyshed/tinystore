@@ -17,7 +17,7 @@ says so. Mark a task done in the commit that does it.
 - [x] The protocol: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
 - [x] The generator's Python and Go codecs, with their SDKs.
   Built, on 18 October: the codecs, `sdk/python/src/tinystore/_wire/protocol.py` on the Python SDK's codec and
-  `internal/wire` of a Go module at the root, each message's reader and writer written out a field at a time, both
+  `sdk/go/internal/wire` of the Go module, each message's reader and writer written out a field at a time, both
   read and written over every vector of `testdata/wire/protocol.json` and Go's over `vectors.json` too, by `just
   codec-go` and `just codec-python` and in CI. Every API book gives its Python and Go call sites, from
   the rules of [dx.md](dx.md#python-and-go-as-every-book-writes-them) and a newcomer check of them, on 18
@@ -66,10 +66,10 @@ them; the workspace builds and tests on three operating systems.
   files with uploads, ranges and checked reads, and events, the logger and its console over
   `testdata/console/console.json`; then metrics and their instruments, configs declared by a dataclass and a
   store's logger following the config `log`, locks and semaphores through `async with`, channels, search with
-  `db.search_index`, and backups, each suite through all four. Then the Go SDK, a package an engine under the
-  root module path, the core in its own process through cgo's dlopen, or its DLL without cgo on Windows, every
-  engine's suite through all four, its loggers `slog.Handler`s that `testing/slogtest` passes. Both SDKs closed
-  by the owner on 18 October. Left: napi-rs, and the Node SDK on it.
+  `db.search_index`, and backups, each suite through all four. Then the Go SDK, a package an engine in `sdk/go`,
+  module `tinyshed.org/tinystore`, the core in its own process through cgo's dlopen, or its DLL without cgo on
+  Windows, every engine's suite through all four, its loggers `slog.Handler`s that `testing/slogtest` passes.
+  Both SDKs closed by the owner on 18 October. Left: napi-rs, and the Node SDK on it.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,
@@ -253,7 +253,7 @@ that ran clean.
   promote`, which asks the nodes `--from` names and refuses while one still serves a file, and `node demote`;
   `witness`.
 - [ ] Self-metrics.
-- [x] The thin Go SDK on cgo and a sidecar, under the root module path: closed by the owner on 18 October,
+- [x] The thin Go SDK on cgo and a sidecar, in `sdk/go` as `tinyshed.org/tinystore`: closed by the owner on 18 October,
   every engine of the books built in it.
 - [ ] Actions builds the libraries, executables, npm packages, wheels and Go modules for seven targets.
 - [ ] The guides in docs/ rewritten from the API books; `v0.1.0`.

@@ -80,7 +80,7 @@ if (files.some((file) => file.startsWith('sdk/python/'))) {
 	add('just', 'sdk-python-check')
 	add('just', 'sdk-python')
 }
-if (files.some((file) => file.endsWith('.go') || file === 'go.mod' || file === 'go.sum')) add('just', 'sdk-go')
+if (files.some((file) => file.startsWith('sdk/go/'))) add('just', 'sdk-go')
 if (files.some((file) => file.startsWith('.github/'))) add('just', 'lint-actions')
 
 if (steps.length === 0) {

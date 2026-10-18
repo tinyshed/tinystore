@@ -9,6 +9,8 @@ binary := if os() == "windows" { "tinystore.exe" } else { "tinystore" }
 # the core the Bun SDK loads in its own process, and the tinystore it starts as a private child or a sidecar
 export TINYSTORE_LIBRARY := justfile_directory() / "target" / "release" / library
 export TINYSTORE_BIN := justfile_directory() / "target" / "release" / binary
+# the core the SDK loads under Node, the same library built as its addon
+export TINYSTORE_ADDON := justfile_directory() / "target" / "release" / "tinystore.node"
 
 # the core's library as Python's extension module, the name an abi3 build takes on each platform;
 # it links no libpython, whose symbols the interpreter that loads it has
@@ -64,7 +66,7 @@ protocol-check:
     cargo run --locked -p tinystore-protocol -- --check
 
 # read and write every vector through the Go codec, which its test holds to gofmt's layout
-[working-directory: 'internal/wire']
+[working-directory: 'sdk/go/internal/wire']
 codec-go:
     go vet .
     go test .
@@ -85,6 +87,7 @@ sdk: build
     bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts test/channels.test.ts test/search.test.ts test/node.test.ts test/values.test.ts
 
 # run the Go SDK over the core in its own process, a private child, a sidecar and a remote server; gofmt checks its layout
+[working-directory: 'sdk/go']
 sdk-go: build
     test -z "$(gofmt -l .)"
     go vet ./...
@@ -106,6 +109,17 @@ sdk-python-check:
     uv run --frozen ruff check src tests
     uv run --frozen ruff format --check src tests
     uv run --frozen pyright
+
+# build the core's library as Node's addon, tinystore.node: a build apart from Bun's, since Node's process gives it Node-API
+node-core:
+    cargo build --release --locked -p tinystore-ffi --features node
+    cp target/release/{{library}} target/release/tinystore.node
+
+# run the SDK under Node: the core in its own process through the addon, a private child, a sidecar and a remote server
+[working-directory: 'sdk/js']
+sdk-node: build node-core
+    bun install --frozen-lockfile
+    node --test test/under-node.ts
 
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']
@@ -139,7 +153,7 @@ tables:
 fuzz target="records_rows" time="60":
     docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src/fuzz {{rust_image}} sh -c 'rustup toolchain install nightly --profile minimal >/dev/null && cargo +nightly install cargo-fuzz --locked --quiet && cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}'
 
-check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-go sdk-python sdk-python-check lint-actions
+check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-node sdk-go sdk-python sdk-python-check lint-actions
 
 # remove build output
 clean:

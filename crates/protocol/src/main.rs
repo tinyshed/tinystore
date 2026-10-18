@@ -47,7 +47,7 @@ fn run(root: &Path, check: bool) -> Result<(), String> {
         ("crates/tinystore/src/wire/protocol.rs", rust::write(&schema)),
         ("sdk/js/src/wire/protocol.ts", typescript::write(&schema)),
         ("sdk/python/src/tinystore/_wire/protocol.py", python::write(&schema)),
-        ("internal/wire/protocol.go", golang::write(&schema)),
+        ("sdk/go/internal/wire/protocol.go", golang::write(&schema)),
         ("testdata/wire/protocol.json", vectors::write(&schema)),
     ];
     for (name, text) in outputs {
