@@ -54,6 +54,7 @@ fn a_batch_applies_once_in_order_and_one_sent_again_changes_nothing() {
     let (mut again, ack) = stats.remote(SESSION, 0);
     assert_eq!((ack.applied, ack.known), (1, true));
     assert_eq!(again.apply(counted(1, 5.0)).unwrap().applied, 1, "applied already: answered, nothing changes");
+    assert_eq!(again.apply(counted(1, 5.0)).unwrap().applied, 1, "and again on the same stream");
     let next = Batch { number: 2, changes: vec![add(1, 2.0)], ..Batch::default() };
     assert_eq!(again.apply(next).unwrap().applied, 2, "what the batch sent again declared serves the next");
     let past = again.apply(Batch { number: 4, ..Batch::default() }).unwrap_err();

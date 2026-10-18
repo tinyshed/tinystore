@@ -52,6 +52,8 @@ pub struct Recorder {
     stats: Metrics,
     buckets: HashMap<String, Buckets>,
     opened: Mutex<HashMap<String, Opened>>,
+    /// The names a macro of another kind was called on, said once each.
+    mixed: Mutex<std::collections::HashSet<String>>,
     /// What `describe_*!` said of a name before it was opened.
     described: Mutex<HashMap<String, Told>>,
 }
@@ -74,7 +76,13 @@ impl Metrics {
     /// A recorder for the `metrics` crate, whose macros then count into
     /// these metrics.
     pub fn recorder(&self) -> Recorder {
-        Recorder { stats: self.clone(), buckets: HashMap::new(), opened: Mutex::default(), described: Mutex::default() }
+        Recorder {
+            stats: self.clone(),
+            buckets: HashMap::new(),
+            opened: Mutex::default(),
+            mixed: Mutex::default(),
+            described: Mutex::default(),
+        }
     }
 }
 
@@ -97,10 +105,10 @@ impl Recorder {
         let mut opened = lock(&self.opened);
         if let Some(held) = opened.get(name) {
             let picked = pick(held);
-            if picked.is_none() && !matches!(held, Opened::Refused) {
+            // The handle stays: only the call of the other kind counts nowhere.
+            if picked.is_none() && !matches!(held, Opened::Refused) && lock(&self.mixed).insert(name.to_owned()) {
                 let why = "a macro of another kind than it was opened as";
                 tracing::warn!(target: "tinystore", "metrics {name}: {why}; said once");
-                opened.insert(name.to_owned(), Opened::Refused);
             }
             return picked;
         }

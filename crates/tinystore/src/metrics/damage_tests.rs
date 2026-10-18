@@ -127,3 +127,17 @@ fn a_deleted_series_whose_group_no_longer_reads_leaves_that_groups_values_in_the
     assert_eq!(f.rows("payloads"), payloads, "b's, and those the group that no longer reads named");
     assert_eq!(stats.query().name("cpu").read().unwrap().len(), 1);
 }
+
+#[test]
+fn a_series_whose_head_no_longer_reads_is_suspended_and_the_others_expire() {
+    let f = fixture();
+    let stats = f.metrics();
+    two(&f);
+    let a = f.value("select min(series_id) from heads");
+    flip(&f, "heads", "body", a);
+    f.pass(31 * crate::metrics::fixture::DAY);
+    maintain(&f.store).unwrap();
+    let damaged = stats.damaged().unwrap();
+    assert_eq!((damaged.len(), &damaged[0].labels), (1, &host("a")), "{damaged:?}");
+    assert_eq!(f.value(&format!("select count(*) from heads where series_id != {a}")), 0, "b expired");
+}

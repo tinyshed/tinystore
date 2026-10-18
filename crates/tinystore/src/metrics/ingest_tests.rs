@@ -177,3 +177,23 @@ fn samples_in_any_order_come_back_in_the_order_of_their_times() {
     assert_eq!(times.len(), 500);
     assert!(times.windows(2).all(|pair| pair[0] < pair[1]));
 }
+
+#[test]
+fn a_call_refused_for_its_times_makes_no_name_and_moves_no_keep() {
+    let f = fixture();
+    let now = f.now();
+    let week = Duration::from_hours(7 * 24);
+    let refused =
+        [Series::gauge("fresh").sample(now, 1.0).keep(week), Series::gauge("stale").sample(now - 31 * DAY, 1.0)];
+    assert_eq!(f.metrics().ingest(&refused).unwrap_err().kind(), ErrorKind::TooOld);
+    let names: i64 = f
+        .engine()
+        .file
+        .read(|c| {
+            c.query_row("select count(*) from names", [], |row| row.get(0))
+                .map_err(|e| crate::sqlite::sql_error("names", e))
+        })
+        .unwrap();
+    assert_eq!(names, 0, "every series or none");
+    f.metrics().ingest(&[Series::gauge("fresh").sample(now, 1.0).keep(2 * week)]).unwrap();
+}

@@ -87,8 +87,13 @@ impl crate::engine::Engine for Engine {
 
     /// A name a copy's home made after the copy read its names is read once
     /// the home's commits arrive.
-    fn applied(&self, _: &str) {
-        let _ = self.names.read_again(&self.file);
+    fn applied(&self, file: &str) {
+        if file != FILE {
+            return;
+        }
+        if let Err(error) = self.names.read_again(&self.file) {
+            tracing::warn!(target: "tinystore", %error, "metrics: a copy's names, read again after its home's commit");
+        }
     }
 }
 

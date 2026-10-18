@@ -125,6 +125,9 @@ pub(super) type Row = (i64, Option<String>, Vec<u8>);
 /// The series of the postings every finding set holds and no leaving set
 /// does, the first past the budget's count refused.
 fn series_of(connection: &Connection, finding: &[Set], leaving: &[Set], budget: &mut Budget) -> Result<Vec<Row>> {
+    if finding.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut values = Vec::new();
     let mut filter = format!("select p.series_id from postings p where {}", membership(&finding[0], "p", &mut values));
     for (set, negated) in finding[1..].iter().map(|set| (set, "")).chain(leaving.iter().map(|set| (set, "not "))) {

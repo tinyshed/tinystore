@@ -22,7 +22,7 @@ use super::engine::{AHEAD, Engine, execute};
 use super::head::{self, Extent};
 use super::labels::Kept;
 use super::ladder::{unit_end, unit_of};
-use super::names::{Name, checked_keep, millis};
+use super::names::{KEEP, Name, checked_keep, millis};
 use super::registry;
 use super::retention::expires;
 use super::series::{Kind, Labels, Series};
@@ -67,7 +67,13 @@ impl Engine {
         let now = self.now();
         let (gathered, bytes) = gather(series)?;
         let _held = self.memory.reserve(bytes as u64, "metrics: an ingest", PATIENCE)?;
-        let names = self.names.settle(&self.file, &wanted_names(&gathered)?)?;
+        let wanted = wanted_names(&gathered)?;
+        // A call refused for its times makes no name and moves no keep.
+        let keeps = self.names.foreseen(&wanted);
+        for series in gathered.values() {
+            within_window(series, keeps.get(series.kept.name()).copied().unwrap_or(KEEP), now)?;
+        }
+        let names = self.names.settle(&self.file, &wanted)?;
         let batches = gathered.into_values().map(|series| batch(series, &names, now)).collect::<Result<Vec<_>>>()?;
         if batches.is_empty() {
             return Ok(());
@@ -172,10 +178,18 @@ fn wanted_names(gathered: &BTreeMap<[u8; 32], Gathered>) -> Result<BTreeMap<&str
 fn batch(series: Gathered, names: &HashMap<String, Name>, now: i64) -> Result<Batch> {
     let named = || format!("metrics {}", series.kept);
     let name = names.get(series.kept.name()).ok_or_else(|| Error::internal(format!("{}: its name", named())))?;
+    within_window(&series, name.keeps(), now)?;
     let keep = millis(name.keeps());
-    let (cutoff, horizon) = (now.saturating_sub(keep), now.saturating_add(millis(AHEAD)));
+    let points = ordered(series.points);
+    Ok(Batch { identity: series.kept.identity(), kept: series.kept, kind: series.kind, name: name.id, keep, points })
+}
+
+/// Refuses a sample older than `keep` or more than ten minutes ahead.
+fn within_window(series: &Gathered, keep: Duration, now: i64) -> Result<()> {
+    let (cutoff, horizon) = (now.saturating_sub(millis(keep)), now.saturating_add(millis(AHEAD)));
     for point in &series.points {
-        let refused = |kind, why| Error::new(kind, format!("{}: sample at {}{why}", named(), rfc3339(point.at)));
+        let refused =
+            |kind, why| Error::new(kind, format!("metrics {}: sample at {}{why}", series.kept, rfc3339(point.at)));
         if point.at < cutoff {
             return Err(refused(ErrorKind::TooOld, ", older than its name keeps"));
         }
@@ -183,8 +197,7 @@ fn batch(series: Gathered, names: &HashMap<String, Name>, now: i64) -> Result<Ba
             return Err(refused(ErrorKind::TooNew, ", more than ten minutes ahead of the store's clock"));
         }
     }
-    let points = ordered(series.points);
-    Ok(Batch { identity: series.kept.identity(), kept: series.kept, kind: series.kind, name: name.id, keep, points })
+    Ok(())
 }
 
 /// Points in the order of their times, of a time given twice the one given

@@ -170,9 +170,12 @@ impl Remote {
             let next = held.applied + 1;
             return Err(Error::invalid(format!("batch {}, where the session's next is {next}", batch.number)));
         }
-        let refused = self.declare(&batch.instruments)?;
-        self.label(&batch.sets)?;
-        if batch.number <= held.applied {
+        // A batch sent again declares again only what this stream lacks: on
+        // the stream that sent it first, its instruments and sets are known.
+        let again = batch.number <= held.applied;
+        let refused = self.declare(&batch.instruments, again)?;
+        self.label(&batch.sets, again)?;
+        if again {
             return Ok(Ack { applied: held.applied, known: true, refused });
         }
         let changed: Vec<_> = batch.changes.iter().map(|change| self.slot_of(change)).collect::<Result<_>>()?;
@@ -191,9 +194,12 @@ impl Remote {
 
     /// Opens the instruments a batch declares; one the store refuses is
     /// answered with why, and the changes of its sets go nowhere.
-    fn declare(&mut self, declared: &[Declared]) -> Result<Vec<(u64, String)>> {
+    fn declare(&mut self, declared: &[Declared], again: bool) -> Result<Vec<(u64, String)>> {
         let mut refused = Vec::new();
         for instrument in declared {
+            if again && self.instruments.contains_key(&instrument.number) {
+                continue;
+            }
             if self.instruments.contains_key(&instrument.number) {
                 return Err(Error::invalid(format!("instrument {} declared twice", instrument.number)));
             }
@@ -215,8 +221,11 @@ impl Remote {
 
     /// The slots of the sets of labels a batch declares; labels an
     /// instrument refuses give a slot nothing writes, said once.
-    fn label(&mut self, sets: &[Set]) -> Result<()> {
+    fn label(&mut self, sets: &[Set], again: bool) -> Result<()> {
         for set in sets {
+            if again && self.sets.contains_key(&set.number) {
+                continue;
+            }
             if self.sets.contains_key(&set.number) {
                 return Err(Error::invalid(format!("set {} declared twice", set.number)));
             }

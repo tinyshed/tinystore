@@ -117,6 +117,14 @@ impl Names {
         Ok(wanted.keys().filter_map(|name| known.get(*name).map(|held| ((*name).to_owned(), held.clone()))).collect())
     }
 
+    /// What each name would keep once `settle` took `wanted`, written nowhere:
+    /// a call checks its samples against it before it makes a name.
+    pub(super) fn foreseen(&self, wanted: &BTreeMap<&str, Option<Duration>>) -> HashMap<String, Duration> {
+        let known = lock(&self.known);
+        let keeps = |name: &str, keep: Option<Duration>| keep.or_else(|| known.get(name).and_then(|held| held.keep));
+        wanted.iter().map(|(&name, &keep)| (name.to_owned(), keeps(name, keep).unwrap_or(KEEP))).collect()
+    }
+
     /// Writes a name's unit and help, the name made the first time it is
     /// given.
     pub(super) fn describe(&self, file: &File, name: &str, unit: String, help: String) -> Result<()> {

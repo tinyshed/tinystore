@@ -18,7 +18,7 @@ use super::names::{KEEP, millis};
 use super::publish::{self, earlier, group_row, read_group};
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
-use crate::{Error, Result};
+use crate::{Error, ErrorKind, Result};
 
 /// The series a pass looks at at most, so that a pass stays short; another
 /// follows at once while one leaves work.
@@ -45,6 +45,10 @@ const DUE: &str = "select st.series_id, n.name from series_state st
     order by st.due, st.series_id limit cast(?2 as integer)";
 const HEAD: &str = "select st.version, st.max_seen, st.head_count, st.head_start, st.head_end, h.body
     from series_state st left join heads h on h.series_id = st.series_id where st.series_id = ?1";
+const SAVEPOINT: &str = "savepoint metrics_expiry";
+const RELEASE: &str = "release metrics_expiry";
+const ROLLBACK_TO: &str = "rollback to metrics_expiry";
+const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
 const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
 const SAVE_STATE: &str = "update series_state set version = version + 1, ready = ?2,
@@ -78,7 +82,9 @@ impl Engine {
             .collect())
     }
 
-    /// Removes what each series due keeps no longer, in one write.
+    /// Removes what each series due keeps no longer, in one write, each series
+    /// in a savepoint of its own: one whose bytes no longer read is suspended,
+    /// as publication suspends it, rather than stall every expiry after it.
     pub(super) fn expire(&self, due: Vec<Due>) -> Result<Expired> {
         if due.is_empty() {
             return Ok(Expired::default());
@@ -88,16 +94,41 @@ impl Engine {
             let mut zstd = zstd;
             let mut expired = Expired::default();
             for series in &due {
-                let done = expire_series(tx, &mut zstd, series)
-                    .map_err(|error| error.within(format!("series {}", series.id)))?;
-                expired.samples += done.samples;
-                expired.reclaimed += done.reclaimed;
+                if let Some(done) = expire_isolated(tx, &mut zstd, series)? {
+                    expired.samples += done.samples;
+                    expired.reclaimed += done.reclaimed;
+                }
             }
             Ok((zstd, expired))
         })?;
         self.codecs.give_back(zstd);
         Ok(expired)
     }
+}
+
+/// Expires one series, or suspends it when its bytes no longer read or its
+/// version cannot move; any other failure fails the whole write.
+fn expire_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Due) -> Result<Option<Expired>> {
+    execute(tx, SAVEPOINT, params![], "start a series' expiry")?;
+    let expired = expire_series(tx, zstd, series).map_err(|error| error.within(format!("series {}", series.id)));
+    let error = match expired {
+        Ok(done) => {
+            execute(tx, RELEASE, params![], "end a series' expiry")?;
+            return Ok(Some(done));
+        }
+        Err(error) => error,
+    };
+    execute(tx, ROLLBACK_TO, params![], "undo a series' expiry")?;
+    execute(tx, RELEASE, params![], "end a series' expiry")?;
+    if !matches!(error.kind(), ErrorKind::Corrupt | ErrorKind::Limit) {
+        return Err(error);
+    }
+    let failure: String = error.to_string().chars().take(1024).collect();
+    let now = series.cutoff.saturating_add(series.keep);
+    if execute(tx, SUSPEND, params![series.id, now, failure], "suspend a series")? == 1 {
+        tracing::warn!(target: "tinystore", series = series.id, failure, "metrics: a series stopped taking samples");
+    }
+    Ok(None)
 }
 
 /// Removes one series' samples behind its cutoff, and the series itself once

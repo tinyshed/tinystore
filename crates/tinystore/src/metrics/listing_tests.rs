@@ -148,3 +148,15 @@ fn a_page_past_its_bounds_is_refused() {
     assert_eq!(stats.label_values("cpu", "").page().unwrap_err().kind(), ErrorKind::Invalid);
     assert_eq!(stats.label_values("cpu", "l".repeat(257)).page().unwrap_err().kind(), ErrorKind::Invalid);
 }
+
+#[test]
+fn a_labels_empty_value_is_listed_on_the_first_page() {
+    let f = fixture();
+    let (stats, now) = (f.metrics(), f.now());
+    let hit = |route: &str| Series::counter("hits_total").label("route", route).sample(now, 1.0);
+    stats.ingest(&[hit(""), hit("/a")]).unwrap();
+    let routes = || stats.label_values("hits_total", "route");
+    assert_eq!(values(routes().page().unwrap()), text(&["", "/a"], None));
+    assert_eq!(values(routes().limit(1).page().unwrap()), text(&[""], Some("")));
+    assert_eq!(values(routes().after("").page().unwrap()), text(&["/a"], None));
+}

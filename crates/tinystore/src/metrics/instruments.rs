@@ -289,6 +289,10 @@ impl Engine {
             Kept::of(name, &Labels::new())?;
         }
         self.check_kinds(&written)?;
+        // Settled before the instrument is registered: a keep refused here
+        // leaves no instrument claiming the names it would write.
+        let keeps = written.iter().map(|(name, _)| (name.as_str(), keep)).collect();
+        self.names.settle(&self.file, &keeps)?;
         let instrument = match builder.read.take() {
             Some(read) => {
                 self.totals.reader(&builder.name, &builder.labels, read)?;
@@ -296,8 +300,6 @@ impl Engine {
             }
             None => self.totals.instrument(&builder.name, builder.form, bounds.clone())?,
         };
-        let keeps = written.iter().map(|(name, _)| (name.as_str(), keep)).collect();
-        self.names.settle(&self.file, &keeps)?;
         self.describe_written(builder, &written, bounds.as_ref());
         Ok(instrument)
     }

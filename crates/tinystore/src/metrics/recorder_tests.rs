@@ -36,10 +36,12 @@ fn the_metrics_crates_macros_count_into_the_stores_instruments() {
             ::metrics::counter!("kept_total").absolute(total);
         }
         ::metrics::gauge!("queue_depth").set(f64::NAN);
+        // and the gauge counts on after it
+        ::metrics::gauge!("queue_depth").increment(1.0);
     });
     stats.flush().unwrap();
     assert_eq!(last(&f, "requests_total", &[("route", "/notes")]), Some(5.0));
-    assert_eq!(last(&f, "queue_depth", &[]), Some(5.0), "a NaN set changes nothing");
+    assert_eq!(last(&f, "queue_depth", &[]), Some(6.0), "a NaN set changes nothing, nor a counter's call");
     assert_eq!(last(&f, "kept_total", &[]), Some(19.0), "10, 5 more, and 4 after it started again");
     let route = [("route", "/users")];
     assert_eq!((last(&f, "latency_ms_count", &route), last(&f, "latency_ms_sum", &route)), (Some(2.0), Some(462.0)));

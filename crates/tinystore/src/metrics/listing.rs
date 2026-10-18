@@ -51,7 +51,7 @@ const NAME_ID: &str = "select id from names where name = ?1";
 /// The next label of a name past `?2`: one seek, however many values it has.
 const NEXT_LABEL: &str = "select label from name_labels where name = ?1 and label > ?2
     and label >= ?3 and (?4 is null or label < ?4) order by label limit 1";
-const VALUES: &str = "select value from name_labels where name = ?1 and label = ?2 and value > ?3
+const VALUES: &str = "select value from name_labels where name = ?1 and label = ?2 and (?3 is null or value > ?3)
     and value >= ?4 and (?5 is null or value < ?5) order by value limit cast(?6 as integer)";
 
 /// A name the store holds series of, as `names` gives it.
@@ -110,7 +110,8 @@ pub struct List<P> {
     engine: Arc<Engine>,
     of: Of,
     prefix: String,
-    after: String,
+    /// None on the first page, so that a label's value "" is listed there.
+    after: Option<String>,
     limit: usize,
     made: PhantomData<fn() -> P>,
 }
@@ -147,14 +148,7 @@ impl Metrics {
 
 impl<P> List<P> {
     fn of(engine: &Arc<Engine>, of: Of) -> List<P> {
-        List {
-            engine: Arc::clone(engine),
-            of,
-            prefix: String::new(),
-            after: String::new(),
-            limit: PAGE,
-            made: PhantomData,
-        }
+        List { engine: Arc::clone(engine), of, prefix: String::new(), after: None, limit: PAGE, made: PhantomData }
     }
 
     /// Only those that start with this text.
@@ -165,7 +159,7 @@ impl<P> List<P> {
 
     /// The page that starts past this one, as a page's `next` says it.
     pub fn after(mut self, next: impl Into<String>) -> Self {
-        self.after = next.into();
+        self.after = Some(next.into());
         self
     }
 
@@ -180,7 +174,9 @@ impl<P> List<P> {
         if !(1..=MOST_PAGE).contains(&self.limit) {
             return Err(Error::invalid(format!("a page of {}: it holds 1 to {MOST_PAGE}", self.limit)));
         }
-        if self.prefix.len() > MOST_VALUE_BYTES || self.after.len() > MOST_VALUE_BYTES {
+        if self.prefix.len() > MOST_VALUE_BYTES
+            || self.after.as_ref().is_some_and(|after| after.len() > MOST_VALUE_BYTES)
+        {
             return Err(Error::invalid(format!("a prefix or an `after` of {MOST_VALUE_BYTES} bytes at most")));
         }
         match &self.of {
@@ -259,7 +255,8 @@ impl Engine {
         let rows: Vec<NameRow> = self.file.read(|connection| {
             let mut select = connection.prepare_cached(NAMES).map_err(failed)?;
             let wanted = list.limit as i64 + 1;
-            let given = params![now, millis(KEEP), list.after, list.prefix, end.as_deref().map(TextBytes), wanted];
+            let after = list.after.as_deref().unwrap_or("");
+            let given = params![now, millis(KEEP), after, list.prefix, end.as_deref().map(TextBytes), wanted];
             let rows = select.query_map(given, |row| {
                 Ok((
                     row.get(0)?,
@@ -285,8 +282,9 @@ impl Engine {
             let Some(id) = name_id(connection, name)? else { return Ok(Vec::new()) };
             let mut next = connection.prepare_cached(NEXT_LABEL).map_err(failed)?;
             let mut labels: Vec<String> = Vec::new();
+            let after = list.after.clone().unwrap_or_default();
             while labels.len() <= list.limit {
-                let last = labels.last().unwrap_or(&list.after);
+                let last = labels.last().unwrap_or(&after);
                 let given = params![id, last, list.prefix, end.as_deref().map(TextBytes)];
                 match next.query_row(given, |row| row.get(0)).optional().map_err(failed)? {
                     Some(label) => labels.push(label),
