@@ -7,11 +7,11 @@ when the work recovers.
 
 from __future__ import annotations
 
-import json
-import sys
+import functools
 import time
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
+
+from ._console import Line, Printer, encode_fields
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,10 +25,17 @@ type Say = Callable[[Level, str, dict[str, Any]], None]
 
 
 def say_own(level: Level, message: str, fields: dict[str, Any]) -> None:
-    """Says one of TinyStore's own lines on stderr, as a JSON line of the stream tinystore."""
-    stamp = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    line = {"time": stamp, "level": level.upper(), "stream": "tinystore", "msg": message, **fields}
-    print(json.dumps(line, ensure_ascii=False, default=str), file=sys.stderr, flush=True)
+    """Says one of TinyStore's own lines, as the console of a logger of the stream tinystore prints it."""
+    attrs = encode_fields(fields.items(), None)
+    _own().print(Line(at=time.time_ns(), stream="tinystore", level=_LEVELS[level], msg=message, attrs=attrs))
+
+
+_LEVELS = {"info": 0, "warn": 4}
+
+
+@functools.cache
+def _own() -> Printer:
+    return Printer(None, None, False, None)
 
 
 def message_of(err: BaseException | str) -> str:

@@ -36,13 +36,30 @@ from .errors import (
 from .jobs import Backoff, Concurrency, Job, JobPage, LastRun, Outcome, Queue, Run, Schedule, StoreTxQueue, Worker
 from .kv import Bucket, Counters, Entry, Page
 from .limits import Allowance, Quota, RateLimit, WindowUse
+from .logger import Logger, logger, secrets
 from .once import Once
 from .query import Query, RowPage, Table
+from .records import (
+    AllEvents,
+    Damage,
+    Event,
+    EventPage,
+    Events,
+    Lines,
+    PollBatch,
+    Row,
+    Stats,
+    StreamInfo,
+    TailBatch,
+    Top,
+)
 from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import Status, Store, connect, open
+from .trace import trace
 from .tx import Tx, TxBucket, TxCounters
 
 __all__ = [
+    "AllEvents",
     "Allowance",
     "Backoff",
     "Bucket",
@@ -55,9 +72,13 @@ __all__ = [
     "Constraint",
     "CorruptError",
     "Counters",
+    "Damage",
     "Database",
     "Done",
     "Entry",
+    "Event",
+    "EventPage",
+    "Events",
     "FileBytes",
     "FileInfo",
     "FilePage",
@@ -69,6 +90,8 @@ __all__ = [
     "JobPage",
     "LastRun",
     "LimitError",
+    "Lines",
+    "Logger",
     "LostError",
     "NotFoundError",
     "Once",
@@ -76,25 +99,31 @@ __all__ = [
     "OutcomeUnknownError",
     "Page",
     "PermissionDeniedError",
+    "PollBatch",
     "ProtocolError",
     "Query",
     "Queue",
     "Quota",
     "RateLimit",
+    "Row",
     "RowPage",
     "Run",
     "Schedule",
     "Sql",
     "SqlTx",
+    "Stats",
     "Status",
     "Store",
     "StoreTxQueue",
     "StoredFile",
+    "StreamInfo",
     "SuspendedError",
     "Table",
+    "TailBatch",
     "TinystoreError",
     "TooNewError",
     "TooOldError",
+    "Top",
     "Tx",
     "TxBucket",
     "TxCounters",
@@ -107,6 +136,9 @@ __all__ = [
     "WindowUse",
     "Worker",
     "connect",
+    "logger",
     "open",
+    "secrets",
     "sql",
+    "trace",
 ]

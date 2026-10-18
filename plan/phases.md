@@ -62,7 +62,8 @@ them; the workspace builds and tests on three operating systems.
   private child, a sidecar or a remote server, with kv's buckets, counters, rate limits, quotas, `once` and
   `store.tx`, jobs' queues, workers, steps, progress, watches, schedules and `run_due`, sql's databases,
   tables, query builder over `testdata/sql/queries.json`, `include`, pages and `db.bucket` and `db.queue`,
-  and files with uploads, ranges and checked reads, each suite through all four.
+  files with uploads, ranges and checked reads, and events, the logger and its console over
+  `testdata/console/console.json`, each suite through all four.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,

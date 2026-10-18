@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Self, overload
@@ -34,16 +35,21 @@ from .errors import InvalidError
 from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Schedule, Worker, open_queue, open_schedule
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
+from .logger import Level, Logger, LoggerOptions, LogHandler, new_logger
 from .once import Once, once_open
+from .records import AllEvents, Events, open_events
 from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
 
 if TYPE_CHECKING:
     import os
     import ssl
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
     from datetime import datetime
     from types import TracebackType
+    from typing import TextIO
+
+    from ._console import Console, ConsoleTime
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +71,7 @@ class Store:
     def __init__(self, link: Link) -> None:
         self._link = link
         self._workers: set[Worker] = set()
+        self._loggers: list[Logger] = []
         self.clock = Clock(link)
         """The test's clock of a private store opened with ``clock``; on any other, its calls are InvalidError."""
 
@@ -237,6 +244,66 @@ class Store:
         """
         return open_files(self._link, name, ttl, max_file_size)
 
+    @overload
+    def events(self) -> AllEvents: ...
+    @overload
+    def events(self, stream: str, *, keep: Duration | None = None) -> Events: ...
+    def events(self, stream: str | None = None, *, keep: Duration | None = None) -> Events | AllEvents:
+        """A stream of events by name, made with its first event; without a name, every stream, to read::
+
+        audit = store.events("audit", keep="365d")
+        await audit.append("role.changed", {"user": 42, "role": "admin"})
+        page = await store.events().list(since="1h", min_level="warn")
+        """
+        if stream is None:
+            if keep is not None:
+                raise InvalidError("keep is a stream's: name the stream")
+            return AllEvents(self._link)
+        return open_events(self._link, stream, keep)
+
+    def logger(
+        self,
+        stream: str,
+        *,
+        level: Level | None = None,
+        console: Console | None = None,
+        time: ConsoleTime | None = None,
+        hide_stream: bool = False,
+        to: TextIO | None = None,
+        redact: Iterable[str] = (),
+        keep_url_passwords: bool = False,
+        replace: Callable[[str, Any], Any] | None = None,
+        source: bool = False,
+        env: str | bool = True,
+        buffer: int = 1024,
+        keep: Duration | None = None,
+    ) -> Logger:
+        """A logger of the stream: each line printed as it is logged and kept within a second.
+
+        A call never waits; what its buffer has no room for is dropped and
+        counted. The store's close hands over what it holds::
+
+            log = store.logger("api", redact=tinystore.secrets)
+            log.info("signed in", user=42)
+        """
+        options = LoggerOptions(
+            level, console, time, hide_stream, to, redact, keep_url_passwords, replace, source, env, buffer
+        )
+        events = open_events(self._link, stream, keep)
+        made = new_logger(events.append_lines, stream, options)
+        self._loggers.append(made)
+        return made
+
+    def log_handler(self, stream: str, level: int = logging.NOTSET, **options: Any) -> LogHandler:
+        """A handler for a program that logs through logging, its lines printed and kept as the store's logger's::
+
+        logging.getLogger("worker").addHandler(store.log_handler("worker"))
+
+        A record's extra are its fields, its logger's name in its context.
+        The options are the store's logger's.
+        """
+        return LogHandler(self.logger(stream, **options), level)
+
     async def database(
         self, name: str, *, migrations: Migrations | None = None, durability: Durability | None = None
     ) -> Database:
@@ -278,6 +345,7 @@ class Store:
         before this returns; the directory's sidecar goes once it has been idle.
         """
         await asyncio.gather(*(worker.stop() for worker in list(self._workers)), return_exceptions=True)
+        await asyncio.gather(*(each.stop() for each in self._loggers), return_exceptions=True)
         await self._link.close()
 
     async def __aenter__(self) -> Self:
