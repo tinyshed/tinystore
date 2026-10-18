@@ -836,6 +836,7 @@ module defines.
 - a blobs upload cancelled, refused or cut by its connection leaves nothing, and `cancelled` comes once its bytes are gone — `an_upload_cancelled_or_refused_leaves_nothing`, `a_connection_that_ends_mid_upload_leaves_nothing` in `wire::blobs`
 - a whole blobs read of a changed byte ends corrupt before its last piece — `a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece` in `wire::blobs`
 - a blobs read is its range, not checked, on the ETag a get gave: a file replaced or deleted since is `conflict` — `a_range_reads_only_its_bytes_and_is_not_checked`, `a_read_on_an_etag_the_path_no_longer_holds_is_a_conflict` in `wire::blobs`
+- a blobs read cancelled mid-way sends nothing after its last frame, a piece its worker read meanwhile dropped — `a_read_cancelled_mid_way_sends_nothing_after_its_last_frame` in `wire::blobs`, `TestAReadClosedMidWayLeavesTheConnectionToTheNextCall` in the Go SDK's `blobs`
 - the server module requires only the root — `TestTheServerRequiresOnlyTheRoot`
 - `server/wire` imports only the standard library — `TestWireImportsOnlyTheStandardLibrary`
 - a data client cannot change a schema — `TestADataClientCannotChangeTheSchema`, `TestEachLineOfTheCheckRefusesOnItsOwn`, `FuzzDataSQL`

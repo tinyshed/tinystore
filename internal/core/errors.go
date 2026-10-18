@@ -192,3 +192,7 @@ func IsConnectionLost(err error) (lost bool, sent bool) {
 	}
 	return false, false
 }
+
+// Unsent is a connection lost before a call's last part left, which the link
+// sends again on another: an upload whose body reads again from its start.
+func Unsent(cause error) error { return lost(cause, false) }
