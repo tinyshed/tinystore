@@ -187,7 +187,7 @@ fn refuse_a_second_home(dir: &Path, files: &[String], asked: &Asked) -> Done {
         files.to_vec()
     };
     for address in &from {
-        let Some(served) = tinystore::replication::served_at(dir, node.clone(), address)? else {
+        let Some(served) = tinystore::replication::served_by(dir, node.clone(), address)? else {
             eprintln!("{address} does not answer");
             continue;
         };

@@ -17,7 +17,7 @@ const ANSWER: Duration = Duration::from_secs(5);
 /// The files the node at `address` serves, its own and its whole copies, as
 /// its welcome says to the node in `dir` with `node`'s token and TLS; none
 /// when nothing answers there. A node that refuses the link is an error.
-pub fn served_at(dir: &Path, node: Node, address: &str) -> Result<Option<Vec<String>>> {
+pub fn served_by(dir: &Path, node: Node, address: &str) -> Result<Option<Vec<String>>> {
     let state = State::new(dir, node, 0)?;
     let Ok(tcp) = super::follow::connect(address) else {
         return Ok(None);

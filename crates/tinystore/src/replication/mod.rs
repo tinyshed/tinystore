@@ -33,7 +33,7 @@ mod witness;
 
 use std::fmt;
 
-pub use ask::served_at;
+pub use ask::served_by;
 pub(crate) use copy::is_copy;
 #[cfg(feature = "blobs")]
 pub(crate) use forward::BLOBS;

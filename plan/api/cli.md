@@ -312,7 +312,7 @@ one table; `serve` with its banner, `--node-config`, `--log-file` and
 and `search drop` on a directory no one holds; `stop`; `token new`; `mcp`;
 `node status`, `node promote` with its check and `node demote`; `witness`;
 `backup` beside a server; and in the core `Store::open_beside`,
-`replication::served_at`, and the pipe's `Connect::greeted`, told a client's
+`replication::served_by`, and the pipe's `Connect::greeted`, told a client's
 name once it is welcomed.
 
 ## Decided
