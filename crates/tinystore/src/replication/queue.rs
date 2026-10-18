@@ -28,8 +28,8 @@ use super::node::State;
 use crate::sqlite::{Config, File, sql_error};
 use crate::{Error, Result, Store};
 
-// subject: what an op changes, as a counter's key, whose ops a read on the
-// copy adds; its engine says what it is
+// subject: the key of the row or counter the op changes, whose ops a read on
+// the copy adds; its engine says how to read it
 const SCHEMA: &str = "create table if not exists queued (
     op      integer primary key autoincrement,
     file    text    not null,
@@ -179,8 +179,8 @@ fn send_some(state: &State, store: &Store, queue: &Queue) -> Result<bool> {
     Ok(true)
 }
 
-/// The node's id, made once from its directory, its process and the time,
-/// and kept in `log/node`.
+/// The node's id, made once from its directory, its process, the time and a
+/// random seed, and kept in `log/node`.
 pub(crate) fn node_id(logs: &Path) -> Result<String> {
     std::fs::create_dir_all(logs).map_err(|error| Error::io(logs.display().to_string(), error))?;
     let path = logs.join("node");

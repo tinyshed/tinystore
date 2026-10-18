@@ -293,7 +293,7 @@ fn bound(piece: usize, left: u64) -> usize {
 }
 
 /// Reads the next piece of a file, at most `bound` bytes: fewer only at its
-/// end, whose read is the one its check holds back on.
+/// end, whose last read waits until the whole file's SHA-256 is checked.
 fn read_piece(file: &mut StoredFile, bound: usize) -> Result<Vec<u8>, Failure> {
     let mut piece = vec![0; bound];
     let mut filled = 0;

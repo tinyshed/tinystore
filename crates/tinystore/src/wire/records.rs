@@ -370,8 +370,8 @@ fn stats_of(stats: Stats) -> RecordsStats {
     }
 }
 
-/// A number as JSON writes it: an integer exactly, however large, and a
-/// float the shortest way that reads back as it.
+/// A number as JSON writes it: an integer exactly, however large, a float
+/// the shortest way that reads back as it, and NaN or an infinity as `null`.
 fn number_of(number: Number) -> String {
     match number {
         Number::Integer(integer) => integer.to_string(),

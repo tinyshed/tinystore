@@ -47,7 +47,7 @@ impl Backups {
         sending.is_some_and(|sending| sending.end(Err(Failure::cancelled("the client cancelled its backup"))))
     }
 
-    /// Ends every backup, the connection gone or the server closing.
+    /// Ends every backup, the connection gone.
     pub(crate) fn end_all(&self, why: &str) {
         let going: Vec<Arc<Sending>> = lock(&self.going).drain().map(|(_, sending)| sending).collect();
         for sending in going {

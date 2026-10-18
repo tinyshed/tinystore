@@ -165,9 +165,9 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
     super::handover::let_go(state, store, file, &holder.address, ours)
 }
 
-/// What a judged node asks its witness each turn: a renewal of each file it
-/// writes, a stand for each copy it holds whole.
 impl State {
+    /// What a judged node asks its witness each turn: a renewal of each file
+    /// it writes, a stand for each copy it holds whole.
     pub(crate) fn judged_files(&self) -> Vec<LeaseAsk> {
         let Ok(logged) = self.files_logged_now() else {
             return Vec::new();

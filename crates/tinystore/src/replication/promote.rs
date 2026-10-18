@@ -2,7 +2,7 @@
 //! stopped: no node can tell a dead home from a cut cable, and two homes of a
 //! file would split it for good ([plan/scaling.md], changing a file's home).
 //!
-//! The node is stopped while it runs. Each copy's mark goes, and its position
+//! It runs while no store holds the directory: it takes the store's lock. Each copy's mark goes, and its position
 //! becomes the point its log goes on from at the next epoch: the next commit
 //! is the entry after the last the copy applied, so the nodes that copied the
 //! old home go on from where they stand, and an entry of the old epoch that

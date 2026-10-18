@@ -14,8 +14,8 @@ use super::entry::Point;
 use super::witness::Holder;
 use crate::{Error, ErrorKind, Result};
 
-/// The link's version, which a node's hello names: the second packs what
-/// follows the welcome through zstd.
+/// The link's version, which a node's hello names: from version 5, the bytes
+/// after the welcome are packed through zstd.
 pub(crate) const VERSION: u32 = 5;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
@@ -470,27 +470,29 @@ pub(crate) fn plain_name(name: &str) -> bool {
 
 /// The error kind `name` spells, as [`ErrorKind::as_str`] writes it.
 pub(crate) fn kind_of(name: &str) -> ErrorKind {
-    const KINDS: [ErrorKind; 17] = [
-        ErrorKind::Invalid,
-        ErrorKind::NotFound,
-        ErrorKind::Conflict,
-        ErrorKind::TooOld,
-        ErrorKind::TooNew,
-        ErrorKind::Limit,
-        ErrorKind::Closed,
-        ErrorKind::Corrupt,
-        ErrorKind::InUse,
-        ErrorKind::Suspended,
-        ErrorKind::Unavailable,
-        ErrorKind::Cancelled,
-        ErrorKind::OutcomeUnknown,
-        ErrorKind::CommittedLocally,
-        ErrorKind::Lost,
-        ErrorKind::Io,
-        ErrorKind::Internal,
-    ];
     KINDS.into_iter().find(|kind| kind.as_str() == name).unwrap_or(ErrorKind::Internal)
 }
+
+/// Every error kind, each of which a link spells by its name.
+const KINDS: [ErrorKind; 17] = [
+    ErrorKind::Invalid,
+    ErrorKind::NotFound,
+    ErrorKind::Conflict,
+    ErrorKind::TooOld,
+    ErrorKind::TooNew,
+    ErrorKind::Limit,
+    ErrorKind::Closed,
+    ErrorKind::Corrupt,
+    ErrorKind::InUse,
+    ErrorKind::Suspended,
+    ErrorKind::Unavailable,
+    ErrorKind::Cancelled,
+    ErrorKind::OutcomeUnknown,
+    ErrorKind::CommittedLocally,
+    ErrorKind::Lost,
+    ErrorKind::Io,
+    ErrorKind::Internal,
+];
 
 fn corrupt(what: &str) -> Error {
     Error::new(ErrorKind::Corrupt, format!("a link: {what}"))
@@ -605,6 +607,34 @@ impl<'a> In<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_error_kind_crosses_a_link_by_its_name() {
+        // a kind added to ErrorKind and not to KINDS fails to compile here
+        let listed = |kind: ErrorKind| match kind {
+            ErrorKind::Invalid
+            | ErrorKind::NotFound
+            | ErrorKind::Conflict
+            | ErrorKind::TooOld
+            | ErrorKind::TooNew
+            | ErrorKind::Limit
+            | ErrorKind::Closed
+            | ErrorKind::Corrupt
+            | ErrorKind::InUse
+            | ErrorKind::Suspended
+            | ErrorKind::Unavailable
+            | ErrorKind::Cancelled
+            | ErrorKind::OutcomeUnknown
+            | ErrorKind::CommittedLocally
+            | ErrorKind::Lost
+            | ErrorKind::Io
+            | ErrorKind::Internal => KINDS.contains(&kind),
+        };
+        for kind in KINDS {
+            assert!(listed(kind));
+            assert_eq!(kind_of(kind.as_str()), kind, "{kind:?}");
+        }
+    }
 
     #[test]
     fn every_message_reads_back_as_it_was_written() {

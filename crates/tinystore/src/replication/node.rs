@@ -963,10 +963,9 @@ impl State {
         Ok(served)
     }
 
-    /// Every file with a log directory now, for a judged node's turn.
-    /// Every file with a directory in `log/`, and each whose log opened with
-    /// no entry yet: a file born here asks its witness for its first lease
-    /// before its first commit.
+    /// Every file with a directory in `log/`, and each whose log is open with
+    /// no entry yet, for a judged node's turn: a file born here asks its
+    /// witness for its first lease before its first commit.
     pub(crate) fn files_logged_now(&self) -> Result<Vec<String>> {
         let mut files = self.files_logged()?;
         for name in lock(&self.logs).keys() {

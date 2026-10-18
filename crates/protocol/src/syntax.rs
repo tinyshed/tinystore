@@ -63,7 +63,7 @@ pub(crate) enum Kind {
     Time,
     /// Unix nanoseconds, as an int.
     Nanos,
-    /// Text: a str, a bin that is not UTF-8, or an integer's decimal spelling.
+    /// Text: a str, a bin that is UTF-8, or an integer's decimal spelling.
     Key,
     /// A kv row: nil, an integer or bin.
     Value,

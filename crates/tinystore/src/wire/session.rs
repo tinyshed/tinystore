@@ -408,7 +408,8 @@ impl Shared {
     }
 
     /// Answers HELLO with what the connection agrees: protocol 2, and the
-    /// smallest body either side takes.
+    /// smallest of the bodies either side takes and the client's stream
+    /// credit, so that one body always fits a stream's window.
     fn welcome(&self, input: &mut Input, body: &[u8]) {
         let hello = match Hello::decode(body) {
             Ok(hello) => hello,

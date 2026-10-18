@@ -194,7 +194,7 @@ pub(crate) enum Among<'a> {
 }
 
 /// The best `k` of an index's vectors by their cosine with `question`, the
-/// document set first first of equal ones: every code read for its range,
+/// document set first of equal ones: every code read for its range,
 /// then those whose range reaches the k-th best lower end scored again,
 /// the highest upper end first, until the next cannot reach the k-th best.
 pub(crate) fn best(connection: &Connection, scan: &Scan<'_>) -> Result<Vec<(f64, u32)>> {

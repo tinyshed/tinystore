@@ -927,8 +927,9 @@ pub(crate) struct Watching {
 #[derive(Default)]
 struct WatchState {
     credit: u64,
-    /// A read is queued or under way, and a change came since it began.
+    /// A read is queued or under way.
     reading: bool,
+    /// A change came since the read under way began: another read follows.
     again: bool,
     /// The latest report, waiting for credit, and whether the watch ends with it.
     report: Option<(Vec<u8>, bool)>,

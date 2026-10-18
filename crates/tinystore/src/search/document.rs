@@ -76,7 +76,7 @@ fn texts<'v>(document: &'v Value, path: &str) -> Result<Vec<&'v str>> {
         Value::Array(items) => items
             .iter()
             .filter(|item| !item.is_null())
-            .map(|item| item.as_str().ok_or_else(|| not_text("a list of more than strings")))
+            .map(|item| item.as_str().ok_or_else(|| not_text("a list holding more than strings")))
             .collect(),
         Value::Bool(_) => Err(not_text("a boolean")),
         Value::Number(_) => Err(not_text("a number")),

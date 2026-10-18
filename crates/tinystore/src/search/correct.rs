@@ -1,7 +1,8 @@
-//! A misspelt word read as the index's nearest: one dictionary of the
-//! index's words as written a script, Latin, Cyrillic and every other,
-//! since search-plan measured a mixed search's candidates at 18.6 ms from
-//! one dictionary of every script and 2.6 from one a script.
+//! A misspelt word read as the index's nearest: the index keeps one
+//! dictionary of its words for each script they are written in, Latin,
+//! Cyrillic and every other, since a word is near only words of its own
+//! script, and one dictionary of every script made each search walk all of
+//! them.
 //!
 //! A dictionary is built from one snapshot of the index and knows how far
 //! its words had changed then. A search uses the one kept even when the

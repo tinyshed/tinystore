@@ -1,7 +1,7 @@
-//! config's methods of protocol 2, protocol/config.wire: a config a
-//! program's SDK opens with its declaration and its layers as data, its
-//! changes, and the stream that follows it, one a config a process, whose
-//! values the SDK hands every handle and watcher of it there.
+//! config's methods of protocol 2, protocol/config.wire: a program's SDK
+//! opens a config with its declaration and its layers as data, changes it,
+//! and follows it on one stream a config and a process, whose values the SDK
+//! hands to every handle and watcher of that config in the process.
 
 use std::collections::HashMap;
 use std::fmt;

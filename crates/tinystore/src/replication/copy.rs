@@ -195,8 +195,8 @@ impl Copy {
 
 impl Drop for Copy {
     fn drop(&mut self) {
-        // the last connection's checkpoint takes the WAL away, and with it what
-        // says how far the file went: the position says it alone from then on
+        // the position is what says how far the file went once its
+        // connections close: synced before them
         let _ = self.lock().sync();
         self.applier.close();
     }

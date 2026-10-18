@@ -439,7 +439,7 @@ impl Model {
         self.ordered(scored.collect(), k)
     }
 
-    /// Hits by their scores, the document set first first of equal ones.
+    /// Hits by their scores, the document set first of equal ones.
     fn ordered(&self, mut hits: Vec<(String, f64)>, k: usize) -> Vec<(String, f64)> {
         let number = |id: &str| self.docs[id].number;
         hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(number(&a.0).cmp(&number(&b.0))));

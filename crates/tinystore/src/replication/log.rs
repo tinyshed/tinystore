@@ -395,8 +395,8 @@ impl Log {
         Ok(None)
     }
 
-    /// Removes every segment of the log in `dir`, for a copy that starts again
-    /// from a snapshot.
+    /// Removes every segment of the log in `dir`, and its `fenced` mark, for a
+    /// copy that starts again from a snapshot.
     pub(crate) fn clear(dir: &Path) -> Result<()> {
         for first in segments_in(dir)? {
             let path = segment_path(dir, first);

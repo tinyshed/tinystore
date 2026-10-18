@@ -8,7 +8,7 @@
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
 //!  "filters":[{"path":"category","number":0}],"next_filter":1,
-//!  "vectors":{"dimensions":1024},"hybrid":{"vector_weight":0.5,"rerank":false},
+//!  "vectors":{"dimensions":1024,"recall":null},"hybrid":{"vector_weight":0.5,"rerank":false},
 //!  "table":{"name":"articles","key":"id","vector":"embedding"}}
 //! ```
 
@@ -332,9 +332,10 @@ impl Settings {
         Ok(Changed { settings: changed, said, rebuild: rebuild.asked() })
     }
 
-    /// Whether these settings read documents as `other` does: the same
-    /// fields, filters and vectors by their paths, whatever their numbers,
-    /// weights and the rest that changes at once.
+    /// Whether these settings read documents as `other` does: the same fields
+    /// and filters by their paths, vectors of the same dimensions, the same
+    /// analysis and table, whatever their numbers, weights and the rest that
+    /// changes at once.
     pub(crate) fn reads_as(&self, other: &Settings) -> bool {
         let fields = |settings: &Settings| settings.fields.iter().map(|field| field.path.clone()).collect::<Vec<_>>();
         let filters = |settings: &Settings| settings.filters.iter().map(|f| f.path.clone()).collect::<Vec<_>>();

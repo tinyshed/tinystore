@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use super::vectors::ranked;
 
 /// The hits each half of a search by both is asked for at least, or the
-/// search's `offset + limit` if more: search-hybrid summed two hundreds.
+/// search's `offset + limit` if more: the sum then ranks two hundred
+/// candidates, enough that a document strong in one half and weak in the
+/// other still reaches it.
 pub(crate) const HALF: usize = 100;
 
 /// Every document either half found, by the sum of (1 − `weight`) × its

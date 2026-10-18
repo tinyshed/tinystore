@@ -482,7 +482,8 @@ fn row_of(columns: &[&str], values: Vec<SqlValue>, table: &Table) -> Result<Row>
     Ok(Row { tree, vector, digest })
 }
 
-/// A column's value as a document holds it: bytes hold no words.
+/// A column's value as a document holds it; a blob holds no words, and is
+/// null.
 fn json_of(value: SqlValue) -> Value {
     match value {
         SqlValue::Integer(number) => Value::from(number),

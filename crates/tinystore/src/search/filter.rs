@@ -49,8 +49,9 @@ const READ_HEAD: &str = "select doc from _tinystore_search_head where index_id =
 /// The longest text a filter keeps as a value.
 pub(crate) const MOST_VALUE: usize = 256;
 /// The conditions a search holds at most, `or` and `and` counting those
-/// inside them, and the values of their lists.
+/// inside them.
 pub(crate) const MOST_CONDITIONS: usize = 8;
+/// The values the lists of a search's conditions hold at most.
 pub(crate) const MOST_VALUES: usize = 100;
 /// The term of no value.
 const NONE: &str = "n:";
