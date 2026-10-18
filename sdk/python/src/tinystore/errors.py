@@ -1,17 +1,64 @@
-"""What failed, as the server's error or the SDK's own says it.
+"""What failed, as the store's error or the SDK's own says it.
 
 Each code is a class of its own, so a caller catches ``ConflictError`` as a Go
-program asks ``errors.Is(err, tinystore.ErrConflict)``.
+program asks ``errors.Is(err, tinystore.ErrConflict)``::
+
+    try:
+        await settings.set("home", page, if_version=entry.version)
+    except tinystore.ConflictError:
+        ...  # read again, then decide
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
+from dataclasses import dataclass
+from typing import ClassVar, Literal
 
 What = dict[str, str | bytes]
-"""The item a failure is about, by the names the server gives: a bucket and a
-key, a queue and a key, a series' labels, a table and a constraint. A value
+"""The item a failure is about, by the names the store gives: a bucket and a
+key, a queue and an id, a series' labels, a table and a constraint. A value
 whose bytes are not UTF-8, as a key of bytes may be, comes as its bytes."""
+
+
+@dataclass(frozen=True, slots=True)
+class Constraint:
+    """A constraint a database's write broke, as SQLite names it.
+
+    A unique or a primary key already held is a ConflictError, any other an
+    InvalidError::
+
+        except tinystore.ConflictError as err:
+            if err.constraint and "email" in err.constraint.columns:
+                return "that email is taken"
+    """
+
+    kind: Literal["unique", "primaryKey", "foreignKey", "check", "notNull"]
+    table: str | None
+    """the table, when SQLite names it"""
+    columns: list[str]
+    """the columns, when SQLite names them"""
+    name: str | None
+    """a check's name, or its text when it has none; the index of a unique key on an expression"""
+
+
+_CONSTRAINTS = ("unique", "primaryKey", "foreignKey", "check", "notNull")
+
+
+def _constraint_of(what: What) -> Constraint | None:
+    def text(name: str) -> str | None:
+        value = what.get(name)
+        return value if isinstance(value, str) else None
+
+    kind = text("constraint")
+    if kind not in _CONSTRAINTS:
+        return None
+    columns = text("columns")
+    return Constraint(
+        kind,  # type: ignore[arg-type]
+        text("table"),
+        [] if columns is None else columns.split(", "),
+        text("name"),
+    )
 
 
 class TinystoreError(Exception):
@@ -21,12 +68,20 @@ class TinystoreError(Exception):
         super().__init__(message)
         self.message = message
         self.what: What = what if what is not None else {}
+        self.constraint: Constraint | None = _constraint_of(self.what)
+        """the constraint a database's write broke; None for any other failure"""
 
 
 class InvalidError(TinystoreError):
     """The request cannot be done as asked."""
 
     code = "invalid"
+
+
+class NotFoundError(TinystoreError):
+    """What the call needs is not there: a file to copy or rename."""
+
+    code = "not_found"
 
 
 class LimitError(TinystoreError):
@@ -53,7 +108,7 @@ class ClosedError(TinystoreError):
 
 
 class InUseError(TinystoreError):
-    """A name is taken."""
+    """A name is taken, or another process holds what was asked for."""
 
     code = "in_use"
 
@@ -83,7 +138,7 @@ class TooNewError(TinystoreError):
 
 
 class SuspendedError(TinystoreError):
-    """A metrics series in quarantine until its repair."""
+    """A metrics series whose bytes no longer read, set aside until it is deleted."""
 
     code = "suspended"
 
@@ -91,11 +146,30 @@ class SuspendedError(TinystoreError):
 class OutcomeUnknownError(TinystoreError):
     """A write whose commit may or may not have happened.
 
-    The connection was lost while it was in flight, or the server's commit
+    The connection was lost while it was in flight, or the store's commit
     failed. Read what it wrote before writing again.
     """
 
     code = "outcome_unknown"
+
+
+class CommittedLocallyError(TinystoreError):
+    """A synchronous commit its home made that no copy it waits for held in time.
+
+    The write stands, and losing that home's disk would lose it.
+    """
+
+    code = "committed_locally"
+
+
+class LostError(TinystoreError):
+    """A lease that ran out or was revoked at its max_hold while its function ran.
+
+    Another holder may have run beside it. The function's work stands, and a
+    system that compares fences refused what came late.
+    """
+
+    code = "lost"
 
 
 class PermissionDeniedError(TinystoreError):
@@ -111,7 +185,7 @@ class UnimplementedError(TinystoreError):
 
 
 class CallCancelledError(TinystoreError):
-    """A call the client cancelled; named apart from asyncio's, which a cancelled task raises."""
+    """A call the store cancelled; named apart from asyncio's, which a cancelled task raises."""
 
     code = "cancelled"
 
@@ -123,7 +197,7 @@ class UnavailableError(TinystoreError):
 
 
 class InternalError(TinystoreError):
-    """A fault of the server's own."""
+    """A fault of the store's own."""
 
     code = "internal"
 
@@ -144,6 +218,7 @@ _classes: dict[str, type[TinystoreError]] = {
     cls.code: cls
     for cls in (
         InvalidError,
+        NotFoundError,
         LimitError,
         ClosedError,
         InUseError,
@@ -153,6 +228,8 @@ _classes: dict[str, type[TinystoreError]] = {
         TooNewError,
         SuspendedError,
         OutcomeUnknownError,
+        CommittedLocallyError,
+        LostError,
         PermissionDeniedError,
         UnimplementedError,
         CallCancelledError,
@@ -164,7 +241,7 @@ _classes: dict[str, type[TinystoreError]] = {
 }
 
 codes: tuple[str, ...] = tuple(_classes)
-"""The codes this SDK knows, as ``messages.json`` lists the server's."""
+"""The codes this SDK knows, as the store's errors name them."""
 
 
 def error_of(code: str, message: str, what: What | None = None) -> TinystoreError:

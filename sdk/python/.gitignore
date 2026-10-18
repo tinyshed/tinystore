@@ -6,3 +6,4 @@ __pycache__/
 htmlcov/
 dist/
 .bin/
+src/tinystore/_core.*

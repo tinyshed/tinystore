@@ -84,6 +84,26 @@ jobs:
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
           bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts
 
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      # the Python SDK through the core in its own process, a private child, a sidecar and a remote server;
+      # its module is the core's library built again with python, after Bun's own has been used
+      - name: Python over the core and tinystore serve
+        shell: bash
+        env:
+          PYO3_BUILD_EXTENSION_MODULE: '1'
+        run: |
+          case "$RUNNER_OS" in
+            Windows) library=tinystore_ffi.dll module=_core.pyd binary=tinystore.exe ;;
+            macOS) library=libtinystore_ffi.dylib module=_core.abi3.so binary=tinystore ;;
+            *) library=libtinystore_ffi.so module=_core.abi3.so binary=tinystore ;;
+          esac
+          cargo build --release --locked -p tinystore-ffi --features python
+          cp "target/release/$library" "sdk/python/src/tinystore/$module"
+          export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
+          cd sdk/python
+          uv run --frozen pytest -q
+
   quality:
     name: quality
     runs-on: ubuntu-latest
@@ -109,6 +129,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: The Python SDK's lint and types
+        working-directory: sdk/python
+        run: |
+          uv run --frozen ruff check src tests
+          uv run --frozen ruff format --check src tests
+          uv run --frozen pyright
 
       - name: The Bun SDK's lint and types
         working-directory: sdk/js

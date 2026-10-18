@@ -57,6 +57,11 @@ them; the workspace builds and tests on three operating systems.
 - [ ] `tinystore stop`, `status` and `logs`; an owner-only DACL on the named pipe and on `server/` on Windows.
 - [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over protocol 2, and its suite passes `embedded`.
 - [ ] napi-rs, PyO3 and cgo over the same four functions; the Python and Go SDKs.
+  Built, on 18 October: PyO3's module in `crates/ffi` behind its feature `python`, the Python SDK's
+  `tinystore._core`, and the Python SDK on protocol 2, `tinystore.open` through the core in its own process, a
+  private child, a sidecar or a remote server, with kv's buckets, counters, rate limits, quotas, `once` and
+  `store.tx`, and jobs' queues, workers, steps, progress, watches, schedules and `run_due`, each suite through
+  all four.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,
