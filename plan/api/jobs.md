@@ -582,13 +582,13 @@ err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 	if _, err := tx.Exec(ctx, `update notes set body = ? where id = ?`, body, id); err != nil {
 		return err
 	}
-	_, err := tinystore.With(tx, indexing).Add(ctx, Index{NoteID: id})
+	_, err := indexing.In(tx).Add(ctx, Index{NoteID: id})
 	return err
 })
 
 err = store.Tx(ctx, func(tx *tinystore.Tx) error {
 	for _, member := range members {
-		if _, err := tinystore.With(tx, pushes).Add(ctx, Push{Member: member, Message: message}, jobs.ID(message+":"+member)); err != nil {
+		if _, err := pushes.In(tx).Add(ctx, Push{Member: member, Message: message}, jobs.ID(message+":"+member)); err != nil {
 			return err
 		}
 	}

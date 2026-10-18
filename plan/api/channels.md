@@ -197,10 +197,10 @@ await store.tx(create)
 
 ```go
 err = store.Tx(ctx, func(tx *tinystore.Tx) error {
-	if err := tinystore.With(tx, orders).Set(ctx, id, order); err != nil {
+	if err := orders.In(tx).Set(ctx, id, order); err != nil {
 		return err
 	}
-	return tinystore.With(tx, events).Under(id).Publish(ctx, Created{Kind: "created"})
+	return events.In(tx).Under(id).Publish(ctx, Created{Kind: "created"})
 })
 ```
 

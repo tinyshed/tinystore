@@ -172,7 +172,7 @@ language lets them be; what follows is only what the language changes.
 | a page; every page         | `await b.list(limit=100, after=page.next)`; `async for e in b.all()`          | `b.List(ctx, kv.Limit(100), kv.After(page.Next))`; `for e, err := range b.All(ctx)` |
 | a function the store calls | `async def`; a lambda that returns an awaitable                               | `func(ctx context.Context, …) error`; its `ctx` ends when it must stop              |
 | a transaction              | `await store.tx(place)` of an `async def place(tx)`                           | `store.Tx(ctx, func(tx *tinystore.Tx) error {…})`                                   |
-| a handle in it             | `tx.with_(stock)`, `with` being a keyword                                     | `tinystore.With(tx, stock)`, a Go method taking no type parameter                   |
+| a handle in it             | `tx.with_(stock)`, `with` being a keyword                                     | `stock.In(tx)`, the handle given back in the transaction                            |
 | a scope                    | `async with`: an upload, a lock's hold, a timer's measure                     | a function, or `defer`                                                              |
 | an error                   | `except tinystore.ConflictError as err`                                       | `errors.Is(err, tinystore.ErrConflict)`; `errors.As` into a `*tinystore.Error`      |
 | a keyword taken            | a trailing `_`: `with_`, `sql.or_`, `search.or_`                              | none                                                                                |
@@ -246,14 +246,15 @@ sqldb's `all` as a list where kv's is an iterator, one name a page's items
 (`entries`, `rows`, `jobs`), spans as text in Python, and a store's backup
 leaving the key out unless asked.
 
+Decided by the owner the same day: **Go's handle in a transaction is
+`stock.In(tx)`**, a method a Go reader finds after `stock.`, as
+`time.Time.In` gives a time in a zone, which the blind choice took over
+`tinystore.With(tx, stock)` and the Go review asked for. TypeScript, Python
+and Rust keep `tx.with(stock)`, which kv's first check chose over an `in(tx)`
+it read as a filter.
+
 For the owner:
 
-- **Go's handle in a transaction**: `tinystore.With(tx, stock)`, as
-  `tx.with(stock)` starts each call with the transaction, or
-  `stock.In(tx)`, a method a Go reader finds after `stock.`, as
-  `time.Time.In`, which the blind choice took at three of five and the Go
-  review asked for. kv's first check read TypeScript's `in(tx)` as a
-  filter. The recommendation is `In` for Go alone.
 - **Config in Go's root package**, `tinystore.OpenConfig`, which the Go
   review would move to `config`: a package `config` takes the name a
   program gives its value, `config, err := config.Open(…)`.

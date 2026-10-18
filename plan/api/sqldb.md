@@ -799,7 +799,7 @@ err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 	if _, err := sqldb.OpenTable[Order](tx, "orders").Insert(ctx, order); err != nil {
 		return err
 	}
-	if _, err := tinystore.With(tx, emails).Add(ctx, Email{Order: order.ID, To: user.Email}); err != nil {
+	if _, err := emails.In(tx).Add(ctx, Email{Order: order.ID, To: user.Email}); err != nil {
 		return err
 	}
 	placed = true

@@ -645,7 +645,7 @@ err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 	if _, err := tx.Exec(ctx, `insert into articles (id, title) values (?, ?)`, 7, "inside"); err != nil {
 		return err
 	}
-	_, err := tinystore.With(tx, articles).Search(ctx, "inside") // sees the insert
+	_, err := articles.In(tx).Search(ctx, "inside") // sees the insert
 	return err
 })
 

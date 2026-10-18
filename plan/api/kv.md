@@ -264,7 +264,7 @@ err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 	if _, err := tx.Exec(ctx, `insert into sources (id, url) values (?, ?)`, source.ID, source.URL); err != nil {
 		return err
 	}
-	return tinystore.With(tx, passwords).Set(ctx, source.ID, password)
+	return passwords.In(tx).Set(ctx, source.ID, password)
 })
 ```
 
@@ -522,17 +522,17 @@ await store.tx(sell)
 
 ```go
 err = store.Tx(ctx, func(tx *tinystore.Tx) error {
-	left, _, err := tinystore.With(tx, stock).Get(ctx, sku)
+	left, _, err := stock.In(tx).Get(ctx, sku)
 	if err != nil {
 		return err
 	}
 	if left < 1 {
 		return ErrSoldOut // rolls back
 	}
-	if err := tinystore.With(tx, stock).Set(ctx, sku, left-1); err != nil {
+	if err := stock.In(tx).Set(ctx, sku, left-1); err != nil {
 		return err
 	}
-	return tinystore.With(tx, orders).Set(ctx, orderID, order)
+	return orders.In(tx).Set(ctx, orderID, order)
 })
 ```
 
@@ -573,8 +573,11 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
   commits.
 - Python spells it `tx.with_(stock)`, `with` being a keyword there, and
   takes the transaction as a function rather than an `async with` block,
-  since a block cannot run again. Go spells it `tinystore.With(tx, stock)`,
-  a Go method taking no type parameter; its function's error rolls back.
+  since a block cannot run again. Go spells it `stock.In(tx)`, a method of
+  the handle that gives it back in the transaction, as `time.Time.In` gives
+  a time in a zone, since a Go method takes no type parameter and so no
+  `tx.With` could give a typed handle back; its function's error rolls back.
+  A call on `stock` itself inside the function is `invalid` there too.
 
 ## Errors
 
