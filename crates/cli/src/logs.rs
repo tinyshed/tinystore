@@ -295,30 +295,57 @@ fn value(json: &str) -> String {
     }
 }
 
-/// One JSON object, as the console's JSON line: its time, level, stream and
-/// message, then its fields.
+/// One JSON object, as the console prints a line of it: time, level,
+/// stream, the event's name for a line other than a log line, msg, the
+/// context's fields, the event's, the trace and the span. A field keeps its
+/// spelling, and a key repeated stays repeated, as the console and Go's
+/// `slog` leave it.
 pub(crate) fn json(event: &Event) -> String {
-    let text = |text: &str| serde_json::Value::String(text.to_owned()).to_string();
     let at = jiff::Timestamp::try_from(event.at)
         .map_or_else(|_| String::new(), |at| at.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
-    // written by hand, so that its keys keep the console's order: a JSON map sorts them
-    let mut pairs = vec![("time".to_owned(), text(&at))];
+    let mut pairs = vec![("time".to_owned(), quoted(&at))];
     if let Some(level) = event.level {
-        pairs.push(("level".to_owned(), text(&level.name().to_ascii_uppercase())));
+        pairs.push(("level".to_owned(), quoted(&level_name(level.number()))));
     }
-    pairs.push(("stream".to_owned(), text(&event.stream)));
+    pairs.push(("stream".to_owned(), quoted(&event.stream)));
     if event.name != "log" {
-        pairs.push(("name".to_owned(), text(&event.name)));
+        pairs.push(("event".to_owned(), quoted(&event.name)));
     }
     if let Some(message) = &event.message {
-        pairs.push(("msg".to_owned(), text(message)));
+        pairs.push(("msg".to_owned(), quoted(message)));
     }
-    pairs.extend(event.fields.iter().chain(event.context.iter()).map(|(key, json)| (key.to_owned(), json.to_owned())));
+    pairs.extend(event.context.iter().chain(event.fields.iter()).map(|(key, json)| (key.to_owned(), json.to_owned())));
     if let Some(trace) = event.trace_id {
-        pairs.push(("trace_id".to_owned(), text(&trace.to_string())));
+        pairs.push(("trace_id".to_owned(), quoted(&trace.to_string())));
     }
-    let written: Vec<String> = pairs.iter().map(|(key, json)| format!("{}:{json}", text(key))).collect();
+    if let Some(span) = event.span_id {
+        pairs.push(("span_id".to_owned(), quoted(&span.to_string())));
+    }
+    // written by hand, so that its keys keep this order: a JSON map sorts them
+    let written: Vec<String> = pairs.iter().map(|(key, json)| format!("{}:{json}", quoted(key))).collect();
     format!("{{{}}}", written.join(","))
+}
+
+/// A text as the console quotes it, as Go's encoding/json does without
+/// escaping HTML: the line and paragraph separators escaped too.
+fn quoted(text: &str) -> String {
+    let quoted = serde_json::Value::String(text.to_owned()).to_string();
+    quoted.replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029")
+}
+
+/// A level as the console names it: one of four names, and how far past it
+/// a level between two lies, `INFO+2`.
+fn level_name(number: i32) -> String {
+    let (base, at) = match number {
+        number if number < 0 => ("DEBUG", -4),
+        number if number < 4 => ("INFO", 0),
+        number if number < 8 => ("WARN", 4),
+        _ => ("ERROR", 8),
+    };
+    match number - at {
+        0 => base.to_owned(),
+        off => format!("{base}{off:+}"),
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +375,55 @@ mod tests {
         assert!(line.ends_with(" WARN  api  slow request  ms=1200 requestId=7f3a why=\"a b\""), "{line}");
         let object: serde_json::Value = serde_json::from_str(&json(&events[0])).unwrap();
         assert_eq!((object["level"].as_str(), object["ms"].as_u64()), (Some("WARN"), Some(1200)));
+    }
+
+    /// The fields a vector's `[key, value]` pairs give, each value as JSON writes it.
+    fn fields(pairs: Option<&serde_json::Value>) -> tinystore::records::Fields {
+        let pairs = pairs.and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        let written: Vec<String> = pairs.iter().map(|pair| format!("{}:{}", pair[0], pair[1])).collect();
+        tinystore::records::Fields::read(&format!("{{{}}}", written.join(","))).unwrap()
+    }
+
+    fn bytes<const N: usize>(hex: &str) -> [u8; N] {
+        std::array::from_fn(|at| u8::from_str_radix(&hex[at * 2..at * 2 + 2], 16).unwrap())
+    }
+
+    #[test]
+    fn a_json_line_is_the_consoles_byte_for_byte() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../testdata/console/console.json")).unwrap();
+        let secrets: Vec<&str> =
+            vectors["secrets"].as_array().unwrap().iter().filter_map(|word| word.as_str()).collect();
+        let mut compared = 0;
+        for line in vectors["lines"].as_array().unwrap() {
+            // what the console hides of a secret is hidden before an event is kept
+            let pairs = [&line["context"], &line["attrs"]].map(|pairs| pairs.as_array().cloned().unwrap_or_default());
+            let hides = pairs.iter().flatten().any(|pair| {
+                let key = pair[0].as_str().unwrap_or_default().to_ascii_lowercase();
+                secrets.iter().any(|secret| key.contains(&secret.replace(' ', "")))
+                    || pair[1].to_string().contains("://")
+            });
+            // a nested object read back through serde_json comes in another key order
+            let nested = pairs.iter().flatten().any(|pair| pair[1].is_object());
+            if hides || nested || line.get("redact").is_some() || line.get("redact_secrets").is_some() {
+                continue;
+            }
+            let nanos: u64 = line["at"].as_str().unwrap().parse().unwrap();
+            let event = Event {
+                at: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(nanos),
+                stream: line["stream"].as_str().unwrap().to_owned(),
+                name: line["event"].as_str().unwrap_or("log").to_owned(),
+                level: line["level"].as_i64().map(|number| Level::of(number as i32)),
+                message: line["msg"].as_str().map(str::to_owned),
+                fields: fields(line.get("attrs")),
+                context: fields(line.get("context")),
+                trace_id: line["trace_id"].as_str().map(|hex| tinystore::records::TraceId(bytes(hex))),
+                span_id: line["span_id"].as_str().map(|hex| tinystore::records::SpanId(bytes(hex))),
+            };
+            assert_eq!(json(&event) + "\n", line["json"].as_str().unwrap(), "{}", line["name"]);
+            compared += 1;
+        }
+        assert!(compared > 20, "only {compared} vectors compared");
     }
 
     #[test]

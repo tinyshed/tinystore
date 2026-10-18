@@ -903,6 +903,7 @@ module defines.
 - SERVE calls a sidecar one, and neither a person's server nor a program's — `TestTheSidecarIsFoundThroughServeAndLeavesWhenIdle`, `TestServeOfADirectoryServesItUntilCtrlC` in `cmd/tinystore`, `TestServeIsWrittenWholeUnderTheLock`
 - a read through the tool makes no store of a directory — `TestLogsOfADirectoryWithoutAStoreMakeNone`
 - `logs` prints a line as the logger's pretty line or the console's JSON, and `-f` prints a line sent a little late, each once and two alike twice — `a_line_prints_as_the_loggers_pretty_line`, `following_prints_each_line_once_and_two_alike_twice` in `logs`
+- `logs --json` and MCP's `logs` print a line as the console's JSON byte for byte, `event`, context before fields, the trace and the span, a key repeated left repeated — `a_json_line_is_the_consoles_byte_for_byte` in the command line's `logs`, over `testdata/console/console.json`
 - an agent over MCP lists the tools and reads beside the program that holds the store, a missing key the tool's own error — `an_agent_lists_the_tools_and_reads_a_value_beside_the_program_that_holds_it` in `mcp`
 
 - search over the wire: an index opened by handle sets, reads, searches by words, a vector and a `where`, and deletes; a set on an index with vectors that says nothing of one, a vector of ragged bytes, a `where` of no condition and an unknown handle are `invalid` — `an_index_sets_reads_searches_and_deletes_documents_over_the_wire`, `a_refusal_over_the_wire_names_what_failed` in `wire::search`
