@@ -96,7 +96,10 @@ impl RateLimit {
             return super::forward::allowance(&self.pass_on(&key, &super::forward::Call::Allow(n))?);
         }
         let shown = || self.scope.shown_key(&key);
-        let asked = i64::try_from(n).ok().filter(|&n| n >= 1 && n <= self.burst).ok_or_else(|| {
+        if n == 0 {
+            return Err(Error::invalid("no requests at once: ask for one at least").within(shown()));
+        }
+        let asked = i64::try_from(n).ok().filter(|&n| n <= self.burst).ok_or_else(|| {
             Error::invalid(format!("{n} requests at once, past a burst of {}", self.burst)).within(shown())
         })?;
         let path = self.scope.path(&key)?;

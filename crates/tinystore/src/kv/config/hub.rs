@@ -210,10 +210,10 @@ fn read(connection: &Connection, name: &str) -> Result<(Kept, Option<String>)> {
         .map_err(|error| sql_error("its changes", error))?;
     let mut changes = BTreeMap::new();
     for row in rows {
-        let (path, text, version, at) = row.map_err(|error| sql_error("its changes", error))?;
+        let (path, text, changed_at_version, at) = row.map_err(|error| sql_error("its changes", error))?;
         let value = serde_json::from_str(&text)
             .map_err(|error| Error::corrupt(format!("the change of {path} is not JSON: {error}")))?;
-        changes.insert(path, Change { value, version, at });
+        changes.insert(path, Change { value, version: changed_at_version, at });
     }
     Ok((Kept { version, changes }, remembered))
 }

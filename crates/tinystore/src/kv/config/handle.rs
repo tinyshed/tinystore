@@ -225,7 +225,7 @@ where
         let within = |error: Error| error.within(format!("config {}: reset {path}", self.inner.name));
         let kept = self.inner.hub.kept();
         let under = format!("{path}.");
-        let has_kept = kept.changes.keys().any(|kept| kept == path || kept.starts_with(&under));
+        let has_kept = kept.changes.keys().any(|changed| changed == path || changed.starts_with(&under));
         if path.is_empty() || (!has_kept && self.inner.declaration.node(path).is_none()) {
             return Err(within(Error::invalid("no such setting, and no change of it is kept")));
         }
@@ -345,10 +345,10 @@ where
         let before = self.snapshot();
         let mut after = (*before.value).clone();
         change(&mut after);
-        let (before, after) = (plain(&*before.value)?, plain(&after)?);
+        let (before_tree, after_tree) = (plain(&*before.value)?, plain(&after)?);
         let mut leaves = Vec::new();
         for (path, setting) in self.declaration.settings() {
-            let (was, is) = (at(&before, &path), at(&after, &path));
+            let (was, is) = (at(&before_tree, &path), at(&after_tree, &path));
             if was == is {
                 continue;
             }

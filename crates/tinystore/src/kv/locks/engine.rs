@@ -57,10 +57,10 @@ impl Locks {
         let epoch = next_epoch(kv, unix_millis(clock.now()))?;
         let mint = Mint { epoch, count: AtomicU64::new(0) };
         let inner = Arc::new(Inner { mint, clock, state: Mutex::default(), timer: Timer::default() });
-        let timer = Arc::clone(&inner);
+        let timed = Arc::clone(&inner);
         let thread = thread::Builder::new()
             .name("tinystore-locks".to_owned())
-            .spawn(move || timer.run_timer())
+            .spawn(move || timed.run_timer())
             .map_err(|error| Error::io("locks: the timer's thread", error))?;
         Ok(Arc::new(Locks { inner, thread: Mutex::new(Some(thread)) }))
     }

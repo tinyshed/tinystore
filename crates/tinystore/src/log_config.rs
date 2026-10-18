@@ -49,6 +49,7 @@ pub(crate) fn follow(store: &Store, console: &Arc<Console>) -> Result<Arc<dyn An
             followed.set_level(level);
         }
     });
+    // The mutex makes `Watching` Sync, which the store's `dyn Any + Send + Sync` asks.
     Ok(Arc::new((config, Mutex::new(watching))))
 }
 

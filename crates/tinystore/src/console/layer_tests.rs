@@ -317,3 +317,14 @@ fn the_lines_of_many_threads_never_interleave() {
     assert_eq!(lines.len(), 1600);
     assert!(lines.iter().all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok()), "every line whole");
 }
+
+#[test]
+fn a_trace_id_with_a_sign_before_its_hex_is_a_field_and_no_id() {
+    let printed = Printed::default();
+    let signed = "+af7651916cd43dd8448eb211c80319c";
+    logged(layer(told(&printed, silent)), || tracing::info!(trace_id = signed, "signed"));
+    assert_eq!(
+        printed.untimed(),
+        [format!(r#"{{"level":"INFO","stream":"api","msg":"signed","trace_id":"{signed}"}}"#)]
+    );
+}

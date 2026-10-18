@@ -20,7 +20,7 @@ use crate::{Clock, Error, Result, Store, unix_millis};
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// kv's own file in the store's directory.
-const FILE: &str = "kv.db";
+pub(crate) const FILE: &str = "kv.db";
 
 /// Expired cells a maintenance transaction deletes, and transactions a call.
 const EXPIRE_BATCH: usize = 10_000;

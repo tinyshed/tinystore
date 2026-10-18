@@ -22,7 +22,7 @@ pub(crate) struct Environment {
 
 impl Default for Environment {
     fn default() -> Environment {
-        Environment { prefix: String::new(), lookup: |name| std::env::var(name).ok() }
+        Environment { prefix: String::new(), lookup: super::layer::real }
     }
 }
 

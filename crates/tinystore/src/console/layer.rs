@@ -265,7 +265,7 @@ pub(crate) fn own_line(at: i64) -> Line {
     Line { at, stream: OWN.to_owned(), name: LOG.to_owned(), ..Line::default() }
 }
 
-fn real(name: &str) -> Option<String> {
+pub(super) fn real(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
@@ -482,11 +482,11 @@ impl Fields<'_> {
         {
             **message = Some(text.to_owned());
         } else if name == "trace_id"
-            && let Some(trace) = hex(text)
+            && let Some(trace) = from_hex(text)
         {
             self.into.trace = Some(trace);
         } else if name == "span_id"
-            && let Some(span) = hex(text)
+            && let Some(span) = from_hex(text)
         {
             self.into.span = Some(span);
         } else {
@@ -560,7 +560,7 @@ pub(crate) fn float(value: f64) -> String {
 
 /// Hex of `N` bytes, the case ignored; all zeros is none, as OpenTelemetry
 /// reads an id.
-fn hex<const N: usize>(text: &str) -> Option<[u8; N]> {
+fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
     // `from_str_radix` takes a leading `+`, which is no hex digit of an id.
     if text.len() != 2 * N || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;

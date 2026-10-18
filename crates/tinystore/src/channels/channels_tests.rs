@@ -209,7 +209,7 @@ fn a_handler_that_panics_or_a_message_of_another_type_is_told_and_the_next_follo
     numbers.publish(&2).unwrap();
     texts.publish(&"not a number".to_owned()).unwrap();
     numbers.publish(&3).unwrap();
-    waits_for("three", || received.lock().unwrap().len() == 2);
+    waits_for("the two numbers", || received.lock().unwrap().len() == 2);
     assert_eq!(values(&received), [1, 3]);
     assert_eq!(*failures.lock().unwrap(), [ErrorKind::Internal, ErrorKind::Corrupt]);
     sub.stop();

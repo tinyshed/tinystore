@@ -288,7 +288,8 @@ impl<V: Value> Bucket<V> {
     }
 
     /// One page of this branch's own keys, after `after` when it continues
-    /// another; at most `limit` keys, and never more than [`PAGE_KEYS`].
+    /// another; `limit` keys at most, one at least, and never more than
+    /// [`PAGE_KEYS`].
     pub fn list(&self, limit: usize, after: Option<&str>) -> Result<Page<V>> {
         let limit = limit.clamp(1, PAGE_KEYS);
         let rows = self

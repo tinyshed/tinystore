@@ -105,12 +105,14 @@ pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<S
     if problems.is_empty() { Ok(Read { given, absent: false }) } else { Err(problems) }
 }
 
+fn past_size(size: u64) -> String {
+    format!("{size} bytes, past the {MOST_BYTES} a config's file holds")
+}
+
 /// A sent file's text, refused past the size a file holds.
 fn check_size(text: Option<String>) -> Result<Option<String>, String> {
     match text {
-        Some(text) if text.len() as u64 > MOST_BYTES => {
-            Err(format!("{} bytes, past the {MOST_BYTES} a config's file holds", text.len()))
-        }
+        Some(text) if text.len() as u64 > MOST_BYTES => Err(past_size(text.len() as u64)),
         other => Ok(other),
     }
 }
@@ -123,7 +125,7 @@ fn text(path: &Path) -> Result<Option<String>, String> {
         Err(error) => return Err(error.to_string()),
     };
     if size > MOST_BYTES {
-        return Err(format!("{size} bytes, past the {MOST_BYTES} a config's file holds"));
+        return Err(past_size(size));
     }
     std::fs::read_to_string(path).map(Some).map_err(|error| error.to_string())
 }

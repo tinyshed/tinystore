@@ -2,7 +2,8 @@
 -- a 256-byte value no longer fits what a page keeps of a row. Every name is
 -- _tinystore_kv_…, so that the tables can live in an application's database.
 
--- role: what a bucket is for, values or counters; a name keeps its role;
+-- role: what a bucket is for: values, encrypted values, counters, a rate
+-- limit, a quota or once; a name keeps its role;
 -- key: the id of the encryption key that the values of an encrypted bucket
 -- are sealed with, kept from its first write until the bucket is cleared whole
 create table _tinystore_kv_buckets (

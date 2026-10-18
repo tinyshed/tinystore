@@ -1,7 +1,8 @@
 //! A declaration as the core reads it, whichever language wrote it: its
 //! groups and settings, and of each setting its kind, rules, default and
 //! marks. A Rust program's comes from its value serialized with the marks
-//! (`marks::marked`); an SDK's will come over the wire as data.
+//! (`marks::marked`); an SDK's comes over the wire as data, which `data`
+//! reads.
 
 use std::collections::BTreeMap;
 

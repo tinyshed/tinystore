@@ -71,8 +71,8 @@ fn made_dir(store: &Path) -> Result<PathBuf> {
 }
 
 /// The engines' files that no engine open holds, copied as they lie: an
-/// SQLite file through a connection of its own, and every other file of
-/// `blobs/` linked, the uploads a process left aside.
+/// SQLite file through a connection of its own, and each object of
+/// `blobs/objects` linked; uploads a process left are not walked.
 struct Unopened<'a> {
     store: &'a Path,
     into: &'a Path,

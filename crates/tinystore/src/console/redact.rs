@@ -10,7 +10,7 @@
 use super::line::quote;
 
 /// What a hidden value becomes, in the store and on the console.
-const REDACTED: &str = "\"[redacted]\"";
+const REDACTED_JSON: &str = "\"[redacted]\"";
 
 /// The usual names of secrets, which `redact` takes to hide them. It hides a
 /// counter named like one too, `token_count` among them.
@@ -40,24 +40,24 @@ pub const SECRETS: &[&str] = &[
 pub(crate) struct Redactor {
     /// Each name's words written together: `api key` is `apikey`.
     names: Vec<String>,
-    urls: bool,
+    hide_url_passwords: bool,
 }
 
 impl Redactor {
     pub(crate) fn new<S: AsRef<str>>(names: &[S], keep_url_passwords: bool) -> Redactor {
         let names =
             names.iter().map(|name| words(name.as_ref()).concat()).filter(|joined| !joined.is_empty()).collect();
-        Redactor { names, urls: !keep_url_passwords }
+        Redactor { names, hide_url_passwords: !keep_url_passwords }
     }
 
     /// Fields with what they must not show hidden.
     pub(crate) fn fields(&self, fields: &mut [(String, String)]) {
-        if self.names.is_empty() && !self.urls {
+        if self.names.is_empty() && !self.hide_url_passwords {
             return;
         }
         for (key, value) in fields.iter_mut() {
             if self.hides(key) {
-                REDACTED.clone_into(value);
+                REDACTED_JSON.clone_into(value);
             } else if let Some(hidden) = self.value(value) {
                 *value = hidden;
             }
@@ -84,7 +84,7 @@ impl Redactor {
     fn value(&self, spelled: &str) -> Option<String> {
         let inner = (!self.names.is_empty()).then(|| self.json(spelled)).flatten();
         let spelled = inner.as_deref().unwrap_or(spelled);
-        let urls = self.urls.then(|| hide_url_passwords(spelled)).flatten();
+        let urls = self.hide_url_passwords.then(|| hide_url_passwords(spelled)).flatten();
         urls.or(inner)
     }
 
@@ -142,7 +142,7 @@ impl Redactor {
             if hide {
                 walk.space();
                 walk.value()?;
-                out.push_str(REDACTED);
+                out.push_str(REDACTED_JSON);
                 changed = true;
             } else {
                 changed |= self.rewrite(walk, out)?;
@@ -294,6 +294,7 @@ impl<'a> Walk<'a> {
 /// The JSON of a value with the password of each URL in its strings hidden,
 /// the rest as it was spelled; none when it held none.
 fn hide_url_passwords(spelled: &str) -> Option<String> {
+    // An escape can hide the scheme's `://`, as `\/` or `\u003a`, until decoded.
     if !spelled.contains("://") && !spelled.contains('\\') {
         return None;
     }

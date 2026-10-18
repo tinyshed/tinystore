@@ -361,7 +361,7 @@ impl Told {
         if let Some(told) = &mut self.on_missed {
             return told(missed);
         }
-        if !self.quiet() {
+        if !self.said_recently() {
             tracing::warn!(
                 target: "tinystore",
                 channel = %self.shown,
@@ -375,13 +375,14 @@ impl Told {
         if let Some(told) = &mut self.on_error {
             return told(error);
         }
-        if !self.quiet() {
+        if !self.said_recently() {
             tracing::warn!(target: "tinystore", channel = %self.shown, %error, "a subscriber's call failed");
         }
     }
 
-    /// Whether the log said something less than a minute ago.
-    fn quiet(&mut self) -> bool {
+    /// Whether the log said something less than a minute ago; if not, it says
+    /// something now.
+    fn said_recently(&mut self) -> bool {
         let now = Instant::now();
         if self.said.is_some_and(|said| now.duration_since(said) < QUIET) {
             return true;

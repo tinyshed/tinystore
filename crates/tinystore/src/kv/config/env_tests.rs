@@ -124,3 +124,10 @@ fn a_dotenv_files_variables_count_where_the_process_has_none() {
     let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
     assert_eq!(unused, ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]);
 }
+
+#[test]
+fn a_settings_name_file_variable_that_another_setting_reads_is_refused() {
+    let declared = declaration(json!({ "db": "", "dbFile": "" }));
+    let refused = read_refused(&Env::prefix("APP"), &declared);
+    assert_eq!(refused, ["APP_DB_FILE would give both db and dbFile"]);
+}

@@ -34,8 +34,9 @@ pub type Stop = Arc<dyn Fn() + Send + Sync>;
 pub type Greeted = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// What a remote server lets a connection do by the token its HELLO carries:
-/// none for a token it does not know. It compares every token it knows in
-/// constant time, so that the time taken says nothing of which matched.
+/// none for a token it does not know. The host that gives it must compare
+/// every token it knows in constant time, so that the time taken says nothing
+/// of which matched.
 pub type Admit = Arc<dyn Fn(Option<&str>) -> Option<Capability> + Send + Sync>;
 
 /// What a connection may do. A local endpoint's are `Admin`, its permission
@@ -218,7 +219,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
     let asked = StoreOptions::decode(options)
         .map_err(|refused| Error::invalid(format!("pipe: its options: {}", refused.message)))?;
     let durability = asked.durability.map(|word| word.parse().map_err(|error: Error| error.within("pipe")));
-    let a_node = asked.node
+    let node_asked = asked.node
         || !asked.from.is_empty()
         || asked.serve.is_some()
         || asked.synchronous
@@ -226,11 +227,11 @@ fn asked(options: &[u8]) -> Result<Asked> {
         || asked.insecure
         || !asked.synchronous_with.is_empty();
     #[cfg(not(feature = "replication"))]
-    if a_node {
+    if node_asked {
         return Err(Error::invalid("pipe: a node's options, and the library was built without replication"));
     }
     #[cfg(feature = "replication")]
-    let node = a_node.then(|| crate::replication::Node {
+    let node = node_asked.then(|| crate::replication::Node {
         from: asked.from,
         serve: asked.serve,
         files: (!asked.files.is_empty()).then_some(asked.files),
@@ -257,20 +258,20 @@ fn asked(options: &[u8]) -> Result<Asked> {
 fn join(dir: &Path, asked: Asked) -> Result<Store> {
     let mut stores = stores();
     if let Some((store, pipes)) = stores.get_mut(dir) {
-        if let Some(asked) = asked.durability
-            && store.durability() != Some(asked)
+        if let Some(durability) = asked.durability
+            && store.durability() != Some(durability)
         {
             let opened = store.durability().map_or_else(|| "each engine's own".to_owned(), |opened| opened.to_string());
             return Err(Error::invalid(format!(
-                "pipe: the store is open with durability {opened}, and asked for {asked}"
+                "pipe: the store is open with durability {opened}, and asked for {durability}"
             )));
         }
-        if let Some(asked) = &asked.encryption_key_file
-            && store.encryption_key_file() != Some(asked)
+        if let Some(key_file) = &asked.encryption_key_file
+            && store.encryption_key_file() != Some(key_file)
         {
             return Err(Error::invalid(format!(
                 "pipe: the store is open with another encryption key file than {}",
-                asked.display()
+                key_file.display()
             )));
         }
         #[cfg(feature = "replication")]

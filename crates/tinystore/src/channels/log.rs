@@ -279,5 +279,6 @@ mod tests {
         assert!(log.leave(2), "the first is still there");
         assert!(!log.leave(1));
         assert_eq!(log.bytes(), 0, "nobody left to read anything");
+        assert_eq!(woken.load(Ordering::SeqCst), 1, "the first woken once more after it took, until it takes again");
     }
 }

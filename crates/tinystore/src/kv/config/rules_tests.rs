@@ -31,6 +31,8 @@ fn a_whole_number_is_whole_and_a_rule_says_what_it_refused() {
     assert_eq!(check(&port, &json!(70000)), Err("70000 is above 65535".to_owned()));
     assert_eq!(check(&port, &json!(0)), Err("0 is below 1".to_owned()));
     assert_eq!(check(&port, &json!("8080")), Err(r#""8080" is not a whole number"#.to_owned()));
+    let count = setting(Kind::Integer, Rules::default());
+    assert!(check(&count, &json!(9_223_372_036_854_775_808.0)).is_err(), "2^63 is past what an i64 holds");
 }
 
 #[test]

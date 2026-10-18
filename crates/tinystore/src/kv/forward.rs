@@ -34,7 +34,7 @@ pub(crate) fn make_in(home: &crate::engine::Home) -> Result<()> {
 }
 
 /// What kv's file is called where its home passes writes.
-pub(crate) const FILE: &str = "kv.db";
+pub(crate) use super::engine::FILE;
 
 /// The handle a call is made on.
 pub(crate) enum Handle {

@@ -77,3 +77,9 @@ fn comments_and_trailing_commas_leave_every_line_where_it_was() {
     let value: Value = serde_json::from_str(&cleaned).unwrap();
     assert_eq!(value, json!({ "a": "// not a comment", "b": [1] }));
 }
+
+#[test]
+fn an_infinite_toml_number_is_refused_rather_than_read_as_unset() {
+    let refused = read_text("app.toml", "port = inf\n").unwrap_err();
+    assert!(refused[0].contains("port"), "{refused:?}");
+}

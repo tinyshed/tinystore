@@ -125,7 +125,10 @@ impl Quota {
     }
 
     fn allow_work(&self, key: &str, n: u64) -> Result<impl Work<Allowance> + use<>> {
-        if n == 0 || n > self.least {
+        if n == 0 {
+            return Err(Error::invalid("none at once: ask for one at least").within(self.scope.shown_key(key)));
+        }
+        if n > self.least {
             let message = format!("{n} at once, past the smallest window's limit of {}", self.least);
             return Err(Error::invalid(message).within(self.scope.shown_key(key)));
         }
