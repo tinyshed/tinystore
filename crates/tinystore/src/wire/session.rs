@@ -112,8 +112,14 @@ struct Shared {
     /// was cancelled, and its number named again, finds another run there.
     asked: AtomicU64,
     /// Streams whose final frame has not left, which a closing server waits
-    /// for, each with the DATA bytes its client may still send on it.
-    open: Mutex<HashMap<u32, u64>>,
+    /// for, each with its credit and the connection's bytes it holds.
+    open: Mutex<HashMap<u32, OpenStream>>,
+    /// REQUEST and DATA bytes the client sent and the server has not granted
+    /// back: past the connection's credit is the client's fault.
+    outstanding: AtomicU64,
+    /// Bytes the server let go of and has not granted back yet: a grant goes
+    /// once half the window has gathered.
+    to_grant: AtomicU64,
     /// The largest body both sides agreed, once WELCOME went out: no frame of
     /// the server's passes it.
     agreed: AtomicUsize,
@@ -127,6 +133,14 @@ struct Shared {
     waiting_output: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
     ready: Condvar,
     connect: Connect,
+}
+
+/// A stream in use: the DATA its client may still send on it, and the bytes of
+/// its REQUEST and DATA the connection's credit gets back once the server lets
+/// go of them, as it grants the stream credit or ends the stream.
+struct OpenStream {
+    left: u64,
+    held: u64,
 }
 
 /// Where a client's run of once stands.
@@ -144,8 +158,6 @@ struct Input {
     max_body: Option<usize>,
     /// The DATA bytes the client takes on a stream before it grants more.
     stream_credit: u64,
-    /// REQUEST and DATA bytes read since credit last went back.
-    released: u64,
     /// GOAWAY went out: a REQUEST after it is answered `unavailable`, unrun.
     going_away: bool,
     /// What the client may do, once its HELLO was admitted.
@@ -231,6 +243,8 @@ impl Session {
             runs: Mutex::new(HashMap::new()),
             asked: AtomicU64::new(0),
             open: Mutex::new(HashMap::new()),
+            outstanding: AtomicU64::new(0),
+            to_grant: AtomicU64::new(0),
             agreed: AtomicUsize::new(HELLO_MOST),
             reads_away: AtomicUsize::new(0),
             read_only: AtomicBool::new(false),
@@ -475,10 +489,11 @@ impl Shared {
     /// returns, a write once its group commits, a run of once handed over,
     /// anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
-        self.release(input, frame.body.len() as u64);
-        // A number in use, or one past the streams WELCOME allowed, is the
-        // client's fault, and ends the connection as the protocol says.
-        if let Err(refused) = self.open_stream(frame.stream) {
+        // A body past the connection's credit, a number in use, or one past
+        // the streams WELCOME allowed, is the client's fault, and ends the
+        // connection as the protocol says.
+        let opened = self.receive(frame.body.len() as u64).and_then(|()| self.open_stream(frame.stream, &frame.body));
+        if let Err(refused) = opened {
             return self.go_away(input, "protocol", &refused);
         }
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
@@ -944,8 +959,8 @@ impl Shared {
     /// handed over, its answer to keep. A DATA of a stream no longer in use is
     /// dropped, its credit still given back.
     fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
-        self.release(input, frame.body.len() as u64);
-        if let Err(refused) = self.spend_stream_credit(frame.stream, frame.body.len() as u64) {
+        let bytes = frame.body.len() as u64;
+        if let Err(refused) = self.receive(bytes).and_then(|()| self.spend_stream_credit(frame.stream, bytes)) {
             return self.go_away(input, "protocol", &refused);
         }
         #[cfg(feature = "blobs")]
@@ -1241,15 +1256,6 @@ impl Shared {
         }
     }
 
-    /// Gives the connection's credit back once half its window was read.
-    fn release(&self, input: &mut Input, bytes: u64) {
-        input.released += bytes;
-        if input.released >= CONNECTION_CREDIT / 2 {
-            let granted = std::mem::take(&mut input.released) as u32;
-            self.send(&[Frame::new(Kind::Credit, 0, granted.to_le_bytes().to_vec())]);
-        }
-    }
-
     fn go_away(&self, input: &mut Input, code: &str, message: &str) {
         let body = GoAway { code: code.to_owned(), message: message.to_owned() }.encode();
         self.send(&[Frame::new(Kind::GoAway, 0, body)]);
@@ -1303,7 +1309,7 @@ impl Shared {
 
     /// Takes a stream number into use, refusing one in use already or one
     /// past the streams in flight WELCOME allowed.
-    fn open_stream(&self, stream: u32) -> std::result::Result<(), String> {
+    fn open_stream(&self, stream: u32, body: &[u8]) -> std::result::Result<(), String> {
         let mut open = self.lock_open();
         if open.contains_key(&stream) {
             return Err(format!("a REQUEST on stream {stream}, which is in use"));
@@ -1311,7 +1317,16 @@ impl Shared {
         if open.len() >= IN_FLIGHT as usize {
             return Err(format!("a REQUEST past the {IN_FLIGHT} streams in flight WELCOME allowed"));
         }
-        open.insert(stream, STREAM_CREDIT);
+        open.insert(stream, OpenStream { left: STREAM_CREDIT, held: body.len() as u64 });
+        Ok(())
+    }
+
+    /// Counts a body against the connection's credit.
+    fn receive(&self, bytes: u64) -> std::result::Result<(), String> {
+        let outstanding = self.outstanding.fetch_add(bytes, Ordering::AcqRel) + bytes;
+        if outstanding > CONNECTION_CREDIT {
+            return Err(format!("{outstanding} bytes sent past the connection's credit of {CONNECTION_CREDIT}"));
+        }
         Ok(())
     }
 
@@ -1320,9 +1335,36 @@ impl Shared {
     /// protocol says, and counts against nothing.
     fn spend_stream_credit(&self, stream: u32, bytes: u64) -> std::result::Result<(), String> {
         let mut open = self.lock_open();
-        let Some(left) = open.get_mut(&stream) else { return Ok(()) };
-        *left = left.checked_sub(bytes).ok_or_else(|| format!("a DATA on stream {stream} past its credit"))?;
+        let Some(opened) = open.get_mut(&stream) else {
+            drop(open);
+            self.let_go(bytes);
+            self.grant_when_due();
+            return Ok(());
+        };
+        opened.left =
+            opened.left.checked_sub(bytes).ok_or_else(|| format!("a DATA on stream {stream} past its credit"))?;
+        opened.held += bytes;
         Ok(())
+    }
+
+    /// Bytes the server let go of, which the next grant gives back.
+    fn let_go(&self, bytes: u64) {
+        self.to_grant.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// Grants the connection's credit back once half its window gathered.
+    fn grant_when_due(&self) {
+        let gathered = self.to_grant.load(Ordering::Acquire);
+        if gathered < CONNECTION_CREDIT / 2 {
+            return;
+        }
+        let granted = self.to_grant.swap(0, Ordering::AcqRel);
+        if granted == 0 {
+            return;
+        }
+        self.outstanding.fetch_sub(granted, Ordering::AcqRel);
+        let granted = u32::try_from(granted).unwrap_or(u32::MAX);
+        self.send(&[Frame::new(Kind::Credit, 0, granted.to_le_bytes().to_vec())]);
     }
 
     /// A body as it may go out: one past the agreed body is `limit`, which a
@@ -1339,7 +1381,7 @@ impl Shared {
         }
     }
 
-    fn lock_open(&self) -> MutexGuard<'_, HashMap<u32, u64>> {
+    fn lock_open(&self) -> MutexGuard<'_, HashMap<u32, OpenStream>> {
         self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -1357,17 +1399,27 @@ impl Shared {
                 frame.encode_into(&mut output.bytes);
             }
         }
+        let mut let_go = 0;
         {
             let mut open = self.lock_open();
-            // a grant of the server's on a stream is room its client may send into
+            // a grant of the server's on a stream is room its client may send
+            // into, and says the server let go of as many of its bytes
             for frame in frames.iter().filter(|frame| frame.kind == Kind::Credit && frame.stream != 0) {
-                if let (Some(left), Ok(granted)) = (open.get_mut(&frame.stream), <[u8; 4]>::try_from(&frame.body[..])) {
-                    *left = left.saturating_add(u64::from(u32::from_le_bytes(granted)));
+                if let (Some(opened), Ok(granted)) = (open.get_mut(&frame.stream), <[u8; 4]>::try_from(&frame.body[..]))
+                {
+                    let granted = u64::from(u32::from_le_bytes(granted));
+                    opened.left = opened.left.saturating_add(granted);
+                    let released = granted.min(opened.held);
+                    opened.held -= released;
+                    let_go += released;
                 }
             }
-            if let Some(stream) = ended {
-                open.remove(&stream);
+            if let Some(opened) = ended.and_then(|stream| open.remove(&stream)) {
+                let_go += opened.held;
             }
+        }
+        if let_go > 0 {
+            self.let_go(let_go);
         }
         if dropped {
             return;
@@ -1380,6 +1432,10 @@ impl Shared {
         }
         if let (true, Some(wake)) = (wake, &self.connect.wake) {
             wake();
+        }
+        // the output's lock is let go: a grant goes out as a frame of its own
+        if let_go > 0 {
+            self.grant_when_due();
         }
     }
 
