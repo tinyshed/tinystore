@@ -14,9 +14,10 @@ use super::entry::Point;
 use super::witness::Holder;
 use crate::{Error, ErrorKind, Result};
 
-/// The link's version, which a node's hello names: from version 5, the bytes
-/// after the welcome are packed through zstd.
-pub(crate) const VERSION: u32 = 5;
+/// The link's version, which a node's hello names: a node refuses a link of
+/// another. It stays 1 until v0.1.0, since nothing before it is compatible,
+/// and moves after it with every change of a message.
+pub(crate) const VERSION: u32 = 1;
 /// A message at most: an entry of the largest commit and its name.
 const LARGEST: usize = (1 << 30) + (1 << 20);
 
