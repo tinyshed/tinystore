@@ -294,10 +294,7 @@ impl fmt::Debug for Database {
 /// A database's name is `[a-z0-9][a-z0-9_-]{0,63}`: lower case, so that it
 /// cannot climb out of `sql/` or meet another on a file system that folds case.
 fn check_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if first && rest && name.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid("a database's name is a-z, 0-9, _ and -, at most 64, and starts with a letter or a digit"))

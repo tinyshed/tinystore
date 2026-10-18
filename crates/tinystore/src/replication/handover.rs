@@ -36,7 +36,8 @@ use super::entry::Point;
 use super::forward;
 use super::log::Log;
 use super::message::{In, Out};
-use super::node::{State, lock};
+use super::node::State;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// How long the old home waits for the catalog to name the new one before it

@@ -7,13 +7,14 @@
 //! memory does, so that memory holds what is busy and not every key ever seen.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::engine::{Kv, next_version};
 use super::path::is_under;
 use super::value::Raw;
 use super::{cells, counters};
+use crate::sync::lock;
 use crate::{ErrorKind, Result};
 
 /// Counters a buffer holds, changed or not: about a second of flushing. A
@@ -258,8 +259,4 @@ impl std::fmt::Debug for Buffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Buffer({} counters, every {:?})", self.lock().counters.len(), self.every)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

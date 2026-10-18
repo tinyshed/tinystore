@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::maintain;
@@ -10,6 +10,7 @@ use super::state::{Kind, QueueState};
 use super::work::Running;
 use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
 use crate::sqlite::{Config, File, Migration};
+use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// jobs.db's schema, a step a file; until `v0.1.0` the first step is edited
@@ -226,17 +227,10 @@ impl Jobs {
 
 /// A queue's name, as a file's is: short and plain.
 fn check_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if first && rest && name.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid(format!("a name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Engine for Jobs {

@@ -13,10 +13,11 @@ use std::time::{Duration, Instant};
 use super::entry::{self, Kind, MAGIC, Point};
 use super::log::{segment_path, segments_in};
 use super::message::{Frames, LeaseAsk, LeaseHolder, Message, VERSION, plain_name, timed_out};
-use super::node::{Following, State, lock};
+use super::node::{Following, State};
 use super::pack::Packer;
 use super::snapshot::{self, Part};
 use super::transport::{self, Reading, Writing};
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 /// How long a link may say nothing before its other end pings it.

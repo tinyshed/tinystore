@@ -4,7 +4,7 @@
 //! once, however many handles and watchers the process holds.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -12,6 +12,7 @@ use serde_json::Value;
 use super::declaration::Declaration;
 use crate::kv::engine::{Kv, next_version};
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 const SELECT_CONFIG: &str = "select version, declaration from _tinystore_kv_configs where name = ?1";
@@ -234,8 +235,4 @@ fn execute(connection: &Connection, sql: &str, params: impl rusqlite::Params, wh
         .and_then(|mut statement| statement.execute(params))
         .map(drop)
         .map_err(|error| sql_error(what, error))
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

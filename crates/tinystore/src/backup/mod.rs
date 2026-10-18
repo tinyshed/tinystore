@@ -188,7 +188,7 @@ fn add(zip: &mut zip::Writer<impl Write>, path: &Path, name: &str, engine: &'sta
     }
     let mut sha = Sha256::new();
     zip.add(name, metadata.len(), io::BufReader::new(file), |piece| sha.update(piece)).map_err(failed)?;
-    Ok(Listed { name: name.to_owned(), engine, size: metadata.len(), sha256: hex(&sha.finalize()) })
+    Ok(Listed { name: name.to_owned(), engine, size: metadata.len(), sha256: crate::text::hex(&sha.finalize()) })
 }
 
 /// Refuses a name of the program's that is not a path inside the store's
@@ -228,10 +228,6 @@ fn beside(path: &Path) -> PathBuf {
     let mut name = path.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
     name.push(format!(".{}.part", std::process::id()));
     path.with_file_name(name)
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(all(

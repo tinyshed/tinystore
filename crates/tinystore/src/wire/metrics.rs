@@ -10,7 +10,7 @@
 //! last batch of the session the store applied.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::codec::Message;
@@ -27,6 +27,7 @@ use crate::metrics::{
     Ack, Aggregate, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op, Query, Remote,
     Series, Set, Value,
 };
+use crate::sync::lock;
 use crate::{Store, unix_millis};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -656,10 +657,6 @@ fn batch_of(batch: MetricsBatch) -> Result<Batch, Failure> {
         changes: changes.collect(),
         flush: batch.flush,
     })
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::buffer::Buffer;
@@ -12,6 +12,7 @@ use crate::encryption::EncryptionKey;
 use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
 use crate::sqlite::{Config, File, Migration, Tx, own_work};
 use crate::store::WeakStore;
+use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// kv.db's schema, a step a file; until `v0.1.0` the first step is edited
@@ -363,10 +364,6 @@ fn described(role: &str) -> &str {
 /// How counters are kept, as an error says it.
 fn kept(every: Option<Duration>) -> String {
     every.map_or_else(|| "writing each add".to_owned(), |every| format!("flushing every {every:?}"))
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Engine for Kv {

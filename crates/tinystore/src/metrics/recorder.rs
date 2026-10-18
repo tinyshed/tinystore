@@ -27,9 +27,9 @@ use ::metrics::{
 
 use super::Metrics;
 use super::buckets::Buckets;
-use super::engine::lock;
 use super::instruments::{Counter, Gauge, Histogram, MOST_HELP, MOST_UNIT};
 use super::totals::Told;
+use crate::sync::lock;
 
 /// A builder told what `describe_*!` said of its name, what passes a
 /// name's bounds left out rather than refusing the name.

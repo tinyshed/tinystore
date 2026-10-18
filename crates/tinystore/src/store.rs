@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
@@ -15,6 +15,7 @@ use crate::engine::{Claim, Engine, Host, Wake};
 use crate::schedule::Scheduler;
 #[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::sqlite::File as EngineFile;
+use crate::sync::lock;
 use crate::{Clock, Durability, Error, ErrorKind, Memory, Result, SystemClock};
 
 /// How a store opens.
@@ -595,10 +596,6 @@ pub(crate) fn take_lock(dir: &Path) -> Result<File> {
         }
         Err(TryLockError::Error(error)) => Err(Error::io(what(), error)),
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

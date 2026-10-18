@@ -64,23 +64,9 @@ impl fmt::Display for Source {
 /// Unix milliseconds as a time in UTC: `2026-10-13 14:03:05 UTC`.
 fn utc(millis: i64) -> String {
     let (days, seconds) = (millis.div_euclid(86_400_000), millis.rem_euclid(86_400_000) / 1000);
-    let (year, month, day) = civil(days);
+    let (year, month, day) = crate::clock::civil_from_days(days);
     let (hour, minute, second) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
-}
-
-/// The date `days` after 1970-01-01, by Howard Hinnant's `civil_from_days`.
-fn civil(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let of_era = shifted.rem_euclid(146_097);
-    let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
-    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * of_year + 2) / 153;
-    let day = of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
 }
 
 /// What one layer gave one setting.

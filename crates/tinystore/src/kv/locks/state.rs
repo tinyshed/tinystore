@@ -34,9 +34,7 @@ impl Mint {
     }
 }
 
-pub(super) fn millis(span: std::time::Duration) -> i64 {
-    i64::try_from(span.as_millis()).unwrap_or(i64::MAX)
-}
+pub(super) use crate::clock::millis;
 
 /// What a change owes the holders, run outside the lock.
 #[derive(Default)]

@@ -6,10 +6,12 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 #[cfg(feature = "replication-tls")]
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::node::State;
+#[cfg(feature = "replication-tls")]
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// How long a link's TLS handshake may take.
@@ -261,9 +263,4 @@ fn client_config(roots: &std::path::Path) -> Result<rustls::ClientConfig> {
 #[cfg(feature = "replication-tls")]
 fn tls_error(error: rustls::Error) -> Error {
     Error::invalid(format!("a link's TLS: {error}"))
-}
-
-#[cfg(feature = "replication-tls")]
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

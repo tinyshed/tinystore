@@ -10,12 +10,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use super::Link;
 use super::codec::Message;
 use super::protocol::{BackupPiece, BackupWrite, BackupWritten, Failure};
 use crate::Store;
+use crate::sync::lock;
 
 /// The pieces a backup holds before it waits for the client: what keeps its
 /// worker writing while the client reads those before.
@@ -208,10 +209,6 @@ fn forget(going: &Mutex<HashMap<u32, Arc<Sending>>>, sending: &Arc<Sending>) {
     if going.get(&sending.stream).is_some_and(|held| Arc::ptr_eq(held, sending)) {
         going.remove(&sending.stream);
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

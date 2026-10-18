@@ -13,6 +13,7 @@ use super::engine::Kv;
 use super::scope::Scope;
 use super::value::Raw;
 use crate::sqlite::Tx;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 type Step = Box<dyn FnOnce(&Tx<'_>, &AtomicI64) -> Result<Outcome> + Send>;
@@ -204,8 +205,4 @@ fn taken(cell: Option<Cell>) -> Outcome {
         Some(cell) => Outcome { found: true, value: Some(cell.raw), ..Outcome::default() },
         None => Outcome::default(),
     }
-}
-
-fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }

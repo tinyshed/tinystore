@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockWriteGuard};
 use std::time::Duration;
 
-use super::engine::lock;
 use super::ids::Ids;
 use crate::durable::sync_directory;
+use crate::sync::lock;
 use crate::{Error, Result};
 
 pub(crate) const UPLOADS: &str = "uploads";

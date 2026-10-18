@@ -60,7 +60,7 @@ impl EncryptionKey {
         }
         let key = Key::try_generate()
             .map_err(|error| Error::internal(format!("{}: the system's random bytes: {error}", shown(file))))?;
-        write_new(file, &hex(&key)).map_err(|error| Error::io(shown(file), error))?;
+        write_new(file, &crate::text::hex(&key)).map_err(|error| Error::io(shown(file), error))?;
         let made = EncryptionKey::of(&key);
         tracing::info!(
             target: "tinystore",
@@ -73,7 +73,7 @@ impl EncryptionKey {
 
     /// The key's id, as an error and a bucket's row name it.
     pub(crate) fn id(&self) -> String {
-        hex(&self.id)
+        crate::text::hex(&self.id)
     }
 
     fn of(key: &Key) -> EncryptionKey {
@@ -110,7 +110,7 @@ impl EncryptionKey {
         if id != self.id {
             return Err(Error::invalid(format!(
                 "its value was sealed with the key {}, and the store's is {}: open the store with the key that sealed it",
-                hex(id),
+                crate::text::hex(id),
                 self.id()
             )));
         }
@@ -149,10 +149,6 @@ fn key_of(text: &str) -> Result<Key> {
     bytes
         .and_then(|bytes| Key::try_from(bytes.as_slice()).ok())
         .ok_or_else(|| Error::invalid("a key is 64 hex digits, 32 random bytes, as `openssl rand -hex 32` writes"))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Writes a file that is not there, its owner's alone where the system has

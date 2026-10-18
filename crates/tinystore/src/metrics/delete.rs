@@ -14,13 +14,14 @@ use rusqlite::{OptionalExtension, params};
 
 use super::Metrics;
 use super::clock;
-use super::engine::{Engine, execute, lock};
+use super::engine::{Engine, execute};
 use super::labels::{Kept, format};
 use super::publish::read_group;
 use super::retention::reclaim;
 use super::series::Labels;
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
+use crate::sync::lock;
 use crate::{ErrorKind, Result};
 
 const FIND: &str = "select s.id, s.name, st.max_seen from series s

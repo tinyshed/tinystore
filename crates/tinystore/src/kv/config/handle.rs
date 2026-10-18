@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
+use std::sync::{Arc, Mutex, TryLockError, Weak};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -24,6 +24,7 @@ use super::resolve::{Making, Resolved, Validate, View};
 use super::rules::{self, described};
 use crate::kv::engine::Kv;
 use crate::kv::scope::check_name;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// The tries a change makes while others race it before it gives up.
@@ -628,8 +629,4 @@ impl fmt::Debug for Watching {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Watching").field("stopped", &self.stop.is_none()).finish()
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

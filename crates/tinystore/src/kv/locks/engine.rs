@@ -9,7 +9,7 @@
 //! renewal.
 
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -18,6 +18,7 @@ use super::state::{Effects, Mint, State};
 use crate::engine::{Engine, Host};
 use crate::kv::engine::Kv;
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
 
 /// The epoch each opening of the locks starts its fences from: the time in
@@ -195,8 +196,4 @@ impl Timer {
         waking.woken = false;
         !waking.stopped
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use rusqlite::params;
 
-use super::engine::lock;
 use super::labels::NAME;
 use crate::sqlite::{File, sql_error};
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// How long a name's samples stay until a call says.
@@ -199,9 +199,7 @@ pub(super) fn checked_keep(keep: Duration) -> Result<Duration> {
     Ok(keep)
 }
 
-pub(super) fn millis(span: Duration) -> i64 {
-    i64::try_from(span.as_millis()).unwrap_or(i64::MAX)
-}
+pub(super) use crate::clock::millis;
 
 /// A span as a program writes it: `30d`, `12h`, `90s`, `250ms`.
 pub(super) fn span(span: Duration) -> String {

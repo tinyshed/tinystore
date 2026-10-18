@@ -198,7 +198,7 @@ impl Records {
         }
         let mut streams = self.streams();
         let Some(stream) = streams.get_mut(name) else {
-            let (named, kept) = (name.to_owned(), keep.map(millis));
+            let (named, kept) = (name.to_owned(), keep.map(crate::clock::millis));
             let id = self.file.write(name.len(), move |tx| {
                 let made = tx.prepare_cached(INSERT_STREAM);
                 let id = made.and_then(|mut insert| insert.query_row(params![named, kept], |row| row.get(0)));
@@ -215,7 +215,9 @@ impl Records {
         }
         if stream.keep != Some(keep) {
             let id = stream.id;
-            self.file.write(8, move |tx| execute(tx, SET_KEEP, params![id, millis(keep)], "write a stream's keep"))?;
+            self.file.write(8, move |tx| {
+                execute(tx, SET_KEEP, params![id, crate::clock::millis(keep)], "write a stream's keep")
+            })?;
         }
         (stream.keep, stream.said) = (Some(keep), Some(keep));
         Ok(stream.clone())
@@ -256,10 +258,6 @@ pub(super) fn nanos(span: Duration) -> i64 {
     i64::try_from(span.as_nanos()).unwrap_or(i64::MAX)
 }
 
-fn millis(span: Duration) -> i64 {
-    i64::try_from(span.as_millis()).unwrap_or(i64::MAX)
-}
-
 /// A span as a program writes it: `30d`, `12h`, `90s`, `250ms`.
 fn span(span: Duration) -> String {
     let millis = span.as_millis();
@@ -271,10 +269,7 @@ fn span(span: Duration) -> String {
 }
 
 fn check_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if first && rest && name.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid(format!("a stream's name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))

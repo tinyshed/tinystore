@@ -2,7 +2,7 @@
 //! options, its alarm and rate, and the jobs its leases hold.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::alarm::Alarm;
@@ -10,6 +10,7 @@ use super::claim::Lease;
 use super::policy::Policy;
 use super::rate::RateLog;
 use super::watch::Watchers;
+use crate::sync::lock;
 
 /// What a name is: a queue of jobs, or a schedule's one repeating job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,8 +150,4 @@ impl Quiet {
         drop(state);
         tracing::warn!(target: "tinystore", queue, count, last, "{}", self.message);
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

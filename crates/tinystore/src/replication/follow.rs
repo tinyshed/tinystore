@@ -13,10 +13,11 @@ use std::time::{Duration, Instant};
 use super::copy::{self, Copy};
 use super::entry::{self, Point};
 use super::message::{Frames, Message, VERSION, plain_name, timed_out};
-use super::node::{State, lock};
+use super::node::State;
 use super::serve::{Out, PING_EVERY, SILENT_AT_MOST};
 use super::snapshot::Taking;
 use crate::store::WeakStore;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// How often a node that copies every file asks for the files served.

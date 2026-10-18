@@ -24,10 +24,10 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::buckets::{Bounds, MOST_BOUNDS, bucket_of};
-use super::engine::lock;
 use super::grid::{Bin, FINEST};
 use super::labels::{BIN, Kept, OVERFLOW};
 use super::series::{Kind, Labels};
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// The sets of labels an instrument holds at most; a new one past them

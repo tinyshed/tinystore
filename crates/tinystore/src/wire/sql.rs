@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::codec::{Cell, Map, Message};
@@ -19,6 +19,7 @@ use super::protocol::{
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
 use crate::sql::{Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, Tx, Value, Wanted};
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -719,10 +720,6 @@ pub(super) fn cell_of(value: Value) -> Cell {
 
 fn done_of(done: &Done) -> SqlDone {
     SqlDone { changes: done.changes, last_insert_rowid: done.last_insert_rowid }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

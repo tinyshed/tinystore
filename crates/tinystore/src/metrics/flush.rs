@@ -19,13 +19,14 @@ use std::sync::Arc;
 use rusqlite::params;
 
 use super::codec::Point;
-use super::engine::{Engine, execute, lock};
+use super::engine::{Engine, execute};
 use super::ingest::{Batch, State, store};
 use super::names::millis;
 use super::registry;
 use super::totals::{Outcome, Planned, Told, Written};
 use crate::compress::frame::Zstd;
 use crate::sqlite::Tx;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 /// The slots one transaction writes at most, so that the writer is never

@@ -11,8 +11,9 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use super::manifest::{Listed, MANIFEST, MOST_BYTES, Manifest};
-use super::{Backup, hex, is_inside, zip};
+use super::{Backup, is_inside, zip};
 use crate::durable::sync_directory;
+use crate::text::hex;
 use crate::{Error, ErrorKind, Result};
 
 /// Restores the backup at `archive` into `dir`, which is empty or absent,

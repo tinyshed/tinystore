@@ -8,9 +8,10 @@ use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
 use super::disk::read_at;
-use super::engine::{Blobs, lock};
+use super::engine::Blobs;
 use crate::Result;
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 
 /// Slices in a pass: thirty days of a slice a minute.
 const SLICES: i64 = 30 * 24 * 60;

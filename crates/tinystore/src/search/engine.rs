@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use super::kept::lock;
 use super::open::{Beside, Current, Data, OpenIndex};
 use super::read::{self, Answer, Asked, Query};
 use super::rebuild;
@@ -29,6 +28,7 @@ use super::write::{self, Prepared};
 use crate::clock::Clock;
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
+use crate::sync::lock;
 use crate::{Error, Memory, Result, Store};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -554,10 +554,7 @@ pub(crate) fn count(connection: &Connection, sql: &str, index: i64) -> Result<u6
 }
 
 pub(crate) fn check_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if first && rest && name.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid(format!("an index's name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))

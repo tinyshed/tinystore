@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -15,6 +15,7 @@ use super::protocol::{ConfigLine, ConfigOpen, ConfigReset, ConfigUpdate, ConfigV
 use super::{Link, Route};
 use crate::Store;
 use crate::config::{Config, Sent, Snapshot, Watching};
+use crate::sync::lock;
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
 
@@ -235,10 +236,6 @@ impl fmt::Debug for Following {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Following").field("handle", &self.handle).finish_non_exhaustive()
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

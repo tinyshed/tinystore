@@ -9,13 +9,13 @@ use std::time::Duration;
 use super::clusters::{self, HEAD, Phase};
 use super::correct::Corrector;
 use super::engine::{Search, count};
-use super::kept::lock;
 use super::open::{Data, OpenIndex};
 use super::pack;
 use super::purge;
 use super::score::Part;
 use crate::Result;
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 
 /// Documents set since a head was packed that make it due: search-compact
 /// packed every thousand writes, which kept `or`'s p99 at 14–16 ms through

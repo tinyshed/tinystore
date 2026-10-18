@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
@@ -20,6 +20,7 @@ use super::ids::Ids;
 use super::scrub::Scrubbing;
 use crate::engine::{Claim, Copied, Engine, Host, copy_file};
 use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
+use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -353,10 +354,6 @@ impl Blobs {
             }
         }
     }
-}
-
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The rows a statement gives, each read by `row`; `what` names the read in

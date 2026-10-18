@@ -13,6 +13,7 @@ use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Committed, Config, Left, Settle, Settlers, Tx};
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
@@ -632,10 +633,6 @@ impl Drop for Open<'_> {
             let _ = execute(self.connection, ROLLBACK);
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

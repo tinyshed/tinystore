@@ -20,10 +20,11 @@ use std::time::Duration;
 
 use super::Metrics;
 use super::buckets::{Bounds, Buckets};
-use super::engine::{Engine, lock};
+use super::engine::Engine;
 use super::grid::{Bin, FINEST};
 use super::series::Labels;
 use super::totals::{Connection, Form, Instrument, Measures, Slot};
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// How long the store remembers a session after its last stream ended.

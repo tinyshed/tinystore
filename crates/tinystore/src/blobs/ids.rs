@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use super::engine::lock;
 use crate::Result;
+use crate::sync::lock;
 
 /// Content ids reserved in one write of `meta`.
 const BLOCK: i64 = 1000;

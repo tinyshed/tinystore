@@ -475,10 +475,7 @@ impl FileCall<'_> {
 
 /// A set's name, as a file's is: short and plain.
 fn check_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let first = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let rest = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if first && rest && name.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid(format!("a name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))

@@ -21,13 +21,14 @@ use super::correct::Corrector;
 use super::execute::{Fetch, List, best, best_of};
 use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
-use super::kept::{Chunk, Gone, Kept, Moment, NORMS, lock};
+use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
 use super::score::{Part, average, idf, score};
 use super::settings::Settings;
 use super::vectors::{self, Among, Question, Scan};
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 use crate::{Error, Memory, Result};
 
 const READ_INDEX: &str =

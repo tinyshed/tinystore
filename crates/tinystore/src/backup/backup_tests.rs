@@ -10,6 +10,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::*;
+use crate::text::hex;
 use crate::metrics::Series;
 use crate::{ErrorKind, Options, TestClock, sql};
 

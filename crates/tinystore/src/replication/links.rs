@@ -12,7 +12,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Map, Value, json};
 
 use super::DIR;
-use super::node::{State, lock};
+use super::node::State;
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// The file in a node's `log/` its links are written to.

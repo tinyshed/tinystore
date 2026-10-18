@@ -11,13 +11,14 @@
 //!   every change: a set read at one count serves a search at that count.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{Connection, OptionalExtension};
 
 use super::correct::Corrector;
 use super::score::Part;
 use crate::sqlite::sql_error;
+use crate::sync::lock;
 use crate::{Error, Memory, Reservation, Result};
 
 /// Documents a row of lengths holds.
@@ -130,8 +131,4 @@ pub(crate) fn lengths_of(bytes: &[u8]) -> Vec<u16> {
 
 pub(crate) fn bytes_of(lengths: &[u16]) -> Vec<u8> {
     lengths.iter().flat_map(|length| length.to_le_bytes()).collect()
-}
-
-pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

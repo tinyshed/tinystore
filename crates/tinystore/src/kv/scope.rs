@@ -193,11 +193,7 @@ fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {
 }
 
 pub(super) fn check_name(name: &str) -> Result<()> {
-    let bytes = name.as_bytes();
-    let first_fits = bytes.first().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
-    let rest_fits =
-        bytes.iter().all(|&byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-');
-    if first_fits && rest_fits && bytes.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     Err(Error::invalid("a name is a lowercase letter or digit, then up to 63 of them, '_' and '-'"))

@@ -3,13 +3,14 @@
 //! lease by its id so that a client that connected again goes on with it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::Route;
 use super::codec::Message;
 use super::protocol::{Empty, Failure, LocksHeld, LocksHold, LocksLease, LocksRenew, method};
 use crate::kv::locks::{Answer, Granted, Locks, Remote, remote_ask};
+use crate::sync::lock;
 use crate::{Clock, Error, ErrorKind, Store, unix_millis};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -168,10 +169,6 @@ impl Holds {
             self.cancel(stream);
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

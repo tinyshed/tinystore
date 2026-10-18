@@ -99,10 +99,10 @@ pub(crate) fn json(line: &Line) -> String {
         out.push_str(value);
     }
     if let Some(trace) = line.trace {
-        let _ = write!(out, ",\"trace_id\":\"{}\"", hex(&trace));
+        let _ = write!(out, ",\"trace_id\":\"{}\"", crate::text::hex(&trace));
     }
     if let Some(span) = line.span {
-        let _ = write!(out, ",\"span_id\":\"{}\"", hex(&span));
+        let _ = write!(out, ",\"span_id\":\"{}\"", crate::text::hex(&span));
     }
     out.push_str("}\n");
     out
@@ -172,7 +172,7 @@ pub(crate) fn pretty(line: &Line, look: &Look) -> String {
         }
     }
     if let Some(trace) = line.trace {
-        field(&mut out, "trace", &hex(&trace[..4]));
+        field(&mut out, "trace", &crate::text::hex(&trace[..4]));
     }
     for (key, text) in below {
         let trimmed = text.trim_end_matches(['\r', '\n']);
@@ -278,10 +278,6 @@ fn clock(at: i64, zone: &TimeZone) -> String {
     let zoned = Timestamp::from_nanosecond(i128::from(at)).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(zone.clone());
     let millis = zoned.subsec_nanosecond() / 1_000_000;
     format!("{:02}:{:02}:{:02}.{millis:03}", zoned.hour(), zoned.minute(), zoned.second())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Appends `text` as a JSON string, as Go's encoding/json writes one without

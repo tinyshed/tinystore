@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use super::tx::BOUND;
 use crate::engine::{Claim, Engine, Host, SharedFile};
 use crate::sqlite::{Config, File, Migration};
+use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store};
 
 /// The history a database's own migrations are kept under.
@@ -182,8 +183,4 @@ impl Base {
 /// statements.
 fn config(durability: Option<Durability>) -> Config {
     Config { statements: 128, ..Config::committing(durability) }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

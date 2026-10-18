@@ -373,7 +373,7 @@ impl Search {
     /// is refused from then on, and opening the name again makes a new one.
     pub(crate) fn drop_index(&self, name: &str) -> Result<bool> {
         check_name(name)?;
-        let open = super::kept::lock(&self.indexes).remove(name);
+        let open = crate::sync::lock(&self.indexes).remove(name);
         let _held = open.as_ref().map(|open| {
             let held = open.change();
             open.mark_dropped();

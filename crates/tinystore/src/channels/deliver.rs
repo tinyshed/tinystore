@@ -17,11 +17,12 @@
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle, ThreadId};
 
 use super::hub::{Hub, LogKey};
 use super::log::{Log, Released};
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// The threads a store runs Rust's handlers on, started with its first
@@ -267,8 +268,4 @@ impl Subscriber {
             hub.leave(&self.key, *reader);
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

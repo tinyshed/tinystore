@@ -33,7 +33,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::DIR;
-use super::node::lock;
+use crate::sync::lock;
 use crate::{Error, Result};
 
 /// How long a lease lasts from the renewal that reached the witness.

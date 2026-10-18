@@ -400,11 +400,7 @@ pub(crate) fn remote_branch(name: &str, under: Vec<String>) -> Result<(Arc<str>,
 }
 
 fn check_name(name: &str) -> Result<()> {
-    let bytes = name.as_bytes();
-    let first_fits = bytes.first().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
-    let rest_fits =
-        bytes.iter().all(|&byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-');
-    if first_fits && rest_fits && bytes.len() <= 64 {
+    if crate::text::is_name(name) {
         return Ok(());
     }
     let refused = "a name is a lowercase letter or digit, then up to 63 of them, '_' and '-'";

@@ -129,7 +129,8 @@ impl Civil {
         let day = (1..=12).contains(&self.month) && self.day >= 1;
         clock
             && day
-            && civil_from_days(days_from_civil(self.year, self.month, self.day)) == (self.year, self.month, self.day)
+            && crate::clock::civil_from_days(days_from_civil(self.year, self.month, self.day))
+                == (self.year, self.month, self.day)
     }
 
     /// The time as if it were UTC, in units of a fraction of `digits` digits;
@@ -179,19 +180,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
-}
-
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
-    let month = if shifted + 3 > 12 { shifted - 9 } else { shifted + 3 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
 }
 
 fn pow10(digits: u8) -> i64 {
@@ -267,7 +255,7 @@ fn read_stamp(text: &[u8], start: usize, pattern: usize, layout: &[u8], at: i64)
         found.end += 1 + usize::from(found.digits);
     }
     if !layout.contains(&YEAR) {
-        spelled.year = civil_from_days(at.div_euclid(NANOS_IN_DAY)).0;
+        spelled.year = crate::clock::civil_from_days(at.div_euclid(NANOS_IN_DAY)).0;
     }
     found.wall = spelled.valid().then(|| spelled.wall(found.digits))??;
     Some(found)
@@ -449,7 +437,7 @@ fn spell(out: &mut String, layout: &[u8], at: i64, distance: i64) -> Option<()> 
     let seconds = wall.div_euclid(pow10(digits));
     let fraction = wall - seconds * pow10(digits);
     let (days, of_day) = (seconds.div_euclid(SECONDS_IN_DAY), seconds.rem_euclid(SECONDS_IN_DAY));
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day) = crate::clock::civil_from_days(days);
     let mut place = 0;
     while place < layout.len() {
         match layout[place] {

@@ -3,8 +3,9 @@
 //! series, so that it stays short, and another follows at once while one
 //! leaves work.
 
-use super::engine::{Engine, lock};
+use super::engine::Engine;
 use super::retention::PASS_SERIES;
+use crate::sync::lock;
 use crate::{Result, Store};
 
 /// What maintenance did.

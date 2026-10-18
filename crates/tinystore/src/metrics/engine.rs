@@ -10,7 +10,7 @@
 //! ```
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::types::FromSql;
@@ -23,6 +23,7 @@ use super::remote::Sessions;
 use super::totals::Totals;
 use crate::engine::{Claim, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
+use crate::sync::lock;
 use crate::{Clock, Durability, Memory, Result, Store, unix_millis};
 
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
@@ -173,10 +174,6 @@ pub(super) fn execute(connection: &Connection, sql: &str, params: impl Params, w
 pub(super) fn query_one<T: FromSql>(connection: &Connection, sql: &str, params: impl Params, what: &str) -> Result<T> {
     let one = connection.prepare_cached(sql).and_then(|mut statement| statement.query_row(params, |row| row.get(0)));
     one.map_err(|error| sql_error(what, error))
-}
-
-pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

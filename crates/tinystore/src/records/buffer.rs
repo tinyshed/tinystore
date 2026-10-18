@@ -19,6 +19,7 @@ use super::event::{Fields, Level, NewEvent, SpanId, TraceId};
 use super::lines::LineWriter;
 use crate::console::{Console, Keep, Line, own_line, quoted};
 use crate::engine::{Host, Wake};
+use crate::sync::lock;
 use crate::{Clock, Error, Result, unix_nanos};
 
 /// The lines a buffer holds between writes unless its logger says.
@@ -285,8 +286,4 @@ impl Records {
     fn lock_held(&self) -> MutexGuard<'_, Held> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

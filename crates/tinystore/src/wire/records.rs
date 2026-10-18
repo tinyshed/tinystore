@@ -27,6 +27,7 @@ use crate::records::{
     Aggregate, Damage, Event, Events, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats, Tail,
     TailBatch, TraceId,
 };
+use crate::sync::lock;
 use crate::{ErrorKind, Store, unix_nanos};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -606,10 +607,6 @@ impl Writer {
         let dropped = taken.and_then(|()| lines.end().map_err(Failure::from));
         (link.finish)(dropped.map(|dropped| RecordsDropped { dropped }.encode()));
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

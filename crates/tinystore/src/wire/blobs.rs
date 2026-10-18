@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::codec::Message;
@@ -19,6 +19,7 @@ use super::protocol::{
 };
 use super::{Link, Route};
 use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
@@ -548,10 +549,6 @@ impl Uploading {
         }
         (self.link.finish)(last);
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

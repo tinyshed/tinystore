@@ -7,7 +7,7 @@ use std::fs;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,7 @@ use super::snapshot::Source;
 use super::{DIR, NODE_LOCAL, Node};
 use crate::sqlite::{File, Observe, Readers, Switch};
 use crate::store::WeakStore;
+use crate::sync::lock;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// How long opening a file a node copies waits for its first copy.
@@ -1154,8 +1155,4 @@ impl Source for CopySource {
     fn stable(&self) -> Result<Point> {
         Ok(self.0.point())
     }
-}
-
-pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

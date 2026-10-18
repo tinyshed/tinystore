@@ -92,9 +92,24 @@ pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
 }
 
 /// A span in whole milliseconds, saturating.
-#[cfg(any(feature = "kv", feature = "jobs"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "records", feature = "metrics"))]
 pub(crate) fn millis(span: Duration) -> i64 {
     saturate(span.as_millis())
+}
+
+/// The year, month and day `days` after 1970-01-01, by Howard Hinnant's
+/// `civil_from_days`, its years counted in eras of 400.
+#[cfg(any(feature = "config", feature = "records", feature = "metrics"))]
+pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let of_era = shifted.rem_euclid(146_097);
+    let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
+    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * of_year + 2) / 153;
+    let day = of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 { shifted_month + 3 } else { shifted_month - 9 };
+    (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
 fn saturate(value: u128) -> i64 {

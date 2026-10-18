@@ -4,11 +4,12 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use super::{Engine, Host};
 use crate::sqlite::File;
 use crate::store::WeakStore;
+use crate::sync::lock;
 use crate::{Error, Result, Store};
 
 /// A file one engine opened that others keep their tables in as well: a
@@ -96,12 +97,4 @@ pub(crate) enum Home {
         expect(dead_code, reason = "only a database lends its file, and the wire opens a handle in one")
     )]
     Shared(Arc<SharedFile>),
-}
-
-#[cfg_attr(
-    not(any(feature = "kv", feature = "jobs", feature = "search")),
-    expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
-)]
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

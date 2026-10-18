@@ -8,13 +8,14 @@
 //! bounded, and neither the publisher nor the session waits for it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::codec::Message;
 use super::protocol::{ChannelsBatch, ChannelsMessage, ChannelsPublish, ChannelsSubscribe, Empty, Failure, method};
 use super::{Link, Route};
 use crate::Store;
 use crate::channels::{Hub, Log, LogKey, remote_branch};
+use crate::sync::lock;
 
 pub(crate) type Answered = Result<Vec<u8>, Failure>;
 
@@ -290,10 +291,6 @@ impl Subscriptions {
             subscribed.end();
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
