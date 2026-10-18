@@ -48,8 +48,10 @@ fn query(asked: Asked) -> Done {
     if asked.has("--write") {
         let store = held(&dir)?;
         let written = write(&store, database, statement, json);
-        store.close()?;
-        return written;
+        // The write's own failure is the answer; a close that fails after it
+        // succeeded is.
+        let closed = store.close();
+        return written.and_then(|()| Ok(closed?));
     }
     let store = Store::open_beside(&dir).map_err(failed)?;
     let db = opened(&store, database)?;
@@ -128,8 +130,9 @@ fn apply(asked: Asked) -> Done {
     let before = applied(&store, database)?;
     let opened = store.database(database).migrations(Path::new(migrations)).open();
     let after = opened.map_err(asked::Refused::from).and_then(|_| applied(&store, database));
-    store.close()?;
+    let closed = store.close();
     let after = after?;
+    closed?;
     let new: Vec<&String> = after.iter().filter(|name| !before.contains(name)).collect();
     match new.len() {
         0 => println!("● {database}  up to date: {} migrations applied", after.len()),
@@ -148,8 +151,15 @@ fn applied(store: &Store, database: &str) -> Result<Vec<String>, asked::Refused>
         return Ok(Vec::new());
     }
     let db = store.database(database).open()?;
-    Ok(db.all("select name from _tinystore_migrations where history = 'migrations' order by version")?)
+    Ok(db.all(APPLIED)?)
 }
+
+const APPLIED: &str = "select name from _tinystore_migrations where history = 'migrations' order by version";
+/// A database's own tables, views, indexes and triggers. `glob`, not `like`,
+/// since `like` reads `_` as any character.
+const SCHEMA: &str = "select type, name, sql from sqlite_schema where sql is not null
+    and name not glob 'sqlite_*' and name not glob '_tinystore_*'
+    order by case type when 'table' then 0 when 'view' then 1 else 2 end, name";
 
 fn tables(asked: Asked) -> Done {
     let (dir, rest) = asked.dir_needed("schema")?;
@@ -171,11 +181,7 @@ fn tables(asked: Asked) -> Done {
         }
         [database] => {
             let db = opened(&store, database)?;
-            let made: Vec<(String, String, String)> = db.all(
-                "select type, name, sql from sqlite_schema where sql is not null and name not like 'sqlite_%' \
-                 and name not like '_tinystore_%' \
-                 order by case type when 'table' then 0 when 'view' then 1 else 2 end, name",
-            )?;
+            let made: Vec<(String, String, String)> = db.all(SCHEMA)?;
             if json {
                 let shown: Vec<serde_json::Value> = made
                     .iter()

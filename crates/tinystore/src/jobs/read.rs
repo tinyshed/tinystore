@@ -351,7 +351,7 @@ fn job_of<V: DeserializeOwned>(c: &Connection, queue: &QueueState, found: &Found
             .map_err(|error| sql_error("the value a job spilled", error))?,
         None => found.value.clone().unwrap_or_default(),
     };
-    let value = values::decode::<V>(&encoded).map_err(|error| Error::corrupt(error.to_string()))?;
+    let value = values::decode::<V>(&encoded).map_err(|error| Error::corrupt("a job's value").with_source(error))?;
     let last_run = match (found.ran, found.took) {
         (Some(ran), Some(took)) => {
             Some(LastRun { started_at: from_unix_millis(ran), ended_at: from_unix_millis(ran.saturating_add(took)) })

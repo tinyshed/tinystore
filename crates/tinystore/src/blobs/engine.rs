@@ -23,6 +23,9 @@ use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
 
+const SETTLE: &str = "update meta set value = ?1 where name = 'settled' and value < ?1";
+const RESERVE_IDS: &str = "update meta set value = value + ?1 where name = 'ids' returning value";
+const HAS_CONTENT: &str = "select 1 from contents where id = ?1";
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// How often maintenance runs: expiry, marked clears, files no row names any
@@ -265,7 +268,8 @@ impl Blobs {
         let mark = self.ids.settled_mark();
         own_work(|| {
             self.file.write(0, move |tx| {
-                tx.execute("update meta set value = ?1 where name = 'settled' and value < ?1", [mark])
+                tx.prepare_cached(SETTLE)
+                    .and_then(|mut update| update.execute([mark]))
                     .map(drop)
                     .map_err(|error| sql_error("blobs: settle the content ids", error))
             })
@@ -278,8 +282,8 @@ impl Blobs {
         self.ids.take(|block| {
             own_work(|| {
                 self.file.write(0, move |tx| {
-                    let reserve = "update meta set value = value + ?1 where name = 'ids' returning value";
-                    tx.query_row(reserve, [block], |row| row.get(0))
+                    tx.prepare_cached(RESERVE_IDS)
+                        .and_then(|mut reserve| reserve.query_row([block], |row| row.get(0)))
                         .map_err(|error| sql_error("blobs: reserve content ids", error))
                 })
             })
@@ -292,7 +296,8 @@ impl Blobs {
     pub(crate) fn resolve(&self, id: i64) {
         let found = self.file.read(|connection| {
             connection
-                .query_row("select 1 from contents where id = ?1", [id], |_| Ok(()))
+                .prepare_cached(HAS_CONTENT)
+                .and_then(|mut select| select.query_row([id], |_| Ok(())))
                 .optional()
                 .map_err(|error| sql_error("blobs: a content in doubt", error))
         });

@@ -17,6 +17,7 @@ use crate::sqlite::sql_error;
 use crate::{Error, ErrorKind, Key, Result, Store};
 
 /// A content type's bytes at most.
+const SET_EXPIRES: &str = "update files set expires = ?3 where set_id = ?1 and path = ?2";
 const MAX_TYPE: usize = 256;
 /// Meta's names and values together, at most.
 const MAX_META: usize = 2 << 10;
@@ -334,10 +335,7 @@ impl Files {
                 return Ok(false);
             }
             let expires = change.now.saturating_add(after);
-            change.execute(
-                "update files set expires = ?3 where set_id = ?1 and path = ?2",
-                params![set, path, expires],
-            )?;
+            change.execute(SET_EXPIRES, params![set, path, expires])?;
             Ok(true)
         })
     }

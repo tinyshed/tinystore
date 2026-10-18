@@ -23,9 +23,7 @@ const PARK_AT_MOST: usize = 1000;
 /// A failure as a job keeps it: its text, at most this long.
 const MAX_ERROR: usize = 4096;
 
-const CLAIM_JOBS: &str = "select next, id, key, at, attempt, repeat, value, spill,
-        coalesce(length(j.value), (select length(s.value) from _tinystore_jobs_spilled s where s.id = j.spill), 0),
-        grp
+const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp
     from _tinystore_jobs j
     where queue = ?1 and next <= ?2
         and not exists (select 1 from _tinystore_jobs_leases l where l.id = j.id and l.until > ?2)
@@ -343,9 +341,9 @@ fn due(c: &Connection, claiming: &Claiming<'_>, limit: usize) -> Result<Vec<DueR
                 key: row.get(2)?,
                 at: row.get(3)?,
                 attempt: row.get(4)?,
-                value: row.get(6)?,
-                spill: row.get(7)?,
-                group: row.get(9)?,
+                value: row.get(5)?,
+                spill: row.get(6)?,
+                group: row.get(7)?,
             })
         })?;
         rows.collect()
