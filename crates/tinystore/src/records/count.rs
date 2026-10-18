@@ -175,7 +175,8 @@ impl List {
     }
 
     /// A row for each span and each value of the keys `by` names, in the
-    /// order of their spans: an answer whole, or `limit` past 10,000 rows.
+    /// order of their spans: an answer whole, or an error of kind `limit`
+    /// past 10,000 rows.
     pub fn aggregate(&self, aggregate: &Aggregate) -> Result<Vec<Row>> {
         let every = match aggregate.every {
             Some(span) if span.is_zero() => return Err(Error::invalid("every: a span longer than none")),

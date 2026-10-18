@@ -35,13 +35,14 @@ const MINUTE: u8 = 7;
 const SECOND: u8 = 8;
 const FRACTION: u8 = 9; // then how many digits it has, one to nine
 
-/// The stamps one value keeps, and the bytes a stamp may start after the
-/// value's start or the stamp before it.
+/// The stamps one value keeps.
 const MOST_STAMPS: usize = 4;
+/// The bytes a stamp may start after the value's start or the stamp before it.
 const REACH: usize = 64;
-/// The layouts one column holds, and the bytes of one.
+/// The layouts one column holds.
 const MOST_LAYOUTS: usize = 64;
-const MOST_LAYOUT: usize = 64;
+/// The bytes of one layout.
+const MOST_LAYOUT_BYTES: usize = 64;
 /// A fraction's digits at most: nanoseconds.
 pub(super) const MOST_DIGITS: u8 = 9;
 const SECONDS_IN_DAY: i64 = 86_400;
@@ -345,7 +346,7 @@ pub(super) fn read_stamped(
     decoder: &mut Decoder<'_>,
     keep: Keep<'_>,
 ) -> Vec<String> {
-    let layouts: Vec<&[u8]> = (0..reader.count(MOST_LAYOUTS)).map(|_| reader.counted(MOST_LAYOUT)).collect();
+    let layouts: Vec<&[u8]> = (0..reader.count(MOST_LAYOUTS)).map(|_| reader.counted(MOST_LAYOUT_BYTES)).collect();
     if layouts.iter().any(|layout| layout_digits(layout).is_none()) {
         reader.fail("a stamp's layout");
     }

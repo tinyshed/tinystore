@@ -173,7 +173,7 @@ impl Tail {
     }
 
     /// The events held past the tail's place that meet its read, and how
-    /// many it would have read that left the hold first.
+    /// many events of any stream left the hold before the tail reached them.
     fn batch(&self, held: &Held) -> TailBatch {
         let first = held.events.front().map_or(held.next, |(place, ..)| *place);
         let read = |stream: &str| self.streams.as_ref().is_none_or(|streams| streams.iter().any(|name| name == stream));

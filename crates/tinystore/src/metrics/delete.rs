@@ -127,7 +127,7 @@ fn remove_groups(tx: &Tx<'_>, zstd: &mut Zstd, id: i64) -> Result<u64> {
         match read_group(tx, zstd, &row) {
             Ok(group) => {
                 for block in group.blocks.iter().filter(|block| block.external()) {
-                    // a payload expiry took with its block needs no removing
+                    // one expiry took with its block is gone: deleting it again changes nothing
                     execute(tx, DROP_PAYLOAD, params![block.payload], "remove a block's values")?;
                 }
             }

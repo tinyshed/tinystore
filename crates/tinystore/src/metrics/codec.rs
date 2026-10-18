@@ -11,19 +11,19 @@
 //! [`Head`], which whoever keeps the body keeps beside it: the body never
 //! repeats them, and its checksum binds it to them.
 //!
-//! | Times        | Kept as                                                 |
-//! |--------------|---------------------------------------------------------|
-//! | evenly apart | nothing: the head's span over its count is the step     |
-//! | deltas       | each step from the time before                          |
+//! | Times        | Kept as                                                     |
+//! |--------------|-------------------------------------------------------------|
+//! | evenly apart | nothing: the head's span over its count is the step         |
+//! | deltas       | each step from the time before                              |
 //! | changes      | the first step, then each step's change from the one before |
 //!
-//! | Values   | Kept as                                                                 |
-//! |----------|-------------------------------------------------------------------------|
-//! | constant | nothing: every one is the first                                         |
-//! | integers | each one's difference from the one before, ZigZag, in Simple8b words    |
-//! | decimals | the integers a power of ten makes of them, which give each one's bits back, so |
-//! | XOR      | each one's bits against the bits before, as Gorilla keeps them          |
-//! | raw      | eight bytes each                                                        |
+//! | Values   | Kept as                                                                          |
+//! |----------|----------------------------------------------------------------------------------|
+//! | constant | nothing: every one is the first                                                  |
+//! | integers | each one's difference from the one before, ZigZag, in Simple8b words             |
+//! | decimals | the integers a power of ten makes of them, so long as each gives its bits back   |
+//! | XOR      | each one's bits against the bits before, as Gorilla keeps them                   |
+//! | raw      | eight bytes each                                                                 |
 
 use std::borrow::Cow;
 use std::sync::{Mutex, PoisonError};
@@ -58,9 +58,8 @@ const UNDER_ZSTD: u8 = 1 << 5;
 /// would cost what it saves.
 const WORTH_ZSTD: usize = 48;
 
-/// How a run's integers are packed: Simple8b words. The Go engine also
-/// weighed huff0 against them, as 1; this one leaves it out until a
-/// measurement says what it saves.
+/// How a run's integers are packed: Simple8b words. Huff0, which the Go
+/// engine also weighed, is left out until a measurement says what it saves.
 const DELTAS_IN_WORDS: u8 = 0;
 
 /// The scales of ten a run of decimals is tried at: past nine, research's
@@ -149,8 +148,9 @@ impl Codecs {
         }
     }
 
-    /// Lets every context go, as a store that stopped writing does.
-    pub(super) fn rest(&self) {
+    /// Lets every pooled context go: maintenance does it on each pass, so that
+    /// a store that stopped writing holds none.
+    pub(super) fn release(&self) {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 }
@@ -169,8 +169,8 @@ pub(super) fn encode(zstd: &mut Zstd, points: &[Point]) -> Result<(Head, Vec<u8>
     let (value_mode, values) = encode_values(points);
     let mut best = envelope(zstd, &head, Packed { time_mode, times: &times, value_mode, values: &values })?;
     // zstd sometimes keeps raw values shorter than a stream already packed
-    let words = matches!(value_mode, VALUES_INTEGERS | VALUES_DECIMALS) && points.len() >= 32;
-    if words || (value_mode == VALUES_XOR && points.len() >= 8) {
+    let try_raw = matches!(value_mode, VALUES_INTEGERS | VALUES_DECIMALS) && points.len() >= 32;
+    if try_raw || (value_mode == VALUES_XOR && points.len() >= 8) {
         let raw = raw_values(points);
         let other = envelope(zstd, &head, Packed { time_mode, times: &times, value_mode: VALUES_RAW, values: &raw })?;
         if other.len() < best.len() {

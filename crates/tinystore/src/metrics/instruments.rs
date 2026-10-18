@@ -173,12 +173,12 @@ impl<T> Builder<T> {
         opened.map_err(|error| error.within(format!("metrics {}", self.name)))
     }
 
-    fn the_unit(mut self, unit: impl Into<String>) -> Self {
+    fn set_unit(mut self, unit: impl Into<String>) -> Self {
         self.unit = Some(unit.into());
         self
     }
 
-    fn the_buckets(mut self, buckets: Buckets) -> Self {
+    fn set_buckets(mut self, buckets: Buckets) -> Self {
         self.buckets = Some(buckets);
         self
     }
@@ -189,7 +189,7 @@ macro_rules! unit {
         impl Builder<$made> {
             /// The unit of its values, 32 bytes at most: `bytes`, `%`.
             pub fn unit(self, unit: impl Into<String>) -> Self {
-                self.the_unit(unit)
+                self.set_unit(unit)
             }
         }
     )*};
@@ -203,7 +203,7 @@ macro_rules! buckets {
             /// number of 0 or more, to which the store adds `+Inf`, or
             /// [`Buckets::Exponential`], a grid the store keeps.
             pub fn buckets(self, buckets: impl Into<Buckets>) -> Self {
-                self.the_buckets(buckets.into())
+                self.set_buckets(buckets.into())
             }
         }
     )*};

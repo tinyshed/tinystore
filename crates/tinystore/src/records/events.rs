@@ -228,8 +228,9 @@ impl Records {
         let _held = self.memory.reserve(weight as u64, "records: an append", PATIENCE)?;
         let (on_time, late) = self.part_late(stream.id, checked, now);
         let mut rows = Vec::new();
-        for (late, events) in [(false, &on_time), (true, &late)].into_iter().filter(|(_, events)| !events.is_empty()) {
-            rows.extend(self.rows_of(events)?.into_iter().map(|row| (late, row)));
+        for (is_late, events) in [(false, &on_time), (true, &late)].into_iter().filter(|(_, events)| !events.is_empty())
+        {
+            rows.extend(self.rows_of(events)?.into_iter().map(|row| (is_late, row)));
         }
         let bytes = rows.iter().map(|(_, row)| row.body.len()).sum();
         let name = Arc::clone(&stream.name);
@@ -325,7 +326,8 @@ fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept
         return Err(Error::new(ErrorKind::TooOld, "older than its stream keeps"));
     }
     if at > newest {
-        return Err(Error::new(ErrorKind::TooNew, "more than ten minutes ahead of the store's clock"));
+        let ahead = super::engine::AHEAD.as_secs() / 60;
+        return Err(Error::new(ErrorKind::TooNew, format!("more than {ahead} minutes ahead of the store's clock")));
     }
     Ok(event)
 }

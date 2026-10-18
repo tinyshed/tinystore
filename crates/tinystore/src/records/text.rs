@@ -279,7 +279,7 @@ mod tests {
         let read = read_bytes(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         reader.finish().unwrap();
         assert_eq!(read, values);
-        // the same bytes read as text are refused, a byte that starts a letter and ends nothing among them
+        // the same bytes read as text are refused: they are no UTF-8
         let mut reader = Reader::new(&out);
         read_texts(&mut reader, values.len(), &mut Decoder { codec: &mut codec, left: 1 << 20 }, None);
         assert_eq!(reader.finish().unwrap_err().to_string(), "text that is not UTF-8: corrupt");

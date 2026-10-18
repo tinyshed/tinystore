@@ -50,7 +50,7 @@ impl Events {
     /// ```
     ///
     /// An event named `log` keeps its text as its message, a line that is no
-    /// UTF-8 with U+FFFD for each byte that spells nothing. A JSON object's
+    /// UTF-8 with U+FFFD for each sequence that spells nothing. A JSON object's
     /// fields and a logfmt line's pairs become the event's fields, named
     /// `json` or `logfmt`, when they spell the line again. Its level is found
     /// where pino, logfmt, glog, Redis, log4j, zerolog and Postgres write it.

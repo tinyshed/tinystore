@@ -336,7 +336,8 @@ fn read_hex(reader: &mut Reader<'_>, fixed: Fixed, decoder: &mut Decoder<'_>, ke
     bytes.iter().enumerate().map(spell).collect()
 }
 
-/// What a column's first byte says it holds, for a measurement.
+/// What a column's first byte says it holds, for the tests that check a
+/// block's columns.
 #[cfg(test)]
 pub(super) fn kind_of(first: u8) -> String {
     let kind = ["text", "integers", "stamped", "hex", "uuid"].get(usize::from(first & KIND)).unwrap_or(&"?");

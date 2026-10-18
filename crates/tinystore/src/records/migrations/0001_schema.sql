@@ -52,10 +52,11 @@ create table head_state (
 --
 -- A merge moves small segments' events into the one of lowest id, the
 -- holder, and keeps the others' rows as places naming it: a place's events
--- begin at start among the holder's. A holder's own start is where its own
--- begin, held how many it holds with its places', first_at and last_at their
--- times, weight what they weigh, and body what its blocks share, their
--- events' names, contexts and shapes, each once. A place holds nothing.
+-- begin at start among the holder's, and a place holds nothing else. For a
+-- holder: start is where its own events begin; held counts its events with
+-- its places'; first_at and last_at are their earliest and latest times;
+-- weight is what they weigh; body is what its blocks share, the events'
+-- names, contexts and shapes, each once.
 create table segments (
     id       integer primary key autoincrement,
     stream   integer not null,

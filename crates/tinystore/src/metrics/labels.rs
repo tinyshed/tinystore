@@ -31,6 +31,8 @@ pub(super) const BIN: &str = "__bin";
 /// counted as a label.
 pub(super) const MOST_LABELS: usize = 128;
 const MOST_LABEL_BYTES: usize = 16 << 10;
+/// A label's name; a series' name is a value, `__name__`'s, and takes
+/// `MOST_VALUE_BYTES`.
 pub(super) const MOST_NAME_BYTES: usize = 256;
 pub(super) const MOST_VALUE_BYTES: usize = 4 << 10;
 

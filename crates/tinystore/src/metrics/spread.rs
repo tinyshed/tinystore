@@ -55,8 +55,8 @@ struct Step {
 }
 
 impl Spread {
-    /// A member's `+Inf`, which counts every value of the member; gives the
-    /// bytes it holds more.
+    /// A member's `+Inf`, which counts every value of the member; gives how
+    /// many bytes the spread holds more than before.
     pub(super) fn add_infinity(&mut self, count: &Exact) -> usize {
         self.members += 1;
         self.add_bound(f64::INFINITY, count)

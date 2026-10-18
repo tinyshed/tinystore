@@ -65,8 +65,8 @@ impl Codec {
         self.rows.expand(frame, most)
     }
 
-    /// Lets the contexts go, as maintenance does for a store that stopped
-    /// writing.
+    /// Lets the pooled contexts go: maintenance does it on each pass, so that
+    /// a store that stopped writing holds none.
     pub(super) fn rest(&mut self) {
         *self = Codec::default();
     }

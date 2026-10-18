@@ -78,7 +78,7 @@ impl Series {
         Series::of(name.into(), Kind::Counter)
     }
 
-    /// The `_bucket` series of a histogram written elsewhere, a series a
+    /// The `_bucket` series of a histogram written elsewhere, one series per
     /// bound, each with its label `le`, beside its `_sum` and `_count`
     /// counters.
     pub fn histogram(name: impl Into<String>) -> Series {

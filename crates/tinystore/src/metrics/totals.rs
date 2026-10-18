@@ -149,7 +149,7 @@ struct Measured {
     count: u64,
     sum: f64,
     longest: f64,
-    any: bool,
+    measured: bool,
     /// Each given bound's bucket's own count, not yet summed into `le`'s.
     buckets: Vec<u64>,
     /// How many values fell in each interval of the finest grid.
@@ -163,7 +163,7 @@ impl Measured {
         let buckets = vec![0; self.buckets.len()];
         let buckets = std::mem::replace(&mut self.buckets, buckets);
         let taken = Measured { buckets, bins: std::mem::take(&mut self.bins), ..*self };
-        (self.count, self.sum, self.longest, self.any) = (0, 0.0, 0.0, false);
+        (self.count, self.sum, self.longest, self.measured) = (0, 0.0, 0.0, false);
         taken
     }
 }
@@ -332,8 +332,8 @@ impl Slot {
         let mut measured = lock(measured);
         measured.count += 1;
         measured.sum += value;
-        measured.longest = if measured.any { measured.longest.max(value) } else { value };
-        measured.any = true;
+        measured.longest = if measured.measured { measured.longest.max(value) } else { value };
+        measured.measured = true;
         match bounds {
             Some(Bounds::Given(bounds)) => measured.buckets[bucket_of(bounds, value)] += 1,
             Some(Bounds::Exponential) => *measured.bins.entry(Bin::of(value, FINEST)).or_default() += 1,
@@ -352,8 +352,8 @@ impl Slot {
         let mut measured = lock(measured);
         measured.count += measures.count;
         measured.sum += measures.sum;
-        measured.longest = if measured.any { measured.longest.max(measures.longest) } else { measures.longest };
-        measured.any = true;
+        measured.longest = if measured.measured { measured.longest.max(measures.longest) } else { measures.longest };
+        measured.measured = true;
         for (total, more) in measured.buckets.iter_mut().zip(&measures.buckets) {
             *total += more;
         }
@@ -860,7 +860,7 @@ fn counted(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) ->
 fn measured(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) -> Option<Planned> {
     let taken = slot.measured.as_ref().map(|measured| lock(measured).take())?;
     let mut run = lock(&slot.run);
-    begin(&mut run, taken.any, now, zero);
+    begin(&mut run, taken.measured, now, zero);
     if !run.live {
         return None;
     }
@@ -877,7 +877,7 @@ fn measured(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) -
         Value { written: series(0), zero: begins, value: run.count as f64 },
         Value { written: series(1), zero: begins, value: run.sum },
     ];
-    values.extend(taken.any.then(|| Value { written: series(2), zero: None, value: taken.longest }));
+    values.extend(taken.measured.then(|| Value { written: series(2), zero: None, value: taken.longest }));
     let mut cumulative = 0;
     for (bucket, count) in run.buckets.iter().enumerate() {
         cumulative += count;
@@ -885,7 +885,7 @@ fn measured(slot: &Arc<Slot>, now: i64, zero: i64, ended: &mut Vec<Arc<Slot>>) -
     }
     values.extend(run.bins.count(slot, &taken.bins, now, zero));
     end_if_idle(slot, &mut run, now, ended);
-    Some(Planned { slot: Arc::clone(slot), values, longest: taken.any.then_some(taken.longest) })
+    Some(Planned { slot: Arc::clone(slot), values, longest: taken.measured.then_some(taken.longest) })
 }
 
 /// Begins a run at a call when none is live: its totals at zero, and its
@@ -930,8 +930,8 @@ fn add_float(cell: &AtomicU64, delta: f64) -> bool {
 fn give_back(plan: &Planned) {
     let (Some(longest), Some(measured)) = (plan.longest, &plan.slot.measured) else { return };
     let mut measured = lock(measured);
-    measured.longest = if measured.any { measured.longest.max(longest) } else { longest };
-    measured.any = true;
+    measured.longest = if measured.measured { measured.longest.max(longest) } else { longest };
+    measured.measured = true;
 }
 
 /// A client's own gauges: they leave the totals when it does.

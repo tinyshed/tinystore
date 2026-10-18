@@ -160,8 +160,7 @@ impl Buffer {
     }
 
     /// Says how many lines a full buffer dropped since it last said so, at
-    /// most once in ten minutes, as the Go, Bun and Python loggers say
-    /// theirs. A failed write is background work failing, which the store's
+    /// most once in ten minutes. A failed write is background work failing, which the store's
     /// own log says.
     fn say_drops(&self, said: &mut Said) {
         let (full, now) = (self.full.load(Ordering::Relaxed), self.now());

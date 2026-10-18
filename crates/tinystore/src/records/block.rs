@@ -462,7 +462,7 @@ fn both(keep: &mut [bool], has: impl IntoIterator<Item = bool>) {
     keep.iter_mut().zip(has).for_each(|(keep, has)| *keep &= has);
 }
 
-/// Each column of a block, for a measurement.
+/// Each column of a block, for the tests that check its layout.
 #[cfg(test)]
 fn columns_of<'b>(schema: &Schema, body: &'b [u8]) -> Result<Vec<&'b [u8]>> {
     Ok(Opened::of(schema, body)?.columns)

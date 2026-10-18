@@ -390,8 +390,8 @@ impl Joined {
         Ok(Some(Value::Exact(*value)))
     }
 
-    /// `exact` a second of what the range leaves of the bucket, which is in
-    /// milliseconds.
+    /// `exact` a second: `exact × 1000` over the milliseconds of the bucket
+    /// the range leaves.
     fn per_second(&self, exact: &Exact) -> f64 {
         exact.scaled(1000, self.end.saturating_sub(self.start).unsigned_abs())
     }

@@ -1,8 +1,7 @@
 //! Exact sums: every finite float is a whole number of units of 2⁻¹⁰⁷⁴, the
 //! least subnormal, so a sum of them is an integer, kept in a fixed
-//! accumulator of 35 words and rounded to a float once. Research's cut-block
-//! sum went from 2.02 to 0.82 ms with it, where each sample had made a big
-//! integer.
+//! accumulator of 35 words and rounded to a float once, rather than a big
+//! integer made of each sample.
 //!
 //! ```text
 //! 0.1 + 0.2       as floats 0.30000000000000004

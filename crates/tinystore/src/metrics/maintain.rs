@@ -51,7 +51,7 @@ impl Engine {
         let more_due = due.len() == PASS_SERIES;
         let expired = self.expire(due)?;
         let (packed, more_ready) = self.pack(now)?;
-        self.codecs.rest();
+        self.codecs.release();
         let done = Maintenance {
             expired: expired.samples,
             reclaimed: expired.reclaimed,
