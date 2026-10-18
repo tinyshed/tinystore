@@ -157,6 +157,15 @@ struct Measured {
 }
 
 impl Measured {
+    /// Takes in a longest value since the write, the first since it the
+    /// longest whatever it is.
+    fn longest_is_at_least(&mut self, longest: f64) {
+        self.longest = if self.measured { self.longest.max(longest) } else { longest };
+        self.measured = true;
+    }
+}
+
+impl Measured {
     /// What it measured, leaving it at zero with as many buckets, so that a
     /// call meanwhile always finds its bucket.
     fn take(&mut self) -> Measured {
@@ -332,8 +341,7 @@ impl Slot {
         let mut measured = lock(measured);
         measured.count += 1;
         measured.sum += value;
-        measured.longest = if measured.measured { measured.longest.max(value) } else { value };
-        measured.measured = true;
+        measured.longest_is_at_least(value);
         match bounds {
             Some(Bounds::Given(bounds)) => measured.buckets[bucket_of(bounds, value)] += 1,
             Some(Bounds::Exponential) => *measured.bins.entry(Bin::of(value, FINEST)).or_default() += 1,
@@ -352,8 +360,7 @@ impl Slot {
         let mut measured = lock(measured);
         measured.count += measures.count;
         measured.sum += measures.sum;
-        measured.longest = if measured.measured { measured.longest.max(measures.longest) } else { measures.longest };
-        measured.measured = true;
+        measured.longest_is_at_least(measures.longest);
         for (total, more) in measured.buckets.iter_mut().zip(&measures.buckets) {
             *total += more;
         }
@@ -929,9 +936,7 @@ fn add_float(cell: &AtomicU64, delta: f64) -> bool {
 /// Gives a timer's longest back to its slot after a failed write.
 fn give_back(plan: &Planned) {
     let (Some(longest), Some(measured)) = (plan.longest, &plan.slot.measured) else { return };
-    let mut measured = lock(measured);
-    measured.longest = if measured.measured { measured.longest.max(longest) } else { longest };
-    measured.measured = true;
+    lock(measured).longest_is_at_least(longest);
 }
 
 /// A client's own gauges: they leave the totals when it does.

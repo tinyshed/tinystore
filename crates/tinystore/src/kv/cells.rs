@@ -191,7 +191,7 @@ pub(crate) fn put(
         Raw::Int(int) => (rusqlite::types::Value::Integer(*int), None),
         Raw::None => (rusqlite::types::Value::Null, None),
     };
-    execute(connection, UPSERT, params![bucket, path, version, expires, value, spill], "a write")
+    execute(connection, UPSERT, params![bucket, path, version, expires, value, spill], "a write").map(drop)
 }
 
 /// Deletes a cell and the row its value spilled to.
@@ -204,7 +204,7 @@ pub(crate) fn remove(connection: &Connection, bucket: i64, path: &[u8], spilled:
 }
 
 pub(crate) fn set_expires(connection: &Connection, bucket: i64, path: &[u8], expires: Option<i64>) -> Result<()> {
-    execute(connection, UPDATE_EXPIRES, params![bucket, path, expires], "an expiry")
+    execute(connection, UPDATE_EXPIRES, params![bucket, path, expires], "an expiry").map(drop)
 }
 
 /// Moves a key's expiry on, unless it was written or touched since it was
@@ -273,7 +273,7 @@ pub(crate) fn delete_under(connection: &Connection, bucket: i64, range: (&[u8], 
 }
 
 pub(crate) fn mark_cleared(connection: &Connection, bucket: i64, prefix: &[u8], cleared: i64) -> Result<()> {
-    execute(connection, MARK_CLEARED, params![bucket, prefix, cleared], "a clear: its mark")
+    execute(connection, MARK_CLEARED, params![bucket, prefix, cleared], "a clear: its mark").map(drop)
 }
 
 /// Deletes up to `limit` expired cells, the oldest first, with their spilled
@@ -315,7 +315,7 @@ pub(crate) fn revision(connection: &Connection) -> Result<i64> {
 }
 
 pub(crate) fn keep_revision(connection: &Connection, revision: i64) -> Result<()> {
-    execute(connection, KEEP_REVISION, params![revision], "the revision")
+    execute(connection, KEEP_REVISION, params![revision], "the revision").map(drop)
 }
 
 /// The id and kind of `name`, if it was made.
@@ -344,7 +344,7 @@ pub(crate) fn queued_applied(connection: &Connection, node: &str) -> Result<Opti
 /// Keeps `op` as the last of `node` applied.
 #[cfg(feature = "replication")]
 pub(crate) fn keep_queued_applied(connection: &Connection, node: &str, op: i64) -> Result<()> {
-    execute(connection, KEEP_QUEUED_APPLIED, params![node, op], "a node's last op")
+    execute(connection, KEEP_QUEUED_APPLIED, params![node, op], "a node's last op").map(drop)
 }
 
 /// The row of `name`, made with `role` the first time: its id and the role it
@@ -376,7 +376,7 @@ pub(crate) fn bucket_key(connection: &Connection, bucket: i64) -> Result<Option<
 /// Keeps the id of the key a bucket's values are sealed with, or none once
 /// the bucket holds no value.
 pub(crate) fn keep_bucket_key(connection: &Connection, bucket: i64, key: Option<&str>) -> Result<()> {
-    execute(connection, KEEP_BUCKET_KEY, params![bucket, key], "its bucket's key")
+    execute(connection, KEEP_BUCKET_KEY, params![bucket, key], "its bucket's key").map(drop)
 }
 
 /// A row's value: a spilled value when the cell names one, else what the cell
@@ -391,13 +391,7 @@ fn raw_of(value: ValueRef<'_>, spilled: ValueRef<'_>) -> rusqlite::Result<Raw> {
     }
 }
 
-fn execute(connection: &Connection, sql: &str, params: impl rusqlite::Params, what: &str) -> Result<()> {
-    connection
-        .prepare_cached(sql)
-        .and_then(|mut statement| statement.execute(params))
-        .map(|_| ())
-        .map_err(|error| sql_error(what, error))
-}
+use crate::sqlite::execute_cached as execute;
 
 fn returned_spills(
     connection: &Connection,

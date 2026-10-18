@@ -34,9 +34,7 @@ pub(super) fn may_hold(filter: &[u8], value: &[u8]) -> bool {
 /// The bits of a value in a filter of `size` bits: FNV-1a and a mix of it,
 /// the two hashes double hashing needs.
 fn bits(value: &[u8], size: u64) -> impl Iterator<Item = u64> {
-    let first = value
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3));
+    let first = crate::text::fnv1a(value.iter().copied());
     let second = ((first ^ first >> 31).wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1;
     (0..HASHES).map(move |n| first.wrapping_add(n.wrapping_mul(second)) % size)
 }

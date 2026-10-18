@@ -4,7 +4,6 @@
 //! nothing.
 
 use std::io::{self, Write};
-use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -25,8 +24,7 @@ const SYNC_EVERY: u64 = 256 << 20;
 /// How often an upload asks the disk how much is free as its bytes go to it.
 const ROOM_EVERY: u64 = 64 << 20;
 
-/// How long an upload waits for the store's memory for its buffer.
-const PATIENCE: Duration = Duration::from_secs(10);
+use crate::memory::PATIENCE;
 
 /// A file written a piece at a time, as [`Files::upload`] begins it: bytes go
 /// in with `write`, the file appears at `commit` and never before, and an

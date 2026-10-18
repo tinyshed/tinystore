@@ -14,10 +14,7 @@ use super::values::Value;
 use crate::replication::{In, Out};
 use crate::{Error, ErrorKind, Result, Store};
 
-/// The file a database is kept in, as a node names it.
-pub(crate) fn file_of(name: &str) -> String {
-    format!("sql/{name}.db")
-}
+pub(crate) use crate::engine::database_file as file_of;
 
 /// Passes statements to the home of the copy the database `name` is, as
 /// one statement or as a batch, and gives what each did.

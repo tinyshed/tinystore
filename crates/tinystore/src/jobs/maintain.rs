@@ -9,9 +9,7 @@ use crate::clock::millis;
 use crate::sqlite::sql_error;
 use crate::{Result, Store};
 
-/// Rows one maintenance transaction removes, and transactions a call.
-const BATCH: usize = 10_000;
-const BATCHES: usize = 10;
+use crate::engine::{BATCH, BATCHES, in_batches};
 
 const EXPIRE_FAILED: &str = "delete from _tinystore_jobs_failed where (queue, id) in (
         select queue, id from _tinystore_jobs_failed where queue = ?1 and failed <= ?2
@@ -68,25 +66,12 @@ fn batches(
     jobs: &Jobs,
     batch: impl Fn(&crate::sqlite::Tx<'_>) -> Result<usize> + Clone + Send + 'static,
 ) -> Result<usize> {
-    let mut total = 0;
-    for _ in 0..BATCHES {
-        let removed = jobs.file().write(0, batch.clone())?;
-        total += removed;
-        if removed < BATCH {
-            break;
-        }
-    }
-    Ok(total)
+    in_batches(|| jobs.file().write(0, batch.clone()))
 }
 
 /// Deletes one batch of rows and the values they spilled.
 fn expire(c: &rusqlite::Connection, sql: &str, params: impl rusqlite::Params) -> Result<usize> {
-    let read = || -> rusqlite::Result<Vec<Option<i64>>> {
-        let mut delete = c.prepare_cached(sql)?;
-        let rows = delete.query_map(params, |row| row.get(0))?;
-        rows.collect()
-    };
-    let spilled = read().map_err(|error| sql_error("maintenance", error))?;
+    let spilled: Vec<Option<i64>> = crate::sqlite::query_cached(c, (sql, "maintenance"), params, |row| row.get(0))?;
     for spill in &spilled {
         rows::drop_spill(c, *spill)?;
     }

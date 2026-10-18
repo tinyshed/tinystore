@@ -14,7 +14,7 @@ use super::scope::Scope;
 use super::value::Value;
 use crate::sqlite::Tx as SqlTx;
 use crate::transaction::sealed::Sealed;
-use crate::{Error, Result, Transaction, TxHandle};
+use crate::{Result, Transaction, TxHandle};
 
 /// Runs one call of a handle of `scope` on `key` in a savepoint of the
 /// transaction, once the handle is kept in the transaction's file.
@@ -165,13 +165,7 @@ impl TxCounters<'_> {
     }
 
     fn refuse_in_memory(&self) -> Result<()> {
-        if self.counters.buffer.is_none() {
-            return Ok(());
-        }
-        Err(Error::invalid(
-            "counters kept in memory join no transaction; open them without flush_every to write them in one",
-        )
-        .within(self.counters.scope.shown()))
+        self.counters.refuse_in_memory()
     }
 }
 

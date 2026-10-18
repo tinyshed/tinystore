@@ -48,18 +48,7 @@ pub(crate) struct Chunk {
 impl Pages {
     pub(crate) fn open(path: &Path) -> Result<Pages> {
         let connection = connection::open(path, &Config::default(), Role::Reader)?;
-        let found: i64 = connection
-            .query_row("select count(*) from pragma_module_list where name = 'sqlite_dbpage'", [], |row| row.get(0))
-            .map_err(|error| sql_error(path.display().to_string(), error))?;
-        if found == 0 {
-            return Err(Error::new(
-                ErrorKind::Invalid,
-                format!(
-                    "{}: the SQLite linked in has no sqlite_dbpage: build with SQLITE_ENABLE_DBPAGE_VTAB",
-                    path.display()
-                ),
-            ));
-        }
+        refuse_without_dbpage(&connection, path)?;
         Ok(Pages { path: path.to_owned(), connection })
     }
 
@@ -122,4 +111,22 @@ impl Drop for Snapshot<'_> {
     fn drop(&mut self) {
         let _ = execute(&self.pages.connection, END);
     }
+}
+
+/// Refuses a connection whose SQLite has no `sqlite_dbpage`, through which a
+/// node reads and writes a file's pages.
+pub(super) fn refuse_without_dbpage(connection: &Connection, path: &Path) -> Result<()> {
+    let found: i64 = connection
+        .query_row("select count(*) from pragma_module_list where name = 'sqlite_dbpage'", [], |row| row.get(0))
+        .map_err(|error| sql_error(path.display().to_string(), error))?;
+    if found == 0 {
+        return Err(Error::new(
+            ErrorKind::Invalid,
+            format!(
+                "{}: the SQLite linked in has no sqlite_dbpage, through which a node reads and writes pages: build                  with LIBSQLITE3_FLAGS holding SQLITE_ENABLE_DBPAGE_VTAB, as this workspace does",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
 }

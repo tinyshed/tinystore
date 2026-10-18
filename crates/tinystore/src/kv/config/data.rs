@@ -15,7 +15,7 @@
 
 use serde_json::{Map, Value};
 
-use super::declaration::{Declaration, Group, Item, Kind, MOST_PATH, Node, Place, Rules, Setting, joined, shown};
+use super::declaration::{Declaration, Group, Item, Kind, Node, Place, Rules, Setting, declared_path, shown};
 use super::env::Env;
 use super::files::File;
 use super::layers::Layer;
@@ -31,13 +31,7 @@ pub(crate) fn declaration(value: &Value) -> Result<Declaration, String> {
 fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, String> {
     let mut settings = Group::new();
     for (key, value) in map {
-        let at = joined(path, key);
-        if key.is_empty() || key.contains('.') {
-            return Err(format!("{at:?}: a setting's key is not empty and has no dot"));
-        }
-        if at.len() > MOST_PATH {
-            return Err(format!("{at}: a path past the {MOST_PATH} bytes a setting's takes"));
-        }
+        let at = declared_path(path, key)?;
         let node = value.as_object().ok_or_else(|| format!("{at}: {} is no setting", shown(value)))?;
         let node = match node.get("group") {
             Some(Value::Object(inner)) => Node::Group(group(inner, &at, place)?),

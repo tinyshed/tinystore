@@ -1,7 +1,7 @@
 //! An event as a program writes it and as a read gives it back.
 
 use std::fmt;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -105,6 +105,23 @@ impl fmt::Debug for SpanId {
 pub struct Fields(Vec<(String, String)>);
 
 impl Fields {
+    /// Writes the pairs as a row keeps them: their count, then each key and
+    /// its JSON.
+    pub(super) fn put_pairs(&self, out: &mut Vec<u8>) {
+        crate::compress::varint::put_count(out, self.len() as u64);
+        for (key, json) in self.iter() {
+            crate::compress::varint::put_text(out, key);
+            crate::compress::varint::put_text(out, json);
+        }
+    }
+
+    /// Reads the pairs `put_pairs` wrote.
+    pub(super) fn read_pairs(reader: &mut crate::compress::varint::Reader<'_>) -> Fields {
+        let count = reader.count(MAX_KEYS);
+        let pairs = (0..count).map(|_| (reader.text(MAX_EVENT).to_owned(), reader.text(MAX_EVENT).to_owned()));
+        Fields::from_pairs(pairs.collect())
+    }
+
     /// The fields of a struct or a map, in the order it writes them; `()`
     /// is none.
     pub fn of(value: &impl Serialize) -> Result<Fields> {
@@ -151,17 +168,13 @@ impl Fields {
 
     /// The fields read as a struct or a map.
     pub fn to<T: DeserializeOwned>(&self) -> Result<T> {
-        let mut object = String::from("{");
-        for (index, (key, json)) in self.iter().enumerate() {
-            if index > 0 {
-                object.push(',');
-            }
-            object.push_str(&serde_json::to_string(key).unwrap_or_default());
-            object.push(':');
-            object.push_str(json);
-        }
-        object.push('}');
-        serde_json::from_str(&object).map_err(|error| Error::invalid("fields do not read so").with_source(error))
+        serde_json::from_str(&self.object()).map_err(|error| Error::invalid("fields do not read so").with_source(error))
+    }
+
+    /// The pairs as one JSON object, each value as it was spelled.
+    pub(crate) fn object(&self) -> String {
+        let pairs = self.iter().map(|(key, json)| format!("{}:{json}", serde_json::Value::from(key)));
+        format!("{{{}}}", pairs.collect::<Vec<_>>().join(","))
     }
 }
 
@@ -206,7 +219,7 @@ impl Kept {
 
     pub(super) fn into_event(self, stream: &str) -> Event {
         Event {
-            at: UNIX_EPOCH + Duration::from_nanos(self.at.max(0) as u64),
+            at: crate::clock::from_unix_nanos(self.at),
             stream: stream.to_owned(),
             name: self.name,
             level: self.level,

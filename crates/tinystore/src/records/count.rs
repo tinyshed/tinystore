@@ -13,7 +13,7 @@
 //! holds is its answer and never the events.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use rusqlite::params;
 use serde_json::Value;
@@ -212,7 +212,7 @@ impl Records {
         for stream in self.every_stream() {
             let cutoff = now.saturating_sub(nanos(stream.keeps()));
             if let Some((oldest, newest)) = self.times_held(stream.id, cutoff)? {
-                let time = |at: i64| UNIX_EPOCH + Duration::from_nanos(at.max(0) as u64);
+                let time = crate::clock::from_unix_nanos;
                 let info = StreamInfo {
                     name: stream.name.to_string(),
                     keep: stream.keeps(),
@@ -351,7 +351,7 @@ impl Rows<'_> {
         let mut rows: Vec<((i64, String), Filling)> = self.rows.into_iter().collect();
         rows.sort_by(|(a, _), (b, _)| a.cmp(b));
         let row = |((at, _), filling): ((i64, String), Filling)| Row {
-            at: UNIX_EPOCH + Duration::from_nanos(at.max(0) as u64),
+            at: crate::clock::from_unix_nanos(at),
             count: filling.count,
             by: asked.by.iter().cloned().zip(filling.by).collect(),
             stats: asked

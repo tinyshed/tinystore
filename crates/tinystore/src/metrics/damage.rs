@@ -19,6 +19,7 @@ use super::Metrics;
 use super::budget::Budget;
 use super::engine::{Engine, execute};
 use super::matching::{Found, Row, labelled};
+use super::publish::SUSPEND;
 use super::series::Labels;
 use crate::sqlite::sql_error;
 use crate::{Error, ErrorKind, Result};
@@ -29,7 +30,6 @@ const MOST_DAMAGED: i64 = 1000;
 /// What a failure keeps of its error.
 const MOST_FAILURE: usize = 1024;
 
-const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
 const DAMAGED: &str = "select s.id, n.kind, s.label_ids, st.failure from series_state st
     join series s on s.id = st.series_id join names n on n.id = s.name
     where st.failed_at is not null order by st.series_id limit cast(?1 as integer)";

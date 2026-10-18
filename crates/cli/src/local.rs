@@ -140,7 +140,8 @@ pub(crate) fn pipe_name(store: &Path) -> String {
     format!("tinystore-{}", hash(store))
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Bytes as lowercase hex, two digits each.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 

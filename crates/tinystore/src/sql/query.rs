@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 
 use super::database::{Database, Done};
 use super::included::{literal_of, names_of};
-use super::pieces::{checked, joined_with, quote};
+use super::pieces::{checked, joined_with, quote, quote_all};
 use super::rows::{Nested, Rows};
 use super::run::Wanted;
 use super::statement::Sql;
@@ -173,7 +173,6 @@ pub struct Query<'r, T> {
 /// query of all its rows.
 #[derive(Clone, Debug)]
 pub struct Table<'r, T> {
-    name: String,
     query: Query<'r, T>,
 }
 
@@ -208,7 +207,7 @@ impl<'r, T> Table<'r, T> {
             Err(why) => (name.to_owned(), None, Some(why)),
         };
         let parts = Parts {
-            table: table.clone(),
+            table,
             alias,
             select: None,
             joins: Vec::new(),
@@ -221,11 +220,11 @@ impl<'r, T> Table<'r, T> {
             includes: Vec::new(),
             refused,
         };
-        Table { name: table, query: Query { runner, parts, row: PhantomData } }
+        Table { query: Query { runner, parts, row: PhantomData } }
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        &self.query.parts.table
     }
 
     /// A table whose statements a test reads rather than runs.
@@ -248,7 +247,7 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        let insert = insert_of(&self.name, rows)?;
+        let insert = insert_of(self.name(), rows)?;
         let (text, values, _) = insert.into_parts();
         let returning = Sql::piece(format!("{text} returning *"), values, false);
         self.query.runner.rows_of(&returning, Wanted::All)?.decode()
@@ -261,10 +260,9 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
         if upsert.update.is_empty() {
             return Err(Error::invalid("an upsert names the columns its update sets"));
         }
-        let insert = insert_of(&self.name, std::slice::from_ref(row))?;
+        let insert = insert_of(self.name(), std::slice::from_ref(row))?;
         let (insert_text, mut values, _) = insert.into_parts();
-        let conflict =
-            upsert.conflict.iter().map(|name| quote(name)).collect::<Result<Vec<_>, _>>().map_err(Error::invalid)?;
+        let conflict = quote_all(&upsert.conflict)?;
         let sets = upsert
             .update
             .iter()
@@ -450,9 +448,8 @@ impl<'r, T> Query<'r, T> {
         if texts.is_empty() {
             return Err(Error::invalid("an update sets at least one column"));
         }
-        let (condition, condition_values) = conditions_text(&self.parts.conditions)?;
+        let (table, condition, condition_values) = self.target()?;
         values.extend(condition_values);
-        let table = quote(&self.parts.table).map_err(Error::invalid)?;
         let text = format!("update {table} set {} where {condition}", texts.join(", "));
         self.runner.exec_of(Sql::piece(text, values, false))
     }
@@ -460,9 +457,15 @@ impl<'r, T> Query<'r, T> {
     /// Deletes the rows the conditions match, and says how many it deleted.
     pub fn delete(&self) -> Result<Done> {
         self.refuse_every_row("a delete")?;
-        let (condition, values) = conditions_text(&self.parts.conditions)?;
-        let table = quote(&self.parts.table).map_err(Error::invalid)?;
+        let (table, condition, values) = self.target()?;
         self.runner.exec_of(Sql::piece(format!("delete from {table} where {condition}"), values, false))
+    }
+
+    /// The table an update or a delete writes, quoted, and the condition
+    /// that picks its rows, with the condition's values.
+    fn target(&self) -> Result<(String, String, Vec<Value>)> {
+        let (condition, values) = conditions_text(&self.parts.conditions)?;
+        Ok((quote(&self.parts.table).map_err(Error::invalid)?, condition, values))
     }
 
     fn with(&self, change: impl FnOnce(&mut Parts)) -> Self {
@@ -777,8 +780,7 @@ fn insert_of<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
     if columns.is_empty() {
         return Err(Error::invalid("a row to insert with no column"));
     }
-    let quoted =
-        columns.iter().map(|name| quote(name)).collect::<std::result::Result<Vec<_>, _>>().map_err(Error::invalid)?;
+    let quoted = quote_all(&columns)?;
     let table = quote(table).map_err(Error::invalid)?;
     let text = format!("insert into {table} ({}) values {}", quoted.join(", "), tuples.join(", "));
     Ok(Sql::piece(text, values, false))
@@ -837,7 +839,7 @@ fn value_of(json: &serde_json::Value) -> Option<Value> {
 
 fn cursor_text(values: &[Value], digest: &str) -> String {
     let json = serde_json::json!({ "q": digest, "v": values.iter().map(json_of).collect::<Vec<_>>() });
-    json.to_string().bytes().map(|byte| format!("{byte:02x}")).collect()
+    crate::text::hex(json.to_string().as_bytes())
 }
 
 fn cursor_of(cursor: &str, digest: &str) -> Result<Vec<Value>> {

@@ -71,7 +71,7 @@ pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: 
     put_values(&mut columns[MESSAGES], &messages, &said_at, codec)?;
     events.iter().filter_map(|event| event.trace_id).for_each(|trace| columns[TRACES].extend_from_slice(&trace.0));
     events.iter().filter_map(|event| event.span_id).for_each(|span| columns[SPANS].extend_from_slice(&span.0));
-    let whole: Vec<String> = with(WHOLE_FIELDS).map(|place| object_of(&events[place].fields)).collect();
+    let whole: Vec<String> = with(WHOLE_FIELDS).map(|place| events[place].fields.object()).collect();
     put_texts(&mut columns[WHOLE], &whole.iter().map(String::as_str).collect::<Vec<_>>(), codec)?;
 
     let mut values: Vec<(Vec<&str>, Vec<i64>)> = vec![Default::default(); schema.columns];
@@ -99,11 +99,6 @@ pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: 
 }
 
 /// Fields as the JSON of an object, each value as it was written.
-fn object_of(fields: &Fields) -> String {
-    let pairs = fields.iter().map(|(key, json)| format!("{}:{json}", serde_json::Value::from(key)));
-    format!("{{{}}}", pairs.collect::<Vec<_>>().join(","))
-}
-
 /// A block's columns, checked and not read yet.
 struct Opened<'b> {
     count: usize,

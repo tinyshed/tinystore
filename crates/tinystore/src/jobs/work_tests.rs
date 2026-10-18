@@ -17,11 +17,7 @@ struct Push {
 }
 
 fn eventually(condition: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !condition() {
-        assert!(Instant::now() < deadline, "the condition never held");
-        thread::sleep(Duration::from_millis(2));
-    }
+    crate::testing::holds_within(crate::testing::PATIENCE, "the condition", condition);
 }
 
 #[test]

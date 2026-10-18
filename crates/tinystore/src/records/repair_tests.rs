@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::super::fixture::{Fixture, fixture, names};
 use super::*;
 use crate::records::{Maintenance, NewEvent, maintain};

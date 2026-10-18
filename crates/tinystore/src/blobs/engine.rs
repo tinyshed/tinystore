@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::{Connection, OptionalExtension, Params, Row, params};
+use rusqlite::{OptionalExtension, params};
 
 use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
@@ -54,16 +54,7 @@ pub(crate) struct Blobs {
 /// from the node it copies blobs.db from.
 #[cfg(feature = "replication")]
 pub(crate) fn objects_missing(store_dir: &std::path::Path) -> Result<Vec<String>> {
-    let db = store_dir.join(DIR).join(FILE);
-    if !db.exists() {
-        return Ok(Vec::new());
-    }
-    let ids = crate::sqlite::read_copy(&db, |connection| {
-        let mut statement = connection.prepare(SELECT_NAMED)?;
-        let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
-        ids.collect::<rusqlite::Result<Vec<i64>>>()
-    })?;
-    let paths = ids.into_iter().map(|id| format!("{DIR}/{OBJECTS}/{:x}/{id:x}", Disk::fan(id)));
+    let paths = object_ids(store_dir, SELECT_NAMED, [])?.into_iter().map(object_in_store);
     Ok(paths.filter(|path| !store_dir.join(path).exists()).collect())
 }
 
@@ -73,17 +64,29 @@ pub(crate) fn objects_missing(store_dir: &std::path::Path) -> Result<Vec<String>
 /// commits that name them. One its disk does not hold yet is left out.
 #[cfg(feature = "replication")]
 pub(crate) fn objects_after(store_dir: &std::path::Path, after: i64) -> Result<Vec<(i64, String)>> {
+    let paths = object_ids(store_dir, SELECT_AFTER, [after])?.into_iter().map(|id| (id, object_in_store(id)));
+    Ok(paths.filter(|(_, path)| store_dir.join(path).exists()).collect())
+}
+
+/// The content ids `select` reads from the blobs.db in `store_dir`, which
+/// no process need hold; none when there is no blobs.db.
+#[cfg(feature = "replication")]
+fn object_ids<const N: usize>(store_dir: &std::path::Path, select: &str, params: [i64; N]) -> Result<Vec<i64>> {
     let db = store_dir.join(DIR).join(FILE);
     if !db.exists() {
         return Ok(Vec::new());
     }
-    let ids = crate::sqlite::read_copy(&db, |connection| {
-        let mut statement = connection.prepare(SELECT_AFTER)?;
-        let ids = statement.query_map([after], |row| row.get::<_, i64>(0))?;
+    crate::sqlite::read_copy(&db, |connection| {
+        let mut statement = connection.prepare(select)?;
+        let ids = statement.query_map(rusqlite::params_from_iter(params), |row| row.get::<_, i64>(0))?;
         ids.collect::<rusqlite::Result<Vec<i64>>>()
-    })?;
-    let paths = ids.into_iter().map(|id| (id, format!("{DIR}/{OBJECTS}/{:x}/{id:x}", Disk::fan(id))));
-    Ok(paths.filter(|(_, path)| store_dir.join(path).exists()).collect())
+    })
+}
+
+/// Content `id`'s file by its path in the store's directory.
+#[cfg(feature = "replication")]
+fn object_in_store(id: i64) -> String {
+    format!("{DIR}/{}", Disk::object_name(id))
 }
 
 /// Whether `path` names a file of `objects/`, as [`objects_missing`] writes
@@ -361,15 +364,4 @@ impl Blobs {
     }
 }
 
-/// The rows a statement gives, each read by `row`; `what` names the read in
-/// an error.
-pub(super) fn rows_of<T>(
-    connection: &Connection,
-    (sql, what): (&str, &str),
-    params: impl Params,
-    row: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<T>> {
-    let mut statement = connection.prepare_cached(sql).map_err(|error| sql_error(what, error))?;
-    let rows = statement.query_map(params, row).map_err(|error| sql_error(what, error))?;
-    rows.collect::<rusqlite::Result<Vec<T>>>().map_err(|error| sql_error(what, error))
-}
+pub(super) use crate::sqlite::query_cached as rows_of;

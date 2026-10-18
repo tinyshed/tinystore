@@ -1,9 +1,6 @@
 use super::*;
 use crate::ErrorKind;
-
-fn zstd() -> Zstd {
-    Zstd::windowed(3, 13)
-}
+use crate::metrics::codec::zstd;
 
 fn points(count: usize, from: i64) -> Vec<Point> {
     (0..count).map(|index| Point { at: from + index as i64 * 1000, value: (index % 13) as f64 * 0.5 }).collect()

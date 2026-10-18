@@ -125,14 +125,19 @@ fn read<T>(dir: &Path, read: impl FnOnce(&AllEvents) -> tinystore::Result<T>) ->
 }
 
 fn level(name: &str) -> Result<Level, asked::Refused> {
+    level_named(name).ok_or_else(|| wrong(format!("--level {name}: trace, debug, info, warn or error")))
+}
+
+/// The level a person names, in any case: `warn` and `warning` alike.
+pub(crate) fn level_named(name: &str) -> Option<Level> {
     match name.to_ascii_lowercase().as_str() {
-        "trace" => Ok(Level::TRACE),
-        "debug" => Ok(Level::DEBUG),
-        "info" => Ok(Level::INFO),
-        "warn" | "warning" => Ok(Level::WARN),
-        "error" => Ok(Level::ERROR),
-        "fatal" => Ok(Level::FATAL),
-        _ => Err(wrong(format!("--level {name}: trace, debug, info, warn or error"))),
+        "trace" => Some(Level::TRACE),
+        "debug" => Some(Level::DEBUG),
+        "info" => Some(Level::INFO),
+        "warn" | "warning" => Some(Level::WARN),
+        "error" => Some(Level::ERROR),
+        "fatal" => Some(Level::FATAL),
+        _ => None,
     }
 }
 

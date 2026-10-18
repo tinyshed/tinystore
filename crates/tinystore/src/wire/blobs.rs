@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -22,7 +21,7 @@ use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
@@ -35,8 +34,7 @@ pub(crate) fn route(called: u16) -> Route {
 /// What a connection opened, by handle, and its streams of a file's bytes.
 #[derive(Default)]
 pub(crate) struct Handles {
-    open: Mutex<HashMap<u64, Files>>,
-    last: AtomicU64,
+    open: super::ByHandle<Files>,
     reads: Arc<Mutex<HashMap<u32, Arc<Getting>>>>,
     uploads: Arc<Mutex<HashMap<u32, Arc<Uploading>>>>,
 }
@@ -44,10 +42,7 @@ pub(crate) struct Handles {
 impl Handles {
     /// The files a handle names, in the folder of these segments.
     fn at(&self, handle: u64, folder: &[String]) -> Result<Files, Failure> {
-        let files = lock(&self.open)
-            .get(&handle)
-            .cloned()
-            .ok_or_else(|| Failure::invalid(format!("handle {handle} names no files this connection opened")))?;
+        let files = self.open.get(handle, || format!("handle {handle} names no files this connection opened"))?;
         Ok(folder.iter().fold(files, |files, segment| files.folder(segment.as_str())))
     }
 
@@ -121,8 +116,7 @@ fn open(store: &Store, handles: &Handles, asked: BlobsOpen) -> Answered {
         files = files.max_file_size(most);
     }
     let files = files.open()?;
-    let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
-    lock(&handles.open).insert(handle, files);
+    let handle = handles.open.keep(files);
     Ok(Handle { handle }.encode())
 }
 
@@ -234,8 +228,7 @@ fn info_of(info: FileInfo) -> BlobsInfo {
 /// takes at once, so that one grant lets the next piece go while it reads
 /// the last, less the piece's own few bytes.
 fn piece_bound(link: &Link) -> usize {
-    let credit = usize::try_from(link.credit).unwrap_or(usize::MAX);
-    (link.max_body.min(credit) / 2).saturating_sub(16).max(1)
+    super::part_bound(link.max_body, link.credit, 16)
 }
 
 /// How a read's answer goes: whole in the RESPONSE, or the RESPONSE's piece

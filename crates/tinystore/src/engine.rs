@@ -53,6 +53,35 @@ pub struct Copied {
 
 /// Copies an SQLite file of an engine's, `name` inside the store, into the
 /// snapshot at `into`, its directory made.
+/// Rows one maintenance transaction removes, so that no pass holds the
+/// writer long, and transactions of each kind one pass runs at most.
+#[cfg(any(feature = "jobs", feature = "blobs"))]
+pub(crate) const BATCH: usize = 10_000;
+#[cfg(any(feature = "jobs", feature = "blobs"))]
+pub(crate) const BATCHES: usize = 10;
+
+/// Runs `batch`, a transaction that removes at most `BATCH` rows and says how
+/// many it removed, until one removes fewer, `BATCHES` times at most; the
+/// rows removed in all.
+#[cfg(any(feature = "jobs", feature = "blobs"))]
+pub(crate) fn in_batches(mut batch: impl FnMut() -> Result<usize>) -> Result<usize> {
+    let mut total = 0;
+    for _ in 0..BATCHES {
+        let removed = batch()?;
+        total += removed;
+        if removed < BATCH {
+            break;
+        }
+    }
+    Ok(total)
+}
+
+/// The file a database's name keeps, by its path in the store's directory.
+#[cfg(any(feature = "sql", feature = "replication"))]
+pub(crate) fn database_file(name: &str) -> String {
+    format!("sql/{name}.db")
+}
+
 #[cfg_attr(
     not(any(
         feature = "kv",

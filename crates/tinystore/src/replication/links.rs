@@ -82,10 +82,7 @@ pub(crate) fn keep_written(state: &Arc<State>) {
         if let Err(error) = write(state) {
             tracing::debug!(target: "tinystore", %error, "a node could not write its links");
         }
-        let until = std::time::Instant::now() + EVERY;
-        while std::time::Instant::now() < until && !state.stopping() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        state.pause(EVERY);
     }
     let _ = std::fs::remove_file(path);
 }

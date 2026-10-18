@@ -386,3 +386,12 @@ impl Position {
 pub(crate) fn io_error(path: &Path, error: io::Error) -> Error {
     Error::io(path.display().to_string(), error)
 }
+
+/// Removes the file at `path`; one that is not there is removed already.
+pub(crate) fn remove_if_there(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(path, error)),
+    }
+}

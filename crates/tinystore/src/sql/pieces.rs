@@ -165,7 +165,12 @@ pub(crate) fn quote(name: &str) -> Result<String, String> {
     if name.is_empty() || name.contains('\0') {
         return Err(format!("the name {name:?}: a name is text without NUL"));
     }
-    Ok(name.split('.').map(|part| format!("\"{}\"", part.replace('"', "\"\""))).collect::<Vec<_>>().join("."))
+    Ok(name.split('.').map(crate::sqlite::quote_ident).collect::<Vec<_>>().join("."))
+}
+
+/// Each of `names` as SQL quotes it, or why one cannot be a name.
+pub(crate) fn quote_all<S: AsRef<str>>(names: &[S]) -> crate::Result<Vec<String>> {
+    names.iter().map(|name| quote(name.as_ref())).collect::<Result<_, _>>().map_err(crate::Error::invalid)
 }
 
 /// What a text's placeholders are, outside quotes and comments.

@@ -17,7 +17,7 @@ use crate::Store;
 use crate::channels::{Hub, Log, LogKey, remote_branch};
 use crate::sync::lock;
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// The messages a batch takes at most.
 const BATCH: usize = 256;

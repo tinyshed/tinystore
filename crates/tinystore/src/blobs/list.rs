@@ -68,8 +68,7 @@ impl Files {
     /// they are now: a count, not a bound.
     pub fn usage(&self) -> Result<Usage> {
         let folder = self.whole_folder()?;
-        let (from, to) = self.folder.range("").map_err(|error| self.fail(&folder, error))?;
-        let to = to.unwrap_or_else(|| PAST_EVERY.clone());
+        let (from, to) = self.bounds("").map_err(|error| self.fail(&folder, error))?;
         let now = self.blobs.now();
         let (count, size): (i64, i64) = self
             .blobs
@@ -92,8 +91,7 @@ impl Files {
         let folder = self.whole_folder()?;
         let blobs = Arc::clone(&self.blobs);
         let (set, prefix) = (self.set, self.folder.prefix().to_owned());
-        let (from, to) = self.folder.range("").map_err(|error| self.fail(&folder, error))?;
-        let to = to.unwrap_or_else(|| PAST_EVERY.clone());
+        let (from, to) = self.bounds("").map_err(|error| self.fail(&folder, error))?;
         let bound = i64::try_from(CLEAR_AT_ONCE).unwrap_or(i64::MAX);
         let freed = self
             .blobs
@@ -118,6 +116,13 @@ impl Files {
         Ok(())
     }
 
+    /// The first path under this folder that starts with `prefix`, and the
+    /// first past every such path.
+    fn bounds(&self, prefix: &str) -> Result<(String, String)> {
+        let (from, to) = self.folder.range(prefix)?;
+        Ok((from, to.unwrap_or_else(|| PAST_EVERY.clone())))
+    }
+
     /// The folder as an error names it, or why it is not one.
     fn whole_folder(&self) -> Result<String> {
         self.usable().map(|()| self.folder.prefix().to_owned())
@@ -127,12 +132,11 @@ impl Files {
         if limit == 0 || limit > PAGE_FILES {
             return Err(Error::invalid(format!("a page of {limit} files; 1 to {PAGE_FILES}")));
         }
-        let (mut from, to) = self.folder.range(prefix)?;
+        let (mut from, to) = self.bounds(prefix)?;
         if let Some(after) = after {
             let (past_after, _) = self.folder.range(after)?;
             from = from.max(format!("{past_after}\u{0}"));
         }
-        let to = to.unwrap_or_else(|| PAST_EVERY.clone());
         let now = self.blobs.now();
         let wanted = i64::try_from(limit + 1).unwrap_or(i64::MAX);
         let rows = self.blobs.file.read(|connection| {

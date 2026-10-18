@@ -152,7 +152,7 @@ fn changes(known: &HashMap<String, Name>, wanted: &BTreeMap<&str, Option<Duratio
         };
         let Some(keep) = keep else { continue };
         if let Some(said) = held.said.filter(|said| *said != keep) {
-            let (keep, said) = (span(keep), span(said));
+            let (keep, said) = (crate::text::span(keep), crate::text::span(said));
             return Err(Error::invalid(format!(
                 "metrics {name}: keep {keep}, where it is kept {said} while the store is open"
             )));
@@ -192,21 +192,14 @@ fn write(file: &File, changes: &Changes) -> Result<Vec<i64>> {
 
 /// A keep a call gave, in whole milliseconds, within its bounds.
 pub(super) fn checked_keep(keep: Duration) -> Result<Duration> {
-    let keep = Duration::from_millis(u64::try_from(keep.as_millis()).unwrap_or(u64::MAX));
+    let keep = Duration::from_millis(crate::clock::millis(keep) as u64);
     if keep.is_zero() || keep > LONGEST_KEEP {
-        return Err(Error::invalid(format!("keep {}: a name keeps its samples from 1ms to 100 years", span(keep))));
+        return Err(Error::invalid(format!(
+            "keep {}: a name keeps its samples from 1ms to 100 years",
+            crate::text::span(keep)
+        )));
     }
     Ok(keep)
 }
 
 pub(super) use crate::clock::millis;
-
-/// A span as a program writes it: `30d`, `12h`, `90s`, `250ms`.
-pub(super) fn span(span: Duration) -> String {
-    let millis = span.as_millis();
-    let units = [("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1000)];
-    match units.iter().find(|(_, unit)| millis >= *unit && millis.is_multiple_of(*unit)) {
-        Some((name, unit)) => format!("{}{name}", millis / unit),
-        None => format!("{millis}ms"),
-    }
-}

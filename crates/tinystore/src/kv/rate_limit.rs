@@ -144,15 +144,12 @@ impl RateLimit {
     /// one limit for every node, decided where its file is written.
     #[cfg(feature = "replication")]
     fn pass_on(&self, key: &str, call: &super::forward::Call) -> Result<Vec<u8>> {
-        let shown = || self.scope.shown_key(key);
-        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
-        let owners = self.scope.branch()?.owners().to_vec();
         let handle = super::forward::Handle::RateLimit {
             name: self.scope.name().to_owned(),
             interval: self.interval,
             burst: self.burst,
         };
-        super::forward::pass_on(&store, &handle, &owners, key, call)
+        self.scope.pass_on(&handle, key, call)
     }
 
     /// The algorithm: `due` is when the key's next request is due, in unix

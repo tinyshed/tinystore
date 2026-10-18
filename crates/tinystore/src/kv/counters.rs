@@ -76,6 +76,17 @@ pub struct Counters {
 }
 
 impl Counters {
+    /// Refuses counters kept in memory, which join no transaction or batch.
+    pub(crate) fn refuse_in_memory(&self) -> Result<()> {
+        if self.buffer.is_none() {
+            return Ok(());
+        }
+        Err(Error::invalid(
+            "counters kept in memory join no transaction; open them without flush_every to write them in one",
+        )
+        .within(self.scope.shown()))
+    }
+
     /// The same counters seen from the branch `owner` names under these.
     pub fn under(&self, owner: impl Key) -> Counters {
         Counters { scope: self.scope.under(owner), ttl: self.ttl, buffer: self.buffer.clone() }
@@ -258,11 +269,8 @@ impl Counters {
     /// Passes a call on `key` to the home of the copy the counters' file is.
     #[cfg(feature = "replication")]
     fn pass_on(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
-        let shown = || self.scope.shown_key(key);
-        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
-        let owners = self.scope.branch()?.owners().to_vec();
         let handle = forward::Handle::Counters { name: self.scope.name().to_owned(), ttl: self.ttl };
-        forward::pass_on(&store, &handle, &owners, key, call)
+        self.scope.pass_on(&handle, key, call)
     }
 
     pub(crate) fn add_work(&self, key: &str, n: i64) -> Result<impl Work<i64> + use<>> {

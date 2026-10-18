@@ -12,7 +12,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use super::engine::{Records, Stream, nanos};
 use super::event::{Fields, Level, NewEvent, SpanId, TraceId};
@@ -222,7 +222,7 @@ impl Keep for Buffer {
 fn event_of(line: Line) -> NewEvent {
     NewEvent {
         name: line.name,
-        at: Some(UNIX_EPOCH + Duration::from_nanos(line.at.max(0) as u64)),
+        at: Some(crate::clock::from_unix_nanos(line.at)),
         level: line.level.map(Level::of),
         message: line.message,
         fields: Fields::from_pairs(line.fields),

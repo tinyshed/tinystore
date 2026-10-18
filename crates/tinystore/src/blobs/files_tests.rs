@@ -1,4 +1,4 @@
-use super::*;
+use crate::ErrorKind;
 use crate::blobs::fixture::{HOUR, bytes, fixture};
 use crate::blobs::upload::INLINE;
 

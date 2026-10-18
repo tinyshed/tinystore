@@ -6,7 +6,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -22,7 +21,7 @@ use crate::sql::{Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migr
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// How long a transaction holds the writer at most, its client's pauses
 /// included: a database's own bound, past which the server rolls it back
@@ -51,18 +50,14 @@ pub(crate) struct Link {
 /// What a connection opened, by handle, and its streams that send DATA.
 #[derive(Default)]
 pub(crate) struct Handles {
-    open: Mutex<HashMap<u64, Database>>,
-    last: AtomicU64,
+    open: super::ByHandle<Database>,
     downloads: Mutex<HashMap<u32, Arc<Downloading>>>,
     txs: Mutex<HashMap<u32, Arc<Txing>>>,
 }
 
 impl Handles {
     fn database(&self, handle: u64) -> Result<Database, Failure> {
-        lock(&self.open)
-            .get(&handle)
-            .cloned()
-            .ok_or_else(|| Failure::invalid(format!("handle {handle} names no database this connection opened")))
+        self.open.get(handle, || format!("handle {handle} names no database this connection opened"))
     }
 
     /// The file of the database `handle` names, for a bucket or a queue
@@ -134,8 +129,7 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> An
         builder = builder.durability(durability);
     }
     let database = builder.open()?;
-    let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
-    lock(&handles.open).insert(handle, database);
+    let handle = handles.open.keep(database);
     Ok(Handle { handle }.encode())
 }
 
@@ -334,11 +328,8 @@ pub(crate) enum Queried {
     Parts(VecDeque<Vec<u8>>, Held),
 }
 
-/// The largest part of a query's rows: half of what the client takes at
-/// once, so that one grant lets the next part go while it reads the last.
 fn part_bound(link: &Link) -> usize {
-    let credit = usize::try_from(link.credit).unwrap_or(usize::MAX);
-    (link.max_body.min(credit) / 2).max(1)
+    super::part_bound(link.max_body, link.credit, 0)
 }
 
 /// A query's rows in parts of at most `bound` bytes, the first naming the

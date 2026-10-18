@@ -148,6 +148,35 @@ pub(crate) fn execute(connection: &Connection, sql: &str) -> rusqlite::Result<()
     connection.prepare_cached(sql)?.execute([]).map(|_| ())
 }
 
+/// A name as SQL quotes it whole, its quotes doubled: `"created_at"`.
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Runs an engine's statement, compiled once a connection, and says how many
+/// rows it changed; a failure is named `what`.
+pub(crate) fn execute_cached(
+    connection: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+    what: &str,
+) -> crate::Result<usize> {
+    let ran = connection.prepare_cached(sql).and_then(|mut statement| statement.execute(params));
+    ran.map_err(|error| sql_error(what, error))
+}
+
+/// The rows an engine's statement gives, compiled once a connection, each
+/// read by `row`; a failure is named `what`.
+pub(crate) fn query_cached<T, C: FromIterator<T>>(
+    connection: &Connection,
+    (sql, what): (&str, &str),
+    params: impl rusqlite::Params,
+    row: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+) -> crate::Result<C> {
+    let read = || -> rusqlite::Result<C> { connection.prepare_cached(sql)?.query_map(params, row)?.collect() };
+    read().map_err(|error| sql_error(what, error))
+}
+
 impl Role {
     fn name(self) -> &'static str {
         match self {

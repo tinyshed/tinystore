@@ -27,6 +27,28 @@ pub(crate) enum Asked {
     Cron { expr: String, zone: String },
 }
 
+impl Asked {
+    /// The repeat as a write passed on carries it: 1 and the span, or 2, the
+    /// expression and the zone.
+    #[cfg(feature = "replication")]
+    pub(super) fn write<'a>(&self, out: &'a mut crate::replication::Out) -> &'a mut crate::replication::Out {
+        match self {
+            Asked::Every(span) => out.byte(1).span(*span),
+            Asked::Cron { expr, zone } => out.byte(2).text(expr).text(zone),
+        }
+    }
+
+    /// Reads the fields of the repeat `tag` says, after the tag.
+    #[cfg(feature = "replication")]
+    pub(super) fn read(tag: u8, at: &mut crate::replication::In<'_>) -> Result<Asked> {
+        match tag {
+            1 => Ok(Asked::Every(at.span()?)),
+            2 => Ok(Asked::Cron { expr: at.text()?, zone: at.text()? }),
+            _ => Err(super::forward::corrupt("a job's repeat")),
+        }
+    }
+}
+
 /// A job's repeat, read from its text or made for its id.
 #[derive(Clone, Debug)]
 pub(crate) enum Repeat {
@@ -120,14 +142,7 @@ impl Repeat {
 /// that the jobs of many ids repeating together do not all run in one instant.
 fn phase_of(id: &str, every: i64) -> i64 {
     let every = u64::try_from(every).unwrap_or(1).max(1);
-    i64::try_from(fnv1a(id.bytes()) % every).unwrap_or(0)
-}
-
-/// FNV-1a 64 of `bytes`: a hash every build and every language computes the
-/// same, for a phase kept in text and a jitter that must come out the same.
-pub(super) fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    let mix = |hash: u64, byte: u8| (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, mix)
+    i64::try_from(crate::text::fnv1a(id.bytes()) % every).unwrap_or(0)
 }
 
 /// Milliseconds in their largest whole unit, as every language reads them

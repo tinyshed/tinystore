@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rusqlite::{Connection, Params, params};
+use rusqlite::params;
 
 use super::buffer::Held;
 use super::head::Codec;
@@ -214,7 +214,7 @@ impl Records {
         };
         let Some(keep) = keep else { return Ok(stream.clone()) };
         if let Some(said) = stream.said.filter(|said| *said != keep) {
-            let (said, keep) = (span(said), span(keep));
+            let (said, keep) = (crate::text::span(said), crate::text::span(keep));
             return Err(Error::invalid(format!("keep {keep}, where the stream is open with keep {said}")));
         }
         if stream.keep != Some(keep) {
@@ -251,25 +251,10 @@ fn read_waiting(file: &File) -> Result<HashMap<i64, i64>> {
     })
 }
 
-/// Runs a statement the connection keeps prepared; `what` says it in an
-/// error.
-pub(super) fn execute(connection: &Connection, sql: &str, params: impl Params, what: &str) -> Result<usize> {
-    let ran = connection.prepare_cached(sql).and_then(|mut statement| statement.execute(params));
-    ran.map_err(|error| sql_error(what, error))
-}
+pub(super) use crate::sqlite::execute_cached as execute;
 
 pub(super) fn nanos(span: Duration) -> i64 {
     i64::try_from(span.as_nanos()).unwrap_or(i64::MAX)
-}
-
-/// A span as a program writes it: `30d`, `12h`, `90s`, `250ms`.
-fn span(span: Duration) -> String {
-    let millis = span.as_millis();
-    let units = [("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1000)];
-    match units.iter().find(|(_, unit)| millis >= *unit && millis.is_multiple_of(*unit)) {
-        Some((name, unit)) => format!("{}{name}", millis / unit),
-        None => format!("{millis}ms"),
-    }
 }
 
 fn check_name(name: &str) -> Result<()> {

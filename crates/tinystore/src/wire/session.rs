@@ -795,7 +795,7 @@ impl Shared {
         let link = self.stream_link(input, stream);
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || {
-            let bound = (link.max_body.min(usize::try_from(link.credit).unwrap_or(usize::MAX)) / 2).max(1);
+            let bound = super::part_bound(link.max_body, link.credit, 0);
             match guarded(|| metrics::parts(&shared.store, called, &body, bound)) {
                 Ok(mut parts) if parts.len() == 1 => shared.answer(stream, Ok(parts.pop_front().unwrap_or_default())),
                 Ok(parts) => {

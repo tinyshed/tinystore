@@ -37,7 +37,7 @@ const READ_PARTS: &str = "select part, tokens from _tinystore_search_parts where
 const FIND_KEY: &str =
     "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
 const READ_HEAD: &str = "select doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
-const READ_BLOCK: &str = "select payload from _tinystore_search_blocks where key = ?1 and first = ?2";
+pub(super) const READ_BLOCK: &str = "select payload from _tinystore_search_blocks where key = ?1 and first = ?2";
 const READ_BLOCKS: &str =
     "select first, payload from _tinystore_search_blocks where key = ?1 and first >= ?2 and first <= ?3 order by first";
 const READ_HIT: &str = "select id, value from _tinystore_search_docs where index_id = ?1 and doc = ?2";

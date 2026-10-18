@@ -14,7 +14,6 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use tinystore::Store;
 use tinystore::jobs::{Filter, State};
-use tinystore::records::Level;
 
 use crate::asked::{self, Asked, Done, wrong};
 use crate::help;
@@ -229,14 +228,8 @@ fn logs(
         list = list.since(asked::span(since)?);
     }
     if let Some(level) = level {
-        let level = match level.to_ascii_lowercase().as_str() {
-            "trace" => Level::TRACE,
-            "debug" => Level::DEBUG,
-            "info" => Level::INFO,
-            "warn" | "warning" => Level::WARN,
-            "error" => Level::ERROR,
-            other => return Err(format!("no level {other}: trace, debug, info, warn or error")),
-        };
+        let level = crate::logs::level_named(level)
+            .ok_or_else(|| format!("no level {level}: trace, debug, info, warn or error"))?;
         list = list.min_level(level);
     }
     if let Some(grep) = grep {

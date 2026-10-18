@@ -1,15 +1,12 @@
 //! A file one engine opened that others keep their tables in as well, and
 //! where a handle opens.
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use super::{Engine, Host};
+use super::Engine;
 use crate::sqlite::File;
 use crate::store::WeakStore;
-use crate::sync::lock;
 use crate::{Error, Result, Store};
 
 /// A file one engine opened that others keep their tables in as well: a
@@ -33,13 +30,13 @@ pub(crate) struct SharedFile {
         not(any(feature = "kv", feature = "jobs", feature = "search")),
         expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
     )]
-    guests: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    guests: Mutex<crate::store::Engines>,
 }
 
 impl SharedFile {
     #[cfg(feature = "sql")]
     pub(crate) fn new(file: File, owner: String, store: &Store) -> SharedFile {
-        SharedFile { file: Arc::new(file), owner, store: store.downgrade(), guests: Mutex::new(HashMap::new()) }
+        SharedFile { file: Arc::new(file), owner, store: store.downgrade(), guests: Mutex::default() }
     }
 
     /// The store the file is open in, while it is open.
@@ -68,15 +65,7 @@ impl SharedFile {
     )]
     pub(crate) fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))?;
-        let mut guests = lock(&self.guests);
-        if let Some(engine) = guests.get(&TypeId::of::<E>()) {
-            let engine = Arc::clone(engine);
-            return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
-        }
-        let engine = open(&store)?;
-        store.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
-        guests.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
-        Ok(engine)
+        store.kept_or_opened(&self.guests, open)
     }
 }
 

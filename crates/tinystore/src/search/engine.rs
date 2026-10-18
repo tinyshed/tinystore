@@ -34,7 +34,7 @@ use crate::{Error, Memory, Result, Store};
 const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
 
 /// search's file in the store's directory.
-pub(super) const FILE: &str = "search.db";
+pub(crate) const FILE: &str = "search.db";
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
 

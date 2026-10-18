@@ -39,7 +39,7 @@ pub struct FileStatus {
 pub fn status(dir: &Path) -> Result<Vec<FileStatus>> {
     let logs = dir.join(DIR);
     let mut files = Vec::new();
-    for name in node::files_logged_in(&logs)?.into_iter().chain(promoted_alone(&logs)?) {
+    for name in node::files_logged_in(&logs)? {
         let log = logs.join(&name);
         let home = !copy::is_copy(&log);
         let last = Log::last_in(&log)?;
@@ -54,7 +54,7 @@ pub fn status(dir: &Path) -> Result<Vec<FileStatus>> {
             entries: first.zip(last.map(|point| point.sequence)),
             epoch: last.or(promoted).or(applied).map(|point| point.epoch),
             applied: applied.map(|point| point.sequence),
-            taking: log.join("taking").exists(),
+            taking: log.join(super::snapshot::TAKING).exists(),
             promoted: promoted.is_some(),
             fenced: Log::fenced_in(&log)?,
             home,
@@ -63,33 +63,4 @@ pub fn status(dir: &Path) -> Result<Vec<FileStatus>> {
     }
     files.sort_by(|a, b| a.file.cmp(&b.file));
     Ok(files)
-}
-
-/// The files a promotion made a node's own whose logs have kept no entry
-/// since, which hold no segment yet.
-fn promoted_alone(logs: &Path) -> Result<Vec<String>> {
-    let logged = node::files_logged_in(logs)?;
-    let mut alone = Vec::new();
-    walk(logs, "", &mut |name, path| {
-        if path.join(promote::PROMOTED).exists() && !logged.iter().any(|known| known == name) {
-            alone.push(name.to_owned());
-        }
-    })?;
-    Ok(alone)
-}
-
-fn walk(dir: &Path, prefix: &str, found: &mut dyn FnMut(&str, &Path)) -> Result<()> {
-    let Ok(listed) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in listed.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let Ok(name) = entry.file_name().into_string() else { continue };
-        let joined = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
-        found(&joined, &entry.path());
-        walk(&entry.path(), &joined, found)?;
-    }
-    Ok(())
 }

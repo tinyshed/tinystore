@@ -1,23 +1,14 @@
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::kv::fixture::*;
+use crate::testing::{PATIENCE, holds_within};
 use crate::{Clock, unix_millis};
 
 /// Long enough for a thread to reach where a test waits for it.
-const PATIENCE: Duration = Duration::from_secs(10);
-
-fn waits_for(what: &str, done: impl Fn() -> bool) {
-    let started = Instant::now();
-    while !done() {
-        assert!(started.elapsed() < PATIENCE, "{what}: still not so after {PATIENCE:?}");
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
 fn locks(store: &Store) -> Arc<Locks> {
     Locks::of(store).unwrap()
 }
@@ -52,7 +43,7 @@ fn a_key_is_held_by_one_holder_at_a_time_and_given_on_when_let_go() {
         thread::spawn(move || invoices.hold("42", |lease| Ok::<_, Error>(lease.fence())))
     };
     let locks = locks(&f.store);
-    waits_for("the second in line", || locks.waiting() == 1);
+    holds_within(PATIENCE, "the second in line", || locks.waiting() == 1);
     go.send(()).unwrap();
     let first = first.join().unwrap().unwrap();
     let second = second.join().unwrap().unwrap();
@@ -77,7 +68,7 @@ fn waiters_are_served_in_the_order_they_came() {
             })
         }));
         let behind = waiters.len();
-        waits_for("the next in line", || locks.waiting() == behind);
+        holds_within(PATIENCE, "the next in line", || locks.waiting() == behind);
     }
     go.send(()).unwrap();
     first.join().unwrap().unwrap();
@@ -97,7 +88,7 @@ fn a_key_still_held_after_the_wait_is_in_use() {
         thread::spawn(move || invoices.key("42").wait(5 * SECOND).hold(|_| Ok::<_, Error>(())))
     };
     let locks = locks(&f.store);
-    waits_for("the waiter in line", || locks.waiting() == 1);
+    holds_within(PATIENCE, "the waiter in line", || locks.waiting() == 1);
     f.clock.advance(5 * SECOND - Duration::from_millis(1));
     f.store.clock_moved();
     thread::sleep(Duration::from_millis(20));
@@ -133,7 +124,7 @@ fn max_hold_revokes_a_lease_gives_the_key_on_and_fails_the_hold_lost() {
         thread::spawn(move || reports.key("sales").wait(MINUTE).hold(|lease| Ok::<_, Error>(lease.fence())))
     };
     let locks = locks(&f.store);
-    waits_for("the next in line", || locks.waiting() == 1);
+    holds_within(PATIENCE, "the next in line", || locks.waiting() == 1);
     f.clock.advance(10 * SECOND);
     f.store.clock_moved();
     next.join().unwrap().expect("revoked at max_hold, the key goes to the next in line");
@@ -250,7 +241,7 @@ fn closing_the_store_ends_every_lease_and_answers_every_waiter() {
         thread::spawn(move || invoices.hold("42", |_| Ok::<_, Error>(())))
     };
     let locks = locks(&f.store);
-    waits_for("the waiter in line", || locks.waiting() == 1);
+    holds_within(PATIENCE, "the waiter in line", || locks.waiting() == 1);
     f.store.close().unwrap();
     assert_eq!(waiter.join().unwrap().unwrap_err().kind(), ErrorKind::Closed);
     stuck.send(()).unwrap();

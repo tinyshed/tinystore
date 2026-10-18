@@ -7,7 +7,7 @@
 //! event   = at | name | presence | level | message | trace | span | context | fields
 //! ```
 
-use super::event::{Fields, Kept, Level, MAX_EVENT, MAX_KEYS, SpanId, TraceId};
+use super::event::{Fields, Kept, Level, MAX_EVENT, SpanId, TraceId};
 use crate::compress::checksum::crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count, put_int, put_text};
@@ -15,10 +15,7 @@ use crate::{Error, Result};
 
 pub(super) const VERSION: u8 = 1;
 
-const HAS_LEVEL: u8 = 1;
-const HAS_MESSAGE: u8 = 1 << 1;
-const HAS_TRACE: u8 = 1 << 2;
-const HAS_SPAN: u8 = 1 << 3;
+use super::segment::{HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE};
 
 /// The events one row holds at most.
 pub(super) const ROW_EVENTS: usize = 1024;
@@ -123,16 +120,8 @@ fn put_event(out: &mut Vec<u8>, event: &Kept) {
     if let Some(span) = event.span_id {
         out.extend_from_slice(&span.0);
     }
-    put_fields(out, &event.context);
-    put_fields(out, &event.fields);
-}
-
-fn put_fields(out: &mut Vec<u8>, fields: &Fields) {
-    put_count(out, fields.len() as u64);
-    for (key, json) in fields.iter() {
-        put_text(out, key);
-        put_text(out, json);
-    }
+    event.context.put_pairs(out);
+    event.fields.put_pairs(out);
 }
 
 /// The events of a row in the order they were written: the one parser of a
@@ -178,8 +167,8 @@ fn read_event(reader: &mut Reader<'_>) -> Kept {
     let message = has(HAS_MESSAGE).then(|| reader.text(MAX_EVENT).to_owned());
     let trace_id = has(HAS_TRACE).then(|| TraceId(taken(reader)));
     let span_id = has(HAS_SPAN).then(|| SpanId(taken(reader)));
-    let context = read_fields(reader);
-    let fields = read_fields(reader);
+    let context = Fields::read_pairs(reader);
+    let fields = Fields::read_pairs(reader);
     if at < 0 {
         reader.fail("an event's time before 1970");
     }
@@ -188,12 +177,6 @@ fn read_event(reader: &mut Reader<'_>) -> Kept {
 
 fn taken<const N: usize>(reader: &mut Reader<'_>) -> [u8; N] {
     <[u8; N]>::try_from(reader.take(N)).unwrap_or([0; N])
-}
-
-fn read_fields(reader: &mut Reader<'_>) -> Fields {
-    let count = reader.count(MAX_KEYS);
-    let pairs = (0..count).map(|_| (reader.text(MAX_EVENT).to_owned(), reader.text(MAX_EVENT).to_owned()));
-    Fields::from_pairs(pairs.collect())
 }
 
 #[cfg(test)]

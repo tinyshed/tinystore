@@ -305,7 +305,7 @@ impl Cell {
             Cell::Integer(integer) => (*integer).into(),
             Cell::Real(real) => serde_json::Number::from_f64(*real).map_or(serde_json::Value::Null, Into::into),
             Cell::Text(text) => text.clone().into(),
-            Cell::Blob(bytes) => bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>().into(),
+            Cell::Blob(bytes) => crate::local::hex(bytes).into(),
         }
     }
 }
@@ -318,7 +318,7 @@ impl fmt::Display for Cell {
             Cell::Real(real) => write!(f, "{real}"),
             Cell::Text(text) => f.write_str(&text.replace('\n', "⏎")),
             Cell::Blob(bytes) => {
-                let hex: String = bytes.iter().take(16).map(|byte| format!("{byte:02x}")).collect();
+                let hex = crate::local::hex(&bytes[..bytes.len().min(16)]);
                 let more = if bytes.len() > 16 { "…" } else { "" };
                 write!(f, "x'{hex}{more}' ({} bytes)", bytes.len())
             }

@@ -13,11 +13,7 @@ use super::paths::past;
 use crate::sqlite::sql_error;
 use crate::{Result, Store};
 
-/// Rows one maintenance transaction removes.
-const BATCH: i64 = 10_000;
-
-/// Transactions of each kind one maintenance runs at most.
-const BATCHES: usize = 10;
+use crate::engine::{BATCH, BATCHES, in_batches};
 
 const EXPIRE: &str = "delete from files where (set_id, path) in (
     select set_id, path from files where expires <= ?1 order by expires limit cast(?2 as integer)
@@ -79,7 +75,7 @@ impl Blobs {
 
     fn expire(self: &Arc<Self>) -> Result<usize> {
         let now = self.now();
-        self.batches(move |change| change.deleted(EXPIRE, params![now, BATCH]))
+        self.batches(move |change| change.deleted(EXPIRE, params![now, BATCH as i64]))
     }
 
     /// Deletes the files marked clears hid, a batch a transaction, and each
@@ -93,8 +89,8 @@ impl Blobs {
         for (set, prefix, revision) in marks {
             let to = past(&prefix).unwrap_or_else(|| PAST_EVERY.clone());
             total += self.batches(move |change| {
-                let contents = change.deleted(DROP_HIDDEN, params![set, prefix, to, revision, BATCH])?;
-                if contents.len() < usize::try_from(BATCH).unwrap_or(usize::MAX) {
+                let contents = change.deleted(DROP_HIDDEN, params![set, prefix, to, revision, BATCH as i64])?;
+                if contents.len() < BATCH {
                     change.execute(UNMARK, params![set, prefix, revision])?;
                 }
                 Ok(contents)
@@ -111,8 +107,7 @@ impl Blobs {
     where
         F: Fn(&mut Change<'_, '_>) -> Result<Vec<i64>> + Clone + Send + 'static,
     {
-        let mut total = 0;
-        for _ in 0..BATCHES {
+        in_batches(|| {
             let (blobs, batch) = (Arc::clone(self), batch.clone());
             let (deleted, freed) = self.file.write(0, move |tx| {
                 let mut change = Change::new(tx, &blobs);
@@ -121,13 +116,9 @@ impl Blobs {
                 change.release_all(contents)?;
                 Ok((deleted, change.freed))
             })?;
-            total += deleted;
             self.remove_freed(&freed);
-            if deleted < usize::try_from(BATCH).unwrap_or(usize::MAX) {
-                break;
-            }
-        }
-        Ok(total)
+            Ok(deleted)
+        })
     }
 
     /// Removes the files of contents no file names, which a commit left
@@ -138,7 +129,7 @@ impl Blobs {
         for _ in 0..BATCHES {
             let unnamed = (SELECT_UNNAMED, "blobs: the contents no file names");
             let unnamed: Vec<i64> =
-                self.file.read(|connection| rows_of(connection, unnamed, [BATCH], |row| row.get(0)))?;
+                self.file.read(|connection| rows_of(connection, unnamed, [BATCH as i64], |row| row.get(0)))?;
             let gone: Vec<i64> = unnamed.iter().copied().filter(|&id| self.disk.remove_object(id).is_ok()).collect();
             if !gone.is_empty() {
                 let forgotten = gone.clone();
@@ -150,7 +141,7 @@ impl Blobs {
                 })?;
             }
             removed += gone.len();
-            if unnamed.len() < usize::try_from(BATCH).unwrap_or(usize::MAX) || gone.len() < unnamed.len() {
+            if unnamed.len() < BATCH || gone.len() < unnamed.len() {
                 break;
             }
         }

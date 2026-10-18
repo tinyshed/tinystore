@@ -135,7 +135,7 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
         }
     }
     let counted = (index, doc, i64::from(new_words), i64::from(document.vector.is_some()));
-    execute(tx, JOIN_INDEX, counted, "count a document")
+    execute(tx, JOIN_INDEX, counted, "count a document").map(drop)
 }
 
 /// Deletes the document of `id`; says whether there was one.
@@ -187,8 +187,4 @@ fn leave_key(connection: &Connection, key: i64) -> Result<(Part, i64)> {
     left.map_err(|error| sql_error(format!("write key {key}"), error))
 }
 
-/// Runs a statement the connection keeps prepared; `what` says it in an error.
-pub(crate) fn execute(connection: &Connection, sql: &str, params: impl rusqlite::Params, what: &str) -> Result<()> {
-    let ran = connection.prepare_cached(sql).and_then(|mut statement| statement.execute(params));
-    ran.map(drop).map_err(|error| sql_error(what, error))
-}
+pub(crate) use crate::sqlite::execute_cached as execute;

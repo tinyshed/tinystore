@@ -9,12 +9,12 @@ use rusqlite::{OptionalExtension, params};
 
 use super::change::{Change, Condition, Content, Place, Version, WhenThere, hidden};
 use super::engine::Blobs;
-use super::info::{FileInfo, FileRow, OCTETS, file_columns, matches, meta_text};
+use super::info::{FileInfo, FileRow, OCTETS, file_columns, meta_text};
 use super::paths::Folder;
 use super::read::StoredFile;
 use super::upload::Upload;
 use crate::sqlite::sql_error;
-use crate::{Error, ErrorKind, Key, Result, Store};
+use crate::{Error, Key, Result, Store};
 
 /// A content type's bytes at most.
 const SET_EXPIRES: &str = "update files set expires = ?3 where set_id = ?1 and path = ?2";
@@ -211,7 +211,7 @@ impl Files {
     }
 
     pub(crate) fn expiry(&self, ttl: Option<Duration>, now: i64) -> Option<i64> {
-        ttl.or(self.ttl).map(|ttl| now.saturating_add(i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX)))
+        ttl.or(self.ttl).map(|ttl| now.saturating_add(crate::clock::millis(ttl)))
     }
 
     fn head_of(&self, whole: &str) -> Result<Option<FileInfo>> {
@@ -309,10 +309,7 @@ impl Files {
         let freed = self.blobs.file.write(0, move |tx| {
             let mut change = Change::new(tx, &blobs);
             if let Some(etag) = &if_match {
-                let current = change.current(set, &path)?.filter(|current| current.live(change.now));
-                if !current.is_some_and(|current| matches(etag, &current.sha256)) {
-                    return Err(Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given"));
-                }
+                super::change::holds_etag(etag, change.current(set, &path)?.as_ref(), change.now)?;
             }
             change.remove(set, &path)?;
             Ok(change.freed)
@@ -328,7 +325,7 @@ impl Files {
         }
         let blobs = Arc::clone(&self.blobs);
         let (set, path) = (self.set, whole.to_owned());
-        let after = i64::try_from(after.as_millis()).unwrap_or(i64::MAX);
+        let after = crate::clock::millis(after);
         self.blobs.file.write(0, move |tx| {
             let change = Change::new(tx, &blobs);
             if !change.current(set, &path)?.is_some_and(|current| current.live(change.now)) {

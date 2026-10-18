@@ -222,12 +222,9 @@ impl Quota {
     /// Passes a call on `key` to the home of the copy the quota's file is.
     #[cfg(feature = "replication")]
     fn pass_on(&self, key: &str, call: &super::forward::Call) -> Result<Vec<u8>> {
-        let shown = || self.scope.shown_key(key);
-        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
-        let owners = self.scope.branch()?.owners().to_vec();
         let windows = self.windows.iter().map(|window| (window.name.clone(), window.limit, window.span)).collect();
         let handle = super::forward::Handle::Quota { name: self.scope.name().to_owned(), windows };
-        super::forward::pass_on(&store, &handle, &owners, key, call)
+        self.scope.pass_on(&handle, key, call)
     }
 
     fn reset_work(&self, key: &str) -> Result<impl Work<()> + use<>> {

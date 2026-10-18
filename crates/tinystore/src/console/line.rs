@@ -9,8 +9,8 @@
 
 use std::fmt::{self, Write as _};
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use jiff::{Timestamp, Zoned};
 use serde::de::{Deserializer as _, MapAccess, Visitor};
 use serde_json::value::RawValue;
 
@@ -270,9 +270,8 @@ pub(crate) fn level_name(level: i32) -> String {
 /// A time in a zone to the millisecond: `2026-10-02T11:02:11.123Z` as JSON
 /// writes it in UTC, `2026-10-02 11:02:11.123 +03:00` as a full pretty line.
 fn stamp(at: i64, zone: &TimeZone, json: bool) -> String {
-    let zoned = Timestamp::from_nanosecond(i128::from(at)).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(zone.clone());
-    let (date, millis) = (zoned.date(), zoned.subsec_nanosecond() / 1_000_000);
-    let time = format!("{:02}:{:02}:{:02}.{millis:03}", zoned.hour(), zoned.minute(), zoned.second());
+    let zoned = zoned(at, zone);
+    let (date, time) = (zoned.date(), time_of(&zoned));
     let day = format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day());
     if json {
         return format!("{day}T{time}Z");
@@ -284,7 +283,15 @@ fn stamp(at: i64, zone: &TimeZone, json: bool) -> String {
 
 /// The time of day in a zone, to the millisecond: `11:02:11.123`.
 fn clock(at: i64, zone: &TimeZone) -> String {
-    let zoned = Timestamp::from_nanosecond(i128::from(at)).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(zone.clone());
+    time_of(&zoned(at, zone))
+}
+
+/// `at`, nanoseconds since 1970, in `zone`.
+fn zoned(at: i64, zone: &TimeZone) -> Zoned {
+    Timestamp::from_nanosecond(i128::from(at)).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(zone.clone())
+}
+
+fn time_of(zoned: &Zoned) -> String {
     let millis = zoned.subsec_nanosecond() / 1_000_000;
     format!("{:02}:{:02}:{:02}.{millis:03}", zoned.hour(), zoned.minute(), zoned.second())
 }

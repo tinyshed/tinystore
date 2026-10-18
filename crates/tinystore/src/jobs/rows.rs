@@ -160,7 +160,7 @@ pub(crate) fn keep_group_bound(c: &Connection, queue: i64, was: i64, is: i64) ->
     }
     execute(c, UNPARK_JOBS, params![queue, PARKED_BY], "the jobs another group bound parked")?;
     execute(c, UNPARK_KEYS, params![queue, PARKED_BY], "the jobs another group bound parked")?;
-    execute(c, KEEP_IN_GROUP, params![queue, is], "a queue's group bound")
+    execute(c, KEEP_IN_GROUP, params![queue, is], "a queue's group bound").map(drop)
 }
 
 /// The next job id, taken by the write that inserts its row: it commits or
@@ -174,7 +174,7 @@ pub(crate) fn next_id(c: &Connection) -> Result<i64> {
 
 pub(crate) fn end_dead_leases(c: &Connection) -> Result<()> {
     execute(c, COUNT_DEAD_ATTEMPTS, [], "the leases of a process that died")?;
-    execute(c, DROP_DEAD_LEASES, [], "the leases of a process that died")
+    execute(c, DROP_DEAD_LEASES, [], "the leases of a process that died").map(drop)
 }
 
 pub(crate) fn job_by_key(c: &Connection, queue: i64, key: &str) -> Result<Option<Row>> {
@@ -262,7 +262,7 @@ fn rewrite(
     let spill = spill(c, there.id, change.value)?;
     let params =
         params![queue, there.next, there.id, change.next, change.value.inline(), spill, change.repeat, change.group];
-    execute(c, statement, params, what)
+    execute(c, statement, params, what).map(drop)
 }
 
 /// Asks one run more of a job that runs: its next run takes the new value and
@@ -277,7 +277,7 @@ pub(crate) fn ask_again(
     drop_spill(c, there.spill)?;
     let spill = spill(c, there.id, change.value)?;
     let params = params![queue, there.next, there.id, again, change.value.inline(), spill, change.repeat, change.group];
-    execute(c, ASK_AGAIN, params, "a set of a running job")
+    execute(c, ASK_AGAIN, params, "a set of a running job").map(drop)
 }
 
 /// Deletes the failed job under a key and its spilled value, and answers its
@@ -353,18 +353,18 @@ pub(crate) fn follow(c: &Connection, queue: i64, key: &str, from: i64, to: i64) 
     if from == to {
         return Ok(());
     }
-    execute(c, MOVE_KEY, params![queue, key, to], "a job's id")
+    execute(c, MOVE_KEY, params![queue, key, to], "a job's id").map(drop)
 }
 
 pub(crate) fn drop_spill(c: &Connection, spilled: Option<i64>) -> Result<()> {
     match spilled {
-        Some(id) => execute(c, DELETE_SPILLED, [id], "a large value"),
+        Some(id) => execute(c, DELETE_SPILLED, [id], "a large value").map(drop),
         None => Ok(()),
     }
 }
 
 pub(crate) fn drop_steps(c: &Connection, job: i64) -> Result<()> {
-    execute(c, DROP_STEPS, [job], "the steps of a run that ended")
+    execute(c, DROP_STEPS, [job], "the steps of a run that ended").map(drop)
 }
 
 /// Writes a value past the inline bound to a row of its own under the job's
@@ -379,12 +379,7 @@ fn spill(c: &Connection, id: i64, value: &Kept) -> Result<Option<i64>> {
     }
 }
 
-pub(crate) fn execute(c: &Connection, sql: &str, params: impl Params, what: &str) -> Result<()> {
-    c.prepare_cached(sql)
-        .and_then(|mut statement| statement.execute(params))
-        .map(drop)
-        .map_err(|error| sql_error(what, error))
-}
+pub(crate) use crate::sqlite::execute_cached as execute;
 
 pub(crate) fn exists(c: &Connection, sql: &str, params: impl Params) -> Result<bool> {
     c.prepare_cached(sql).and_then(|mut select| select.exists(params)).map_err(|error| sql_error("a read", error))

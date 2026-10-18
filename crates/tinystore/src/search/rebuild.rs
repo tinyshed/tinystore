@@ -106,6 +106,15 @@ pub(crate) struct Progress {
 }
 
 impl Progress {
+    /// The rebuild's status as `status` and a listing say it.
+    fn status(self) -> Status {
+        let done = self.share();
+        match self.failed {
+            Some(error) => Status::Failed { error },
+            None => Status::Rebuilding { done },
+        }
+    }
+
     pub(crate) fn share(&self) -> f64 {
         (self.copied_through as f64 / (self.next_doc - 1).max(1) as f64).clamp(0.0, 1.0)
     }
@@ -347,10 +356,7 @@ impl Search {
             return Ok(filling.map_or(Status::Ready, |done| Status::Rebuilding { done }));
         };
         let progress = self.file.read(|connection| progress(connection, (open.id(), beside.data.id)))?;
-        Ok(match progress.failed {
-            Some(error) => Status::Failed { error },
-            None => Status::Rebuilding { done: progress.share() },
-        })
+        Ok(progress.status())
     }
 
     /// Waits until the index serves the settings it was opened with: its
@@ -413,7 +419,7 @@ impl Search {
             return Ok(());
         }
         let at = self.clock.now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as i64);
-        self.file.write(16, move |tx| execute(tx, WRITE_OPENED, (id, at), "write when an index was opened"))
+        self.file.write(16, move |tx| execute(tx, WRITE_OPENED, (id, at), "write when an index was opened")).map(drop)
     }
 
     /// Every index search.db holds, by name.
@@ -480,11 +486,7 @@ fn listed_status(connection: &Connection, serving: i64) -> Result<Status> {
     let mut select = connection.prepare_cached(READ_BESIDE).map_err(failed)?;
     let beside: Option<i64> = select.query_row([serving], |row| row.get(0)).optional().map_err(failed)?;
     let Some(beside) = beside else { return Ok(Status::Ready) };
-    let progress = progress(connection, (serving, beside))?;
-    Ok(match progress.failed {
-        Some(error) => Status::Failed { error },
-        None => Status::Rebuilding { done: progress.share() },
-    })
+    Ok(progress(connection, (serving, beside))?.status())
 }
 
 fn numbers(connection: &Connection, index: i64) -> Result<(i64, i64)> {
@@ -497,8 +499,11 @@ fn numbers(connection: &Connection, index: i64) -> Result<(i64, i64)> {
 fn drop_step(tx: &Tx<'_>, index: i64) -> Result<bool> {
     let mut dropped = 0;
     for sql in DROP_STEPS {
-        let params: Vec<i64> =
-            if sql.contains("?3") { vec![index, index << 32, (index + 1) << 32] } else { vec![index] };
+        let params: Vec<i64> = if sql.contains("?3") {
+            vec![index, super::vectors::key(index, 0), super::vectors::key(index + 1, 0)]
+        } else {
+            vec![index]
+        };
         let ran = tx.prepare_cached(sql).and_then(|mut delete| delete.execute(rusqlite::params_from_iter(params)));
         dropped += ran.map_err(|error| sql_error("drop an index's rows", error))?;
     }
@@ -510,7 +515,7 @@ fn drop_step(tx: &Tx<'_>, index: i64) -> Result<bool> {
 
 /// Marks an index's rows to be dropped a step a commit.
 pub(crate) fn mark_dropping(tx: &Tx<'_>, index: i64) -> Result<()> {
-    execute(tx, MARK_DROPPING, [index], "drop an index's rows")
+    execute(tx, MARK_DROPPING, [index], "drop an index's rows").map(drop)
 }
 
 /// Adds the rows of a new index; says its id.

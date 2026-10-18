@@ -169,11 +169,7 @@ impl Schema {
         self.names.iter().for_each(|name| put_text(&mut plain, name));
         put_count(&mut plain, self.contexts.len() as u64);
         for context in &self.contexts {
-            put_count(&mut plain, context.len() as u64);
-            for (key, json) in context.iter() {
-                put_text(&mut plain, key);
-                put_text(&mut plain, json);
-            }
+            context.put_pairs(&mut plain);
         }
         put_count(&mut plain, self.shapes.len() as u64);
         for shape in &self.shapes {
@@ -207,7 +203,7 @@ impl Schema {
         let names = reader.count(MOST_EVENTS);
         schema.names = (0..names).map(|_| reader.text(MAX_EVENT).to_owned()).collect();
         let contexts = reader.count(MOST_EVENTS);
-        schema.contexts = (0..contexts).map(|_| read_fields(&mut reader)).collect();
+        schema.contexts = (0..contexts).map(|_| Fields::read_pairs(&mut reader)).collect();
         let shapes = reader.count(MOST_SHAPES);
         let mut columns: HashMap<(String, usize), usize> = HashMap::new();
         for _ in 0..shapes {
@@ -219,7 +215,7 @@ impl Schema {
             let keys: Vec<String> = (0..count).map(|_| reader.text(MAX_EVENT).to_owned()).collect();
             let mut of_keys = Vec::new();
             for (place, key) in keys.iter().enumerate() {
-                let which = keys[..place].iter().filter(|earlier| *earlier == key).count();
+                let which = occurrence(&keys, place);
                 let next = columns.len();
                 of_keys.push(*columns.entry((key.clone(), which)).or_insert(next));
             }
@@ -234,14 +230,8 @@ impl Schema {
 }
 
 /// Which time a shape has the key at `place`.
-fn occurrence(keys: &[&str], place: usize) -> usize {
+fn occurrence<K: PartialEq>(keys: &[K], place: usize) -> usize {
     keys[..place].iter().filter(|earlier| **earlier == keys[place]).count()
-}
-
-fn read_fields(reader: &mut Reader<'_>) -> Fields {
-    let count = reader.count(MAX_KEYS);
-    let pairs = (0..count).map(|_| (reader.text(MAX_EVENT).to_owned(), reader.text(MAX_EVENT).to_owned()));
-    Fields::from_pairs(pairs.collect())
 }
 
 #[cfg(test)]

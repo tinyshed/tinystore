@@ -154,7 +154,7 @@ impl Question {
 pub(crate) fn keep(tx: &Tx<'_>, index: i64, doc: u32, vector: &Vector) -> Result<()> {
     let key = key(index, doc);
     execute(tx, ADD_VECTOR, (key, vector.length, &vector.bytes), "keep a vector")?;
-    execute(tx, ADD_CODE, (key, &vector.code), "keep a vector's code")
+    execute(tx, ADD_CODE, (key, &vector.code), "keep a vector's code").map(drop)
 }
 
 /// Forgets a document's vector and its place among the clusters; says
@@ -170,7 +170,7 @@ pub(crate) fn forget(tx: &Tx<'_>, index: i64, doc: u32) -> Result<bool> {
 
 /// Puts a document's vector in the head of its index's clusters.
 pub(crate) fn join_head(tx: &Tx<'_>, index: i64, doc: u32) -> Result<()> {
-    execute(tx, ADD_HEAD, (index, doc), "put a vector in the head")
+    execute(tx, ADD_HEAD, (index, doc), "put a vector in the head").map(drop)
 }
 
 /// A search of an index's vectors: its question, the hits it asks for, and
@@ -349,11 +349,11 @@ fn code_of<'r>(row: &'r Row<'_>) -> Result<(u32, &'r [u8])> {
 
 /// A vector's row: the index's id × 2³² + the document's number, so that an
 /// index's vectors lie together, in the order their documents were set.
-fn key(index: i64, doc: u32) -> i64 {
+pub(super) fn key(index: i64, doc: u32) -> i64 {
     index << 32 | i64::from(doc)
 }
 
-fn doc_of(key: i64) -> u32 {
+pub(super) fn doc_of(key: i64) -> u32 {
     (key & 0xffff_ffff) as u32
 }
 

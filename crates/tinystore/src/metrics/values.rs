@@ -19,6 +19,7 @@
 
 use super::clock::Times;
 use super::codec::{self, POWERS_OF_TEN, Point};
+use super::directory::MOST_BODY as MOST_BASE;
 use super::residuals;
 use crate::compress::checksum::Crc32;
 use crate::compress::frame::Zstd;
@@ -35,8 +36,6 @@ pub(super) const UNTRIED: i64 = -2;
 const NO_GRID: i64 = -1;
 /// The scales a grid is tried at: a 64-bit float holds 15 to 17 digits.
 const MOST_GRID_SCALE: usize = 15;
-/// What a grid's integers take at most: a block's body.
-const MOST_BASE: usize = 8200;
 
 /// The shortest body of a block's values, sealed, and the hint the next block
 /// tries; none for a constant block.
@@ -94,11 +93,7 @@ fn checksum(points: &[Point], times: &Times, body: &[u8]) -> u32 {
 }
 
 fn checksum_of(times: &Times, first: f64, body: &[u8]) -> u32 {
-    let mut key = [0_u8; 26];
-    key[..8].copy_from_slice(&times.start.to_le_bytes());
-    key[8..16].copy_from_slice(&times.end.to_le_bytes());
-    key[16..18].copy_from_slice(&(times.count as u16).to_le_bytes());
-    key[18..].copy_from_slice(&first.to_bits().to_le_bytes());
+    let key = codec::Head { start: times.start, end: times.end, count: times.count, first }.key();
     Crc32::new().update(&key).update(&times.steps).update(body).finish()
 }
 

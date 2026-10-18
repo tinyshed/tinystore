@@ -43,8 +43,7 @@ const FETCH_ROWS: usize = 1024;
 const FETCH_BYTES: usize = 16 << 20;
 /// What a read reserves for each event its rows hold, beside their bytes.
 pub(super) const EVENT_HELD: u64 = 1 << 10;
-/// How long a read waits for the store's memory.
-const PATIENCE: Duration = Duration::from_secs(10);
+use crate::memory::PATIENCE;
 
 /// One page of an answer. `next` is the page after it, for `after`; the last
 /// page has none.

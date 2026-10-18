@@ -303,10 +303,7 @@ fn make_here(store: &Store, name: &str) -> Result<()> {
 /// opens in.
 pub(crate) type Lenders<'a> = &'a dyn Fn(&str) -> Result<crate::engine::Home>;
 
-/// The file a database's name keeps, as a node names it.
-pub(crate) fn database_file(name: &str) -> String {
-    format!("sql/{name}.db")
-}
+pub(crate) use crate::engine::database_file;
 
 /// The database's name a lending file's owner says, `sql app` for `app`.
 pub(crate) fn database_of(owner: &str) -> Option<&str> {

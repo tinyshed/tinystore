@@ -1,9 +1,5 @@
 use super::*;
 
-fn zstd() -> Zstd {
-    Zstd::windowed(LEVEL, WINDOW_LOG)
-}
-
 fn points(times: &[i64], values: &[f64]) -> Vec<Point> {
     times.iter().zip(values).map(|(&at, &value)| Point { at, value }).collect()
 }

@@ -10,7 +10,6 @@
 //!
 //! [plan/scaling.md]: https://github.com/tinyshed/tinystore/blob/rust/plan/scaling.md
 
-use std::fs;
 use std::path::Path;
 
 use super::copy::{self, Position, io_error};
@@ -87,12 +86,8 @@ pub(crate) fn promote_one(file: String, path: &Path, log: &Path, at_least: u64) 
     }
     crate::sqlite::checkpoint_away(path)?;
     // a copy a direct link took is taken from no node once it is a home
-    for gone in [copy::MARK, Position::FILE, "from"] {
-        match fs::remove_file(log.join(gone)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error(&log.join(gone), error)),
-        }
+    for gone in [copy::MARK, Position::FILE, super::node::DIRECT] {
+        copy::remove_if_there(&log.join(gone))?;
     }
     crate::durable::sync_directory(log).map_err(|error| io_error(log, error))?;
     Ok(Promoted { file, sequence: point.sequence, epoch: point.epoch })
@@ -179,11 +174,7 @@ fn demote_one(file: String, log: &Path) -> Result<Demoted> {
 /// copy: a log that keeps one is its node's own, and its file is taken from
 /// no node.
 pub(crate) fn forget_promotion(log: &Path) -> Result<()> {
-    match fs::remove_file(log.join(PROMOTED)) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(io_error(&log.join(PROMOTED), error)),
-    }
+    copy::remove_if_there(&log.join(PROMOTED))
 }
 
 /// The point a promoted copy's log goes on from, if the log in `dir` is one.

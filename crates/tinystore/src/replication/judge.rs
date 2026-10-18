@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use super::entry::Point;
 use super::log::Log;
-use super::message::{Frames, LeaseAsk, LeaseHolder, Message, VERSION, timed_out};
+use super::message::{Frames, LeaseAsk, LeaseHolder, Message, timed_out};
 use super::node::State;
 use super::serve::Out;
 use super::witness::{Holder, TTL};
@@ -40,28 +40,18 @@ pub(crate) fn start(state: &Arc<State>, store: &Store, witness: String) {
                 tracing::warn!(target: "tinystore", witness = %witness, %error, "a node's link to its witness");
                 said = Some(error.to_string());
             }
-            let until = Instant::now() + RENEW;
-            while Instant::now() < until && !state.stopping() {
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            state.pause(RENEW);
         }
     });
 }
 
 /// Renews and stands over a link to the witness until it breaks.
 fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
-    let stream = super::follow::connect(witness)?;
-    state.keep_link(&stream);
-    let (mut reading, writing) = super::transport::connect(state, witness, stream)?;
+    let (mut reading, writing) = super::follow::dial(state, witness)?;
     reading.set_timeout(Duration::from_millis(100))?;
     writing.set_timeout(Duration::from_secs(5))?;
     let out = Out::new(writing);
-    out.send(&Message::Hello {
-        version: VERSION,
-        token: state.options.token.clone().unwrap_or_default(),
-        node: state.id.clone(),
-        address: state.address(),
-    })?;
+    out.send(&state.hello(state.address()))?;
     let mut frames = Frames::default();
     let (mut welcomed, mut turn, mut asks) = (false, Instant::now(), Asks::default());
     loop {

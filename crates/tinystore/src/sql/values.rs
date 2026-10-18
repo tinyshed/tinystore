@@ -299,42 +299,42 @@ impl ser::SerializeStruct for Time {
 /// Serializer methods that refuse what a probe does not take: each probe below
 /// takes one shape of value and leaves the rest to the next.
 macro_rules! refuse {
-    ($($method:ident)*) => { $(refuse!(@ $method);)* };
-    (@ bool) => { fn serialize_bool(self, _: bool) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ i8) => { fn serialize_i8(self, _: i8) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ i16) => { fn serialize_i16(self, _: i16) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ i32) => { fn serialize_i32(self, _: i32) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ i64) => { fn serialize_i64(self, _: i64) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ u8) => { fn serialize_u8(self, _: u8) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ u16) => { fn serialize_u16(self, _: u16) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ u32) => { fn serialize_u32(self, _: u32) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ u64) => { fn serialize_u64(self, _: u64) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ f32) => { fn serialize_f32(self, _: f32) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ f64) => { fn serialize_f64(self, _: f64) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ char) => { fn serialize_char(self, _: char) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ str) => { fn serialize_str(self, _: &str) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ bytes) => { fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ none) => { fn serialize_none(self) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ some) => {
+    ($error:expr; $($method:ident)*) => { $(refuse!(@ $error; $method);)* };
+    (@ $error:expr; bool) => { fn serialize_bool(self, _: bool) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; i8) => { fn serialize_i8(self, _: i8) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; i16) => { fn serialize_i16(self, _: i16) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; i32) => { fn serialize_i32(self, _: i32) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; i64) => { fn serialize_i64(self, _: i64) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; u8) => { fn serialize_u8(self, _: u8) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; u16) => { fn serialize_u16(self, _: u16) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; u32) => { fn serialize_u32(self, _: u32) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; u64) => { fn serialize_u64(self, _: u64) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; f32) => { fn serialize_f32(self, _: f32) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; f64) => { fn serialize_f64(self, _: f64) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; char) => { fn serialize_char(self, _: char) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; str) => { fn serialize_str(self, _: &str) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; bytes) => { fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; none) => { fn serialize_none(self) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; some) => {
         fn serialize_some<T: Serialize + ?Sized>(self, _: &T) -> Result<Self::Ok, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ unit) => { fn serialize_unit(self) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) } };
-    (@ unit_struct) => {
-        fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Refusal> { Err(Refusal::Compound) }
+    (@ $error:expr; unit) => { fn serialize_unit(self) -> Result<Self::Ok, Refusal> { Err($error) } };
+    (@ $error:expr; unit_struct) => {
+        fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Refusal> { Err($error) }
     };
-    (@ unit_variant) => {
+    (@ $error:expr; unit_variant) => {
         fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ newtype_struct) => {
+    (@ $error:expr; newtype_struct) => {
         fn serialize_newtype_struct<T: Serialize + ?Sized>(self, _: &'static str, _: &T) -> Result<Self::Ok, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ newtype_variant) => {
+    (@ $error:expr; newtype_variant) => {
         fn serialize_newtype_variant<T: Serialize + ?Sized>(
             self,
             _: &'static str,
@@ -342,21 +342,21 @@ macro_rules! refuse {
             _: &'static str,
             _: &T,
         ) -> Result<Self::Ok, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ seq) => {
-        fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Refusal> { Err(Refusal::Compound) }
+    (@ $error:expr; seq) => {
+        fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Refusal> { Err($error) }
     };
-    (@ tuple) => {
-        fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Refusal> { Err(Refusal::Compound) }
+    (@ $error:expr; tuple) => {
+        fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Refusal> { Err($error) }
     };
-    (@ tuple_struct) => {
+    (@ $error:expr; tuple_struct) => {
         fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Self::SerializeTupleStruct, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ tuple_variant) => {
+    (@ $error:expr; tuple_variant) => {
         fn serialize_tuple_variant(
             self,
             _: &'static str,
@@ -364,18 +364,18 @@ macro_rules! refuse {
             _: &'static str,
             _: usize,
         ) -> Result<Self::SerializeTupleVariant, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ map) => {
-        fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Refusal> { Err(Refusal::Compound) }
+    (@ $error:expr; map) => {
+        fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Refusal> { Err($error) }
     };
-    (@ struct) => {
+    (@ $error:expr; struct) => {
         fn serialize_struct(self, _: &'static str, _: usize) -> Result<Self::SerializeStruct, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
-    (@ struct_variant) => {
+    (@ $error:expr; struct_variant) => {
         fn serialize_struct_variant(
             self,
             _: &'static str,
@@ -383,7 +383,7 @@ macro_rules! refuse {
             _: &'static str,
             _: usize,
         ) -> Result<Self::SerializeStructVariant, Refusal> {
-            Err(Refusal::Compound)
+            Err($error)
         }
     };
 }
@@ -411,6 +411,7 @@ impl ser::Serializer for Unsigned {
     }
 
     refuse! {
+        Refusal::Compound;
         bool i8 i16 i32 i64 u8 u16 f32 f64 char str bytes none some unit unit_struct unit_variant
         newtype_struct newtype_variant seq tuple tuple_struct tuple_variant map struct struct_variant
     }
@@ -450,6 +451,7 @@ impl ser::Serializer for Bytes {
     }
 
     refuse! {
+        Refusal::Compound;
         bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str none unit unit_struct unit_variant
         newtype_variant tuple tuple_struct tuple_variant map struct struct_variant
     }
@@ -490,6 +492,7 @@ impl ser::Serializer for Byte {
     }
 
     refuse! {
+        Refusal::Compound;
         bool i8 i16 i32 i64 u16 u32 u64 f32 f64 char str bytes none some unit unit_struct unit_variant
         newtype_struct newtype_variant seq tuple tuple_struct tuple_variant map struct struct_variant
     }
@@ -542,118 +545,10 @@ impl ser::Serializer for RowWriter {
         value.serialize(self)
     }
 
-    fn serialize_bool(self, _: bool) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_i8(self, _: i8) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_i16(self, _: i16) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_i32(self, _: i32) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_i64(self, _: i64) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_u8(self, _: u8) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_u16(self, _: u16) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_u32(self, _: u32) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_u64(self, _: u64) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_f32(self, _: f32) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_f64(self, _: f64) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_char(self, _: char) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_str(self, _: &str) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_none(self) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_unit(self) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_newtype_variant<T: Serialize + ?Sized>(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: &T,
-    ) -> Result<Self::Ok, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Self::SerializeTupleStruct, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_tuple_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleVariant, Refusal> {
-        Err(not_a_row())
-    }
-
-    fn serialize_struct_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStructVariant, Refusal> {
-        Err(not_a_row())
+    refuse! {
+        not_a_row();
+        bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str bytes none unit unit_struct unit_variant
+        newtype_variant seq tuple tuple_struct tuple_variant struct_variant
     }
 }
 

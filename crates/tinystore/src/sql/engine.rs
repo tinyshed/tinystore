@@ -11,10 +11,7 @@ use crate::{Clock, Durability, Error, Memory, Result, Store};
 /// The history a database's own migrations are kept under.
 const HISTORY: &str = "migrations";
 
-/// A database's file in the store's directory.
-fn file_of(name: &str) -> String {
-    format!("sql/{name}.db")
-}
+use crate::engine::database_file as file_of;
 
 /// Statements known to write that a database remembers; past them it forgets
 /// them all and asks SQLite again.
@@ -175,8 +172,18 @@ impl Base {
     }
 
     pub(crate) fn describe(&self) -> String {
-        format!("sql {}", self.name)
+        described(&self.name)
     }
+
+    /// An error of `statement`, named by it and by the database.
+    pub(super) fn failed(&self, statement: &super::statement::Sql, error: Error) -> Error {
+        error.within(statement.describe()).within(self.describe())
+    }
+}
+
+/// The database `name` as an error names it: `sql app`.
+pub(super) fn described(name: &str) -> String {
+    format!("sql {name}")
 }
 
 /// A database's connections: every file's, their cache of prepared statements

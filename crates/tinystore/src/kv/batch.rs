@@ -119,9 +119,7 @@ impl Batch {
     }
 
     pub(crate) fn add(&mut self, counters: &Counters, key: &str, n: i64) -> Result<()> {
-        if counters.buffer.is_some() {
-            return Err(Error::invalid("counters kept in memory join no transaction").within(counters.scope.shown()));
-        }
+        counters.refuse_in_memory()?;
         self.join(&counters.scope)?;
         let work = counters.add_work(key, n)?;
         self.write(&counters.scope, key, move |tx, revision| {

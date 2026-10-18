@@ -195,7 +195,7 @@ pub(crate) fn node_id(logs: &Path) -> Result<String> {
     hash.update(std::process::id().to_le_bytes());
     hash.update(format!("{:?}", std::time::SystemTime::now()));
     hash.update(std::hash::BuildHasher::hash_one(&std::collections::hash_map::RandomState::new(), 0_u64).to_le_bytes());
-    let id: String = hash.finalize()[..16].iter().map(|byte| format!("{byte:02x}")).collect();
+    let id: String = crate::text::hex(&hash.finalize()[..16]);
     std::fs::write(&path, &id).map_err(|error| Error::io(path.display().to_string(), error))?;
     crate::durable::sync_directory(logs).map_err(|error| Error::io(logs.display().to_string(), error))?;
     Ok(id)

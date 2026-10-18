@@ -168,7 +168,7 @@ fn words(key: &str) -> Vec<String> {
             continue;
         }
         if let Some(from) = start
-            && starts_word(&chars, at)
+            && crate::text::starts_word(&chars, at)
         {
             out.push(lower(&chars[from..at]));
             start = Some(at);
@@ -183,17 +183,6 @@ fn words(key: &str) -> Vec<String> {
 
 fn lower(chars: &[char]) -> String {
     chars.iter().collect::<String>().to_lowercase()
-}
-
-/// A capital after a small letter or a digit, or a capital before a small
-/// letter after capitals: `passwordHash`, `APIKey`.
-fn starts_word(chars: &[char], at: usize) -> bool {
-    if !chars[at].is_uppercase() {
-        return false;
-    }
-    let before = chars[at - 1];
-    let lower_after = chars.get(at + 1).is_some_and(|c| c.is_lowercase());
-    before.is_lowercase() || before.is_numeric() || before.is_uppercase() && lower_after
 }
 
 /// Whether some words in a row, written together, are `name`.

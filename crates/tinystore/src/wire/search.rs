@@ -5,9 +5,7 @@
 //! index opens with its database's handle, and its hits carry their rows as
 //! sql's rows carry them.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -22,19 +20,17 @@ use crate::engine::SharedFile;
 use crate::search::{self, Document, Index, Rebuild, SearchCall, Status};
 use crate::{Store, unix_millis};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// The indexes a connection opened, by handle.
 #[derive(Default)]
 pub(crate) struct Handles {
-    last: AtomicU64,
-    open: Mutex<HashMap<u64, Index<Value>>>,
+    open: super::ByHandle<Index<Value>>,
 }
 
 impl Handles {
     fn index(&self, handle: u64) -> Result<Index<Value>, Failure> {
-        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        open.get(&handle).cloned().ok_or_else(|| Failure::invalid(format!("index {handle}: no such handle")))
+        self.open.get(handle, || format!("index {handle}: no such handle"))
     }
 
     /// An index of documents of its own, which a call sets, reads and deletes.
@@ -47,10 +43,6 @@ impl Handles {
             )));
         }
         Ok(index)
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HashMap<u64, Index<Value>>> {
-        self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -96,8 +88,7 @@ fn open((store, lent): (&Store, Lent<'_>), handles: &Handles, asked: SearchOpen,
         None if read_only => search::open_as_it_is(store, &asked.name)?,
         None => documents_index(store, &asked)?,
     };
-    let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
-    handles.lock().insert(handle, index);
+    let handle = handles.open.keep(index);
     Ok(Handle { handle }.encode())
 }
 

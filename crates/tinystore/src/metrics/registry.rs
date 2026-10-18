@@ -73,7 +73,7 @@ fn register(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
         execute(tx, INSERT_POSTING, params![pair, id], "index a series' label")?;
         execute(tx, COUNT_POSTING, params![pair], "count a label's series")?;
     }
-    for (label, value) in batch.kept.pairs().iter().filter(|(label, _)| !label.starts_with("__")) {
+    for (label, value) in batch.kept.pairs().iter().filter(|(label, _)| !super::labels::is_own(label)) {
         execute(tx, COUNT_NAME_LABEL, params![batch.name, label, value], "count a name's label")?;
     }
     execute(tx, INSERT_STATE, params![id, batch.name, batch.points[0].at], "start a series' state")?;

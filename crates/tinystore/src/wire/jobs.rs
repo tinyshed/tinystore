@@ -33,7 +33,7 @@ use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
 /// A job's value as the wire carries it.
 type Raw = Box<RawValue>;
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// Puts a DATA of a work stream on its connection.
 pub(crate) type Sender = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
@@ -42,7 +42,7 @@ pub(crate) type Sender = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 pub(crate) type Finisher = Arc<dyn Fn(Answered) + Send + Sync>;
 
 /// Runs a task on the session's workers, off the thread that asked.
-pub(crate) type Spawn = Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
+pub(crate) use super::Spawn;
 
 /// A connection's workers, by stream.
 type Works = Mutex<HashMap<u32, Arc<Work>>>;

@@ -9,7 +9,7 @@ use super::rows::due_of;
 use super::state::QueueState;
 use super::values;
 use crate::clock::from_unix_millis;
-use crate::sqlite::{TextBytes, prefix_end, sql_error};
+use crate::sqlite::{TextBytes, prefix_end, query_cached, sql_error};
 use crate::{Error, Result};
 
 /// `ahead` counts this far: a job further back reads it.
@@ -297,12 +297,7 @@ fn one(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Optio
 }
 
 fn all(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Found>> {
-    let read = || -> rusqlite::Result<Vec<Found>> {
-        let mut select = c.prepare_cached(sql)?;
-        let rows = select.query_map(params, found)?;
-        rows.collect()
-    };
-    read().map_err(|error| sql_error("a page of jobs", error))
+    query_cached(c, (sql, "a page of jobs"), params, found)
 }
 
 fn found(row: &Row<'_>) -> rusqlite::Result<Found> {

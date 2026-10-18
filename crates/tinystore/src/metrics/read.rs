@@ -1,8 +1,6 @@
 //! `read`: the samples of each series a query finds, in its range, decoded
 //! from what one snapshot of the file copied.
 
-use std::time::Duration;
-
 use super::budget::Budget;
 use super::codec::Point;
 use super::engine::Engine;
@@ -16,8 +14,7 @@ use crate::{Error, Result};
 /// What a read reserves of the store's memory for each sample it decodes,
 /// beside the bytes it copied.
 const SAMPLE_HELD: u64 = 32;
-/// How long a query waits for the store's memory.
-pub(super) const PATIENCE: Duration = Duration::from_secs(10);
+pub(super) use crate::memory::PATIENCE;
 
 impl Engine {
     pub(super) fn read(&self, asked: &Asked) -> Result<Vec<Series>> {

@@ -168,7 +168,7 @@ impl Kv {
 
     /// The file as an error names it: `kv.db`, or `sql app`.
     pub(crate) fn place(&self) -> &str {
-        self.lent_by.as_deref().unwrap_or("kv.db")
+        self.lent_by.as_deref().unwrap_or(FILE)
     }
 
     pub(crate) fn now(&self) -> i64 {

@@ -1,8 +1,5 @@
 use super::*;
-
-fn zstd() -> Zstd {
-    Zstd::windowed(3, 13)
-}
+use crate::metrics::codec::zstd;
 
 fn points(values: &[f64]) -> Vec<Point> {
     values.iter().zip(0..).map(|(&value, index)| Point { at: 1_000 + index * 15_000, value }).collect()

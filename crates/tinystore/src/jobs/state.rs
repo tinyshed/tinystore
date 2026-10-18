@@ -55,6 +55,12 @@ pub(crate) struct QueueState {
 }
 
 impl QueueState {
+    /// Wakes the queue's workers for a job due at `at`, and its watchers.
+    pub(crate) fn wake(&self, at: i64) {
+        self.alarm.lower(at);
+        self.watchers.changed();
+    }
+
     pub(crate) fn new(id: i64, name: &str, kind: Kind, policy: Policy, lent_by: Option<String>) -> QueueState {
         QueueState {
             id,

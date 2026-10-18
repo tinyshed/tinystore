@@ -111,7 +111,7 @@ enum Verifying {
 
 /// The file in a copy's log directory that names the node a direct link
 /// takes it from, so that the link is made again when the node starts.
-const DIRECT: &str = "from";
+pub(super) const DIRECT: &str = "from";
 
 /// The files whose route may be changing now, by their name: a takeover, a
 /// hand-over or a snapshot taken again changes how an engine's file is reached.
@@ -763,6 +763,25 @@ impl State {
         self.stopping.load(Ordering::SeqCst)
     }
 
+    /// What this node first says on a link, naming itself at `address`, or
+    /// by no address when it only asks.
+    pub(crate) fn hello(&self, address: String) -> super::message::Message {
+        super::message::Message::Hello {
+            version: super::message::VERSION,
+            token: self.options.token.clone().unwrap_or_default(),
+            node: self.id.clone(),
+            address,
+        }
+    }
+
+    /// Sleeps `span`, waking within 50 ms once the node stops.
+    pub(crate) fn pause(&self, span: Duration) {
+        let until = Instant::now() + span;
+        while Instant::now() < until && !self.stopping() {
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     pub(crate) fn spawn(&self, name: &str, work: impl FnOnce() + Send + 'static) {
         // each line a node's threads log names the node, for a process or a log that holds several
         let inside = tracing::Span::current().metadata().is_some_and(|span| span.name() == "node");
@@ -1025,10 +1044,7 @@ impl State {
                     Err(error) => tracing::debug!(target: "tinystore", %file, %error, "a node's claim of a file it took waits for the catalog"),
                 }
                 drop(store);
-                let until = Instant::now() + Duration::from_secs(2);
-                while Instant::now() < until && !state.stopping() {
-                    thread::sleep(Duration::from_millis(50));
-                }
+                state.pause(Duration::from_secs(2));
             }
         });
     }
@@ -1164,9 +1180,7 @@ impl Source for HomeSource {
         // With no writer open, a WAL that holds frames may hold commits a
         // process that died made and its log never took: they reach the log
         // when the file's engine opens it.
-        let mut wal = self.path.as_os_str().to_owned();
-        wal.push("-wal");
-        if fs::metadata(PathBuf::from(wal)).is_ok_and(|wal| wal.len() > 0) {
+        if fs::metadata(crate::sqlite::wal_of(&self.path)).is_ok_and(|wal| wal.len() > 0) {
             return Err(Error::new(
                 ErrorKind::Unavailable,
                 "its WAL holds commits its log may lack until its engine opens it",

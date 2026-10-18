@@ -198,6 +198,20 @@ fn collect<'a>(group: &'a Group, path: &str, settings: &mut Vec<(String, &'a Set
     }
 }
 
+/// The path of the setting `key` names in the group at `path`, as a
+/// declaration may give it: a key that is not empty and has no dot, a path of
+/// at most `MOST_PATH` bytes.
+pub(super) fn declared_path(path: &str, key: &str) -> Result<String, String> {
+    let at = joined(path, key);
+    if key.is_empty() || key.contains('.') {
+        return Err(format!("{at:?}: a setting's key is not empty and has no dot"));
+    }
+    if at.len() > MOST_PATH {
+        return Err(format!("{at}: a path past the {MOST_PATH} bytes a setting's takes"));
+    }
+    Ok(at)
+}
+
 pub(crate) fn joined(path: &str, key: &str) -> String {
     if path.is_empty() { key.to_owned() } else { format!("{path}.{key}") }
 }
@@ -222,13 +236,7 @@ pub(crate) fn did_you_mean(meant: Option<String>) -> String {
 fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, String> {
     let mut settings = Group::new();
     for (key, value) in map {
-        let at = joined(path, key);
-        if key.is_empty() || key.contains('.') {
-            return Err(format!("{at:?}: a setting's key is not empty and has no dot"));
-        }
-        if at.len() > MOST_PATH {
-            return Err(format!("{at}: a path past the {MOST_PATH} bytes a setting's takes"));
-        }
+        let at = declared_path(path, key)?;
         let node = match value {
             Value::Object(inner) if is_group(inner) => Node::Group(group(inner, &at, place)?),
             _ => Node::Setting(setting(value, &at, place)?),

@@ -9,8 +9,7 @@
 //! last answered with what the writer dropped.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::value::RawValue;
@@ -30,7 +29,7 @@ use crate::records::{
 use crate::sync::lock;
 use crate::{ErrorKind, Store, unix_nanos};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// A connection's tails, by stream.
 type Tails = Mutex<HashMap<u32, Arc<Tailing>>>;
@@ -50,22 +49,14 @@ pub(crate) fn route(called: u16) -> Route {
 /// lines, by the stream each came on.
 #[derive(Default)]
 pub(crate) struct Handles {
-    open: Mutex<HashMap<u64, Events>>,
-    last: AtomicU64,
+    open: super::ByHandle<Events>,
     tails: Arc<Tails>,
     writers: Mutex<HashMap<u32, Writer>>,
 }
 
 impl Handles {
     fn events(&self, handle: u64) -> Result<Events, Failure> {
-        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        open.get(&handle)
-            .cloned()
-            .ok_or_else(|| Failure::invalid(format!("handle {handle} names no stream opened here")))
-    }
-
-    fn lock(&self) -> MutexGuard<'_, HashMap<u64, Events>> {
-        self.open.lock().unwrap_or_else(PoisonError::into_inner)
+        self.open.get(handle, || format!("handle {handle} names no stream opened here"))
     }
 
     /// Credit the client granted a tail's stream.
@@ -164,8 +155,7 @@ fn open(store: &Store, handles: &Handles, asked: RecordsOpen, read_only: bool) -
         events = events.keep(Duration::from_millis(keep));
     }
     let events = events.open()?;
-    let handle = handles.last.fetch_add(1, Ordering::Relaxed) + 1;
-    handles.lock().insert(handle, events);
+    let handle = handles.open.keep(events);
     Ok(Handle { handle }.encode())
 }
 
@@ -237,7 +227,7 @@ fn aggregate(store: &Store, handles: &Handles, asked: RecordsAggregateAsked) -> 
 fn streams(store: &Store) -> Answered {
     let streams = store.all_events()?.streams()?.into_iter().map(|stream| RecordsStream {
         name: stream.name,
-        keep: u64::try_from(stream.keep.as_millis()).unwrap_or(u64::MAX),
+        keep: crate::clock::millis(stream.keep) as u64,
         retained_from: unix_nanos(stream.retained_from),
         newest: unix_nanos(stream.newest),
     });
@@ -355,9 +345,7 @@ fn object_of(fields: &Fields) -> Option<String> {
     if fields.is_empty() {
         return None;
     }
-    let pairs: Vec<String> =
-        fields.iter().map(|(key, json)| format!("{}:{json}", serde_json::to_string(key).unwrap_or_default())).collect();
-    Some(format!("{{{}}}", pairs.join(",")))
+    Some(fields.object())
 }
 
 fn stats_of(stats: Stats) -> RecordsStats {

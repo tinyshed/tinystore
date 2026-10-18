@@ -331,7 +331,7 @@ impl Query {
             (Some(_), Some(_)) => {
                 return Err(Error::invalid("a query starts `since` before now or `from` a time, not both"));
             }
-            (Some(span), None) => now.saturating_sub(i64::try_from(span.as_millis()).unwrap_or(i64::MAX)),
+            (Some(span), None) => now.saturating_sub(crate::clock::millis(span)),
             (None, Some(from)) => unix_millis(from),
             (None, None) => i64::MIN,
         };
@@ -364,7 +364,7 @@ impl Query {
 /// a label of the store's own, of no values or of too many is refused.
 fn check(label: &str, condition: &Condition) -> Result<Condition> {
     let condition_of = || format!("label {label:?}");
-    if label.starts_with("__") {
+    if super::labels::is_own(label) {
         return Err(Error::invalid(format!("{}: a name beginning with __ is the store's own", condition_of())));
     }
     if label.is_empty() || label.len() > MOST_NAME_BYTES {

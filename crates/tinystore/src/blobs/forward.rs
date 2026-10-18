@@ -18,8 +18,7 @@ use super::files::{Files, Options};
 use crate::replication::{In, Out};
 use crate::{Error, ErrorKind, Result, Store};
 
-/// blobs' file, as a node names it.
-pub(crate) const FILE: &str = "blobs/blobs.db";
+pub(crate) use super::engine::FILE_IN_STORE as FILE;
 /// The bytes a copy's upload gathers at most, before its home takes them.
 pub(crate) const GATHERED: u64 = 256 << 20;
 

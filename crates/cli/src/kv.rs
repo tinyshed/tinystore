@@ -68,10 +68,7 @@ fn get(store: &Store, bucket: &str, key: &str, json: bool) -> Done {
 
 fn list(store: &Store, bucket: &str, branch: Option<&String>, json: bool) -> Done {
     let entries = read(store, bucket, |opened| {
-        let opened = branch.map_or_else(
-            || opened.clone(),
-            |branch| branch.split('/').fold(opened.clone(), |at, owner| at.under(owner)),
-        );
+        let opened = under(opened, branch.map(String::as_str));
         let mut entries = Vec::new();
         for entry in opened.all().take(MOST + 1) {
             let entry = entry?;
@@ -112,10 +109,7 @@ pub(crate) fn entries(
             Ok(opened.entry(key)?.map(|entry| (entry.key, entry.value, entry.expires_at)).into_iter().collect())
         }
         None => {
-            let branch = branch.map_or_else(
-                || opened.clone(),
-                |branch| branch.split('/').fold(opened.clone(), |at, owner| at.under(owner)),
-            );
+            let branch = under(opened, branch);
             branch.all().take(most).map(|entry| entry.map(|entry| (entry.key, entry.value, entry.expires_at))).collect()
         }
     })
@@ -132,6 +126,11 @@ type Kept = (String, Stored, Option<SystemTime>);
 
 /// Reads the bucket's entries as `Stored` values; an encrypted bucket with
 /// the store's key.
+/// The bucket under `branch`, its owners written as `42/devices`.
+fn under(opened: &Bucket<Stored>, branch: Option<&str>) -> Bucket<Stored> {
+    branch.map_or_else(|| opened.clone(), |branch| branch.split('/').fold(opened.clone(), |at, owner| at.under(owner)))
+}
+
 fn read(
     store: &Store,
     name: &str,
@@ -208,9 +207,7 @@ impl fmt::Display for Stored {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
+use crate::local::hex;
 
 impl Serialize for Stored {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

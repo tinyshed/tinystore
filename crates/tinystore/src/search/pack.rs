@@ -23,7 +23,6 @@ use crate::{Error, Result};
 
 const READ_NUMBERS: &str = "select next_doc, normed from _tinystore_search_indexes where id = ?1";
 const READ_LENGTHS: &str = "select doc, lengths from _tinystore_search_docs where index_id = ?1 and doc >= ?2";
-const READ_NORMS: &str = "select lengths from _tinystore_search_norms where index_id = ?1 and part = ?2 and chunk = ?3";
 const WRITE_NORMS: &str =
     "insert or replace into _tinystore_search_norms (index_id, part, chunk, lengths) values (?1, ?2, ?3, ?4)";
 const SET_NORMED: &str = "update _tinystore_search_indexes set normed = ?2 where id = ?1";
@@ -35,7 +34,8 @@ const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 
 const READ_LIST: &str = "select directory, inline from _tinystore_search_lists where key = ?1";
 pub(super) const WRITE_LIST: &str =
     "insert or replace into _tinystore_search_lists (key, directory, inline) values (?1, ?2, ?3)";
-const READ_BLOCK: &str = "select payload from _tinystore_search_blocks where key = ?1 and first = ?2";
+use super::kept::READ_NORMS;
+use super::read::READ_BLOCK;
 pub(super) const WRITE_BLOCK: &str =
     "insert or replace into _tinystore_search_blocks (key, first, payload) values (?1, ?2, ?3)";
 
@@ -92,7 +92,7 @@ fn norm(tx: &Tx<'_>, index: i64) -> Result<()> {
     for ((part, chunk), lengths) in rows {
         write_norms(tx, index, (part, chunk), &lengths)?;
     }
-    execute(tx, SET_NORMED, (index, next_doc), "write what is normed")
+    execute(tx, SET_NORMED, (index, next_doc), "write what is normed").map(drop)
 }
 
 /// Sets lengths in a row of `norms`, each at its document's place in it.
@@ -110,7 +110,7 @@ fn write_norms(connection: &Connection, index: i64, (part, chunk): (u32, u32), l
         }
         row[at] = u16::try_from(len).unwrap_or(u16::MAX);
     }
-    execute(connection, WRITE_NORMS, (index, part, chunk, bytes_of(&row)), "write lengths")
+    execute(connection, WRITE_NORMS, (index, part, chunk, bytes_of(&row)), "write lengths").map(drop)
 }
 
 /// The head's first rows in key order, one more than a step takes, to tell
@@ -179,7 +179,7 @@ fn append(connection: &Connection, key: i64, fresh: &[Posting]) -> Result<()> {
 fn append_inline(connection: &Connection, key: i64, mut all: Vec<Posting>, fresh: &[Posting]) -> Result<()> {
     all.extend_from_slice(fresh);
     if all.len() <= INLINE {
-        return execute(connection, WRITE_LIST, (key, None::<Vec<u8>>, pack_inline(&all)), "write a list");
+        return execute(connection, WRITE_LIST, (key, None::<Vec<u8>>, pack_inline(&all)), "write a list").map(drop);
     }
     write_blocks(connection, key, Vec::new(), &all)
 }
@@ -190,7 +190,7 @@ fn write_blocks(connection: &Connection, key: i64, mut entries: Vec<Entry>, fres
         entries.push(entry_of(block));
         execute(connection, WRITE_BLOCK, (key, block[0].doc, pack(block)), "write a block")?;
     }
-    execute(connection, WRITE_LIST, (key, encode_directory(&entries), None::<Vec<u8>>), "write a list")
+    execute(connection, WRITE_LIST, (key, encode_directory(&entries), None::<Vec<u8>>), "write a list").map(drop)
 }
 
 /// A key's list as its row keeps it.

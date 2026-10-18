@@ -409,29 +409,8 @@ pub(crate) fn plain_name(name: &str) -> bool {
 
 /// The error kind `name` spells, as [`ErrorKind::as_str`] writes it.
 pub(crate) fn kind_of(name: &str) -> ErrorKind {
-    KINDS.into_iter().find(|kind| kind.as_str() == name).unwrap_or(ErrorKind::Internal)
+    ErrorKind::named(name).unwrap_or(ErrorKind::Internal)
 }
-
-/// Every error kind, each of which a link spells by its name.
-const KINDS: [ErrorKind; 17] = [
-    ErrorKind::Invalid,
-    ErrorKind::NotFound,
-    ErrorKind::Conflict,
-    ErrorKind::TooOld,
-    ErrorKind::TooNew,
-    ErrorKind::Limit,
-    ErrorKind::Closed,
-    ErrorKind::Corrupt,
-    ErrorKind::InUse,
-    ErrorKind::Suspended,
-    ErrorKind::Unavailable,
-    ErrorKind::Cancelled,
-    ErrorKind::OutcomeUnknown,
-    ErrorKind::CommittedLocally,
-    ErrorKind::Lost,
-    ErrorKind::Io,
-    ErrorKind::Internal,
-];
 
 fn corrupt(what: &str) -> Error {
     Error::new(ErrorKind::Corrupt, format!("a link: {what}"))
@@ -596,7 +575,7 @@ mod tests {
 
     #[test]
     fn every_error_kind_crosses_a_link_by_its_name() {
-        // a kind added to ErrorKind and not to KINDS fails to compile here
+        // a kind added to ErrorKind and not to ErrorKind::ALL fails to compile here
         let listed = |kind: ErrorKind| match kind {
             ErrorKind::Invalid
             | ErrorKind::NotFound
@@ -614,9 +593,9 @@ mod tests {
             | ErrorKind::CommittedLocally
             | ErrorKind::Lost
             | ErrorKind::Io
-            | ErrorKind::Internal => KINDS.contains(&kind),
+            | ErrorKind::Internal => ErrorKind::ALL.contains(&kind),
         };
-        for kind in KINDS {
+        for kind in ErrorKind::ALL {
             assert!(listed(kind));
             assert_eq!(kind_of(kind.as_str()), kind, "{kind:?}");
         }

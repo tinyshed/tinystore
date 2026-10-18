@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::Node;
-use super::message::{Frames, Message, VERSION, timed_out};
+use super::message::{Frames, Message, timed_out};
 use super::node::State;
 use super::serve::Out;
 use crate::{Error, ErrorKind, Result};
@@ -26,12 +26,7 @@ pub fn served_by(dir: &Path, node: Node, address: &str) -> Result<Option<Vec<Str
     reading.set_timeout(Duration::from_millis(100))?;
     writing.set_timeout(ANSWER)?;
     let out = Out::new(writing);
-    out.send(&Message::Hello {
-        version: VERSION,
-        token: state.options.token.clone().unwrap_or_default(),
-        node: state.id.clone(),
-        address: String::new(),
-    })?;
+    out.send(&state.hello(String::new()))?;
     let mut frames = Frames::default();
     let deadline = Instant::now() + ANSWER;
     loop {

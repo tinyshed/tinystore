@@ -13,7 +13,7 @@ use crate::kv::locks::{Answer, Granted, Locks, Remote, remote_ask};
 use crate::sync::lock;
 use crate::{Clock, Error, ErrorKind, Store, unix_millis};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// What a hold's answer goes to: the stream's RESPONSE.
 pub(crate) type Answering = Box<dyn FnOnce(Answered) + Send>;

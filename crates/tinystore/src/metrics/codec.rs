@@ -127,6 +127,11 @@ const LEVEL: i32 = 3;
 
 /// The zstd contexts the engine's calls borrow, so that a read does not make
 /// its own: a few are kept, the rest let go when given back.
+/// A context of zstd at the level and window every run of the store packs with.
+pub(super) fn zstd() -> Zstd {
+    Zstd::windowed(LEVEL, WINDOW_LOG)
+}
+
 #[derive(Debug, Default)]
 pub(super) struct Codecs {
     kept: Mutex<Vec<Zstd>>,
@@ -138,7 +143,7 @@ const KEPT_CODECS: usize = 8;
 impl Codecs {
     pub(super) fn take(&self) -> Zstd {
         let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner).pop();
-        kept.unwrap_or(Zstd::windowed(LEVEL, WINDOW_LOG))
+        kept.unwrap_or_else(zstd)
     }
 
     pub(super) fn give_back(&self, zstd: Zstd) {

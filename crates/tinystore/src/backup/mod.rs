@@ -203,17 +203,17 @@ fn check_file(name: &str) -> Result<()> {
     }
     let first = name.split('/').next().unwrap_or_default();
     let own = |own: &&str| first == *own || first.strip_prefix(own).is_some_and(|rest| rest.starts_with('-'));
-    if OWN.iter().any(own) || first.starts_with(snapshot::PREFIX) {
+    let engines = snapshot::FILES.iter().map(|(file, _)| file);
+    if OWN.iter().chain(engines).any(own) || first.starts_with(snapshot::PREFIX) {
         return refused("a file of the store's own, which a backup holds or leaves by itself");
     }
     Ok(())
 }
 
-/// The names of the store's directory a program's file is none of: the
-/// engines' files, with their journals after a `-`, `LOCK`, the server's
-/// and the manifest's.
-const OWN: [&str; 10] =
-    ["LOCK", MANIFEST, "kv.db", "jobs.db", "records.db", "metrics.db", "search.db", "sql", "blobs", "server"];
+/// The names of the store's directory a program's file is none of, beside
+/// the engines' files: `LOCK`, the manifest's, the databases', blobs' and the
+/// server's; each with its journals after a `-`.
+const OWN: [&str; 5] = ["LOCK", MANIFEST, "sql", "blobs", "server"];
 
 /// Whether `name` is a relative path whose parts are each a name: no `..`,
 /// no root, no drive, no `\`.

@@ -229,10 +229,4 @@ fn refuse_past_bound(connection: &Connection, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute(connection: &Connection, sql: &str, params: impl rusqlite::Params, what: &str) -> Result<()> {
-    connection
-        .prepare_cached(sql)
-        .and_then(|mut statement| statement.execute(params))
-        .map(drop)
-        .map_err(|error| sql_error(what, error))
-}
+use crate::sqlite::execute_cached as execute;

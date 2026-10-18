@@ -9,10 +9,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::policy::Policy;
-use super::repeat::{Repeat, fnv1a};
+use super::repeat::Repeat;
 use super::rows::{self, PARKED_BY, execute};
 use super::state::QueueState;
-use crate::sqlite::sql_error;
+use crate::sqlite::{query_cached, sql_error};
+use crate::text::fnv1a;
 use crate::{Error, ErrorKind, Result};
 
 /// Jobs one claim takes at most, and jobs of full groups it parks at most,
@@ -309,12 +310,8 @@ fn by_group(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
 }
 
 fn running_by_group(c: &Connection, claiming: &Claiming<'_>) -> Result<HashMap<String, i64>> {
-    let read = || -> rusqlite::Result<HashMap<String, i64>> {
-        let mut select = c.prepare_cached(RUNNING_IN_GROUPS)?;
-        let rows = select.query_map(params![claiming.queue.id, claiming.now], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        rows.collect()
-    };
-    read().map_err(|error| sql_error("a claim: the jobs each group runs", error))
+    let read = (RUNNING_IN_GROUPS, "a claim: the jobs each group runs");
+    query_cached(c, read, params![claiming.queue.id, claiming.now], |row| Ok((row.get(0)?, row.get(1)?)))
 }
 
 /// A due job as a claim reads it.
@@ -332,23 +329,19 @@ struct DueRow {
 
 /// Up to `limit` due jobs no live lease holds, in the order of their time.
 fn due(c: &Connection, claiming: &Claiming<'_>, limit: usize) -> Result<Vec<DueRow>> {
-    let read = || -> rusqlite::Result<Vec<DueRow>> {
-        let mut select = c.prepare_cached(CLAIM_JOBS)?;
-        let rows = select.query_map(params![claiming.queue.id, claiming.now, limit as i64], |row| {
-            Ok(DueRow {
-                next: row.get(0)?,
-                id: row.get(1)?,
-                key: row.get(2)?,
-                at: row.get(3)?,
-                attempt: row.get(4)?,
-                value: row.get(5)?,
-                spill: row.get(6)?,
-                group: row.get(7)?,
-            })
-        })?;
-        rows.collect()
-    };
-    read().map_err(|error| sql_error("a claim: the jobs due", error))
+    let read = (CLAIM_JOBS, "a claim: the jobs due");
+    query_cached(c, read, params![claiming.queue.id, claiming.now, limit as i64], |row| {
+        Ok(DueRow {
+            next: row.get(0)?,
+            id: row.get(1)?,
+            key: row.get(2)?,
+            at: row.get(3)?,
+            attempt: row.get(4)?,
+            value: row.get(5)?,
+            spill: row.get(6)?,
+            group: row.get(7)?,
+        })
+    })
 }
 
 impl Claimed {
@@ -400,7 +393,7 @@ fn abandon(c: &Connection, claiming: &Claiming<'_>, row: &DueRow, attempts: i64)
     let failed =
         params![queue, row.next, row.id, attempts, claiming.now, cause, Option::<i64>::None, Option::<i64>::None];
     execute(c, FAIL_JOB, failed, "an abandoned job")?;
-    execute(c, DROP_JOB_ROW, params![queue, row.next, row.id], "an abandoned job")
+    execute(c, DROP_JOB_ROW, params![queue, row.next, row.id], "an abandoned job").map(drop)
 }
 
 /// When the queue next needs a claim: its first due job no live lease holds,

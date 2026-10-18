@@ -62,7 +62,7 @@ impl DatabaseBuilder {
     }
 
     pub fn open(self) -> Result<Database> {
-        let describe = format!("sql {}", self.name);
+        let describe = super::engine::described(&self.name);
         let durability = self.durability;
         let opened = check_name(&self.name)
             .and_then(|()| self.migrations.map(Migrations::load).transpose())
@@ -87,34 +87,53 @@ pub struct Done {
     pub last_insert_rowid: i64,
 }
 
+/// The calls that read a statement's rows, the same on a database and in its
+/// transaction: each type has `rows`, which reads them, and `base`.
+macro_rules! reads {
+    () => {
+        /// The rows a statement gives, each read as a `T`: a struct by its
+        /// columns' names, a tuple by their order, a single value when a row has
+        /// one column. A write with `returning` runs on the writer and gives its
+        /// rows once its commit is durable.
+        pub fn all<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Vec<T>> {
+            let statement = statement.into();
+            self.rows(&statement, Wanted::All)
+                .and_then(Rows::decode)
+                .map_err(|error| self.base.failed(&statement, error))
+        }
+
+        /// The one row a statement gives, or none; a statement that gives two is
+        /// `invalid`, and a write that gave them rolls back.
+        pub fn one<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Option<T>> {
+            let statement = statement.into();
+            let rows = self.rows(&statement, Wanted::One).and_then(Rows::decode);
+            rows.map(|rows: Vec<T>| rows.into_iter().next()).map_err(|error| self.base.failed(&statement, error))
+        }
+
+        /// The one value of the one row a statement gives, as `count(*)` does;
+        /// `Option` takes a `NULL`, as `max` over no rows gives.
+        pub fn scalar<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<T> {
+            let statement = statement.into();
+            self.rows(&statement, Wanted::Scalar)
+                .and_then(Rows::scalar)
+                .map_err(|error| self.base.failed(&statement, error))
+        }
+
+        /// A statement's rows as SQLite keeps them, for a caller that is not
+        /// Rust: the wire's.
+        pub(crate) fn rows_of(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
+            self.rows(statement, wanted).map_err(|error| self.base.failed(statement, error))
+        }
+    };
+}
+pub(super) use reads;
+
 impl Database {
     pub fn name(&self) -> &str {
         &self.base.name
     }
 
-    /// The rows a statement gives, each read as a `T`: a struct by its
-    /// columns' names, a tuple by their order, a single value when a row has
-    /// one column. A write with `returning` runs on the writer and gives its
-    /// rows once its commit is durable.
-    pub fn all<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Vec<T>> {
-        let statement = statement.into();
-        self.rows(&statement, Wanted::All).and_then(Rows::decode).map_err(|error| self.failed(&statement, error))
-    }
-
-    /// The one row a statement gives, or none; a statement that gives two is
-    /// `invalid`, and a write that gave them rolls back.
-    pub fn one<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Option<T>> {
-        let statement = statement.into();
-        let rows = self.rows(&statement, Wanted::One).and_then(Rows::decode);
-        rows.map(|rows: Vec<T>| rows.into_iter().next()).map_err(|error| self.failed(&statement, error))
-    }
-
-    /// The one value of the one row a statement gives, as `count(*)` does;
-    /// `Option` takes a `NULL`, as `max` over no rows gives.
-    pub fn scalar<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<T> {
-        let statement = statement.into();
-        self.rows(&statement, Wanted::Scalar).and_then(Rows::scalar).map_err(|error| self.failed(&statement, error))
-    }
+    reads!();
 
     /// Runs a write once it is durable. Writes from many callers share a
     /// commit, each in a savepoint of it: one that fails rolls back alone.
@@ -130,7 +149,7 @@ impl Database {
         self.base
             .file()
             .write(weight, move |tx| run::exec(tx, &running))
-            .map_err(|error| self.failed(&statement, error))
+            .map_err(|error| self.base.failed(&statement, error))
     }
 
     /// Runs statements known before they run as one, all of them or none, in
@@ -180,12 +199,6 @@ impl Database {
     #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
     pub(crate) fn shared(&self) -> &Arc<SharedFile> {
         &self.base.shared
-    }
-
-    /// A statement's rows as SQLite keeps them, for a caller that is not
-    /// Rust: the wire's.
-    pub(crate) fn rows_of(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
-        self.rows(statement, wanted).map_err(|error| self.failed(statement, error))
     }
 
     /// `exec` without waiting: `done` is called on the thread that commits it.
@@ -250,7 +263,7 @@ impl Database {
         }
         let held = Held::of(&self.base.memory);
         let read = self.base.file().read(|connection| run::read(connection, statement, wanted, held));
-        match read.map_err(|error| self.failed(statement, error))? {
+        match read.map_err(|error| self.base.failed(statement, error))? {
             Read::Rows(rows) => Ok(Some(rows)),
             Read::Writes => {
                 self.base.remember_write(statement.text());
@@ -271,10 +284,6 @@ impl Database {
         }
         let (running, held) = (statement.clone(), Held::of(&self.base.memory));
         self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted, held))
-    }
-
-    fn failed(&self, statement: &Sql, error: Error) -> Error {
-        error.within(statement.describe()).within(self.base.describe())
     }
 
     /// What names a failure of `statement`, to say it on another thread.

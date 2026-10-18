@@ -46,7 +46,8 @@ const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
 const SEAL: &str = "update series_state set sealed_before = ?2, version = version + 1, ready = ?3, scale = ?4,
     head_count = ?5, head_start = ?6, head_end = ?7, due = ?8 where series_id = ?1";
-const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
+pub(super) const SUSPEND: &str =
+    "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
 
 impl Engine {
     /// Publishes staged series in one write, each in a savepoint, so that a

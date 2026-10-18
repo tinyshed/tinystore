@@ -39,8 +39,7 @@ const WAIT: Duration = Duration::from_hours(1);
 /// What packing one segment holds of the store's memory for each byte its
 /// events weigh: the rows read, the events parsed and sorted, the blocks made.
 pub(super) const HELD: u64 = 4;
-/// How long packing waits for the store's memory.
-pub(super) const PATIENCE: Duration = Duration::from_secs(10);
+pub(super) use crate::memory::PATIENCE;
 /// The segments one pass packs of a stream at most: what is left waits for
 /// the next pass, a minute on.
 const SWEEPS: usize = 64;

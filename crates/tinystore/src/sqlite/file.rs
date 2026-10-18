@@ -165,17 +165,9 @@ impl File {
         if self.is_copy() {
             return self.as_a_copy(write);
         }
-        let slot = Arc::new(Mutex::new(None));
-        let filled = Arc::clone(&slot);
-        let work: Work = Box::new(move |tx| {
-            let value = write(tx)?;
-            *lock(&filled) = Some(value);
-            Ok(())
-        });
+        let (work, slot) = keeping(write);
         self.group.write(&self.writer, bytes, work).map_err(|error| error.within(self.describe()))?;
-        lock(&slot)
-            .take()
-            .ok_or_else(|| Error::internal(format!("{}: a write committed without its value", self.describe())))
+        taken(&slot, &self.describe())
     }
 
     /// `write` without waiting: it queues the write and returns, and `done` is
@@ -198,20 +190,10 @@ impl File {
         if self.is_copy() {
             return done(self.as_a_copy(write));
         }
-        let slot = Arc::new(Mutex::new(None));
-        let filled = Arc::clone(&slot);
-        let work: Work = Box::new(move |tx| {
-            let value = write(tx)?;
-            *lock(&filled) = Some(value);
-            Ok(())
-        });
+        let (work, slot) = keeping(write);
         let describe = self.describe();
         let answered: Done = Box::new(move |answer| {
-            let value = answer.map_err(|error| error.within(&describe)).and_then(|()| {
-                let missing = || Error::internal(format!("{describe}: a write committed without its value"));
-                lock(&slot).take().ok_or_else(missing)
-            });
-            done(value);
+            done(answer.map_err(|error| error.within(&describe)).and_then(|()| taken(&slot, &describe)));
         });
         self.group.submit(&self.writer, bytes, work, answered);
     }
@@ -579,6 +561,26 @@ impl Begun<'_> {
         }
         handed
     }
+}
+
+/// The work of a write, which keeps the value `write` gives in the slot
+/// beside it, for its caller to take once the work committed.
+fn keeping<T: Send + 'static>(
+    write: impl FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
+) -> (Work, Arc<Mutex<Option<T>>>) {
+    let slot = Arc::new(Mutex::new(None));
+    let filled = Arc::clone(&slot);
+    let work: Work = Box::new(move |tx| {
+        let value = write(tx)?;
+        *lock(&filled) = Some(value);
+        Ok(())
+    });
+    (work, slot)
+}
+
+/// The value a committed write kept in its slot.
+fn taken<T>(slot: &Mutex<Option<T>>, file: &str) -> Result<T> {
+    lock(slot).take().ok_or_else(|| Error::internal(format!("{file}: a write committed without its value")))
 }
 
 impl Drop for Begun<'_> {

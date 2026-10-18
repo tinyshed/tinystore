@@ -11,14 +11,13 @@ use serde::Serialize;
 use super::engine::{AHEAD, LATENESS, Records, Stream, execute, nanos};
 use super::event::Kept;
 use super::event::{Level, MAX_EVENT, MAX_KEYS, NewEvent, SpanId, TraceId};
-use super::head::{self, ROW_EVENTS, ROW_WEIGHT, Row};
+use super::head::{self, Row};
 use super::read::List;
 use crate::{Error, ErrorKind, Result, Store, unix_nanos};
 
 /// What one append carries at most: more is sent in pieces.
 const MAX_APPEND: usize = 4 << 20;
-/// How long an append waits for the store's memory.
-const PATIENCE: Duration = Duration::from_secs(10);
+use crate::memory::PATIENCE;
 
 /// What opens a stream of events: its name, and how long it keeps them.
 #[derive(Debug)]
@@ -283,17 +282,7 @@ impl Records {
     /// holds at most, or at what they weigh.
     fn rows_of(&self, events: &[Kept]) -> Result<Vec<Row>> {
         let mut codec = self.codec.lock().unwrap_or_else(PoisonError::into_inner);
-        let (mut rows, mut from, mut weight) = (Vec::new(), 0, 0);
-        for (index, event) in events.iter().enumerate() {
-            let added = event.weight();
-            if index > from && (index - from == ROW_EVENTS || weight + added > ROW_WEIGHT) {
-                rows.push(head::encode(&events[from..index], &mut codec)?);
-                (from, weight) = (index, 0);
-            }
-            weight += added;
-        }
-        rows.push(head::encode(&events[from..], &mut codec)?);
-        Ok(rows)
+        super::pack::cut(events).into_iter().map(|row| head::encode(row, &mut codec)).collect()
     }
 }
 

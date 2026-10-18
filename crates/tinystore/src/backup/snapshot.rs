@@ -25,7 +25,7 @@ pub(super) const PREFIX: &str = ".snapshot-";
 
 /// The engines' files a store's directory may hold besides those of `sql/`
 /// and `blobs/`, by their names in it.
-const FILES: [(&str, &str); 5] = [
+pub(super) const FILES: [(&str, &str); 5] = [
     ("kv.db", "kv"),
     ("jobs.db", "jobs"),
     ("records.db", "records"),

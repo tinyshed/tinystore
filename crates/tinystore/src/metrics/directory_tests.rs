@@ -1,12 +1,9 @@
 use super::*;
 use crate::metrics::codec::Point;
+use crate::metrics::codec::zstd;
 use crate::metrics::series::Kind;
 use crate::metrics::summary::summarize;
 use crate::metrics::values::{self, UNTRIED};
-
-fn zstd() -> Zstd {
-    Zstd::windowed(3, 13)
-}
 
 /// A block of `values` from `start`, a second apart, its body encoded.
 fn block(start: i64, values: &[f64], payload: i64) -> Block {

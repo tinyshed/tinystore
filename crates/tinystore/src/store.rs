@@ -112,6 +112,9 @@ impl WeakStore {
     }
 }
 
+/// Engines open on a file, each by its type.
+pub(crate) type Engines = HashMap<TypeId, Arc<dyn Any + Send + Sync>>;
+
 struct Inner {
     dir: PathBuf,
     lock: Mutex<Option<File>>,
@@ -121,7 +124,7 @@ struct Inner {
     engines: Mutex<Vec<Arc<dyn Engine>>>,
     /// The engine of each kind this store has open, which every handle of that
     /// engine shares: one `kv.db` writer however many buckets open.
-    open: Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    open: Mutex<Engines>,
     /// Shared with each claim's release, which must not keep the store open.
     claims: Arc<Mutex<HashSet<String>>>,
     /// The engines' own files, kv.db and jobs.db, which the store's
@@ -474,6 +477,24 @@ impl Store {
         self.inner.describe()
     }
 
+    /// The engine of type `E` that `kept` holds, or the one `open` makes,
+    /// attached to the store and kept there.
+    pub(crate) fn kept_or_opened<E: Engine>(
+        &self,
+        kept: &Mutex<Engines>,
+        open: impl FnOnce(&Store) -> Result<Arc<E>>,
+    ) -> Result<Arc<E>> {
+        let mut kept = lock(kept);
+        if let Some(engine) = kept.get(&TypeId::of::<E>()) {
+            let engine = Arc::clone(engine);
+            return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
+        }
+        let engine = open(self)?;
+        self.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
+        kept.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
+        Ok(engine)
+    }
+
     pub(crate) fn refuse_when_closed(&self, what: &str) -> Result<()> {
         if self.inner.closed.load(Ordering::SeqCst) {
             return Err(Error::closed(format!("{}: {what}", self.describe())));
@@ -485,15 +506,7 @@ impl Store {
 impl Host for Store {
     fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         self.refuse_when_closed("an engine opening")?;
-        let mut open_engines = lock(&self.inner.open);
-        if let Some(engine) = open_engines.get(&TypeId::of::<E>()) {
-            let engine = Arc::clone(engine);
-            return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
-        }
-        let engine = crate::sqlite::own_work(|| open(self))?;
-        self.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
-        open_engines.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
-        Ok(engine)
+        self.kept_or_opened(&self.inner.open, |store| crate::sqlite::own_work(|| open(store)))
     }
 
     fn attach(&self, engine: Arc<dyn Engine>) -> Result<()> {

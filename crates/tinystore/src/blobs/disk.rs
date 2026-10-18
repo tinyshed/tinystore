@@ -60,6 +60,11 @@ impl Disk {
         id >> IDS_PER_DIR
     }
 
+    /// Content `id`'s file by its path under the blobs' directory.
+    pub(crate) fn object_name(id: i64) -> String {
+        format!("{OBJECTS}/{:x}/{id:x}", Disk::fan(id))
+    }
+
     /// The first and the last id of a directory of `objects/`.
     pub(crate) fn span(fan: i64) -> (i64, i64) {
         (fan << IDS_PER_DIR, ((fan + 1) << IDS_PER_DIR) - 1)
@@ -152,7 +157,7 @@ impl Disk {
     /// system links nothing. A file that is missing is left out and logged,
     /// as the scrub will find it missing in the store.
     pub(crate) fn link_object(&self, id: i64, into: &Path) -> Result<Option<String>> {
-        let name = format!("{OBJECTS}/{:x}/{id:x}", Disk::fan(id));
+        let name = Disk::object_name(id);
         let (source, target) = (self.object_path(id), into.join(&name));
         let failed = |error: io::Error| Error::io(format!("snapshot blobs: {name}"), error);
         if let Some(parent) = target.parent() {

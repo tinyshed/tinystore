@@ -96,16 +96,21 @@ pub(crate) struct Condition {
     pub(crate) when_there: WhenThere,
 }
 
+/// Refuses a write that names an ETag the path's live file does not have.
+pub(super) fn holds_etag(etag: &str, existing: Option<&Current>, now: i64) -> Result<()> {
+    match existing.filter(|current| current.live(now)) {
+        Some(current) if matches(etag, &current.sha256) => Ok(()),
+        _ => Err(Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given")),
+    }
+}
+
 impl Condition {
     /// Whether the write goes ahead against what the path holds.
     fn holds(&self, existing: Option<&Current>, now: i64) -> Result<bool> {
-        let live = existing.filter(|current| current.live(now));
         if let Some(etag) = &self.if_match {
-            return match live {
-                Some(current) if matches(etag, &current.sha256) => Ok(true),
-                _ => Err(Error::new(ErrorKind::Conflict, "the path holds no file with the ETag given")),
-            };
+            return holds_etag(etag, existing, now).map(|()| true);
         }
+        let live = existing.filter(|current| current.live(now));
         match (live, self.when_there) {
             (None, _) | (Some(_), WhenThere::Replace) => Ok(true),
             (Some(_), WhenThere::Skip) => Ok(false),

@@ -161,8 +161,7 @@ impl Engine {
     }
 }
 
-/// How long the instruments' write waits for the store's memory.
-const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+use crate::memory::PATIENCE;
 
 /// Writes one slot's series in a savepoint: all of them, or none and the
 /// error that refused one. An error of the file rather than of the series

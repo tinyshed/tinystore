@@ -429,7 +429,8 @@ fn remember_the_end(_: &Wal, frames: c_int) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub(super) fn wal_of(path: &Path) -> PathBuf {
+/// The WAL beside the file at `path`.
+pub(crate) fn wal_of(path: &Path) -> PathBuf {
     let mut wal = OsString::from(path.as_os_str());
     wal.push("-wal");
     PathBuf::from(wal)

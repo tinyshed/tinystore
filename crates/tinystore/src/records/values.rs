@@ -52,9 +52,7 @@ fn integer(json: &str) -> Option<i64> {
 }
 
 /// What is inside a value's quotes, when it has them.
-fn unquoted(value: &str) -> Option<&str> {
-    value.strip_prefix('"')?.strip_suffix('"')
-}
+use super::logfmt::unquote as unquoted;
 
 /// Appends a column of values, `times` their events'; of none, nothing.
 pub(super) fn put_values(out: &mut Vec<u8>, values: &[&str], times: &[i64], codec: &mut Codec) -> Result<()> {

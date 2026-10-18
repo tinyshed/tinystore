@@ -150,8 +150,7 @@ impl Asked {
         };
         match &self.repeat {
             None => out.byte(0),
-            Some(Repeat::Every(span)) => out.byte(1).span(*span),
-            Some(Repeat::Cron { expr, zone }) => out.byte(2).text(expr).text(zone),
+            Some(repeat) => repeat.write(out),
         };
     }
 
@@ -166,9 +165,7 @@ impl Asked {
         };
         let repeat = match at.byte()? {
             0 => None,
-            1 => Some(Repeat::Every(at.span()?)),
-            2 => Some(Repeat::Cron { expr: at.text()?, zone: at.text()? }),
-            _ => return Err(super::forward::corrupt("a job's repeat")),
+            tag => Some(Repeat::read(tag, at)?),
         };
         Ok(Asked { id, when, group, repeat, refused })
     }

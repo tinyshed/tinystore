@@ -222,12 +222,7 @@ where
             return super::forward::pass_on_cancel(&store, self.passed_as(), id)
                 .map_err(|error| self.fail(Some(id), error));
         }
-        let (queue, key) = (Arc::clone(&self.state), id.to_owned());
-        let work = move |c: &SqlTx<'_>| {
-            let cancelled = write::cancel(c, &queue, &key)?;
-            queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
-            Ok(cancelled)
-        };
+        let work = self.cancel_work(id);
         let written = match tx {
             None => self.jobs.file().write(0, work),
             Some(tx) => self.run_in(tx, work),
@@ -252,18 +247,12 @@ where
     pub(crate) fn cancel_then(&self, id: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.jobs.file().is_copy() {
-            let queue =
-                Queue::<V> { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData };
+            let queue = self.clone();
             let id = id.to_owned();
             std::thread::spawn(move || done(queue.cancel_in(&id, None)));
             return;
         }
-        let (queue, key, named) = (Arc::clone(&self.state), id.to_owned(), self.named(Some(id)));
-        let work = move |c: &SqlTx<'_>| {
-            let cancelled = write::cancel(c, &queue, &key)?;
-            queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
-            Ok(cancelled)
-        };
+        let (work, named) = (self.cancel_work(id), self.named(Some(id)));
         let (jobs, state, key) = (Arc::clone(&self.jobs), Arc::clone(&self.state), id.to_owned());
         self.jobs.file().submit(0, work, move |written| match written {
             Ok(cancelled) => {
@@ -275,6 +264,17 @@ where
                 done(Err(error.within(named)));
             }
         });
+    }
+
+    /// The write that cancels the job under `id`, which tells the queue's
+    /// watchers inside it.
+    fn cancel_work(&self, id: &str) -> impl FnOnce(&SqlTx<'_>) -> Result<Cancelled> + Send + 'static {
+        let (queue, key) = (Arc::clone(&self.state), id.to_owned());
+        move |c: &SqlTx<'_>| {
+            let cancelled = write::cancel(c, &queue, &key)?;
+            queue.watchers.cancelled(&key, !matches!(cancelled, Cancelled::Nothing));
+            Ok(cancelled)
+        }
     }
 
     /// Where the job under `id` is: scheduled, waiting and how many jobs are
@@ -460,8 +460,7 @@ where
         let named = self.named(asked.id());
         #[cfg(feature = "replication")]
         if self.jobs.file().is_copy() {
-            let queue =
-                Queue::<V> { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData };
+            let queue = self.clone();
             let json = serde_json::to_value(value);
             std::thread::spawn(move || {
                 let written = json
@@ -478,8 +477,7 @@ where
         let (state, bytes) = (Arc::clone(&self.state), call.value.len());
         self.jobs.file().submit(bytes, self.change_of(change, call), move |due| {
             if let Ok(Some(at)) = due {
-                state.alarm.lower(at);
-                state.watchers.changed();
+                state.wake(at);
             }
             done(due.map(|due| due.is_some()).map_err(|error| error.within(named)));
         });
@@ -509,10 +507,7 @@ where
     /// the commit would not find the job, and sleep past it.
     fn wake(&self, at: i64, tx: Option<&Transaction<'_>>) {
         let state = Arc::clone(&self.state);
-        let wake = move |_committed: bool| {
-            state.alarm.lower(at);
-            state.watchers.changed();
-        };
+        let wake = move |_committed: bool| state.wake(at);
         match tx {
             None => wake(true),
             Some(tx) => tx.after(wake),

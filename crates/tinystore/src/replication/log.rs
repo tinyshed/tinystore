@@ -415,11 +415,7 @@ impl Log {
 
     /// Removes what the log directory `dir` kept of a later epoch.
     pub(crate) fn unfence_in(dir: &Path) -> Result<()> {
-        match fs::remove_file(dir.join(FENCED)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(io_error(&dir.join(FENCED), error)),
-        }
+        super::copy::remove_if_there(&dir.join(FENCED))
     }
 
     /// Refuses this log's file every write from now on: another node writes it
@@ -750,6 +746,4 @@ fn read_segment(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn io_error(path: &Path, error: io::Error) -> Error {
-    Error::io(path.display().to_string(), error)
-}
+use super::copy::io_error;

@@ -9,7 +9,7 @@ use super::codec::{self, Head, Point};
 use super::directory::{self, Group, Row};
 use super::head::{self, Extent};
 use crate::compress::checksum::Crc32;
-use crate::compress::frame::Zstd;
+use crate::metrics::codec::zstd;
 use crate::{ErrorKind, Result};
 
 /// The series a head's checksum and a directory's are bound to.
@@ -77,10 +77,6 @@ fn sealed(sum: Crc32, version: u8, body: &[u8]) -> Vec<u8> {
 fn times() -> Times {
     let points: Vec<Point> = (0..4).map(|n| Point { at: n * 1000, value: 0.0 }).collect();
     Times::of(&points)
-}
-
-fn zstd() -> Zstd {
-    Zstd::windowed(3, 13)
 }
 
 /// Whether a decoder read what it was given; a failure is `corrupt`.

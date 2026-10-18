@@ -232,7 +232,7 @@ impl Shape {
             Some(span) if span.is_zero() || span.subsec_nanos() % 1_000_000 != 0 => {
                 return Err(Error::invalid("every: a span of whole milliseconds, one at least"));
             }
-            Some(span) => Some(i64::try_from(span.as_millis()).unwrap_or(i64::MAX)),
+            Some(span) => Some(crate::clock::millis(span)),
         };
         let grouping = match (asking.by, asking.without) {
             (Some(_), Some(_)) => {
@@ -399,7 +399,7 @@ fn grouped(labels: &[String]) -> Result<Vec<String>> {
         return Err(Error::invalid(format!("a grouping of more than {MOST_LABELS} labels")));
     }
     for label in labels {
-        if label.is_empty() || label.len() > MOST_NAME_BYTES || label.starts_with("__") {
+        if label.is_empty() || label.len() > MOST_NAME_BYTES || super::labels::is_own(label) {
             return Err(Error::invalid(format!(
                 "group by label {label:?}: a name of 1 to {MOST_NAME_BYTES} bytes that does not begin with __"
             )));

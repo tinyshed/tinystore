@@ -51,7 +51,7 @@ impl Kept {
         let mut pairs = Vec::with_capacity(labels.len() + 1);
         let mut named = false;
         for (label, value) in labels {
-            if label.starts_with("__") {
+            if is_own(label) {
                 return Err(Error::invalid(format!("label {label:?}: a name beginning with __ is the store's own")));
             }
             if !named && label.as_str() > NAME {
@@ -180,6 +180,12 @@ impl fmt::Display for Kept {
 
 /// Writes a series as Prometheus prints it, a value's quotes, backslashes and
 /// line breaks escaped.
+/// Whether `label` is one of the store's own, `__name__` and its kind, which
+/// a program does not set.
+pub(super) fn is_own(label: &str) -> bool {
+    label.starts_with("__")
+}
+
 pub(super) fn format<'a>(
     f: &mut impl fmt::Write,
     name: &str,

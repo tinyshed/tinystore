@@ -36,8 +36,7 @@ const MOST_SAMPLES: usize = 10_000;
 const MOST_BYTES: usize = 4 << 20;
 /// What a sample weighs against the call's bytes, a time and a value.
 const SAMPLE_BYTES: usize = 16;
-/// How long a call waits for the store's memory.
-const PATIENCE: Duration = Duration::from_secs(10);
+use crate::memory::PATIENCE;
 
 /// One series' samples of a call, checked, in the order of their times, a
 /// time given twice holding the value given last.

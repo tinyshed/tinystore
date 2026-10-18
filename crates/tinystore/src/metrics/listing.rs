@@ -184,7 +184,7 @@ impl<P> List<P> {
             Of::Labels { name } => Kept::of(name, &Labels::new()).map(drop),
             Of::Values { name, label } => {
                 Kept::of(name, &Labels::new())?;
-                if label.starts_with("__") {
+                if super::labels::is_own(label) {
                     return Err(Error::invalid(format!(
                         "label {label:?}: a name beginning with __ is the store's own"
                     )));

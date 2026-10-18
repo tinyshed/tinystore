@@ -31,12 +31,8 @@ fn serving(dir: &Path) -> (Store, String) {
     (store, address)
 }
 
-fn eventually(what: &str, mut holds: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !holds() {
-        assert!(Instant::now() < deadline, "{what}: not within 30 seconds");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+fn eventually(what: &str, holds: impl FnMut() -> bool) {
+    crate::testing::holds_within(Duration::from_secs(30), what, holds);
 }
 
 /// Where the home's log of `name` stands with no commit under way.

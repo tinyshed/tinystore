@@ -18,6 +18,11 @@ pub(crate) const STORE_MEMORY_NOW: &str = "store memory, now";
 /// reservation. A request past the limit is a `Limit` error naming what asked:
 /// the caller gets a refusal, never a quietly smaller answer. The budget counts
 /// what work reserves; it is not a ceiling on the process's RSS.
+/// How long a call waits for other work to give the store's memory back
+/// before it fails `limit`.
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
+pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub struct Memory {
     limit: u64,
     used: Mutex<u64>,

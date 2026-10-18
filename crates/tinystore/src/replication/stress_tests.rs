@@ -156,12 +156,8 @@ fn free_address() -> String {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string()
 }
 
-fn eventually(what: &str, within: Duration, mut holds: impl FnMut() -> bool) {
-    let deadline = Instant::now() + within;
-    while !holds() {
-        assert!(Instant::now() < deadline, "{what}: not within {within:?}");
-        thread::sleep(Duration::from_millis(50));
-    }
+fn eventually(what: &str, within: Duration, holds: impl FnMut() -> bool) {
+    crate::testing::holds_within(within, what, holds);
 }
 
 fn say(began: Instant, what: impl std::fmt::Display) {

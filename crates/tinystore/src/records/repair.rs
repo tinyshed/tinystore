@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{MutexGuard, PoisonError};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use rusqlite::{OptionalExtension, params};
 
@@ -242,9 +242,7 @@ impl Records {
     }
 }
 
-fn time_of(nanos: i64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_nanos(nanos.max(0) as u64)
-}
+use crate::clock::from_unix_nanos as time_of;
 
 #[cfg(test)]
 #[path = "repair_tests.rs"]

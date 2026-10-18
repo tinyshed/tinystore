@@ -39,6 +39,34 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
+    /// Every kind, each of which a link between nodes spells by its name.
+    #[cfg(feature = "replication")]
+    pub(crate) const ALL: [ErrorKind; 17] = [
+        ErrorKind::Invalid,
+        ErrorKind::NotFound,
+        ErrorKind::Conflict,
+        ErrorKind::TooOld,
+        ErrorKind::TooNew,
+        ErrorKind::Limit,
+        ErrorKind::Closed,
+        ErrorKind::Corrupt,
+        ErrorKind::InUse,
+        ErrorKind::Suspended,
+        ErrorKind::Unavailable,
+        ErrorKind::Cancelled,
+        ErrorKind::OutcomeUnknown,
+        ErrorKind::CommittedLocally,
+        ErrorKind::Lost,
+        ErrorKind::Io,
+        ErrorKind::Internal,
+    ];
+
+    /// The kind `name` spells, as [`ErrorKind::as_str`] writes it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn named(name: &str) -> Option<ErrorKind> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Invalid => "invalid",

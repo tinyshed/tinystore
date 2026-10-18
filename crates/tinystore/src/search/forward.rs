@@ -21,8 +21,7 @@ pub(crate) fn make(store: &Store) -> Result<()> {
     super::engine::Search::of(store).map(drop)
 }
 
-/// search's file, where its home passes writes.
-pub(crate) const FILE: &str = "search.db";
+pub(crate) use super::engine::FILE;
 
 /// A document as it passes on.
 pub(super) struct Passed {

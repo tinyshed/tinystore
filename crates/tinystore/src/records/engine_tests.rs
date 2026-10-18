@@ -1,17 +1,7 @@
 use std::time::Duration;
 
 use super::super::fixture::{DAY, fixture};
-use super::*;
 use crate::ErrorKind;
-
-#[test]
-fn a_span_is_said_in_its_largest_whole_unit() {
-    let said = [(86_400 * 30, "30d"), (3600 * 12, "12h"), (90, "90s"), (60, "1m")];
-    for (seconds, text) in said {
-        assert_eq!(span(Duration::from_secs(seconds)), text);
-    }
-    assert_eq!(span(Duration::from_millis(1500)), "1500ms");
-}
 
 #[test]
 fn a_stream_nobody_gave_a_keep_keeps_fourteen_days() {

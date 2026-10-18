@@ -27,7 +27,7 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) const CHUNK: u32 = 256;
 
 /// Where a snapshot's file is put together beside the copy's name.
-const TAKING: &str = "taking";
+pub(super) const TAKING: &str = "taking";
 
 /// A copy being put together from a snapshot.
 pub(crate) struct Taking {
@@ -122,11 +122,7 @@ impl Taking {
         self.file.sync_all().map_err(|error| io_error(&self.temp, error))?;
         drop(self.file);
         let position = self.dir.join(Position::FILE);
-        match fs::remove_file(&position) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error(&position, error)),
-        }
+        super::copy::remove_if_there(&position)?;
         remove_file_and_wal(&self.target)?;
         Log::clear(&self.dir)?;
         if let Some(parent) = self.target.parent() {
@@ -161,12 +157,7 @@ fn remove_file_and_wal(target: &Path) -> Result<()> {
     for suffix in ["", "-wal", "-shm"] {
         let mut path = target.as_os_str().to_owned();
         path.push(suffix);
-        let path = PathBuf::from(path);
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error(&path, error)),
-        }
+        super::copy::remove_if_there(&PathBuf::from(path))?;
     }
     Ok(())
 }

@@ -142,7 +142,7 @@ fn write_state(tx: &Tx<'_>, index: i64, state: &State) -> Result<()> {
     };
     let row = (index, phase, state.built_through, state.probes, state.rescored, state.calibrated_vectors);
     let row = (row.0, row.1, row.2, row.3, row.4, row.5, state.calibrated_recall, state.version);
-    execute(tx, WRITE_STATE, row, "write an index's clusters")
+    execute(tx, WRITE_STATE, row, "write an index's clusters").map(drop)
 }
 
 impl Clusters {
@@ -366,7 +366,7 @@ pub(crate) fn assign(tx: &Tx<'_>, index: i64, step: &Assigned) -> Result<Option<
     }
     let mut touched = Vec::with_capacity(step.members.len());
     for (doc, cluster, code) in &step.members {
-        let key = index << 32 | i64::from(*doc);
+        let key = vectors::key(index, *doc);
         let assigned = tx.prepare_cached(ADD_MEMBER).and_then(|mut add| add.execute((index, cluster, doc, code, key)));
         if assigned.map_err(|error| sql_error("assign a vector", error))? > 0 {
             touched.push(*cluster);
@@ -384,12 +384,12 @@ pub(crate) fn assign(tx: &Tx<'_>, index: i64, step: &Assigned) -> Result<Option<
 fn read_vectors(connection: &Connection, index: i64, after: i64, most: i64) -> Result<Vec<(u32, Vec<f32>)>> {
     let failed = |error| sql_error("read vectors", error);
     let mut select = connection.prepare_cached(READ_VECTORS).map_err(failed)?;
-    let mut rows = select.query((index << 32 | after, (index + 1) << 32, most)).map_err(failed)?;
+    let mut rows = select.query((index << 32 | after, vectors::key(index + 1, 0), most)).map_err(failed)?;
     let mut read = Vec::new();
     while let Some(row) = rows.next().map_err(failed)? {
         let (key, length): (i64, f64) = (row.get(0).map_err(failed)?, row.get(1).map_err(failed)?);
         let bytes = row.get_ref(2).and_then(|value| Ok(value.as_blob()?)).map_err(failed)?;
-        read.push(((key & 0xffff_ffff) as u32, direction(bytes, length)));
+        read.push((vectors::doc_of(key), direction(bytes, length)));
     }
     Ok(read)
 }
@@ -446,7 +446,7 @@ pub(crate) fn split(tx: &Tx<'_>, index: i64, clusters: &Clusters, cluster: i64) 
     for (doc, direction) in &rows {
         let (half, _) = best_of(&halves, direction);
         let id = if half == 0 { cluster } else { added };
-        let key = index << 32 | i64::from(*doc);
+        let key = vectors::key(index, *doc);
         execute(tx, ADD_MEMBER, (index, id, doc, code(direction, &halves[half]), key), "move a member")?;
     }
     let mut state = state(tx, index)?;
@@ -625,10 +625,10 @@ fn raw_vector(connection: &Connection, index: i64, after: i64) -> Result<Option<
     let failed = |error| sql_error("read a vector", error);
     let mut select = connection.prepare_cached(READ_VECTORS).map_err(failed)?;
     let found = select
-        .query_row((index << 32 | after, (index + 1) << 32, 1), |row| {
+        .query_row((index << 32 | after, vectors::key(index + 1, 0), 1), |row| {
             let key: i64 = row.get(0)?;
             let bytes: Vec<u8> = row.get(2)?;
-            Ok(((key & 0xffff_ffff) as u32, bytes))
+            Ok((vectors::doc_of(key), bytes))
         })
         .optional()
         .map_err(failed)?;

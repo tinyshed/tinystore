@@ -3,9 +3,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use super::*;
+use crate::testing::{PATIENCE, holds_within};
 use crate::{ErrorKind, Options};
-
-const PATIENCE: Duration = Duration::from_secs(10);
 
 fn opened() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -23,14 +22,6 @@ fn kept<T: Send + 'static>() -> (impl FnMut(Message<T>) + Send + 'static, Kept<T
     (move |message| keeping.lock().unwrap().push(message), messages)
 }
 
-fn waits_for(what: &str, done: impl Fn() -> bool) {
-    let started = Instant::now();
-    while !done() {
-        assert!(started.elapsed() < PATIENCE, "{what}: still not so after {PATIENCE:?}");
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
 fn values<T: Clone>(messages: &Kept<T>) -> Vec<T> {
     messages.lock().unwrap().iter().map(|message| message.value.clone()).collect()
 }
@@ -45,7 +36,7 @@ fn a_subscriber_receives_what_is_published_from_now_on_in_order() {
     for text in ["a", "b", "c"] {
         chat.publish(&text.to_owned()).unwrap();
     }
-    waits_for("three messages", || received.lock().unwrap().len() == 3);
+    holds_within(PATIENCE, "three messages", || received.lock().unwrap().len() == 3);
     assert_eq!(values(&received), ["a", "b", "c"]);
     sub.stop();
     chat.publish(&"after the stop".to_owned()).unwrap();
@@ -73,7 +64,7 @@ fn a_subscription_takes_its_exact_branch_and_recursive_the_branches_below_too() 
     orders.under("eu").publish(&2).unwrap();
     orders.under("eu").under("shop-7").publish(&3).unwrap();
     orders.under("us").publish(&4).unwrap();
-    waits_for("the branch and below", || eu_and_below.lock().unwrap().len() == 2);
+    holds_within(PATIENCE, "the branch and below", || eu_and_below.lock().unwrap().len() == 2);
     thread::sleep(Duration::from_millis(20));
     assert_eq!(values(&eu), [2]);
     assert_eq!(values(&eu_and_below), [2, 3]);
@@ -138,7 +129,7 @@ fn a_message_of_a_transaction_is_handed_over_after_its_commit_and_never_after_a_
         tx.with(&events).under("note").publish(&"noted".to_owned())
     });
     in_db.unwrap();
-    waits_for("three handed over", || received.lock().unwrap().len() == 3);
+    holds_within(PATIENCE, "three handed over", || received.lock().unwrap().len() == 3);
     thread::sleep(Duration::from_millis(20));
     assert_eq!(values(&received), ["created 2", "a transaction of no file", "noted"]);
     sub.stop();
@@ -165,7 +156,7 @@ fn stop_from_inside_its_handler_answers_at_once_and_from_outside_waits_for_the_r
     for value in 1..=4 {
         chat.publish(&value).unwrap();
     }
-    waits_for("two", || received.lock().unwrap().len() >= 2);
+    holds_within(PATIENCE, "two", || received.lock().unwrap().len() >= 2);
     thread::sleep(Duration::from_millis(20));
     assert_eq!(values(&received), [1, 2], "no call after the stop");
 
@@ -209,7 +200,7 @@ fn a_handler_that_panics_or_a_message_of_another_type_is_told_and_the_next_follo
     numbers.publish(&2).unwrap();
     texts.publish(&"not a number".to_owned()).unwrap();
     numbers.publish(&3).unwrap();
-    waits_for("the two numbers", || received.lock().unwrap().len() == 2);
+    holds_within(PATIENCE, "the two numbers", || received.lock().unwrap().len() == 2);
     assert_eq!(values(&received), [1, 3]);
     assert_eq!(*failures.lock().unwrap(), [ErrorKind::Internal, ErrorKind::Corrupt]);
     sub.stop();

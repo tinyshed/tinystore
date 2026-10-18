@@ -91,8 +91,22 @@ pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
     }
 }
 
+/// The time `nanos` nanoseconds after the Unix epoch; the epoch for a time
+/// before it.
+#[cfg(feature = "records")]
+pub(crate) fn from_unix_nanos(nanos: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_nanos(nanos.max(0) as u64)
+}
+
 /// A span in whole milliseconds, saturating.
-#[cfg(any(feature = "kv", feature = "jobs", feature = "records", feature = "metrics"))]
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "blobs",
+    feature = "records",
+    feature = "metrics",
+    feature = "replication"
+))]
 pub(crate) fn millis(span: Duration) -> i64 {
     saturate(span.as_millis())
 }

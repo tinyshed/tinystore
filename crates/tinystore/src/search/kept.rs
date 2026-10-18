@@ -24,7 +24,8 @@ use crate::{Error, Memory, Reservation, Result};
 /// Documents a row of lengths holds.
 pub(crate) const NORMS: u32 = 65_536;
 
-const READ_NORMS: &str = "select lengths from _tinystore_search_norms where index_id = ?1 and part = ?2 and chunk = ?3";
+pub(super) const READ_NORMS: &str =
+    "select lengths from _tinystore_search_norms where index_id = ?1 and part = ?2 and chunk = ?3";
 const READ_GONE: &str = "select doc from _tinystore_search_gone where index_id = ?1";
 
 #[derive(Default)]

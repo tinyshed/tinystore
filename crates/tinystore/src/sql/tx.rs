@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 
-use super::database::Done;
+use super::database::{Done, reads};
 use super::engine::Base;
 use super::rows::{Held, Rows};
 use super::run::{self, Wanted};
@@ -25,25 +25,11 @@ impl<'t> Tx<'t> {
         Tx { transaction, base }
     }
 
-    pub fn all<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Vec<T>> {
-        let statement = statement.into();
-        self.rows(&statement, Wanted::All).and_then(Rows::decode).map_err(|error| self.failed(&statement, error))
-    }
-
-    pub fn one<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<Option<T>> {
-        let statement = statement.into();
-        let rows = self.rows(&statement, Wanted::One).and_then(Rows::decode);
-        rows.map(|rows: Vec<T>| rows.into_iter().next()).map_err(|error| self.failed(&statement, error))
-    }
-
-    pub fn scalar<T: DeserializeOwned>(&self, statement: impl Into<Sql>) -> Result<T> {
-        let statement = statement.into();
-        self.rows(&statement, Wanted::Scalar).and_then(Rows::scalar).map_err(|error| self.failed(&statement, error))
-    }
+    reads!();
 
     pub fn exec(&self, statement: impl Into<Sql>) -> Result<Done> {
         let statement = statement.into();
-        self.transaction.call(|raw| run::exec(raw, &statement)).map_err(|error| self.failed(&statement, error))
+        self.transaction.call(|raw| run::exec(raw, &statement)).map_err(|error| self.base.failed(&statement, error))
     }
 
     /// The calls of a bucket or a queue opened from this database, inside the
@@ -68,11 +54,6 @@ impl<'t> Tx<'t> {
         handle.in_tx(self.transaction)
     }
 
-    /// A statement's rows as SQLite keeps them, for the wire.
-    pub(crate) fn rows_of(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
-        self.rows(statement, wanted).map_err(|error| self.failed(statement, error))
-    }
-
     /// The transaction itself, for the wire's calls of other engines in it.
     #[cfg(feature = "wire")]
     pub(crate) fn transaction(&self) -> &'t Transaction<'t> {
@@ -81,10 +62,6 @@ impl<'t> Tx<'t> {
 
     fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
         self.transaction.call(|raw| run::write(raw, statement, wanted, Held::of(&self.base.memory)))
-    }
-
-    fn failed(&self, statement: &Sql, error: crate::Error) -> crate::Error {
-        error.within(statement.describe()).within(self.base.describe())
     }
 }
 

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::copy::{self, Copy};
 use super::entry::{self, Point};
-use super::message::{Frames, Message, Refusal, VERSION, plain_name, timed_out};
+use super::message::{Frames, Message, Refusal, plain_name, timed_out};
 use super::node::State;
 use super::serve::{Out, PING_EVERY, SILENT_AT_MOST};
 use super::snapshot::Taking;
@@ -163,10 +163,7 @@ pub(crate) fn start_direct(state: &Arc<State>, store: &Store, direct: Arc<Direct
             } else {
                 (pause * 2).min(Duration::from_secs(5))
             };
-            let until = Instant::now() + pause;
-            while Instant::now() < until && !state.stopping() {
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            state.pause(pause);
         }
     });
 }
@@ -195,10 +192,7 @@ fn keep_linked(state: &Arc<State>, store: &WeakStore) {
             index += 1;
             pause = (pause * 2).min(Duration::from_secs(5));
         }
-        let until = Instant::now() + pause;
-        while Instant::now() < until && !state.stopping() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        state.pause(pause);
     }
 }
 
@@ -212,18 +206,11 @@ enum Held {
 
 /// Follows the files over a link to `address` until it breaks.
 fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) -> Result<()> {
-    let stream = connect(address)?;
-    state.keep_link(&stream);
-    let (mut reading, writing) = super::transport::connect(state, address, stream)?;
+    let (mut reading, writing) = dial(state, address)?;
     reading.set_timeout(Duration::from_millis(250))?;
     writing.set_timeout(SILENT_AT_MOST)?;
     let out = Arc::new(Out::new(writing));
-    out.send(&Message::Hello {
-        version: VERSION,
-        token: state.options.token.clone().unwrap_or_default(),
-        node: state.id.clone(),
-        address: state.address(),
-    })?;
+    out.send(&state.hello(state.address()))?;
     let mut link = Link::new(state, store, scope, Arc::clone(&out));
     let mut frames = Frames::default();
     let (mut heard, mut listed, mut welcomed) = (Instant::now(), Instant::now(), false);
@@ -318,6 +305,13 @@ impl<'a> Link<'a> {
         }
         Ok(())
     }
+}
+
+/// Opens a link to the node at `address`, kept where a stop cuts it.
+pub(crate) fn dial(state: &State, address: &str) -> Result<(super::transport::Reading, super::transport::Writing)> {
+    let stream = connect(address)?;
+    state.keep_link(&stream);
+    super::transport::connect(state, address, stream)
 }
 
 pub(crate) fn connect(address: &str) -> Result<TcpStream> {

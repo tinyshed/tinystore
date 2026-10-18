@@ -13,6 +13,7 @@
 
 use super::binary::{advance, distance};
 use super::codec::{self, Head, MOST_SAMPLES as CHUNK, Point};
+use super::directory::MOST_BODY;
 use crate::compress::checksum::Crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count, put_int};
@@ -23,8 +24,6 @@ use crate::{Error, Result};
 pub(super) const MOST_SAMPLES: usize = 16_384;
 /// What a head's row holds at most.
 pub(super) const MOST_BYTES: usize = 1 << 20;
-/// What a chunk's body holds at most: the codec's stream and its frame.
-const MOST_BODY: usize = 8200;
 pub(super) const VERSION: u8 = 1;
 
 /// How many samples a head holds and its first and last times, which the

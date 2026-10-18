@@ -69,17 +69,7 @@ pub(crate) fn pass_on_cancel(store: &Store, queue: (&str, Option<&str>), id: &st
 /// the home, which keeps its job: a schedule runs where its file is written.
 pub(crate) fn pass_on_schedule(store: &Store, name: &str, repeat: &RepeatAsked) -> Result<()> {
     let mut out = head((name, None), 5);
-    match repeat {
-        RepeatAsked::Every(span) => {
-            out.byte(1);
-            out.long(u64::try_from(span.as_millis()).unwrap_or(u64::MAX));
-        }
-        RepeatAsked::Cron { expr, zone } => {
-            out.byte(2);
-            out.text(expr);
-            out.text(zone);
-        }
-    }
+    repeat.write(&mut out);
     answered(store, out).map(drop)
 }
 
@@ -128,11 +118,7 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         3 => queue.cancel(at.text()?)?,
         4 => true,
         5 => {
-            let repeat = match at.byte()? {
-                1 => RepeatAsked::Every(std::time::Duration::from_millis(at.long()?)),
-                2 => RepeatAsked::Cron { expr: at.text()?, zone: at.text()? },
-                _ => return Err(corrupt("a schedule's repeat")),
-            };
+            let repeat = RepeatAsked::read(at.byte()?, &mut at)?;
             super::schedule::keep_repeat(&queue, &repeat.of(&name)?)?;
             true
         }

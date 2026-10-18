@@ -35,6 +35,52 @@ mod workers;
 pub(crate) use session::Session;
 pub use session::Wake;
 
+/// The largest part a DATA carries, less `own` bytes of its frame: half of
+/// what the client takes at once, so that one grant lets the next part go
+/// while it reads the last.
+#[cfg(any(feature = "sql", feature = "blobs", feature = "metrics"))]
+pub(crate) fn part_bound(max_body: usize, credit: u64, own: usize) -> usize {
+    (max_body.min(usize::try_from(credit).unwrap_or(usize::MAX)) / 2).saturating_sub(own).max(1)
+}
+
+/// A call's answer: its body, or the failure the client is told.
+pub(crate) type Answered = Result<Vec<u8>, protocol::Failure>;
+
+/// What a connection opened of one kind, by the handle each was given.
+#[cfg(any(feature = "blobs", feature = "config", feature = "records", feature = "search", feature = "sql"))]
+#[derive(Debug)]
+pub(crate) struct ByHandle<T> {
+    last: std::sync::atomic::AtomicU64,
+    open: std::sync::Mutex<std::collections::HashMap<u64, T>>,
+}
+
+#[cfg(any(feature = "blobs", feature = "config", feature = "records", feature = "search", feature = "sql"))]
+impl<T> Default for ByHandle<T> {
+    fn default() -> Self {
+        ByHandle { last: Default::default(), open: Default::default() }
+    }
+}
+
+#[cfg(any(feature = "blobs", feature = "config", feature = "records", feature = "search", feature = "sql"))]
+impl<T: Clone> ByHandle<T> {
+    /// Keeps `value` under a handle no other the connection opened has.
+    pub(crate) fn keep(&self, value: T) -> u64 {
+        let handle = self.last.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        crate::sync::lock(&self.open).insert(handle, value);
+        handle
+    }
+
+    /// What `handle` names; `missing` says why there is none.
+    pub(crate) fn get(&self, handle: u64, missing: impl FnOnce() -> String) -> Result<T, protocol::Failure> {
+        crate::sync::lock(&self.open).get(&handle).cloned().ok_or_else(|| protocol::Failure::invalid(missing()))
+    }
+
+    #[cfg(feature = "config")]
+    pub(crate) fn clear(&self) {
+        crate::sync::lock(&self.open).clear();
+    }
+}
+
 /// The file of a database a connection opened, by its handle: where a bucket
 /// or a queue opened with that handle is kept.
 pub(crate) type Lent<'a> = &'a dyn Fn(u64) -> Result<std::sync::Arc<crate::engine::SharedFile>, protocol::Failure>;
@@ -89,6 +135,7 @@ pub(crate) enum Route {
 
 /// Work on a session's workers, off the thread that asked.
 #[cfg(any(
+    feature = "jobs",
     feature = "blobs",
     feature = "records",
     feature = "metrics",

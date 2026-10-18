@@ -216,12 +216,8 @@ pub(super) fn upper_snake(path: &str) -> String {
             name.push('_');
             continue;
         }
-        if at > 0 && c.is_uppercase() {
-            let before = chars[at - 1];
-            let small_after = chars.get(at + 1).is_some_and(|after| after.is_lowercase());
-            if before.is_lowercase() || before.is_ascii_digit() || (before.is_uppercase() && small_after) {
-                name.push('_');
-            }
+        if at > 0 && crate::text::starts_word(&chars, at) {
+            name.push('_');
         }
         name.extend(c.to_uppercase());
     }

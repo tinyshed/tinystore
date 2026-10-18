@@ -159,9 +159,7 @@ fn from_bitmap(reader: &mut Reader<'_>, count: usize, mode: u8) -> Result<Vec<i6
 mod tests {
     use super::*;
 
-    fn zstd() -> Zstd {
-        Zstd::windowed(3, 13)
-    }
+    use crate::metrics::codec::zstd;
 
     /// A fixed sequence no period of which zstd could fold.
     fn scrambled(index: usize) -> usize {

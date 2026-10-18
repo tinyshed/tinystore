@@ -301,7 +301,7 @@ fn unlabel(tx: &Tx<'_>, name: i64, pair: i64) -> Result<()> {
     });
     let text = text.map_err(|error| sql_error("read a series' label", error))?;
     let (label, value) = text.ok_or_else(|| Error::corrupt("a series' label missing from the dictionary"))?;
-    if label.starts_with("__") {
+    if super::labels::is_own(&label) {
         return Ok(());
     }
     if execute(tx, UNLABEL_LAST, params![name, label, value], "remove a name's label")? == 0 {

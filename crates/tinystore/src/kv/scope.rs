@@ -96,6 +96,20 @@ impl Scope {
         self.branch.as_ref().map_err(|invalid| Error::invalid(invalid.clone()).within(self.shown()))
     }
 
+    /// Passes a call on `key` of `handle`, under this branch, to the home of
+    /// the copy the scope's file is, and gives its answer's bytes once the
+    /// copy holds the commit that made it.
+    #[cfg(feature = "replication")]
+    pub(crate) fn pass_on(
+        &self,
+        handle: &super::forward::Handle,
+        key: &str,
+        call: &super::forward::Call,
+    ) -> Result<Vec<u8>> {
+        let store = self.kv.store().map_err(|error| error.within(self.shown_key(key)))?;
+        super::forward::pass_on(&store, handle, self.branch()?.owners(), key, call)
+    }
+
     pub(crate) fn path(&self, key: &str) -> Result<Vec<u8>> {
         self.branch()?.path(key).map_err(|error| error.within(self.shown()))
     }

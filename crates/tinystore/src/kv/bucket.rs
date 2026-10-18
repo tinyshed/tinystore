@@ -758,13 +758,11 @@ impl<V> Bucket<V> {
     pub(crate) fn pass_on(&self, key: &str, call: forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
         let call = self.sealed(key, call).map_err(|error| error.within(shown()))?;
-        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
-        let owners = self.scope.branch()?.owners().to_vec();
         let name = self.scope.name().to_owned();
         let database = self.scope.kv.lent_by().and_then(crate::replication::database_of).map(str::to_owned);
         let handle =
             forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database };
-        forward::pass_on(&store, &handle, &owners, key, &call)
+        self.scope.pass_on(&handle, key, &call)
     }
 
     /// The call as it crosses the link: an encrypted bucket's value sealed
@@ -862,14 +860,12 @@ impl<V> Bucket<V> {
 
     fn pass_on_once(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
-        let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
-        let owners = self.scope.branch()?.owners().to_vec();
         let keep = match self.expiry {
-            Expiry::Ttl(keep) => u64::try_from(keep.as_millis()).unwrap_or(u64::MAX),
+            Expiry::Ttl(keep) => crate::clock::millis(keep) as u64,
             _ => return Err(Error::internal("once's answers kept for no span").within(shown())),
         };
         let handle = forward::Handle::Once { name: self.scope.name().to_owned(), keep };
-        forward::pass_on(&store, &handle, &owners, key, call).map_err(|error| error.within(shown()))
+        self.scope.pass_on(&handle, key, call).map_err(|error| error.within(shown()))
     }
 
     /// Takes a key's cell, at the home where the bucket's file is a copy.

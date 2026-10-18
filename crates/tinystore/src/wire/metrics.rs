@@ -30,7 +30,7 @@ use crate::metrics::{
 use crate::sync::lock;
 use crate::{Store, unix_millis};
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// What a part's message takes past its series or groups, and each of them
 /// past its samples or buckets.
@@ -249,7 +249,7 @@ fn names(metrics: &Metrics, asked: MetricsPageAsked, max_body: usize) -> Answere
     let names = page.names.into_iter().map(|info| MetricsName {
         kind: info.kind.as_str().to_owned(),
         series_count: info.series_count,
-        keep: u64::try_from(info.keep.as_millis()).unwrap_or(u64::MAX),
+        keep: crate::clock::millis(info.keep) as u64,
         retained_from: unix_millis(info.retained_from),
         newest: unix_millis(info.newest),
         name: info.name,

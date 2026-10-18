@@ -63,7 +63,7 @@ fn triggers(name: &str, table: &Table) -> [(String, String); 3] {
     let pending = "insert into _tinystore_search_pending (name, key)";
     let changed = format!("select '{name}', new.{key} where new.{key} is not old.{key};");
     let made = |event: &str, body: String| {
-        let trigger = format!("_tinystore_search_{name}_{event}");
+        let trigger = trigger_of(name, event);
         let sql = format!("CREATE TRIGGER {} after {event} on {on} begin {body} end", quoted(&trigger));
         (trigger, sql)
     };
@@ -74,10 +74,7 @@ fn triggers(name: &str, table: &Table) -> [(String, String); 3] {
     ]
 }
 
-/// A name as SQL quotes it.
-fn quoted(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
+use crate::sqlite::quote_ident as quoted;
 
 /// Puts the triggers of the index `name` on its table, made again where
 /// they read otherwise; says whether one was missing, as when a migration
@@ -100,27 +97,32 @@ pub(crate) fn follow(tx: &Tx<'_>, name: &str, table: &Table) -> Result<bool> {
     Ok(missing)
 }
 
+/// The trigger of the index `name` that lists a row on `event`.
+fn trigger_of(name: &str, event: &str) -> String {
+    format!("_tinystore_search_{name}_{event}")
+}
+
 /// Takes the triggers of the index `name` off its table, and its pending
 /// keys with them.
 pub(crate) fn unfollow(tx: &Tx<'_>, name: &str) -> Result<()> {
     let failed = |error| sql_error("stop following a table", error);
     for event in ["insert", "update", "delete"] {
-        let drop = format!("drop trigger if exists {}", quoted(&format!("_tinystore_search_{name}_{event}")));
+        let drop = format!("drop trigger if exists {}", quoted(&trigger_of(name, event)));
         tx.execute_batch(&drop).map_err(failed)?;
     }
-    execute(tx, DROP_NAMED_PENDING, [name], "drop an index's pending keys")
+    execute(tx, DROP_NAMED_PENDING, [name], "drop an index's pending keys").map(drop)
 }
 
 /// Has a new table's index read its table's rows the first time.
 pub(crate) fn begin_fill(tx: &Tx<'_>, index: i64) -> Result<()> {
-    execute(tx, BEGIN_FILL, [index, READING], "begin reading a table")
+    execute(tx, BEGIN_FILL, [index, READING], "begin reading a table").map(drop)
 }
 
 /// Has a table's index whose triggers were missing read its table's rows
 /// again, then delete the documents whose rows are gone: what a migration
 /// changed meanwhile left no key behind.
 pub(crate) fn begin_again(tx: &Tx<'_>, index: i64) -> Result<()> {
-    execute(tx, BEGIN_FILL, [index, READING_AGAIN], "begin reading a table again")
+    execute(tx, BEGIN_FILL, [index, READING_AGAIN], "begin reading a table again").map(drop)
 }
 
 /// Whether any key waits for its index.
@@ -383,11 +385,8 @@ pub(crate) fn prepared_again(
     settings: &Settings,
     (id, value): (&str, &[u8]),
 ) -> Result<Option<Prepared>> {
-    let key = value
-        .get(DIGEST..)
-        .and_then(|json| serde_json::from_slice::<Value>(json).ok())
-        .and_then(|json| sql_value(&json))
-        .ok_or_else(|| Error::corrupt(format!("document {id:?}: a row's key that does not read")))?;
+    let key =
+        row_key(value).ok_or_else(|| Error::corrupt(format!("document {id:?}: a row's key that does not read")))?;
     prepared_row(connection, index, settings, &key, id)
 }
 
@@ -395,12 +394,14 @@ pub(crate) fn prepared_again(
 /// the value its document keeps.
 #[cfg(any(feature = "sql", test))]
 pub(crate) fn hit_row(table: &Table, value: &[u8]) -> Result<(String, SqlValue)> {
-    let key = value
-        .get(DIGEST..)
-        .and_then(|json| serde_json::from_slice::<Value>(json).ok())
-        .and_then(|json| sql_value(&json))
-        .ok_or_else(|| Error::corrupt("a hit's row key that does not read"))?;
+    let key = row_key(value).ok_or_else(|| Error::corrupt("a hit's row key that does not read"))?;
     Ok((format!("select * from {} where {} = ?", quoted(&table.name), quoted(&table.key)), key))
+}
+
+/// The row's key the value of a table's document keeps after its digest.
+fn row_key(value: &[u8]) -> Option<SqlValue> {
+    let json = serde_json::from_slice::<Value>(value.get(DIGEST..)?).ok()?;
+    sql_value(&json)
 }
 
 fn key_json(key: &SqlValue) -> Vec<u8> {

@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -17,14 +16,13 @@ use crate::Store;
 use crate::config::{Config, Sent, Snapshot, Watching};
 use crate::sync::lock;
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 /// What a connection opened of configs, by handle, and the streams that
 /// follow them, by stream.
 #[derive(Debug, Default)]
 pub(crate) struct Configs {
-    open: Mutex<HashMap<u64, Config<Value>>>,
-    last: AtomicU64,
+    open: super::ByHandle<Config<Value>>,
     follows: Mutex<HashMap<u32, Arc<Following>>>,
 }
 
@@ -71,10 +69,8 @@ fn open(store: &Store, configs: &Configs, open: &ConfigOpen, read_only: bool) ->
         remember: !read_only,
     };
     let config = store.config_sent(&sent)?;
-    let handle = configs.last.fetch_add(1, Ordering::Relaxed) + 1;
-    let answer = value(handle, &config);
-    lock(&configs.open).insert(handle, config);
-    Ok(answer)
+    let handle = configs.open.keep(config.clone());
+    Ok(value(handle, &config))
 }
 
 fn json(text: &str, what: &str) -> Result<Value, Failure> {
@@ -106,10 +102,7 @@ fn message(handle: u64, snapshot: &Snapshot<Value>, config: &Config<Value>) -> C
 
 impl Configs {
     fn config(&self, handle: u64) -> Result<Config<Value>, Failure> {
-        let open = lock(&self.open);
-        open.get(&handle)
-            .cloned()
-            .ok_or_else(|| Failure::invalid(format!("handle {handle} names no config opened here")))
+        self.open.get(handle, || format!("handle {handle} names no config opened here"))
     }
 
     /// Credit the client granted a follow's stream.
@@ -145,7 +138,7 @@ impl Configs {
         for following in follows {
             following.end();
         }
-        lock(&self.open).clear();
+        self.open.clear();
     }
 }
 

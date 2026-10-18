@@ -41,7 +41,7 @@ enum Opened {
     Once(Bucket<()>),
 }
 
-pub(crate) type Answered = Result<Vec<u8>, Failure>;
+use super::Answered;
 
 pub(crate) fn route(called: u16) -> Route {
     match called {

@@ -164,19 +164,7 @@ fn open(path: &Path, config: &Config) -> Result<Connection> {
         std::fs::create_dir_all(parent).map_err(|error| Error::io(path.display().to_string(), error))?;
     }
     let connection = connection::open(path, config, Role::Writer)?;
-    let found: i64 = connection
-        .query_row("select count(*) from pragma_module_list where name = 'sqlite_dbpage'", [], |row| row.get(0))
-        .map_err(|error| sql_error(path.display().to_string(), error))?;
-    if found == 0 {
-        return Err(Error::new(
-            ErrorKind::Invalid,
-            format!(
-                "{}: the SQLite linked in has no sqlite_dbpage, which a copy writes its pages through: build with \
-                 LIBSQLITE3_FLAGS holding SQLITE_ENABLE_DBPAGE_VTAB, as this workspace does",
-                path.display()
-            ),
-        ));
-    }
+    super::pages::refuse_without_dbpage(&connection, path)?;
     Ok(connection)
 }
 

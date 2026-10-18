@@ -163,12 +163,7 @@ impl Engine {
     }
 }
 
-/// Runs a statement the connection keeps prepared; `what` says it in an
-/// error.
-pub(super) fn execute(connection: &Connection, sql: &str, params: impl Params, what: &str) -> Result<usize> {
-    let ran = connection.prepare_cached(sql).and_then(|mut statement| statement.execute(params));
-    ran.map_err(|error| sql_error(what, error))
-}
+pub(super) use crate::sqlite::execute_cached as execute;
 
 /// The one value of a statement's one row.
 pub(super) fn query_one<T: FromSql>(connection: &Connection, sql: &str, params: impl Params, what: &str) -> Result<T> {
