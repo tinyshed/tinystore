@@ -153,6 +153,9 @@ fn toml_value(value: toml::Value) -> Value {
     match value {
         toml::Value::String(text) => Value::String(text),
         toml::Value::Integer(int) => Value::from(int),
+        // JSON holds no infinity or NaN, and `Value::from` makes them null,
+        // which reads as unset; as text they fail the setting's type instead.
+        toml::Value::Float(float) if !float.is_finite() => Value::String(float.to_string()),
         toml::Value::Float(float) => Value::from(float),
         toml::Value::Boolean(flag) => Value::Bool(flag),
         toml::Value::Datetime(time) => Value::String(time.to_string()),

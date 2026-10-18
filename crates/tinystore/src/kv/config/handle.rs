@@ -206,8 +206,9 @@ where
     /// Changes live settings: the ones `change` changes are kept in kv.db,
     /// go over every layer until they are reset, and reach every handle of
     /// the config before this returns. All of them are kept or none is, and
-    /// another change made meanwhile to other settings stays.
-    pub fn update(&self, change: impl FnOnce(&mut T)) -> Result<()> {
+    /// another change made meanwhile stays: `change` runs again on the
+    /// settings it made, so `|s| s.rps += 1` racing another counts both.
+    pub fn update(&self, change: impl FnMut(&mut T)) -> Result<()> {
         self.change(None, change)
     }
 
@@ -280,16 +281,16 @@ where
         self.inner.hub.change(version, leaves).map(drop).map_err(within)
     }
 
-    fn change(&self, if_version: Option<i64>, change: impl FnOnce(&mut T)) -> Result<()> {
+    fn change(&self, if_version: Option<i64>, mut change: impl FnMut(&mut T)) -> Result<()> {
         let within = |error: Error| error.within(format!("config {}", self.inner.name));
-        let leaves = self.inner.leaves(change).map_err(within)?;
-        if leaves.is_empty() {
-            return Ok(());
-        }
         for _ in 0..ATTEMPTS {
             let (version, tree) = self.inner.state();
+            let leaves = self.inner.leaves(&mut change).map_err(within)?;
+            if leaves.is_empty() {
+                return Ok(());
+            }
             self.inner.candidate(&tree, &leaves).map_err(within)?;
-            match self.inner.hub.change(if_version.unwrap_or(version), leaves.clone()) {
+            match self.inner.hub.change(if_version.unwrap_or(version), leaves) {
                 Err(error) if error.kind() == ErrorKind::Conflict && if_version.is_none() => {}
                 done => return done.map(drop).map_err(within),
             }
@@ -302,7 +303,7 @@ impl<T> IfVersion<'_, T>
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
-    pub fn update(self, change: impl FnOnce(&mut T)) -> Result<()> {
+    pub fn update(self, change: impl FnMut(&mut T)) -> Result<()> {
         self.config.change(Some(self.version), change)
     }
 }

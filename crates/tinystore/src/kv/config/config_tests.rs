@@ -453,3 +453,21 @@ fn a_name_is_a_buckets_kind_of_name() {
     let error = refused(f.store.config("App", Settings::default()).open());
     assert_eq!(error.kind(), ErrorKind::Invalid);
 }
+
+#[test]
+fn a_change_of_one_setting_made_meanwhile_is_counted_by_the_retry() {
+    let f = fixture();
+    let (first, second) = (open(&f, &[]), open(&f, &[]));
+    let mut runs = 0;
+    second
+        .update(|settings| {
+            runs += 1;
+            if runs == 1 {
+                first.update(|settings| *settings.limits.rps += 1).unwrap();
+            }
+            *settings.limits.rps += 1;
+        })
+        .unwrap();
+    assert_eq!(runs, 2, "the change ran again on the settings the other made");
+    assert_eq!(*first.get().limits.rps, 102, "both increments stay");
+}

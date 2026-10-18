@@ -48,9 +48,15 @@ fn whole(number: &Number) -> Option<Value> {
         return Some(Value::Number(number.clone()));
     }
     let float = number.as_f64()?;
-    #[expect(clippy::cast_possible_truncation, reason = "a float is whole and within i64 when it reads back the same")]
+    // 2^63 reads back as itself from the saturated i64::MAX, so the range is
+    // checked before the cast rather than by reading the cast back.
+    const BOUND: f64 = 9_223_372_036_854_775_808.0;
+    if float.fract() != 0.0 || !(-BOUND..BOUND).contains(&float) {
+        return None;
+    }
+    #[expect(clippy::cast_possible_truncation, reason = "a whole float within i64's range casts exactly")]
     let int = float as i64;
-    (float.fract() == 0.0 && int as f64 == float).then(|| Value::from(int))
+    Some(Value::from(int))
 }
 
 /// What an item of a list was given, with the place of a field inside it:

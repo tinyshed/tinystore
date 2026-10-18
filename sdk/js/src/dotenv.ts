@@ -71,7 +71,9 @@ function dotenvQuoted(text: string, number: number): [string, string] {
 		if (c === '\\' && quote === '"' && i + 1 < text.length) {
 			i++
 			const escaped = text[i] as string
-			out += escaped === 'n' ? '\n' : escaped === 'r' ? '\r' : escaped === 't' ? '\t' : escaped
+			// only the five escapes are read: "D:\dev" keeps its backslash
+			const read: Record<string, string> = { n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\' }
+			out += read[escaped] ?? `\\${escaped}`
 		} else {
 			out += c
 		}

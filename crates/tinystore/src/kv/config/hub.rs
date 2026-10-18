@@ -25,8 +25,8 @@ const UPSERT_CHANGE: &str = "insert into _tinystore_kv_config_changes (name, pat
     on conflict (name, path) do update set value = excluded.value, version = excluded.version, at = excluded.at";
 const DELETE_UNDER: &str = "delete from _tinystore_kv_config_changes
     where name = ?1 and (?2 = '' or path = ?2 or substr(path, 1, length(?2) + 1) = ?2 || '.')";
-const KEPT_BYTES: &str =
-    "select coalesce(sum(length(path) + length(value)), 0) from _tinystore_kv_config_changes where name = ?1";
+const KEPT_BYTES: &str = "select coalesce(sum(length(cast(path as blob)) + length(cast(value as blob))), 0)
+    from _tinystore_kv_config_changes where name = ?1";
 
 /// What a config keeps of its changes, all of them together.
 const MOST_KEPT: i64 = 256 << 10;

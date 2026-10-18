@@ -69,7 +69,12 @@ fn setting(map: &Map<String, Value>, path: &str, place: Place) -> Result<Setting
     }
     let mut setting = Setting { kind, rules, default: None, required, live, secret };
     if let Some(default) = map.get("default") {
-        setting.default = Some(rules::check(&setting, default).map_err(|why| refused(&format!("its default: {why}")))?);
+        // A rule's complaint quotes the value, which a secret's must not show.
+        let checked = rules::check(&setting, default).map_err(|why| match setting.secret {
+            true => refused("its default breaks a rule"),
+            false => refused(&format!("its default: {why}")),
+        });
+        setting.default = Some(checked?);
     }
     Ok(setting)
 }

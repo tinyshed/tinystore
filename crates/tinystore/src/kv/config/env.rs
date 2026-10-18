@@ -13,6 +13,8 @@ use super::rules;
 
 /// The longest text a config takes from a variable.
 const MOST_BYTES: usize = 16 << 10;
+/// What a `.env` file may hold; a file past it is no program's settings.
+const MOST_DOTENV: usize = 1 << 20;
 
 /// The variables a config reads: the prefix's, those `var` names, from the
 /// process, or from what `from` gives in its place, as a test does.
@@ -177,10 +179,17 @@ fn names<'a>(env: &Env, declaration: &'a Declaration) -> Result<BTreeMap<String,
             problems.push(format!("a variable is named for {path}, which is no setting{}", did_you_mean(near)));
         }
     }
+    // A setting reads NAME and NAME_FILE, so `db`'s APP_DB_FILE is also the
+    // name `db.file` would read.
     let mut taken: HashMap<String, &str> = HashMap::new();
     for (path, (name, _)) in &names {
-        if let Some(other) = taken.insert(key(name), path) {
-            problems.push(format!("{name} would give both {other} and {path}"));
+        for read in [name.clone(), format!("{name}_FILE")] {
+            if let Some(other) = taken.insert(key(&read), path)
+                && other != path.as_str()
+            {
+                problems.push(format!("{read} would give both {other} and {path}"));
+                break;
+            }
         }
     }
     if problems.is_empty() { Ok(names) } else { Err(problems) }
@@ -219,6 +228,17 @@ pub(super) fn upper_snake(path: &str) -> String {
     name
 }
 
+/// A file's text, refused past `most` bytes before more of it is read.
+fn read_at_most(path: &std::path::Path, most: usize) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path)?.take(most as u64 + 1).read_to_string(&mut text)?;
+    if text.len() > most {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("past the {most} bytes it may hold")));
+    }
+    Ok(text)
+}
+
 /// A name as variables are looked up: Windows does not tell `Path` from
 /// `PATH`, and neither does a config there.
 fn key(name: &str) -> String {
@@ -232,7 +252,7 @@ fn variables(env: &Env) -> Result<Variables, Vec<String>> {
     for file in &env.files {
         let (shown, text) = match file {
             Dotenv::Sent { name, text } => (name.clone(), text.clone()),
-            Dotenv::Path(path) => match std::fs::read_to_string(path) {
+            Dotenv::Path(path) => match read_at_most(path, MOST_DOTENV) {
                 Ok(text) => (path.display().to_string(), text),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(vec![format!("{}: {error}", path.display())]),
@@ -265,7 +285,9 @@ fn variable(env: &Env, variables: &Variables, name: &str) -> Result<Option<(Stri
                     .get(path)
                     .cloned()
                     .ok_or_else(|| format!("{file_name}: {path}: the program could not read it"))?,
-                None => std::fs::read_to_string(path).map_err(|error| format!("{file_name}: {path}: {error}"))?,
+                None => {
+                    read_at_most(path.as_ref(), MOST_BYTES).map_err(|error| format!("{file_name}: {path}: {error}"))?
+                }
             };
             Ok(Some((without_newline(text), Origin::File(path.clone()), file_name)))
         }
@@ -375,7 +397,11 @@ fn quoted(text: &str, quote: u8) -> Result<(String, &str), String> {
             }
             b'\\' if quote == b'"' && at + 1 < bytes.len() => {
                 at += 1;
-                value.push(unescaped(bytes[at]));
+                // Only the five escapes are read: `"D:\dev"` keeps its backslash.
+                match bytes[at] {
+                    b'n' | b'r' | b't' | b'"' | b'\\' => value.push(unescaped(bytes[at])),
+                    other => value.extend([b'\\', other]),
+                }
             }
             byte => value.push(byte),
         }
