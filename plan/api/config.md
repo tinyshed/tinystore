@@ -10,8 +10,10 @@ whose DX the owner called bad: an options object whose sources nobody could
 rank, then layers ranked by the order of their arguments. The owner's idea
 is the shape of this one: a declaration in layers, each declaring again what
 the ones before it gave, spelled as each language spells it. [dx.md](../dx.md)
-has the rules it follows. TypeScript comes first; Python, Go and Rust follow.
-Nothing of it is built.
+has the rules it follows. TypeScript comes first; Python, Go and Rust follow,
+the first two as [dx.md](../dx.md#python-and-go-as-every-book-writes-them)
+spells them. The Rust core, protocol 2 and the Bun SDK are built to it; Python
+and Go come with their SDKs.
 
 ## What a newcomer learns
 
@@ -92,7 +94,7 @@ type Limits struct {
 	RPS int `json:"rps" config:"live"`
 }
 
-config, err := tinystore.Config(store, "app",
+config, err := tinystore.OpenConfig(ctx, store, "app",   // *tinystore.Config[Settings]
 	Settings{Port: 8080, Origins: []string{"localhost"}, DB: DB{Pool: 10}, Limits: Limits{RPS: 100}},
 	tinystore.File("app.yaml"),
 	tinystore.File("app.local.yaml", tinystore.Optional()),
@@ -223,12 +225,16 @@ await config.reset()                           // every change of the config
 
 ```python
 await config.update({"limits": {"rps": 200}})
+await config.update({"limits": {"rps": 300}}, if_version=shown)
 await config.reset("limits.rps")
+await config.reset()
 ```
 
 ```go
-err = config.Update(func(s *Settings) { s.Limits.RPS = 200 })
-err = config.Reset("limits.rps")
+err = config.Update(ctx, func(s *Settings) { s.Limits.RPS = 200 })
+err = config.Update(ctx, func(s *Settings) { s.Limits.RPS = 300 }, tinystore.IfVersion(shown))
+err = config.Reset(ctx, "limits.rps")
+err = config.ResetAll(ctx)
 ```
 
 ```rust
@@ -274,6 +280,32 @@ config.reset("limits.rps")?;
 db: { url: secret(String), pool: 10 },   // a layer must give it
 sentry: { dsn: secret('') },             // empty unless a layer gives it
 region: required(String),                // also Number and Boolean
+```
+
+```python
+@dataclass
+class Db:
+    url: Secret = secret()            # a layer must give it
+    pool: int = 10
+
+@dataclass
+class Sentry:
+    dsn: Secret = secret("")          # empty unless a layer gives it
+
+region: str                           # in Settings, no default: required
+```
+
+```go
+type DB struct {
+	URL  tinystore.Secret `json:"url" config:"required"`
+	Pool int              `json:"pool"`
+}
+
+type Sentry struct {
+	DSN tinystore.Secret `json:"dsn"` // empty unless a layer gives it
+}
+
+Region string `json:"region" config:"required"` // in Settings
 ```
 
 - A secret prints as `***` wherever it goes: `console.log`,
@@ -323,6 +355,34 @@ workers: required(int({ min: 1 })),                          // a rule without i
 limits: { rps: live(int(100, { min: 0 })) },
 ```
 
+```python
+@dataclass(kw_only=True)
+class Settings:
+    port: Annotated[int, Range(1, 65535)] = 8080
+    level: Literal["info", "debug", "warn", "error"] = "info"
+    timeout: timedelta = timedelta(seconds=30)
+    origins: list[str] = field(default_factory=lambda: ["localhost"])
+    peers: list[str] = field(default_factory=list)
+    hosts: Annotated[list[str], Items(1, 20)] = field(default_factory=lambda: ["localhost"])
+    upstreams: Annotated[list[Upstream], Items(min=1)]
+    workers: Annotated[int, Range(min=1)]
+    limits: Limits = field(default_factory=Limits)   # rps: int = live(100), Annotated[int, Range(min=0)]
+```
+
+```go
+type Settings struct {
+	Port      int           `json:"port" config:"min=1,max=65535"`
+	Level     string        `json:"level" config:"oneof=info debug warn error"`
+	Timeout   time.Duration `json:"timeout"`
+	Origins   []string      `json:"origins"`
+	Peers     []string      `json:"peers"`
+	Hosts     []string      `json:"hosts" config:"items=1-20"`
+	Upstreams []Upstream    `json:"upstreams" config:"required,items=1-"`
+	Workers   int           `json:"workers" config:"required,min=1"`
+	Limits    Limits        `json:"limits"` // RPS int `config:"live,min=0"`
+}
+```
+
 ```text
 config app: APP_LEVEL: "verbose" is not one of info, debug, warn, error
 config app: app.yaml: port: 70000 is above 65535
@@ -359,9 +419,10 @@ config app: app.yaml: upstreams[0]: host is required
   is `validate`'s too.
 - Each language writes them its own way and the core reads one kind of rule:
   Rust's types, `u16`, `NonZeroU32`, an `enum`, `Duration`; Go's
-  `config:"min=1,max=65535"` and `config:"oneof=debug info warn error"`
-  beside `time.Duration`; Python's `Literal[…]`, `Annotated[int, Range(1,
-  65535)]` and `timedelta`.
+  `config:"min=1,max=65535"`, `config:"oneof=debug info warn error"` and
+  `config:"items=1-20"` beside `time.Duration`; Python's `Literal[…]`,
+  `Annotated[int, Range(1, 65535)]`, `Annotated[list[str], Items(1, 20)]`
+  and `timedelta`.
 
 ## Read
 
@@ -373,10 +434,14 @@ config.version                   // the version of the changes the value holds
 
 ```python
 config.value.limits.rps
+config.value.db.url.reveal()
+config.version
 ```
 
 ```go
 settings := config.Get() // a copy
+settings.DB.URL.Reveal()
+config.Version()
 ```
 
 ```rust
@@ -401,12 +466,12 @@ stop()
 ```
 
 ```python
-async for settings in config.watch():
+async for settings in config.watch():   # the settings now, then after every change
     limiter.set_rate(settings.limits.rps)
 ```
 
 ```go
-for s := range config.Watch(ctx) {
+for s := range config.Watch(ctx) {      // until ctx ends
 	limiter.SetRate(s.Limits.RPS)
 }
 ```
@@ -438,6 +503,17 @@ let watching = config.watch(move |next, _previous| limiter.set_rate(*next.limits
 console.table(config.explain())
 ```
 
+```python
+for line in config.explain():           # Line(path, value, from_, over), from being a keyword
+    print(line)
+```
+
+```go
+for _, line := range config.Explain() { // tinystore.Line{Path, Value, From, Over}
+	fmt.Println(line)
+}
+```
+
 ```text
 path        value  from                                   over
 port        9000   PORT                                   8000 app.yaml, 8080 the declaration
@@ -456,6 +532,24 @@ region      eu     app.yaml
 
 ```ts
 const config = await store.config('app', layers, { validate: Settings }) // zod, valibot, or a function
+```
+
+```python
+def check(settings: Settings) -> None:
+    if settings.limits.rps == 0:
+        raise ValueError("limits.rps is 0")
+
+
+config = await store.config("app", layers, validate=check)    # or a pydantic model
+```
+
+```go
+config, err := tinystore.OpenConfig(ctx, store, "app", defaults, tinystore.Validate(func(s Settings) error {
+	if s.Limits.RPS == 0 {
+		return errors.New("limits.rps is 0")
+	}
+	return nil
+}))
 ```
 
 ```rust
@@ -588,6 +682,29 @@ const log = store.logger('api', { level: 'info' })
 const settings = await store.config('log', [{ level: live('info') }])
 await settings.update({ level: 'debug' })   // every logger of the store, in every process
 await settings.reset('level')               // each logger's own level again
+```
+
+```python
+@dataclass
+class Log:
+    level: str = live("info")
+
+
+log = store.logger("api", level="info")
+settings = await store.config("log", [Log])
+await settings.update({"level": "debug"})
+await settings.reset("level")
+```
+
+```go
+type Log struct {
+	Level string `json:"level" config:"live"`
+}
+
+handler := records.NewHandler(store, "api", console.Level(slog.LevelInfo))
+settings, err := tinystore.OpenConfig(ctx, store, "log", Log{Level: "info"})
+err = settings.Update(ctx, func(l *Log) { l.Level = "debug" })
+err = settings.Reset(ctx, "level")
 ```
 
 ```rust

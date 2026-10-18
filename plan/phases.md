@@ -19,7 +19,9 @@ says so. Mark a task done in the commit that does it.
   Built, on 18 October: the codecs, `sdk/python/src/tinystore/_wire/protocol.py` on the Python SDK's codec and
   `internal/wire` of a Go module at the root, each message's reader and writer written out a field at a time, both
   read and written over every vector of `testdata/wire/protocol.json` and Go's over `vectors.json` too, by `just
-  codec-go` and `just codec-python` and in CI. Left: the SDKs that stand on them.
+  codec-go` and `just codec-python` and in CI. Every API book gives its Python and Go call sites, from
+  the rules of [dx.md](dx.md#python-and-go-as-every-book-writes-them) and a newcomer check of them, on 18
+  October, and the Python SDK of the Go engine is gone but its codec. Left: the SDKs that stand on them.
 
 **Gate:** the jobs and kv books pass the newcomer check and the owner accepts
 them; the workspace builds and tests on three operating systems.

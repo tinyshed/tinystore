@@ -7,8 +7,9 @@ but outside the request that asked for it: a reminder at six, an email in the
 background, a push to every member of a group, an account deleted thirty days
 after its owner asked, a cleanup every night. This book is the API before the
 code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) the words
-both books share. TypeScript comes first; Python, Go and Rust follow where
-they spell something differently. The Rust and TypeScript columns are
+both books share. TypeScript comes first; Python, Go and Rust follow, the
+first two as [dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells
+them. The Rust and TypeScript columns are
 built, the core in `crates/tinystore/src/jobs`, protocol 2 in
 `protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, queues opened
 from an SQL database and transactions, a database's and the store's, among
@@ -37,6 +38,26 @@ emails.work(async email => {
 })
 ```
 
+```python
+emails = store.queue("emails", Email)
+await emails.add(Email(to=to, subject=subject, body=body))
+
+
+async def send(email: Email, run: tinystore.Run) -> None:
+    await smtp.send(email)
+
+
+emails.work(send)
+```
+
+```go
+emails, err := jobs.OpenQueue[Email](store, "emails")
+_, err = emails.Add(ctx, Email{To: to, Subject: subject, Body: body})
+err = emails.Work(ctx, func(ctx context.Context, email Email, run *jobs.Run) error {
+	return smtp.Send(ctx, email)
+})
+```
+
 A job runs at least once: a process that dies after the work and before the
 job was marked done runs it again. A handler keys its effect by what the job
 names, `insert … on conflict do nothing`, so that twice is harmless.
@@ -55,12 +76,16 @@ const pushes = store.queue<Push>('pushes', { dedupe: '1h' })
 reminders = store.queue("reminders", Reminder)
 emails = store.queue("emails", Email, attempts=20, backoff=Backoff(initial="5s", max="30m"))
 refreshes = store.queue("refreshes", Refresh, concurrency=Concurrency(total=8, group=2))
+telegram = store.queue("telegram", Message, rate="30/s")
+pushes = store.queue("pushes", Push, dedupe="1h")
 ```
 
 ```go
-reminders, err := jobs.Queue[Reminder](store, "reminders")
-emails, err := jobs.Queue[Email](store, "emails", jobs.Attempts(20), jobs.Backoff{Initial: 5 * time.Second, Max: 30 * time.Minute})
-refreshes, err := jobs.Queue[Refresh](store, "refreshes", jobs.Concurrency{Total: 8, Group: 2})
+reminders, err := jobs.OpenQueue[Reminder](store, "reminders")
+emails, err := jobs.OpenQueue[Email](store, "emails", jobs.Attempts(20), jobs.Backoff{Initial: 5 * time.Second, Max: 30 * time.Minute})
+refreshes, err := jobs.OpenQueue[Refresh](store, "refreshes", jobs.Concurrency{Total: 8, Group: 2})
+telegram, err := jobs.OpenQueue[Message](store, "telegram", jobs.Rate(30, time.Second))
+pushes, err := jobs.OpenQueue[Push](store, "pushes", jobs.Dedupe(time.Hour))
 ```
 
 ```rust
@@ -102,6 +127,22 @@ const added = await later.add(draft, { id: `chat:${chatId}:${draft.id}`, at: nin
 await refreshes.add({ dataset: 3 }, { id: 'refresh:3', group: 'db:42' })
 ```
 
+```python
+await reminders.add(Reminder(user_id=42, text="Call mom"))                    # now
+await reminders.add(Reminder(user_id=42, text="Call mom"), at=evening)
+await reminders.add(Reminder(user_id=42, text="Drink water"), delay="1h")
+added = await later.add(draft, id=f"chat:{chat_id}:{draft.id}", at=nine_am)  # False: it was there
+await refreshes.add(Refresh(dataset=3), id="refresh:3", group="db:42")
+```
+
+```go
+_, err = reminders.Add(ctx, Reminder{UserID: 42, Text: "Call mom"})          // now
+_, err = reminders.Add(ctx, reminder, jobs.At(evening))
+_, err = reminders.Add(ctx, reminder, jobs.Delay(time.Hour))
+added, err := later.Add(ctx, draft, jobs.ID(fmt.Sprintf("chat:%d:%s", chatID, draft.ID)), jobs.At(nineAM))
+_, err = refreshes.Add(ctx, Refresh{Dataset: 3}, jobs.ID("refresh:3"), jobs.Group("db:42"))
+```
+
 ```rust
 reminders.add(&Reminder { user_id: 42, text: "Call mom".into() })?;          // now
 reminders.at(evening).add(&reminder)?;
@@ -141,6 +182,20 @@ const added = await later.add(draft, { id, at: nineAm })           // false: a s
 await checks.set(`check:${check.id}`, check, { delay: '25h' })      // each ping moves the alarm 25 h on
 const edited = await later.update(id, draft, { at: tenAm })        // false: it is being sent, or was
 const cancelled = await later.cancel(id)                            // false: it ran already
+```
+
+```python
+added = await later.add(draft, id=id, at=nine_am)
+await checks.set(f"check:{check.id}", check, delay="25h")
+edited = await later.update(id, draft, at=ten_am)
+cancelled = await later.cancel(id)
+```
+
+```go
+added, err := later.Add(ctx, draft, jobs.ID(id), jobs.At(nineAM))
+err = checks.Set(ctx, "check:"+check.ID, check, jobs.Delay(25*time.Hour))
+edited, err := later.Update(ctx, id, draft, jobs.At(tenAM))
+cancelled, err := later.Cancel(ctx, id)
 ```
 
 ```rust
@@ -195,6 +250,51 @@ pushes.work(async (push, run) => {
 })
 ```
 
+```python
+async def remind(reminder: Reminder, run: tinystore.Run) -> None:
+    await push(reminder.user_id, reminder.text)
+
+
+worker = reminders.work(remind)
+await worker.stop()                     # at shutdown
+
+
+async def send(push: Push, run: tinystore.Run) -> tinystore.Outcome | None:
+    answer = await provider.send(push)
+    if answer.unknown_token:
+        return run.fail("the provider no longer knows this token")
+    if answer.retry_at:
+        return run.snooze(answer.retry_at)
+    return None
+
+
+pushes.work(send)
+```
+
+```go
+func remind(ctx context.Context, r Reminder, run *jobs.Run) error {
+	return push(ctx, r.UserID, r.Text)
+}
+
+func send(ctx context.Context, p Push, run *jobs.Run) error {
+	answer, err := provider.Send(ctx, p)
+	switch {
+	case err != nil:
+		return err
+	case answer.UnknownToken:
+		return run.Fail("the provider no longer knows this token")
+	case !answer.RetryAt.IsZero():
+		return run.SnoozeUntil(answer.RetryAt)
+	}
+	return nil
+}
+
+workers, ctx := errgroup.WithContext(ctx)
+workers.Go(func() error { return reminders.Work(ctx, remind) })   // each returns once ctx ends
+workers.Go(func() error { return pushes.Work(ctx, send) })        // and its handlers under way are done
+err = workers.Wait()
+```
+
 ```rust
 let worker = reminders.work(|reminder: Reminder, _run| push(reminder.user_id, &reminder.text))?;
 worker.stop();   // at shutdown; the store's close stops it too
@@ -221,7 +321,9 @@ pushes.work(|push: Push, run| match provider.send(&push) {
 - `retry`, `snooze` and `fail` make the answer to return. An answer made and
   not returned fails the run with an error that says so, since a snooze lost
   for a missing `return` would otherwise mark the job done. A time for `retry`
-  or `snooze` is a span or a `Date`. In Rust they are `#[must_use]` beside
+  or `snooze` is a span or a `Date`; Go spells a time `run.RetryUntil(t)`
+  and `run.SnoozeUntil(t)`, and an answer is the error the handler returns,
+  so none is lost. In Rust they are `#[must_use]` beside
   `run.done()`, and a handler that never answers otherwise returns `Ok(())`;
   an `Err` retries, its text kept as the job's error.
 - A snooze counts no attempt, so a handler that snoozes for ever runs for
@@ -258,6 +360,33 @@ store.schedule('sync', { every: '15m' }, syncInvoices)
 const last = await cleanup.get()   // { at: the next run, lastRun, error }: what a page of cron jobs shows
 ```
 
+```python
+await probes.set(f"probe:{site.id}", Probe(url=site.url), every="30s")
+await digests.set(f"user:{user.id}", Digest(user_id=user.id), cron="0 20 * * *", time_zone=user.time_zone)
+await digests.cancel(f"user:{user.id}")
+
+
+async def cleanup_deleted(run: tinystore.Run) -> None:
+    await purge_deleted_before(run.at - timedelta(days=30))
+
+
+cleanup = store.schedule("cleanup", cleanup_deleted, cron="10 3 * * *", time_zone="Europe/Berlin")
+store.schedule("sync", sync_invoices, every="15m")
+last = await cleanup.get()          # last.at, last.last_run, last.error
+```
+
+```go
+err = probes.Set(ctx, "probe:"+site.ID, Probe{URL: site.URL}, jobs.Every(30*time.Second))
+err = digests.Set(ctx, fmt.Sprintf("user:%d", user.ID), Digest{UserID: user.ID}, jobs.Cron("0 20 * * *", user.TimeZone))
+_, err = digests.Cancel(ctx, fmt.Sprintf("user:%d", user.ID))
+
+cleanup, err := jobs.OpenSchedule(store, "cleanup", jobs.Cron("10 3 * * *", "Europe/Berlin"))
+err = cleanup.Work(ctx, func(ctx context.Context, run *jobs.Run) error {
+	return purgeDeletedBefore(ctx, run.At.AddDate(0, 0, -30))
+})
+last, err := cleanup.Get(ctx)       // last.At, last.LastRun, last.Error
+```
+
 ```rust
 probes.id(&format!("probe:{}", site.id)).every(Duration::from_secs(30)).set(&probe)?;
 digests.id("user:42").cron("0 20 * * *", &user.time_zone).set(&Digest { user_id: 42 })?;
@@ -287,7 +416,9 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
   changed in the code is the one that runs. Its handler gets the run alone,
   there being no value; `run.at` is when it was due, which "thirty days ago" is
   counted from even when the run starts late. `stop`, `get` and `runDue` work
-  on a schedule as on a worker and a queue.
+  on a schedule as on a worker and a queue. Go opens a schedule apart from
+  its handler, `jobs.OpenSchedule`, since its `Work` blocks as a queue's
+  does; Python gives the handler before the options, as keywords come last.
 
 ## Limits
 
@@ -322,6 +453,38 @@ const page = await later.list({ prefix: `chat:${chatId}:`, limit: 100 })   // { 
 const failed = await emails.list({ state: 'failed' })                       // the latest failures first
 ```
 
+```python
+job = await videos.get(id)              # Job(id, value, state, at, attempt, ahead, progress, …) | None
+
+async for job in videos.watch(id):
+    send(job.state, job.ahead, job.progress)
+
+
+async def convert(video: Video, run: tinystore.Run) -> None:
+    await transcode(video, run.set_progress)
+
+
+videos.work(convert)
+
+page = await later.list(prefix=f"chat:{chat_id}:", limit=100)   # Page(jobs, next)
+failed = await emails.list(state="failed")
+```
+
+```go
+job, found, err := videos.Get(ctx, id) // jobs.Job[Video]{ID, Value, State, At, Attempt, Ahead, Progress, …}
+
+for job, err := range videos.Watch(ctx, id) {
+	send(job.State, job.Ahead, job.Progress)
+}
+
+err = videos.Work(ctx, func(ctx context.Context, v Video, run *jobs.Run) error {
+	return transcode(ctx, v, func(done float64) { run.SetProgress(done) })
+})
+
+page, err := later.List(ctx, jobs.Prefix(fmt.Sprintf("chat:%d:", chatID)), jobs.Limit(100))   // jobs.Page[T]{Jobs, Next}
+failed, err := emails.List(ctx, jobs.Failed)
+```
+
 - `get` says where a job is: `scheduled` until its time, `waiting` for a worker
   once it is due, `running` while one has it, `failed` once it failed for good,
   `done` while `dedupe` keeps its id; `undefined` for an id with no job. `at` is
@@ -348,11 +511,37 @@ agents.work(async (question, run) => {
 })
 ```
 
+```python
+async def answer(question: Question, run: tinystore.Run) -> None:
+    found = await run.step("search", lambda: search(question.text))
+    reply_text = await run.step("answer", lambda: model.answer(question.text, found))
+    await reply(question.chat, reply_text)
+
+
+agents.work(answer)
+```
+
+```go
+err = agents.Work(ctx, func(ctx context.Context, q Question, run *jobs.Run) error {
+	found, err := jobs.Step(ctx, run, "search", func(ctx context.Context) ([]Doc, error) { return search(ctx, q.Text) })
+	if err != nil {
+		return err
+	}
+	answer, err := jobs.Step(ctx, run, "answer", func(ctx context.Context) (string, error) { return model.Answer(ctx, q.Text, found) })
+	if err != nil {
+		return err
+	}
+	return reply(ctx, q.Chat, answer)
+})
+```
+
 - `run.step(name, fn)` keeps `fn`'s answer across the job's attempts: the
   attempt after a retry, a lost worker or a restart gets the answer back
   without running `fn` again, and runs only the steps left. A step whose
   attempt ends before its answer is kept runs again, so what `fn` does outside
-  the store should bear doing twice.
+  the store should bear doing twice. Go's is `jobs.Step(ctx, run, name, fn)`,
+  a function, since the answer's type is the step's and a Go method takes no
+  type parameter.
 - A name is a step's within its job, numbered in a loop (`model:1`, `tool:1`);
   an answer is at most 1 MiB of JSON. A job that ends, done, failed or
   cancelled, takes its steps with it, and a repeat's next time starts without
@@ -368,6 +557,42 @@ await db.tx(async tx => {
 
 await store.tx(async tx => {
 	for (const member of members) await tx.with(pushes).add({ member, message }, { id: `${message}:${member}` })
+})
+```
+
+```python
+async def edit(tx) -> None:
+    await tx.exec("update notes set body = ? where id = ?", body, id)
+    await tx.with_(indexing).add(Index(note_id=id))
+
+
+await db.tx(edit)
+
+
+async def notify(tx) -> None:
+    for member in members:
+        await tx.with_(pushes).add(Push(member=member, message=message), id=f"{message}:{member}")
+
+
+await store.tx(notify)
+```
+
+```go
+err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+	if _, err := tx.Exec(ctx, `update notes set body = ? where id = ?`, body, id); err != nil {
+		return err
+	}
+	_, err := tinystore.With(tx, indexing).Add(ctx, Index{NoteID: id})
+	return err
+})
+
+err = store.Tx(ctx, func(tx *tinystore.Tx) error {
+	for _, member := range members {
+		if _, err := tinystore.With(tx, pushes).Add(ctx, Push{Member: member, Message: message}, jobs.ID(message+":"+member)); err != nil {
+			return err
+		}
+	}
+	return nil
 })
 ```
 
@@ -395,6 +620,24 @@ await reminders.add(reminder, { delay: '1h' })
 await reminders.runDue(remind)          // nothing is due yet
 await store.clock.advance('1h')
 await reminders.runDue(remind)          // runs it
+```
+
+```python
+store = await tinystore.open(dir, private=True, clock=datetime(2026, 10, 9, 9, tzinfo=UTC))
+reminders = store.queue("reminders", Reminder)
+await reminders.add(reminder, delay="1h")
+await reminders.run_due(remind)         # nothing is due yet
+await store.clock.advance("1h")
+await reminders.run_due(remind)         # runs it
+```
+
+```go
+store, err := tinystore.Open(ctx, dir, tinystore.Private(), tinystore.Clock(time.Date(2026, 10, 9, 9, 0, 0, 0, time.UTC)))
+reminders, err := jobs.OpenQueue[Reminder](store, "reminders")
+_, err = reminders.Add(ctx, reminder, jobs.Delay(time.Hour))
+err = reminders.RunDue(ctx, remind)     // nothing is due yet
+err = store.Clock().Advance(ctx, time.Hour)
+err = reminders.RunDue(ctx, remind)     // runs it
 ```
 
 A store opened with `background: false` starts no work of its own, and a test
@@ -448,31 +691,26 @@ Every error names the queue and the id: `jobs queue digests: id "user:42": time 
 ## Python and Go
 
 ```python
-await later.add(draft, id=f"chat:{chat_id}:{draft.id}", at=nine_am)
-await checks.set(f"check:{check.id}", check, delay="25h")
-
-
-async def remind(reminder: Reminder, run: tinystore.Run) -> None:
-    await push(reminder.user_id, reminder.text)
-
-
 reminders.work(remind, concurrency=4)
-store.schedule("cleanup", purge, cron="10 3 * * *", time_zone="Europe/Berlin")
 ```
 
 ```go
-added, err := later.Add(ctx, draft, jobs.ID(key), jobs.At(nineAM))
-err = checks.Set(ctx, key, check, jobs.Delay(25*time.Hour))
 err = reminders.Work(ctx, func(ctx context.Context, r Reminder, run *jobs.Run) error {
 	if busy {
 		return run.Snooze(time.Minute)
 	}
 	return push(ctx, r.UserID, r.Text)
-}, jobs.Concurrency(4))
+}, jobs.Concurrency{Total: 4})
 ```
 
-Go's `Work` blocks until its context ends, as a Go loop does; an answer is
-an error value the handler returns, as River's are.
+- Go's `Work` blocks until its context ends, as a Go loop does, and then
+  waits for the handlers under way; an answer is an error value the handler
+  returns, as River's are. `RunDue` returns once nothing is due.
+- Python's `work` returns a running worker at once, as TypeScript's does,
+  and `await worker.stop()` stops it; a handler is an `async def` of the
+  value and the run, and a cancelled job cancels its task.
+- A short form of a nested setting is Python's, `concurrency=4`; Go writes
+  the struct, `jobs.Concurrency{Total: 4}`.
 
 ## Newcomer check and comparison, 9 October
 

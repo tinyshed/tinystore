@@ -5,7 +5,8 @@ across every process of a store. Locks live in the memory of the process
 that holds the store; kv.db keeps one number of theirs, the epoch their
 fences start from. This book is a proposal of 16 October 2026, not yet
 accepted: it holds the call sites after a newcomer check and three outside
-reviews. [dx.md](../dx.md) holds the rules it follows; research's
+reviews. [dx.md](../dx.md) holds the rules it follows, and how Python and Go
+spell the calls of TypeScript and Rust; research's
 [locks round](https://github.com/tinyshed/research/blob/main/tinystore/reports/locks-2026-10-15.md),
 its [follow-up on the grouped writer](https://github.com/tinyshed/research/blob/main/tinystore/reports/core-locks-followup-2026-10-15.md)
 and the [handoff](https://github.com/tinyshed/research/blob/main/tinystore/reports/channels-locks-handoff-2026-10-15.md)
@@ -36,6 +37,35 @@ if (tried.acquired) use(tried.value)
 else say('someone is charging it already')
 ```
 
+```python
+invoices = store.lock("invoices", ttl="10s")
+
+async with invoices.hold(invoice.id) as lease:
+    await charge(invoice, fence=lease.fence)
+async with invoices.hold(invoice.id, wait="30s") as lease:
+    await work(lease)
+
+async with invoices.try_hold(invoice.id) as lease:
+    if lease is None:
+        say("someone is charging it already")
+    else:
+        use(await work(lease))
+```
+
+```go
+invoices, err := locks.OpenLock(store, "invoices", locks.TTL(10*time.Second))   // *locks.Lock
+
+err = invoices.Hold(ctx, invoice.ID, func(ctx context.Context, lease *locks.Lease) error {
+	return charge(ctx, invoice, lease.Fence) // ctx ends when the lease is lost
+})
+err = invoices.Hold(ctx, invoice.ID, work, locks.Wait(30*time.Second))
+
+acquired, err := invoices.TryHold(ctx, invoice.ID, work)
+if err == nil && !acquired {
+	say("someone is charging it already")
+}
+```
+
 ```rust
 let invoices = store.lock("invoices").open()?;
 
@@ -52,7 +82,12 @@ let tried: Option<Receipt> = invoices.try_hold(&invoice.id, |lease| work(lease))
   long as it takes says so with a longer `wait`.
 - `tryHold` never waits: `{ acquired: true, value }`, or `{ acquired:
   false }` when the key is held. Rust's `try_hold` answers `None` then,
-  `Some` of what the function answered.
+  `Some` of what the function answered; Python's `try_hold` gives `None`
+  for the lease, and Go's `TryHold` `false`, the function not run.
+- Python holds through `async with`, as an `asyncio.Lock` is held: the
+  block is the function, and a lease lost cancels it at its next `await`,
+  as `asyncio.timeout` does, and the block ends `LostError`. Go's function
+  gets a `ctx` that ends when the lease is lost, and its error is `hold`'s.
 - In Rust the function's error is the caller's own type, which a
   `tinystore` error converts into, as `once` has it.
 - A program names keys in one order when it holds two at once: a transfer
@@ -138,10 +173,22 @@ await invoices.hold(invoice.id, async lease => {
 })
 ```
 
+```python
+async with invoices.hold(invoice.id) as lease:
+    await ledger.write(invoice.id, state, fence=lease.fence)       # an int of 128 bits
+```
+
+```go
+err = invoices.Hold(ctx, invoice.ID, func(ctx context.Context, lease *locks.Lease) error {
+	return ledger.Write(ctx, invoice.ID, state, lease.Fence) // a locks.Fence, compared by Less
+})
+```
+
 - A fence is two numbers compared in order, the store's epoch and a count:
   the epoch in the high 64 bits of a 128-bit integer, the count in the low.
-  It is a `bigint` in TypeScript, a decimal string on the wire, an ordered
-  `Fence` in Rust.
+  It is a `bigint` in TypeScript, an `int` in Python, a decimal string on
+  the wire, an ordered `Fence` in Rust and a `locks.Fence` of two `uint64`s
+  in Go.
 - The count is the store's, one for every lock and key, and grows with every
   lease it gives while it is open; a key that nobody holds or waits for is
   forgotten, so a count of its own would start again.
@@ -174,6 +221,19 @@ not carry, which replication's lease in object storage will be.
 ```ts
 const uploads = store.semaphore('uploads', { limit: 3, ttl: '30s' })
 await uploads.hold(user.id, () => upload(file))          // three uploads a user at once
+```
+
+```python
+uploads = store.semaphore("uploads", limit=3, ttl="30s")
+async with uploads.hold(user.id):
+    await upload(file)
+```
+
+```go
+uploads, err := locks.OpenSemaphore(store, "uploads", locks.Limit(3), locks.TTL(30*time.Second))
+err = uploads.Hold(ctx, user.ID, func(ctx context.Context, _ *locks.Lease) error {
+	return upload(ctx, file)
+})
 ```
 
 ```rust

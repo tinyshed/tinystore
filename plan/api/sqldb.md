@@ -5,7 +5,8 @@ reviews (below). The application's own relational data: its tables, joins,
 reports and transactions, in SQLite files it owns. This book is the API before
 the code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) and
 [jobs.md](jobs.md) the words all three share. TypeScript comes first in each
-section; Python, Go and Rust follow where they spell something differently.
+section; Python, Go and Rust follow, the first two as
+[dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them.
 The Rust core builds databases, their migrations, reads, writes, batches and
 transactions (`crates/tinystore/src/sql`), protocol 2 serves them
 (`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
@@ -55,7 +56,7 @@ db = await store.database("app", migrations=Path(__file__).parent / "migrations"
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-db, err := sqldb.Database(store, "app", sqldb.Migrations(migrations))
+db, err := sqldb.Open(ctx, store, "app", sqldb.Migrations(migrations))   // *sqldb.DB
 ```
 
 ```rust
@@ -116,12 +117,21 @@ for await (const note of db.each<Note>`select * from notes order by created_at`)
 ```python
 mine = await db.all(Note, "select * from notes where author_id = ? order by created_at desc limit 50", user_id)
 note = await db.one(Note, "select * from notes where id = ?", note_id)           # Note | None
+open_ = await db.scalar(int, "select count(*) from notes where done = 0")
+done = await db.one(Note, "update notes set done = 1 where id = ? returning *", note_id)
+async for note in db.each(Note, "select * from notes order by created_at"):
+    await out.write(note)
 mine = await db.all(Note, t"select * from notes where author_id = {user_id}")   # Python 3.14
 ```
 
 ```go
 mine, err := sqldb.All[Note](ctx, db, `select * from notes where author_id = ? order by created_at desc limit 50`, userID)
 note, found, err := sqldb.One[Note](ctx, db, `select * from notes where id = ?`, id)
+open, err := sqldb.Scalar[int64](ctx, db, `select count(*) from notes where done = 0`)
+done, found, err := sqldb.One[Note](ctx, db, `update notes set done = 1 where id = ? returning *`, id)
+for note, err := range sqldb.Each[Note](ctx, db, `select * from notes order by created_at`) {
+	…
+}
 ```
 
 ```rust
@@ -130,6 +140,10 @@ let note = db.one::<Note>(sql!("select * from notes where id = ?", id))?;      /
 let open: i64 = db.scalar(sql!("select count(*) from notes where done = 0"))?;
 ```
 
+- Python gives the row's type first, before the statement, and a statement
+  alone gives `dict`s; Go's verbs are functions, `sqldb.All[Note](ctx, db,
+  …)`, since a Go method takes no type parameter, and take a database or
+  a transaction.
 - The verb says what comes back, and the statement what it does: `all` gives
   the rows, `one` one row or none, `scalar` one value, whether the statement
   reads or is a write with `returning`. SQLite says which when it compiles
@@ -173,6 +187,20 @@ const { ts, cpu } = await db.columns<Sample>`select ts, cpu from samples where h
 plot.setData([ts, cpu])                       // a chart takes them as they are
 ```
 
+```python
+cols = await db.columns("select ts, cpu from samples where host = ? order by ts", host)
+# cols["ts"]: [1000, 2000, …]   cols["cpu"]: [0.5, None, …]
+```
+
+```go
+type Samples struct {
+	TS  []int64
+	CPU []*float64 // nil for a NULL
+}
+
+cols, err := sqldb.Columns[Samples](ctx, db, `select ts, cpu from samples where host = ? order by ts`, host)
+```
+
 `columns` gives what `all` gives, turned: an array a column, by the column's
 name, where `all` gives an object a row. It is for rows by the thousand, a
 chart's points or a report's measures: they come a fifth to a half faster,
@@ -213,7 +241,9 @@ and before the Bun SDK read an integer without a `bigint`.
 The protocol carries a column of `INTEGER`s alone as int64s and one of
 `REAL`s alone as float64s, a bit a `NULL`, and any other as its values
 ([protocol.md](../protocol.md#sql)); the Bun SDK reads them into arrays.
-Python and Go get `columns` with their SDKs, each as its own arrays. Rust has
+Python and Go get `columns` with their SDKs, each as its own arrays: a
+`dict` of lists by name in Python, and in Go the fields of a struct of
+slices, a pointer for a column that may be `NULL`. Rust has
 none: `db.all::<(i64, f64)>` reads rows into the program's types with no
 object and no MessagePack between, which is most of what `columns` saves the
 others.
@@ -231,13 +261,26 @@ await db.batch([
 ```
 
 ```python
-done = await db.exec("update notes set done = 1 where id = ? and author_id = ?", note_id, user_id)
-await db.batch([sql("insert into orders (id, user_id, total) values (?, ?, ?)", order.id, user_id, order.total), *lines])
+result = await db.exec("update notes set done = 1 where id = ? and author_id = ?", note_id, user_id)
+result = await db.exec("insert into events (kind, at) values (?, ?)", kind, store.clock.now())
+# result.changes, result.last_insert_rowid
+
+await db.batch([
+    sql("insert into orders (id, user_id, total) values (?, ?, ?)", order.id, user_id, order.total),
+    *(sql("insert into order_lines (order_id, sku, qty) values (?, ?, ?)", order.id, line.sku, line.qty) for line in order.lines),
+])
 ```
 
 ```go
 result, err := db.Exec(ctx, `update notes set done = 1 where id = ? and author_id = ?`, id, userID)
-err = db.Batch(ctx, sqldb.SQL(`insert into orders (id, user_id, total) values (?, ?, ?)`, order.ID, userID, order.Total), lines...)
+result, err = db.Exec(ctx, `insert into events (kind, at) values (?, ?)`, kind, store.Now())
+// result.Changes, result.LastInsertRowid
+
+statements := []sqldb.Statement{sqldb.SQL(`insert into orders (id, user_id, total) values (?, ?, ?)`, order.ID, userID, order.Total)}
+for _, line := range order.Lines {
+	statements = append(statements, sqldb.SQL(`insert into order_lines (order_id, sku, qty) values (?, ?, ?)`, order.ID, line.SKU, line.Qty))
+}
+err = db.Batch(ctx, statements...)
 ```
 
 ```rust
@@ -266,7 +309,8 @@ db.batch([
   own: another verb, since it costs another thing.
 - A unique or primary key already held is `conflict`; another constraint, a
   check, a foreign key, a `not null`, is `invalid`. Either says which in
-  `err.constraint`, `error.constraint()` in Rust: its `kind`, `'unique'`,
+  `err.constraint`, `e.Constraint` in Go, `error.constraint()` in Rust: its
+  `kind`, `'unique'`,
   `'primaryKey'`, `'foreignKey'`, `'check'` or `'notNull'`, and the `table`
   and the `columns`, or the constraint's `name`, as SQLite names them: a
   check's name or its text, the index of a unique key on an expression, and
@@ -279,6 +323,23 @@ db.batch([
   } catch (err) {
   	if (err instanceof ConflictError && err.constraint?.columns.includes('email')) return 'that email is taken'
   	throw err
+  }
+  ```
+
+  ```python
+  try:
+      await users.insert(User(id=id, org=org, email=email))
+  except tinystore.ConflictError as err:
+      if err.constraint and "email" in err.constraint.columns:
+          return "that email is taken"
+      raise
+  ```
+
+  ```go
+  _, err := users.Insert(ctx, User{ID: id, Org: org, Email: email})
+  var e *tinystore.Error
+  if errors.As(err, &e) && e.Kind == tinystore.Conflict && e.Constraint != nil && slices.Contains(e.Constraint.Columns, "email") {
+  	return "that email is taken", nil
   }
   ```
 - A shared commit whose disk sync fails cannot say whether it was saved: each
@@ -331,11 +392,15 @@ await notes.upsert(note, { conflict: 'id', update: ['title', 'done'], where: { a
 ```python
 notes = db.table("notes", Note)          # a dataclass, a TypedDict or a pydantic model
 note = await notes.insert(Note(id=uuid7(), author_id=user_id, title="Buy milk", tags=["home"], created_at=now))
+await notes.insert(drafts)
+await notes.upsert(note, conflict="id", update=["title", "done"], where={"author_id": user_id})
 ```
 
 ```go
-notes := sqldb.Table[Note](db, "notes")
+notes := sqldb.OpenTable[Note](db, "notes")
 note, err := notes.Insert(ctx, Note{ID: uuid.NewV7(), AuthorID: userID, Title: "Buy milk", Tags: []string{"home"}, CreatedAt: store.Now()})
+_, err = notes.InsertMany(ctx, drafts)
+result, err := notes.Upsert(ctx, note, sqldb.Conflict("id"), sqldb.Update("title", "done"), sqldb.Where(sqldb.Eq{"author_id": userID}))
 ```
 
 ```rust
@@ -344,7 +409,9 @@ let note = notes.insert(&Note { id: Uuid::now_v7(), author_id: user_id, title: "
 ```
 
 - A table handle is typed where it opens, as a bucket and a queue are, costs
-  nothing and checks nothing until its first call. Open each table once, in
+  nothing and checks nothing until its first call: Go's `sqldb.OpenTable`
+  returns no error for that reason, and a list of rows is `InsertMany`,
+  Go having one signature a name. Open each table once, in
   the module that owns it, and export it: a second handle opened without the
   first one's `types` reads `0` where the type says `false`.
 - `insert` writes a row, every field it has, and returns it as the file keeps
@@ -403,7 +470,7 @@ urgent = await (
 ```
 
 ```go
-orders := sqldb.Table[Order](db, "orders")
+orders := sqldb.OpenTable[Order](db, "orders")
 
 urgent, err := orders.
 	Where(sqldb.Eq{"status": "pending", "deleted": false}).
@@ -435,12 +502,26 @@ const page = await query.orderBy('created_at', 'desc').limit(50).all()
 const total = await query.count()                 // every match: count leaves out order and limit
 ```
 
+```python
+query = orders.where(tenant_id=tenant_id)
+if only_paid:
+    query = query.where(status="paid")
+if min_total is not None:
+    query = query.where(sql("total >= ?", min_total))
+page = await query.order_by("created_at", "desc").limit(50).all()
+total = await query.count()
+```
+
 ```go
 query := orders.Where(sqldb.Eq{"tenant_id": tenantID})
 if onlyPaid {
 	query = query.Where(sqldb.Eq{"status": "paid"})
 }
+if minTotal != nil {
+	query = query.Where(sqldb.SQL("total >= ?", *minTotal))
+}
 page, err := query.OrderBy("created_at", sqldb.Desc).Limit(50).All(ctx)
+total, err := query.Count(ctx)
 ```
 
 ```rust
@@ -459,6 +540,18 @@ const visible = sql.or({ owner_id: user.id }, { is_public: true })
 const shown = sql.and(visible, sql`deleted_at is null`)
 const docs = await db.table<Doc>('documents').where(shown).all()
 // … where (("owner_id" = ? or "is_public" = ?) and deleted_at is null)
+```
+
+```python
+visible = sql.or_({"owner_id": user.id}, {"is_public": True})
+shown = sql.and_(visible, sql("deleted_at is null"))
+docs = await db.table("documents", Doc).where(shown).all()
+```
+
+```go
+visible := sqldb.Or(sqldb.Eq{"owner_id": user.ID}, sqldb.Eq{"is_public": true})
+shown := sqldb.And(visible, sqldb.SQL("deleted_at is null"))
+docs, err := sqldb.OpenTable[Doc](db, "documents").Where(shown).All(ctx)
 ```
 
 Lists, JSON, joins, rows of another shape, related rows, subqueries, a sort a
@@ -493,6 +586,74 @@ const sorted = await orders.orderBy(...(sorts[request.sort] ?? sorts.newest)).li
 
 const { changes } = await notes.where({ id, author_id: userId }).update({ done: true })
 await notes.where(sql`created_at < ${cutoff}`).delete()
+```
+
+```python
+await orders.where(status=["pending", "paid"]).all()
+await orders.where(sql("total between ? and ?", 100, 5000)).count()
+
+await users.where(sql("meta ->> 'plan' = ?", "pro")).all()
+await notes.where(sql.has("tags", "urgent")).all()
+await users.where(id=id).update(meta=sql("json_set(meta, '$.plan', ?)", plan))
+await posts.where(id=id).update(views=sql("views + 1"))
+
+mine = await db.table("orders as o", Order).join("users as u", "u.id = o.user_id").where({"u.email": email}).all()
+rows = await (
+    db.table("orders as o")
+    .left_join("users as u", sql("u.id = o.user_id and u.active = ?", True))
+    .select(OrderEmail, "o.id, o.total, u.email")
+    .all()
+)
+totals = await orders.select(Total, "user_id, sum(total) as total").group_by("user_id").all()
+
+latest = (
+    db.table("posts as p", Post).select(PostTitle, "p.id, p.title")
+    .where("p.author_id = u.id").order_by("p.id", "desc").limit(3)
+)
+authors = await db.table("users as u", User).include("posts", latest).where({"u.active": True}).all()
+
+paid = db.table("orders as o").select("1").where("o.user_id = u.id").where({"o.status": "paid"})
+buyers = await db.table("users as u", User).where(sql("exists ?", paid)).all()
+
+sorts = {"newest": ("created_at", "desc"), "largest": ("total", "desc")}
+ordered = await orders.order_by(*sorts.get(request.sort, sorts["newest"])).limit(50).all()
+
+result = await notes.where(id=id, author_id=user_id).update(done=True)   # result.changes
+await notes.where(sql("created_at < ?", cutoff)).delete()
+```
+
+```go
+_, err = orders.Where(sqldb.Eq{"status": []string{"pending", "paid"}}).All(ctx)
+_, err = orders.Where(sqldb.SQL("total between ? and ?", 100, 5000)).Count(ctx)
+
+_, err = users.Where(sqldb.SQL("meta ->> 'plan' = ?", "pro")).All(ctx)
+_, err = notes.Where(sqldb.Has("tags", "urgent")).All(ctx)
+_, err = users.Where(sqldb.Eq{"id": id}).Update(ctx, sqldb.Set{"meta": sqldb.SQL("json_set(meta, '$.plan', ?)", plan)})
+_, err = posts.Where(sqldb.Eq{"id": id}).Update(ctx, sqldb.Set{"views": sqldb.SQL("views + 1")})
+
+mine, err := sqldb.OpenTable[Order](db, "orders as o").Join("users as u", "u.id = o.user_id").Where(sqldb.Eq{"u.email": email}).All(ctx)
+rows, err := sqldb.Select[OrderEmail](
+	sqldb.OpenTable[Order](db, "orders as o").LeftJoin("users as u", sqldb.SQL("u.id = o.user_id and u.active = ?", true)),
+	"o.id, o.total, u.email",
+).All(ctx)
+totals, err := sqldb.Select[Total](orders, "user_id, sum(total) as total").GroupBy("user_id").All(ctx)
+
+latest := sqldb.Select[PostTitle](sqldb.OpenTable[Post](db, "posts as p"), "p.id, p.title").
+	Where(sqldb.SQL("p.author_id = u.id")).OrderBy("p.id", sqldb.Desc).Limit(3)
+authors, err := sqldb.OpenTable[User](db, "users as u").Include("posts", latest).Where(sqldb.Eq{"u.active": true}).All(ctx)
+
+paid := sqldb.Select[struct{}](sqldb.OpenTable[Order](db, "orders as o"), "1").
+	Where(sqldb.SQL("o.user_id = u.id")).Where(sqldb.Eq{"o.status": "paid"})
+buyers, err := sqldb.OpenTable[User](db, "users as u").Where(sqldb.SQL("exists ?", paid)).All(ctx)
+
+sort, ok := sorts[request.Sort] // map[string]sqldb.Order{"newest": {"created_at", sqldb.Desc}, …}
+if !ok {
+	sort = sorts["newest"]
+}
+ordered, err := orders.OrderBy(sort.Column, sort.Direction).Limit(50).All(ctx)
+
+result, err := notes.Where(sqldb.Eq{"id": id, "author_id": userID}).Update(ctx, sqldb.Set{"done": true})   // result.Changes
+_, err = notes.Where(sqldb.SQL("created_at < ?", cutoff)).Delete(ctx)
 ```
 
 - `where` adds a condition with `and`: an object of equal values, a piece of
@@ -571,6 +732,18 @@ const second = await orders.where({ tenant_id: tenantId }).orderBy('created_at',
 // { rows, next }: next is undefined after the last page
 ```
 
+```python
+newest = orders.where(tenant_id=tenant_id).order_by("created_at", "desc").order_by("id", "desc")
+first = await newest.list(limit=50)
+second = await newest.list(limit=50, after=first.next)   # Page(rows, next); next is None after the last
+```
+
+```go
+newest := orders.Where(sqldb.Eq{"tenant_id": tenantID}).OrderBy("created_at", sqldb.Desc).OrderBy("id", sqldb.Desc)
+first, err := newest.List(ctx, sqldb.Limit(50))
+second, err := newest.List(ctx, sqldb.Limit(50), sqldb.After(first.Next))   // sqldb.Page[T]{Rows, Next}
+```
+
 - `list` reads a page after the last row of the one before, as kv's and jobs'
   `list` do: by the query's order, which ends in a unique column so that no row
   is read twice or skipped while rows come and go. `next` is opaque and holds
@@ -600,15 +773,37 @@ const placed = await db.tx(async tx => {
 ```
 
 ```python
-async with db.tx() as tx:
-    left = await tx.scalar("select stock from items where sku = ?", sku)
-    ...
+async def place(tx) -> bool:
+    left = await tx.scalar(int, "select stock from items where sku = ?", sku)
+    if left < 1:
+        return False
+    await tx.exec("update items set stock = stock - 1 where sku = ?", sku)
+    await tx.table("orders", Order).insert(order)
+    await tx.with_(emails).add(Email(order=order.id, to=user.email))
+    return True
+
+
+placed = await db.tx(place)
 ```
 
 ```go
+placed := false
 err = db.Tx(ctx, func(tx *sqldb.Tx) error {
 	left, err := sqldb.Scalar[int64](ctx, tx, `select stock from items where sku = ?`, sku)
-	…
+	if err != nil || left < 1 {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `update items set stock = stock - 1 where sku = ?`, sku); err != nil {
+		return err
+	}
+	if _, err := sqldb.OpenTable[Order](tx, "orders").Insert(ctx, order); err != nil {
+		return err
+	}
+	if _, err := tinystore.With(tx, emails).Add(ctx, Email{Order: order.ID, To: user.Email}); err != nil {
+		return err
+	}
+	placed = true
+	return nil
 })
 ```
 
@@ -625,7 +820,10 @@ let placed = db.tx(|tx| -> Result<bool, ShopError> {
 ```
 
 - `tx` is for writes that depend on what a read found.
-  Returning commits what it wrote; a throw (an error, a panic) rolls back. Its
+  Returning commits what it wrote; a throw (an error, a panic) rolls back,
+  and in Go the function's error. Python takes a function, as kv's
+  `store.tx` does, rather than an `async with` block, so that both
+  transactions have one shape and a value to return. Its
   function runs once: nothing runs it again, since a call to a payment
   service inside would be made twice.
 - It holds the database's writer while the function runs and pays a disk sync
@@ -655,6 +853,18 @@ let placed = db.tx(|tx| -> Result<bool, ShopError> {
 const sessions = db.bucket<Session>('sessions', { idle: '30d' })   // in sql/app.db, beside the tables
 const emails = db.queue<Email>('emails', { attempts: 5 })
 emails.work(async email => send(email))
+```
+
+```python
+sessions = db.bucket("sessions", Session, idle="30d")
+emails = db.queue("emails", Email, attempts=5)
+emails.work(send)
+```
+
+```go
+sessions, err := kv.OpenBucket[Session](db, "sessions", kv.Idle(30*24*time.Hour))
+emails, err := jobs.OpenQueue[Email](db, "emails", jobs.Attempts(5))
+err = emails.Work(ctx, send)
 ```
 
 ```rust
@@ -693,6 +903,16 @@ the index and the triggers that keep it, and a query reads it:
 ```ts
 const hits = await db.all<Message>`select m.* from messages_fts f join messages m on m.id = f.rowid
 	where messages_fts match ${query} and m.chat_id = ${chatId} order by bm25(messages_fts) limit 50`
+```
+
+```python
+hits = await db.all(Message, """select m.* from messages_fts f join messages m on m.id = f.rowid
+    where messages_fts match ? and m.chat_id = ? order by bm25(messages_fts) limit 50""", query, chat_id)
+```
+
+```go
+hits, err := sqldb.All[Message](ctx, db, `select m.* from messages_fts f join messages m on m.id = f.rowid
+	where messages_fts match ? and m.chat_id = ? order by bm25(messages_fts) limit 50`, query, chatID)
 ```
 
 The `unicode61` tokenizer folds Cyrillic case but knows neither `ё` nor word

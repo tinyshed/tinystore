@@ -6,7 +6,8 @@ an audit trail, the clicks of a page, another program's output; read back by
 time and by what they hold, shown live, counted, and copied elsewhere each
 once. This book is the API before the code; [dx.md](../dx.md) has the rules
 it follows. TypeScript comes first in each section because most callers will
-read it; Python, Go and Rust follow when they spell something differently.
+read it; Python, Go and Rust follow, the first two as
+[dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them.
 The engine is `records`: its module, its file and its documents use the
 word, and a program never needs it. The Go engine at `e81a050` and research's
 [design/records.md][design] are what this ports: its promises are GATES.md's,
@@ -46,15 +47,30 @@ log.event('signup', { plan: 'pro' })                 // an event named 'signup':
 ```
 
 ```python
-log = logging.getLogger("api")
-log.addHandler(store.log_handler("api"))
-log.info("signed in", extra={"user": 42})
+log = store.logger("api")
+log.info("signed in", user=42)
+log.warning("slow request", route="/notes", ms=1200)
+log.error("charge failed", order=7, error=error)      # an exception is kept as its traceback
+
+request = log.bind(request_id=request_id)             # every line of `request` carries it
+request.debug("cache miss", key=key)
+
+log.event("signup", plan="pro")
+
+logging.getLogger("worker").addHandler(store.log_handler("worker"))   # a program on logging
 ```
 
 ```go
-log := slog.New(records.Handler(store, "api"))
+handler := records.NewHandler(store, "api")           // a *records.Handler: a slog.Handler, with Event, Flush and Dropped
+log := slog.New(handler)
 log.Info("signed in", "user", 42)
-request := log.With("request_id", id)
+log.Warn("slow request", "route", "/notes", "ms", 1200)
+log.Error("charge failed", "order", 7, "error", err)
+
+request := log.With("request_id", requestID)
+request.Debug("cache miss", "key", key)
+
+handler.Event("signup", "plan", "pro")
 ```
 
 ```rust
@@ -77,8 +93,15 @@ log.event("signup", &Signup { plan: "pro" });
   level or a message, as a line is written: at once, and dropped under load.
   An event that must not be lost is `append`'s.
 - The levels are `debug`, `info`, `warn` and `error`.
-- Python's logger is `logging`'s and Go's is `slog`'s, with a handler of the
-  store's; in Rust it is a `tracing` layer, whose spans give the `context`,
+- Python's logger is the store's, with `logging`'s levels and `warning`,
+  and `bind` for `with`, structlog's and loguru's word, since `with_` would
+  read as a `with` block; `store.log_handler` gives `logging` a handler of
+  the store's for a
+  program that logs through it, a record's `extra` its fields. Go's is
+  `slog`'s with a handler of the store's, `records.NewHandler`, whose
+  `Event`, `Flush` and `Dropped` are the handler's, `slog.Logger` having no
+  place for them; `With` gives the `context`. In Rust it is a `tracing`
+  layer, whose spans give the `context`,
   the trace and the span, and whose clone gives `flush`, `dropped` and
   `event`. Its level is its own: the subscriber's other layers still see a
   line under it.
@@ -102,6 +125,15 @@ log.event("signup", &Signup { plan: "pro" });
 
 ```ts
 const log = store.logger('api', { level: 'info', console: 'json', redact: secrets, keep: '30d' })
+```
+
+```python
+log = store.logger("api", level="info", console="json", redact=tinystore.secrets, keep="30d")
+```
+
+```go
+handler := records.NewHandler(store, "api", console.Level(slog.LevelInfo), console.Format(console.JSON),
+	console.Redact(console.Secrets...), records.Keep(30*24*time.Hour))
 ```
 
 ```rust
@@ -135,10 +167,21 @@ import { logger, secrets } from 'tinystore'
 const log = logger('app', { redact: secrets })   // printed, and kept nowhere
 ```
 
+```python
+from tinystore import logger, secrets
+
+log = logger("app", redact=secrets)
+```
+
+```go
+log := slog.New(console.NewHandler("app", console.Redact(console.Secrets...)))
+```
+
 A program that wants the logger and no store takes it from the package: the
 same calls, the same options but `buffer` and `keep`, the same lines.
 `store.logger('app')` in its place keeps them too. In TypeScript and Python
-it loads nothing native. In Rust it is `tinystore::console::logger("app")`,
+it loads nothing native, and Go's package `console` imports neither the
+store nor cgo. In Rust it is `tinystore::console::logger("app")`,
 which the crate's `console` feature builds alone, without a store or SQLite.
 
 ## Events
@@ -153,15 +196,18 @@ await clicks.append(batch.map(click => ({ name: click.type, fields: click.props,
 
 ```python
 audit = store.events("audit", keep="365d")
+
 await audit.append("role.changed", {"user": 42, "role": "admin"})
 await audit.append("role.changed", {"user": 42, "role": "admin"}, at=changed_at, context={"actor": admin.id})
+await clicks.append([Event(name=click.type, fields=click.props, at=click.time) for click in batch])
 ```
 
 ```go
-audit, err := records.Events(store, "audit", records.Keep(365*24*time.Hour))
+audit, err := records.OpenEvents(store, "audit", records.Keep(365*24*time.Hour))   // *records.Events
+
 err = audit.Append(ctx, "role.changed", records.Fields{"user": 42, "role": "admin"})
-actor := records.Fields{"actor": admin.ID}
-err = audit.Append(ctx, "role.changed", change, records.At(changedAt), records.Context(actor))
+err = audit.Append(ctx, "role.changed", change, records.At(changedAt), records.Context(records.Fields{"actor": admin.ID}))
+err = clicks.AppendMany(ctx, events)   // []records.Event{{Name, Fields, At}}, all or none
 ```
 
 ```rust
@@ -191,8 +237,9 @@ audit.event("role.changed").at(changed_at).context(&Actor { actor: admin.id }).a
 - `store.events()` without a name only reads: it has no `append` and no
   `lines`, and a call of either does not compile. Rust and Go, where a name
   has one signature, spell it `store.all_events()` and
-  `records.AllEvents(store)`, and a condition `filter`, as sql's builder
-  does where `where` is the language's.
+  `records.OpenAllEvents(store)`; Rust spells a condition `filter`, as sql's
+  builder does where `where` is the language's. Go's list of events is
+  `AppendMany`, for the same reason.
 
 ### How long a stream keeps
 
@@ -242,13 +289,22 @@ const mine = await audit.list({ where: { user: 42 }, newest: true, limit: 50 }) 
 ```
 
 ```python
-page = await store.events().list(since="1h", min_level="warn")
+page = await store.events().list(since="1h", min_level="warn")              # Page(events, next)
+more = await store.events().list(since="1h", min_level="warn", after=page.next)
+
 async for event in store.events().all(since="24h", trace_id=trace_id): ...
+resets = await store.events().list(since="1h", search="connection reset")
+mine = await audit.list(where={"user": 42}, newest=True, limit=50)
 ```
 
 ```go
-page, err := records.AllEvents(store).List(ctx, records.Since(time.Hour), records.MinLevel(slog.LevelWarn))
-for event, err := range audit.All(ctx, records.Where("user", 42), records.Newest()) { … }
+events, err := records.OpenAllEvents(store)
+page, err := events.List(ctx, records.Query{Since: time.Hour, MinLevel: slog.LevelWarn})   // records.Page{Events, Next}
+more, err := events.List(ctx, records.Query{Since: time.Hour, MinLevel: slog.LevelWarn, After: page.Next})
+
+for event, err := range events.All(ctx, records.Query{Since: 24 * time.Hour, TraceID: traceID}) { … }
+resets, err := events.List(ctx, records.Query{Since: time.Hour, Search: "connection reset"})
+mine, err := audit.List(ctx, records.Query{Where: records.Where{"user": 42}, Newest: true, Limit: 50})
 ```
 
 ```rust
@@ -288,6 +344,9 @@ for event in audit.list().filter("user", 42).newest().all() { … }
   first page had.
 - A condition given as `undefined` is `invalid`, never a condition left out,
   as sql's is: a trace id that was not there must not read every event.
+  Python's `None` is the same; Go's zero value is a field left out, as a
+  struct cannot say otherwise, so a Go program that may lack a trace id
+  checks it before it asks.
 - The time, the stream, the level, the trace and a `where` on a value that
   rarely repeats, a request's id, are found without reading what cannot
   match. `search` reads every event the rest of the query leaves.
@@ -298,6 +357,28 @@ for event in audit.list().filter("user", 42).newest().all() { … }
 for await (const { events, missed } of store.events().tail({ streams: ['api'], minLevel: 'warn' })) {
 	if (missed > 0) socket.send(JSON.stringify({ skipped: missed }))
 	for (const event of events) socket.send(JSON.stringify(event))
+}
+```
+
+```python
+async for batch in store.events().tail(streams=["api"], min_level="warn"):
+    if batch.missed > 0:
+        await socket.send_json({"skipped": batch.missed})
+    for event in batch.events:
+        await socket.send_json(event)
+```
+
+```go
+for batch, err := range events.Tail(ctx, records.Query{Streams: []string{"api"}, MinLevel: slog.LevelWarn}) {
+	if err != nil {
+		return err
+	}
+	if batch.Missed > 0 {
+		send(map[string]int{"skipped": batch.Missed})
+	}
+	for _, event := range batch.Events {
+		send(event)
+	}
 }
 ```
 
@@ -322,6 +403,39 @@ for (;;) {
 	await warehouse.insert(batch.events)
 	cursor = batch.cursor
 	await shipping.set('cursor', cursor)
+}
+```
+
+```python
+cursor = await shipping.get("cursor")
+while True:
+    batch = await store.events().poll(cursor)   # Batch(events, cursor, expired)
+    if not batch.events:
+        break
+    if batch.expired > 0:
+        log.warning("events expired before their copy", count=batch.expired)
+    await warehouse.insert(batch.events)
+    cursor = batch.cursor
+    await shipping.set("cursor", cursor)
+```
+
+```go
+cursor, _, err := shipping.Get(ctx, "cursor")
+for {
+	batch, err := events.Poll(ctx, cursor) // records.Batch{Events, Cursor, Expired}
+	if err != nil || len(batch.Events) == 0 {
+		return err
+	}
+	if batch.Expired > 0 {
+		log.Warn("events expired before their copy", "count", batch.Expired)
+	}
+	if err := warehouse.Insert(ctx, batch.Events); err != nil {
+		return err
+	}
+	cursor = batch.Cursor
+	if err := shipping.Set(ctx, "cursor", cursor); err != nil {
+		return err
+	}
 }
 ```
 
@@ -357,6 +471,20 @@ const hourly = await store.events().aggregate({ since: '24h', every: '1h', by: [
 
 const latency = await api.aggregate({ since: '24h', names: ['request'], every: '5m', stats: ['duration'] })
 // [{ at, count: 310, stats: { duration: { samples: 287, sum: 12772, min: 3, max: 1200, avg: 44.5 } } }, …]
+```
+
+```python
+errors = await store.events().count(since="1h", min_level="error")
+routes = await store.events().top("route", since="1h", min_level="error")    # [Top(value, count), …]
+hourly = await store.events().aggregate(since="24h", every="1h", by=["level"])
+latency = await api.aggregate(since="24h", names=["request"], every="5m", stats=["duration"])
+```
+
+```go
+errors, err := events.Count(ctx, records.Query{Since: time.Hour, MinLevel: slog.LevelError})
+routes, err := events.Top(ctx, "route", records.Query{Since: time.Hour, MinLevel: slog.LevelError})
+hourly, err := events.Aggregate(ctx, records.Query{Since: 24 * time.Hour, Every: time.Hour, By: []string{"level"}})
+latency, err := api.Aggregate(ctx, records.Query{Since: 24 * time.Hour, Names: []string{"request"}, Every: 5 * time.Minute, Stats: []string{"duration"}})
 ```
 
 - Each takes a query as `list` does, without `newest`, `limit` and `after`.
@@ -395,6 +523,16 @@ const streams = await store.events().streams()        // [{ name: 'api', keep: '
 const names = await api.fieldNames({ since: '1h' })   // ['ms', 'requestId', 'route', 'user']
 ```
 
+```python
+streams = await store.events().streams()   # [Stream(name, keep, retained_from, newest), …]
+names = await api.field_names(since="1h")
+```
+
+```go
+streams, err := events.Streams(ctx)         // []records.Stream{{Name, Keep, RetainedFrom, Newest}}
+names, err := api.FieldNames(ctx, records.Query{Since: time.Hour})
+```
+
 - `streams` gives every stream with events, by name, with what it keeps,
   `retainedFrom`, where that begins, and its newest event's time.
   `retainedFrom` is its oldest event's time, or where its `keep` begins
@@ -414,6 +552,19 @@ const names = await api.fieldNames({ since: '1h' })   // ['ms', 'requestId', 'ro
 const out = store.events('worker').lines()
 child.stdout.on('data', chunk => out.write(chunk))
 child.on('close', () => out.end())
+```
+
+```python
+async with store.events("worker").lines() as out:   # leaving the block hands over what it holds
+    async for chunk in child.stdout:
+        await out.write(chunk)
+```
+
+```go
+out, err := worker.Lines(ctx)                       // an io.WriteCloser
+cmd.Stdout = out
+err = cmd.Run()
+err = out.Close()                                   // hands over what it holds
 ```
 
 ```rust
@@ -442,6 +593,16 @@ std::io::copy(child.stdout.as_mut().unwrap(), &mut out)?;   // dropped, it hands
 await withTrace({ traceId, spanId }, () => handle(request))
 ```
 
+```python
+with tinystore.trace(trace_id=trace_id, span_id=span_id):
+    await handle(request)
+```
+
+```go
+ctx = records.WithTrace(ctx, traceID, spanID)
+handle(ctx, request) // log.InfoContext(ctx, …) and Append(ctx, …) take it
+```
+
 - A line logged and an event appended inside the call, however deep and
   after any `await`, take its trace and span. An event given its own keeps
   them.
@@ -453,6 +614,18 @@ await withTrace({ traceId, spanId }, () => handle(request))
 
 ```ts
 for (const damage of await store.events().damaged()) await store.events().drop(damage)
+```
+
+```python
+for damage in await store.events().damaged():
+    await store.events().drop(damage)
+```
+
+```go
+damaged, err := events.Damaged(ctx)
+for _, damage := range damaged {
+	err = events.Drop(ctx, damage)
+}
 ```
 
 A changed byte is refused as `corrupt` naming what broke, and a read over it

@@ -29,6 +29,16 @@ const backup = await store.backup('backup-2026-10-13.zip')
 await store.backup('full.zip', { include: ['secret.key'], includeEncryptionKey: true })
 ```
 
+```python
+backup = await store.backup("backup-2026-10-13.zip")    # Backup(files, bytes, key_left_out)
+await store.backup("full.zip", include=["secret.key"], include_encryption_key=True)
+```
+
+```go
+backup, err := store.Backup(ctx, "backup-2026-10-13.zip") // tinystore.Backup{Files, Bytes, KeyLeftOut}
+_, err = store.Backup(ctx, "full.zip", tinystore.Include("secret.key"), tinystore.IncludeEncryptionKey())
+```
+
 ```sh
 tinystore backup ./data backup-2026-10-13.zip --include secret.key
 ```
@@ -88,6 +98,9 @@ tinystore::backup::restore("backup-2026-10-13.zip", "data")?;   // before Store:
 ```sh
 tinystore restore backup-2026-10-13.zip ./data
 ```
+
+An SDK's program restores through the command line: a restore runs before a
+store opens, when an SDK has nothing yet to call.
 
 - A restore writes into a directory that is empty or absent, holding its
   `LOCK` meanwhile, so that no store opens there before it ends.

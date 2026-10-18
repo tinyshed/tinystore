@@ -4,7 +4,8 @@ Messages a program publishes on a named channel and every subscriber that
 listens at that moment receives, in memory and at most once. This book is a
 proposal of 16 October 2026, not yet accepted: it holds the call sites after
 a newcomer check and three outside reviews, and the contract they asked for.
-[dx.md](../dx.md) holds the rules it follows; research's
+[dx.md](../dx.md) holds the rules it follows, and how Python and Go spell the
+calls of TypeScript and Rust; research's
 [channels round](https://github.com/tinyshed/research/blob/main/tinystore/reports/channels-2026-10-15.md),
 its [follow-up with real receivers](https://github.com/tinyshed/research/blob/main/tinystore/reports/channels-wire-followup-2026-10-15.md)
 and the [handoff](https://github.com/tinyshed/research/blob/main/tinystore/reports/channels-locks-handoff-2026-10-15.md)
@@ -32,6 +33,22 @@ const typing = store.channel<Typing>('typing')    // another type, another chann
 
 await messages.under(roomId).publish({ from: 'ann', text: 'hi' })
 await messages.publish(notice)                    // the channel's root
+```
+
+```python
+messages = store.channel("messages", Chat)
+typing = store.channel("typing", Typing)
+
+await messages.under(room_id).publish(Chat(sender="ann", text="hi"))
+await messages.publish(notice)
+```
+
+```go
+messages, err := channels.OpenChannel[Chat](store, "messages")   // *channels.Channel[Chat]
+typing, err := channels.OpenChannel[Typing](store, "typing")
+
+err = messages.Under(roomID).Publish(ctx, Chat{From: "ann", Text: "hi"})
+err = messages.Publish(ctx, notice)
 ```
 
 ```rust
@@ -65,6 +82,44 @@ for await (const m of messages.under(roomId).each({ onMissed })) {
 }
 ```
 
+```python
+sub = await messages.under(room_id).subscribe(
+    lambda m: show(m.value),
+    on_missed=lambda missed: reload_from_db(),   # Missed(reason="behind" | "reconnect", count)
+    on_error=lambda error, m: report(error),
+)
+await sub.stop()
+
+await messages.under(region).subscribe(on_message, recursive=True)
+await messages.subscribe(on_notice)
+
+async for m in messages.under(room_id).each(on_missed=on_missed):
+    await save(m.value)
+```
+
+```go
+sub, err := messages.Under(roomID).Subscribe(ctx, func(ctx context.Context, m channels.Message[Chat]) error {
+	show(m.Value)
+	return nil // an error goes to OnError
+},
+	channels.OnMissed(func(missed channels.Missed) { reloadFromDB() }),
+	channels.OnError(func(err error, m channels.Message[Chat]) { report(err) }),
+)
+err = sub.Stop(ctx)
+
+_, err = messages.Under(region).Subscribe(ctx, onMessage, channels.Recursive())
+_, err = messages.Subscribe(ctx, onNotice)
+
+for m, err := range messages.Under(roomID).Each(ctx, channels.OnMissed(onMissed)) {
+	if err != nil {
+		return err
+	}
+	if err := save(ctx, m.Value); err != nil {
+		return err // leaving the loop ends the subscription
+	}
+}
+```
+
 ```rust
 let sub = messages
     .under(&room_id)
@@ -79,7 +134,9 @@ for m in messages.under(&room_id).each()? {
 ```
 
 - `await subscribe()` answers once the store has the subscription: a
-  message published after that reaches it. The loop of `each` listens from
+  message published after that reaches it. Go's `Subscribe` returns then
+  too, its handler on a goroutine of the SDK's, rather than blocking as a
+  queue's `Work` does. The loop of `each` listens from
   its first turn, so a program that publishes and must hear its own message
   subscribes first.
 - A subscription matches the branch it was made on. `recursive` adds every
@@ -126,6 +183,24 @@ for m in messages.under(&room_id).each()? {
 await store.tx(async tx => {
   await tx.with(orders).set(id, order)
   await tx.with(events).under(id).publish({ kind: 'created' })
+})
+```
+
+```python
+async def create(tx) -> None:
+    await tx.with_(orders).set(id, order)
+    await tx.with_(events).under(id).publish(Created(kind="created"))
+
+
+await store.tx(create)
+```
+
+```go
+err = store.Tx(ctx, func(tx *tinystore.Tx) error {
+	if err := tinystore.With(tx, orders).Set(ctx, id, order); err != nil {
+		return err
+	}
+	return tinystore.With(tx, events).Under(id).Publish(ctx, Created{Kind: "created"})
 })
 ```
 

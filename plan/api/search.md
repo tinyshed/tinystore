@@ -5,7 +5,10 @@ owner's and an outside reviewer's readings (below), and closed by the owner
 on 17 October, its eight slices built. Documents a program sets
 by id in a named index and finds again by their words, by vectors it gives
 with them, or by both, kept to the documents a filter passes.
-[dx.md](../dx.md) holds the rules it follows. The evidence is research's
+[dx.md](../dx.md) holds the rules it follows; TypeScript comes first, then
+Python, Go and Rust, the first two as
+[dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them. The
+evidence is research's
 rounds of 16 October:
 [search-plan](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-plan-2026-10-16.md),
 [search-1m](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-1m-2026-10-16.md),
@@ -53,9 +56,22 @@ const products = store.index<Product>('products', {
 ```python
 articles = store.index("articles", Article, fields={"title": 2, "body": 1})
 posts = store.index("posts", Post, fields=["title", "body"])
+notes = store.index("notes", str)
 products = store.index("products", Product, fields={"name": 3, "description": 1},
                        filters=["category", "owner_id"], vectors=Vectors(dimensions=1024),
                        hybrid=Hybrid(vector_weight=0.5))
+```
+
+```go
+articles, err := search.OpenIndex[Article](store, "articles", search.Fields{"title": 2, "body": 1})   // *search.Index[Article]
+posts, err := search.OpenIndex[Post](store, "posts", search.FieldNames("title", "body"))
+notes, err := search.OpenIndex[string](store, "notes")
+products, err := search.OpenIndex[Product](store, "products",
+	search.Fields{"name": 3, "description": 1},
+	search.Filters("category", "owner_id"),
+	search.Vectors{Dimensions: 1024},
+	search.Hybrid{VectorWeight: 0.5},
+)
 ```
 
 ```rust
@@ -90,6 +106,16 @@ let products = store
 ```ts
 store.index('articles', { fields: { title: 2, body: 1 } })                    // before a deploy
 store.index('articles', { fields: { title: 5, body: 1, description: 1 } })    // after it
+```
+
+```python
+store.index("articles", Article, fields={"title": 2, "body": 1})                     # before a deploy
+store.index("articles", Article, fields={"title": 5, "body": 1, "description": 1})   # after it
+```
+
+```go
+articles, err := search.OpenIndex[Article](store, "articles", search.Fields{"title": 2, "body": 1})                    // before a deploy
+articles, err = search.OpenIndex[Article](store, "articles", search.Fields{"title": 5, "body": 1, "description": 1})   // after it
 ```
 
 ```text
@@ -142,6 +168,22 @@ await articles.ready()        // once the index serves the settings it was opene
 await articles.status()       // { state: 'rebuilding', done: 0.42 } | { state: 'ready' } | { state: 'failed', error }
 ```
 
+```python
+articles = store.index("articles", Article, fields=fields, rebuild="manual")
+await store.reindex("articles", fields={"title": 2, "body": 1, "description": 1})
+
+await articles.ready()
+await articles.status()       # Status(state="rebuilding", done=0.42)
+```
+
+```go
+articles, err := search.OpenIndex[Article](store, "articles", fields, search.Rebuild(search.Manual))
+err = search.Reindex(ctx, store, "articles", search.Fields{"title": 2, "body": 1, "description": 1})
+
+err = articles.Ready(ctx)
+status, err := articles.Status(ctx) // search.Status{State: search.Rebuilding, Done: 0.42}
+```
+
 ```rust
 let articles = store.index::<Article>("articles").fields(["title", "body"]).rebuild(Rebuild::Manual).open()?;
 let articles = store.index::<Article>("articles").fields(["title", "body", "description"]).rebuild(Rebuild::Manual).reindex()?;
@@ -164,6 +206,16 @@ articles.status()?;           // Status::Rebuilding { done: 0.42 } | Status::Rea
 ```ts
 await store.dropIndex('posts')            // true when there was one
 await store.indexes()                     // [{ name, documents, vectors, opened, status }]
+```
+
+```python
+await store.drop_index("posts")
+await store.indexes()
+```
+
+```go
+dropped, err := search.Drop(ctx, store, "posts")
+indexes, err := search.List(ctx, store)   // []search.Listed{{Name, Documents, Vectors, Opened, Status}}
 ```
 
 ```rust
@@ -197,6 +249,24 @@ await products.set('p-4', draft, { vector: null })                 // found by i
 await articles.delete('a-17')
 const article = await articles.get('a-17')                          // the value, or undefined
 await articles.setMany([{ id: 'a-1', value: first }, { id: 'a-2', value: second }])
+```
+
+```python
+await articles.set("a-17", Article(title="Хлеб на закваске", body="…"))
+await products.set("p-3", product, vector=embedding)               # a list of floats, or an array
+await products.set("p-4", draft, vector=None)
+await articles.delete("a-17")
+article = await articles.get("a-17")                                # the value, or None
+await articles.set_many([("a-1", first), ("a-2", second)])        # (id, value) or (id, value, vector)
+```
+
+```go
+err = articles.Set(ctx, "a-17", Article{Title: "Хлеб на закваске", Body: "…"})
+err = products.Set(ctx, "p-3", product, search.Vector(embedding))  // []float32
+err = products.Set(ctx, "p-4", draft, search.NoVector())
+err = articles.Delete(ctx, "a-17")
+article, found, err := articles.Get(ctx, "a-17")
+err = articles.SetMany(ctx, []search.Doc[Article]{{ID: "a-1", Value: first}, {ID: "a-2", Value: second}})
 ```
 
 ```rust
@@ -240,8 +310,26 @@ for (const hit of hits) show(hit.id, hit.value.title)
 ```
 
 ```python
-hits = articles.search("как испечь хлеб").hits
-hits = products.search(text="red shoes", vector=q, where={"owner_id": 42}).hits
+result = await articles.search("как испечь хлеб")                         # Result(hits, corrected)
+result = await products.search(text="red shoes", vector=q)
+result = await products.search(vector=q)
+result = await articles.search(text="хлеб", limit=20, offset=20)
+result = await products.search(text="red shoes", where={"owner_id": 42})
+
+for hit in result.hits:
+    show(hit.id, hit.value.title)
+```
+
+```go
+result, err := articles.Search(ctx, "как испечь хлеб")                     // search.Result[Article]{Hits, Corrected}
+result, err = products.Search(ctx, "red shoes", search.Vector(q))
+result, err = products.SearchVector(ctx, q)
+result, err = articles.Search(ctx, "хлеб", search.Limit(20), search.Offset(20))
+result, err = products.Search(ctx, "red shoes", search.Where{"owner_id": 42})
+
+for _, hit := range result.Hits {
+	show(hit.ID, hit.Value.Title)
+}
 ```
 
 ```rust
@@ -300,6 +388,18 @@ await products.search({ text: 'red shoes', vector: q, hybrid: { vectorWeight: 0.
 await products.search({ text: 'red shoes', vector: q, hybrid: { rerank: true } })        // the words' hits, ordered by the vector
 ```
 
+```python
+await products.search(text="red shoes", vector=q)
+await products.search(text="red shoes", vector=q, hybrid=Hybrid(vector_weight=0.7))
+await products.search(text="red shoes", vector=q, hybrid=Hybrid(rerank=True))
+```
+
+```go
+result, err := products.Search(ctx, "red shoes", search.Vector(q))
+result, err = products.Search(ctx, "red shoes", search.Vector(q), search.Hybrid{VectorWeight: 0.7})
+result, err = products.Search(ctx, "red shoes", search.Vector(q), search.Hybrid{Rerank: true})
+```
+
 ```rust
 let found = products.search("red shoes").vector(&q).vector_weight(0.7).run()?;
 let found = products.search("red shoes").vector(&q).rerank().run()?;
@@ -352,6 +452,16 @@ let found = products.search("red shoes").vector(&q).rerank().run()?;
 ```ts
 const products = store.index<Product>('products', { fields, vectors: { dimensions: 1024 } })
 const catalog = store.index<Product>('catalog', { fields, vectors: { dimensions: 1024, recall: 0.95 } })
+```
+
+```python
+products = store.index("products", Product, fields=fields, vectors=Vectors(dimensions=1024))
+catalog = store.index("catalog", Product, fields=fields, vectors=Vectors(dimensions=1024, recall=0.95))
+```
+
+```go
+products, err := search.OpenIndex[Product](store, "products", fields, search.Vectors{Dimensions: 1024})
+catalog, err := search.OpenIndex[Product](store, "catalog", fields, search.Vectors{Dimensions: 1024, Recall: 0.95})
 ```
 
 ```rust
@@ -414,6 +524,24 @@ await products.search({ vector: q, where: search.or({ category: 'boots' }, { tag
 await products.search({ text: 'red shoes', where: { category: null } })      // documents with no category
 ```
 
+```python
+products = store.index("products", Product, fields=fields, filters=["category", "owner_id", "price", "tags"])
+
+await products.search(text="red shoes", where={"owner_id": 42})
+await products.search(text="red shoes", where={"category": ["shoes", "boots"], "price": {"gte": 10, "lt": 100}})
+await products.search(vector=q, where=search.or_({"category": "boots"}, {"tags": "sale"}))
+await products.search(text="red shoes", where={"category": None})
+```
+
+```go
+products, err := search.OpenIndex[Product](store, "products", fields, search.Filters("category", "owner_id", "price", "tags"))
+
+result, err := products.Search(ctx, "red shoes", search.Where{"owner_id": 42})
+result, err = products.Search(ctx, "red shoes", search.Where{"category": []string{"shoes", "boots"}, "price": search.Range{Gte: 10, Lt: 100}})
+result, err = products.SearchVector(ctx, q, search.Or(search.Where{"category": "boots"}, search.Where{"tags": "sale"}))
+result, err = products.Search(ctx, "red shoes", search.Where{"category": nil})
+```
+
 ```rust
 use tinystore::search::{eq, is_in, missing, or, range};
 
@@ -430,7 +558,8 @@ let found = products.search("red shoes").filter(missing("category")).run()?;
 - A filter is written as sqldb's conditions are, the owner's call: in
   TypeScript the object `where` takes, equal values with a list for one of
   them and `null` for none, grouped by `search.or` and `search.and` as
-  sqldb's by `sql.or`; in Rust the pieces `.filter` takes, `eq`,
+  sqldb's by `sql.or`, in Python the same `dict` and `search.or_`, in Go a
+  `search.Where` and `search.Or`; in Rust the pieces `.filter` takes, `eq`,
   `is_in`, `or` and `and` as `sql::eq` and the rest, and `range` for
   numbers between two bounds, any Rust range. Each `.filter` adds a
   condition with and. A piece of SQL is no filter: a search's filter runs
@@ -487,6 +616,42 @@ const products = db.searchIndex<Product>('products_search', {
   vectors: { column: 'embedding', dimensions: 1024 },
 })
 await db.dropSearchIndex('products_search')
+```
+
+```python
+db = await store.database("app", migrations="./migrations")
+articles = db.search_index("articles_search", Article, table="articles",
+                           fields={"title": 2, "body": 1}, filters=["category", "done"])
+await articles.ready()
+
+await db.exec("update articles set title = ? where id = ?", "Новый заголовок", 42)
+result = await articles.search("новый заголовок")
+await articles.search(text="bread", where={"done": True})
+
+products = db.search_index("products_search", Product, table="products",
+                           fields={"name": 3, "description": 1}, vectors=Vectors(column="embedding", dimensions=1024))
+await db.drop_search_index("products_search")
+```
+
+```go
+db, err := sqldb.Open(ctx, store, "app", sqldb.Migrations(migrations))
+articles, err := search.OpenIndex[Article](db, "articles_search", search.Table("articles"),
+	search.Fields{"title": 2, "body": 1}, search.Filters("category", "done"))
+err = articles.Ready(ctx)
+
+_, err = db.Exec(ctx, `update articles set title = ? where id = ?`, "Новый заголовок", 42)
+result, err := articles.Search(ctx, "новый заголовок")
+err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+	if _, err := tx.Exec(ctx, `insert into articles (id, title) values (?, ?)`, 7, "inside"); err != nil {
+		return err
+	}
+	_, err := tinystore.With(tx, articles).Search(ctx, "inside") // sees the insert
+	return err
+})
+
+products, err := search.OpenIndex[Product](db, "products_search", search.Table("products"),
+	search.Fields{"name": 3, "description": 1}, search.Vectors{Column: "embedding", Dimensions: 1024})
+dropped, err := search.Drop(ctx, db, "products_search")
 ```
 
 ```rust
@@ -555,7 +720,9 @@ db.drop_search_index("products_search")?;
 - Over the wire a table's index opens with its database's handle, and a
   hit carries its row's cells as `sql.Rows` does (docs/wire.md).
 - On a database `index` would read as SQL's `create index`, so it is spelled
-  out there; `store.index` stays short where nothing else is an index. An
+  out there; `store.index` stays short where nothing else is an index. Go
+  opens both with `search.OpenIndex`, given the store or the database, its
+  package saying what kind of index it is. An
   index in `search.db` owns its documents and joins no store's transaction,
   since no write is atomic across two files.
 - Measured on nothing yet: what a row costs a commit, and a table's first

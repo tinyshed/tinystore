@@ -59,7 +59,8 @@ channel), `key` (identity and deduplication at once), `keepDone`,
   `store.bucket`, `store.counters`, `store.queue`, never `store.kv.bucket`.
   Where it lives is said by what opened it: the store, or an SQL database
   (`db.bucket`). Go is the exception its language makes, since a Go method
-  takes no type parameter: `kv.Bucket[T](store, …)`.
+  takes no type parameter: `kv.OpenBucket[T](store, …)`, and
+  `kv.OpenBucket[T](db, …)` for a database's.
 
 ## The newcomer check
 
@@ -150,6 +151,112 @@ reminders.work(async ({ userId, text }, run) => push(userId, text))
 | Python     | keyword arguments, snake_case                          | `'30s'`, `timedelta`, `datetime` | `concurrency=Concurrency(total=8, group=2)`    |
 | Go         | functional options on calls, structs for nested values | `time.Duration`, `time.Time`     | `jobs.Concurrency{Total: 8, Group: 2}`         |
 | Rust       | builders                                               | `Duration`, a timestamp type     | `.concurrency(Concurrency::total(8).group(2))` |
+
+### Python and Go, as every book writes them
+
+Written on 18 October, before the two SDKs are rewritten on protocol 2, so
+that each book gives every call site in the four languages from the same
+rules. The calls are TypeScript's and Rust's, word for word where the
+language lets them be; what follows is only what the language changes.
+
+| What                       | Python                                                                        | Go                                                                                  |
+|----------------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| the package                | one, `tinystore`, on asyncio                                                  | the root `tinystore` and a package an engine: `kv`, `jobs`, `sqldb`, `blobs` …      |
+| the store                  | `store = await tinystore.open("data", …)`, `async with` too                   | `store, err := tinystore.Open(ctx, "data", …)`; `defer store.Close()`               |
+| a handle                   | `store.bucket("sessions", Session, idle="30d")`: no `await`, as in TypeScript | `kv.OpenBucket[Session](store, "sessions", kv.Idle(d))`: opens at its first call    |
+| a handle's type            | the second argument: a dataclass, a TypedDict, a pydantic model or a builtin  | the type parameter; the handle is `*kv.Bucket[Session]`                             |
+| a call that reaches it     | `await`ed                                                                     | `ctx` first, an `error` last                                                        |
+| options                    | keyword arguments, TypeScript's names in snake_case                           | values of the package: `kv.TTL(time.Hour)`; a struct for a nested one               |
+| nothing there              | `None`                                                                        | `found` false: `v, found, err := b.Get(ctx, key)`                                   |
+| an answer                  | a dataclass, its fields in snake_case: `answer.retry_at`                      | a struct: `answer.RetryAt`                                                          |
+| a page; every page         | `await b.list(limit=100, after=page.next)`; `async for e in b.all()`          | `b.List(ctx, kv.Limit(100), kv.After(page.Next))`; `for e, err := range b.All(ctx)` |
+| a function the store calls | `async def`; a lambda that returns an awaitable                               | `func(ctx context.Context, …) error`; its `ctx` ends when it must stop              |
+| a transaction              | `await store.tx(place)` of an `async def place(tx)`                           | `store.Tx(ctx, func(tx *tinystore.Tx) error {…})`                                   |
+| a handle in it             | `tx.with_(stock)`, `with` being a keyword                                     | `tinystore.With(tx, stock)`, a Go method taking no type parameter                   |
+| a scope                    | `async with`: an upload, a lock's hold, a timer's measure                     | a function, or `defer`                                                              |
+| an error                   | `except tinystore.ConflictError as err`                                       | `errors.Is(err, tinystore.ErrConflict)`; `errors.As` into a `*tinystore.Error`      |
+| a keyword taken            | a trailing `_`: `with_`, `sql.or_`, `search.or_`                              | none                                                                                |
+| a query                    | keyword arguments: `read(name="cpu", since="1h", where={…})`                  | a struct, as data is: `metrics.Query{Name: "cpu", Since: time.Hour}`                |
+| a logger                   | `store.logger("api")`, or `store.log_handler("api")` for `logging`            | `slog.New(records.NewHandler(store, "api"))`                                        |
+
+- **A handle's opener in Go is `Open` and its type**, `kv.OpenBucket`,
+  `jobs.OpenQueue`, `blobs.OpenFiles`, `sqldb.Open`, because a Go function
+  and a type of one package cannot share a name, and the type is the one a
+  program writes in its own structs: `sessions *kv.Bucket[Session]`, as
+  Rust's `Bucket<Session>` and TypeScript's. Rust's builders end in
+  `.open()` alike. It opens at its first call, as `sql.Open` connects at
+  its first query, so it takes no `ctx`, and its `err` is a name or an
+  option it refuses. What opens only once the store answers, a database
+  whose migrations run and a config whose layers are read, is awaited in
+  Python and takes `ctx` in Go, as TypeScript awaits it.
+- **A handle of a database opens with the same opener**, given the database
+  for the store: `kv.OpenBucket[Session](db, "sessions")` is TypeScript's
+  `db.bucket('sessions')`.
+- **Go's lists of options are values that a call takes or does not**: a
+  call given an option it has no use for does not compile. A nested value
+  is a struct that is an option too, `jobs.Concurrency{Total: 8, Group: 2}`.
+- **A span and a time are typed**: Python takes `"30s"` or a `timedelta`, and
+  an aware `datetime`; Go a `time.Duration` and a `time.Time`. A size is
+  `"2GiB"` or bytes in Python, bytes in Go.
+- **A function given once runs once; a function the store may run again is
+  still a function.** Python's `async with` is for a scope that runs once,
+  so a lock holds through it; `store.tx` takes a function, since kv's runs
+  it again across the pipe, and `db.tx` the same shape for one rule.
+- **Go blocks where a Go loop would**: `Work` runs until its `ctx` ends, as
+  the jobs book has it; a call that answers once something is in place,
+  `Subscribe`, returns then, as TypeScript's and Rust's do.
+- **What prints is the language's**: Python's logger has `logging`'s
+  levels and `warning`, and a handler for `logging`; Go's is `slog`'s, its
+  handler the store's, and the console's alone `console.NewHandler`, which
+  links no SQLite.
+
+### Python and Go check, 18 October
+
+Four Haiku agents with no other context: one chose blind among eleven pairs
+of spellings in doubt, one said what each of 65 bare call sites does and
+returns, and two reviewed the books' Python and their Go apart, as a
+developer of each language choosing a library. A first free review of both
+at once stopped at the model's output limit.
+
+| They found                                                                                   | Change                                                                 |
+|----------------------------------------------------------------------------------------------|------------------------------------------------------------------------|
+| `log.with_(…)` read as a `with` block, by two of four                                        | `log.bind(…)`, structlog's and loguru's word                           |
+| `defer t.Since(time.Now())` read as "since now", zero                                        | `defer t.Start().Stop()`, as Prometheus' `NewTimer(h).ObserveDuration` |
+| `found` named a search's answer, where Go's `found` is the bool of every `Get`               | `result`, and `search.Result[T]`                                       |
+| `metrics.Latest` a function and a type of one package                                        | the type is `metrics.Point`                                            |
+| two `Work` calls in a row, the first of which blocks                                         | the example runs them in an `errgroup`                                 |
+| examples that did not compile: a page from itself, `:=` with no new name, an id concatenated | fixed, and every Go block checked for a name declared twice            |
+| an error of `TryHold` unchecked, an index opened and dropped                                 | the examples check and keep them                                       |
+| `out.write(chunk)` not awaited where `upload.write` is                                       | `await out.write(chunk)`                                               |
+| `db.scalar` with no type where `all` and `one` take one first                                | `db.scalar(int, …)`                                                    |
+| `entry.version` read off an entry that may be absent                                         | the examples check it first                                            |
+
+Read right and kept, by the blind choice: `kv.OpenBucket[T]` and its
+`*kv.Bucket[T]` (over `kv.Bucket[T]` with another type, and `kv.NewBucket`,
+which reads as I/O-free and as making an empty bucket), Go's `Work` blocking
+until `ctx` ends, Python's transaction as a function, a lock held through
+`async with`, `labels(…)`, `metrics.OpenCounter` returning its error, a query
+as a struct, `v, found, err`, and Python's type as the second argument. The
+bare call sites were read at four of five or better but for ten, the
+lowest a `try_hold` through `async with`, which the book now says.
+
+Kept as the TypeScript and Rust books have them, which the reviews asked to
+change: `lastInsertRowid` over Go's `LastInsertId`, `Keep` beside `TTL`,
+sqldb's `all` as a list where kv's is an iterator, one name a page's items
+(`entries`, `rows`, `jobs`), spans as text in Python, and a store's backup
+leaving the key out unless asked.
+
+For the owner:
+
+- **Go's handle in a transaction**: `tinystore.With(tx, stock)`, as
+  `tx.with(stock)` starts each call with the transaction, or
+  `stock.In(tx)`, a method a Go reader finds after `stock.`, as
+  `time.Time.In`, which the blind choice took at three of five and the Go
+  review asked for. kv's first check read TypeScript's `in(tx)` as a
+  filter. The recommendation is `In` for Go alone.
+- **Config in Go's root package**, `tinystore.OpenConfig`, which the Go
+  review would move to `config`: a package `config` takes the name a
+  program gives its value, `config, err := config.Open(…)`.
 
 ## The API books
 

@@ -5,7 +5,8 @@ Draft, 9 October 2026, after two newcomer checks and an independent review
 the answers of requests sent twice, counters and limits. This book is the API
 before the code; [dx.md](../dx.md) has the rules it follows. TypeScript comes
 first in each section because most callers will read it; Python, Go and Rust
-follow when they spell something differently. The Rust column is built
+follow, the first two as [dx.md](../dx.md#python-and-go-as-every-book-writes-them)
+spells them. The Rust column is built
 (`crates/tinystore/src/kv`), all but a bucket opened from an SQL database,
 which comes with sqldb in phase 2.
 
@@ -44,9 +45,9 @@ seen = store.bucket("stripe-events", ttl="7d")
 ```
 
 ```go
-sessions, err := kv.Bucket[Session](store, "sessions", kv.Idle(30*24*time.Hour))
-codes, err := kv.Bucket[int64](store, "login-codes", kv.TTL(15*time.Minute))
-seen, err := kv.Bucket[struct{}](store, "stripe-events", kv.TTL(7*24*time.Hour))
+sessions, err := kv.OpenBucket[Session](store, "sessions", kv.Idle(30*24*time.Hour))
+codes, err := kv.OpenBucket[int64](store, "login-codes", kv.TTL(15*time.Minute))
+seen, err := kv.OpenBucket[struct{}](store, "stripe-events", kv.TTL(7*24*time.Hour))
 ```
 
 ```rust
@@ -66,8 +67,10 @@ let seen = store.bucket::<()>("stripe-events").ttl(Duration::from_hours(24 * 7))
   `'bytes'`, `'int'`, `'float'`, `'bool'`, and `'bigint'` for integers past
   what a number holds exactly. In Rust the type parameter is enough: anything
   serde reads and writes.
-- Go spells it `kv.Bucket[T](store, …)` because a Go method takes no type
-  parameter.
+- Go spells it `kv.OpenBucket[T](store, …)` because a Go method takes no type
+  parameter; the handle is a `*kv.Bucket[T]`. Python's type is the second
+  argument; a bucket without one keeps any JSON value, as TypeScript's
+  without its type parameter does, and `add` keys alone.
 
 ## Read and write
 
@@ -80,6 +83,24 @@ const created = await sessions.under(user.id).create(digest(token), session)   /
 await sessions.under(user.id).expire(digest(token), '1h')   // expires an hour from now
 ```
 
+```python
+await sessions.under(user.id).set(digest(token), Session(user=user.id, device=device))
+session = await sessions.under(user.id).get(digest(token))   # Session | None
+user_id = await codes.take(digest(code))
+is_new = await seen.add(event.id)
+created = await sessions.under(user.id).create(digest(token), session)
+await sessions.under(user.id).expire(digest(token), "1h")
+```
+
+```go
+err = sessions.Under(user.ID).Set(ctx, digest(token), Session{User: user.ID, Device: device})
+session, found, err := sessions.Under(user.ID).Get(ctx, digest(token))
+userID, found, err := codes.Take(ctx, digest(code))
+isNew, err := seen.Add(ctx, event.ID)
+created, err := sessions.Under(user.ID).Create(ctx, digest(token), session)
+err = sessions.Under(user.ID).Expire(ctx, digest(token), time.Hour)
+```
+
 ```rust
 sessions.under(user_id).set(&digest(&token), &session)?;
 let session: Option<Session> = sessions.under(user_id).get(&digest(&token))?;
@@ -88,15 +109,19 @@ let user: Option<i64> = codes.take(&digest(&code))?;
 
 - `set` writes; a key that exists keeps its expiry, an idle key lives its span
   from the write, and a call that gives an expiry sets it:
-  `set(key, value, { ttl: '1h' })`, in Rust `bucket.key(k).ttl(d).set(&v)`.
-- `get` is `undefined` (`None`, `nil`) for a key that is not there or expired.
+  `set(key, value, { ttl: '1h' })`, `set(key, value, ttl="1h")` in Python,
+  `Set(ctx, key, v, kv.TTL(time.Hour))` in Go, and in Rust
+  `bucket.key(k).ttl(d).set(&v)`.
+- `get` is `undefined` (`None`, `found` false in Go) for a key that is not
+  there or expired.
 - `add` puts a key in a set; `create(key, value)` writes a key only when it is
   not there. Both return `false` when it is there, and never throw for that.
 - `take` reads a key and removes it in one commit: of two callers taking a
   one-time code at once, one gets it. A value that no longer reads as the
   bucket's type is `corrupt`, and stays.
 - `expire(key, span)` gives a key a new expiry, as Redis's `EXPIRE` does: it
-  may lengthen or shorten its life, and keeps its value.
+  may lengthen or shorten its life, and keeps its value. A time in its place
+  is `ExpireAt` in Go, a Go name having one signature.
 - `delete` removes a key and says whether it was there.
 - A write returns once it is durable; writes from many callers share a commit.
   A store opened with `durability: 'os'` returns it once the operating system
@@ -114,6 +139,19 @@ const entry = await settings.entry('home')         // { key, value, version, exp
 await settings.set('home', next, { ifVersion: entry.version })   // ConflictError if it changed
 ```
 
+```python
+entry = await settings.entry("home")              # Entry(key, value, version, expires_at) | None
+if entry:
+    await settings.set("home", next, if_version=entry.version)   # ConflictError if it changed
+```
+
+```go
+entry, found, err := settings.Entry(ctx, "home")  // kv.Entry[T]{Key, Value, Version, ExpiresAt}
+if found {
+	err = settings.Set(ctx, "home", next, kv.IfVersion(entry.Version)) // tinystore.ErrConflict if it changed
+}
+```
+
 ```rust
 let entry = settings.entry("home")?;               // Option<Entry { key, value, version, expires_at }>
 settings.key("home").if_version(entry.version).set(&next)?;      // a Conflict error if it changed
@@ -124,7 +162,9 @@ settings.key("home").if_version(entry.version).set(&next)?;      // a Conflict e
 - `ifVersion` works on `set`, `take`, `delete` and `expire`. A key that changed,
   expired or was deleted since is a conflict. In TypeScript it takes a version
   and never `undefined`, so `{ ifVersion: entry?.version }` does not compile:
-  an absent key would write without a check.
+  an absent key would write without a check. Python's `if_version=None` is
+  `invalid` for the same reason, and Go's `kv.IfVersion` takes a
+  `kv.Version`, never a pointer.
 - To write only a key that is not there, use `create`.
 - In Rust a call with options is a chain on its key that ends in its verb:
   `.key(k)`, then `.ttl(d)`, `.expires_at(t)` or `.if_version(v)`, then `.set`,
@@ -157,6 +197,18 @@ for await (const { key, value } of sessions.under(user.id).all()) { … }
 const page = await sessions.under(user.id).list({ limit: 100, after: page.next })   // { entries, next }
 ```
 
+```python
+await sessions.under(user.id).clear()
+async for entry in sessions.under(user.id).all(): ...
+more = await sessions.under(user.id).list(limit=100, after=page.next)   # Page(entries, next)
+```
+
+```go
+err = sessions.Under(user.ID).Clear(ctx)
+for entry, err := range sessions.Under(user.ID).All(ctx) { … }
+more, err := sessions.Under(user.ID).List(ctx, kv.Limit(100), kv.After(page.Next))   // kv.Page[T]{Entries, Next}
+```
+
 - `under(...owners)` names a branch: whose keys these are. A branch exists
   while it holds keys. Owners are kept apart from keys and from each other, so
   `under('a').under('b')` is never `under('a/b')`.
@@ -175,12 +227,44 @@ await passwords.set(source.id, 'hunter2')     // the file holds what only the en
 await passwords.get(source.id)                // 'hunter2'
 ```
 
+```python
+passwords = store.bucket("source-passwords", str, encrypted=True)
+await passwords.set(source.id, "hunter2")
+```
+
+```go
+passwords, err := kv.OpenBucket[string](store, "source-passwords", kv.Encrypted())
+err = passwords.Set(ctx, source.ID, "hunter2")
+```
+
 ```ts
 // kept in a database, a password commits with its source's row
 const passwords = db.bucket<string>('source-passwords', { encrypted: true })
 await db.tx(async tx => {
 	await tx.exec`insert into sources (id, url) values (${source.id}, ${source.url})`
 	await tx.with(passwords).set(source.id, password)
+})
+```
+
+```python
+passwords = db.bucket("source-passwords", str, encrypted=True)
+
+
+async def add_source(tx) -> None:
+    await tx.exec("insert into sources (id, url) values (?, ?)", source.id, source.url)
+    await tx.with_(passwords).set(source.id, password)
+
+
+await db.tx(add_source)
+```
+
+```go
+passwords, err := kv.OpenBucket[string](db, "source-passwords", kv.Encrypted())
+err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+	if _, err := tx.Exec(ctx, `insert into sources (id, url) values (?, ?)`, source.ID, source.URL); err != nil {
+		return err
+	}
+	return tinystore.With(tx, passwords).Set(ctx, source.ID, password)
 })
 ```
 
@@ -219,6 +303,14 @@ openssl rand -hex 32 > /run/secrets/ts.key                       # an encryption
 
 ```ts
 const store = await open('data', { encryptionKeyFile: '/run/secrets/ts.key' })
+```
+
+```python
+store = await tinystore.open("data", encryption_key_file="/run/secrets/ts.key")
+```
+
+```go
+store, err := tinystore.Open(ctx, "data", tinystore.EncryptionKeyFile("/run/secrets/ts.key"))
 ```
 
 | Where the key is                                                                     | Who makes it                                                     |
@@ -268,6 +360,18 @@ const n = await attempts.add(clientIp, 1)              // the new count: 1, 2, 3
 const hits = store.counters('page-hits', { flushEvery: '1s' })
 ```
 
+```python
+attempts = store.counters("login-attempts", ttl="15m")
+n = await attempts.add(client_ip, 1)
+hits = store.counters("page-hits", flush_every="1s")
+```
+
+```go
+attempts, err := kv.OpenCounters(store, "login-attempts", kv.TTL(15*time.Minute))
+n, err := attempts.Add(ctx, clientIP, 1)
+hits, err := kv.OpenCounters(store, "page-hits", kv.FlushEvery(time.Second))
+```
+
 ```rust
 let attempts = store.counters("login-attempts").ttl(Duration::from_mins(15)).open()?;
 let n: i64 = attempts.add(&client_ip, 1)?;
@@ -292,6 +396,24 @@ const { ok, left, retryAt } = await api.allow(userId)   // retryAt: a Date
 const ai = store.quota('ai', { daily: '100/1d', weekly: '300/7d' })
 const answer = await ai.allow(userId)                   // counts in every window, or in none
 await ai.refund(userId)
+```
+
+```python
+api = store.rate_limit("api", rate="100/s", burst=20)
+answer = await api.allow(user_id)                       # answer.ok, answer.left, answer.retry_at
+
+ai = store.quota("ai", daily="100/1d", weekly="300/7d")
+answer = await ai.allow(user_id)                        # answer.windows["weekly"].left
+await ai.refund(user_id)
+```
+
+```go
+api, err := kv.OpenRateLimit(store, "api", kv.Rate(100, time.Second), kv.Burst(20))
+answer, err := api.Allow(ctx, userID)                   // kv.Allowance{OK, Left, RetryAt}
+
+ai, err := kv.OpenQuota(store, "ai", kv.Window("daily", 100, 24*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+used, err := ai.Allow(ctx, userID)                      // used.Windows["weekly"].Left
+err = ai.Refund(ctx, userID)
 ```
 
 ```rust
@@ -326,6 +448,18 @@ const charges = store.once<Receipt>('charges', { keep: '1d' })
 const receipt = await charges.run(requestId, () => pay.charge(order, requestId))
 ```
 
+```python
+charges = store.once("charges", Receipt, keep="1d")
+receipt = await charges.run(request_id, lambda: pay.charge(order, request_id))
+```
+
+```go
+charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
+receipt, err := charges.Run(ctx, requestID, func(ctx context.Context) (Receipt, error) {
+	return pay.Charge(ctx, order, requestID)
+})
+```
+
 ```rust
 let charges = store.once::<Receipt>("charges").keep(Duration::from_hours(24)).open()?;
 let receipt = charges.run(&request_id, || pay.charge(&order, &request_id))?;
@@ -353,6 +487,16 @@ const panels = store.once<Panel[]>('panels', { keep: '30s' })
 const data = await panels.run(`dashboard:${id}`, () => computePanels(id))
 ```
 
+```python
+panels = store.once("panels", list[Panel], keep="30s")
+data = await panels.run(f"dashboard:{id}", lambda: compute_panels(id))
+```
+
+```go
+panels, err := kv.OpenOnce[[]Panel](store, "panels", kv.Keep(30*time.Second))
+data, err := panels.Run(ctx, "dashboard:"+id, func(ctx context.Context) ([]Panel, error) { return computePanels(ctx, id) })
+```
+
 ## Transactions
 
 ```ts
@@ -361,6 +505,34 @@ await store.tx(async tx => {
 	if (left < 1) throw new SoldOut()
 	await tx.with(stock).set(sku, left - 1)
 	await tx.with(orders).set(id, order)
+})
+```
+
+```python
+async def sell(tx) -> None:
+    left = await tx.with_(stock).get(sku) or 0
+    if left < 1:
+        raise SoldOut
+    await tx.with_(stock).set(sku, left - 1)
+    await tx.with_(orders).set(order_id, order)
+
+
+await store.tx(sell)
+```
+
+```go
+err = store.Tx(ctx, func(tx *tinystore.Tx) error {
+	left, _, err := tinystore.With(tx, stock).Get(ctx, sku)
+	if err != nil {
+		return err
+	}
+	if left < 1 {
+		return ErrSoldOut // rolls back
+	}
+	if err := tinystore.With(tx, stock).Set(ctx, sku, left-1); err != nil {
+		return err
+	}
+	return tinystore.With(tx, orders).Set(ctx, orderID, order)
 })
 ```
 
@@ -399,7 +571,10 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
   a counter's `add` gives no count, which only the commit knows.
 - Writes that need no reads need no transaction: separate calls already share
   commits.
-- Python spells it `tx.with_(stock)`, `with` being a keyword there.
+- Python spells it `tx.with_(stock)`, `with` being a keyword there, and
+  takes the transaction as a function rather than an `async with` block,
+  since a block cannot run again. Go spells it `tinystore.With(tx, stock)`,
+  a Go method taking no type parameter; its function's error rolls back.
 
 ## Errors
 
@@ -414,7 +589,11 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
 | `outcome unknown` | the commit failed after the write ran                                                                                                                              | read the key before writing again |
 
 Every error names the bucket and the key, owners first:
-`kv bucket sessions: key "42/9f86d0…": conflict`.
+`kv bucket sessions: key "42/9f86d0…": conflict`. A kind is one class of each
+language: TypeScript throws a `ConflictError`, Python raises a
+`tinystore.ConflictError`, Go returns an error that
+`errors.Is(err, tinystore.ErrConflict)` finds, and Rust's `error.kind()` is
+`ErrorKind::Conflict`.
 
 ## Bounds
 
@@ -429,7 +608,8 @@ Every error names the bucket and the key, owners first:
 
 ## Closing
 
-`store.close()` writes what memory holds, counters and rate limits and the
+`store.close()`, `await store.close()` in Python and `store.Close()` in Go,
+writes what memory holds, counters and rate limits and the
 renewals reads asked for, then lets go of the directory. In Rust a store whose
 last clone is dropped closes the same way; a handle that outlives its store is
 `closed`.

@@ -5,8 +5,9 @@ and a review (below). The application's files: avatars and their sizes, a
 chat's attachments, a camera's recordings, an export a user downloads
 tomorrow, a backup. This book is the API before the code; [dx.md](../dx.md)
 has the rules it follows. TypeScript comes first in each section because most
-callers will read it; Python, Go and Rust follow when they spell something
-differently. The engine is `blobs`: its module, its directory and its
+callers will read it; Python, Go and Rust follow, the first two as
+[dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them. The
+engine is `blobs`: its module, its directory and its
 documents use the word, and a program never needs it. The Go engine at
 `e81a050` and research's [design/blobs.md][design] are what this ports: its
 promises are GATES.md's, its storage was measured.
@@ -43,8 +44,8 @@ reports = store.files("reports", ttl="24h", max_file_size="2GiB")
 ```
 
 ```go
-avatars, err := blobs.Files(store, "avatars")
-reports, err := blobs.Files(store, "reports", blobs.TTL(24*time.Hour), blobs.MaxFileSize(2<<30))
+avatars, err := blobs.OpenFiles(store, "avatars")   // *blobs.Files
+reports, err := blobs.OpenFiles(store, "reports", blobs.TTL(24*time.Hour), blobs.MaxFileSize(2<<30))
 ```
 
 ```rust
@@ -74,7 +75,7 @@ await avatars.delete(`${user.id}.png`)                                     // no
 ```
 
 ```python
-await avatars.put(f"{user.id}.png", png, content_type="image/png")
+info = await avatars.put(f"{user.id}.png", png, content_type="image/png")   # FileInfo
 avatar = await avatars.get(f"{user.id}.png")   # StoredFile | None
 data = await avatar.read() if avatar else None
 info = await avatars.head(f"{user.id}.png")    # FileInfo | None
@@ -82,10 +83,10 @@ await avatars.delete(f"{user.id}.png")
 ```
 
 ```go
-info, err := avatars.Put(ctx, id+".png", r, blobs.ContentType("image/png"))
+info, err := avatars.Put(ctx, id+".png", bytes.NewReader(png), blobs.ContentType("image/png"))
 avatar, found, err := avatars.Get(ctx, id+".png") // *blobs.StoredFile: io.ReadSeekCloser, io.ReaderAt
 defer avatar.Close()
-info, found, err := avatars.Head(ctx, id+".png")
+info, found, err = avatars.Head(ctx, id+".png")
 err = avatars.Delete(ctx, id+".png")
 ```
 
@@ -153,6 +154,26 @@ const { count, size } = await media.folder('users', 42).usage()
 await media.folder('users', 42).clear()                                    // every file of user 42
 ```
 
+```python
+media = store.files("media")
+
+await media.folder("users", 42).put("photos/1.jpg", photo)
+page = await media.folder("users", 42).list(prefix="photos/")   # Page(files, next)
+async for file in media.folder("users", 42).all(): ...
+usage = await media.folder("users", 42).usage()                  # usage.count, usage.size
+await media.folder("users", 42).clear()
+```
+
+```go
+media, err := blobs.OpenFiles(store, "media")
+
+_, err = media.Folder("users", 42).Put(ctx, "photos/1.jpg", photo)
+page, err := media.Folder("users", 42).List(ctx, blobs.Prefix("photos/"))   // blobs.Page{Files, Next}
+for file, err := range media.Folder("users", 42).All(ctx) { … }
+usage, err := media.Folder("users", 42).Usage(ctx)                         // blobs.Usage{Count, Size}
+err = media.Folder("users", 42).Clear(ctx)
+```
+
 ```rust
 media.folder("users").folder(42).key("photos/1.jpg").put(&photo)?;
 let page = media.folder("users").folder(42).list().prefix("photos/").page()?;   // Page { files, next }
@@ -164,7 +185,9 @@ media.folder("users").folder(42).clear()?;
   most 1 KiB and 16 segments with its folders. A path that is not one is
   `invalid`, so no path leaves the folder it was written in.
 - `folder('users', 42)` is the folder `users/42`: each argument is one
-  segment, and a file's path in it is the folder's segments and then its own,
+  segment, a number spelled in decimal, as Go's `Folder(...any)` takes an
+  id of any integer type, and a file's path in it is the folder's segments
+  and then its own,
   so the two writes above are one file. A folder exists while it holds files,
   and needs no creating or deleting.
 - `folder('users', 4)` never holds user 42's files, nor `users/420`'s: a
@@ -247,6 +270,21 @@ if (doc) await docs.put('notes.md', text, { ifMatch: doc.etag })   // ConflictEr
 const created = await docs.create('notes.md', text)                 // false when a file was there
 ```
 
+```python
+doc = await docs.head("notes.md")
+if doc:
+    await docs.put("notes.md", text, if_match=doc.etag)   # ConflictError if it changed since
+created = await docs.create("notes.md", text)
+```
+
+```go
+doc, found, err := docs.Head(ctx, "notes.md")
+if found {
+	_, err = docs.Put(ctx, "notes.md", strings.NewReader(text), blobs.IfMatch(doc.ETag))   // tinystore.ErrConflict if it changed
+}
+created, err := docs.Create(ctx, "notes.md", strings.NewReader(text))
+```
+
 ```rust
 docs.key("notes.md").if_match(&doc.etag).put(&text)?;   // a Conflict error if it changed
 let created: bool = docs.create("notes.md", &text)?;
@@ -266,6 +304,18 @@ let created: bool = docs.create("notes.md", &text)?;
 await docs.copy('notes.md', 'notes (copy).md')                // FileInfo; no bytes are copied
 await docs.rename('draft.md', 'final.md')                     // ConflictError if final.md is there
 await docs.rename('draft.md', 'final.md', { ifMatch: final.etag })   // replaces that version of it
+```
+
+```python
+await docs.copy("notes.md", "notes (copy).md")
+await docs.rename("draft.md", "final.md")
+await docs.rename("draft.md", "final.md", if_match=final.etag)
+```
+
+```go
+_, err = docs.Copy(ctx, "notes.md", "notes (copy).md")
+_, err = docs.Rename(ctx, "draft.md", "final.md")
+_, err = docs.Rename(ctx, "draft.md", "final.md", blobs.IfMatch(final.ETag))
 ```
 
 ```rust
@@ -290,6 +340,18 @@ docs.key("final.md").if_match(&final_.etag).rename_from("draft.md")?;
 await reports.put('report.csv', csv)                       // the files' ttl, 24h here, from now
 await reports.put('report.csv', csv, { ttl: '7d' })        // its own
 await reports.expire('report.csv', '1h')                   // from now; a Date for a time
+```
+
+```python
+await reports.put("report.csv", csv)
+await reports.put("report.csv", csv, ttl="7d")
+await reports.expire("report.csv", "1h")                   # a datetime for a time
+```
+
+```go
+_, err = reports.Put(ctx, "report.csv", csv)
+_, err = reports.Put(ctx, "report.csv", csv, blobs.TTL(7*24*time.Hour))
+err = reports.Expire(ctx, "report.csv", time.Hour)         // ExpireAt(ctx, path, t) for a time
 ```
 
 ```rust
@@ -318,10 +380,29 @@ Bun.serve({
 })
 ```
 
+```python
+@app.get("/avatar")
+async def avatar(request: Request) -> Response:
+    user = await signed_in(request)                          # the program's own
+    file = await avatars.get(f"{user.id}.png")
+    if file is None:
+        return Response("not found", status_code=404)
+    if request.headers.get("if-none-match") == file.etag:
+        return Response(status_code=304)
+    headers = {"etag": file.etag, "content-length": str(file.size)}
+    return StreamingResponse(file, media_type=file.content_type, headers=headers)   # Starlette's
+```
+
 ```go
-file, found, err := avatars.Get(ctx, path)
+file, found, err := avatars.Get(ctx, fmt.Sprintf("%d.png", user.ID))
+if !found {
+	http.NotFound(w, r)
+	return
+}
 defer file.Close()
-http.ServeContent(w, r, path, file.LastModified, file) // Range, If-None-Match and If-Modified-Since
+w.Header().Set("Content-Type", file.ContentType)
+w.Header().Set("ETag", file.ETag)
+http.ServeContent(w, r, "", file.LastModified, file) // Range, If-None-Match and If-Modified-Since
 ```
 
 - The engine knows no HTTP, and checks no one's right to a file: which path

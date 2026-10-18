@@ -7,7 +7,8 @@ queue's length, how long its calls take, and samples other programs send;
 read back exactly, as buckets of a range and as the newest value of each
 series. This book is the API before the code; [dx.md](../dx.md) has the rules
 it follows. TypeScript comes first in each section because most callers will
-read it; Python, Go and Rust follow when they spell something differently.
+read it; Python, Go and Rust follow, the first two as
+[dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them.
 The Go engine at `e81a050`, its guides in `docs/metrics/` and research's
 [design/metrics.md][design] and [aggregate contract][contract] are what this
 ports: its promises are GATES.md's, its storage was measured. Dashbin's asks
@@ -54,17 +55,29 @@ latency.with({ route: '/sync' }).record(performance.now() - started)   // millis
 requests = store.metrics.counter("http_requests_total", help="Requests served.")
 requests.labels(route="/notes", status=200).inc()
 
+depth = store.metrics.gauge("queue_depth", unit="jobs")
+depth.set(12)
+store.metrics.gauge_func("open_tickets", lambda: db.scalar("select count(*) from tickets where open"))
+
 latency = store.metrics.timer("http_request_ms", buckets=[5, 10, 25, 50, 100, 250, 500, 1000])
 async with latency.labels(route="/users").measure():
     user = await users.get(user_id)
+latency.labels(route="/sync").record(elapsed)          # a timedelta
 ```
 
 ```go
-requests := metrics.Counter(store, "http_requests_total", metrics.Help("Requests served."))
+requests, err := metrics.OpenCounter(store, "http_requests_total", metrics.Help("Requests served."))
 requests.With("route", "/notes", "status", "200").Inc()
 
-latency := metrics.Timer(store, "http_request_ms", metrics.Buckets(5, 10, 25, 50, 100, 250, 500, 1000))
-defer latency.With("route", "/users").Since(time.Now())
+depth, err := metrics.OpenGauge(store, "queue_depth", metrics.Unit("jobs"))
+depth.Set(12)
+err = metrics.OpenGaugeFunc(store, "open_tickets", func(ctx context.Context) (float64, error) {
+	return sqldb.Scalar[float64](ctx, db, `select count(*) from tickets where open`)
+})
+
+latency, err := metrics.OpenTimer(store, "http_request_ms", metrics.Buckets(5, 10, 25, 50, 100, 250, 500, 1000))
+defer latency.With("route", "/users").Start().Stop()   // records when the function returns
+latency.With("route", "/sync").Record(time.Since(started))
 ```
 
 ```rust
@@ -100,10 +113,15 @@ let _timing = latency.with(&[("route", "/users")]).start();   // recorded when i
   `value` as a number; a percentile's may have a timer's bounds in its place.
 - A value an instrument is given is a finite number: `NaN` or an infinity
   throws `invalid` at once, where the program made it, rather than failing
-  every average of its bucket for as long as the name keeps it. `ingest`
-  keeps them, bit for bit. In Rust a call returns nothing, as the `metrics`
-  crate's do: what it refuses, a value or a label, changes nothing and is
-  said once in the store's log.
+  every average of its bucket for as long as the name keeps it, and Python
+  raises it. `ingest` keeps them, bit for bit. In Rust and Go a call returns
+  nothing, as the `metrics` crate's and Prometheus' client's do: what it
+  refuses, a value or a label, changes nothing and is said once in the
+  store's log.
+- Python names an instrument's labels with `labels(…)`, prometheus_client's
+  word, `with` being a keyword; Go's `With` takes a label's name and value in
+  pairs, as `slog`'s attributes go. Go's `defer timer.Start().Stop()` is
+  `start()`'s timing, as Prometheus' `defer NewTimer(h).ObserveDuration()`.
 - A counter's `inc()` adds one and `add(n)` adds `n`; a negative `n` throws
   `invalid` at once. The store keeps a counter's total, and a timer's count,
   sum and buckets, so that processes sharing a store, through a sidecar or a
@@ -198,6 +216,16 @@ store.metrics.gaugeFunc('queue_depth', () => emails.depth(), { labels: { queue: 
 store.metrics.gaugeFunc('queue_depth', () => sms.depth(), { labels: { queue: 'sms' } })
 ```
 
+```python
+store.metrics.gauge_func("queue_depth", emails.depth, labels={"queue": "emails"})
+store.metrics.gauge_func("queue_depth", sms.depth, labels={"queue": "sms"})
+```
+
+```go
+err = metrics.OpenGaugeFunc(store, "queue_depth", emails.Depth, metrics.Labels{"queue": "emails"})
+err = metrics.OpenGaugeFunc(store, "queue_depth", sms.Depth, metrics.Labels{"queue": "sms"})
+```
+
 ```rust
 stats.gauge_func("queue_depth", move || emails.depth()).labels(&[("queue", "emails")]).open()?;
 stats.gauge_func("queue_depth", move || sms.depth()).labels(&[("queue", "sms")]).open()?;
@@ -245,14 +273,20 @@ await store.metrics.ingest({ name: 'signups_total', kind: 'counter', labels: {},
 ```
 
 ```python
-await store.metrics.ingest(name="cpu", kind="gauge", labels={"host": "web-1"}, samples=[(at, 0.42), (later, 0.47)])
+await store.metrics.ingest(Series(name="cpu", kind="gauge", labels={"host": "web-1"}, samples=[(at, 0.42), (later, 0.47)]))
+await store.metrics.ingest([cpu, memory, disk])                                        # all or none
+await store.metrics.ingest(Series(name="cpu", kind="gauge", labels=labels, times=times, values=values))
+await store.metrics.ingest(Series(name="signups_total", kind="counter", labels={}, samples=samples, keep="730d"))
 ```
 
 ```go
 err := metrics.Ingest(ctx, store, metrics.Series{
-	Name: "cpu", Kind: metrics.Gauge, Labels: metrics.Labels{"host": "web-1"},
+	Name: "cpu", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": "web-1"},
 	Samples: []metrics.Sample{{At: at, Value: 0.42}, {At: later, Value: 0.47}},
 })
+err = metrics.Ingest(ctx, store, cpu, memory, disk)                                     // all or none
+err = metrics.Ingest(ctx, store, metrics.Series{Name: "cpu", Kind: metrics.KindGauge, Labels: labels, Times: times, Values: values})
+err = metrics.Ingest(ctx, store, metrics.Series{Name: "signups_total", Kind: metrics.KindCounter, Samples: samples, Keep: 730 * 24 * time.Hour})
 ```
 
 ```rust
@@ -325,12 +359,27 @@ const host = await store.metrics.read({ where: { host: 'web-1' }, since: '10m' }
 ```
 
 ```python
-failing = await store.metrics.read(name="http_requests_total", since="1h", where={"status": ["500", "502"], "env": {"not": "dev"}})
+series = await store.metrics.read(name="cpu", where={"host": "web-1"}, since="1h")
+for s in series:
+    chart.line(s.labels["host"], s.times, s.values)
+
+failing = await store.metrics.read(
+    name="http_requests_total",
+    since="1h",
+    where={"status": ["500", "502"], "env": {"not": "dev"}, "host": {"prefix": "api-"}},
+)
+host = await store.metrics.read(where={"host": "web-1"}, since="10m")
 ```
 
 ```go
+series, err := metrics.Read(ctx, store, metrics.Query{Name: "cpu", Where: metrics.Where{"host": "web-1"}, Since: time.Hour})
+for _, s := range series {
+	chart.Line(s.Labels["host"], s.Samples)
+}
+
 failing, err := metrics.Read(ctx, store, metrics.Query{Name: "http_requests_total", Since: time.Hour,
-	Where: metrics.Where{"status": metrics.OneOf("500", "502"), "env": metrics.Not("dev")}})
+	Where: metrics.Where{"status": metrics.OneOf("500", "502"), "env": metrics.Not("dev"), "host": metrics.Prefix("api-")}})
+host, err := metrics.Read(ctx, store, metrics.Query{Where: metrics.Where{"host": "web-1"}, Since: 10 * time.Minute})
 ```
 
 ```rust
@@ -391,11 +440,17 @@ const mean = await store.metrics.aggregate({ name: 'http_request_ms', since: '1h
 
 ```python
 traffic = await store.metrics.aggregate(name="http_requests_total", since="24h", every="1h", op="increase", by=["route"])
+total = await store.metrics.aggregate(name="http_requests_total", since="1h", every="5m", op="rate")
+p95 = await store.metrics.aggregate(name="http_request_ms", since="1h", every="5m", op="p95")
+mean = await store.metrics.aggregate(name="http_request_ms", since="1h", op="avg", by=["route"])
 ```
 
 ```go
-traffic, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_requests_total", Since: 24 * time.Hour},
-	metrics.Every(time.Hour), metrics.Increase, metrics.By("route"))
+traffic, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_requests_total", Since: 24 * time.Hour,
+	Every: time.Hour, Op: metrics.Increase, By: []string{"route"}})
+total, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_requests_total", Since: time.Hour, Every: 5 * time.Minute, Op: metrics.Rate})
+p95, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_request_ms", Since: time.Hour, Every: 5 * time.Minute, Op: metrics.Percentile(95)})
+mean, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_request_ms", Since: time.Hour, Op: metrics.Avg, By: []string{"route"}})
 ```
 
 ```rust
@@ -538,10 +593,27 @@ const backlog = await store.metrics.aggregate({ name: 'queue_depth', since: '1d'
 // every queue's length at the end of each hour, added up
 ```
 
+```python
+backlog = await store.metrics.aggregate(name="queue_depth", since="1d", every="1h", op="last")
+```
+
+```go
+backlog, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "queue_depth", Since: 24 * time.Hour, Every: time.Hour, Op: metrics.Last})
+```
+
 ### A heatmap
 
 ```ts
 const heat = await store.metrics.aggregate({ name: 'http_request_ms_bucket', since: '1h', every: '1m', op: 'increase', by: ['le'] })
+```
+
+```python
+heat = await store.metrics.aggregate(name="http_request_ms_bucket", since="1h", every="1m", op="increase", by=["le"])
+```
+
+```go
+heat, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_request_ms_bucket", Since: time.Hour, Every: time.Minute,
+	Op: metrics.Increase, By: []string{"le"}})
 ```
 
 How many durations fell under each bound, each minute: a timer's buckets are
@@ -552,6 +624,14 @@ counters, one a bound, each counting the durations at most its `le`, the last
 
 ```ts
 const cpu = await store.metrics.latest({ name: 'cpu', since: '5m' })   // [{ name, labels, at, value }, …]
+```
+
+```python
+cpu = await store.metrics.latest(name="cpu", since="5m")              # [Point(name, labels, at, value), …]
+```
+
+```go
+cpu, err := metrics.Latest(ctx, store, metrics.Query{Name: "cpu", Since: 5 * time.Minute})   // []metrics.Point{Name, Labels, At, Value}
 ```
 
 ```rust
@@ -573,6 +653,14 @@ const plan = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1h
 
 const heavy = await store.metrics.explain({ name: 'cpu', since: '30d', every: '1h', op: 'p95' })
 // { series: 40, bytes: 14_680_064, decoded: 6_912_000, exceeds: { limit: 'samples decoded', wanted: 6_912_000, bound: 1_048_576 } }
+```
+
+```python
+plan = await store.metrics.explain(name="cpu", since="30d", every="1h", op="avg")   # Plan(series, bytes, decoded, exceeds)
+```
+
+```go
+plan, err := metrics.Explain(ctx, store, metrics.Query{Name: "cpu", Since: 30 * 24 * time.Hour, Every: time.Hour, Op: metrics.Avg})
 ```
 
 ```rust
@@ -607,6 +695,26 @@ const { values } = await store.metrics.labelValues('http_requests_total', 'route
 
 await store.metrics.describe('cpu', { unit: '%', help: 'Busy time of a core.' })
 const { unit, help } = await store.metrics.description('cpu')
+```
+
+```python
+page = await store.metrics.names(prefix="http_")                   # NamePage(names, next)
+more = await store.metrics.names(prefix="http_", after=page.next)
+labels = (await store.metrics.label_names("http_requests_total")).labels
+values = (await store.metrics.label_values("http_requests_total", "route", prefix="/api")).values
+
+await store.metrics.describe("cpu", unit="%", help="Busy time of a core.")
+description = await store.metrics.description("cpu")               # Description(unit, help)
+```
+
+```go
+page, err := metrics.Names(ctx, store, metrics.Prefix("http_"))    // metrics.NamePage{Names, Next}
+more, err := metrics.Names(ctx, store, metrics.Prefix("http_"), metrics.After(page.Next))
+labels, err := metrics.LabelNames(ctx, store, "http_requests_total")
+values, err := metrics.LabelValues(ctx, store, "http_requests_total", "route", metrics.Prefix("/api"))
+
+err = metrics.Describe(ctx, store, "cpu", metrics.Description{Unit: "%", Help: "Busy time of a core."})
+description, err := metrics.DescriptionOf(ctx, store, "cpu")
 ```
 
 ```rust
@@ -652,6 +760,30 @@ await store.metrics.delete({ name: 'cpu', labels: { host: 'web-1' } })   // true
 
 for (let damaged = await store.metrics.damaged(); damaged.length > 0; damaged = await store.metrics.damaged()) {
   for (const series of damaged) await store.metrics.delete(series)
+}
+```
+
+```python
+held = await store.metrics.delete(name="cpu", labels={"host": "web-1"})
+
+while damaged := await store.metrics.damaged():
+    for series in damaged:
+        await store.metrics.delete(name=series.name, labels=series.labels)
+```
+
+```go
+held, err := metrics.Delete(ctx, store, "cpu", metrics.Labels{"host": "web-1"})
+
+for {
+	damaged, err := metrics.Damaged(ctx, store)
+	if err != nil || len(damaged) == 0 {
+		return err
+	}
+	for _, series := range damaged {
+		if _, err := metrics.Delete(ctx, store, series.Name, series.Labels); err != nil {
+			return err
+		}
+	}
 }
 ```
 
@@ -719,6 +851,21 @@ await store.metrics.flush()                         // written now
 await store.clock.advance('15s')
 ```
 
+```python
+store = await tinystore.open(dir, private=True, background=False, clock=datetime(2026, 10, 11, 9, tzinfo=UTC))
+requests.inc()
+await store.metrics.flush()
+await store.clock.advance("15s")
+```
+
+```go
+store, err := tinystore.Open(ctx, dir, tinystore.Private(), tinystore.Background(false),
+	tinystore.Clock(time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)))
+requests.Inc()
+err = metrics.Flush(ctx, store)
+err = store.Clock().Advance(ctx, 15*time.Second)
+```
+
 A store opened with `background: false` writes instruments only at
 `flush()` and when it closes.
 
@@ -727,6 +874,15 @@ A store opened with `background: false` writes instruments only at
 ```ts
 const text = await (await fetch('http://db-1:9100/metrics')).text()
 const { samples, skipped } = await store.metrics.ingest(text, { format: 'prometheus', labels: { instance: 'db-1' }, keep: '7d' })
+```
+
+```python
+text = (await http.get("http://db-1:9100/metrics")).text
+scraped = await store.metrics.ingest(text, format="prometheus", labels={"instance": "db-1"}, keep="7d")   # scraped.samples, scraped.skipped
+```
+
+```go
+scraped, err := metrics.IngestPrometheus(ctx, store, response.Body, metrics.Labels{"instance": "db-1"}, metrics.Keep(7*24*time.Hour))
 ```
 
 - The text Prometheus' exporters serve, and OpenMetrics': a counter is a
