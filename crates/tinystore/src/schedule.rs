@@ -50,6 +50,12 @@ pub struct Wake {
 }
 
 impl Wake {
+    /// Whether a thread runs its work: not on a store without background work.
+    #[cfg(feature = "search")]
+    pub(crate) fn runs(&self) -> bool {
+        self.shared.strong_count() > 0
+    }
+
     pub fn wake(&self) {
         let Some(shared) = self.shared.upgrade() else { return };
         let mut state = shared.lock();

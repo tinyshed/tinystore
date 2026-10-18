@@ -1261,6 +1261,16 @@ fn a_rebuild_that_cannot_read_a_document_fails_and_the_index_answers_as_before()
     again.ready().unwrap();
 }
 
+#[test]
+fn ready_on_a_store_without_background_work_runs_maintenance_itself() {
+    let fixture = fixture();
+    let titles = fixture.store.index::<Article>("articles").field("title", 2.0).open().unwrap();
+    titles.set("a", &article("bread", "salt")).unwrap();
+    let bodies = fixture.store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
+    bodies.ready().unwrap();
+    assert_eq!(ids(&search(&bodies, "salt")), ["a"]);
+}
+
 /// How many numbers an index has given.
 fn numbers_given<T>(index: &Index<T>) -> i64 {
     let id = index.open.id();

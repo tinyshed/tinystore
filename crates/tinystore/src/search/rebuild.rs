@@ -356,10 +356,13 @@ impl Search {
     /// Waits until the index serves the settings it was opened with: its
     /// rebuild switched in, or failed, which is the error.
     pub(crate) fn ready(&self, open: &OpenIndex) -> Result<()> {
+        // Without background work nothing moves a rebuild on but this.
+        let maintains_itself = !self.runs_in_background();
         loop {
             match self.status(open)? {
                 Status::Ready => return Ok(()),
                 Status::Failed { error } => return Err(Error::invalid(format!("its rebuild failed: {error}"))),
+                Status::Rebuilding { .. } if maintains_itself => drop(self.maintain(true)?),
                 Status::Rebuilding { .. } => open.wait_settled(std::time::Duration::from_millis(100)),
             }
         }

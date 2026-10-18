@@ -163,6 +163,12 @@ impl Search {
         Ok(search)
     }
 
+    /// Whether the store's thread runs maintenance; without background work
+    /// the program does, and a wait for a rebuild runs it itself.
+    pub(super) fn runs_in_background(&self) -> bool {
+        self.wake.get().is_some_and(crate::schedule::Wake::runs)
+    }
+
     /// Counts a row a settle set in the index `name`, which maintenance
     /// then keeps, and wakes it once enough wait to be packed.
     pub(crate) fn table_set(&self, name: &str) {
@@ -304,7 +310,8 @@ impl Search {
         }
         match self.change_beside(beside, wanted) {
             Ok(changed) => Ok(Some(changed)),
-            Err(_) => {
+            Err(error) => {
+                tracing::info!(target: "tinystore", %error, "search: a rebuild under way dropped, since the change asks another");
                 self.file.transaction(|tx| rebuild::mark_dropping(tx, beside.data.id))?;
                 Ok(None)
             }
@@ -420,36 +427,52 @@ impl Search {
         self.keep_reached()?;
         self.table_sets.store(0, Ordering::Relaxed);
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
+        // One index that fails keeps no other from its maintenance; the
+        // first failure is the pass's error, which the scheduler says once.
+        let mut failed = None;
         for open in indexes {
-            let within = |error: Error| error.within(format!("index {}", open.name));
-            self.fill(&open).map_err(within)?;
-            let current = open.current();
-            for data in current.written() {
-                done.packed += self.pack(data, everything).map_err(within)?;
-                if data.id == current.serving.id {
-                    open.sets.store(0, Ordering::Relaxed);
-                }
-                done.purged += self.purge(data, everything).map_err(within)?;
-                self.build_dictionary(data, everything).map_err(within)?;
-                self.cluster(&open, data, everything).map_err(within)?;
+            if let Err(error) = self.maintain_one(&open, everything, &mut done) {
+                failed.get_or_insert(error.within(format!("index {}", open.name)));
             }
-            self.rebuild(&open).map_err(within)?;
         }
         self.drop_rows()?;
-        Ok(done)
+        failed.map_or(Ok(done), Err)
+    }
+
+    fn maintain_one(&self, open: &OpenIndex, everything: bool, done: &mut Maintenance) -> Result<()> {
+        self.fill(open)?;
+        let current = open.current();
+        for data in current.written() {
+            done.packed += self.pack(data, everything)?;
+            if data.id == current.serving.id {
+                open.sets.store(0, Ordering::Relaxed);
+            }
+            done.purged += self.purge(data, everything)?;
+            self.build_dictionary(data, everything)?;
+            self.cluster(open, data, everything)?;
+        }
+        self.rebuild(open)
     }
 
     /// Opens, for maintenance, each table's index a settle set rows in that
     /// this process has not opened.
     fn keep_reached(&self) -> Result<()> {
         let names = std::mem::take(&mut *lock(&self.reached));
-        for name in names {
-            if lock(&self.indexes).contains_key(&name) {
+        for name in &names {
+            if lock(&self.indexes).contains_key(name) {
                 continue;
             }
-            if let Some(current) = self.file.read(|connection| rebuild::read_current(connection, &name))? {
-                let open = Arc::new(OpenIndex::new(&name, current));
-                lock(&self.indexes).entry(name).or_insert(open);
+            match self.file.read(|connection| rebuild::read_current(connection, name)) {
+                Ok(Some(current)) => {
+                    let open = Arc::new(OpenIndex::new(name, current));
+                    lock(&self.indexes).entry(name.clone()).or_insert(open);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    // The names not opened yet wait for the next pass.
+                    lock(&self.reached).extend(names.iter().skip_while(|left| *left != name).cloned());
+                    return Err(error);
+                }
             }
         }
         Ok(())

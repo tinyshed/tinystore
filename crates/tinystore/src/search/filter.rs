@@ -16,8 +16,11 @@
 //! A number is also kept at eight precisions, as Lucene's numeric fields
 //! were: its place among all numbers as a u64 that sorts as they do, and that
 //! place with its last 8, 16, … 56 bits dropped, `r0:` to `r7:`. A range is
-//! then a few hundred keys at most, whole blocks of numbers at the coarsest
-//! precision that fits and single numbers only at its edges.
+//! then whole blocks of numbers at the coarsest precision that fits and
+//! single numbers only at its edges: up to 255 keys on each side at each of
+//! the seven finer precisions and 255 at the coarsest, 3,825 at most and a
+//! few hundred for most ranges, which the bound on a filter's values leaves
+//! out.
 //!
 //! A key's postings are a word's, packed and purged with them, a frequency of
 //! 1 each, and the key counts the documents that hold it. A search reads every

@@ -472,6 +472,8 @@ pub(crate) fn drop_step(tx: &Tx<'_>, index: i64) -> Result<bool> {
     execute(tx, DROP_CLUSTERS, [index], "drop an index's centroids")?;
     let mut state = state(tx, index)?;
     (state.phase, state.built_through, state.probes, state.version) = (Phase::None, 0, 0, state.version + 1);
+    // Calibrated again with the clusters built again, whatever recall asks.
+    (state.calibrated_vectors, state.calibrated_recall) = (0, 0.0);
     write_state(tx, index, &state)?;
     Ok(true)
 }
@@ -516,6 +518,9 @@ pub(crate) fn best(connection: &Connection, probe: &Probe<'_>) -> Result<Vec<(f6
             }
             passed += 1;
             let code = row.get_ref(1).and_then(|value| Ok(value.as_blob()?)).map_err(failed)?;
+            if !turned.fits(code) {
+                return Err(Error::corrupt(format!("cluster member {doc}: a code of {} bytes", code.len())));
+            }
             kept.push(Reverse((Estimate(turned.estimate(toward, code)), doc)));
             if kept.len() > keep {
                 kept.pop();

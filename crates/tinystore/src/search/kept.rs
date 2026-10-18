@@ -18,7 +18,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::correct::Corrector;
 use super::score::Part;
 use crate::sqlite::sql_error;
-use crate::{Memory, Reservation, Result};
+use crate::{Error, Memory, Reservation, Result};
 
 /// Documents a row of lengths holds.
 pub(crate) const NORMS: u32 = 65_536;
@@ -100,7 +100,9 @@ impl Kept {
             .query_row((moment.index, part.0, chunk), |row| row.get(0))
             .optional()
             .map_err(|error| sql_error("read lengths", error))?;
-        let lengths = lengths_of(&bytes.unwrap_or_default());
+        // Lengths are written before a posting reaches a block: none is damage.
+        let bytes = bytes.ok_or_else(|| Error::corrupt(format!("lengths of part {} chunk {chunk}: none", part.0)))?;
+        let lengths = lengths_of(&bytes);
         let reserved = keep(memory, lengths.len() as u64 * 2);
         let keep = reserved.is_some();
         let read = Arc::new(Chunk { normed: moment.normed, lengths, _reserved: reserved });

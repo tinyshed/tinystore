@@ -118,6 +118,12 @@ impl Turned {
         Turned { planes, low, step, sum, root: (size as f32).sqrt() }
     }
 
+    /// Whether `code` is as long as a member's code of the question's
+    /// dimensions, which `estimate` reads without looking.
+    pub(crate) fn fits(&self, code: &[u8]) -> bool {
+        code.len() == HEADER + self.planes[0].len() * 8
+    }
+
     /// The question's estimated cosine with a member whose centroid it meets
     /// at `toward`.
     pub(crate) fn estimate(&self, toward: f32, code: &[u8]) -> f32 {
