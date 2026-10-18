@@ -26,7 +26,7 @@ pub const MOST_EDITS: u8 = 2;
 pub struct Dictionary {
     words: Set<Vec<u8>>,
     /// The automatons' builders for one and two edits, made at their first use.
-    builders: [OnceLock<LevenshteinAutomatonBuilder>; 2],
+    builders: [OnceLock<LevenshteinAutomatonBuilder>; MOST_EDITS as usize],
 }
 
 impl std::fmt::Debug for Dictionary {

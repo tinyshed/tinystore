@@ -389,7 +389,8 @@ impl Store {
             return Ok(Arc::clone(key));
         }
         let own = self.inner.dir.join(encryption::FILE);
-        // a store beside its holder writes nothing, a key no more than a file
+        // a store opened beside its holder never makes the key file: it reads
+        // the key there, as any other file
         let key = Arc::new(match &self.inner.encryption_key_file {
             Some(file) => EncryptionKey::read(file)?,
             None if make && !self.inner.beside => EncryptionKey::read_or_make(&own)?,
@@ -483,14 +484,14 @@ impl Store {
 impl Host for Store {
     fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         self.refuse_when_closed("an engine opening")?;
-        let mut engines = lock(&self.inner.open);
-        if let Some(engine) = engines.get(&TypeId::of::<E>()) {
+        let mut open_engines = lock(&self.inner.open);
+        if let Some(engine) = open_engines.get(&TypeId::of::<E>()) {
             let engine = Arc::clone(engine);
             return Ok(engine.downcast::<E>().expect("an engine is kept under its own type"));
         }
         let engine = crate::sqlite::own_work(|| open(self))?;
         self.attach(Arc::clone(&engine) as Arc<dyn Engine>)?;
-        engines.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
+        open_engines.insert(TypeId::of::<E>(), Arc::clone(&engine) as Arc<dyn Any + Send + Sync>);
         Ok(engine)
     }
 
@@ -572,13 +573,13 @@ fn absolute(dir: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Takes the directory's `LOCK`. The lock belongs to the open file, so a
-/// second store in the same process is refused like one in another process,
-/// and the operating system lets go of it if the process dies.
 /// The engines a store has open, and the names they hold in its directory.
 #[cfg(feature = "backup")]
 pub(crate) type EnginesOpen = (Vec<Arc<dyn Engine>>, HashSet<String>);
 
+/// Takes the directory's `LOCK`. The lock belongs to the open file, so a
+/// second store in the same process is refused like one in another process,
+/// and the operating system lets go of it if the process dies.
 pub(crate) fn take_lock(dir: &Path) -> Result<File> {
     let path = dir.join("LOCK");
     let what = || format!("store {}: LOCK", dir.display());

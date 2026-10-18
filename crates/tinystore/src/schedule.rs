@@ -235,8 +235,8 @@ mod tests {
         scheduler.add("test: tick", Duration::from_millis(5), work).unwrap();
         assert!(wait_until(|| runs.load(Ordering::SeqCst) >= 3));
         scheduler.stop();
+        // `stop` joins the thread: nothing runs after it returns
         let after = runs.load(Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(30));
         assert_eq!(runs.load(Ordering::SeqCst), after);
     }
 

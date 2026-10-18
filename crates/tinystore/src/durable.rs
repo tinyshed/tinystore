@@ -10,7 +10,7 @@ pub(crate) fn sync_directory(dir: &Path) -> io::Result<()> {
 }
 
 /// Makes a directory's names durable. Windows opens a directory only for
-/// backup and flushes it as a file, in about a millisecond.
+/// backup, and flushes it as a file.
 #[cfg(windows)]
 pub(crate) fn sync_directory(dir: &Path) -> io::Result<()> {
     use std::os::windows::fs::OpenOptionsExt;

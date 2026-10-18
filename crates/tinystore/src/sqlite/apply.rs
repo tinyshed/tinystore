@@ -31,9 +31,6 @@ const WRITE_FIRST: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1)
 const WRITE_FIRST_AND_CUT: &str = "insert into sqlite_dbpage (pgno, data) values (1, ?1), (?2, null)";
 const PAGES: &str = "pragma page_count";
 const CHECKPOINT: &str = super::given::own!("pragma wal_checkpoint(passive)");
-/// What SQLite's own automatic checkpoint waits for.
-const CHECKPOINT_AT: u32 = 1000;
-const TRUNCATE: &str = super::given::own!("pragma wal_checkpoint(truncate)");
 const PAGE_SIZE: &str = "pragma page_size";
 
 /// The connection that writes a copy, opened at its first commit, whose
@@ -102,7 +99,7 @@ impl Applier {
     /// for since the last one.
     pub(crate) fn is_long(&self) -> bool {
         let wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
-        wal.at.frame >= wal.checkpointed + CHECKPOINT_AT
+        wal.at.frame >= wal.checkpointed + super::capture::CHECKPOINT_AT
     }
 
     /// Checkpoints the WAL, once the copy synced the position that names
@@ -144,15 +141,14 @@ impl Applier {
 /// it: a copy's, each named, as the copy becomes a home whose capture would
 /// take what its WAL holds for commits of its own.
 pub(crate) fn checkpoint_away(path: &Path) -> Result<()> {
-    let mut wal = path.as_os_str().to_owned();
-    wal.push("-wal");
-    if !Path::new(&wal).exists() {
+    let wal = super::capture::wal_of(path);
+    if !wal.exists() {
         return Ok(());
     }
     let config = Config { keep_wal: true, ..Config::default() };
     let connection = connection::open(path, &config, Role::Writer)?;
     let busy: i64 = connection
-        .query_row(TRUNCATE, [], |row| row.get(0))
+        .query_row(super::file::TRUNCATE, [], |row| row.get(0))
         .map_err(|error| sql_error(path.display().to_string(), error))?;
     if busy != 0 {
         return Err(Error::new(

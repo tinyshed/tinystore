@@ -1,8 +1,9 @@
 //! The store's encryption key, and the values sealed with it.
 //!
 //! The key is 32 random bytes, kept as 64 hex digits in a file: `encryption.key`
-//! of the store's directory, which the store makes the first time it seals a
-//! value, or the file the store's options name, which it only reads. A value
+//! of the store's directory, which the store makes when an encrypted bucket
+//! opens and no key is there yet, or the file the store's options name, which
+//! it only reads. A value
 //! is sealed with XChaCha20-Poly1305 under a nonce of its own and bound to its
 //! place, so that it opens nowhere else:
 //!
@@ -20,8 +21,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
+use chacha20poly1305::Key as CipherKey;
 use chacha20poly1305::aead::{Aead, Generate, Payload};
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use sha2::{Digest, Sha256};
 
 use crate::durable::sync_directory;
@@ -58,7 +60,7 @@ impl EncryptionKey {
         if file.exists() {
             return EncryptionKey::read(file);
         }
-        let key = Key::try_generate()
+        let key = CipherKey::try_generate()
             .map_err(|error| Error::internal(format!("{}: the system's random bytes: {error}", shown(file))))?;
         write_new(file, &crate::text::hex(&key)).map_err(|error| Error::io(shown(file), error))?;
         let made = EncryptionKey::of(&key);
@@ -76,7 +78,7 @@ impl EncryptionKey {
         crate::text::hex(&self.id)
     }
 
-    fn of(key: &Key) -> EncryptionKey {
+    fn of(key: &CipherKey) -> EncryptionKey {
         let digest = Sha256::new().chain_update(b"tinystore encryption key id").chain_update(key).finalize();
         let mut id = [0; ID];
         id.copy_from_slice(&digest[..ID]);
@@ -118,7 +120,7 @@ impl EncryptionKey {
         let nonce = XNonce::try_from(nonce).map_err(|_| Error::internal("a nonce of another length"))?;
         self.cipher
             .decrypt(&nonce, Payload { msg: cipher, aad: place })
-            .map_err(|_| Error::corrupt("its value does not open: it was changed, or sealed for another key's place"))
+            .map_err(|_| Error::corrupt("its value does not open: it was changed, or sealed for another place"))
     }
 }
 
@@ -140,14 +142,14 @@ fn shown(file: &Path) -> String {
 }
 
 /// The key a file's text holds: 64 hex digits, and spaces around them.
-fn key_of(text: &str) -> Result<Key> {
+fn key_of(text: &str) -> Result<CipherKey> {
     let digits = text.trim();
     let bytes: Option<Vec<u8>> = match digits.len() == 64 && digits.bytes().all(|digit| digit.is_ascii_hexdigit()) {
         true => (0..32).map(|at| u8::from_str_radix(&digits[at * 2..at * 2 + 2], 16).ok()).collect(),
         false => None,
     };
     bytes
-        .and_then(|bytes| Key::try_from(bytes.as_slice()).ok())
+        .and_then(|bytes| CipherKey::try_from(bytes.as_slice()).ok())
         .ok_or_else(|| Error::invalid("a key is 64 hex digits, 32 random bytes, as `openssl rand -hex 32` writes"))
 }
 
@@ -177,7 +179,7 @@ mod tests {
     use crate::ErrorKind;
 
     fn key() -> EncryptionKey {
-        EncryptionKey::of(&Key::try_generate().unwrap())
+        EncryptionKey::of(&CipherKey::try_generate().unwrap())
     }
 
     #[test]

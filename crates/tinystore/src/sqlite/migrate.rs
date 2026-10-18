@@ -59,7 +59,7 @@ pub(crate) fn apply(tx: &Tx<'_>, history: &str, migrations: &[Migration]) -> Res
 /// Checks, on a copy, that its home applied these steps of `history` and no
 /// other: the steps are the home's to run, and arrive as its pages. A step
 /// not there yet is `Unavailable` until the home's commit of it arrives.
-pub(crate) fn check_applied_by_home(connection: &Connection, history: &str, migrations: &[Migration]) -> Result<()> {
+pub(crate) fn check_applied_steps(connection: &Connection, history: &str, migrations: &[Migration]) -> Result<()> {
     check_order(history, migrations)?;
     let kept: i64 = connection
         .query_row(HISTORY_KEPT, [], |row| row.get(0))

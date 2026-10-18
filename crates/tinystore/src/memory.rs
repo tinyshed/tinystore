@@ -4,11 +4,12 @@ use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
-/// What a `Limit` of the store's memory names in its `limit` fact: one call
-/// past the whole budget, and calls together past what is free now. Its
-/// `wanted` is what the call, or every call, would have held, and its `bound`
-/// the budget.
+/// What a `Limit` of the store's memory names in its `limit` fact when one
+/// call passes the whole budget. Its `wanted` is what the call would have
+/// held, and its `bound` the budget.
 pub(crate) const STORE_MEMORY: &str = "store memory";
+/// The `limit` fact of calls that together pass what is free now: `wanted`
+/// is what every call would have held.
 pub(crate) const STORE_MEMORY_NOW: &str = "store memory, now";
 
 /// The bytes a store's work may hold at once.

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -397,8 +398,16 @@ fn commit(
         let _ = execute(connection, ROLLBACK);
         return batch.iter().map(|_| Err(failure.duplicate())).collect();
     }
+    let undone = Cell::new(true);
     let answers: Vec<Result<()>> =
-        batch.iter().map(|write| run(connection, write.take_work(), (&committed, settlers))).collect();
+        batch.iter().map(|write| run(connection, write.take_work(), (&committed, settlers), &undone)).collect();
+    // A failed write whose savepoint would not roll back is still in the
+    // transaction: committing would keep it, so the whole batch goes.
+    if !undone.get() {
+        let _ = execute(connection, ROLLBACK);
+        let failure = Error::internal("a grouped write's savepoint did not roll back; its batch rolled back");
+        return batch.iter().map(|_| Err(failure.duplicate())).collect();
+    }
     if let Some(capture) = capture {
         capture.arm(batch.iter().any(|write| write.for_a_caller));
     }
@@ -430,7 +439,12 @@ fn commit(
 /// Runs one write in a savepoint, then settles what it left, keeping the
 /// savepoint when both succeed and rolling it back when either fails or
 /// panics, its hooks with it.
-fn run(connection: &Connection, work: Option<Work>, (committed, settlers): (&Committed, &Settlers)) -> Result<()> {
+fn run(
+    connection: &Connection,
+    work: Option<Work>,
+    (committed, settlers): (&Committed, &Settlers),
+    undone: &Cell<bool>,
+) -> Result<()> {
     let Some(work) = work else {
         return Err(Error::internal("a grouped write ran twice"));
     };
@@ -441,19 +455,18 @@ fn run(connection: &Connection, work: Option<Work>, (committed, settlers): (&Com
         .unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
     if outcome.is_ok() {
         if let Err(error) = execute(connection, RELEASE) {
-            undo(connection);
+            undone.set(undone.get() && undo(connection));
             committed.take_back(mark);
             return Err(sql_error("a grouped write: its savepoint", error));
         }
         return Ok(());
     }
-    undo(connection);
+    undone.set(undone.get() && undo(connection));
     committed.take_back(mark);
     outcome
 }
 
-fn undo(connection: &Connection) {
-    // A savepoint that cannot be rolled back leaves the transaction failing at
-    // its commit, which answers every write of the batch.
-    let _ = execute(connection, ROLLBACK_TO).and_then(|()| execute(connection, RELEASE));
+/// Rolls a write's savepoint back; says whether it did.
+fn undo(connection: &Connection) -> bool {
+    execute(connection, ROLLBACK_TO).and_then(|()| execute(connection, RELEASE)).is_ok()
 }

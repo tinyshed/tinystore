@@ -39,7 +39,7 @@ use crate::{Error, ErrorKind, Result};
 const HEADER: usize = 32;
 const FRAME_HEADER: usize = 24;
 /// What SQLite's own automatic checkpoint waits for.
-const CHECKPOINT_AT: u32 = 1000;
+pub(super) const CHECKPOINT_AT: u32 = 1000;
 const CHECKPOINT: &str = own!("pragma wal_checkpoint(passive)");
 
 thread_local! {
@@ -299,7 +299,7 @@ impl Capture {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(Error::io("read", error)),
         };
-        let wal = Committed::read(&bytes);
+        let wal = WalCommits::read(&bytes);
         let mut state = self.lock();
         match (self.observer.last(), wal) {
             (None, wal) => {
@@ -377,10 +377,10 @@ pub(crate) fn commits_past(path: &Path, mark: Position) -> Result<Vec<Position>>
 }
 
 /// The commits the WAL beside `path` holds, as SQLite would recover them.
-fn commits_in(path: &Path) -> Result<Option<Committed>> {
+fn commits_in(path: &Path) -> Result<Option<WalCommits>> {
     let wal = wal_of(path);
     match fs::read(&wal) {
-        Ok(bytes) => Ok(Committed::read(&bytes)),
+        Ok(bytes) => Ok(WalCommits::read(&bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::io(wal.display().to_string(), error)),
     }
@@ -402,7 +402,7 @@ fn remember_the_end(_: &Wal, frames: c_int) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn wal_of(path: &Path) -> PathBuf {
+pub(super) fn wal_of(path: &Path) -> PathBuf {
     let mut wal = OsString::from(path.as_os_str());
     wal.push("-wal");
     PathBuf::from(wal)
@@ -472,15 +472,15 @@ impl<'a> Frame<'a> {
 /// The frames of a WAL that SQLite would recover: those whose salts are the
 /// header's and whose checksums chain from it, up to the last that ends a
 /// commit.
-struct Committed {
+struct WalCommits {
     header: Header,
     /// The frame that ends each commit, in order.
     commit_ends: Vec<u32>,
     end: u32,
 }
 
-impl Committed {
-    fn read(bytes: &[u8]) -> Option<Committed> {
+impl WalCommits {
+    fn read(bytes: &[u8]) -> Option<WalCommits> {
         let header = Header::parse(bytes)?;
         let mut sum = header.checksum;
         let mut commit_ends = Vec::new();
@@ -496,7 +496,7 @@ impl Committed {
             }
         }
         let end = *commit_ends.last()?;
-        Some(Committed { header, commit_ends, end })
+        Some(WalCommits { header, commit_ends, end })
     }
 
     /// Each commit at or past `from`, as its first and last frames.

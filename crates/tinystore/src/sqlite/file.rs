@@ -16,6 +16,7 @@ use super::{Committed, Config, Left, Settle, Settlers, Tx};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
+pub(super) const TRUNCATE: &str = super::given::own!("pragma wal_checkpoint(truncate)");
 const FOREIGN_KEYS_OFF: &str = own!("pragma foreign_keys = off");
 const FOREIGN_KEYS_ON: &str = own!("pragma foreign_keys = on");
 
@@ -178,9 +179,10 @@ impl File {
     }
 
     /// `write` without waiting: it queues the write and returns, and `done` is
-    /// called with the value, or the error, on the thread that commits it. For
-    /// hosts whose one thread holds many writes in flight; `done` must not
-    /// block, since the commits after it wait for it.
+    /// called with the value, or the error, on the thread that commits it; a
+    /// write refused before it is queued is answered at once, on the caller's
+    /// thread. For hosts whose one thread holds many writes in flight; `done`
+    /// must not block, since the commits after it wait for it.
     pub(crate) fn submit<T, F, D>(&self, bytes: usize, write: F, done: D)
     where
         F: FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
@@ -237,8 +239,8 @@ impl File {
         let mut outcome = None;
         self.readers
             .read(|connection| {
-                let (committed, settled_by_none) = (Committed::default(), Settlers::default());
-                outcome = Some(work(&Tx::new(connection, &committed, &settled_by_none)));
+                let (committed, no_settlers) = (Committed::default(), Settlers::default());
+                outcome = Some(work(&Tx::new(connection, &committed, &no_settlers)));
                 Ok(())
             })
             .map_err(|error| error.within(self.describe()))?;
@@ -356,7 +358,7 @@ impl File {
     /// answers, and no writer is taken, so that a file which takes no writes,
     /// as an old home's, still opens.
     fn migrated(&self, history: &str, migrations: &[Migration]) -> Result<bool> {
-        match self.read(|connection| migrate::check_applied_by_home(connection, history, migrations)) {
+        match self.read(|connection| migrate::check_applied_steps(connection, history, migrations)) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == ErrorKind::Unavailable => Ok(false),
             Err(error) => Err(error.within(self.describe())),
@@ -366,7 +368,7 @@ impl File {
     /// A copy's migrations are its home's: they arrive as pages, and the copy
     /// only checks that its home applied these steps.
     fn check_its_home_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
-        self.read(|connection| migrate::check_applied_by_home(connection, history, migrations))
+        self.read(|connection| migrate::check_applied_steps(connection, history, migrations))
             .map_err(|error| error.within(self.describe()))
     }
 
@@ -436,7 +438,7 @@ impl File {
         }
         // A truncated WAL leaves the directory as small as its data.
         connection
-            .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .query_row(TRUNCATE, [], |_| Ok(()))
             .map_err(|error| sql_error(format!("{}: its last checkpoint", self.describe()), error))
     }
 
@@ -501,7 +503,7 @@ impl Switch {
         let config = Config { keep_wal: true, ..(*self.config).clone() };
         let writer = connection::open(&self.path, &config, Role::Writer)?;
         writer
-            .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .query_row(TRUNCATE, [], |_| Ok(()))
             .map_err(|error| sql_error(format!("{describe}: the copy's last checkpoint"), error))?;
         let capture = Capture::open(&self.path, &writer, Arc::clone(&observer))?;
         let mut writing = lock(&held);
@@ -531,7 +533,7 @@ impl Switch {
         }
         capture_cell.write().unwrap_or_else(PoisonError::into_inner).take();
         writing
-            .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
+            .query_row(TRUNCATE, [], |_| Ok(()))
             .map_err(|error| sql_error(format!("{describe}: its last checkpoint as a home"), error))?;
         copy.store(true, Ordering::SeqCst);
         *writing = no_writer(&describe)?;

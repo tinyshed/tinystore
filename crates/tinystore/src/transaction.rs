@@ -257,7 +257,8 @@ impl Writer for OneFile<'_> {
 #[cfg(any(feature = "kv", feature = "jobs"))]
 struct OfStore<'f> {
     files: &'f [Arc<File>],
-    /// The transaction once it began, and what an error calls its file.
+    /// The transaction once it began, and what an error calls it: the place of
+    /// the first handle it took in, such as `kv bucket sessions`.
     begun: RefCell<Option<(Begun<'f>, String)>>,
     /// This thread marked inside a transaction of each file, in their order.
     marks: Vec<Mark>,
