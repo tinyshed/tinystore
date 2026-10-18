@@ -94,7 +94,7 @@ pub struct Store {
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 pub(crate) struct WeakStore(
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication")),
+        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication", feature = "search")),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     Weak<Inner>,
@@ -103,7 +103,7 @@ pub(crate) struct WeakStore(
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
 impl WeakStore {
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication")),
+        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication", feature = "search")),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     pub(crate) fn upgrade(&self) -> Option<Store> {
