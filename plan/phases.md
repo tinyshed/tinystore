@@ -15,13 +15,14 @@ says so. Mark a task done in the commit that does it.
 - [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
 - [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the owner accepted the jobs book on 9 October, after a survey of job libraries and a second newcomer round.
 - [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
-- [ ] The generator's Python and Go codecs, with their SDKs.
+- [x] The generator's Python and Go codecs, with their SDKs.
   Built, on 18 October: the codecs, `sdk/python/src/tinystore/_wire/protocol.py` on the Python SDK's codec and
   `internal/wire` of a Go module at the root, each message's reader and writer written out a field at a time, both
   read and written over every vector of `testdata/wire/protocol.json` and Go's over `vectors.json` too, by `just
   codec-go` and `just codec-python` and in CI. Every API book gives its Python and Go call sites, from
   the rules of [dx.md](dx.md#python-and-go-as-every-book-writes-them) and a newcomer check of them, on 18
-  October, and the Python SDK of the Go engine is gone but its codec. Left: the SDKs that stand on them.
+  October, and the Python SDK of the Go engine is gone but its codec. The Python and Go SDKs stand on them,
+  both closed by the owner on 18 October.
 
 **Gate:** the jobs and kv books pass the newcomer check and the owner accepts
 them; the workspace builds and tests on three operating systems.
@@ -47,7 +48,7 @@ them; the workspace builds and tests on three operating systems.
   Built, slice 3: a store's logger's options as the config `log` in Rust and in the Bun SDK, the code's options its
   defaults and `LOG_*` a layer over them, read as they were, its level live for every logger of the store and
   `trace` the level of a logger told none; records and kv's config meet in `log_config.rs`. Every slice of the book
-  is built; Python and Go come with their bindings, and the book's Later waits for the owner.
+  is built, in the Python and Go SDKs too on 18 October, and the book's Later waits for the owner.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
 - [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.
@@ -65,7 +66,10 @@ them; the workspace builds and tests on three operating systems.
   files with uploads, ranges and checked reads, and events, the logger and its console over
   `testdata/console/console.json`; then metrics and their instruments, configs declared by a dataclass and a
   store's logger following the config `log`, locks and semaphores through `async with`, channels, search with
-  `db.search_index`, and backups, each suite through all four. Left: the Go SDK.
+  `db.search_index`, and backups, each suite through all four. Then the Go SDK, a package an engine under the
+  root module path, the core in its own process through cgo's dlopen, or its DLL without cgo on Windows, every
+  engine's suite through all four, its loggers `slog.Handler`s that `testing/slogtest` passes. Both SDKs closed
+  by the owner on 18 October. Left: napi-rs, and the Node SDK on it.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,
@@ -82,9 +86,9 @@ taken against Go `e81a050` and written up as a research round.
 ## 2. sqldb, jobs, blobs
 
 - [x] Downloads and uploads under credit, which blobs and records need: blobs' get and upload pace both ways in protocol 2.
-- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, protocol 2 and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet, and Python and Go come with their bindings.
-- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, a queue in the store's transaction among them; Python and Go come with their bindings.
-- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core, protocol 2 and the Bun SDK are built to the book, reads over the wire as S3's, on an ETag and a range, and the disk the store keeps free, `keep_free` and `serve --keep-free`; Python and Go come with their bindings.
+- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, protocol 2 and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet; the Python and Go SDKs are built to it too, on 18 October.
+- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, a queue in the store's transaction among them, and the Python and Go SDKs too, on 18 October.
+- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core, protocol 2 and the Bun SDK are built to the book, reads over the wire as S3's, on an ETag and a range, and the disk the store keeps free, `keep_free` and `serve --keep-free`; the Python and Go SDKs too, on 18 October.
 - [x] kv and jobs inside an sql database: `db.bucket` and `db.queue`, which commit with its rows, in the Rust core, protocol 2 and the Bun SDK.
 
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can
@@ -249,7 +253,8 @@ that ran clean.
   promote`, which asks the nodes `--from` names and refuses while one still serves a file, and `node demote`;
   `witness`.
 - [ ] Self-metrics.
-- [ ] The thin Go SDK on cgo and a sidecar, under the root module path.
+- [x] The thin Go SDK on cgo and a sidecar, under the root module path: closed by the owner on 18 October,
+  every engine of the books built in it.
 - [ ] Actions builds the libraries, executables, npm packages, wheels and Go modules for seven targets.
 - [ ] The guides in docs/ rewritten from the API books; `v0.1.0`.
 
@@ -267,7 +272,7 @@ target.
   transaction handed over at its commit, a subscription's batches within the client's credit, a connection's output
   bounded and its subscriptions drained in turn; the Bun SDK's `store.channel`, `publish`, `subscribe`, `each`,
   `onMissed`, `onError`, a subscription made again after a lost connection, `tx.with(channel)` in both
-  transactions. Python and Go come with their bindings; the book waits for the owner.
+  transactions; the Python and Go SDKs too, on 18 October. The book waits for the owner.
 - [ ] Locks and semaphores to their book ([api/locks.md](api/locks.md)), proposed on 16 October: leases in memory, fences from an epoch kept in kv.db, the SDK's leases across connections.
   Built, slices 1 and 2: the Rust core, `store.lock` and `store.semaphore`, `hold` and `try_hold` waiting in line
   first come first served, `max_hold` revoking a lease at its time, `lost` and `in use`, a hold refused inside its
@@ -275,7 +280,7 @@ target.
   timer; `protocol/locks.wire`, a hold answered once its key is given, a lease renewed and let go by its id from any
   connection and asked for again by its request; the Bun SDK's `store.lock` and `store.semaphore`, `hold`,
   `tryHold`, a lease renewed at a third of its ttl, its signal aborted at its own deadline or at `maxHold`, through
-  each way a store is reached. Python and Go come with their bindings; the book waits for the owner.
+  each way a store is reached; the Python and Go SDKs too, on 18 October. The book waits for the owner.
 
 **Gate:** a message published in a transaction that rolls back is never
 delivered; a subscriber that falls behind receives a gap event.

@@ -289,7 +289,7 @@ Proposed, to be measured before they are promised.
    subscriber's place, missed, `subscribe`, `each`, `stop`.
 3. The wire, a connection's output bounded in bytes, and the Bun SDK.
 
-Python and Go come with their bindings.
+The Python and Go SDKs followed, closed by the owner on 18 October.
 
 ## Gates
 

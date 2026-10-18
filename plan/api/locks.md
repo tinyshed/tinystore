@@ -311,7 +311,7 @@ Proposed, to be measured before they are promised.
    `locks.release`, renewals from the SDK, the lease's and the request's ids
    across connections, `lease.signal`.
 
-Python and Go come with their bindings.
+The Python and Go SDKs followed, closed by the owner on 18 October.
 
 ## Gates
 

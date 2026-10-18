@@ -13,7 +13,7 @@ transactions (`crates/tinystore/src/sql`), protocol 2 serves them
 query builder (`sdk/js/src/sql.ts`, `query.ts`), as the Rust core has
 them (`query.rs`), both held to `testdata/sql/queries.json`, and the buckets
 and queues kept in a database's file (`inside.rs`), and `include`
-(`included.rs`); the Python and Go SDKs come next. The Go engine at `e81a050` and research's
+(`included.rs`); the Python and Go SDKs followed, closed by the owner on 18 October. The Go engine at `e81a050` and research's
 design of it are the reference for what it promises.
 
 What changed from the Go engine: queries can be built without writing their

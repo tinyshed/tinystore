@@ -152,7 +152,7 @@ store opens, when an SDK has nothing yet to call.
 2. The wire, the Bun SDK's `store.backup` and the command line's `backup`
    and `restore`.
 
-Python and Go come with their bindings.
+The Python and Go SDKs followed, closed by the owner on 18 October.
 
 ## Later
 

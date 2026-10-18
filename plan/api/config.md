@@ -767,7 +767,7 @@ it is made and follows while it runs:
    only and `vars` declared paths only.
 3. The logger's config.
 
-Python and Go come with their bindings.
+The Python and Go SDKs followed, closed by the owner on 18 October.
 
 ## Later
 

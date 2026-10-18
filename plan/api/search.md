@@ -899,7 +899,7 @@ Proposed, to be measured before they are promised.
    migration rebuilt it, and the wire and the Bun SDK; a search in the
    transaction that wrote in Rust alone.
 
-Python and Go come with their bindings. Each slice ends with its gates and
+The Python and Go SDKs followed, closed by the owner on 18 October. Each slice ends with its gates and
 a newcomer check of what it made public.
 
 ## Gates
