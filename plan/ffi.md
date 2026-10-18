@@ -80,13 +80,13 @@ where C takes a pointer and a length.
 
 ## Each language
 
-| Language | Embedded                                            | Loads                              | Wake                                                | Sidecar and remote         |
-|----------|-----------------------------------------------------|------------------------------------|-----------------------------------------------------|----------------------------|
-| Rust     | the engines directly, no pipe                       | the crates                         | —                                                   | a client crate             |
-| Go       | cgo and a static library                            | `libtinystore.a`, built in Actions | none: a goroutine blocks in `recv`                  | the same SDK over a socket |
-| Bun      | bun:ffi                                             | the dynamic library                | a threadsafe `JSCallback`                           | the same SDK over a socket |
-| Node     | napi-rs                                             | `tinystore.node`                   | a threadsafe function                               | the same SDK over a socket |
-| Python   | PyO3, one abi3 wheel a platform for every CPython 3 | the extension module               | `loop.call_soon_threadsafe`; GIL released in `recv` | the same SDK over a socket |
+| Language | Embedded                                            | Loads                              | Wake                                                                                                        | Sidecar and remote         |
+|----------|-----------------------------------------------------|------------------------------------|-------------------------------------------------------------------------------------------------------------|----------------------------|
+| Rust     | the engines directly, no pipe                       | the crates                         | —                                                                                                           | a client crate             |
+| Go       | cgo and a static library                            | `libtinystore.a`, built in Actions | none: a goroutine blocks in `recv`                                                                          | the same SDK over a socket |
+| Bun      | bun:ffi                                             | the dynamic library                | a threadsafe `JSCallback`                                                                                   | the same SDK over a socket |
+| Node     | napi-rs                                             | `tinystore.node`                   | a threadsafe function                                                                                       | the same SDK over a socket |
+| Python   | PyO3, one abi3 wheel a platform for every CPython 3 | `crates/ffi` built with `python`   | none: a thread waits in `recv`, the GIL let go, and hands each read to the loop with `call_soon_threadsafe` | the same SDK over a socket |
 
 bun:ffi is experimental by Bun's own documentation; the owner chose it to try
 it (decision 10). If it fails a gate, Bun loads the napi-rs addon instead,

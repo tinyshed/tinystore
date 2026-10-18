@@ -66,7 +66,13 @@ proposal), and "events" is already what records stores.
 
 **10. Bun loads the core through bun:ffi,** although Bun calls it
 experimental; the owner wants to try it. Node loads it through napi-rs and
-Python through PyO3. All three expose the same four functions.
+Python through PyO3. All three expose the same four functions. On 18
+October the owner had PyO3 live in `crates/ffi`, behind its feature
+`python`, rather than in a crate of its own: one crate is every other
+language's way into the core's process. PyO3 stays over ctypes because the
+research round `ffi-window` measured PyO3 alone barely faster (500k against
+490k keys a second) and frames read and written in Rust 1.5 times faster,
+which only an extension module can do.
 
 **11. jobs' limits nest.** `concurrency: { total: 8, perGroup: 2 }`, with
 `concurrency: 8` as the short form of `{ total: 8 }`. `rate` stays beside it:
@@ -85,7 +91,7 @@ chores; they never write or edit Rust code.
 `tinystore-core`, `tinystore-sqlite` and the rest odd to read. The runtime, the
 SQLite adapter, the engines, the wire and the server are modules of one crate,
 `tinystore`, behind features; crates of their own exist only for separate
-artifacts: `crates/cli`, `crates/ffi`, `crates/node`, `crates/python`. What
+artifacts: `crates/cli` and `crates/ffi`, whose features build Python's module and later Node's. What
 separate crates enforced is kept by lints and a test: `unsafe` is denied
 everywhere but `sqlite::memory` and the FFI, and no engine module imports
 another.

@@ -1,6 +1,8 @@
 //! TinyStore's C ABI: four functions that carry the wire's frames, whole, to a
 //! store in this process. They know nothing of engines, so they never change:
-//! a new call or a new engine is new messages, agreed in HELLO.
+//! a new call or a new engine is new messages, agreed in HELLO. Built with
+//! `python`, the same library is also the Python SDK's extension module, the
+//! same pipe behind Python's own types.
 //!
 //! Every function takes and returns pointers and integers alone, which bun:ffi,
 //! ctypes and cgo all pass without a struct. No memory of the core's crosses:
@@ -16,6 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tinystore::pipe::{Pipe, Wake};
+
+#[cfg(feature = "python")]
+mod python;
 
 /// A connection: a pipe to the store in one directory.
 #[derive(Debug)]

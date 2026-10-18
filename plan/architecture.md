@@ -48,13 +48,11 @@ the wire and the server, as modules behind cargo features: a Rust program
 writes `tinystore::kv`, and one crate is published. A crate of its own exists
 only where a separate artifact does.
 
-| Folder              | Package            | What it holds                                                                  |
-|---------------------|--------------------|--------------------------------------------------------------------------------|
-| `crates/tinystore/` | `tinystore`        | the library: modules below                                                     |
-| `crates/cli/`       | `tinystore-cli`    | the `tinystore` executable: serve, status, logs, mcp, backup, restore, migrate |
-| `crates/ffi/`       | `tinystore-ffi`    | the C ABI, as `staticlib` for Go and `cdylib` for Bun · `unsafe`               |
-| `crates/node/`      | `tinystore-node`   | napi-rs over the same four functions                                           |
-| `crates/python/`    | `tinystore-python` | PyO3 over the same four functions                                              |
+| Folder              | Package         | What it holds                                                                                                                                                                       |
+|---------------------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `crates/tinystore/` | `tinystore`     | the library: modules below                                                                                                                                                          |
+| `crates/cli/`       | `tinystore-cli` | the `tinystore` executable: serve, status, logs, mcp, backup, restore, migrate                                                                                                      |
+| `crates/ffi/`       | `tinystore-ffi` | the C ABI, as `staticlib` for Go and `cdylib` for Bun; with `python`, PyO3's module over the same pipe, the Python SDK's `tinystore._core`; later napi-rs's the same way · `unsafe` |
 
 | Module in `tinystore`                                        | What it holds                                                                                  |
 |--------------------------------------------------------------|------------------------------------------------------------------------------------------------|
