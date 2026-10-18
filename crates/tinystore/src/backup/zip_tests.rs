@@ -9,7 +9,7 @@ fn zipped(files: &[(&str, Vec<u8>)], wide_from: u64) -> Vec<u8> {
     for (name, bytes) in files {
         writer.add(name, bytes.len() as u64, bytes.as_slice(), |_| {}).unwrap();
     }
-    writer.finish().unwrap().0
+    writer.finish().unwrap()
 }
 
 fn read_back(zip: &[u8]) -> Vec<(String, Vec<u8>)> {

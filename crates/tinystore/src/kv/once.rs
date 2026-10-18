@@ -170,7 +170,11 @@ impl<V: Value> Once<V> {
         }
         let answer = work()?;
         if let Err(error) = self.answers.set(&*key, &answer) {
-            tracing::warn!(target: "tinystore", %error, "a once answer was not kept; the next run of its key runs again");
+            tracing::warn!(
+                target: "tinystore",
+                %error,
+                "a once answer was not kept; the next run of its key runs again",
+            );
         }
         drop(claimed);
         Ok(answer)
@@ -193,7 +197,11 @@ impl<V: Value> Once<V> {
             Err(_) => None,
         };
         if let Err(error) = self.answers.once_keep(key, token, raw) {
-            tracing::warn!(target: "tinystore", %error, "a once answer was not kept at its home; the next run of its key runs again");
+            tracing::warn!(
+                target: "tinystore",
+                %error,
+                "a once answer was not kept at its home; the next run of its key runs again",
+            );
         }
         answer
     }

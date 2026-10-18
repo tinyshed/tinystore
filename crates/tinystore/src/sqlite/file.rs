@@ -305,7 +305,8 @@ impl File {
     }
 
     /// Begins the transaction `mark` announced, which holds the writer alone
-    /// until it commits, and rolls back when it is dropped before.
+    /// until it commits, and rolls back when it is dropped before. `mark` is
+    /// read for nothing: it is the proof that this thread said it is inside.
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
         if self.is_copy() {
@@ -406,6 +407,7 @@ impl File {
         closed
     }
 
+    #[cfg(test)]
     pub(crate) fn readers_open(&self) -> usize {
         self.readers.open()
     }
@@ -415,6 +417,7 @@ impl File {
         self.readers.waiting()
     }
 
+    #[cfg(test)]
     pub(crate) fn commits(&self) -> u64 {
         self.group.commits()
     }

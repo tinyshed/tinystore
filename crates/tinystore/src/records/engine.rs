@@ -108,7 +108,11 @@ impl Engine for Records {
                 *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = waiting;
             }
             (Err(error), _) | (_, Err(error)) => {
-                tracing::warn!(target: "tinystore", %error, "records: a copy's streams, read again after its home's commit");
+                tracing::warn!(
+                    target: "tinystore",
+                    %error,
+                    "records: a copy's streams, read again after its home's commit",
+                );
             }
         }
     }

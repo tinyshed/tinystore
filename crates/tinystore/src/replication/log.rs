@@ -181,7 +181,13 @@ impl Acks {
                 self.unheld.fetch_add(1, Ordering::Relaxed);
                 let why = if counted.is_empty() { "no node it waits for copies it" } else { "none held it in time" };
                 if !self.said.swap(true, Ordering::SeqCst) {
-                    tracing::warn!(target: "tinystore", file, entry = sequence, why, "a synchronous commit no copy held");
+                    tracing::warn!(
+                        target: "tinystore",
+                        file,
+                        entry = sequence,
+                        why,
+                        "a synchronous commit no copy held",
+                    );
                 }
                 return Err(Error::new(
                     ErrorKind::CommittedLocally,

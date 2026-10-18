@@ -106,6 +106,7 @@ impl Group {
         Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers, capture }
     }
 
+    #[cfg(test)]
     pub(crate) fn commits(&self) -> u64 {
         self.commits.load(Ordering::Relaxed)
     }

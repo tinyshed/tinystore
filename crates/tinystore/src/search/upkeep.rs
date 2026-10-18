@@ -189,7 +189,11 @@ impl Search {
         let calibrated = ((probes, rescored), (state.vectors, recall));
         self.file.transaction(|tx| clusters::calibrated(tx, id, calibrated.0, calibrated.1))?;
         if probes == 0 {
-            tracing::info!(target: "tinystore", "search {}: no clusters reach recall {recall}; searches stay exact", open.name);
+            tracing::info!(
+                target: "tinystore",
+                "search {}: no clusters reach recall {recall}; searches stay exact",
+                open.name,
+            );
         } else {
             tracing::info!(target: "tinystore", "search {}: {count} clusters of vectors, {probes} read and {rescored} \
                 scored again a search for recall {recall}", open.name);

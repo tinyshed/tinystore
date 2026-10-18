@@ -616,18 +616,6 @@ pub(crate) fn pass_on(store: &Store, handle: &Handle, owners: &[String], key: &s
     crate::replication::pass_on(store, FILE, encode(handle, owners, key, call))
 }
 
-/// Why a handle of a copy cannot pass a write on, if it cannot: a bucket in
-/// a database's file is passed on with the database's writes, not yet built.
-pub(crate) fn refuse(lent_by: Option<&str>) -> Result<()> {
-    if let Some(owner) = lent_by {
-        return Err(Error::new(
-            ErrorKind::Unavailable,
-            format!("a copy passes no write of a bucket in {owner}'s file to its home yet"),
-        ));
-    }
-    Ok(())
-}
-
 fn database_out(out: &mut Out, database: Option<&str>) {
     out.byte(u8::from(database.is_some()));
     out.text(database.unwrap_or(""));

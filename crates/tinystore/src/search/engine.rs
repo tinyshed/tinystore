@@ -311,7 +311,11 @@ impl Search {
         match self.change_beside(beside, wanted) {
             Ok(changed) => Ok(Some(changed)),
             Err(error) => {
-                tracing::info!(target: "tinystore", %error, "search: a rebuild under way dropped, since the change asks another");
+                tracing::info!(
+                    target: "tinystore",
+                    %error,
+                    "search: a rebuild under way dropped, since the change asks another",
+                );
                 self.file.transaction(|tx| rebuild::mark_dropping(tx, beside.data.id))?;
                 Ok(None)
             }

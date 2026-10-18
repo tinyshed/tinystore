@@ -86,7 +86,12 @@ pub(crate) fn compare(file: &str, sequence: u64, ours: [u8; 32], theirs: &[u8]) 
     if ours.as_slice() == theirs {
         return Ok(sequence);
     }
-    tracing::error!(target: "tinystore", file, entry = sequence, "a copy's pages differ from the node it takes them from");
+    tracing::error!(
+        target: "tinystore",
+        file,
+        entry = sequence,
+        "a copy's pages differ from the node it takes them from",
+    );
     Err(Error::new(
         ErrorKind::Corrupt,
         format!("its pages differ from those of the node it takes it from, at entry {sequence}"),

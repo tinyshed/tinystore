@@ -106,6 +106,7 @@ impl Readers {
         waiting.iter().for_each(Thread::unpark);
     }
 
+    #[cfg(test)]
     pub(crate) fn open(&self) -> usize {
         self.lock().open
     }

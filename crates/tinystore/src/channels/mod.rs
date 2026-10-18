@@ -206,6 +206,8 @@ impl<T: Serialize + DeserializeOwned + Send + 'static> Subscribing<T> {
         Ok(Subscription { subscriber })
     }
 
+    /// The messages as an iterator on the caller's thread. A message that
+    /// does not read is an `Err` item there, so `on_error` has nothing to say.
     pub fn each(self) -> Result<Each<T>> {
         let key = self.key()?;
         let signal = Arc::new(Signal::default());
@@ -360,7 +362,12 @@ impl Told {
             return told(missed);
         }
         if !self.quiet() {
-            tracing::warn!(target: "tinystore", channel = %self.shown, count = missed.count, "a subscriber missed messages");
+            tracing::warn!(
+                target: "tinystore",
+                channel = %self.shown,
+                count = missed.count,
+                "a subscriber missed messages",
+            );
         }
     }
 

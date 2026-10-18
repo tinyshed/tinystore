@@ -30,29 +30,33 @@ impl Zstd {
     /// `plain` as one frame.
     pub(crate) fn squeeze(&mut self, plain: &[u8]) -> Result<Vec<u8>> {
         let failed = |error| Error::internal("zstd could not write a frame").with_source(error);
-        if self.compressor.is_none() {
-            let mut made = zstd::bulk::Compressor::new(self.level).map_err(failed)?;
-            if let Some(window_log) = self.window_log {
-                made.set_parameter(zstd::zstd_safe::CParameter::WindowLog(window_log)).map_err(failed)?;
+        let compressor = match &mut self.compressor {
+            Some(compressor) => compressor,
+            slot @ None => {
+                let mut made = zstd::bulk::Compressor::new(self.level).map_err(failed)?;
+                if let Some(window_log) = self.window_log {
+                    made.set_parameter(zstd::zstd_safe::CParameter::WindowLog(window_log)).map_err(failed)?;
+                }
+                slot.insert(made)
             }
-            self.compressor = Some(made);
-        }
-        let Some(compressor) = self.compressor.as_mut() else { return Ok(Vec::new()) };
+        };
         compressor.compress(plain).map_err(failed)
     }
 
     /// Expands a frame into `most` bytes at most: a frame that says more is
     /// refused before anything is allocated for it.
     pub(crate) fn expand(&mut self, frame: &[u8], most: usize) -> Result<Vec<u8>> {
-        if self.decompressor.is_none() {
-            let failed = |error| Error::internal("zstd could not start").with_source(error);
-            let mut made = zstd::bulk::Decompressor::new().map_err(failed)?;
-            if let Some(window_log) = self.window_log {
-                made.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(window_log)).map_err(failed)?;
+        let decompressor = match &mut self.decompressor {
+            Some(decompressor) => decompressor,
+            slot @ None => {
+                let failed = |error| Error::internal("zstd could not start").with_source(error);
+                let mut made = zstd::bulk::Decompressor::new().map_err(failed)?;
+                if let Some(window_log) = self.window_log {
+                    made.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(window_log)).map_err(failed)?;
+                }
+                slot.insert(made)
             }
-            self.decompressor = Some(made);
-        }
-        let Some(decompressor) = self.decompressor.as_mut() else { return Ok(Vec::new()) };
+        };
         decompressor.decompress(frame, most).map_err(|_| Error::corrupt("a row's frame"))
     }
 }

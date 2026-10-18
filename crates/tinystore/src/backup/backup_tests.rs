@@ -10,8 +10,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::text::hex;
 use crate::metrics::Series;
+use crate::text::hex;
 use crate::{ErrorKind, Options, TestClock, sql};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -267,7 +267,7 @@ fn a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zip
     let mut writer = zip::Writer::new(Vec::new());
     writer.add("kv.db", bytes.len() as u64, bytes.as_slice(), |_| {}).unwrap();
     writer.add(MANIFEST, manifest.len() as u64, manifest.as_bytes(), |_| {}).unwrap();
-    fs::write(&f.zip, writer.finish().unwrap().0).unwrap();
+    fs::write(&f.zip, writer.finish().unwrap()).unwrap();
     let error = restore(&f.zip, &f.restored).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
     assert!(error.to_string().contains("kv.db: its SHA-256 is not its manifest's"), "{error}");

@@ -690,7 +690,12 @@ impl State {
             let epoch = match self.epoch_of(&name) {
                 Ok(epoch) => epoch,
                 Err(error) => {
-                    tracing::warn!(target: "tinystore", file = %name, %error, "a node could not read a file's epoch to claim it");
+                    tracing::warn!(
+                        target: "tinystore",
+                        file = %name,
+                        %error,
+                        "a node could not read a file's epoch to claim it",
+                    );
                     continue;
                 }
             };
@@ -699,7 +704,12 @@ impl State {
                 // a move away from it called off while this node was down
                 Ok(home) if home.node == self.id && home.epoch > epoch => {
                     if let Err(error) = self.go_on_at(&name, home.epoch) {
-                        tracing::warn!(target: "tinystore", file = %name, %error, "a node could not write a file again");
+                        tracing::warn!(
+                            target: "tinystore",
+                            file = %name,
+                            %error,
+                            "a node could not write a file again",
+                        );
                     }
                 }
                 Ok(home) if home.node == self.id => {}
@@ -838,7 +848,12 @@ impl State {
                 asked_to_make = true;
                 drop(copies);
                 if let Err(error) = super::forward::make(self, name) {
-                    tracing::debug!(target: "tinystore", file = name, %error, "a node could not ask its home to make a file");
+                    tracing::debug!(
+                        target: "tinystore",
+                        file = name,
+                        %error,
+                        "a node could not ask its home to make a file",
+                    );
                 }
                 copies = lock(&self.copies);
                 continue;
@@ -1014,7 +1029,12 @@ impl State {
             super::handover::let_go(self, store, file, &home.address, ours)
         });
         if let Err(error) = stepped {
-            tracing::error!(target: "tinystore", file, %error, "a node could not become a copy of the home the catalog names");
+            tracing::error!(
+                target: "tinystore",
+                file,
+                %error,
+                "a node could not become a copy of the home the catalog names",
+            );
         }
     }
 

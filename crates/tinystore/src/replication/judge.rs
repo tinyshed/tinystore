@@ -132,7 +132,12 @@ fn leased(state: &Arc<State>, store: &Store, file: &str, holder: &Holder, sent: 
         if let Some(copy) = state.copy(file).filter(|copy| holder.epoch > copy.point().epoch) {
             state.granted(file, until);
             state.take_over_at(store, file, copy, holder.epoch)?;
-            tracing::info!(target: "tinystore", file, epoch = holder.epoch, "a copy took a file over, its lease granted");
+            tracing::info!(
+                target: "tinystore",
+                file,
+                epoch = holder.epoch,
+                "a copy took a file over, its lease granted",
+            );
             state.claim_taken(file, holder.epoch);
         }
         state.lease_until(file, until);

@@ -156,7 +156,13 @@ impl Witness {
         }
         let Holder { node, epoch, .. } = &lease.kept.holder;
         if *node != before.node || *epoch != before.epoch {
-            tracing::info!(target: "tinystore", file = ask.file, holder = %node, epoch, "a witness granted a file's lease");
+            tracing::info!(
+                target: "tinystore",
+                file = ask.file,
+                holder = %node,
+                epoch,
+                "a witness granted a file's lease",
+            );
         }
         let holder = lease.kept.holder.clone();
         leases.insert(ask.file.to_owned(), lease);

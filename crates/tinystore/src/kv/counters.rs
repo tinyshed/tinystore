@@ -242,7 +242,13 @@ impl Counters {
             // its caller had its answer when the node queued it, so an add past
             // an i64 is let go rather than refused, which would hold the queue
             let Some(sum) = added else {
-                tracing::warn!(target: "tinystore", node, op, n, "a queued add passes the range of an i64 and is not counted");
+                tracing::warn!(
+                    target: "tinystore",
+                    node,
+                    op,
+                    n,
+                    "a queued add passes the range of an i64 and is not counted",
+                );
                 return Ok(live(tx, id, &path, now)?.map_or(0, |live| live.value));
             };
             Ok(sum)
@@ -253,7 +259,6 @@ impl Counters {
     #[cfg(feature = "replication")]
     fn pass_on(&self, key: &str, call: &forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
-        forward::refuse(self.scope.kv.lent_by()).map_err(|error| error.within(shown()))?;
         let store = self.scope.kv.store().map_err(|error| error.within(shown()))?;
         let owners = self.scope.branch()?.owners().to_vec();
         let handle = forward::Handle::Counters { name: self.scope.name().to_owned(), ttl: self.ttl };

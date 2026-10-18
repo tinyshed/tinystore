@@ -4,9 +4,25 @@
 //! Nothing here knows an engine's vocabulary. `unsafe` is allowed in this
 //! module alone, and only in [`memory`] and [`mutex`].
 
-// The engines that use the adapter land one by one; until kv does, its calls
-// are reached only from tests.
-#![allow(dead_code, unused_imports)]
+// Every engine stands on the adapter, and a build of a few of them leaves the
+// rest of it unused: there the lint is quiet, while a build of every engine
+// still finds what nothing calls.
+#![cfg_attr(
+    not(all(
+        feature = "kv",
+        feature = "locks",
+        feature = "jobs",
+        feature = "sql",
+        feature = "blobs",
+        feature = "records",
+        feature = "metrics",
+        feature = "search",
+        feature = "backup",
+        feature = "replication",
+        feature = "wire"
+    )),
+    allow(dead_code, unused_imports)
+)]
 
 mod apply;
 mod capture;
@@ -34,12 +50,13 @@ pub(crate) use apply::{Applier, checkpoint_away};
 pub(crate) use capture::{Commit, Observe, Position, answering, commits_past, own_work, wal_end};
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};
-pub(crate) use connection::{copy, execute, read_copy, sql_error};
+pub(crate) use connection::{copy, read_copy, sql_error};
 pub(crate) use constraint::named as name_constraint;
 #[cfg(feature = "replication")]
 pub(crate) use file::Switch;
 pub(crate) use file::{Begun, File, Mark, a_copy_takes_no_transaction, in_a_transaction};
 pub(crate) use given::given;
+#[cfg(test)]
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};

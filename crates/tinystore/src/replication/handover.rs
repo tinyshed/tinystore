@@ -182,7 +182,12 @@ fn let_go_once_taken(state: &Arc<State>, file: &str, to: &str, last: Point) {
                 Ok(claimed) => home = Some(claimed),
                 Err(error) if !said => {
                     said = true;
-                    tracing::warn!(target: "tinystore", file, %error, "a move went silent and the catalog cannot be reached: this node stays fenced");
+                    tracing::warn!(
+                        target: "tinystore",
+                        file,
+                        %error,
+                        "a move went silent and the catalog cannot be reached: this node stays fenced",
+                    );
                 }
                 Err(_) => {}
             }

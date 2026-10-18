@@ -326,11 +326,17 @@ pub(crate) fn find_bucket(connection: &Connection, name: &str) -> Result<Option<
         .map_err(|error| sql_error("its record", error))
 }
 
+#[cfg(feature = "replication")]
+const QUEUED_APPLIED: &str = "select applied from _tinystore_kv_queued where node = ?1";
+#[cfg(feature = "replication")]
+const KEEP_QUEUED_APPLIED: &str = "insert into _tinystore_kv_queued (node, applied) values (?1, ?2)
+    on conflict (node) do update set applied = excluded.applied";
+
 /// The last op of `node` a home applied of those the node queued.
 #[cfg(feature = "replication")]
 pub(crate) fn queued_applied(connection: &Connection, node: &str) -> Result<Option<i64>> {
     connection
-        .prepare_cached("select applied from _tinystore_kv_queued where node = ?1")
+        .prepare_cached(QUEUED_APPLIED)
         .and_then(|mut select| select.query_row([node], |row| row.get(0)).optional())
         .map_err(|error| sql_error("a node's last op", error))
 }
@@ -338,13 +344,7 @@ pub(crate) fn queued_applied(connection: &Connection, node: &str) -> Result<Opti
 /// Keeps `op` as the last of `node` applied.
 #[cfg(feature = "replication")]
 pub(crate) fn keep_queued_applied(connection: &Connection, node: &str, op: i64) -> Result<()> {
-    execute(
-        connection,
-        "insert into _tinystore_kv_queued (node, applied) values (?1, ?2)
-            on conflict (node) do update set applied = excluded.applied",
-        params![node, op],
-        "a node's last op",
-    )
+    execute(connection, KEEP_QUEUED_APPLIED, params![node, op], "a node's last op")
 }
 
 /// The row of `name`, made with `role` the first time: its id and the role it

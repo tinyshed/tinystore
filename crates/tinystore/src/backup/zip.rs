@@ -85,9 +85,8 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    /// Writes the central directory and the end, and gives back the writer
-    /// and the bytes the zip has.
-    pub(crate) fn finish(mut self) -> io::Result<(W, u64)> {
+    /// Writes the central directory and the end, and gives back the writer.
+    pub(crate) fn finish(mut self) -> io::Result<W> {
         let start = self.out.written;
         for entry in std::mem::take(&mut self.entries).iter() {
             self.central_header(entry)?;
@@ -104,7 +103,7 @@ impl<W: Write> Writer<W> {
         self.out.u32(END)?.u16(0)?.u16(0)?.u16(entries as u16)?.u16(entries as u16)?;
         self.out.u32(size as u32)?.u32(start as u32)?.u16(0)?;
         self.out.out.flush()?;
-        Ok((self.out.out, self.out.written))
+        Ok(self.out.out)
     }
 
     fn local_header(&mut self, name: &str, wide: bool) -> io::Result<()> {
@@ -353,7 +352,10 @@ impl<R: Read> Read for Checked<R> {
 
 fn read_at(zip: &mut (impl Read + Seek), at: u64, bytes: &mut [u8]) -> Result<(), String> {
     zip.seek(SeekFrom::Start(at)).map_err(|error| error.to_string())?;
-    zip.read_exact(bytes).map_err(|_| "cut short".to_owned())
+    zip.read_exact(bytes).map_err(|error| match error.kind() {
+        io::ErrorKind::UnexpectedEof => "cut short".to_owned(),
+        _ => error.to_string(),
+    })
 }
 
 /// A zip's fields read little end first, each bounded by what is left.
