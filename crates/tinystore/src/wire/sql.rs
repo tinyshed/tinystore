@@ -525,7 +525,7 @@ impl Downloading {
 /// A client's transaction: the calls its stream brings, to the thread that
 /// holds the writer, and the credit its answers go within.
 pub(crate) struct Txing {
-    calls: Mutex<Option<Sender<SqlTxCall>>>,
+    calls: Mutex<Option<Sender<TxItem>>>,
     credit: Mutex<u64>,
     granted: Condvar,
 }
@@ -550,7 +550,7 @@ pub(crate) fn transaction(
 /// What a transaction's thread runs with.
 pub(crate) struct Running {
     database: Database,
-    received: Receiver<SqlTxCall>,
+    received: Receiver<TxItem>,
     link: Link,
 }
 
@@ -566,6 +566,12 @@ impl From<Error> for Ended {
     }
 }
 
+/// What a transaction's thread takes from the client: a call, or END.
+pub(crate) enum TxItem {
+    Call(SqlTxCall),
+    End { commit: bool },
+}
+
 impl Txing {
     /// A DATA of the client's: a call, or, with END, the last, which commits
     /// or rolls back. A call that is not one fails the transaction.
@@ -577,10 +583,11 @@ impl Txing {
                 return self.leave();
             }
         };
-        let call = if ended { SqlTxCall { want: String::new(), ..call } } else { call };
+        // Only END ends the transaction, whatever a call's `want` holds.
+        let item = if ended { TxItem::End { commit: call.commit } } else { TxItem::Call(call) };
         let calls = lock(&self.calls);
         if let Some(calls) = calls.as_ref() {
-            let _ = calls.send(call);
+            let _ = calls.send(item);
         }
     }
 
@@ -605,7 +612,8 @@ impl Txing {
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
                 let call = match received.recv_timeout(left) {
-                    Ok(call) => call,
+                    Ok(TxItem::Call(call)) => call,
+                    Ok(TxItem::End { commit }) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
                     Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
                     Err(RecvTimeoutError::Disconnected) => {
                         return Err(Ended::Failed(Error::new(
@@ -614,9 +622,6 @@ impl Txing {
                         )));
                     }
                 };
-                if call.want.is_empty() {
-                    return if call.commit { Ok(()) } else { Err(Ended::RolledBack) };
-                }
                 let answer = answer(tx, call, link.max_body, nested);
                 self.send(&link, answer.encode(), deadline)?;
             }

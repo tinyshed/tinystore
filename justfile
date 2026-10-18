@@ -35,7 +35,7 @@ test:
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
 # hides one's code from another
-lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "search") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "sql,search") (lint-alone "kv,replication") (lint-alone "kv,replication,replication-tls") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication")
+lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "search") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "sql,search") (lint-alone "wire,search") (lint-alone "kv,replication") (lint-alone "kv,replication,replication-tls") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # run clippy on the library built with these features alone
@@ -110,7 +110,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config locks channels jobs sql blobs records metrics search wire kv,backup kv,channels sql,search kv,replication kv,replication,replication-tls kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked && cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked'
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config locks channels jobs sql blobs records metrics search wire kv,backup kv,channels sql,search wire,search kv,replication kv,replication,replication-tls kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked && cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked'
 
 # lint the GitHub workflows
 lint-actions:

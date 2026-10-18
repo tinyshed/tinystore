@@ -170,7 +170,10 @@ fn dropped(store: &Store, lent: Lent<'_>, asked: SearchName) -> Result<bool, Fai
         #[cfg(feature = "sql")]
         Some(database) => Ok(search::drop_in_file(&*lent(database)?, &asked.name)?),
         #[cfg(not(feature = "sql"))]
-        Some(_) => Err(Failure::invalid("this server keeps no databases")),
+        Some(_) => {
+            let _ = lent;
+            Err(Failure::invalid("this server keeps no databases"))
+        }
         None => Ok(store.drop_index(&asked.name)?),
     }
 }

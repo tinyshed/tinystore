@@ -309,10 +309,13 @@ fn read_piece(file: &mut StoredFile, bound: usize) -> Result<Vec<u8>, Failure> {
 
 /// The store's error a read carried, or an I/O one.
 fn read_error(error: std::io::Error) -> crate::Error {
+    // An OS error carries no inner error, and `into_inner` would drop it whole.
+    if !error.get_ref().is_some_and(|inner| inner.is::<crate::Error>()) {
+        return crate::Error::io("blobs: read a file", error);
+    }
     match error.into_inner().map(|inner| inner.downcast::<crate::Error>()) {
         Some(Ok(error)) => *error,
-        Some(Err(inner)) => crate::Error::io("blobs: read a file", std::io::Error::other(inner)),
-        None => crate::Error::internal("blobs: a read failed"),
+        _ => crate::Error::internal("blobs: a read failed"),
     }
 }
 

@@ -68,6 +68,7 @@ fn code_of(kind: ErrorKind) -> &'static str {
         ErrorKind::OutcomeUnknown => "outcome_unknown",
         ErrorKind::CommittedLocally => "committed_locally",
         ErrorKind::Lost => "lost",
-        _ => "internal",
+        // The wire has no code of its own for a disk's error: the server's fault.
+        ErrorKind::Io | ErrorKind::Internal => "internal",
     }
 }

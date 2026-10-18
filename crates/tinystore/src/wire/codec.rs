@@ -62,7 +62,7 @@ pub(crate) enum Row {
 
 /// A value as SQLite keeps it, as it travels: nothing, an integer, a float,
 /// text or bytes. A bool from a client is the integer SQLite keeps for it.
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "search"))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Cell {
     #[default]
@@ -172,8 +172,8 @@ pub(crate) fn int(r: &mut Reader<'_>, name: &str) -> Result<i64, Failure> {
 
 /// A float, or an integer a float holds exactly, as JavaScript writes 3.0.
 #[cfg_attr(
-    not(any(feature = "records", feature = "metrics")),
-    expect(dead_code, reason = "only records' and metrics' messages have a float field")
+    not(any(feature = "records", feature = "metrics", feature = "search")),
+    expect(dead_code, reason = "only records', metrics' and search's messages have a float field")
 )]
 pub(crate) fn float(r: &mut Reader<'_>, name: &str) -> Result<f64, Failure> {
     let float = match r.next()? {
@@ -208,7 +208,7 @@ pub(crate) fn key(r: &mut Reader<'_>, name: &str) -> Result<String, Failure> {
         Token::Uint(number) => Ok(number.to_string()),
         Token::Int(number) => Ok(number.to_string()),
         Token::Bin(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(|_| Failure::unimplemented(format!("{name} of bytes that are not UTF-8"))),
+            .map_err(|_| Failure::invalid(format!("{name} of bytes that are not UTF-8"))),
         _ => Err(not(name, "a str, a bin or an integer")),
     }
 }
@@ -225,7 +225,7 @@ pub(crate) fn row(r: &mut Reader<'_>, name: &str) -> Result<Row, Failure> {
     }
 }
 
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "search"))]
 pub(crate) fn cell(r: &mut Reader<'_>, name: &str) -> Result<Cell, Failure> {
     match r.next()? {
         Token::Nil => Ok(Cell::Nil),
@@ -297,8 +297,8 @@ pub(crate) fn write_int(out: &mut Vec<u8>, number: &i64) {
 }
 
 #[cfg_attr(
-    not(any(feature = "records", feature = "metrics")),
-    expect(dead_code, reason = "only records' and metrics' messages have a float field")
+    not(any(feature = "records", feature = "metrics", feature = "search")),
+    expect(dead_code, reason = "only records', metrics' and search's messages have a float field")
 )]
 pub(crate) fn write_float(out: &mut Vec<u8>, float: &f64) {
     msgpack::write_float(out, *float);
@@ -320,7 +320,7 @@ pub(crate) fn write_row(out: &mut Vec<u8>, row: &Row) {
     }
 }
 
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "search"))]
 pub(crate) fn write_cell(out: &mut Vec<u8>, cell: &Cell) {
     match cell {
         Cell::Nil => msgpack::write_nil(out),
@@ -362,7 +362,7 @@ pub(crate) fn row_size(row: &Row) -> usize {
 
 /// The most bytes a cell writes as: a head of five and its text or bytes, or
 /// a number's nine.
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "search"))]
 pub(crate) fn cell_size(cell: &Cell) -> usize {
     match cell {
         Cell::Str(text) => 5 + text.len(),
@@ -396,7 +396,7 @@ pub(crate) fn row_is_zero(row: &Row) -> bool {
 
 /// Whether a cell writes as a zero value of the profile: nil, the integer 0,
 /// a float whose bits are all 0, no text or no bytes.
-#[cfg(feature = "sql")]
+#[cfg(any(feature = "sql", feature = "search"))]
 #[expect(dead_code, reason = "a field that is not optional holds a cell with it, and cells are in lists yet")]
 pub(crate) fn cell_is_zero(cell: &Cell) -> bool {
     match cell {

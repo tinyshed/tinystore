@@ -1,11 +1,13 @@
 use crate::pipe::Capability;
 use crate::pipe::fixture::Client;
+#[cfg(feature = "sql")]
 use crate::wire::codec::Cell;
 use crate::wire::protocol::{
     Empty, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchField, SearchFound, SearchGot, SearchKey,
-    SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, SqlDone, SqlMigration,
-    SqlOpen, SqlStatement, method,
+    SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus, method,
 };
+#[cfg(feature = "sql")]
+use crate::wire::protocol::{SqlDone, SqlMigration, SqlOpen, SqlStatement};
 use crate::{Options, Store};
 
 fn open(client: &mut Client, name: &str) -> u64 {
@@ -122,6 +124,7 @@ fn an_index_is_listed_and_dropped_over_the_wire() {
     assert_eq!(client.call::<SearchFound>(method::SEARCH_SEARCH, &query(handle, "red")).unwrap_err().code, "invalid");
 }
 
+#[cfg(feature = "sql")]
 #[test]
 fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
     let dir = tempfile::tempdir().unwrap();

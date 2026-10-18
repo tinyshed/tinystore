@@ -471,7 +471,13 @@ impl Shared {
     /// anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
-        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        // WELCOME said how many streams a client keeps open: past it is the
+        // client's fault, and ends the connection as the protocol says.
+        if self.in_flight.fetch_add(1, Ordering::AcqRel) >= IN_FLIGHT as usize {
+            self.in_flight.fetch_sub(1, Ordering::AcqRel);
+            let past = format!("a REQUEST past the {IN_FLIGHT} streams in flight WELCOME allowed");
+            return self.go_away(input, "protocol", &past);
+        }
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
         if input.going_away {
@@ -1373,7 +1379,8 @@ fn engines() -> Vec<String> {
     let backup = cfg!(feature = "backup").then_some("backup");
     let locks = cfg!(feature = "locks").then_some("locks");
     let channels = cfg!(feature = "channels").then_some("channels");
-    let engines = [Some("kv"), config, locks, channels, jobs, sql, blobs, records, metrics, backup];
+    let search = cfg!(feature = "search").then_some("search");
+    let engines = [Some("kv"), config, locks, channels, jobs, sql, blobs, records, metrics, search, backup];
     engines.into_iter().flatten().map(str::to_owned).collect()
 }
 

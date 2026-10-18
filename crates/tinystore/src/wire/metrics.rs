@@ -92,7 +92,6 @@ impl Handles {
     /// a worker; says whether the stream is an instruments' stream.
     pub(crate) fn batch(&self, stream: u32, body: &[u8], last: bool) -> bool {
         let Some(instruments) = lock(&self.instruments).get(&stream).cloned() else { return false };
-        (instruments.link.grant)(u32::try_from(body.len()).unwrap_or(u32::MAX));
         let mut waiting = lock(&instruments.waiting);
         waiting.batches.push_back((body.to_vec(), last));
         if !std::mem::replace(&mut waiting.running, true) {
@@ -586,7 +585,12 @@ impl Instruments {
             };
             let applied = self.apply(&body);
             match (applied, last) {
-                (Ok(ack), false) => (self.link.send)(ack),
+                (Ok(ack), false) => {
+                    // Credit goes back once a batch is applied, as records and
+                    // blobs grant theirs: a client sends no faster than it is taken.
+                    (self.link.grant)(u32::try_from(body.len()).unwrap_or(u32::MAX));
+                    (self.link.send)(ack);
+                }
                 (answered, _) => {
                     lock(open).remove(&stream);
                     return (self.link.finish)(answered);

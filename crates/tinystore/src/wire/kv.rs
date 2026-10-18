@@ -485,7 +485,7 @@ fn add_check(handles: &Handles, batch: &mut Batch, check: &KvCheck) -> Result<()
 }
 
 fn add_write(handles: &Handles, batch: &mut Batch, called: u64, call: &KvCall) -> Result<(), Failure> {
-    let called = u16::try_from(called).unwrap_or(0);
+    let called = u16::try_from(called).map_err(|_| Failure::invalid(format!("method {called:#06x}")))?;
     if called == method::KV_COUNTERS_ADD {
         let counters = handles.counters(call.handle, &call.under)?;
         return Ok(batch.add(&counters, &call.key, call.n.unwrap_or(1))?);

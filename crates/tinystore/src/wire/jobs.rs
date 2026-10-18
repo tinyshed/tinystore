@@ -191,7 +191,7 @@ fn tx(store: &Store, handles: &Handles, asked: &JobsTx) -> Answered {
 
 /// One write of a transaction, and whether it changed anything.
 fn write_op(handles: &Handles, tx: &Transaction<'_>, op: &JobsOp) -> Result<bool, Failure> {
-    let called = u16::try_from(op.method).unwrap_or(0);
+    let called = u16::try_from(op.method).map_err(|_| Failure::invalid(format!("method {:#06x}", op.method)))?;
     match (called, &op.call, &op.id) {
         (method::JOBS_ADD, Some(call), _) => on_job(handles, call.clone(), Some(tx), |job, value| job.add(&value)),
         (method::JOBS_SET, Some(call), _) => {
