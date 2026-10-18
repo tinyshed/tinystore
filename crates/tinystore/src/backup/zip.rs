@@ -211,9 +211,9 @@ impl<W: Write> Write for Counted<W> {
 /// module did not write reads too, while each file is stored as it is.
 pub(crate) fn entries(zip: &mut (impl Read + Seek)) -> Result<Vec<Entry>, String> {
     let length = zip.seek(SeekFrom::End(0)).map_err(|error| error.to_string())?;
-    let (mut count, mut size, mut start) = end_of(zip, length)?;
+    let ((mut count, mut size, mut start), end) = end_of(zip, length)?;
     if count == MAX16 || size == MAX32 || start == MAX32 {
-        (count, size, start) = end64_of(zip, length)?;
+        (count, size, start) = end64_of(zip, end)?;
     }
     if start.checked_add(size).is_none_or(|end| end > length) {
         return Err("its central directory lies past its end".to_owned());
@@ -225,24 +225,30 @@ pub(crate) fn entries(zip: &mut (impl Read + Seek)) -> Result<Vec<Entry>, String
 }
 
 /// The count of files, the central directory's size and its offset, as the
-/// end of the central directory says them.
-fn end_of(zip: &mut (impl Read + Seek), length: u64) -> Result<(u64, u64, u64), String> {
+/// end of the central directory says them, and where that end begins.
+fn end_of(zip: &mut (impl Read + Seek), length: u64) -> Result<((u64, u64, u64), u64), String> {
+    const CUT_SHORT: &str = "no end of a central directory: not a zip, or cut short";
+    if length < END_SIZE {
+        return Err(CUT_SHORT.to_owned());
+    }
     let tail_length = length.min(END_SIZE + MOST_COMMENT);
     let mut tail = vec![0; tail_length as usize];
     read_at(zip, length - tail_length, &mut tail)?;
-    let found = (0..=tail.len().saturating_sub(END_SIZE as usize))
+    let found = (0..=tail.len() - END_SIZE as usize)
         .rev()
         .find(|&at| tail[at..at + 4] == END.to_le_bytes())
-        .ok_or("no end of a central directory: not a zip, or cut short")?;
+        .ok_or(CUT_SHORT)?;
     let mut fields = Fields { bytes: &tail[found..], at: 10 };
     let count = u64::from(fields.u16()?);
     let (size, start) = (u64::from(fields.u32()?), u64::from(fields.u32()?));
-    Ok((count, size, start))
+    Ok(((count, size, start), length - tail_length + found as u64))
 }
 
-fn end64_of(zip: &mut (impl Read + Seek), length: u64) -> Result<(u64, u64, u64), String> {
+/// The ZIP64 end, whose locator lies just before the end at `end`, whatever
+/// comment follows that end.
+fn end64_of(zip: &mut (impl Read + Seek), end: u64) -> Result<(u64, u64, u64), String> {
     let mut locator = [0; 20];
-    let at = length.checked_sub(END_SIZE + 20).ok_or("a ZIP64 end that is not there")?;
+    let at = end.checked_sub(20).ok_or("a ZIP64 end that is not there")?;
     read_at(zip, at, &mut locator)?;
     let mut fields = Fields { bytes: &locator, at: 0 };
     if fields.u32()? != LOCATOR64 {

@@ -92,6 +92,6 @@ fn listed(value: &Value) -> Result<Listed, String> {
 /// An engine's name as the backup writes it; one this version does not
 /// know is kept as `other`, its file restored all the same.
 fn engine(name: &str) -> &'static str {
-    const KNOWN: [&str; 9] = ["kv", "jobs", "sql", "blobs", "records", "metrics", "program", "key", "other"];
+    const KNOWN: [&str; 10] = ["kv", "jobs", "sql", "blobs", "records", "metrics", "search", "program", "key", "other"];
     KNOWN.into_iter().find(|known| *known == name).unwrap_or("other")
 }

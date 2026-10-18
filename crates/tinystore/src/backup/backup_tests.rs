@@ -272,3 +272,13 @@ fn a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zip
     assert!(error.to_string().contains("kv.db: its SHA-256 is not its manifest's"), "{error}");
     assert!(tree(&f.restored).is_empty());
 }
+
+#[test]
+fn an_archive_shorter_than_a_zip_end_is_corrupt() {
+    let f = fixture();
+    for length in [0, 1, 3, 21] {
+        fs::write(&f.zip, vec![b'P'; length]).unwrap();
+        let error = restore(&f.zip, &f.restored).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Corrupt, "{length} bytes: {error}");
+    }
+}

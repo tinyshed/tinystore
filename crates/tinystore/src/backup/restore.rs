@@ -28,14 +28,18 @@ pub fn restore(archive: impl AsRef<Path>, dir: impl AsRef<Path>) -> Result<Backu
     let lock = crate::store::take_lock(dir).map_err(within)?;
     let restored =
         manifest.files.iter().try_for_each(|file| put(&mut zip, &entries, dir, file)).and_then(|()| synced(dir));
-    drop(lock);
     if let Err(error) = restored {
-        let error = match empty(dir) {
+        // Emptied while the LOCK is held, so no store opens the half restored.
+        let emptied = empty(dir);
+        drop(lock);
+        let lock_file = dir.join("LOCK");
+        let error = match emptied.and_then(|()| removed(&lock_file)) {
             Ok(()) => error,
             Err(left) => error.within(left),
         };
         return Err(within(error));
     }
+    drop(lock);
     Ok(manifest.summary())
 }
 
@@ -148,10 +152,21 @@ fn synced(dir: &Path) -> Result<()> {
 /// not go is said.
 fn empty(dir: &Path) -> std::result::Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|error| format!("{} is left: {error}", dir.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for entry in entries {
+        let path = entry.map_err(|error| format!("something of {} is left: {error}", dir.display()))?.path();
+        // The LOCK is held while this runs, and goes once let go.
+        if path.file_name().is_some_and(|name| name == "LOCK") {
+            continue;
+        }
         let removed = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
         removed.map_err(|error| format!("{} is left: {error}", path.display()))?;
     }
     Ok(())
+}
+
+fn removed(file: &Path) -> std::result::Result<(), String> {
+    match fs::remove_file(file) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(format!("{} is left: {error}", file.display())),
+        _ => Ok(()),
+    }
 }
