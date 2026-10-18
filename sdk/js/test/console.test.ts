@@ -3,6 +3,7 @@
 // the logger of the console alone.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { env } from '../src/config.ts'
@@ -57,10 +58,10 @@ interface Vector {
 	pretty: string
 }
 
-const testdata = join(import.meta.dir, '..', '..', '..', 'testdata', 'console')
-const vectors: { secrets: string[]; lines: Vector[] } = await Bun.file(
-	join(testdata, 'console.json'),
-).json()
+const testdata = join(import.meta.dirname, '..', '..', '..', 'testdata', 'console')
+const vectors: { secrets: string[]; lines: Vector[] } = JSON.parse(
+	readFileSync(join(testdata, 'console.json'), 'utf8'),
+)
 
 describe('console lines', () => {
 	test('secrets are the vectors', () => {

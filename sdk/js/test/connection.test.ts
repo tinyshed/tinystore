@@ -6,6 +6,7 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { Link, olderRelease, olderServer, replacedSidecar, sidecar } from '../src/connection.ts'
 import { InvalidError, open } from '../src/index.ts'
@@ -80,7 +81,7 @@ test('a sidecar of an older release is stopped, and every client moves to the on
 			if (tried === 100) {
 				throw err
 			}
-			await Bun.sleep(50)
+			await sleep(50)
 		}
 	}
 }, 30_000)

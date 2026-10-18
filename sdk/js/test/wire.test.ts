@@ -11,7 +11,7 @@ import { checkHeader, frame, headerSize, parseHeader } from '../src/wire/frame.t
 import { messages, methods } from '../src/wire/messages.ts'
 import { Reader, Writer } from '../src/wire/msgpack.ts'
 
-const testdata = `${import.meta.dir}/../../../server/wire/testdata`
+const testdata = `${import.meta.dirname}/../../../server/wire/testdata`
 
 type Notation =
 	| null
@@ -498,7 +498,7 @@ test('a byte written as the buffer grows is kept', () => {
 describe('limits', () => {
 	test("are the names of testdata/limits.json, which Go's constants hold", async () => {
 		const file: { limits: { bun: string; name: string }[] } = await Bun.file(
-			join(import.meta.dir, '..', '..', '..', 'testdata', 'limits.json'),
+			join(import.meta.dirname, '..', '..', '..', 'testdata', 'limits.json'),
 		).json()
 		expect(Object.entries(limits) as [string, string][]).toEqual(
 			file.limits.map(l => [l.bun, l.name]),

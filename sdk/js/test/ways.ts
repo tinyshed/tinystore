@@ -4,8 +4,10 @@
 // server, when TINYSTORE_BIN names the tinystore that test/binary.ts or `just
 // sdk` built.
 
+import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { connect, open, type Store } from '../src/index.ts'
 
@@ -27,7 +29,7 @@ export interface Way {
 	home(dir: string): string
 }
 
-const remotes = new Map<string, ReturnType<typeof Bun.spawn>>()
+const remotes = new Map<string, ChildProcess>()
 
 export const ways: Way[] = [
 	{
@@ -65,7 +67,7 @@ export const ways: Way[] = [
 				'--tokens',
 				join(dir, 'tokens'),
 			]
-			remotes.set(dir, Bun.spawn([binary!, ...args], { stdout: 'ignore', stderr: 'ignore' }))
+			remotes.set(dir, spawn(binary!, args, { stdio: 'ignore' }))
 			const serve = join(dir, 'store', 'server', 'SERVE')
 			await until(() => existsSync(serve))
 			const endpoints: string[] = JSON.parse(readFileSync(serve, 'utf8')).endpoints
@@ -73,8 +75,11 @@ export const ways: Way[] = [
 		},
 		leave: async dir => {
 			const server = remotes.get(dir)
-			server?.kill()
-			await server?.exited
+			if (server !== undefined && server.exitCode === null) {
+				const exited = new Promise(done => server.once('exit', done))
+				server.kill()
+				await exited
+			}
 		},
 		home: dir => join(dir, 'store'),
 	},
@@ -83,7 +88,7 @@ export const ways: Way[] = [
 export async function until(done: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 10_000
 	while (!(await done()) && Date.now() < deadline) {
-		await Bun.sleep(20)
+		await sleep(20)
 	}
 }
 
@@ -110,7 +115,7 @@ export async function removed(dir: string): Promise<void> {
 			if (Date.now() > deadline) {
 				throw err
 			}
-			await Bun.sleep(20)
+			await sleep(20)
 		}
 	}
 }

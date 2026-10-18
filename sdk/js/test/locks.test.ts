@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { InUseError, InvalidError, LostError, type Store } from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
@@ -52,7 +53,7 @@ for (const way of ways) {
 				value: 'another key',
 			})
 			const second = invoices.hold('42', lease => lease.fence)
-			await Bun.sleep(50)
+			await sleep(50)
 			letGo.open()
 			const [before, after] = await Promise.all([first, second])
 			expect(typeof before).toBe('bigint')
@@ -112,7 +113,7 @@ for (const way of ways) {
 				return lease.signal.aborted
 			})
 			await holding.opened
-			await Bun.sleep(1600)
+			await sleep(1600)
 			expect(await jobs.tryHold('nightly', () => 'ran')).toEqual({ acquired: false })
 			letGo.open()
 			expect(await held).toBe(false)

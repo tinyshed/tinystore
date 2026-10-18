@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { CancelledError, InvalidError, type StandardSchemaV1, type Store } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
@@ -306,7 +307,7 @@ for (const way of ways) {
 				async () => {
 					running++
 					most = Math.max(most, running)
-					await Bun.sleep(50)
+					await sleep(50)
 					running--
 					finished++
 				},

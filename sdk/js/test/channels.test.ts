@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import type { ChannelMessage, Missed, Store } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
@@ -41,7 +42,7 @@ for (const way of ways) {
 			expect(received).toEqual(['a', 'b', 'c'])
 			await sub.stop()
 			await chat.publish('after the stop')
-			await Bun.sleep(50)
+			await sleep(50)
 			expect(received).toHaveLength(3)
 		})
 
@@ -64,7 +65,7 @@ for (const way of ways) {
 			await orders.under('eu').publish(2)
 			await orders.under('eu', 'shop-7').publish(3)
 			await until(() => below.length === 2)
-			await Bun.sleep(50)
+			await sleep(50)
 			expect(exact).toEqual([2])
 			expect(below.map(m => m.value)).toEqual([2, 3])
 			expect(below[1]!.branch).toEqual(['eu', 'shop-7'])
@@ -77,7 +78,7 @@ for (const way of ways) {
 			const ticks = store.channel<number>('ticks')
 			const loop = ticks.each()
 			const first = loop.next()
-			await Bun.sleep(50)
+			await sleep(50)
 			await ticks.publish(1)
 			expect((await first).value?.value).toBe(1)
 			await ticks.publish(2)
@@ -123,7 +124,7 @@ for (const way of ways) {
 				await tx.with(events).under('note').publish('noted')
 			})
 			await until(() => received.length === 2)
-			await Bun.sleep(50)
+			await sleep(50)
 			expect(received).toEqual(['created 2', 'noted'])
 			await sub.stop()
 		})
@@ -148,7 +149,7 @@ for (const way of ways) {
 				await numbers.publish(value)
 			}
 			await until(() => received.length === 2)
-			await Bun.sleep(50)
+			await sleep(50)
 			expect(received).toEqual([1, 3])
 			expect((failures[0] as Error).message).toBe('two is refused')
 		})

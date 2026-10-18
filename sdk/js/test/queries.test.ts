@@ -3,6 +3,7 @@
 // write alike. A runner that records what it is given stands for a database.
 
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { CorruptError, InvalidError } from '../src/errors.ts'
@@ -24,9 +25,9 @@ interface Case {
 	values: unknown[]
 }
 
-const vectors: { queries: Case[] } = await Bun.file(
-	resolve(import.meta.dir, '../../../testdata/sql/queries.json'),
-).json()
+const vectors: { queries: Case[] } = JSON.parse(
+	readFileSync(resolve(import.meta.dirname, '../../../testdata/sql/queries.json'), 'utf8'),
+)
 
 /** A runner that keeps the last statement it was given and answers nothing. */
 class Recorder implements Runner {

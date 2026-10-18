@@ -4,6 +4,7 @@
 // directory, and a file of the program's only when it is named.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,8 +18,8 @@ const restores = binary !== undefined && binary !== 'unused'
 
 /** Restores a zip into `dir` with `tinystore restore`, saying what it printed when it failed. */
 function restore(zip: string, dir: string): void {
-	const run = Bun.spawnSync([binary!, 'restore', zip, dir])
-	expect(run.exitCode, `${run.stdout}${run.stderr}`).toBe(0)
+	const run = spawnSync(binary!, ['restore', zip, dir], { encoding: 'utf8' })
+	expect(run.status, `${run.stdout}${run.stderr}`).toBe(0)
 }
 
 for (const way of ways) {

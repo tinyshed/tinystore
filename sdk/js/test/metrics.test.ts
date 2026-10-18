@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { type Connection, embedded, Link } from '../src/connection.ts'
 import {
@@ -22,6 +23,7 @@ import {
 import { binOf, Instruments } from '../src/instruments.ts'
 import { Metrics } from '../src/metrics.ts'
 import { bunRuntime } from '../src/runtime/bun.ts'
+import { nodeRuntime } from '../src/runtime/node.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 /** The last value of each series of a name, by the labels given. */
@@ -274,6 +276,7 @@ for (const way of ways) {
 }
 
 const library = process.env.TINYSTORE_LIBRARY
+const runtime = typeof Bun === 'undefined' ? nodeRuntime : bunRuntime
 
 test.skipIf(library === undefined)(
 	'a batch whose answer a lost connection took counts once',
@@ -282,7 +285,7 @@ test.skipIf(library === undefined)(
 		// a second handle keeps the store open while the connection under test is cut
 		const keeper = await open(dir, { embedded: true, library })
 		const dialled: Connection[] = []
-		const dial = embedded(bunRuntime, dir, () => library ?? '')
+		const dial = embedded(runtime, dir, () => library ?? '')
 		const link = new Link(async () => {
 			const connection = await dial()
 			dialled.push(connection)
@@ -296,7 +299,7 @@ test.skipIf(library === undefined)(
 		for (let cut = 0; cut < 5; cut++) {
 			jobs.add(2)
 			const flushed = metrics.flush()
-			await Bun.sleep(cut)
+			await sleep(cut)
 			dialled.at(-1)?.session.end(new Error('cut'))
 			await flushed
 		}
@@ -313,7 +316,7 @@ test.skipIf(library === undefined)(
 	async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'tinystore-metrics-down-'))
 		const keeper = await open(dir, { embedded: true, library })
-		const dial = embedded(bunRuntime, dir, () => library ?? '')
+		const dial = embedded(runtime, dir, () => library ?? '')
 		const dialled: Connection[] = []
 		let down = false
 		const link = new Link(async () => {
@@ -371,7 +374,7 @@ test.skipIf(library === undefined)(
 			mkdtempSync(join(tmpdir(), 'tinystore-metrics-restart-')),
 		)
 		const keeper = await open(first!, { embedded: true, library })
-		let dial = embedded(bunRuntime, first!, () => library ?? '')
+		let dial = embedded(runtime, first!, () => library ?? '')
 		// a connection that hears nothing: the store applies a batch whose answer never comes
 		let deaf = false
 		const dialled: Connection[] = []
@@ -392,7 +395,7 @@ test.skipIf(library === undefined)(
 		const flushed = caught(metrics.flush())
 		await until(async () => (await last(keeper, 'restart_jobs_total'))['{}'] === 3)
 		// the next connection reaches a store that knows no session, as one started again does
-		dial = embedded(bunRuntime, second!, () => library ?? '')
+		dial = embedded(runtime, second!, () => library ?? '')
 		deaf = false
 		dialled.at(-1)?.session.end(new Error('restarted'))
 		expect(await flushed).toBeInstanceOf(OutcomeUnknownError)

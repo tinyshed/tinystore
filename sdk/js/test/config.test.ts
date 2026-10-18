@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { inspect } from 'node:util'
 
 import { envName } from '../src/config.ts'
 import { parseDotenv } from '../src/dotenv.ts'
@@ -30,7 +31,10 @@ import { ms, spelled } from '../src/time.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 const vectors = JSON.parse(
-	readFileSync(join(import.meta.dir, '..', '..', '..', 'testdata', 'config', 'env.json'), 'utf8'),
+	readFileSync(
+		join(import.meta.dirname, '..', '..', '..', 'testdata', 'config', 'env.json'),
+		'utf8',
+	),
 ) as {
 	names: [string, string, string][]
 	dotenv: { name: string; text: string; want?: Record<string, string>; refused?: number }[]
@@ -72,7 +76,7 @@ describe('what every language reads alike', () => {
 			String(url),
 			`${url}`,
 			JSON.stringify({ url }),
-			Bun.inspect({ url }),
+			inspect({ url }),
 			JSON.stringify({ ...url }),
 		]
 		for (const text of shown) {

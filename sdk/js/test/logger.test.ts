@@ -3,7 +3,8 @@
 // what FORCE_COLOR makes of a child's stderr.
 
 import { describe, expect, test } from 'bun:test'
-import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import type { ConsoleLine } from '../src/console.ts'
 import { logger, newLogger } from '../src/logger.ts'
@@ -21,7 +22,7 @@ function heldAppend() {
 		/** answers the oldest write, then lets what follows its answer run */
 		async letGo() {
 			held.shift()?.()
-			await Bun.sleep(0)
+			await sleep(0)
 		},
 	}
 }
@@ -66,18 +67,14 @@ describe("a logger's buffer", () => {
 describe('FORCE_COLOR', () => {
 	// a child's stderr is a pipe, as an IDE's run console reads it
 	async function logged(env: Record<string, string>): Promise<string> {
-		const index = fileURLToPath(new URL('../src/index.ts', import.meta.url))
-		const child = Bun.spawn(
-			[
-				process.execPath,
-				'-e',
-				`import { logger } from ${JSON.stringify(index)}; logger('app').warn('slow request')`,
-			],
-			{ env: { ...process.env, NO_COLOR: '', TERM: '', ...env }, stdout: 'ignore', stderr: 'pipe' },
+		// a URL, since Node's loader takes no Windows path
+		const index = new URL('../src/index.ts', import.meta.url).href
+		const child = spawnSync(
+			process.execPath,
+			['-e', `import { logger } from ${JSON.stringify(index)}; logger('app').warn('slow request')`],
+			{ env: { ...process.env, NO_COLOR: '', TERM: '', ...env }, encoding: 'utf8' },
 		)
-		const text = await new Response(child.stderr).text()
-		await child.exited
-		return text
+		return child.stderr
 	}
 
 	test('makes a pipe pretty and coloured, unless NO_COLOR', async () => {

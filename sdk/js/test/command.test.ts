@@ -4,7 +4,7 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
 
-const command = join(import.meta.dir, '..', 'bin', 'tinystore.js')
+const command = join(import.meta.dirname, '..', 'bin', 'tinystore.js')
 const runtimes = [process.execPath, Bun.which('node')].filter(runtime => runtime !== null)
 
 function run(

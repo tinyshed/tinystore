@@ -6,6 +6,7 @@
 // values, the same values or the same refusal for the same bytes.
 
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { type Codec, Message, message } from '../src/wire/codec.ts'
@@ -32,9 +33,9 @@ interface Vector {
 // biome-ignore lint/suspicious/noExplicitAny: a vector names any message of the schema
 type AnyMessage = Message<any>
 
-const vectors: { methods: Record<string, number>; messages: Vector[] } = await Bun.file(
-	resolve(import.meta.dir, '../../../testdata/wire/protocol.json'),
-).json()
+const vectors: { methods: Record<string, number>; messages: Vector[] } = JSON.parse(
+	readFileSync(resolve(import.meta.dirname, '../../../testdata/wire/protocol.json'), 'utf8'),
+)
 
 /** A message's codec by its name in the schema: kv.Call is KvCall. */
 function codecOf(name: string): AnyMessage {

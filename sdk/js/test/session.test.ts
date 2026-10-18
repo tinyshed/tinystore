@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { createServer } from 'node:net'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import {
 	CancelledError,
@@ -49,7 +50,7 @@ class Peer {
 
 	/** Every frame written since the last look, once the turn's writes have left. */
 	async frames(): Promise<Frame[]> {
-		await Bun.sleep(0)
+		await sleep(0)
 		const frames: Frame[] = []
 		for (const bytes of this.writes.splice(0)) {
 			let at = 0
@@ -160,7 +161,7 @@ describe('calls', () => {
 		for (let i = 0; i < 3; i++) {
 			peer.session.call(0x0102, new Uint8Array([0x80]))
 		}
-		await Bun.sleep(0)
+		await sleep(0)
 		expect(peer.writes.length).toBe(1)
 	})
 
@@ -253,7 +254,7 @@ describe('streams', () => {
 		peer.session.call(0x0104, new Uint8Array([0x80])).catch(() => {})
 		const controller = new AbortController()
 		const cancelled = peer.session.call(0x0104, new Uint8Array(1), controller.signal)
-		await Bun.sleep(0)
+		await sleep(0)
 		controller.abort()
 		expect(await caught(cancelled)).toBeInstanceOf(CancelledError)
 		peer.session.receive(credit(0, 1))

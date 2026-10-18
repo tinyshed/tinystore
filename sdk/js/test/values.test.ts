@@ -21,7 +21,10 @@ interface Vectors {
 }
 
 const vectors: Vectors = JSON.parse(
-	readFileSync(join(import.meta.dir, '..', '..', '..', 'testdata', 'kv', 'values.json'), 'utf8'),
+	readFileSync(
+		join(import.meta.dirname, '..', '..', '..', 'testdata', 'kv', 'values.json'),
+		'utf8',
+	),
 )
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex')
