@@ -166,7 +166,8 @@ impl RateLimit {
         let (next, limit) = (start + n * self.interval, nanos + self.burst * self.interval);
         if next > limit {
             let wait = Duration::from_nanos((next - limit).unsigned_abs());
-            let left = ((limit - start) / self.interval).unsigned_abs();
+            // `due` past the limit, a rate changed between opens or a clock moved back, leaves none.
+            let left = ((limit - start).max(0) / self.interval).unsigned_abs();
             return (Allowance { ok: false, left, retry_at: Some(now + wait), windows: Vec::new() }, due);
         }
         let left = ((limit - next) / self.interval).unsigned_abs();

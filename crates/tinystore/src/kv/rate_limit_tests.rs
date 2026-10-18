@@ -112,3 +112,17 @@ fn peek_uses_nothing_and_reset_gives_a_key_its_whole_burst() {
     login.reset("ip").unwrap();
     assert_eq!(login.allow("ip").unwrap(), allowed(2));
 }
+
+#[test]
+fn a_key_due_past_a_smaller_burst_has_none_left() {
+    let f = fixture();
+    let wide = f.store.rate_limit("api").rate(1, SECOND).burst(5).open().unwrap();
+    for _ in 0..5 {
+        assert!(wide.allow("k").unwrap().ok);
+    }
+    drop(wide);
+    let narrow = f.store.rate_limit("api").rate(1, SECOND).burst(2).open().unwrap();
+    let refused = narrow.allow("k").unwrap();
+    assert!(!refused.ok);
+    assert_eq!(refused.left, 0, "a key due past the burst has no spare capacity");
+}

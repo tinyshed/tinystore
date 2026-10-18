@@ -340,7 +340,8 @@ fn a_request_asked_again_answers_its_lease_or_takes_over_its_place_in_line() {
     let waiting_request = Some([8; 16]);
     let (waiting, lost) = asked(&locks, remote("42", 10 * SECOND, MINUTE, waiting_request));
     assert!(waiting.is_some());
-    let (_, taken_over) = asked(&locks, remote("42", 10 * SECOND, MINUTE, waiting_request));
+    let (waiting_again, taken_over) = asked(&locks, remote("42", 10 * SECOND, MINUTE, waiting_request));
+    assert_eq!(waiting_again, waiting, "the place taken over keeps its waiter's id, which a cancel names");
     assert_eq!(lost.recv_timeout(PATIENCE).unwrap().err().map(|error| error.kind()), Some(ErrorKind::Cancelled));
     assert_eq!(locks.waiting(), 1, "one place in line");
     assert!(locks.release(&lease.lease));

@@ -154,7 +154,10 @@ impl State {
             effects.answer(reply, Err(Error::closed(ask.place.to_string())));
             return None;
         }
-        let reply = self.ask_again(&ask, reply, effects)?;
+        let reply = match self.ask_again(&ask, reply, effects) {
+            Ok(reply) => reply,
+            Err(waits) => return waits,
+        };
         let place = ask.place.clone();
         self.settle(&place, now, mint, effects);
         let line = self.lines.entry(place.clone()).or_default();
@@ -170,11 +173,11 @@ impl State {
     }
 
     /// Answers a request asked before, by its id: the lease it holds, or its
-    /// place in line, which this ask takes over. Gives the reply back when
-    /// the request is new.
-    fn ask_again(&mut self, ask: &Ask, reply: Reply, effects: &mut Effects) -> Option<Reply> {
+    /// place in line, which this ask takes over, and whose waiter's id it
+    /// gives as `ask` would. Gives the reply back when the request is new.
+    fn ask_again(&mut self, ask: &Ask, reply: Reply, effects: &mut Effects) -> Result<Reply, Option<u64>> {
         let Some(asked) = ask.request.and_then(|request| self.requests.get(&request).copied()) else {
-            return Some(reply);
+            return Ok(reply);
         };
         match asked {
             Asked::Held(lease) => {
@@ -186,10 +189,11 @@ impl State {
                 let waiter = self.waiter_mut(id).map(|waiter| std::mem::replace(&mut waiter.reply, reply));
                 if let Some(earlier) = waiter {
                     effects.answer(earlier, Err(Error::new(crate::ErrorKind::Cancelled, "asked again")));
+                    return Err(Some(id));
                 }
             }
         }
-        None
+        Err(None)
     }
 
     fn grant_at_once(&mut self, ask: Ask, reply: Reply, now: i64, mint: &Mint, effects: &mut Effects) {

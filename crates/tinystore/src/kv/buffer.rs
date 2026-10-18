@@ -159,13 +159,15 @@ impl Buffer {
     /// as a crash would.
     pub(crate) fn clear(&self, prefix: &[u8], clear: impl FnOnce() -> Result<()>) -> Result<()> {
         let _flushing = lock(&self.flushing);
+        // Memory stays locked across the commit: an add between the commit and
+        // the retain would answer its sum and then be dropped with the branch.
+        let mut held = self.lock();
         let cleared = clear();
         if let Err(error) = &cleared
             && error.kind() != ErrorKind::OutcomeUnknown
         {
             return cleared;
         }
-        let mut held = self.lock();
         held.counters.retain(|path, _| !is_under(path, prefix));
         held.evictions += 1;
         cleared

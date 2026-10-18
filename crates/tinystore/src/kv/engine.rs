@@ -374,7 +374,7 @@ impl Engine for Kv {
     /// error, and the file closes either way. A file another engine lends is
     /// that engine's to close.
     fn close(&self) -> Result<()> {
-        let renewed = self.renewals.flush(&self.file);
+        let renewed = if self.file.is_copy() { Ok(()) } else { self.renewals.flush(&self.file).map(drop) };
         let flushed = self.flush_buffers();
         let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         renewed.and(flushed).and(closed)

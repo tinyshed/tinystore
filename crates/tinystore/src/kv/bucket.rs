@@ -693,6 +693,11 @@ impl<V> Bucket<V> {
     /// read returns when the key has less than a minute left. A renewal that
     /// cannot be written now waits for the flush.
     fn renew(&self, key: &str, path: Vec<u8>, mut cell: Cell, now: i64) -> Cell {
+        // A copy's renewals are its home's: one queued here would never be written.
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return cell;
+        }
         let Some(renewal) = self.renewal_due(&cell, now) else {
             return cell;
         };
