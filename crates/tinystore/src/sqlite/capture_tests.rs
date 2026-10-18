@@ -277,12 +277,17 @@ fn a_wal_header_and_frames_read_as_sqlite_recovers_them() {
         insert(&file, &format!("row {i}")).unwrap();
     }
     let bytes = std::fs::read(wal_of(&path)).unwrap();
-    let wal = WalCommits::read(&bytes).expect("a WAL with commits");
+    let scanned = |bytes: &[u8]| {
+        let copy = dir.path().join("scanned-wal");
+        std::fs::write(&copy, bytes).unwrap();
+        WalCommits::scan(&mut std::fs::File::open(&copy).unwrap()).unwrap()
+    };
+    let wal = scanned(&bytes).expect("a WAL with commits");
     assert_eq!(wal.end, kept.commits.lock().unwrap().last().unwrap().position.frame);
     let mut torn = bytes.clone();
     let last = torn.len() - 1;
     torn[last] ^= 0xff;
-    let recovered = WalCommits::read(&torn).expect("the commits before the torn frame");
+    let recovered = scanned(&torn).expect("the commits before the torn frame");
     assert!(recovered.end < wal.end, "a frame whose checksum breaks ends what is recovered");
     std::mem::forget(file);
 }

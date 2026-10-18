@@ -241,6 +241,7 @@ impl Store {
     )]
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
+        let config = crate::sqlite::Config { memory: Some(Arc::clone(&self.inner.memory)), ..config };
         if self.inner.beside {
             if !path.exists() {
                 return Err(Error::not_found(format!("{}: it holds no {name}", self.describe())));

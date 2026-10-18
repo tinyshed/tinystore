@@ -25,6 +25,8 @@ pub(crate) struct Config {
     /// Whether closing a connection leaves the WAL as it is, for a file whose
     /// capture alone checkpoints it.
     pub(crate) keep_wal: bool,
+    /// The store's memory, which a capture's reads of the WAL count against.
+    pub(crate) memory: Option<std::sync::Arc<crate::Memory>>,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             busy_timeout: Duration::from_secs(5),
             group: GroupLimits::default(),
             keep_wal: false,
+            memory: None,
         }
     }
 }

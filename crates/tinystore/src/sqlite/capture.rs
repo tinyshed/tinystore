@@ -41,6 +41,9 @@ const FRAME_HEADER: usize = 24;
 /// What SQLite's own automatic checkpoint waits for.
 pub(super) const CHECKPOINT_AT: u32 = 1000;
 const CHECKPOINT: &str = own!("pragma wal_checkpoint(passive)");
+/// How long a commit's frames wait for room in the store's memory before they
+/// are held past its limit.
+const HOLD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(1);
 
 thread_local! {
     /// Where the WAL ends after the commit this thread just made, left by the
@@ -164,6 +167,8 @@ pub(crate) fn logged(cell: &Logged) -> Option<Arc<Capture>> {
 pub(crate) struct Capture {
     observer: Arc<dyn Observe>,
     wal: PathBuf,
+    /// The store's memory, which a commit's frames are held under while read.
+    memory: Option<Arc<crate::Memory>>,
     state: Mutex<State>,
     broken: AtomicBool,
 }
@@ -184,10 +189,16 @@ struct State {
 impl Capture {
     /// Hooks `writer`, then hands `observer` the commits its WAL holds past
     /// the observer's last position, before any write.
-    pub(crate) fn open(path: &Path, writer: &Connection, observer: Arc<dyn Observe>) -> Result<Capture> {
+    pub(crate) fn open(
+        path: &Path,
+        writer: &Connection,
+        observer: Arc<dyn Observe>,
+        memory: Option<Arc<crate::Memory>>,
+    ) -> Result<Capture> {
         writer.wal_hook(Some(remember_the_end));
         let state = State { file: None, at: Position::default(), checkpointed: 0, restart_expected: true };
-        let capture = Capture { observer, wal: wal_of(path), state: Mutex::new(state), broken: AtomicBool::new(false) };
+        let (wal, broken) = (wal_of(path), AtomicBool::new(false));
+        let capture = Capture { observer, wal, memory, state: Mutex::new(state), broken };
         capture.recover(writer).map_err(|error| error.within(format!("{}: its WAL", path.display())))?;
         Ok(capture)
     }
@@ -258,6 +269,7 @@ impl Capture {
         if end < from {
             return Ok(());
         }
+        let _held = self.hold(&header, from, end);
         let frames = read_frames(wal, &header, from, end)?;
         let commit = commit_of(&header, end, &frames)?;
         let kept = self.observer.committed(&commit);
@@ -293,13 +305,19 @@ impl Capture {
     /// Hands the commits a WAL left by a process that died holds past the
     /// observer's last position, or starts the observer where the file
     /// stands when it keeps nothing yet.
+    /// A WAL that a long reader let grow is read a frame at a time, and each
+    /// commit's frames once it is handed, so that recovery holds one commit
+    /// rather than the whole WAL.
     fn recover(&self, writer: &Connection) -> Result<()> {
-        let bytes = match fs::read(&self.wal) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        let mut file = match fs::File::open(&self.wal) {
+            Ok(file) => Some(file),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(Error::io("read", error)),
         };
-        let wal = WalCommits::read(&bytes);
+        let wal = match &mut file {
+            Some(file) => WalCommits::scan(file)?,
+            None => None,
+        };
         let mut state = self.lock();
         match (self.observer.last(), wal) {
             (None, wal) => {
@@ -324,15 +342,24 @@ impl Capture {
                     }
                     1
                 };
+                let file = file.as_mut().expect("a WAL that holds commits is open");
                 for (start, end) in wal.commits_from(from) {
-                    let frames = &bytes[frame_offset(&wal.header, start)..frame_offset(&wal.header, end + 1)];
-                    self.observer.committed(&commit_of(&wal.header, end, frames)?)?;
+                    let _held = self.hold(&wal.header, start, end);
+                    let frames = read_frames(file, &wal.header, start, end)?;
+                    self.observer.committed(&commit_of(&wal.header, end, &frames)?)?;
                 }
                 state.at = wal.header.at(wal.end);
                 state.restart_expected = false;
             }
         }
         self.observer.sync()
+    }
+
+    /// Holds the bytes of frames `from` to `end` of the store's memory while
+    /// they are read; a commit already in its file is never refused for them.
+    fn hold(&self, header: &Header, from: u32, end: u32) -> Option<crate::Reservation> {
+        let bytes = u64::from(end.saturating_sub(from) + 1) * header.frame_size() as u64;
+        self.memory.as_ref().map(|memory| memory.hold(bytes, HOLD_PATIENCE))
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -379,8 +406,8 @@ pub(crate) fn commits_past(path: &Path, mark: Position) -> Result<Vec<Position>>
 /// The commits the WAL beside `path` holds, as SQLite would recover them.
 fn commits_in(path: &Path) -> Result<Option<WalCommits>> {
     let wal = wal_of(path);
-    match fs::read(&wal) {
-        Ok(bytes) => Ok(WalCommits::read(&bytes)),
+    match fs::File::open(&wal) {
+        Ok(mut file) => WalCommits::scan(&mut file).map_err(|error| error.within(wal.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::io(wal.display().to_string(), error)),
     }
@@ -480,23 +507,40 @@ struct WalCommits {
 }
 
 impl WalCommits {
-    fn read(bytes: &[u8]) -> Option<WalCommits> {
-        let header = Header::parse(bytes)?;
-        let mut sum = header.checksum;
-        let mut commit_ends = Vec::new();
-        for (index, frame) in bytes[HEADER..].chunks_exact(header.frame_size()).enumerate() {
-            let parsed = Frame::parse(frame);
+    /// Reads `wal` a frame at a time, however long it grew: what it keeps is
+    /// a frame's bytes and where each commit ends.
+    fn scan(wal: &mut fs::File) -> Result<Option<WalCommits>> {
+        let failed = |error| Error::io("read the WAL", error);
+        wal.seek(SeekFrom::Start(0)).map_err(failed)?;
+        let mut reader = io::BufReader::new(wal);
+        let mut head = [0; HEADER];
+        match reader.read_exact(&mut head) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(failed(error)),
+        }
+        let Some(header) = Header::parse(&head) else { return Ok(None) };
+        let (mut sum, mut commit_ends, mut index) = (header.checksum, Vec::new(), 0u32);
+        let mut frame = vec![0; header.frame_size()];
+        loop {
+            match reader.read_exact(&mut frame) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) => return Err(failed(error)),
+            }
+            index += 1;
+            let parsed = Frame::parse(&frame);
             sum = checksum(header.big_endian, sum, &frame[..8]);
             sum = checksum(header.big_endian, sum, parsed.data);
             if parsed.salts != header.salts || parsed.checksum != sum {
                 break;
             }
             if parsed.size_after != 0 {
-                commit_ends.push(u32::try_from(index + 1).ok()?);
+                commit_ends.push(index);
             }
         }
-        let end = *commit_ends.last()?;
-        Some(WalCommits { header, commit_ends, end })
+        let Some(&end) = commit_ends.last() else { return Ok(None) };
+        Ok(Some(WalCommits { header, commit_ends, end }))
     }
 
     /// Each commit at or past `from`, as its first and last frames.

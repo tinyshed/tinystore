@@ -81,6 +81,25 @@ impl Memory {
         Ok(self.reservation(bytes))
     }
 
+    /// Takes `bytes` for work that cannot be refused, as a commit already in
+    /// its file that its log must keep: it waits up to `patience` for room,
+    /// then takes them past the limit, so that other work waits until they
+    /// come back rather than the store believing them free.
+    pub(crate) fn hold(self: &Arc<Self>, bytes: u64, patience: Duration) -> Reservation {
+        let deadline = Instant::now() + patience;
+        let mut used = self.lock();
+        while used.saturating_add(bytes) > self.limit {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            used = self.freed.wait_timeout(used, left).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        *used = used.saturating_add(bytes);
+        drop(used);
+        self.reservation(bytes)
+    }
+
     fn refuse_past_limit(&self, bytes: u64, what: &str) -> Result<()> {
         if bytes <= self.limit {
             return Ok(());
@@ -236,6 +255,17 @@ mod tests {
         reservation.shrink(40);
         assert_eq!(memory.used(), 40);
         drop(reservation);
+        assert_eq!(memory.used(), 0);
+    }
+
+    #[test]
+    fn a_hold_that_finds_no_room_takes_its_bytes_past_the_limit_and_gives_them_back() {
+        let memory = Memory::new(100);
+        let other = memory.try_reserve(80, "other work").unwrap();
+        let held = memory.hold(50, Duration::from_millis(20));
+        assert_eq!(memory.used(), 130, "a commit already in its file is never refused");
+        assert!(memory.try_reserve(1, "more").is_err(), "other work waits until it comes back");
+        drop((held, other));
         assert_eq!(memory.used(), 0);
     }
 }
