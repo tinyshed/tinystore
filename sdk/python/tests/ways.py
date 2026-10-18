@@ -42,6 +42,8 @@ class Way:
     """waits until whatever served the directory has let go of it"""
     shared: bool = False
     """whether a second open of the directory joins the same store"""
+    home: Callable[[Path], Path] = lambda directory: directory
+    """the store's own directory, where a test's directory holds more than the store"""
 
 
 async def _nothing(_: Path) -> None:
@@ -89,7 +91,7 @@ WAYS = [
     Way("a private child", SERVED, lambda d: tinystore.open(d, private=True), _nothing),
     # gone at once once the store closes, so that its directory can go
     Way("a sidecar", SERVED, lambda d: tinystore.open(d, idle="1ms"), _sidecar_gone, shared=True),
-    Way("a remote server over TCP", SERVED, _remote, _remote_gone),
+    Way("a remote server over TCP", SERVED, _remote, _remote_gone, home=lambda d: d / "store"),
 ]
 
 

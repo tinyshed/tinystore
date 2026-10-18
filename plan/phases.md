@@ -63,7 +63,9 @@ them; the workspace builds and tests on three operating systems.
   `store.tx`, jobs' queues, workers, steps, progress, watches, schedules and `run_due`, sql's databases,
   tables, query builder over `testdata/sql/queries.json`, `include`, pages and `db.bucket` and `db.queue`,
   files with uploads, ranges and checked reads, and events, the logger and its console over
-  `testdata/console/console.json`, each suite through all four.
+  `testdata/console/console.json`; then metrics and their instruments, configs declared by a dataclass and a
+  store's logger following the config `log`, locks and semaphores through `async with`, channels, search with
+  `db.search_index`, and backups, each suite through all four. Left: the Go SDK.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,

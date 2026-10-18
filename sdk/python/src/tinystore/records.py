@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
 from ._handles import handle_on, via_link
-from ._time import Duration, ms, spelled
+from ._time import Duration, ms, spelled_keep
 from ._values import to_json
 from ._wire.protocol import (
     Empty,
@@ -557,7 +557,7 @@ class AllEvents(_Reads):
         return [
             StreamInfo(
                 each.get("name", ""),
-                _spelled_keep(each.get("keep", 0)),
+                spelled_keep(each.get("keep", 0)),
                 _moment(each.get("retained_from", 0)),
                 _moment(each.get("newest", 0)),
             )
@@ -608,14 +608,6 @@ class AllEvents(_Reads):
 
     async def _opened(self, method: str, body: Callable[[int | None], bytes]) -> Stream:
         return await self._link.run("read", lambda c: _stream_of(c, methods[method], body(None), True))
-
-
-def _spelled_keep(millis: int) -> str:
-    """A stream's keep as a span is written: 30d, 12h, 90s, 250ms."""
-    for unit, size in (("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1000)):
-        if millis >= size and millis % size == 0:
-            return f"{millis // size}{unit}"
-    return spelled(millis) if millis == 0 else f"{millis}ms"
 
 
 class Lines:

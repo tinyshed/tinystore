@@ -42,9 +42,11 @@ from ._wire.protocol import (
     SqlTxOpen,
     methods,
 )
+from .channels import Channel, TxChannel
 from .errors import InvalidError, error_of
 from .jobs import Backoff, Concurrency, Job, Queue, QueueOptions, open_queue
 from .kv import Bucket, Parts, bucket_open
+from .search import Fields, Hybrid, TableIndex, Vectors, drop_index, index_open
 
 if TYPE_CHECKING:
     import os
@@ -674,6 +676,81 @@ class Database:
         return Bucket(parts, self.via(f"kv bucket {name}"))
 
     @overload
+    def search_index[T](
+        self,
+        name: str,
+        of: type[T],
+        *,
+        table: str,
+        key: str | None = None,
+        fields: Fields,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> TableIndex[T]: ...
+    @overload
+    def search_index(
+        self,
+        name: str,
+        of: None = None,
+        *,
+        table: str,
+        key: str | None = None,
+        fields: Fields,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> TableIndex[dict[str, Any]]: ...
+    def search_index(
+        self,
+        name: str,
+        of: Any = None,
+        *,
+        table: str,
+        key: str | None = None,
+        fields: Fields,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> TableIndex[Any]:
+        """An index of a table of this database, kept in its file: its rows found again by their words or vectors.
+
+        Each hit's value is its row as ``all`` reads it. The table owns the
+        rows and the index follows them: every change of a row, by any
+        statement, trigger or migration, reaches it in the commit that makes
+        it, and one by a process beside the store within a second::
+
+            articles = db.search_index("articles_search", Article, table="articles", fields={"title": 2, "body": 1})
+        """
+        settings: dict[str, Any] = {
+            "fields": fields,
+            "filters": filters,
+            "typo_tolerance": typo_tolerance,
+            "vectors": vectors,
+            "hybrid": hybrid,
+            "rebuild": rebuild,
+            "table": table,
+            "key": key,
+        }
+        body = index_open(name, **settings)
+
+        async def make(connection: Connection) -> bytes:
+            return index_open(name, **settings, database=await self.handle(connection))
+
+        opener = self.keep(methods["search.open"], body, make)
+        return TableIndex(self.via(f"index {name}"), name, opener, of)
+
+    async def drop_search_index(self, name: str) -> bool:
+        """Drops a table's index this database keeps, its triggers off the table; says whether there was one."""
+        return await drop_index(self._link, name, self.handle)
+
+    @overload
     def queue[T](
         self,
         name: str,
@@ -1013,12 +1090,20 @@ class SqlTx:
     def with_[T](self, handle: Bucket[T]) -> Bucket[T]: ...
     @overload
     def with_[T](self, handle: Queue[T]) -> TxQueue[T]: ...
-    def with_(self, handle: Bucket[Any] | Queue[Any]) -> Bucket[Any] | TxQueue[Any]:
-        """A bucket or a queue opened from this database, inside the transaction.
+    @overload
+    def with_[T](self, handle: Channel[T]) -> TxChannel[T]: ...
+    def with_(self, handle: Bucket[Any] | Queue[Any] | Channel[Any]) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any]:
+        """A bucket or a queue opened from this database, or a channel, inside the transaction.
 
         What it writes commits with the rows or not at all, and what it reads
-        sees what the transaction wrote.
+        sees what the transaction wrote; a message is handed over at the commit.
         """
+        if isinstance(handle, Channel):
+
+            async def publish(body: bytes) -> None:
+                await self.nested(methods["channels.publish"], body)
+
+            return TxChannel(handle.name, handle.branch, publish)
         if isinstance(handle, Bucket):
             parts = handle.parts
             self._takes(parts.home, parts.opener, f"kv bucket {parts.name}")

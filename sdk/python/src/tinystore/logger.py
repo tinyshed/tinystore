@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import inspect
 import logging
 import os
@@ -28,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal, TextIO
 from ._background import FailureLog, say_own
 from ._console import SECRETS, SOURCE_KEY, Console, ConsoleTime, Line, Printer, Redactor, encode_fields, redactor
 from ._values import to_json
+from .config import EnvLayer, env, live
 from .errors import InvalidError
 from .trace import current_trace
 
@@ -117,7 +119,10 @@ class LoggerOptions:
     buffer: int = 1024
 
 
-def _shared_of(append: Callable[[list[Line]], Awaitable[None]] | None, stream: str, options: LoggerOptions) -> _Shared:
+def _shared_of(
+    append: Callable[[list[Line]], Awaitable[None]] | None, stream: str, options: LoggerOptions
+) -> tuple[_Shared, dict[str, str]]:
+    """What a logger shares with the loggers its bind makes, and the variables it read as the config log spells them."""
     if not stream:
         raise InvalidError("a logger of no stream")
     if options.console not in (None, "pretty", "json", "off"):
@@ -128,12 +133,14 @@ def _shared_of(append: Callable[[list[Line]], Awaitable[None]] | None, stream: s
         raise InvalidError(f"a logger's buffer of {options.buffer!r} lines")
     least = -(1 << 31) if options.level is None else level_number(options.level)
     console, shown, ignored = options.console, options.time, list[tuple[str, str, str]]()
+    spelled: dict[str, str] = {}
     if options.env is not False:
         for name, text in _read_env(None if options.env is True else options.env).items():
             known = text.lower()
             if name.endswith("LOG_LEVEL"):
                 if known in _LEVELS:
                     least = _LEVELS[known]
+                    spelled[name] = "warn" if known == "warning" else known
                 else:
                     ignored.append((name, text, "trace, debug, info, warn or error"))
             elif name.endswith("LOG_FORMAT"):
@@ -141,8 +148,10 @@ def _shared_of(append: Callable[[list[Line]], Awaitable[None]] | None, stream: s
                     ignored.append((name, text, "pretty, json or off"))
                 elif console != "off":
                     console = known  # type: ignore[assignment]
+                    spelled[name] = known
             elif known in ("clock", "full", "off"):
                 shown = known  # type: ignore[assignment]
+                spelled[name] = known
             else:
                 ignored.append((name, text, "clock, full or off"))
     try:
@@ -169,7 +178,7 @@ def _shared_of(append: Callable[[list[Line]], Awaitable[None]] | None, stream: s
         shared.printer.print(
             Line(at=time.time_ns(), stream="tinystore", level=4, msg=f"{name} is ignored", attrs=attrs)
         )
-    return shared
+    return shared, spelled
 
 
 def _shown(value: Any) -> Any:
@@ -392,7 +401,68 @@ def _say_dropped(shared: _Shared) -> None:
 
 def new_logger(append: Callable[[list[Line]], Awaitable[None]] | None, stream: str, options: LoggerOptions) -> Logger:
     """A logger of one stream, its lines appended through append when it is a store's."""
-    return Logger(_shared_of(append, stream, options), [])
+    return Logger(_shared_of(append, stream, options)[0], [])
+
+
+@dataclass(frozen=True, slots=True)
+class LogConfig:
+    """What a store's logger declares its config log with, and how it takes the level each value gives.
+
+    The code's options are the defaults, trace for a logger told no level,
+    and the variables it read the layer over them.
+    """
+
+    layers: list[Any]
+    take: Callable[[str], None]
+
+
+_LEVEL_NAMES = ("trace", "debug", "info", "warn", "error")
+_declarations: dict[tuple[str, str, str], type] = {}
+"""The config log's declarations made, one a set of defaults, so that loggers told alike share one config."""
+
+
+def new_store_logger(
+    append: Callable[[list[Line]], Awaitable[None]], stream: str, options: LoggerOptions
+) -> tuple[Logger, LogConfig]:
+    """A store's logger of one stream, and what it declares its config log with."""
+    shared, spelled = _shared_of(append, stream, options)
+    least = None if options.level is None else level_number(options.level)
+    level = "trace" if least is None else next((n for n in _LEVEL_NAMES if _LEVELS[n] >= least), "error")
+    pretty = Printer(None, None, False, options.to).pretty()
+    shown = options.console or ("pretty" if pretty else "json")
+    declaration = _log_declaration(level, shown, options.time or "clock")
+
+    def take(name: str) -> None:
+        if name in _LEVELS:
+            shared.least = _LEVELS[name]
+
+    made = Logger(shared, [])
+    if options.env is False:
+        return made, LogConfig([declaration], take)
+    prefix = "LOG" if options.env is True else f"{options.env}_LOG"
+    layer: EnvLayer = env(prefix, from_=spelled)
+    return made, LogConfig([declaration, layer], take)
+
+
+def _log_declaration(level: str, shown: str, time: str) -> type:
+    """The config log as a logger declares it: its level live, each setting one of what it may be, its own first."""
+    key = (level, shown, time)
+    found = _declarations.get(key)
+    if found is None:
+
+        def one_of(first: str, every: tuple[str, ...]) -> Any:
+            return Literal[(first, *(name for name in every if name != first))]  # pyright: ignore[reportInvalidTypeArguments]
+
+        found = dataclasses.make_dataclass(
+            "Log",
+            [
+                ("level", one_of(level, _LEVEL_NAMES), live(level)),
+                ("format", one_of(shown, ("pretty", "json", "off")), shown),
+                ("time", one_of(time, ("clock", "full", "off")), time),
+            ],
+        )
+        _declarations[key] = found
+    return found
 
 
 def logger(

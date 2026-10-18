@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal, Unpack, overload
 from ._handles import Home, handle_on, key_text
 from ._time import Duration, ms
 from ._wire.protocol import KvCall, KvEntry, KvTx, methods
+from .channels import Channel, TxChannel
 from .errors import ConflictError, InvalidError
 from .jobs import JobOp, Queue, StoreTxQueue, commit_jobs
 from .kv import Bucket, Counters, Entry, IfVersion, Parts, below, entry_of, under_field, write_fields
@@ -97,8 +98,16 @@ class Tx:
     def with_(self, handle: Counters) -> TxCounters: ...
     @overload
     def with_[T](self, handle: Queue[T]) -> StoreTxQueue[T]: ...
-    def with_(self, handle: Bucket[Any] | Counters | Queue[Any]) -> TxBucket[Any] | TxCounters | StoreTxQueue[Any]:
+    @overload
+    def with_[T](self, handle: Channel[T]) -> TxChannel[T]: ...
+    def with_(
+        self, handle: Bucket[Any] | Counters | Queue[Any] | Channel[Any]
+    ) -> TxBucket[Any] | TxCounters | StoreTxQueue[Any] | TxChannel[Any]:
         """Takes a handle into the transaction: its calls then go through it."""
+        if isinstance(handle, Channel):
+            # a store's transaction commits in one kv.tx, which carries no
+            # message: its messages leave once its commit answered
+            return TxChannel(handle.name, handle.branch, self._publish_after)
         if isinstance(handle, Queue):
             source = handle.source
             self._takes(source.link, source.home, "jobs.db", source.describe)
@@ -110,6 +119,12 @@ class Tx:
             self.takes(handle.parts, "kv.db", f"kv counters {handle.name}")
             return TxCounters(self, handle.parts)
         raise InvalidError(f"tx.with_ takes a bucket, counters or a queue, not a {type(handle).__name__}")
+
+    async def _publish_after(self, body: bytes) -> None:
+        async def publish() -> None:
+            await self._link.run("write", lambda c: c.session.call(methods["channels.publish"], body))
+
+        self.after(publish)
 
     def takes(self, parts: Parts, file: Literal["kv.db", "jobs.db"], what: str) -> None:
         self._takes(parts.link, parts.home, file, what)

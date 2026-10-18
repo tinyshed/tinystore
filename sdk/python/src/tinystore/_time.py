@@ -27,7 +27,10 @@ def ms(d: Duration, of: str = "a duration") -> int:
         parts = _SPELLED.fullmatch(text)
         if parts is None or not text:
             raise InvalidError(f"{of} {d!r}: write it as 30d, 1h30m, 15m, 1s or 250ms")
-        return sum(int(n) * _UNITS[unit] for n, unit in zip(parts.groups(), _UNITS, strict=True) if n is not None)
+        total = sum(int(n) * _UNITS[unit] for n, unit in zip(parts.groups(), _UNITS, strict=True) if n is not None)
+        if total >= 1 << 63:
+            raise InvalidError(f"{of} {d!r}: past what 64 bits of milliseconds hold")
+        return total
     if isinstance(d, timedelta):  # pyright: ignore[reportUnnecessaryIsInstance]
         if d < timedelta(0):
             raise InvalidError(f"{of} of {d}, before nothing")
@@ -45,6 +48,14 @@ def spelled(milliseconds: int) -> str:
             text += f"{left // size}{unit}"
             left %= size
     return text
+
+
+def spelled_keep(milliseconds: int) -> str:
+    """A keep as a span is written, in its largest unit that divides it: 30d, 12h, 90s, 250ms."""
+    for unit, size in (("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1000)):
+        if milliseconds >= size and milliseconds % size == 0:
+            return f"{milliseconds // size}{unit}"
+    return "0s" if milliseconds == 0 else f"{milliseconds}ms"
 
 
 def unix_ms(t: datetime, of: str = "a time") -> int:

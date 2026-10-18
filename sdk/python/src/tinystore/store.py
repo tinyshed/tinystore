@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Self, overload
 
 from . import _runtime
+from ._background import message_of, say_own
 from ._connection import (
     Durability,
     Link,
@@ -29,27 +30,35 @@ from ._connection import (
 )
 from ._time import Duration, ms, spelled
 from ._values import json_values, values_of
+from .backup import Backup, backup
 from .blobs import Files, Size, open_files
+from .channels import Channel
 from .clock import Clock
+from .config import Config
 from .errors import InvalidError
+from .instruments import Instruments
 from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Schedule, Worker, open_queue, open_schedule
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
-from .logger import Level, Logger, LoggerOptions, LogHandler, new_logger
+from .locks import Lock, Semaphore
+from .logger import Level, Logger, LoggerOptions, LogHandler, new_store_logger
+from .metrics import Metrics
 from .once import Once, once_open
 from .records import AllEvents, Events, open_events
+from .search import Fields, Hybrid, IndexInfo, SearchIndex, Vectors, drop_index, index_open, list_indexes
 from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
 
 if TYPE_CHECKING:
     import os
     import ssl
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Sequence
     from datetime import datetime
     from types import TracebackType
     from typing import TextIO
 
     from ._console import Console, ConsoleTime
+    from .config import Layer
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +80,13 @@ class Store:
     def __init__(self, link: Link) -> None:
         self._link = link
         self._workers: set[Worker] = set()
+        self._following: set[asyncio.Future[None]] = set()
         self._loggers: list[Logger] = []
+        self._configs: dict[tuple[str, type | None, str, bool], tuple[asyncio.Future[Config[Any]], object]] = {}
+        """the configs open, by what opened them, so that the same open shares one stream"""
+        self._instruments = Instruments(link)
+        self.metrics = Metrics(link, self._instruments)
+        """Series by name and labels, their reads and aggregates, and the program's instruments."""
         self.clock = Clock(link)
         """The test's clock of a private store opened with ``clock``; on any other, its calls are InvalidError."""
 
@@ -236,6 +251,42 @@ class Store:
             timeout=timeout,
         )
 
+    @overload
+    def channel[T](self, name: str, of: type[T]) -> Channel[T]: ...
+    @overload
+    def channel(self, name: str, of: None = None) -> Channel[Any]: ...
+    def channel(self, name: str, of: Any = None) -> Channel[Any]:
+        """A channel of messages of one type, JSON, which every subscriber listening at that moment receives::
+
+        messages = store.channel("messages", Chat)
+        await messages.under(room_id).publish(Chat(sender="ann", text="hi"))
+        sub = await messages.under(room_id).subscribe(lambda m: show(m.value))
+        """
+        return Channel(self._link, name, of)
+
+    def lock(self, name: str, *, ttl: Duration = "10s", max_hold: Duration | None = None) -> Lock:
+        """Keys held one holder at a time, across every program of the store::
+
+            invoices = store.lock("invoices", ttl="10s")
+            async with invoices.hold(invoice.id) as lease:
+                await charge(invoice, fence=lease.fence)
+
+        - ``ttl``: how long a lease lasts from its last renewal, 1 s to 1 hour;
+          this program renews it at a third of it while the block runs.
+        - ``max_hold``: how long a lease lasts from its grant, however it is
+          renewed: past it the next in line holds the key.
+        """
+        return Lock(self._link, name, ttl, max_hold)
+
+    def semaphore(self, name: str, *, limit: int, ttl: Duration = "10s", max_hold: Duration | None = None) -> Semaphore:
+        """Keys held by up to limit holders at a time, 1 to 1000::
+
+        uploads = store.semaphore("uploads", limit=3, ttl="30s")
+        async with uploads.hold(user.id):
+            await upload(file)
+        """
+        return Semaphore(self._link, name, limit, ttl, max_hold)
+
     def files(self, name: str, *, ttl: Duration | None = None, max_file_size: Size | None = None) -> Files:
         """A named set of files by path, written whole and replaced whole::
 
@@ -290,9 +341,24 @@ class Store:
             level, console, time, hide_stream, to, redact, keep_url_passwords, replace, source, env, buffer
         )
         events = open_events(self._link, stream, keep)
-        made = new_logger(events.append_lines, stream, options)
+        made, log = new_store_logger(events.append_lines, stream, options)
         self._loggers.append(made)
+        follows = asyncio.ensure_future(self._follow_log(log.layers, log.take))
+        self._following.add(follows)
+        follows.add_done_callback(self._following.discard)
         return made
+
+    async def _follow_log(self, layers: list[Any], take: Callable[[str], None]) -> None:
+        """Sets a logger's level from the config log, which a change of any process sets for every logger."""
+        global _unfollowed
+        try:
+            log = await self.config("log", layers)
+        except Exception as err:
+            if not self._link.closed and not _unfollowed:
+                _unfollowed = True
+                say_own("warn", "a logger follows no config log", {"error": message_of(err)})
+            return
+        log.on_change(lambda value: take(value.level))
 
     def log_handler(self, stream: str, level: int = logging.NOTSET, **options: Any) -> LogHandler:
         """A handler for a program that logs through logging, its lines printed and kept as the store's logger's::
@@ -317,6 +383,100 @@ class Store:
         """
         return await open_database(self._link, self._workers, name, migrations, durability)
 
+    @overload
+    def index[T](
+        self,
+        name: str,
+        of: type[T],
+        *,
+        fields: Fields | None = None,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> SearchIndex[T]: ...
+    @overload
+    def index(
+        self,
+        name: str,
+        of: None = None,
+        *,
+        fields: Fields | None = None,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> SearchIndex[Any]: ...
+    def index(
+        self,
+        name: str,
+        of: Any = None,
+        *,
+        fields: Fields | None = None,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> SearchIndex[Any]:
+        """An index of documents of one type by id, found again by their words, vectors or both::
+
+            articles = store.index("articles", Article, fields={"title": 2, "body": 1})
+            result = await articles.search("как испечь хлеб")
+
+        Opening an index with other settings than it holds changes it, and
+        one that needs every document read again does so beside it, the old
+        rows answering until the new ones switch in; ``rebuild="manual"``
+        waits for ``store.reindex``.
+        """
+        opener = index_open(
+            name,
+            fields=fields,
+            filters=filters,
+            typo_tolerance=typo_tolerance,
+            vectors=vectors,
+            hybrid=hybrid,
+            rebuild=rebuild,
+        )
+        return SearchIndex(self._link, name, opener, of)
+
+    async def reindex(
+        self,
+        name: str,
+        of: Any = None,
+        *,
+        fields: Fields | None = None,
+        filters: Sequence[str] = (),
+        typo_tolerance: bool | None = None,
+        vectors: Vectors | None = None,
+        hybrid: Hybrid | None = None,
+        rebuild: Literal["automatic", "manual"] | None = None,
+    ) -> SearchIndex[Any]:
+        """Opens an index as index does and reads it again beside itself in the background, as a change would."""
+        opener = index_open(
+            name,
+            fields=fields,
+            filters=filters,
+            typo_tolerance=typo_tolerance,
+            vectors=vectors,
+            hybrid=hybrid,
+            rebuild=rebuild,
+            reindex=True,
+        )
+        index: SearchIndex[Any] = SearchIndex(self._link, name, opener, of)
+        await index.status()
+        return index
+
+    async def drop_index(self, name: str) -> bool:
+        """Drops an index and every document it holds, in the background; says whether there was one."""
+        return await drop_index(self._link, name)
+
+    async def indexes(self) -> list[IndexInfo]:
+        """Every index the store holds: its documents and vectors, when it was last opened, and a rebuild under way."""
+        return await list_indexes(self._link)
+
     async def tx[R](self, fn: Callable[[Tx], Awaitable[R]]) -> R:
         """Runs fn as one transaction over the handles it takes in with ``tx.with_(handle)``, and gives what it returns.
 
@@ -325,6 +485,80 @@ class Store:
         five times at most, so it does nothing else that must happen once.
         """
         return await run_tx(self._link, fn)
+
+    @overload
+    async def config[T](
+        self,
+        name: str,
+        layers: Sequence[type[T] | Layer],
+        *,
+        validate: Callable[[T], object] | type | None = None,
+        strict: bool = False,
+    ) -> Config[T]: ...
+    @overload
+    async def config(
+        self,
+        name: str,
+        layers: Sequence[Any],
+        *,
+        validate: Callable[[Any], object] | type | None = None,
+        strict: bool = False,
+    ) -> Config[Any]: ...
+    async def config(
+        self,
+        name: str,
+        layers: Sequence[Any],
+        *,
+        validate: Callable[[Any], object] | type | None = None,
+        strict: bool = False,
+    ) -> Config[Any]:
+        """A program's settings as one typed value: the declaration first, then dicts, files and the environment.
+
+        Each layer goes over the ones before it, and a live setting's change
+        over them all::
+
+            config = await store.config("app", [Settings, file("app.yaml"), env("APP", vars={"port": "PORT"})])
+
+        It follows every change, whoever makes it, until the store closes; the
+        same config opened again in the process shares its one stream.
+        ``validate``, a function that raises or a pydantic model, checks the
+        whole value at open and before a change is kept; ``strict`` refuses to
+        open while a kept change no longer fits, rather than ignoring it.
+        """
+        # the declaration by itself, since two classes of one name may declare apart
+        key = (name, layers[0] if layers and isinstance(layers[0], type) else None, repr(list(layers[1:])), strict)
+        found = self._configs.get(key)
+        if found is not None and found[1] is validate:
+            return await asyncio.shield(found[0])
+        opening = asyncio.ensure_future(Config[Any].open(self._link, name, layers, validate, strict))
+        self._configs[key] = (opening, validate)
+        try:
+            return await asyncio.shield(opening)
+        except BaseException:
+            if key in self._configs and self._configs[key][0] is opening:
+                del self._configs[key]
+            raise
+
+    async def backup(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        include: Sequence[str] = (),
+        include_encryption_key: bool = False,
+    ) -> Backup:
+        """A backup of every engine of the store as one zip, made while the store keeps working.
+
+        It is written beside path and renamed once whole, so that a backup
+        that fails leaves no zip. A file of the program's goes in only when
+        ``include`` names it by its path in the store's directory, and the
+        store's encryption key only with ``include_encryption_key``, the zip
+        not being encrypted::
+
+            backup = await store.backup("backup-2026-10-13.zip", include=["secret.key"])
+            if backup.key_left_out:
+                print("keep encryption.key apart: the backup opens with it alone")
+        """
+        return await backup(self._link, path, include, include_encryption_key)
 
     async def status(self) -> Status:
         """What the server this store reaches is: its version, protocol, engines and capability.
@@ -345,7 +579,12 @@ class Store:
         before this returns; the directory's sidecar goes once it has been idle.
         """
         await asyncio.gather(*(worker.stop() for worker in list(self._workers)), return_exceptions=True)
+        await self._instruments.stop()
         await asyncio.gather(*(each.stop() for each in self._loggers), return_exceptions=True)
+        opened = [
+            opening.result() for opening, _ in self._configs.values() if opening.done() and not opening.exception()
+        ]
+        await asyncio.gather(*(config.stop() for config in opened), return_exceptions=True)
         await self._link.close()
 
     async def __aenter__(self) -> Self:
@@ -429,6 +668,9 @@ async def connect(url: str, *, token: str, tls: ssl.SSLContext | None = None) ->
     await link.connection()
     return Store(link)
 
+
+_unfollowed = False
+"""Whether a logger that follows no config log has been said, once a process."""
 
 # two letters or more before a colon: an address, never a Windows drive
 _ADDRESS = re.compile(r"([a-z][a-z0-9+.-]+):", re.IGNORECASE)
