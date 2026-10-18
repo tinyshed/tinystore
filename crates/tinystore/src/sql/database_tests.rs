@@ -237,6 +237,8 @@ fn exec_says_what_it_changed_and_the_rowid_of_its_insert() {
     let updated = db.exec("update events set kind = upper(kind)").unwrap();
     assert_eq!(updated, Done { changes: 2, last_insert_rowid: 0 }, "an update inserted nothing");
     assert_eq!(db.exec("select * from events").unwrap(), Done::default(), "a read changes nothing");
+    let made = db.exec("create table seen (id integer primary key)").unwrap();
+    assert_eq!(made, Done::default(), "a schema change counts no rows, whatever wrote before it");
 }
 
 #[test]

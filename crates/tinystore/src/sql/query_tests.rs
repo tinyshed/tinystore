@@ -251,6 +251,9 @@ fn an_update_or_a_delete_changes_what_its_condition_says_and_refuses_every_row()
     for refused in [notes.delete(), notes.filter(sql::and(Vec::<Sql>::new())).delete()] {
         assert_eq!(refused.unwrap_err().kind(), ErrorKind::Invalid);
     }
+    let limited = notes.filter(sql::eq("author_id", &5)).limit(1).delete().unwrap_err();
+    assert_eq!(limited.kind(), ErrorKind::Invalid, "a limit SQLite would not keep: {limited}");
+    assert_eq!(notes.count().unwrap(), 2);
     assert_eq!(notes.filter(sql::eq("done", &true)).delete().unwrap().changes, 1);
     assert_eq!(notes.count().unwrap(), 1);
     let short = notes.filter(sql!("id = ? and author_id = ?", "n2")).all().unwrap_err();
@@ -294,6 +297,14 @@ fn a_page_reads_after_the_last_row_of_the_one_before_and_only_its_own_query() {
     let other =
         notes.filter(sql::eq("author_id", &9)).order_by("views", Direction::Desc).order_by("id", Direction::Desc);
     assert_eq!(other.list(2, second.next.as_deref()).unwrap_err().kind(), ErrorKind::Invalid);
+    // a cursor of this query with one order value of two is anyone's forgery
+    let next = first.next.unwrap();
+    let bytes: Vec<u8> =
+        (0..next.len()).step_by(2).map(|at| u8::from_str_radix(&next[at..at + 2], 16).unwrap()).collect();
+    let mut read: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    read["v"].as_array_mut().unwrap().truncate(1);
+    let forged: String = serde_json::to_vec(&read).unwrap().iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(query.list(2, Some(&forged)).unwrap_err().kind(), ErrorKind::Invalid);
 }
 
 #[test]

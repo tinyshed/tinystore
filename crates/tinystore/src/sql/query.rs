@@ -497,6 +497,21 @@ impl<'r, T> Query<'r, T> {
         if !self.parts.joins.is_empty() {
             return Err(Error::invalid(format!("{what} of a join: write it in SQL")));
         }
+        // SQLite's update and delete take none of these: `limit(10).delete()`
+        // would delete every row the conditions match.
+        let parts = &self.parts;
+        let shaped = parts.limit.is_some()
+            || parts.offset.is_some()
+            || !parts.order.is_empty()
+            || !parts.groups.is_empty()
+            || !parts.having.is_empty()
+            || parts.select.is_some()
+            || !parts.includes.is_empty();
+        if shaped {
+            return Err(Error::invalid(format!(
+                "{what} with a limit, offset, order, group, select or include: narrow it by conditions, or write it in SQL"
+            )));
+        }
         Ok(())
     }
 }
@@ -533,7 +548,12 @@ impl<T: DeserializeOwned> Query<'_, T> {
         parts.limit = Some(limit);
         parts.offset = None;
         if let Some(after) = after {
-            parts.conditions.push(keyset(order, &cursor_of(after, &digest)?));
+            let values = cursor_of(after, &digest)?;
+            // A cursor is anyone's to send: one short of the order's values is no page's.
+            if values.len() != order.len() {
+                return Err(Error::invalid("a cursor that is not one: pass the next of a page"));
+            }
+            parts.conditions.push(keyset(order, &values));
         }
         let rows = self.runner.rows_of(&render(&parts)?, Wanted::All)?;
         let last = last_order_values(&rows, order)?;

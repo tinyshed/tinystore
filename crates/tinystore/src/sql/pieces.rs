@@ -256,19 +256,26 @@ pub(crate) fn grouped(text: &str) -> bool {
     if !text.starts_with('(') || !text.ends_with(')') {
         return text == "0" || text == "1";
     }
-    let mut depth = 0i32;
-    let last = text.chars().count() - 1;
-    for (at, c) in text.chars().enumerate() {
-        match c {
+    // A parenthesis inside quotes or a comment counts for nothing: `('(') or
+    // ('x')` is two groups, not one.
+    let chars: Vec<char> = text.chars().collect();
+    let (mut depth, mut at) = (0i32, 0);
+    while at < chars.len() {
+        if let Some(end) = quoted_or_comment_end(&chars, at) {
+            at = end + 1;
+            continue;
+        }
+        match chars[at] {
             '(' => depth += 1,
             ')' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && at < last {
+        if depth == 0 && at < chars.len() - 1 {
             return false;
         }
+        at += 1;
     }
-    true
+    depth == 0
 }
 
 fn word_char(c: Option<&char>) -> bool {
@@ -319,5 +326,7 @@ mod tests {
         assert!(!stands_alone("a = 1 or b = 2"));
         assert!(!stands_alone("total between ? and ?"));
         assert!(!stands_alone("(a) or (b)"));
+        assert!(!stands_alone("('(') or ('x')"), "a parenthesis in quotes opens nothing");
+        assert!(stands_alone("(title = ')')"));
     }
 }

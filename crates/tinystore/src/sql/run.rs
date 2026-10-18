@@ -133,6 +133,9 @@ fn exec_given(connection: &Connection, statement: &Sql) -> Result<Done> {
     // The writer is shared by every write of a commit: a rowid left by
     // another write is not this one's.
     let before = connection.last_insert_rowid();
+    // SQLite counts `changes` only for an insert, update or delete: a schema
+    // change or a pragma would report another write's count otherwise.
+    let total = connection.total_changes();
     let mut rows = prepared.query(params_from_iter(statement.values())).map_err(|error| failure("its run", error))?;
     while rows.next().map_err(|error| failure("its run", error))?.is_some() {}
     drop(rows);
@@ -140,5 +143,6 @@ fn exec_given(connection: &Connection, statement: &Sql) -> Result<Done> {
         return Ok(Done::default());
     }
     let after = connection.last_insert_rowid();
-    Ok(Done { changes: connection.changes(), last_insert_rowid: if after == before { 0 } else { after } })
+    let changes = if connection.total_changes() == total { 0 } else { connection.changes() };
+    Ok(Done { changes, last_insert_rowid: if after == before { 0 } else { after } })
 }

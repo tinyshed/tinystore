@@ -122,7 +122,8 @@ impl Database {
         let statement = statement.into();
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
-            return self.pass_on(std::slice::from_ref(&statement), false).map(|mut done| done.remove(0));
+            let done = self.pass_on(std::slice::from_ref(&statement), false)?;
+            return done.into_iter().next().ok_or_else(|| Error::internal("a write's home answered no result"));
         }
         let weight = statement.weight();
         let running = statement.clone();
@@ -142,7 +143,12 @@ impl Database {
         let statements: Vec<Sql> = statements.into_iter().map(Into::into).collect();
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
-            return self.pass_on(&statements, true);
+            let done = self.pass_on(&statements, true)?;
+            if done.len() != statements.len() {
+                let why = format!("a batch of {} statements answered with {} results", statements.len(), done.len());
+                return Err(Error::internal(why));
+            }
+            return Ok(done);
         }
         let (weight, write) = batch_write(statements);
         self.base.file().write(weight, write).map_err(|error| error.within(self.base.describe()))
