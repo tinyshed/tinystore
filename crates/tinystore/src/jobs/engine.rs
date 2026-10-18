@@ -160,7 +160,14 @@ impl Jobs {
                 return Err(Error::invalid(format!("the name is a {stored}")).within(describe()));
             }
             let state = Arc::new(QueueState::new(id, name, kind, policy, self.lent_by.clone()));
-            return Ok(Arc::clone(lock(&self.queues).entry(name.to_owned()).or_insert(state)));
+            let mut queues = lock(&self.queues);
+            let kept = queues.entry(name.to_owned()).or_insert(state);
+            // Another open may have kept one while the home answered.
+            if kept.kind != kind || kept.policy != policy {
+                let why = format!("open in this process as a {} with other options", kept.kind.as_str());
+                return Err(Error::invalid(why).within(describe()));
+            }
+            return Ok(Arc::clone(kept));
         }
         let made = crate::sqlite::own_work(|| {
             self.file.transaction(|tx| {

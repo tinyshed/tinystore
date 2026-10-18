@@ -99,8 +99,13 @@ fn head((name, database): (&str, Option<&str>), call: u8) -> Out {
     out
 }
 
+/// Passes a call on toward the home of the file that keeps its queue, which
+/// `head` wrote: a database's queue goes where that database is written.
 fn answered(store: &Store, out: Out) -> Result<bool> {
-    let answer = crate::replication::pass_on(store, FILE, out.0)?;
+    let mut head = In { bytes: &out.0, at: 1 };
+    let (_, lent, database) = (head.text()?, head.byte()? == 1, head.text()?);
+    let file = if lent { crate::replication::database_file(&database) } else { FILE.to_owned() };
+    let answer = crate::replication::pass_on(store, &file, out.0)?;
     In { bytes: &answer, at: 0 }.byte().map(|changed| changed == 1)
 }
 

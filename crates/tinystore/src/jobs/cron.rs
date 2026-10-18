@@ -191,7 +191,9 @@ fn parse_field(text: &str, field: &Field) -> Result<u64, String> {
         let mut value = first;
         while value <= last {
             set |= 1 << value;
-            value += step.unwrap_or(1);
+            // A step past u32, as `5-59/4294967295`, ends the span rather than wrap.
+            let Some(next) = value.checked_add(step.unwrap_or(1)) else { break };
+            value = next;
         }
     }
     Ok(set)
@@ -246,6 +248,12 @@ mod tests {
         assert_eq!(next("0 0 29 2 *", "UTC", "2026-10-09T12:00:00Z"), "2028-02-29T00:00:00Z");
         // 2100 is no leap year
         assert_eq!(next("0 0 29 2 *", "UTC", "2096-03-01T00:00:00Z"), "2104-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn a_step_past_u32_takes_its_first_value_alone() {
+        assert_eq!(next("5-59/4294967295 * * * *", "UTC", "2026-10-09T12:00:00Z"), "2026-10-09T12:05:00Z");
+        assert_eq!(next("5-59/4294967295 * * * *", "UTC", "2026-10-09T12:05:00Z"), "2026-10-09T13:05:00Z");
     }
 
     #[test]

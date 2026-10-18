@@ -198,9 +198,14 @@ pub(crate) fn get<V: DeserializeOwned>(
     now: i64,
 ) -> Result<Option<Job<V>>> {
     let no = Option::<i64>::None;
-    let found = one(c, GET_JOB, params![queue.id, key, no, no, no, no, no, no, now])?
-        .or(one(c, GET_FAILED, params![queue.id, key])?)
-        .or(one(c, GET_DONE, params![queue.id, key, now])?);
+    // Each lookup only when the one before found nothing.
+    let mut found = one(c, GET_JOB, params![queue.id, key, no, no, no, no, no, no, now])?;
+    if found.is_none() {
+        found = one(c, GET_FAILED, params![queue.id, key])?;
+    }
+    if found.is_none() {
+        found = one(c, GET_DONE, params![queue.id, key, now])?;
+    }
     let Some(found) = found else {
         return Ok(None);
     };
