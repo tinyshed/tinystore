@@ -27,6 +27,11 @@ rust_caches := "-v tinystore-cargo:/usr/local/cargo/registry -v tinystore-target
 default:
     @just --list
 
+# check only what changed since the branch's upstream: fmt, clippy and the tests of each area touched,
+# the lint sets that name it, and the SDK it reaches; minutes, where check takes half an hour
+quick:
+    bun tools/quick.ts
+
 # run every crate's tests
 test:
     cargo test --workspace --locked

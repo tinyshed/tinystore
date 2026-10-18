@@ -95,6 +95,7 @@ Do not describe unbuilt behaviour as though it works.
 | `testdata/console/`                 | a logger's console lines, which Rust and every SDK print byte for byte                                                                                |
 | `plan/`                             | the rewrite: decisions, evidence, architecture, the API books, phases                                                                                 |
 | `docs/`, `web/`                     | the guides and the docs site, built from `main`                                                                                                       |
+| `tools/`                            | scripts the justfile runs: `quick.ts`, the checks of what changed                                                                                     |
 | `.agents/skills/`                   | how recurring work is done; `.claude/skills/` points to it                                                                                            |
 
 ## Crates
@@ -473,7 +474,8 @@ own type: the evidence and the feature are read by different people.
 just test        # every crate's tests
 just lint        # clippy, a warning failing it
 just fmt         # rustfmt
-just check       # everything CI gates on
+just quick       # what changed since the upstream, before each commit
+just check       # everything CI gates on, before each push
 just sdk         # the Bun SDK's kv over the core in process, a private child and a sidecar, and its codecs
 just sdk-check   # the Bun SDK's lint and types
 just protocol    # every codec and vector written again from protocol/*.wire
@@ -491,7 +493,7 @@ A timing beside the code is an `#[ignore]` test run by hand with
 Property tests use proptest and decoders get fuzz targets as the codecs land;
 a fuzz run is manual.
 
-Run `just check` before pushing. Say which checks you ran and which you could
+Run `just quick` before a commit and `just check` before pushing. Say which checks you ran and which you could
 not.
 
 ## Reporting your work

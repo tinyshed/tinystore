@@ -17,14 +17,21 @@ which could not.
 
 ## Before every commit
 
+- `just quick`: what changed since the branch's upstream, in minutes:
+  formatting, clippy, the tests of each area touched, every lint set that
+  names it, and the SDK a change of the wire, the protocol or an SDK reaches;
+  a file at the root of the library runs every lint set and test. Its table
+  of what runs for what is at the top of `tools/quick.ts`. Commits pile up
+  locally on it.
+
+## Before every push
+
 - `just check`: formatting, clippy, every crate's tests, the protocol's files,
-  the Bun SDK's suites, its lint and types (bun on `PATH`), and the workflows
-  (Docker).
+  the Bun, Go and Python SDKs' suites, their lint and types (bun on `PATH`),
+  and the workflows (Docker): about half an hour, once for the commits a
+  push carries.
 - `just test-linux`: clippy and the tests in the `rust:1.99` container, since
-  `cfg` hides Linux's code from a Windows host.
-- A change to an engine's seams, or to anything behind `#[cfg(feature = …)]`:
-  `cargo clippy -p tinystore --no-default-features --features <set> --all-targets -- -D warnings`
-  for `kv`, `kv,sql` and `kv,jobs`. CI builds the default features only.
+  `cfg` hides Linux's code from a Windows host; CI runs Linux as well.
 - Docker Desktop may be stopped: `platform-traps` says how to start it.
 - Never while a measurement runs: see research's `measure` skill.
 
