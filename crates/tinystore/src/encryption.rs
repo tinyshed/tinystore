@@ -156,15 +156,22 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Writes a file that is not there, its owner's alone where the system has
-/// owners, and makes it and its name durable.
+/// owners, and makes it and its name durable. It is written beside its name
+/// and renamed once whole: a crash between creating and writing it would
+/// leave an empty key that no open reads again.
 fn write_new(file: &Path, line: &str) -> io::Result<()> {
+    let mut beside = file.as_os_str().to_owned();
+    beside.push(".new");
+    let beside = std::path::PathBuf::from(beside);
     let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut made = options.open(file)?;
+    let mut made = options.open(&beside)?;
     made.write_all(format!("{line}\n").as_bytes())?;
     made.sync_all()?;
+    drop(made);
+    fs::rename(&beside, file)?;
     file.parent().map_or(Ok(()), sync_directory)
 }
 

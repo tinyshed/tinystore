@@ -79,11 +79,15 @@ pub fn unix_nanos(time: SystemTime) -> i64 {
 }
 
 /// The time `millis` milliseconds after the Unix epoch; before it when negative.
+/// A time outside the years 1601 to 9999 is held at their edge: `SystemTime`
+/// panics past what the platform represents, and Windows' begins at 1601.
 #[cfg(any(feature = "kv", feature = "jobs", feature = "metrics"))]
 pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
+    const LATEST: Duration = Duration::from_secs(253_402_300_799);
+    const EARLIEST: Duration = Duration::from_secs(11_644_473_600);
     match u64::try_from(millis) {
-        Ok(after) => UNIX_EPOCH + Duration::from_millis(after),
-        Err(_) => UNIX_EPOCH - Duration::from_millis(millis.unsigned_abs()),
+        Ok(after) => UNIX_EPOCH + Duration::from_millis(after).min(LATEST),
+        Err(_) => UNIX_EPOCH - Duration::from_millis(millis.unsigned_abs()).min(EARLIEST),
     }
 }
 
@@ -118,5 +122,13 @@ mod tests {
         let before = UNIX_EPOCH - Duration::from_millis(1_500);
         assert_eq!(unix_millis(before), -1_500);
         assert_eq!(unix_nanos(before), -1_500_000_000);
+    }
+
+    #[test]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "metrics"))]
+    fn a_time_past_any_platform_is_held_at_its_edge() {
+        assert!(from_unix_millis(i64::MAX) > from_unix_millis(0));
+        assert!(from_unix_millis(i64::MIN) < from_unix_millis(0));
+        assert_eq!(unix_millis(from_unix_millis(-1_500)), -1_500);
     }
 }

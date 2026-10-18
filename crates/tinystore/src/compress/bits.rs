@@ -19,7 +19,9 @@ pub(crate) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: 
 /// `packed_len` of them.
 pub(crate) fn unpack(data: &[u8], count: usize, width: u32) -> Vec<u64> {
     let mut reader = BitReader::of(data);
-    (0..count).map(|_| reader.read(width)).collect()
+    let values = (0..count).map(|_| reader.read(width)).collect();
+    debug_assert!(!reader.short(), "unpack's caller checks that `data` holds {count} values of {width} bits");
+    values
 }
 
 /// A writer of bits onto bytes, the lowest bit of a byte first.
@@ -104,7 +106,6 @@ impl<'a> BitReader<'a> {
     }
 
     /// Whether a read went past the end.
-    #[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
     pub(crate) fn short(&self) -> bool {
         self.short
     }

@@ -327,8 +327,12 @@ fn in_savepoint<T>(raw: &SqlTx<'_>, work: impl FnOnce() -> Result<T>) -> Result<
         Ok(value) => raw.execute_batch(RELEASE).map_err(failed).map(|()| value),
         Err(error) => {
             raw.committed().take_back(mark);
-            raw.execute_batch(ROLLBACK_TO).and_then(|()| raw.execute_batch(RELEASE)).map_err(failed)?;
-            Err(error)
+            // The work's own failure is the answer; one of the rollback
+            // after it only says why the transaction cannot go on.
+            match raw.execute_batch(ROLLBACK_TO).and_then(|()| raw.execute_batch(RELEASE)) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(error.within(format!("a savepoint not rolled back ({rollback})"))),
+            }
         }
     }
 }

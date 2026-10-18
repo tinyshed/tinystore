@@ -100,7 +100,11 @@ impl Scheduler {
             woken: false,
         });
         drop(state);
-        self.start()?;
+        if let Err(error) = self.start() {
+            // A task the caller was refused must not run once a later one starts the thread.
+            self.shared.lock().tasks.retain(|task| task.id != id);
+            return Err(error);
+        }
         self.shared.changed.notify_all();
         Ok(Wake { shared: Arc::downgrade(&self.shared), id })
     }
