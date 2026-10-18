@@ -1354,6 +1354,39 @@ fn an_old_home_started_again_after_a_crash_and_a_failover_becomes_a_copy() {
 }
 
 #[test]
+fn an_engine_opening_a_file_its_node_takes_over_waits_for_the_takeover_and_writes_the_file() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    home.bucket::<String>("sessions").open().unwrap().set("before", &"the takeover".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    caught_up(&home, &copy, &["kv.db"]);
+    let copied = copy_point(&copy, "kv.db").unwrap();
+    home.close().unwrap();
+
+    // a reference to the copy held here keeps the takeover waiting, the copy already let go of
+    let held = copy.node().unwrap().copy("kv.db").unwrap();
+    let taking_over = {
+        let (store, taken) = (copy.clone(), Arc::clone(&held));
+        std::thread::spawn(move || store.node().unwrap().take_over_at(&store, "kv.db", taken, 0))
+    };
+    eventually("the takeover lets go of the copy", || copy.node().unwrap().copy("kv.db").is_none());
+    let opening = {
+        let store = copy.clone();
+        std::thread::spawn(move || store.bucket::<String>("sessions").open())
+    };
+    // time for the open to meet the takeover before it goes on
+    std::thread::sleep(Duration::from_millis(300));
+    drop(held);
+    taking_over.join().unwrap().unwrap();
+
+    let sessions = opening.join().unwrap().unwrap();
+    sessions.set("after", &"the takeover".to_owned()).unwrap();
+    assert_eq!(sessions.get("before").unwrap().as_deref(), Some("the takeover"));
+    assert_eq!(home_point(&copy, "kv.db").epoch, copied.epoch + 1, "the node writes the file as its home");
+    copy.close().unwrap();
+}
+
+#[test]
 fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};

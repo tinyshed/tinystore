@@ -43,6 +43,11 @@ pub(crate) struct State {
     /// The copies this node holds whole.
     copies: Mutex<HashMap<String, Arc<Copy>>>,
     copied: Condvar,
+    /// An open waits out a takeover of its file, and a takeover the opens
+    /// begun before it, so that an engine's file opens either as a copy the
+    /// takeover switches or after it, as this node's own.
+    routes: Mutex<Routes>,
+    rerouted: Condvar,
     pub(crate) upstream: Upstream,
     pub(crate) stopping: AtomicBool,
     threads: Mutex<Vec<JoinHandle<()>>>,
@@ -105,6 +110,47 @@ enum Verifying {
 /// The file in a copy's log directory that names the node a direct link
 /// takes it from, so that the link is made again when the node starts.
 const DIRECT: &str = "from";
+
+/// The files whose route may be changing now, by their name.
+#[derive(Default)]
+struct Routes {
+    /// How many engines are opening each.
+    opening: HashMap<String, usize>,
+    taking_over: HashSet<String>,
+}
+
+/// An engine's open of a file under way, which a takeover of the file waits
+/// for.
+pub(crate) struct Opening<'a> {
+    state: &'a State,
+    name: String,
+}
+
+impl Drop for Opening<'_> {
+    fn drop(&mut self) {
+        let mut routes = lock(&self.state.routes);
+        if let Some(opens) = routes.opening.get_mut(&self.name) {
+            *opens -= 1;
+            if *opens == 0 {
+                routes.opening.remove(&self.name);
+            }
+        }
+        self.state.rerouted.notify_all();
+    }
+}
+
+/// A takeover of a file under way, which an engine's open of it waits out.
+struct TakingOver<'a> {
+    state: &'a State,
+    name: String,
+}
+
+impl Drop for TakingOver<'_> {
+    fn drop(&mut self) {
+        lock(&self.state.routes).taking_over.remove(&self.name);
+        self.state.rerouted.notify_all();
+    }
+}
 
 /// Where a node's claim of a file in the catalog leaves the file.
 pub(crate) enum Claimed {
@@ -183,6 +229,8 @@ impl State {
             logs: Mutex::default(),
             copies: Mutex::default(),
             copied: Condvar::new(),
+            routes: Mutex::default(),
+            rerouted: Condvar::new(),
             upstream: Upstream::default(),
             stopping: AtomicBool::new(false),
             threads: Mutex::default(),
@@ -406,10 +454,13 @@ impl State {
     }
 
     /// Makes the copy `name` this running node's own at the next epoch, or at
-    /// `at_least` when that is later, as a claim or a lease names it: its
-    /// readers paused, its applier closed once no link holds it, its log going
-    /// on after the last entry it applied, and each engine's file of it given
-    /// a writer.
+    /// `at_least` when that is later, as a claim or a lease names it: the
+    /// engines' opens of it under way ended, its readers paused, its applier
+    /// closed once no link holds it, its log going on after the last entry it
+    /// applied, and each engine's file of it given a writer.
+    ///
+    /// An open between letting go of the copy and keeping the promotion's
+    /// point would wait for a copy that never comes, so opens wait it out.
     pub(crate) fn take_over_at(
         self: &Arc<Self>,
         store: &Store,
@@ -417,6 +468,7 @@ impl State {
         copy: Arc<Copy>,
         at_least: u64,
     ) -> Result<()> {
+        let _taking_over = self.wait_to_take_over(name)?;
         let paused = self.pause_readers(name)?;
         if let Some(direct) = lock(&self.direct).values().find(|direct| direct.follows(name)) {
             direct.remove(name);
@@ -437,6 +489,41 @@ impl State {
         drop(paused);
         store.applied(name);
         Ok(())
+    }
+
+    /// Begins an engine's open of `name` once no takeover of it is under way,
+    /// `READY_WAIT` at most: until the open ends, no takeover begins.
+    pub(crate) fn wait_to_open(&self, name: &str) -> Result<Opening<'_>> {
+        let deadline = Instant::now() + READY_WAIT;
+        let mut routes = lock(&self.routes);
+        while routes.taking_over.contains(name) {
+            let now = Instant::now();
+            if now >= deadline || self.stopping() {
+                return Err(Error::new(ErrorKind::Unavailable, format!("{name}: this node is taking it over still")));
+            }
+            let turn = (deadline - now).min(Duration::from_millis(250));
+            routes = self.rerouted.wait_timeout(routes, turn).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        *routes.opening.entry(name.to_owned()).or_default() += 1;
+        Ok(Opening { state: self, name: name.to_owned() })
+    }
+
+    /// Begins a takeover of `name` once the engines' opens of it under way
+    /// end, `PAUSE_AT_MOST` at most; an open begun meanwhile waits for it.
+    fn wait_to_take_over(&self, name: &str) -> Result<TakingOver<'_>> {
+        let deadline = Instant::now() + PAUSE_AT_MOST;
+        let mut routes = lock(&self.routes);
+        routes.taking_over.insert(name.to_owned());
+        while routes.opening.contains_key(name) {
+            let now = Instant::now();
+            if now >= deadline {
+                routes.taking_over.remove(name);
+                self.rerouted.notify_all();
+                return Err(Error::new(ErrorKind::Unavailable, format!("{name}: an engine still opens it")));
+            }
+            routes = self.rerouted.wait_timeout(routes, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
+        }
+        Ok(TakingOver { state: self, name: name.to_owned() })
     }
 
     /// Takes writes of `name` again, after a move that did not finish.
