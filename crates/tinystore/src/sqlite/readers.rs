@@ -185,10 +185,12 @@ impl Readers {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 pool.leave(ticket);
-                return Err(Error::new(
-                    ErrorKind::Unavailable,
-                    format!("{}: all {} readers are busy", self.path.display(), self.config.readers),
-                ));
+                let why = if pool.paused {
+                    "its readers are paused while a snapshot takes the file's place".to_owned()
+                } else {
+                    format!("all {} readers are busy", self.config.readers)
+                };
+                return Err(Error::new(ErrorKind::Unavailable, format!("{}: {why}", self.path.display())));
             }
             if ticket.is_none() {
                 ticket = Some(pool.queue());

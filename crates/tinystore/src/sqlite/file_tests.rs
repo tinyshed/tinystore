@@ -611,3 +611,26 @@ fn a_copy_s_readers_paused_hold_its_file_open_nowhere_and_their_reads_wait_for_w
     readers.resume();
     assert_eq!(reading.join().unwrap(), 2, "the read that waited reads the file that took the copy's place");
 }
+
+/// A settler that panics once, as an engine kept in the file might.
+struct PanicsOnce(std::sync::atomic::AtomicBool);
+
+impl Settle for PanicsOnce {
+    fn settle(&self, _tx: &Tx<'_>, left: Left) -> Result<()> {
+        if matches!(left, Left::Before) && !self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            panic!("a bug in a settler");
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_commit_that_panics_outside_its_writes_leaves_a_leader_for_the_next() {
+    let (_dir, file) = open(Config::default());
+    let settler: Arc<dyn Settle> = Arc::new(PanicsOnce(Default::default()));
+    file.settle_with(Arc::downgrade(&settler));
+
+    assert_eq!(insert(&file, "a").unwrap_err().kind(), ErrorKind::OutcomeUnknown);
+    insert(&file, "b").unwrap();
+    assert_eq!(count(&file), 1);
+}

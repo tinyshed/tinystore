@@ -329,15 +329,6 @@ fn past_bound(size: usize, bytes: usize) -> Error {
 /// A statement's failure as the error a caller acts on: a unique or primary
 /// key already held is `conflict`, and any other constraint is `invalid`.
 pub(crate) fn failure(what: &str, error: rusqlite::Error) -> Error {
-    use rusqlite::ffi;
-    if let rusqlite::Error::SqliteFailure(code, _) = &error {
-        let held = [ffi::SQLITE_CONSTRAINT_UNIQUE, ffi::SQLITE_CONSTRAINT_PRIMARYKEY, ffi::SQLITE_CONSTRAINT_ROWID];
-        if code.code == rusqlite::ErrorCode::ConstraintViolation {
-            let kind =
-                if held.contains(&code.extended_code) { crate::ErrorKind::Conflict } else { crate::ErrorKind::Invalid };
-            return crate::sqlite::name_constraint(Error::new(kind, what), &error).with_source(error);
-        }
-    }
     crate::sqlite::sql_error(what, error)
 }
 

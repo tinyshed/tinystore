@@ -228,7 +228,7 @@ impl Capture {
         if !in_the_file(&handed) {
             return handed.map_err(broken);
         }
-        self.checkpoint_when_long(writer, end).map_err(broken)?;
+        self.checkpoint_when_long(writer, end, broken)?;
         handed
     }
 
@@ -271,14 +271,17 @@ impl Capture {
     /// Checkpoints each time the WAL grew by as many frames as SQLite's own
     /// checkpoint waits for, so that a reader that keeps the WAL from
     /// starting over does not cost a sync every commit.
-    fn checkpoint_when_long(&self, writer: &Connection, end: u32) -> Result<()> {
+    /// A log that fails to sync no longer holds what it was handed, so the
+    /// file is `broken`; a checkpoint that fails after it leaves the commit
+    /// logged and is tried again at the next commit.
+    fn checkpoint_when_long(&self, writer: &Connection, end: u32, broken: impl FnOnce(Error) -> Error) -> Result<()> {
         if end < self.lock().checkpointed + CHECKPOINT_AT {
             return Ok(());
         }
-        self.observer.sync()?;
+        self.observer.sync().map_err(broken)?;
         let (busy, frames, copied): (i64, i64, i64) = writer
             .query_row(CHECKPOINT, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .map_err(|error| sql_error("a checkpoint", error))?;
+            .map_err(|error| sql_error("a checkpoint of a commit already logged", error))?;
         let mut state = self.lock();
         state.checkpointed = end;
         if busy == 0 && frames == copied {

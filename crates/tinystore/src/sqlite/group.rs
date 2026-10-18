@@ -183,7 +183,17 @@ impl Group {
             let started = Instant::now();
             // read while the writer is held, which a change of the file's home holds too
             let capture = logged(&self.capture);
-            let answers = commit(&connection, &batch, &self.settlers, capture.as_deref());
+            // A panic past the writes' own savepoints, in a settler or a hook,
+            // must still reach `hand_off`, or no thread leads again.
+            let answers =
+                catch_unwind(AssertUnwindSafe(|| commit(&connection, &batch, &self.settlers, capture.as_deref())))
+                    .unwrap_or_else(|_| {
+                        if !connection.is_autocommit() {
+                            let _ = execute(&connection, ROLLBACK);
+                        }
+                        let panicked = Error::new(ErrorKind::OutcomeUnknown, "a grouped commit panicked");
+                        batch.iter().map(|_| Err(panicked.duplicate())).collect()
+                    });
             let held = started.elapsed();
             drop(connection);
             if !batch.is_empty() {
@@ -412,7 +422,7 @@ fn commit(
         let _ = execute(connection, ROLLBACK);
     }
     let failure = sql_error("a grouped commit", error);
-    let unknown = || Error::new(ErrorKind::OutcomeUnknown, failure.to_string());
+    let unknown = || Error::new(ErrorKind::OutcomeUnknown, "a grouped commit").with_source(failure.duplicate());
     answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
 }
 

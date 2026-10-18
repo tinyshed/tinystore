@@ -76,7 +76,7 @@ impl Applier {
         // Page 1 written through sqlite_dbpage leaves the connection's own
         // schema and file size where they were: it reads the next commit as
         // over a file that is not there. A new connection reads it as it is.
-        if pages.first().is_some_and(|&(number, _)| number == 1) || committed.is_err() {
+        if pages.iter().any(|&(number, _)| number == 1) || committed.is_err() {
             held.take();
         }
         committed.map_err(|error| error.within(self.path.display()))?;

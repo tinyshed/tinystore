@@ -520,10 +520,12 @@ impl Switch {
         };
         let describe = self.path.display().to_string();
         let mut writing = lock(&held);
-        let capture = capture_cell.write().unwrap_or_else(PoisonError::into_inner).take();
-        if let Some(capture) = capture {
+        // The capture leaves its cell only once closed: one that fails to close
+        // keeps the file a home whose commits are logged.
+        if let Some(capture) = logged(&capture_cell) {
             capture.close().map_err(|error| error.within(format!("{describe}: its log")))?;
         }
+        capture_cell.write().unwrap_or_else(PoisonError::into_inner).take();
         writing
             .query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(()))
             .map_err(|error| sql_error(format!("{describe}: its last checkpoint as a home"), error))?;

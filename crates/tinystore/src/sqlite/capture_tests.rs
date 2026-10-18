@@ -14,6 +14,7 @@ struct Kept {
     gaps: Mutex<Vec<Position>>,
     syncs: AtomicUsize,
     refusing: AtomicBool,
+    unsynced: AtomicBool,
 }
 
 struct Handed {
@@ -52,6 +53,9 @@ impl Observe for Kept {
     }
 
     fn sync(&self) -> Result<()> {
+        if self.unsynced.load(Ordering::SeqCst) {
+            return Err(Error::io("sync", io::Error::other("the disk is gone")));
+        }
         self.syncs.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -315,5 +319,29 @@ fn a_file_open_becomes_a_copy_and_a_home_again_its_commits_handed_only_as_a_home
     assert!(!file.is_copy());
     insert(&file, "a home again").unwrap();
     assert_eq!((kept.handed(), count(&file)), (handed + 1, 2), "a home again hands its commits");
+    file.close().unwrap();
+}
+
+#[cfg(feature = "replication")]
+#[test]
+fn a_log_that_fails_to_close_keeps_the_file_a_logged_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let kept = Arc::new(Kept::default());
+    let file = File::open_observed(dir.path().join("stuck.db"), Config::default(), Some(kept.clone())).unwrap();
+    let insert = |value: &'static str| {
+        file.write(value.len(), move |tx| {
+            tx.execute("insert into t (v) values (?1)", [value]).map(drop).map_err(|error| sql_error("insert", error))
+        })
+    };
+    file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("t", error))).unwrap();
+
+    kept.unsynced.store(true, Ordering::SeqCst);
+    assert!(file.become_copy().is_err());
+    kept.unsynced.store(false, Ordering::SeqCst);
+
+    assert!(!file.is_copy(), "a failed change of home leaves a home");
+    let handed = kept.handed();
+    insert("still a home").unwrap();
+    assert_eq!(kept.handed(), handed + 1, "whose commits are still logged");
     file.close().unwrap();
 }

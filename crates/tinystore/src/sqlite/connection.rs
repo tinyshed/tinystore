@@ -160,7 +160,7 @@ impl Role {
 /// An SQLite failure as the error kind a caller acts on.
 pub(crate) fn sql_error(what: impl Into<String>, error: rusqlite::Error) -> Error {
     let kind = match &error {
-        rusqlite::Error::SqliteFailure(failure, _) => kind_of(failure.code),
+        rusqlite::Error::SqliteFailure(failure, _) => kind_of(failure),
         rusqlite::Error::QueryReturnedNoRows => ErrorKind::NotFound,
         // What the file holds is not what the schema says it holds.
         rusqlite::Error::FromSqlConversionFailure(..)
@@ -168,18 +168,51 @@ pub(crate) fn sql_error(what: impl Into<String>, error: rusqlite::Error) -> Erro
         | rusqlite::Error::IntegralValueOutOfRange(..) => ErrorKind::Corrupt,
         _ => ErrorKind::Internal,
     };
-    Error::new(kind, what).with_source(error)
+    super::name_constraint(Error::new(kind, what), &error).with_source(error)
 }
 
-fn kind_of(code: ErrorCode) -> ErrorKind {
-    match code {
+/// A unique or a primary key already held is `conflict`; any other
+/// constraint, a check, a not null or a foreign key, is `invalid`.
+fn kind_of(failure: &rusqlite::ffi::Error) -> ErrorKind {
+    use rusqlite::ffi;
+    let held = [ffi::SQLITE_CONSTRAINT_UNIQUE, ffi::SQLITE_CONSTRAINT_PRIMARYKEY, ffi::SQLITE_CONSTRAINT_ROWID];
+    match failure.code {
+        ErrorCode::ConstraintViolation if held.contains(&failure.extended_code) => ErrorKind::Conflict,
+        ErrorCode::ConstraintViolation => ErrorKind::Invalid,
         ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => ErrorKind::Unavailable,
         ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase => ErrorKind::Corrupt,
         ErrorCode::DiskFull | ErrorCode::TooBig => ErrorKind::Limit,
         ErrorCode::SystemIoFailure | ErrorCode::CannotOpen | ErrorCode::PermissionDenied => ErrorKind::Io,
-        ErrorCode::ConstraintViolation => ErrorKind::Conflict,
         ErrorCode::ReadOnly => ErrorKind::Invalid,
         ErrorCode::OperationInterrupted => ErrorKind::Cancelled,
         _ => ErrorKind::Internal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn broken(sql: &str) -> Error {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE parent (id INTEGER PRIMARY KEY);
+                 CREATE TABLE t (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+                     total INTEGER CHECK (total > 0), parent INTEGER REFERENCES parent (id));
+                 INSERT INTO t VALUES (1, 'a', 1, NULL);
+                 PRAGMA foreign_keys = ON;",
+            )
+            .unwrap();
+        sql_error("t", connection.execute_batch(sql).unwrap_err())
+    }
+
+    #[test]
+    fn only_a_key_already_held_is_a_conflict() {
+        assert_eq!(broken("INSERT INTO t VALUES (2, 'a', 1, NULL)").kind(), ErrorKind::Conflict, "unique");
+        assert_eq!(broken("INSERT INTO t VALUES (1, 'b', 1, NULL)").kind(), ErrorKind::Conflict, "primary key");
+        assert_eq!(broken("INSERT INTO t VALUES (2, NULL, 1, NULL)").kind(), ErrorKind::Invalid, "not null");
+        assert_eq!(broken("INSERT INTO t VALUES (2, 'b', 0, NULL)").kind(), ErrorKind::Invalid, "check");
+        assert_eq!(broken("INSERT INTO t VALUES (2, 'b', 1, 9)").kind(), ErrorKind::Invalid, "foreign key");
     }
 }
