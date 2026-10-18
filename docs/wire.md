@@ -467,8 +467,9 @@ carry:
 The values they carry:
 
 - the server's own call carries nothing, `{}` each way;
-- a kv value is nil, an integer or bin, as its row keeps it, and a version is
-  an opaque bin compared only for equality;
+- a kv value is nil, an integer or bin, as its row keeps it, a bin's first
+  byte the kind that wrote it (1 text, 2 bytes, 3 JSON, 4 a float's eight
+  bytes), and a version is an opaque bin compared only for equality;
 - a job's value is its JSON as str;
 - an SQL value is one of SQLite's five: nil, an integer, a float, str or bin;
 - a record's attribute keeps its JSON spelling as str;

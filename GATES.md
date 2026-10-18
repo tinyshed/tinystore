@@ -415,6 +415,9 @@ module defines.
 - prepared key changes hold their memory once and wait for none of their own slots — `TestABatchHoldsEachKeysMemoryOnce`, `TestABatchOfKeysDoesNotWaitForItsOwnWriteSlots`
 - a prepared key change refuses nil as an ordinary call does — `TestAChangeRefusesANilKeyAsItsOrdinaryCallDoes`
 - a row keeps a value by its type, for every type — `a_primitive_is_kept_as_its_row`, `a_compound_value_is_kept_as_json` in `kv::value`
+- a kv row is the same bytes in Rust, Bun, Go and Python, a bin's first byte the kind that wrote it — `every_language_writes_and_reads_the_same_rows` in `kv::value`, over `testdata/kv/values.json`, which `sdk/js/test/values.test.ts`, `TestEveryLanguageWritesAndReadsTheSameRows` in Go's `internal/core` and `test_every_language_writes_and_reads_the_same_rows` in Python's read too
+- a value read as another kind than it was written is `corrupt`, never a plausible wrong value — `a_value_read_as_another_kind_than_it_was_written_is_refused_not_guessed` in `kv::value`; `a row read as another kind than wrote it is corrupt` in `sdk/js/test/values.test.ts`, `TestARowReadAsAnotherKindThanWroteItIsCorrupt` in Go's, `test_a_row_read_as_another_kind_than_wrote_it_is_corrupt` in Python's
+- `tinystore kv get` shows each kind a program kept as what it is — `each_kind_a_program_kept_reads_back_as_what_it_is` in the command line's `kv`
 - an overflowing counter is refused, not rounded — `an_overflowing_counter_is_refused_rather_than_rounded` in `kv::counters`, in memory too
 - `LoseAtMost` loses no more than its interval — `TestLoseAtMostLosesNoMoreThanItsInterval`, an exit that closes nothing
 - counters of one name keep their numbers one way — `counters_of_a_name_count_one_way_in_a_process` in `kv::counters`

@@ -3,24 +3,57 @@
 //! A type is kept by what serde says it is, so a bucket's type is given once,
 //! where the bucket opens, and nothing wraps it:
 //!
-//! | Type                                   | Row          | Example                    |
-//! |----------------------------------------|--------------|----------------------------|
-//! | `()`, `None`                           | nothing      | a set's member             |
-//! | `bool`, integers that fit an `i64`     | an integer   | `true → 1`, `-7 → -7`      |
-//! | `u64`                                  | 8 bytes, big-endian | `2^63 → 80 00 … 00` |
-//! | `f64`, `f32`                           | their bits, big-endian | `-0.0 → 80 00 … 00` |
-//! | `String`, `char`, serde bytes          | the bytes    | `"hé" → 68 c3 a9`          |
-//! | structs, maps, sequences, enums        | JSON         | `{"user":42}`              |
+//! | Type                               | Row                                 | Example                      |
+//! |------------------------------------|-------------------------------------|------------------------------|
+//! | `()`, `None`                       | nothing                             | a set's member               |
+//! | `bool`, integers that fit an `i64` | an integer                          | `true → 1`, `-7 → -7`        |
+//! | `String`, `char`                   | `01`, then the text's UTF-8         | `"hé" → 01 68 c3 a9`         |
+//! | serde bytes                        | `02`, then the bytes                | `Bytes([7]) → 02 07`         |
+//! | structs, maps, sequences, enums    | `03`, then JSON                     | `{"user":42} → 03 7b …`      |
+//! | `f64`                              | `04`, then its bits, big-endian     | `-0.0 → 04 80 00 … 00`       |
+//! | `u64`                              | `05`, then 8 bytes, big-endian      | `2^63 → 05 80 00 … 00`       |
+//! | `f32`                              | `06`, then its bits, big-endian     | `1.0 → 06 3f 80 00 00`       |
 //!
-//! A float keeps its bits, `-0`, infinities and a NaN's payload included. A
-//! newtype keeps what it wraps. `Vec<u8>` is a sequence to serde and becomes
-//! JSON; [`Bytes`] keeps bytes as they are.
+//! A row of bytes says by its first byte what wrote it, so a value read as
+//! another kind than it was written is `Corrupt` rather than a plausible wrong
+//! value: text is never read from JSON, nor bytes from text. Every SDK writes
+//! the same rows, so each reads the others'. A float keeps its bits, `-0`,
+//! infinities and a NaN's payload included. A newtype keeps what it wraps.
+//! `Vec<u8>` is a sequence to serde and becomes JSON; [`Bytes`] keeps bytes as
+//! they are.
 
 use std::fmt;
 
 use serde::de::{self, DeserializeOwned, Visitor};
 use serde::ser::{self, Impossible};
 use serde::{Deserialize, Serialize};
+
+/// The first byte of a row of bytes: the kind of value that wrote it.
+const TEXT: u8 = 1;
+const BYTES: u8 = 2;
+const JSON: u8 = 3;
+const F64: u8 = 4;
+const U64: u8 = 5;
+const F32: u8 = 6;
+
+fn tagged(tag: u8, body: &[u8]) -> Raw {
+    let mut row = Vec::with_capacity(body.len() + 1);
+    row.push(tag);
+    row.extend_from_slice(body);
+    Raw::Bytes(row)
+}
+
+fn kind_of(tag: u8) -> &'static str {
+    match tag {
+        TEXT => "text",
+        BYTES => "bytes",
+        JSON => "JSON",
+        F64 => "an f64",
+        U64 => "a u64",
+        F32 => "an f32",
+        _ => "bytes of no kind",
+    }
+}
 
 /// A value as its row keeps it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,7 +140,9 @@ impl de::Error for Mismatch {
 pub(crate) fn encode<V: Serialize>(value: &V) -> Result<Raw, Mismatch> {
     match value.serialize(Probe) {
         Ok(raw) => Ok(raw),
-        Err(Probed::Compound) => serde_json::to_vec(value).map(Raw::Bytes).map_err(|error| Mismatch(error.to_string())),
+        Err(Probed::Compound) => {
+            serde_json::to_vec(value).map(|json| tagged(JSON, &json)).map_err(|error| Mismatch(error.to_string()))
+        }
         Err(Probed::Failed(mismatch)) => Err(mismatch),
     }
 }
@@ -197,27 +232,27 @@ impl ser::Serializer for Probe {
     }
 
     fn serialize_u64(self, value: u64) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.to_be_bytes().to_vec()))
+        Ok(tagged(U64, &value.to_be_bytes()))
     }
 
     fn serialize_f32(self, value: f32) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.to_bits().to_be_bytes().to_vec()))
+        Ok(tagged(F32, &value.to_bits().to_be_bytes()))
     }
 
     fn serialize_f64(self, value: f64) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.to_bits().to_be_bytes().to_vec()))
+        Ok(tagged(F64, &value.to_bits().to_be_bytes()))
     }
 
     fn serialize_char(self, value: char) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.to_string().into_bytes()))
+        Ok(tagged(TEXT, value.to_string().as_bytes()))
     }
 
     fn serialize_str(self, value: &str) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.as_bytes().to_vec()))
+        Ok(tagged(TEXT, value.as_bytes()))
     }
 
     fn serialize_bytes(self, value: &[u8]) -> Result<Raw, Probed> {
-        Ok(Raw::Bytes(value.to_vec()))
+        Ok(tagged(BYTES, value))
     }
 
     fn serialize_none(self) -> Result<Raw, Probed> {
@@ -270,9 +305,15 @@ impl ser::Serializer for Probe {
 struct Row<'de>(&'de Raw);
 
 impl<'de> Row<'de> {
-    fn bytes(&self, wanted: &str) -> Result<&'de [u8], Mismatch> {
+    /// The body of a row of bytes that `tag` wrote; one another kind wrote
+    /// is refused, naming both.
+    fn body(&self, tag: u8, wanted: &str) -> Result<&'de [u8], Mismatch> {
         match self.0 {
-            Raw::Bytes(bytes) => Ok(bytes),
+            Raw::Bytes(bytes) => match bytes.split_first() {
+                Some((&first, body)) if first == tag => Ok(body),
+                Some((&first, _)) => Err(Mismatch(format!("{wanted} from a row of {}", kind_of(first)))),
+                None => Err(Mismatch(format!("{wanted} from a row of no bytes"))),
+            },
             other => Err(Mismatch(format!("{wanted} from a row holding {}", shown(other)))),
         }
     }
@@ -284,13 +325,13 @@ impl<'de> Row<'de> {
         }
     }
 
-    fn fixed<const N: usize>(&self, wanted: &str) -> Result<[u8; N], Mismatch> {
-        let bytes = self.bytes(wanted)?;
+    fn fixed<const N: usize>(&self, tag: u8, wanted: &str) -> Result<[u8; N], Mismatch> {
+        let bytes = self.body(tag, wanted)?;
         bytes.try_into().map_err(|_| Mismatch(format!("{wanted} from {} bytes rather than {N}", bytes.len())))
     }
 
     fn text(&self) -> Result<&'de str, Mismatch> {
-        std::str::from_utf8(self.bytes("text")?).map_err(|_| Mismatch("text that is not UTF-8".to_owned()))
+        std::str::from_utf8(self.body(TEXT, "text")?).map_err(|_| Mismatch("text that is not UTF-8".to_owned()))
     }
 
     /// Reads the row as JSON with `read`, refusing anything after the value.
@@ -298,7 +339,7 @@ impl<'de> Row<'de> {
         &self,
         read: impl FnOnce(&mut serde_json::Deserializer<serde_json::de::SliceRead<'de>>) -> serde_json::Result<T>,
     ) -> Result<T, Mismatch> {
-        let mut json = serde_json::Deserializer::from_slice(self.bytes("JSON")?);
+        let mut json = serde_json::Deserializer::from_slice(self.body(JSON, "JSON")?);
         let value = read(&mut json).map_err(|error| Mismatch(error.to_string()))?;
         json.end().map_err(|error| Mismatch(error.to_string()))?;
         Ok(value)
@@ -336,7 +377,14 @@ impl<'de> de::Deserializer<'de> for Row<'de> {
         match self.0 {
             Raw::None => visitor.visit_unit(),
             Raw::Int(int) => visitor.visit_i64(*int),
-            Raw::Bytes(_) => self.json(|json| de::Deserializer::deserialize_any(json, visitor)),
+            Raw::Bytes(bytes) => match bytes.first() {
+                Some(&TEXT) => visitor.visit_borrowed_str(self.text()?),
+                Some(&BYTES) => visitor.visit_borrowed_bytes(self.body(BYTES, "bytes")?),
+                Some(&F64) => visitor.visit_f64(f64::from_bits(u64::from_be_bytes(self.fixed(F64, "an f64")?))),
+                Some(&U64) => visitor.visit_u64(u64::from_be_bytes(self.fixed(U64, "a u64")?)),
+                Some(&F32) => visitor.visit_f32(f32::from_bits(u32::from_be_bytes(self.fixed(F32, "an f32")?))),
+                _ => self.json(|json| de::Deserializer::deserialize_any(json, visitor)),
+            },
         }
     }
 
@@ -354,15 +402,15 @@ impl<'de> de::Deserializer<'de> for Row<'de> {
     }
 
     fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_u64(u64::from_be_bytes(self.fixed("a u64")?))
+        visitor.visit_u64(u64::from_be_bytes(self.fixed(U64, "a u64")?))
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_f32(f32::from_bits(u32::from_be_bytes(self.fixed("an f32")?)))
+        visitor.visit_f32(f32::from_bits(u32::from_be_bytes(self.fixed(F32, "an f32")?)))
     }
 
     fn deserialize_f64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_f64(f64::from_bits(u64::from_be_bytes(self.fixed("an f64")?)))
+        visitor.visit_f64(f64::from_bits(u64::from_be_bytes(self.fixed(F64, "an f64")?)))
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
@@ -378,11 +426,11 @@ impl<'de> de::Deserializer<'de> for Row<'de> {
     }
 
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_borrowed_bytes(self.bytes("bytes")?)
+        visitor.visit_borrowed_bytes(self.body(BYTES, "bytes")?)
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {
-        visitor.visit_borrowed_bytes(self.bytes("bytes")?)
+        visitor.visit_borrowed_bytes(self.body(BYTES, "bytes")?)
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Mismatch> {

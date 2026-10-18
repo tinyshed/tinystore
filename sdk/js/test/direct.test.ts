@@ -80,7 +80,9 @@ const echo: Script = (method, body) => {
 		return KvWritten.encode({ written: true, version: new Uint8Array(8) })
 	}
 	const key = String(KvCall.decode(body).key)
-	return KvEntry.encode({ found: true, value: new TextEncoder().encode(JSON.stringify(key)) })
+	// a row of JSON: its kind's byte, 3, then the text
+	const json = new TextEncoder().encode(JSON.stringify(key))
+	return KvEntry.encode({ found: true, value: Uint8Array.of(3, ...json) })
 }
 
 function bucketOver(link: Link): Bucket<string> {

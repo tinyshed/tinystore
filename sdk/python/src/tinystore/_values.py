@@ -1,8 +1,10 @@
 """Python values as the store keeps them, by the type a handle is opened with.
 
 A bucket keeps a value as the core keeps a Rust type, so that every language
-reads the others' rows: text and bytes as they are, integers and booleans as
-integers, floats bit for bit, and JSON for the rest. JSON reads back into its
+reads the others' rows: integers and booleans as integers, and a row of bytes
+that says by its first byte what wrote it: 1 text, 2 bytes, 3 JSON, 4 a
+float's eight bytes. A row read as another kind than wrote it is corrupt,
+never a plausible wrong value. JSON reads back into its
 type: a dataclass from its fields' names, a TypedDict as the dict it is, a
 model with ``model_validate`` as pydantic reads it; lists, dicts, unions,
 enums and datetimes follow their annotations. Unknown keys are ignored, as
@@ -25,6 +27,25 @@ from ._wire.codec import Raw, text_of
 from .errors import CorruptError, InvalidError
 
 _INT64 = range(-(1 << 63), 1 << 63)
+
+# the first byte of a row of bytes: the kind of value that wrote it
+_TEXT, _BYTES, _JSON, _FLOAT = 1, 2, 3, 4
+_KINDS = {1: "text", 2: "bytes", 3: "JSON", 4: "a float", 5: "a u64", 6: "an f32"}
+
+
+def _tagged(kind: int, body: bytes) -> bytes:
+    return bytes((kind,)) + body
+
+
+def _body(raw: Raw, kind: int, wanted: str) -> bytes:
+    """The body of a row that kind wrote; a row another kind wrote is corrupt here, never read as this one."""
+    if not isinstance(raw, bytes):
+        raise CorruptError(f"a stored value is {_describe(raw)} where {wanted} was written")
+    if not raw:
+        raise CorruptError(f"{wanted} from a row of no bytes")
+    if raw[0] != kind:
+        raise CorruptError(f"{wanted} from a row of {_KINDS.get(raw[0], 'bytes of no kind')}")
+    return raw[1:]
 
 
 def _default(value: Any) -> Any:
@@ -142,26 +163,26 @@ class _Json:
         self._of = of
 
     def encode(self, value: Any) -> Raw:
-        return to_json(value).encode()
+        return _tagged(_JSON, to_json(value).encode())
 
     def decode(self, raw: Raw) -> Any:
         if raw is None:
             return None
-        if not isinstance(raw, bytes):
-            raise CorruptError(f"a stored value is {_describe(raw)} where JSON was written")
-        return from_json(raw, self._of)
+        return from_json(_body(raw, _JSON, "JSON"), self._of)
 
 
 class _Text:
     def encode(self, value: str) -> Raw:
         if not isinstance(value, str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"a {type(value).__name__} in a bucket of str")
-        return value.encode()
+        return _tagged(_TEXT, value.encode())
 
     def decode(self, raw: Raw) -> str:
-        text = "" if raw is None else text_of(raw) if isinstance(raw, bytes) else None
+        if raw is None:
+            return ""
+        text = text_of(_body(raw, _TEXT, "text"))
         if text is None:
-            raise CorruptError(f"a stored value is {_describe(raw)}, which is no UTF-8 text")
+            raise CorruptError("a stored value is text that is not UTF-8")
         return text
 
 
@@ -169,12 +190,12 @@ class _Bytes:
     def encode(self, value: bytes) -> Raw:
         if not isinstance(value, bytes | bytearray | memoryview):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"a {type(value).__name__} in a bucket of bytes")
-        return bytes(value)
+        return _tagged(_BYTES, bytes(value))
 
     def decode(self, raw: Raw) -> bytes:
-        if isinstance(raw, int):
-            raise CorruptError(f"a stored value is {_describe(raw)} where bytes were written")
-        return raw or b""
+        if raw is None:
+            return b""
+        return _body(raw, _BYTES, "bytes")
 
 
 class _Int:
@@ -195,12 +216,13 @@ class _Float:
     def encode(self, value: float) -> Raw:
         if isinstance(value, bool) or not isinstance(value, int | float):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise InvalidError(f"a {type(value).__name__} in a bucket of float")
-        return struct.pack(">d", value)
+        return _tagged(_FLOAT, struct.pack(">d", value))
 
     def decode(self, raw: Raw) -> float:
-        if not isinstance(raw, bytes) or len(raw) != 8:
-            raise CorruptError(f"a stored value is {_describe(raw)} where a float's eight bytes were written")
-        return struct.unpack(">d", raw)[0]
+        bits = _body(raw, _FLOAT, "a float")
+        if len(bits) != 8:
+            raise CorruptError(f"a float from {len(bits)} bytes rather than 8")
+        return struct.unpack(">d", bits)[0]
 
 
 class _Bool:

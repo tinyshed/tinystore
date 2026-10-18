@@ -130,9 +130,8 @@ fn shown(key: &str, value: &Stored, expires: Option<SystemTime>) -> serde_json::
 /// A key, its value and when it expires.
 type Kept = (String, Stored, Option<SystemTime>);
 
-/// Reads the bucket's entries as `Stored` values, the key of each row that
-/// holds an integer read again as one; an encrypted bucket with the store's
-/// key.
+/// Reads the bucket's entries as `Stored` values; an encrypted bucket with
+/// the store's key.
 fn read(
     store: &Store,
     name: &str,
@@ -146,17 +145,8 @@ fn read(
         Err(error) => return Err(failed(error)),
         Ok(_) => false,
     };
-    let bytes = opened::<Stored>(store, name, encrypted)?;
-    let mut entries = read(&bytes)?;
-    if entries.iter().any(|(_, value, _)| *value == Stored::Unread) {
-        let integers = opened::<i64>(store, name, encrypted)?;
-        for (key, value, _) in &mut entries {
-            if *value == Stored::Unread {
-                *value = integers.get(key.as_str()).ok().flatten().map_or(Stored::Unread, Stored::Integer);
-            }
-        }
-    }
-    Ok(entries)
+    let stored = opened::<Stored>(store, name, encrypted)?;
+    Ok(read(&stored)?)
 }
 
 fn opened<V: tinystore::kv::Value>(store: &Store, name: &str, encrypted: bool) -> Result<Bucket<V>, asked::Refused> {
@@ -169,52 +159,51 @@ fn millis(at: Option<SystemTime>) -> Option<u64> {
     at.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|since| since.as_millis() as u64)
 }
 
-/// A value as a bucket's row keeps it, whatever type its program chose.
+/// A value as a bucket's row keeps it, whatever type its program chose: the
+/// row says by its first byte which kind wrote it, so each reads back as what
+/// it is.
 #[derive(Debug, PartialEq)]
 enum Stored {
     Nothing,
     Integer(i64),
+    Float(f64),
+    Text(String),
     Bytes(Vec<u8>),
-    /// A row of bytes this type cannot read: an integer, read again as one.
+    Json(serde_json::Value),
+    /// A row this command cannot read.
     Unread,
 }
 
 impl Stored {
-    /// The value as JSON: a row's JSON as it is, a JSON string or text as a
-    /// string, other bytes as their hex.
+    /// The value as JSON: JSON as it is, text as a string, bytes as their hex.
     fn json(&self) -> serde_json::Value {
         match self {
             Stored::Nothing | Stored::Unread => serde_json::Value::Null,
             Stored::Integer(integer) => (*integer).into(),
-            Stored::Bytes(bytes) => match serde_json::from_slice::<serde_json::Value>(bytes) {
-                Ok(json) if bytes.first().is_some_and(|byte| matches!(byte, b'{' | b'[' | b'"')) => json,
-                _ => match std::str::from_utf8(bytes) {
-                    Ok(text) => text.into(),
-                    Err(_) => hex(bytes).into(),
-                },
-            },
+            Stored::Float(float) => serde_json::Number::from_f64(*float).map_or(serde_json::Value::Null, Into::into),
+            Stored::Text(text) => text.as_str().into(),
+            Stored::Bytes(bytes) => hex(bytes).into(),
+            Stored::Json(json) => json.clone(),
         }
     }
 }
 
 impl fmt::Display for Stored {
     /// JSON on one line, or spread over lines with `{:#}`; text as it is;
-    /// other bytes as hex with their count.
+    /// bytes as hex with their count.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (self, self.json()) {
-            (Stored::Nothing, _) => f.write_str("(no value)"),
-            (Stored::Unread, _) => f.write_str("(a value this command cannot read)"),
-            (Stored::Integer(integer), _) => write!(f, "{integer}"),
-            (_, json @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+        match self {
+            Stored::Nothing => f.write_str("(no value)"),
+            Stored::Unread => f.write_str("(a value this command cannot read)"),
+            Stored::Integer(integer) => write!(f, "{integer}"),
+            Stored::Float(float) => write!(f, "{float}"),
+            Stored::Text(text) => f.write_str(text),
+            Stored::Bytes(bytes) => write!(f, "{} bytes: {}", bytes.len(), hex(bytes)),
+            Stored::Json(json) => {
                 let written =
-                    if f.alternate() { serde_json::to_string_pretty(&json) } else { serde_json::to_string(&json) };
+                    if f.alternate() { serde_json::to_string_pretty(json) } else { serde_json::to_string(json) };
                 f.write_str(&written.map_err(|_| fmt::Error)?)
             }
-            (Stored::Bytes(bytes), _) if std::str::from_utf8(bytes).is_err() => {
-                write!(f, "{} bytes: {}", bytes.len(), hex(bytes))
-            }
-            (_, serde_json::Value::String(text)) => f.write_str(&text),
-            (_, json) => write!(f, "{json}"),
         }
     }
 }
@@ -228,21 +217,22 @@ impl Serialize for Stored {
         match self {
             Stored::Nothing | Stored::Unread => serializer.serialize_unit(),
             Stored::Integer(integer) => serializer.serialize_i64(*integer),
+            Stored::Float(float) => serializer.serialize_f64(*float),
+            Stored::Text(text) => serializer.serialize_str(text),
             Stored::Bytes(bytes) => serializer.serialize_bytes(bytes),
+            Stored::Json(json) => json.serialize(serializer),
         }
     }
 }
 
 impl<'de> Deserialize<'de> for Stored {
-    /// A row's bytes as they are kept, or its nothing. A row of an integer
-    /// refuses to be read as bytes, and a reader can ask a row only once, so
-    /// such a row is `Unread`, and read again as an integer.
+    /// A row as its kind wrote it; one this command cannot read is `Unread`.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(deserializer.deserialize_option(Rows).unwrap_or(Stored::Unread))
+        Ok(deserializer.deserialize_any(Rows).unwrap_or(Stored::Unread))
     }
 }
 
-/// Reads a row: none is nothing, and otherwise its bytes.
+/// Reads a row as the kind its first byte names.
 struct Rows;
 
 impl<'de> Visitor<'de> for Rows {
@@ -260,21 +250,65 @@ impl<'de> Visitor<'de> for Rows {
         Ok(Stored::Nothing)
     }
 
-    fn visit_some<D: Deserializer<'de>>(self, row: D) -> Result<Stored, D::Error> {
-        row.deserialize_byte_buf(Bytes)
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Stored, E> {
+        Ok(Stored::Json(value.into()))
     }
-}
 
-struct Bytes;
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Stored, E> {
+        Ok(Stored::Integer(value))
+    }
 
-impl Visitor<'_> for Bytes {
-    type Value = Stored;
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Stored, E> {
+        Ok(Stored::Json(value.into()))
+    }
 
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("bytes")
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Stored, E> {
+        Ok(Stored::Float(value))
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Stored, E> {
+        Ok(Stored::Text(value.to_owned()))
     }
 
     fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<Stored, E> {
         Ok(Stored::Bytes(bytes.to_vec()))
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<Stored, A::Error> {
+        serde_json::Value::deserialize(de::value::SeqAccessDeserializer::new(seq)).map(Stored::Json)
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Stored, A::Error> {
+        serde_json::Value::deserialize(de::value::MapAccessDeserializer::new(map)).map(Stored::Json)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_kind_a_program_kept_reads_back_as_what_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), tinystore::Options { background: false, ..Default::default() }).unwrap();
+        store.bucket::<String>("names").open().unwrap().set("a", &"ann".to_owned()).unwrap();
+        store.bucket::<serde_json::Value>("docs").open().unwrap().set("a", &serde_json::json!({"n": 1})).unwrap();
+        let raw = tinystore::kv::Bytes(vec![0xff, 0x00]);
+        store.bucket::<tinystore::kv::Bytes>("raw").open().unwrap().set("a", &raw).unwrap();
+        store.bucket::<f64>("floats").open().unwrap().set("a", &1.5).unwrap();
+        store.bucket::<i64>("counts").open().unwrap().set("a", &7).unwrap();
+        let one = |name: &str| {
+            let read = read(&store, name, |bucket| {
+                let entry = bucket.entry("a")?.unwrap();
+                Ok(vec![(entry.key, entry.value, entry.expires_at)])
+            });
+            read.unwrap().remove(0).1
+        };
+        assert_eq!(one("names"), Stored::Text("ann".to_owned()));
+        assert_eq!(one("docs"), Stored::Json(serde_json::json!({"n": 1})));
+        assert_eq!(one("raw"), Stored::Bytes(vec![0xff, 0x00]));
+        assert_eq!(one("floats"), Stored::Float(1.5));
+        assert_eq!(one("counts"), Stored::Integer(7));
+        assert_eq!(one("raw").to_string(), "2 bytes: ff00");
     }
 }

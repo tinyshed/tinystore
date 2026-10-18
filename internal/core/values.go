@@ -12,9 +12,44 @@ import (
 )
 
 // A bucket keeps a value as the core keeps a Rust type, so that every
-// language reads the others' rows: text and bytes as they are, integers and
-// booleans as integers, floats bit for bit in eight bytes, a set's keys with
-// no value, and JSON for the rest.
+// language reads the others' rows: integers and booleans as integers, a set's
+// keys with no value, and a row of bytes that says by its first byte what
+// wrote it: 1 text, 2 bytes, 3 JSON, 4 a float's eight bytes. A row read as
+// another kind than wrote it is corrupt, never a plausible wrong value.
+
+// The first byte of a row of bytes: the kind of value that wrote it.
+const (
+	kindText  byte = 1
+	kindBytes byte = 2
+	kindJSON  byte = 3
+	kindFloat byte = 4
+)
+
+var kindNames = map[byte]string{1: "text", 2: "bytes", 3: "JSON", 4: "a float", 5: "a u64", 6: "an f32"}
+
+func tagged(kind byte, body []byte) []byte {
+	return append([]byte{kind}, body...)
+}
+
+// bodyOf is the body of a row that kind wrote; a row another kind wrote is
+// corrupt here, never read as this one.
+func bodyOf(raw wire.Raw, kind byte, wanted string) ([]byte, error) {
+	bytes, ok := raw.([]byte)
+	if !ok {
+		return nil, Errorf(Corrupt, "a stored value is %s where %s was written", described(raw), wanted)
+	}
+	if len(bytes) == 0 {
+		return nil, Errorf(Corrupt, "%s from a row of no bytes", wanted)
+	}
+	if bytes[0] != kind {
+		written, known := kindNames[bytes[0]]
+		if !known {
+			written = "bytes of no kind"
+		}
+		return nil, Errorf(Corrupt, "%s from a row of %s", wanted, written)
+	}
+	return bytes[1:], nil
+}
 
 type valueKind int
 
@@ -67,9 +102,9 @@ func (v Values[T]) Encode(value T) (wire.Raw, error) {
 	r := reflect.ValueOf(&value).Elem()
 	switch v.kind {
 	case asText:
-		return []byte(r.String()), nil
+		return tagged(kindText, []byte(r.String())), nil
 	case asBytes:
-		return append([]byte{}, r.Bytes()...), nil
+		return tagged(kindBytes, r.Bytes()), nil
 	case asBool:
 		if r.Bool() {
 			return int64(1), nil
@@ -85,7 +120,7 @@ func (v Values[T]) Encode(value T) (wire.Raw, error) {
 	case asFloat:
 		var bytes [8]byte
 		binary.BigEndian.PutUint64(bytes[:], math.Float64bits(r.Float()))
-		return bytes[:], nil
+		return tagged(kindFloat, bytes[:]), nil
 	case asNothing:
 		return nil, nil
 	}
@@ -93,7 +128,7 @@ func (v Values[T]) Encode(value T) (wire.Raw, error) {
 	if err != nil {
 		return nil, Wrap(Invalid, err, "a value JSON cannot write")
 	}
-	return text, nil
+	return tagged(kindJSON, text), nil
 }
 
 // Decode is a value a row kept, as type T.
@@ -102,16 +137,25 @@ func (v Values[T]) Decode(raw wire.Raw) (T, error) {
 	r := reflect.ValueOf(&value).Elem()
 	switch v.kind {
 	case asText:
-		bytes, ok := raw.([]byte)
-		if raw != nil && (!ok || !utf8.Valid(bytes)) {
-			return value, Errorf(Corrupt, "a stored value is %s, which is no UTF-8 text", described(raw))
+		if raw == nil {
+			return value, nil
 		}
-		r.SetString(string(bytes))
+		text, err := bodyOf(raw, kindText, "text")
+		if err != nil {
+			return value, err
+		}
+		if !utf8.Valid(text) {
+			return value, Errorf(Corrupt, "a stored value is text that is not UTF-8")
+		}
+		r.SetString(string(text))
 	case asBytes:
-		if _, ok := raw.(int64); ok {
-			return value, Errorf(Corrupt, "a stored value is %s where bytes were written", described(raw))
+		if raw == nil {
+			return value, nil
 		}
-		bytes, _ := raw.([]byte)
+		bytes, err := bodyOf(raw, kindBytes, "bytes")
+		if err != nil {
+			return value, err
+		}
 		r.SetBytes(append([]byte{}, bytes...))
 	case asBool, asInt, asUint:
 		n, ok := raw.(int64)
@@ -127,21 +171,24 @@ func (v Values[T]) Decode(raw wire.Raw) (T, error) {
 			r.SetUint(uint64(n))
 		}
 	case asFloat:
-		bytes, ok := raw.([]byte)
-		if !ok || len(bytes) != 8 {
-			return value, Errorf(Corrupt, "a stored value is %s where a float's eight bytes were written", described(raw))
+		bits, err := bodyOf(raw, kindFloat, "a float")
+		if err != nil {
+			return value, err
 		}
-		r.SetFloat(math.Float64frombits(binary.BigEndian.Uint64(bytes)))
+		if len(bits) != 8 {
+			return value, Errorf(Corrupt, "a float from %d bytes rather than 8", len(bits))
+		}
+		r.SetFloat(math.Float64frombits(binary.BigEndian.Uint64(bits)))
 	case asNothing:
 	default:
 		if raw == nil {
 			return value, nil
 		}
-		bytes, ok := raw.([]byte)
-		if !ok {
-			return value, Errorf(Corrupt, "a stored value is %s where JSON was written", described(raw))
+		text, err := bodyOf(raw, kindJSON, "JSON")
+		if err != nil {
+			return value, err
 		}
-		if err := json.Unmarshal(bytes, &value); err != nil {
+		if err := json.Unmarshal(text, &value); err != nil {
 			return value, Wrap(Corrupt, err, "a stored value does not read as %s", reflect.TypeFor[T]())
 		}
 	}

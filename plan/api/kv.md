@@ -60,12 +60,15 @@ let seen = store.bucket::<()>("stripe-events").ttl(Duration::from_hours(24 * 7))
   that holds counters does not open as a bucket of values.
 - `ttl` and `idle` are the default of every key written without its own; they
   do not go together.
-- A value is kept by its type: text and bytes as they are, integers and
-  booleans as integers, floats bit for bit (`-0`, NaN payloads and infinities
-  included), nothing for a set, JSON for the rest. TypeScript loses the type at
-  run time, so `type` names it for the few that are not JSON: `'string'`,
-  `'bytes'`, `'int'`, `'float'`, `'bool'`, and `'bigint'` for integers past
-  what a number holds exactly. In Rust the type parameter is enough: anything
+- A value is kept by its type: integers and booleans as integers, nothing for
+  a set, and a row of bytes whose first byte says what wrote it: `1` text,
+  `2` bytes, `3` JSON for the rest, `4` a float bit for bit (`-0`, NaN
+  payloads and infinities included), `5` a `u64` and `6` an `f32` in Rust. A
+  value read as another kind than it was written is `corrupt`, never a
+  plausible wrong value, and every language reads the others' rows.
+  TypeScript loses the type at run time, so `type` names it for the few that
+  are not JSON: `'string'`, `'bytes'`, `'int'`, `'float'`, `'bool'`, and
+  `'bigint'` for integers past what a number holds exactly. In Rust the type parameter is enough: anything
   serde reads and writes.
 - Go spells it `kv.OpenBucket[T](store, …)` because a Go method takes no type
   parameter; the handle is a `*kv.Bucket[T]`. Python's type is the second

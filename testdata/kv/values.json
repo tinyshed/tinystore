@@ -1,0 +1,67 @@
+{
+  "about": "A kv value as every language writes its row: a bin's first byte the kind that wrote it, 1 text, 2 bytes, 3 JSON, 4 a float's eight bytes, big-endian. An integer is a row of its own, not bytes. Each SDK writes these rows and reads them back.",
+  "values": [
+    {
+      "kind": "text",
+      "text": "hé",
+      "row": "0168c3a9"
+    },
+    {
+      "kind": "text",
+      "text": "",
+      "row": "01"
+    },
+    {
+      "kind": "bytes",
+      "bytes": "00ff",
+      "row": "0200ff"
+    },
+    {
+      "kind": "json",
+      "json": {
+        "user": 42
+      },
+      "row": "037b2275736572223a34327d"
+    },
+    {
+      "kind": "json",
+      "json": [
+        1,
+        "a"
+      ],
+      "row": "035b312c2261225d"
+    },
+    {
+      "kind": "float",
+      "float": 1.5,
+      "row": "043ff8000000000000"
+    },
+    {
+      "kind": "float",
+      "float": -2.25,
+      "row": "04c002000000000000"
+    }
+  ],
+  "refused": [
+    {
+      "read_as": "text",
+      "row": "03227822",
+      "says": "text from a row of JSON"
+    },
+    {
+      "read_as": "json",
+      "row": "017b2275736572223a34327d",
+      "says": "JSON from a row of text"
+    },
+    {
+      "read_as": "bytes",
+      "row": "016162",
+      "says": "bytes from a row of text"
+    },
+    {
+      "read_as": "float",
+      "row": "020000000000000000",
+      "says": "from a row of bytes"
+    }
+  ]
+}

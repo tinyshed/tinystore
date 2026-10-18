@@ -494,6 +494,37 @@ function numberOf(n: bigint, name: string): number {
 
 const utf8 = new TextEncoder()
 
+/** The first byte of a row of bytes, the kind of value that wrote it, as the core and every SDK write it. */
+const kinds = { text: 1, bytes: 2, json: 3, float: 4, u64: 5, f32: 6 } as const
+const kindNames: Record<number, string> = {
+	1: 'text',
+	2: 'bytes',
+	3: 'JSON',
+	4: 'a float',
+	5: 'a u64',
+	6: 'an f32',
+}
+
+function tagged(kind: number, body: Uint8Array): Uint8Array {
+	const row = new Uint8Array(body.length + 1)
+	row[0] = kind
+	row.set(body, 1)
+	return row
+}
+
+/** The body of a row that `kind` wrote; a row another kind wrote is corrupt here, never read as this one. */
+function bodyOf(raw: Raw, kind: number, wanted: string): Uint8Array {
+	if (!(raw instanceof Uint8Array)) {
+		throw new CorruptError(`a stored value is ${describe(raw)} where ${wanted} was written`)
+	}
+	if (raw[0] !== kind) {
+		const written =
+			raw.length === 0 ? 'no bytes' : (kindNames[raw[0] as number] ?? 'bytes of no kind')
+		throw new CorruptError(`${wanted} from a row of ${written}`)
+	}
+	return raw.subarray(1)
+}
+
 /** JSON, what a bucket keeps unless its type says otherwise; a row of nothing, a set's member, reads as null. */
 export const jsonValues: Values<unknown> = {
 	encode: value => {
@@ -506,17 +537,15 @@ export const jsonValues: Values<unknown> = {
 		if (text === undefined) {
 			throw new InvalidError('a value JSON cannot write: undefined, a function or a symbol')
 		}
-		return utf8.encode(text)
+		return tagged(kinds.json, utf8.encode(text))
 	},
 	decode: raw => {
 		if (raw === null) {
 			return null
 		}
-		if (!(raw instanceof Uint8Array)) {
-			throw new CorruptError(`a stored value is ${describe(raw)} where JSON was written`)
-		}
+		const json = bodyOf(raw, kinds.json, 'JSON')
 		try {
-			return JSON.parse(textOf(raw) ?? '')
+			return JSON.parse(textOf(json) ?? '')
 		} catch (err) {
 			throw new CorruptError(`a stored value is not JSON any more: ${(err as Error).message}`)
 		}
@@ -533,12 +562,15 @@ export function valuesOf(type: ValueType | undefined): Values<unknown> {
 					if (typeof v !== 'string') {
 						throw new InvalidError(`a ${typeof v} in a bucket of strings`)
 					}
-					return utf8.encode(v)
+					return tagged(kinds.text, utf8.encode(v))
 				},
 				decode: raw => {
-					const text = raw === null ? '' : raw instanceof Uint8Array ? textOf(raw) : undefined
+					if (raw === null) {
+						return ''
+					}
+					const text = textOf(bodyOf(raw, kinds.text, 'text'))
 					if (text === undefined) {
-						throw new CorruptError(`a stored value is ${describe(raw)}, which is no UTF-8 string`)
+						throw new CorruptError('a stored value is text that is not UTF-8')
 					}
 					return text
 				},
@@ -550,14 +582,9 @@ export function valuesOf(type: ValueType | undefined): Values<unknown> {
 					if (!(v instanceof Uint8Array)) {
 						throw new InvalidError(`a ${typeof v} in a bucket of bytes`)
 					}
-					return v
+					return tagged(kinds.bytes, v)
 				},
-				decode: raw => {
-					if (raw !== null && !(raw instanceof Uint8Array)) {
-						throw new CorruptError(`a stored value is ${describe(raw)} where bytes were written`)
-					}
-					return raw ?? new Uint8Array(0)
-				},
+				decode: raw => (raw === null ? new Uint8Array(0) : bodyOf(raw, kinds.bytes, 'bytes')),
 			}
 		case 'int':
 			return {
@@ -608,15 +635,14 @@ export function valuesOf(type: ValueType | undefined): Values<unknown> {
 					}
 					const bytes = new Uint8Array(8)
 					new DataView(bytes.buffer).setFloat64(0, v)
-					return bytes
+					return tagged(kinds.float, bytes)
 				},
 				decode: raw => {
-					if (!(raw instanceof Uint8Array) || raw.length !== 8) {
-						throw new CorruptError(
-							`a stored value is ${describe(raw)} where a float's eight bytes were written`,
-						)
+					const bits = bodyOf(raw, kinds.float, 'a float')
+					if (bits.length !== 8) {
+						throw new CorruptError(`a float from ${bits.length} bytes rather than 8`)
 					}
-					return new DataView(raw.buffer, raw.byteOffset, 8).getFloat64(0)
+					return new DataView(bits.buffer, bits.byteOffset, 8).getFloat64(0)
 				},
 			}
 		case 'bool':
