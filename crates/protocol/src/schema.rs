@@ -72,10 +72,13 @@ impl Schema {
             }
         }
         for message in &self.messages {
-            let mut numbers = HashSet::new();
+            let (mut numbers, mut fields) = (HashSet::new(), HashSet::new());
             for field in &message.fields {
                 if !numbers.insert(field.number) {
                     return Err(format!("{}: field {} twice", message.name, field.number));
+                }
+                if !fields.insert(field.name.as_str()) {
+                    return Err(format!("{}: a field named {} twice", message.name, field.name));
                 }
                 // a positive fixint: a field's number is one byte, which its writer pushes as it is
                 if !(1..=127).contains(&field.number) {
@@ -97,10 +100,13 @@ impl Schema {
                 return Err(format!("{} nests a value {deepest} levels down, past the profile's 8", message.name));
             }
         }
-        let mut ids = HashSet::new();
+        let (mut ids, mut methods) = (HashSet::new(), HashSet::new());
         for method in &self.methods {
             if !ids.insert(method.id) {
                 return Err(format!("method {:#06x} declared twice", method.id));
+            }
+            if !methods.insert(method.name.as_str()) {
+                return Err(format!("a method named {} twice", method.name));
             }
             for named in method.messages() {
                 if !names.contains(named) {

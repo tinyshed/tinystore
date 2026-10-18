@@ -16,11 +16,22 @@ pub(crate) fn const_name(name: &str) -> String {
     name.split('.').map(|part| snake(part).to_uppercase()).collect::<Vec<_>>().join("_")
 }
 
-/// A field as Rust names it, a keyword escaped.
+/// Rust's strict and reserved keywords that a raw identifier may name.
+const KEYWORDS: [&str; 46] = [
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do", "dyn", "else", "enum",
+    "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "macro", "match", "mod", "move",
+    "mut", "override", "priv", "pub", "ref", "return", "static", "struct", "trait", "true", "try", "type", "typeof",
+    "unsafe", "unsized", "use", "virtual", "where",
+];
+
+/// A field as Rust names it: a keyword escaped, and one no raw identifier
+/// may name, `self` and its kin, given a trailing `_`.
 pub(crate) fn rust_field(name: &str) -> String {
     let snake = snake(name);
     match snake.as_str() {
-        "type" | "match" | "move" | "ref" | "in" | "loop" | "use" | "where" | "self" => format!("r#{snake}"),
+        "self" | "super" | "crate" => format!("{snake}_"),
+        "while" | "yield" => format!("r#{snake}"),
+        keyword if KEYWORDS.contains(&keyword) => format!("r#{snake}"),
         _ => snake,
     }
 }
