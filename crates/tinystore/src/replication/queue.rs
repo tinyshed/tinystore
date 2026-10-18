@@ -38,7 +38,7 @@ const SCHEMA: &str = "create table if not exists queued (
 ) strict;
 create index if not exists queued_subject on queued (file, subject, op)";
 const ENQUEUE: &str = "insert into queued (file, subject, request) values (?1, ?2, ?3) returning op";
-const NEXT: &str = "select op, file, request from queued order by op limit ?1";
+const NEXT: &str = "select op, file, request from queued order by op limit cast(?1 as integer)";
 const OF_SUBJECT: &str = "select op, request from queued where file = ?1 and subject = ?2 order by op";
 const SENT: &str = "delete from queued where file = ?1 and op <= ?2";
 /// The queue's file in the node's `log/`.

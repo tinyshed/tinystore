@@ -192,13 +192,13 @@ pub(crate) fn read(source: &dyn Source, mut send: impl FnMut(Part) -> Result<()>
     let at = source.stable().map_err(|error| error.within(what()))?;
     let pages = Pages::open(source.path()).map_err(|error| error.within(what()))?;
     let mut first = 1;
-    let Chunk { page_size, size, pages: read } = pages.read(first, CHUNK)?;
+    let Chunk { page_size, size, pages: read } = pages.read(first, CHUNK).map_err(|error| error.within(what()))?;
     send(Part::Begin { page_size, at })?;
     let mut more = first.saturating_add(CHUNK) <= size;
     first += CHUNK;
     send(Part::Pages(read))?;
     while more {
-        let chunk = pages.read(first, CHUNK)?;
+        let chunk = pages.read(first, CHUNK).map_err(|error| error.within(what()))?;
         if chunk.page_size != page_size {
             return Err(Error::corrupt("the file's pages changed size while a snapshot read it").within(what()));
         }

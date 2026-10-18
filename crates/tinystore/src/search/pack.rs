@@ -46,7 +46,6 @@ pub(crate) const STEP_ROWS: usize = 2048;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Packed {
     pub(crate) postings: u64,
-    pub(crate) keys: u64,
     /// The head is empty after it.
     pub(crate) done: bool,
 }
@@ -61,14 +60,12 @@ pub(crate) fn step(tx: &Tx<'_>, index: i64, most_rows: usize) -> Result<Packed> 
     let (Some(first), Some(last)) = (rows.first().map(|row| row.0), rows.last().map(|row| row.0)) else {
         return Ok(Packed { done: true, ..Packed::default() });
     };
-    let mut keys = 0;
     for run in rows.chunk_by(|a, b| a.0 == b.0) {
         let fresh: Vec<Posting> = run.iter().map(|(_, posting)| *posting).collect();
         append(tx, run[0].0, &fresh).map_err(|error| error.within(format!("key {}", run[0].0)))?;
-        keys += 1;
     }
     execute(tx, DROP_HEAD, (index, first, last), "drop packed postings")?;
-    Ok(Packed { postings: rows.len() as u64, keys, done })
+    Ok(Packed { postings: rows.len() as u64, done })
 }
 
 /// Gives every document set since the last step its lengths, row of

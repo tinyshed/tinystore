@@ -50,11 +50,10 @@ const WRITE_CENTROID: &str =
 const ADD_MEMBER: &str = "insert or replace into _tinystore_search_members (index_id, cluster, doc, code)
     select ?1, ?2, ?3, ?4 where exists (select 1 from _tinystore_search_vectors where key = ?5)";
 const READ_MEMBERS: &str = "select doc, code from _tinystore_search_members where index_id = ?1 and cluster = ?2";
-const READ_HEAD: &str =
-    "select doc from _tinystore_search_members where index_id = ?1 and cluster = -1 order by doc limit ?2";
+const READ_HEAD: &str = "select doc from _tinystore_search_members where index_id = ?1 and cluster = -1 order by doc limit cast(?2 as integer)";
 const COUNT_MEMBERS: &str = "select count(*) from _tinystore_search_members where index_id = ?1 and cluster = ?2";
 const READ_VECTORS: &str = "select key, length, vector from _tinystore_search_vectors
-    where key > ?1 and key < ?2 order by key limit ?3";
+    where key > ?1 and key < ?2 order by key limit cast(?3 as integer)";
 const READ_CODES: &str = "select key, code from _tinystore_search_codes where key >= ?1 and key < ?2";
 const DROP_MEMBERS: &str = "delete from _tinystore_search_members where index_id = ?1 and cluster in
     (select cluster from _tinystore_search_members where index_id = ?1 limit 1)";

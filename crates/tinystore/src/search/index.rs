@@ -175,8 +175,6 @@ pub enum Rebuild {
     Manual,
 }
 
-impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {}
-
 /// Documents of type `T` by id in a named index, found again by their words,
 /// their vectors or both.
 pub struct Index<T> {

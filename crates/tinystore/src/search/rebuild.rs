@@ -50,7 +50,7 @@ const SWITCH: &str = "update _tinystore_search_indexes set name = ?2, beside_of 
     filling = (select filling from _tinystore_search_indexes where id = ?3),
     filled_through = (select filled_through from _tinystore_search_indexes where id = ?3) where id = ?1";
 const READ_DOCS: &str = "select doc, id, value from _tinystore_search_docs
-    where index_id = ?1 and doc > ?2 order by doc limit ?3";
+    where index_id = ?1 and doc > ?2 order by doc limit cast(?3 as integer)";
 const STILL_THERE: &str = "select exists (select 1 from _tinystore_search_docs where index_id = ?1 and doc = ?2)";
 const BESIDE_LIVE: &str = "select exists (select 1 from _tinystore_search_indexes
     where id = ?1 and beside_of = ?2 and dropping = 0 and failed is null)";

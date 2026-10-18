@@ -39,7 +39,7 @@ const READ_FILL: &str = "select filling, filled_through, documents from _tinysto
 const WRITE_FILL: &str = "update _tinystore_search_indexes set filling = ?2, filled_through = ?3 where id = ?1";
 const BEGIN_FILL: &str = "update _tinystore_search_indexes set filling = ?2, filled_through = null where id = ?1";
 const READ_DOCS: &str = "select doc, value from _tinystore_search_docs
-    where index_id = ?1 and doc > ?2 order by doc limit ?3";
+    where index_id = ?1 and doc > ?2 order by doc limit cast(?3 as integer)";
 const READ_ID: &str = "select id from _tinystore_search_docs where index_id = ?1 and doc = ?2";
 
 /// What a table's index reads while it fills, as `filling` keeps it.
