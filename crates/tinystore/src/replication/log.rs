@@ -122,11 +122,12 @@ impl Acks {
         Acks { chosen, ..Acks::default() }
     }
 
-    /// The last entry of `file` that every node linked now and copying it
-    /// holds; none while no linked node said it holds one.
+    /// The last entry of `file` that every node linked now holds, a node
+    /// that said nothing yet holding none; none while no node is linked.
     pub(crate) fn floor(&self, file: &str) -> Option<u64> {
         let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        held.linked.keys().filter_map(|node| held.entries.get(&(node.clone(), file.to_owned())).copied()).min()
+        let holds = |node: &String| held.entries.get(&(node.clone(), file.to_owned())).copied().unwrap_or(0);
+        held.linked.keys().map(holds).min()
     }
 
     /// The node `node` holds `file`'s entries up to `sequence`.
@@ -417,20 +418,25 @@ impl Log {
     /// Refuses this log's file every write from now on: another node writes it
     /// at `epoch`, later than this log's.
     pub(crate) fn fence(&self, epoch: u64) -> Result<()> {
-        Self::fence_in(&self.dir, epoch)?;
+        // Refused in memory first: a fence that fails to persist still keeps
+        // this node from writing what another writes, until it opens again.
         self.fenced.fetch_max(epoch, Ordering::SeqCst);
-        Ok(())
+        Self::fence_in(&self.dir, epoch)
     }
 
     /// Keeps durably, in the log directory `dir`, that another node writes its
     /// file at `epoch`.
     pub(crate) fn fence_in(dir: &Path, epoch: u64) -> Result<()> {
         fs::create_dir_all(dir).map_err(|error| io_error(dir, error))?;
-        let path = dir.join(FENCED);
-        let mut file = fs::File::create(&path).map_err(|error| io_error(&path, error))?;
+        // Written beside and renamed once whole: a crash between creating
+        // and writing `fenced` would leave one no open reads.
+        let (path, beside) = (dir.join(FENCED), dir.join(format!("{FENCED}.new")));
+        let mut file = fs::File::create(&beside).map_err(|error| io_error(&beside, error))?;
         file.write_all(epoch.to_string().as_bytes())
             .and_then(|()| file.sync_all())
-            .map_err(|error| io_error(&path, error))?;
+            .map_err(|error| io_error(&beside, error))?;
+        drop(file);
+        fs::rename(&beside, &path).map_err(|error| io_error(&path, error))?;
         crate::durable::sync_directory(dir).map_err(|error| io_error(dir, error))
     }
 

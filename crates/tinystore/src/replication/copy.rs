@@ -79,7 +79,7 @@ impl Copy {
         let path = store.dir().join(name);
         let mut position = Position::read(dir.join(Position::FILE)).map_err(|error| error.within(what()))?;
         let unnamed = position.settle(&path, &dir).map_err(|error| error.within(what()))?;
-        let log = Log::open(dir, super::log::Bounds::default(), store.node_notify()).map_err(|e| e.within(what()))?;
+        let log = Log::open(dir, store.node_bounds(), store.node_notify()).map_err(|e| e.within(what()))?;
         Ok(Copy {
             name: name.to_owned(),
             applier: Applier::new(&path, Durability::Full),

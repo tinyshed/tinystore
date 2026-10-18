@@ -670,8 +670,12 @@ impl State {
         let Some(store) = self.store() else {
             return;
         };
-        let (Ok(logged), Ok(catalog)) = (self.files_logged(), self.catalog(&store)) else {
-            return;
+        let (logged, catalog) = match (self.files_logged(), self.catalog(&store)) {
+            (Ok(logged), Ok(catalog)) => (logged, catalog),
+            (Err(error), _) | (_, Err(error)) => {
+                tracing::warn!(target: "tinystore", %error, "a node could not claim its files in the catalog");
+                return;
+            }
         };
         let address = self.address();
         for name in logged {
@@ -681,7 +685,14 @@ impl State {
             }
             // the claim goes to the catalog's home, whose answer is the last
             // word: this node's copy may be older than a move made while it was away
-            let epoch = self.epoch_of(&name).unwrap_or(1);
+            // A claim at a guessed epoch could fence this node: one unread waits.
+            let epoch = match self.epoch_of(&name) {
+                Ok(epoch) => epoch,
+                Err(error) => {
+                    tracing::warn!(target: "tinystore", file = %name, %error, "a node could not read a file's epoch to claim it");
+                    continue;
+                }
+            };
             let claim = Claim { file: &name, node: &self.id, address: &address, epoch };
             match catalog.claim(&store, &claim) {
                 // a move away from it called off while this node was down
@@ -751,7 +762,13 @@ impl State {
         };
         let thread = thread::Builder::new().name(name.to_owned()).spawn(move || span.in_scope(work));
         match thread {
-            Ok(thread) => lock(&self.threads).push(thread),
+            Ok(thread) => {
+                // A thread that ended needs no join at stop: a copy forwarding
+                // writes starts one a write, which would otherwise pile up.
+                let mut threads = lock(&self.threads);
+                threads.retain(|kept| !kept.is_finished());
+                threads.push(thread);
+            }
             Err(error) => tracing::warn!(target: "tinystore", %error, "a node could not start a thread of its links"),
         }
     }
@@ -894,6 +911,10 @@ impl State {
         self.copied.notify_all();
         self.notify.served_changed();
         self.notify.appended();
+    }
+
+    pub(crate) fn bounds(&self) -> Bounds {
+        self.bounds
     }
 
     pub(crate) fn drop_copy(&self, name: &str) {

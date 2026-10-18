@@ -146,8 +146,9 @@ pub(crate) const NODE_LOCAL: [&str; 2] = ["records.db", "metrics.db"];
 /// The directory of a store's logs, beside its engines' files.
 pub(crate) const DIR: &str = "log";
 
+pub(crate) use log::Bounds;
 #[cfg(test)]
-pub(crate) use log::{Bounds, Log};
+pub(crate) use log::Log;
 
 #[cfg(test)]
 #[path = "log_tests.rs"]

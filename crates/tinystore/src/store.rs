@@ -318,6 +318,13 @@ impl Store {
         self.inner.node.as_ref().map_or_else(Arc::default, |node| Arc::clone(&node.notify))
     }
 
+    /// The bounds of a node's logs, a copy's as a home's, so that the disk
+    /// the store keeps free reaches both.
+    #[cfg(feature = "replication")]
+    pub(crate) fn node_bounds(&self) -> crate::replication::Bounds {
+        self.inner.node.as_ref().map_or_else(Default::default, |node| node.bounds())
+    }
+
     /// Tells every engine open that a commit of its home was applied to the
     /// copy `name`.
     #[cfg(feature = "replication")]
