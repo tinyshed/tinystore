@@ -28,6 +28,8 @@ const SERVER_STOP: u16 = 0x0001;
 /// The largest frame body this client reads: a WELCOME or a failure is far
 /// smaller.
 const MOST: usize = 1 << 20;
+/// How long a command waits for the server to answer a HELLO or a stop.
+const ANSWER_WAIT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
 
 /// What `SERVE` says of the server that published it.
 #[derive(Debug)]
@@ -62,9 +64,9 @@ pub(crate) fn found(dir: &Path) -> Result<Option<Found>, String> {
 }
 
 /// A byte stream to the server, both ways.
-trait Stream: Read + Write {}
+trait Stream: Read + Write + Send {}
 
-impl<T: Read + Write> Stream for T {}
+impl<T: Read + Write + Send> Stream for T {}
 
 /// A connection the server welcomed, its proof checked.
 pub(crate) struct Connection {
@@ -78,38 +80,44 @@ impl Found {
     /// gone that left `SERVE` behind is an error, and so is a process on its
     /// endpoint that cannot prove it read `SERVE`.
     pub(crate) fn connect(&self) -> Result<Connection, String> {
-        let endpoint = self.endpoints.first().ok_or("SERVE names no endpoint")?;
-        let mut stream = dial(endpoint).map_err(|error| format!("{endpoint}: {error}"))?;
-        let mut challenge = [0; 16];
-        getrandom::fill(&mut challenge).map_err(|error| error.to_string())?;
-        let client = format!("tinystore-cli/{}", env!("CARGO_PKG_VERSION"));
-        let mut hello = vec![0x83, 0x01, 0x01, 0x02];
-        hello.extend(str_of(&client));
-        hello.extend([0x06, 0xc4, 0x10]);
-        hello.extend(challenge);
-        send(&mut stream, HELLO, 0, 0, 0, &hello).map_err(|error| error.to_string())?;
-        let (kind, _, _, body) = receive(&mut stream).map_err(|error| format!("{endpoint}: {error}"))?;
-        match kind {
-            WELCOME => {}
-            GOAWAY => {
-                return Err(format!(
-                    "the server would not take a connection: {}",
-                    text_at(&body, 2).unwrap_or_default()
-                ));
-            }
-            other => return Err(format!("a frame of kind {other} where WELCOME belongs")),
-        }
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret).expect("HMAC takes a key of any length");
-        mac.update(&challenge);
-        let proof = bin_at(&body, 11).ok_or("the server gave no proof")?;
-        mac.verify_slice(&proof).map_err(|_| "a process on the endpoint did not prove it is the store's server")?;
-        Ok(Connection { stream, server: text_at(&body, 2).unwrap_or_default() })
+        let endpoint = self.endpoints.first().ok_or("SERVE names no endpoint")?.clone();
+        let secret = self.secret.clone();
+        answered_within(&endpoint.clone(), move || hello(&endpoint, &secret))
     }
+}
+
+fn hello(endpoint: &str, secret: &[u8]) -> Result<Connection, String> {
+    let mut stream = dial(endpoint).map_err(|error| format!("{endpoint}: {error}"))?;
+    let mut challenge = [0; 16];
+    getrandom::fill(&mut challenge).map_err(|error| error.to_string())?;
+    let client = format!("tinystore-cli/{}", env!("CARGO_PKG_VERSION"));
+    let mut hello = vec![0x83, 0x01, 0x01, 0x02];
+    hello.extend(str_of(&client));
+    hello.extend([0x06, 0xc4, 0x10]);
+    hello.extend(challenge);
+    send(&mut stream, HELLO, 0, 0, 0, &hello).map_err(|error| error.to_string())?;
+    let (kind, _, _, body) = receive(&mut stream).map_err(|error| format!("{endpoint}: {error}"))?;
+    match kind {
+        WELCOME => {}
+        GOAWAY => {
+            return Err(format!("the server would not take a connection: {}", text_at(&body, 2).unwrap_or_default()));
+        }
+        other => return Err(format!("a frame of kind {other} where WELCOME belongs")),
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC takes a key of any length");
+    mac.update(&challenge);
+    let proof = bin_at(&body, 11).ok_or("the server gave no proof")?;
+    mac.verify_slice(&proof).map_err(|_| "a process on the endpoint did not prove it is the store's server")?;
+    Ok(Connection { stream, server: text_at(&body, 2).unwrap_or_default() })
 }
 
 impl Connection {
     /// Asks the server to stop, and returns once it agreed.
-    pub(crate) fn stop(mut self) -> Result<(), String> {
+    pub(crate) fn stop(self) -> Result<(), String> {
+        answered_within("server.stop", move || self.asked_to_stop())
+    }
+
+    fn asked_to_stop(mut self) -> Result<(), String> {
         send(&mut self.stream, REQUEST, END, SERVER_STOP, 1, &[0x80]).map_err(|error| error.to_string())?;
         loop {
             let (kind, flags, stream, body) = receive(&mut self.stream).map_err(|error| error.to_string())?;
@@ -123,6 +131,22 @@ impl Connection {
             }
         }
     }
+}
+
+/// Runs `exchange` on a thread of its own and waits for it at most
+/// `ANSWER_WAIT`: a Windows pipe's read takes no timeout, and a second handle
+/// to read it with would wait behind the first, so a server that never
+/// answers would otherwise hold the command for good. The thread left waiting
+/// ends with the command.
+fn answered_within<T: Send + 'static>(
+    what: &str,
+    exchange: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let (done, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || drop(done.send(exchange())));
+    answer
+        .recv_timeout(ANSWER_WAIT)
+        .unwrap_or_else(|_| Err(format!("{what}: the server did not answer within {} s", ANSWER_WAIT.as_secs())))
 }
 
 #[cfg(unix)]
@@ -315,6 +339,35 @@ mod tests {
         assert_eq!(bin_at(&body, 11), Some(vec![7, 8, 9]));
         assert_eq!(bin_at(&body, 12), None);
         assert_eq!(text_at(&body[..6], 2), None, "cut short");
+    }
+
+    #[test]
+    fn a_server_that_takes_the_connection_and_never_answers_is_said_within_the_wait() {
+        let (endpoint, _listening) = silent_endpoint();
+        let found = Found { pid: 0, endpoints: vec![endpoint], since: SystemTime::now(), secret: vec![1] };
+        let began = std::time::Instant::now();
+        let refused = found.connect().err().expect("no answer came");
+        assert!(refused.contains("did not answer within"), "{refused}");
+        assert!(began.elapsed() < ANSWER_WAIT * 5, "{:?}", began.elapsed());
+    }
+
+    /// An endpoint that takes a connection and says nothing, and what keeps it open.
+    #[cfg(unix)]
+    fn silent_endpoint() -> (String, Box<dyn std::any::Any>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("silent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        (format!("unix://{}", path.display()), Box::new((dir, listener)))
+    }
+
+    #[cfg(windows)]
+    fn silent_endpoint() -> (String, Box<dyn std::any::Any>) {
+        let name = format!("tinystore-silent-{}", std::process::id());
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let pipe = runtime.block_on(async {
+            tokio::net::windows::named_pipe::ServerOptions::new().create(format!(r"\\.\pipe\{name}"))
+        });
+        (format!("pipe:{name}"), Box::new((pipe.unwrap(), runtime)))
     }
 
     #[test]
