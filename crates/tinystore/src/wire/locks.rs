@@ -1,4 +1,4 @@
-//! locks' methods of protocol 2, protocol/locks.wire: a hold answered once
+//! locks' methods of the protocol, protocol/locks.wire: a hold answered once
 //! its key is given, and its lease's renewals and letting go, which name the
 //! lease by its id so that a client that connected again goes on with it.
 

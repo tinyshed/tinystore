@@ -1,5 +1,5 @@
 // kv as plan/api/kv.md has it, buckets, counters, limits, once and
-// transactions over protocol 2, through each way a store is reached.
+// transactions over the protocol, through each way a store is reached.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'

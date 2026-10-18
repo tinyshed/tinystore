@@ -23,7 +23,7 @@ interface Served {
 }
 
 const welcome = Welcome.encode({
-	protocol: 2,
+	protocol: 1,
 	server: 'script/0',
 	instance: new Uint8Array(16),
 	capability: 'admin',

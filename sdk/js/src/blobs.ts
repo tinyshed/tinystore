@@ -1,5 +1,5 @@
 // The application's files, as plan/api/blobs.md has them: files by path in
-// named sets, written whole and replaced whole, over protocol 2. A file's
+// named sets, written whole and replaced whole, over the protocol. A file's
 // bytes go in pieces within the credit of the side that takes them, and a
 // whole read ends CorruptError before its last piece when its bytes changed.
 

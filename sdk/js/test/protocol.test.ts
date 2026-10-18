@@ -85,7 +85,7 @@ function hexOf(bytes: Uint8Array): string {
 	return Buffer.from(bytes).toString('hex')
 }
 
-describe('protocol 2', () => {
+describe('the protocol', () => {
 	test('the methods are the schema’s, by name and number', () => {
 		expect(protocol.methods as Record<string, number>).toEqual(vectors.methods)
 	})

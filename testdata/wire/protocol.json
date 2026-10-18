@@ -1,5 +1,5 @@
 {
-  "about": "Every message of protocol 2, written by crates/protocol from protocol/*.wire: its bytes, and its fields by their names in the schema, each typed as bool, uint, int, float (its bits in hex), str, bin (hex), list, names or fields, a nested message. A field a vector leaves out is absent from its bytes, and reads back at its zero value. `just protocol` writes it again.",
+  "about": "Every message of the protocol, written by crates/protocol from protocol/*.wire: its bytes, and its fields by their names in the schema, each typed as bool, uint, int, float (its bits in hex), str, bin (hex), list, names or fields, a nested message. A field a vector leaves out is absent from its bytes, and reads back at its zero value. `just protocol` writes it again.",
   "messages": [
     {
       "fields": {
@@ -5736,5 +5736,5 @@
     "sql.query": 770,
     "sql.tx": 773
   },
-  "protocol": 2
+  "protocol": 1
 }

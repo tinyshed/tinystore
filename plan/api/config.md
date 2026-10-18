@@ -12,7 +12,7 @@ is the shape of this one: a declaration in layers, each declaring again what
 the ones before it gave, spelled as each language spells it. [dx.md](../dx.md)
 has the rules it follows. TypeScript comes first; Python, Go and Rust follow,
 the first two as [dx.md](../dx.md#python-and-go-as-every-book-writes-them)
-spells them. The Rust core, protocol 2 and the Bun SDK are built to it; Python
+spells them. The Rust core, the protocol and the Bun SDK are built to it; Python
 and Go come with their SDKs.
 
 ## What a newcomer learns

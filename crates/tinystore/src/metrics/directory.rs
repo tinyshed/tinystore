@@ -24,7 +24,8 @@ use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count};
 use crate::{Error, Result};
 
-pub(super) const VERSION: u8 = 5;
+/// The directory's format: 1 until v0.1.0, since nothing before it is kept.
+pub(super) const VERSION: u8 = 1;
 const HEADER: usize = 10;
 /// A body this long or shorter lives in its directory.
 pub(super) const INLINE: usize = 16;

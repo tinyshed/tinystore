@@ -27,7 +27,7 @@ const WIDTH: usize = 120;
 
 pub(crate) fn write(schema: &Schema) -> String {
     let mut out = String::new();
-    out.push_str("\"\"\"Every message and method of protocol 2.\n\n");
+    out.push_str("\"\"\"Every message and method of the protocol.\n\n");
     out.push_str("Written by crates/protocol from protocol/*.wire; `just protocol` writes it again.\n\"\"\"\n\n");
     // a list of lists is read by a loop, which the lint would have a comprehension
     out.push_str("# ruff: noqa: PERF401, RUF100\n");

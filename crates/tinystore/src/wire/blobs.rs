@@ -1,4 +1,4 @@
-//! blobs over protocol 2: files by handle, the server holding nothing
+//! blobs over the protocol: files by handle, the server holding nothing
 //! between calls, as S3 does. A get answers what the file carries, and all
 //! its bytes when they fit one message; a read streams a file's bytes, the
 //! whole file checked or a range, on the ETag a get gave, as pieces within

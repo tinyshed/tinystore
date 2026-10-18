@@ -1,8 +1,9 @@
-# Protocol 2
+# The protocol
 
-The protocol is the API of every language but Rust (decision 2), so protocol
-2 is the API books spelled as messages. Nothing was released, so protocol 1 is
-not spoken: a client of protocol 1 is told the server's protocol in `GOAWAY`.
+The protocol is the API of every language but Rust (decision 2), so it is the
+API books spelled as messages. It is protocol 1, and stays 1 until v0.1.0: the
+Go engine's release candidates spoke another, which nothing keeps. A client of
+another protocol is told the server's in `GOAWAY`.
 
 ## What stays
 
@@ -26,7 +27,7 @@ of `testdata/wire/vectors.json`:
   and method. A generator writes the codecs of Rust, TypeScript, Python and Go
   from it, and `testdata/wire/protocol.json`, a vector of every message, so
   that an SDK cannot drift from the server: the hand-written declarations of
-  protocol 1 drifted in each SDK.
+  the Go engine's protocol drifted in each SDK.
 - **Handles a kind.** `kv.bucket.open`, `kv.counters.open`,
   `kv.rateLimit.open`, `kv.quota.open`, `kv.once.open`, `jobs.queue.open`,
   each with its own options, rather than one `kv.open` with flags.

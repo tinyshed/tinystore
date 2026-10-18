@@ -60,7 +60,7 @@ fn a_subscription_answers_once_it_is_registered_then_sends_what_is_published_und
 fn a_client_that_grants_no_credit_falls_behind_and_is_told_how_many_it_missed() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
-    client.greet(Hello { protocol: 2, stream_credit: Some(4 << 10), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, stream_credit: Some(4 << 10), ..Hello::default() }).unwrap();
     let stream = subscribed(&mut client, &[], false);
     let text = format!("{:?}", "m".repeat(100));
     let published = 2000;
@@ -83,7 +83,7 @@ fn a_client_that_grants_no_credit_falls_behind_and_is_told_how_many_it_missed() 
 fn a_message_larger_than_the_connection_takes_is_counted_missed_and_the_next_follows() {
     let dir = tempfile::tempdir().unwrap();
     let mut listener = Client::connect(dir.path());
-    listener.greet(Hello { protocol: 2, stream_credit: Some(4 << 10), ..Hello::default() }).unwrap();
+    listener.greet(Hello { protocol: 1, stream_credit: Some(4 << 10), ..Hello::default() }).unwrap();
     let stream = subscribed(&mut listener, &[], false);
     let mut publisher = Client::open(dir.path());
     publish(&mut publisher, &[], &format!("{:?}", "p".repeat(5 << 10))).unwrap();
@@ -112,7 +112,7 @@ fn a_read_connection_subscribes_but_publishes_nothing_and_a_publish_is_checked()
 fn a_connection_whose_host_reads_nothing_stops_its_subscriptions_near_its_bound_and_goes_on_once_read() {
     let dir = tempfile::tempdir().unwrap();
     let mut listener = Client::connect(dir.path());
-    listener.greet(Hello { protocol: 2, stream_credit: Some(64 << 20), ..Hello::default() }).unwrap();
+    listener.greet(Hello { protocol: 1, stream_credit: Some(64 << 20), ..Hello::default() }).unwrap();
     let stream = subscribed(&mut listener, &[], false);
     let mut publisher = Client::open(dir.path());
     let value = format!("{:?}", "p".repeat(60 << 10));

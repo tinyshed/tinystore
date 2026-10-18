@@ -299,7 +299,7 @@ fn what_a_handler_reports_shows_while_its_job_runs() {
 fn the_server_sends_a_worker_no_more_than_the_credit_its_client_granted() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
-    let hello = Hello { protocol: 2, stream_credit: Some(1024), ..Hello::default() };
+    let hello = Hello { protocol: 1, stream_credit: Some(1024), ..Hello::default() };
     assert_eq!(client.greet(hello).unwrap().max_body, 1024, "a body fits the credit it is sent under");
     let handle = queue(&mut client, "emails");
     for n in 0..4 {
@@ -322,7 +322,7 @@ fn a_closing_server_hands_its_workers_no_job_more() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let handle = queue(&mut client, "emails");
     add(&mut client, &job(handle, "e1", "null"));
     add(&mut client, &job(handle, "e2", "null"));
@@ -390,7 +390,7 @@ fn a_watch_the_client_cancels_or_its_server_leaves_ends_with_why() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let handle = queue(&mut client, "videos");
     add(&mut client, &JobsCall { delay: Some(3_600_000), ..job(handle, "v1", "null") });
 
@@ -471,7 +471,7 @@ fn writes_of_jobs_in_flight_hold_no_thread_of_the_session() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let mail = queue(&mut client, "mail");
     let held = store.queue::<serde_json::Value>("mail").open().unwrap();
     let (began, begun) = std::sync::mpsc::channel();

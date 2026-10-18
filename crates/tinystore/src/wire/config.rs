@@ -1,4 +1,4 @@
-//! config's methods of protocol 2, protocol/config.wire: a program's SDK
+//! config's methods of the protocol, protocol/config.wire: a program's SDK
 //! opens a config with its declaration and its layers as data, changes it,
 //! and follows it on one stream a config and a process, whose values the SDK
 //! hands to every handle and watcher of that config in the process.

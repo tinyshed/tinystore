@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 async def test_a_store_says_what_serves_it(store: tinystore.Store) -> None:
     status = await store.status()
-    assert status.protocol == 2
+    assert status.protocol == 1
     assert "kv" in status.engines
     assert status.capability == "admin"
 

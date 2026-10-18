@@ -126,7 +126,7 @@ fn a_large_file_goes_up_and_comes_down_in_pieces_within_the_credit() {
     let dir = tempfile::tempdir().unwrap();
     let credit = 256 << 10;
     let (mut client, server_credit) =
-        connect(dir.path(), Hello { protocol: 2, stream_credit: Some(credit), ..Hello::default() });
+        connect(dir.path(), Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() });
     let handle = open(&mut client, "exports");
     let body = bytes(3 << 20);
     let write =
@@ -144,7 +144,7 @@ fn a_large_file_goes_up_and_comes_down_in_pieces_within_the_credit() {
 #[test]
 fn a_range_reads_only_its_bytes_and_is_not_checked() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 1, ..Hello::default() });
     let handle = open(&mut client, "videos");
     let body = bytes(5 << 20);
     let write = BlobsWrite { handle, path: "film.mp4".to_owned(), ..BlobsWrite::default() };
@@ -177,7 +177,7 @@ fn a_range_reads_only_its_bytes_and_is_not_checked() {
 #[test]
 fn a_read_on_an_etag_the_path_no_longer_holds_is_a_conflict() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 1, ..Hello::default() });
     let handle = open(&mut client, "docs");
     let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
     answered::<BlobsWritten>(&upload(&mut client, &write, &bytes(3 << 20), 1 << 20, credit)).unwrap();
@@ -205,7 +205,7 @@ fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     let dir = tempfile::tempdir().unwrap();
     let credit = 1 << 20;
     let (mut client, server_credit) =
-        connect(dir.path(), Hello { protocol: 2, stream_credit: Some(credit), ..Hello::default() });
+        connect(dir.path(), Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() });
     let handle = open(&mut client, "docs");
     let body = bytes(5 << 20);
     let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
@@ -225,7 +225,7 @@ fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
 #[test]
 fn a_read_cancelled_mid_way_sends_nothing_after_its_last_frame() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 1, ..Hello::default() });
     let handle = open(&mut client, "films");
     let write = BlobsWrite { handle, path: "film.mp4".to_owned(), ..BlobsWrite::default() };
     answered::<BlobsWritten>(&upload(&mut client, &write, &bytes(16 << 20), 1 << 20, credit)).unwrap();
@@ -303,7 +303,7 @@ fn a_request_on_a_stream_in_use_ends_the_connection() {
 fn data_past_its_streams_credit_ends_the_connection() {
     let dir = tempfile::tempdir().unwrap();
     let (mut client, credit) =
-        connect(dir.path(), Hello { protocol: 2, client: "test/0".to_owned(), ..Hello::default() });
+        connect(dir.path(), Hello { protocol: 1, client: "test/0".to_owned(), ..Hello::default() });
     let handle = open(&mut client, "docs");
     let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
     let stream = client.open_stream(method::BLOBS_UPLOAD, &write);

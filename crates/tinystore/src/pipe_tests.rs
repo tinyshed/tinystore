@@ -66,10 +66,10 @@ fn a_field_the_core_does_not_know_is_unimplemented_and_named() {
 }
 
 #[test]
-fn a_client_of_protocol_one_is_refused_with_goaway() {
+fn a_client_of_another_protocol_is_refused_with_goaway() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
-    let refused = client.hello(1).unwrap_err();
+    let refused = client.hello(2).unwrap_err();
     assert_eq!(refused.code, "protocol");
 }
 
@@ -201,7 +201,7 @@ fn a_store_the_program_holds_answers_its_servers_calls() {
     let stops = Arc::new(AtomicUsize::new(0));
     let mut client = Client::over(served(&store, &stops));
     let challenge: Vec<u8> = (0..16).collect();
-    let welcome = client.greet(Hello { protocol: 2, challenge: Some(challenge.clone()), ..Hello::default() }).unwrap();
+    let welcome = client.greet(Hello { protocol: 1, challenge: Some(challenge.clone()), ..Hello::default() }).unwrap();
     assert_eq!(welcome.proof, Some(challenge.iter().rev().copied().collect()), "the proof answers the challenge");
 
     let read: ServerClock = client.call(method::SERVER_CLOCK, &ServerClock::default()).unwrap();
@@ -254,7 +254,7 @@ fn reads_sent_together_are_each_answered_though_workers_take_the_crowd() {
 fn a_challenge_of_another_length_is_a_hello_the_server_cannot_take() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
-    let refused = client.greet(Hello { protocol: 2, challenge: Some(vec![1; 8]), ..Hello::default() }).unwrap_err();
+    let refused = client.greet(Hello { protocol: 1, challenge: Some(vec![1; 8]), ..Hello::default() }).unwrap_err();
     assert_eq!(refused.code, "protocol");
 }
 
@@ -263,7 +263,7 @@ fn a_closing_server_says_goaway_and_answers_a_later_request_unavailable_unrun() 
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options::default()).unwrap();
     let mut client = Client::over(served(&store, &Arc::new(AtomicUsize::new(0))));
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let handle = client.bucket("sessions");
     assert_eq!(client.pipe.streams(), 0);
 
@@ -275,7 +275,7 @@ fn a_closing_server_says_goaway_and_answers_a_later_request_unavailable_unrun() 
     drop(client);
 
     let mut again = Client::over(served(&store, &Arc::new(AtomicUsize::new(0))));
-    again.hello(2).unwrap();
+    again.hello(1).unwrap();
     let handle = again.bucket("sessions");
     let get = KvCall { handle, key: "k".to_owned(), ..KvCall::default() };
     assert!(!again.call::<KvEntry>(method::KV_GET, &get).unwrap().found, "the refused set never ran");
@@ -340,7 +340,7 @@ fn writes_of_kv_in_flight_hold_no_thread_of_the_session() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let sessions = client.bucket("sessions");
     let hits = KvCountersOpen { name: "hits".to_owned(), ..KvCountersOpen::default() };
     let hits = client.call::<Handle>(method::KV_COUNTERS_OPEN, &hits).unwrap().handle;
@@ -406,7 +406,7 @@ fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_wha
     });
     let pipe = Pipe::connect(&store, Connect { wake: Some(wake), ..Connect::default() }).unwrap();
     let mut hello = Vec::new();
-    let said = Hello { protocol: 2, client: "test/0".to_owned(), ..Hello::default() };
+    let said = Hello { protocol: 1, client: "test/0".to_owned(), ..Hello::default() };
     Frame::new(Kind::Hello, 0, said.encode()).encode_into(&mut hello);
 
     // given no room, a send leaves the WELCOME to the read, and the host is woken for it
@@ -445,7 +445,7 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     let asking = |word: &str| StoreOptions { durability: Some(word.to_owned()), ..StoreOptions::default() }.encode();
     let dir = tempfile::tempdir().unwrap();
     let mut first = Client::over(Pipe::open(dir.path(), &asking("os"), None).unwrap());
-    assert_eq!(first.hello(2).unwrap().durability.as_deref(), Some("os"), "the WELCOME says what the store has");
+    assert_eq!(first.hello(1).unwrap().durability.as_deref(), Some("os"), "the WELCOME says what the store has");
 
     let unasked = Pipe::open(dir.path(), &[], None).unwrap();
     let same = Pipe::open(dir.path(), &asking("os"), None).unwrap();
@@ -456,7 +456,7 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     // a store opened with nothing said keeps each engine's own, which a pipe asking for one is not given
     let dir = tempfile::tempdir().unwrap();
     let mut plain = Client::over(Pipe::open(dir.path(), &[], None).unwrap());
-    assert_eq!(plain.hello(2).unwrap().durability, None);
+    assert_eq!(plain.hello(1).unwrap().durability, None);
     let refused = Pipe::open(dir.path(), &asking("full"), None).unwrap_err();
     assert_eq!(
         refused.to_string(),
@@ -525,7 +525,7 @@ fn a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name() {
         StoreOptions { encryption_key_file: Some(file.display().to_string()), ..StoreOptions::default() }.encode()
     };
     let mut client = Client::over(Pipe::open(&data, &named(&key), None).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let encrypted = KvBucketOpen { name: "passwords".to_owned(), encrypted: true, ..KvBucketOpen::default() };
     client.call::<Handle>(method::KV_BUCKET_OPEN, &encrypted).unwrap();
     assert!(!data.join("encryption.key").exists(), "the store made no key of its own");

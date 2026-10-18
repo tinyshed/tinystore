@@ -1,4 +1,4 @@
-//! jobs' methods of protocol 2, protocol/jobs.wire: handles on queues and
+//! jobs' methods of the protocol, protocol/jobs.wire: handles on queues and
 //! schedules, calls on their jobs, and workers whose handlers are a client's.
 //! A value travels as its JSON, checked and kept as it came.
 //!

@@ -219,8 +219,8 @@ mod tests {
 
     use super::*;
 
-    /// HELLO { 1 protocol: 2, 2 client: "c/0" }, a frame of kind 1 on no stream.
-    const HELLO: [u8; 20] = [8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0x82, 0x01, 0x02, 0x02, 0xa3, b'c', b'/', b'0'];
+    /// HELLO { 1 protocol: 1, 2 client: "c/0" }, a frame of kind 1 on no stream.
+    const HELLO: [u8; 20] = [8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0x82, 0x01, 0x01, 0x02, 0xa3, b'c', b'/', b'0'];
     const WELCOME: u8 = 2;
 
     fn opened(dir: &std::path::Path) -> *mut Connection {

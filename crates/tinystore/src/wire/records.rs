@@ -1,4 +1,4 @@
-//! records over protocol 2: a stream of events by handle, appended whole and
+//! records over the protocol: a stream of events by handle, appended whole and
 //! read a page at a time, and every stream read without one. Fields and a
 //! context travel as the JSON object each is, every value spelled as it was
 //! written, so that what a client wrote comes back byte for byte.

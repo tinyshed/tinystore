@@ -83,7 +83,7 @@ impl Found {
         let mut challenge = [0; 16];
         getrandom::fill(&mut challenge).map_err(|error| error.to_string())?;
         let client = format!("tinystore-cli/{}", env!("CARGO_PKG_VERSION"));
-        let mut hello = vec![0x83, 0x01, 0x02, 0x02];
+        let mut hello = vec![0x83, 0x01, 0x01, 0x02];
         hello.extend(str_of(&client));
         hello.extend([0x06, 0xc4, 0x10]);
         hello.extend(challenge);

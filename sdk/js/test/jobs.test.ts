@@ -1,4 +1,4 @@
-// jobs as plan/api/jobs.md has it over protocol 2, through each way a store
+// jobs as plan/api/jobs.md has it over the protocol, through each way a store
 // is reached: ids, answers, steps, progress, cancels, schedules, pages, a
 // schema, concurrency and dedupe, the handlers running here while the
 // server's loop claims their jobs.

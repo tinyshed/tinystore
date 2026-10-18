@@ -1,4 +1,4 @@
-//! channels' methods of protocol 2, protocol/channels.wire: a publish, one
+//! channels' methods of the protocol, protocol/channels.wire: a publish, one
 //! inside a database's transaction handed over at its commit, and a
 //! subscription whose batches go within the client's credit.
 //!

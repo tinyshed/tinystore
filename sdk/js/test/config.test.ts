@@ -1,4 +1,4 @@
-// Configs as plan/api/config.md has them over protocol 2, through each way a
+// Configs as plan/api/config.md has them over the protocol, through each way a
 // store is reached: a declaration in layers, each declaring again what came
 // before, the rules of one value the core checks, live settings whose change
 // every handle sees on one stream, secrets that print as ***, and the names,

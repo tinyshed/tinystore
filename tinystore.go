@@ -1,7 +1,7 @@
 // Package tinystore opens a store: kv, jobs, SQL databases, files, events,
 // metrics, configs, locks, channels and search in one directory, reached
 // through the core in this process, the directory's sidecar, a private child
-// or a remote server, over protocol 2.
+// or a remote server, over the protocol.
 //
 //	store, err := tinystore.Open(ctx, "data")
 //	if err != nil {

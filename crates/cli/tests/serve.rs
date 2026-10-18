@@ -34,18 +34,18 @@ fn frame(kind: u8, flags: u8, method: u16, stream: u32, body: &[u8]) -> Vec<u8> 
     bytes
 }
 
-/// A HELLO of protocol 2, `{1: 2}`, with a challenge when given, `{6: bin}`.
+/// A HELLO of protocol 1, `{1: 1}`, with a challenge when given, `{6: bin}`.
 fn hello(challenge: Option<&[u8; 16]>) -> Vec<u8> {
     let body = match challenge {
-        None => vec![0x81, 0x01, 0x02],
-        Some(challenge) => [&[0x82, 0x01, 0x02, 0x06, 0xc4, 0x10][..], challenge].concat(),
+        None => vec![0x81, 0x01, 0x01],
+        Some(challenge) => [&[0x82, 0x01, 0x01, 0x06, 0xc4, 0x10][..], challenge].concat(),
     };
     frame(HELLO, 0, 0, 0, &body)
 }
 
-/// A HELLO of protocol 2 with a token, `{1: 2, 3: str}`.
+/// A HELLO of protocol 1 with a token, `{1: 1, 3: str}`.
 fn hello_with(token: &str) -> Vec<u8> {
-    let body = [&[0x82, 0x01, 0x02, 0x03, 0xd9, u8::try_from(token.len()).unwrap()][..], token.as_bytes()].concat();
+    let body = [&[0x82, 0x01, 0x01, 0x03, 0xd9, u8::try_from(token.len()).unwrap()][..], token.as_bytes()].concat();
     frame(HELLO, 0, 0, 0, &body)
 }
 
@@ -143,7 +143,7 @@ fn a_local_server_publishes_serve_proves_itself_stops_and_holds_its_directory_me
         .spawn()
         .unwrap();
     let serve = published(&dir.path().join("server").join("SERVE"));
-    assert_eq!(serve["protocol"], 2);
+    assert_eq!(serve["protocol"], 1);
     assert_eq!(serve["sidecar"], true);
 
     let held =

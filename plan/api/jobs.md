@@ -10,7 +10,7 @@ code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) the words
 both books share. TypeScript comes first; Python, Go and Rust follow, the
 first two as [dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells
 them. The Rust and TypeScript columns are
-built, the core in `crates/tinystore/src/jobs`, protocol 2 in
+built, the core in `crates/tinystore/src/jobs`, the protocol in
 `protocol/jobs.wire` and the Bun SDK in `sdk/js/src/jobs.ts`, queues opened
 from an SQL database and transactions, a database's and the store's, among
 them.

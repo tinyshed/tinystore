@@ -32,7 +32,7 @@ import {
 import { Reader, Writer } from './wire/msgpack.ts'
 import { Failure, GoAway, Hello, Welcome } from './wire/protocol.ts'
 
-export const protocol = 2
+export const protocol = 1
 
 /** What this client lets the server send on a stream before it grants more: a body at least. */
 export const downloadWindow = 2 << 20

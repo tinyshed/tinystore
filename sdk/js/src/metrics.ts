@@ -1,5 +1,5 @@
 // Numbers that move over time, as plan/api/metrics.md has them, over
-// protocol 2: series by their name and labels, written whole by ingest and
+// the protocol: series by their name and labels, written whole by ingest and
 // read back by range, in buckets and as their newest samples; what a store
 // holds of them; and a program's instruments, whose totals the store keeps.
 // A series' samples travel as two columns, an int64 time and a float64 value

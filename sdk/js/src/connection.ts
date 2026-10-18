@@ -17,7 +17,14 @@ import {
 	UnavailableError,
 } from './errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
-import { ConnectionLostError, Session, type SessionOptions, type Stream, watch } from './session.ts'
+import {
+	ConnectionLostError,
+	protocol,
+	Session,
+	type SessionOptions,
+	type Stream,
+	watch,
+} from './session.ts'
 import type { NodeOptions } from './store.ts'
 import { Empty, methods, StoreOptions } from './wire/protocol.ts'
 
@@ -443,7 +450,7 @@ async function reachServe(
 	}
 	const endpoint = published.endpoints?.[0]
 	const secret = Buffer.from(published.secret ?? '', 'base64url')
-	if (published.protocol !== 2 || endpoint === undefined || secret.length !== 32) {
+	if (published.protocol !== protocol || endpoint === undefined || secret.length !== 32) {
 		return undefined
 	}
 	try {

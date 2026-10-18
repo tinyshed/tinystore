@@ -22,7 +22,7 @@ import (
 // what was asked for meanwhile into one write.
 
 // ProtocolVersion is the protocol this SDK speaks.
-const ProtocolVersion = 2
+const ProtocolVersion = 1
 
 // DownloadWindow is what this client lets the server send on a stream
 // before it grants more: a body at least.

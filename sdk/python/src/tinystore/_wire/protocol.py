@@ -1,4 +1,4 @@
-"""Every message and method of protocol 2.
+"""Every message and method of the protocol.
 
 Written by crates/protocol from protocol/*.wire; `just protocol` writes it again.
 """

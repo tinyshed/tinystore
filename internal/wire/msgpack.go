@@ -1,4 +1,4 @@
-// Package wire is protocol 2's bytes for the Go SDK: the MessagePack profile
+// Package wire is the protocol's bytes for the Go SDK: the MessagePack profile
 // of docs/wire.md, and every message and method, which crates/protocol writes
 // into protocol.go from protocol/*.wire.
 //

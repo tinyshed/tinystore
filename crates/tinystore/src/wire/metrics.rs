@@ -1,4 +1,4 @@
-//! metrics over protocol 2: queries and their answers, what a store holds of
+//! metrics over the protocol: queries and their answers, what a store holds of
 //! its series, and a client's instruments.
 //!
 //! A read, the newest samples and an aggregate answer in parts within the

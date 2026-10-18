@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal
 
 from . import _runtime
 from ._pipe import open_pipe
-from ._session import ConnectionLostError, Session, Stream
+from ._session import PROTOCOL, ConnectionLostError, Session, Stream
 from ._wire.protocol import Empty, StoreOptions, methods
 from .errors import ClosedError, InvalidError, OutcomeUnknownError, UnavailableError
 
@@ -360,7 +360,7 @@ async def _reach_serve(serve: Path) -> tuple[Connection, bool, str] | None:
         secret = base64.urlsafe_b64decode(published["secret"] + "==")
     except (OSError, ValueError, KeyError, IndexError, TypeError):
         return None
-    if published.get("protocol") != 2 or len(secret) != 32:
+    if published.get("protocol") != PROTOCOL or len(secret) != 32:
         return None
     try:
         return await dial(endpoint, secret=secret), published.get("sidecar") is True, str(published.get("instance"))

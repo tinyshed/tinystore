@@ -8,7 +8,7 @@ the code; [dx.md](../dx.md) has the rules it follows, and [kv.md](kv.md) and
 section; Python, Go and Rust follow, the first two as
 [dx.md](../dx.md#python-and-go-as-every-book-writes-them) spells them.
 The Rust core builds databases, their migrations, reads, writes, batches and
-transactions (`crates/tinystore/src/sql`), protocol 2 serves them
+transactions (`crates/tinystore/src/sql`), the protocol serves them
 (`protocol/sql.wire`), and the Bun SDK has all of it with its tables and
 query builder (`sdk/js/src/sql.ts`, `query.ts`), as the Rust core has
 them (`query.rs`), both held to `testdata/sql/queries.json`, and the buckets

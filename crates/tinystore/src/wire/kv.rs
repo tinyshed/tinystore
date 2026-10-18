@@ -1,4 +1,4 @@
-//! kv's methods of protocol 2, protocol/kv.wire: a handle on what a client
+//! kv's methods of the protocol, protocol/kv.wire: a handle on what a client
 //! opened, and the calls on it. A handle holds rows, nil, an integer or bin,
 //! so that the server reads what any language wrote.
 

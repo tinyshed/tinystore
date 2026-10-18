@@ -40,9 +40,8 @@ use crate::kv::Handed;
 use crate::pipe::{Capability, Connect};
 use crate::{Clock, Result, Store, unix_millis};
 
-/// The protocol this server speaks, the second: a client of the first is
-/// refused, since nothing of it was released.
-const PROTOCOL: u64 = 2;
+/// The protocol this server speaks; a client of another is refused.
+const PROTOCOL: u64 = 1;
 const MAX_BODY: u64 = 4 << 20;
 /// Streams a client may have open at once: as many writes as one grouped
 /// commit carries, so an event loop with many writes in flight fills commits.
@@ -411,7 +410,7 @@ impl Shared {
         }
     }
 
-    /// Answers HELLO with what the connection agrees: protocol 2, and the
+    /// Answers HELLO with what the connection agrees: the protocol, and the
     /// smallest of the bodies either side takes and the client's stream
     /// credit, so that one body always fits a stream's window.
     fn welcome(&self, input: &mut Input, body: &[u8]) {
@@ -419,8 +418,8 @@ impl Shared {
             Ok(hello) => hello,
             Err(failure) => return self.go_away(input, "protocol", &failure.message),
         };
-        if hello.protocol < PROTOCOL {
-            let refused = format!("protocol {}, older than {PROTOCOL}, the one this server speaks", hello.protocol);
+        if hello.protocol != PROTOCOL {
+            let refused = format!("protocol {}, where this server speaks {PROTOCOL}", hello.protocol);
             return self.go_away(input, "protocol", &refused);
         }
         if let Some(length) = hello.challenge.as_ref().map(Vec::len).filter(|length| *length != CHALLENGE) {

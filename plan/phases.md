@@ -14,7 +14,7 @@ says so. Mark a task done in the commit that does it.
 - [x] CI building and testing it on Linux, macOS and Windows, with the Bun pipe on all three: green since the branch was first pushed, on 10 October.
 - [x] The kv book's first draft and one newcomer check ([api/kv.md](api/kv.md)).
 - [ ] The jobs book; the kv book's second check; the owner accepts both. The kv book's second check is done; the owner accepted the jobs book on 9 October, after a survey of job libraries and a second newcomer round.
-- [x] Protocol 2: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
+- [x] The protocol: kv's schema in the new vocabulary, `protocol/*.wire`, and `crates/protocol`, which writes its codecs for Rust and TypeScript and a vector of every message ([protocol.md](protocol.md)).
 - [x] The generator's Python and Go codecs, with their SDKs.
   Built, on 18 October: the codecs, `sdk/python/src/tinystore/_wire/protocol.py` on the Python SDK's codec and
   `internal/wire` of a Go module at the root, each message's reader and writer written out a field at a time, both
@@ -51,15 +51,15 @@ them; the workspace builds and tests on three operating systems.
   is built, in the Python and Go SDKs too on 18 October, and the book's Later waits for the owner.
 - [x] kv's buckets: any serde type, branches, ttl and idle expiry, versions, sets, pages, large clears, maintenance.
 - [x] kv's counters, rate limits, quotas, once, transactions; idle renewals that never wait for a commit.
-- [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of protocol 2, decoded by the generated messages.
+- [x] The wire's session over frames and the MessagePack profile, every vector of `testdata/wire` passing; kv's every method of the protocol, decoded by the generated messages.
 - [x] kv's pages within the agreed body, transactions as a checked batch, `once` handed over to the client, and a `CANCEL` that lets a handed run go.
 - [x] The server, `tinystore serve`: stdio for a private child, a Unix socket or a named pipe that `SERVE` names and its proof, `server.stop`, a private server's clock; the Bun SDK's kv suite passes through a private child and a sidecar.
 - [x] The server's TCP and TLS, rustls on ring: a client's capability is its token's line, the tokens and the certificate read before the store opens, a HELLO awaited five seconds; the kv suite passes through a remote server.
 - [ ] `tinystore stop`, `status` and `logs`; an owner-only DACL on the named pipe and on `server/` on Windows.
-- [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over protocol 2, and its suite passes `embedded`.
+- [x] The pipe: the C ABI and bun:ffi; the Bun SDK's kv is the book's over the protocol, and its suite passes `embedded`.
 - [ ] napi-rs, PyO3 and cgo over the same four functions; the Python and Go SDKs.
   Built, on 18 October: PyO3's module in `crates/ffi` behind its feature `python`, the Python SDK's
-  `tinystore._core`, and the Python SDK on protocol 2, `tinystore.open` through the core in its own process, a
+  `tinystore._core`, and the Python SDK on the protocol, `tinystore.open` through the core in its own process, a
   private child, a sidecar or a remote server, with kv's buckets, counters, rate limits, quotas, `once` and
   `store.tx`, jobs' queues, workers, steps, progress, watches, schedules and `run_due`, sql's databases,
   tables, query builder over `testdata/sql/queries.json`, `include`, pages and `db.bucket` and `db.queue`,
@@ -85,11 +85,11 @@ taken against Go `e81a050` and written up as a research round.
 
 ## 2. sqldb, jobs, blobs
 
-- [x] Downloads and uploads under credit, which blobs and records need: blobs' get and upload pace both ways in protocol 2.
-- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, protocol 2 and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet; the Python and Go SDKs are built to it too, on 18 October.
-- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, protocol 2 and the Bun SDK are built to the accepted book, a queue in the store's transaction among them, and the Python and Go SDKs too, on 18 October.
-- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core, protocol 2 and the Bun SDK are built to the book, reads over the wire as S3's, on an ETag and a range, and the disk the store keeps free, `keep_free` and `serve --keep-free`; the Python and Go SDKs too, on 18 October.
-- [x] kv and jobs inside an sql database: `db.bucket` and `db.queue`, which commit with its rows, in the Rust core, protocol 2 and the Bun SDK.
+- [x] Downloads and uploads under credit, which blobs and records need: blobs' get and upload pace both ways in the protocol.
+- [ ] sqldb to its accepted book ([api/sqldb.md](api/sqldb.md)): migrations checked at open, SQL as text, typed tables, a query builder in every SDK, `batch` and `tx` in the protocol, FTS5 and R*Tree. The Rust core, the protocol and the Bun SDK are built to the book, `include` among them; FTS5 and R*Tree have no test yet; the Python and Go SDKs are built to it too, on 18 October.
+- [ ] jobs in the new vocabulary: queues, ids, repeats, `concurrency`, `rate`, steps, watching. The Rust core, the protocol and the Bun SDK are built to the accepted book, a queue in the store's transaction among them, and the Python and Go SDKs too, on 18 October.
+- [ ] blobs to its accepted book ([api/blobs.md](api/blobs.md)): files inline or a file each, uploads, conditions, copies, expiry, checked reads, the scrub. The Rust core, the protocol and the Bun SDK are built to the book, reads over the wire as S3's, on an ETag and a range, and the disk the store keeps free, `keep_free` and `serve --keep-free`; the Python and Go SDKs too, on 18 October.
+- [x] kv and jobs inside an sql database: `db.bucket` and `db.queue`, which commit with its rows, in the Rust core, the protocol and the Bun SDK.
 
 **Gate:** their GATES.md lines pass in Rust and through every SDK; Dashbin can
 start on sqldb, kv and jobs.
@@ -109,10 +109,10 @@ percentile, a gauge's percentile by rank, and `names`, `labelNames` and
 Closed: C2, the `read` token; B10, a memo, which `once` with a short `keep`
 is, across processes too; C9, values kept encrypted, which an encrypted
 bucket keeps ([api/kv.md](api/kv.md#encrypted-buckets)): the Rust core,
-protocol 2 and the Bun SDK, one key a store, keys by name and a change of
+the protocol and the Bun SDK, one key a store, keys by name and a change of
 key left for when someone needs them; C8, an SQL answer by its columns,
 `db.columns` ([api/sqldb.md](api/sqldb.md#by-columns)), once a smoke measured
-it against `db.all`: the core reads rows straight into columns, protocol 2
+it against `db.all`: the core reads rows straight into columns, the protocol
 carries int64s and float64s with a bit a `NULL`, and the Bun SDK gives
 arrays of what `all` gives; typed arrays are left for when someone needs
 them.
@@ -209,7 +209,7 @@ them.
   aggregate's groups in parts within the client's credit, their values as float64 bits; a program's instruments on a
   stream of their own, in batches numbered in the SDK's session that the store applies once and in order, a lost
   answer found again when the stream opens again, and a store that started again sent nothing it may have counted;
-  the Bun SDK's metrics over protocol 2 through each way a store is reached, its durations, ops and an instrument's
+  the Bun SDK's metrics over the protocol through each way a store is reached, its durations, ops and an instrument's
   labels offered and checked as they are written. After the owner's review: a gauge's function a set of labels, in
   Rust and the SDK, and a flush failing with what the store refused or a restart may have counted.
   Built, slice 8: fuzz targets of every decoder past its version and checksum, `metrics_runs` and `metrics_rows`,

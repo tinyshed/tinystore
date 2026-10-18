@@ -154,7 +154,7 @@ reminders.work(async ({ userId, text }, run) => push(userId, text))
 
 ### Python and Go, as every book writes them
 
-Written on 18 October, before the two SDKs are rewritten on protocol 2, so
+Written on 18 October, before the two SDKs are rewritten on the protocol, so
 that each book gives every call site in the four languages from the same
 rules. The calls are TypeScript's and Rust's, word for word where the
 language lets them be; what follows is only what the language changes.

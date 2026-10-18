@@ -1,4 +1,4 @@
-//! A backup over protocol 2: the zip a store's backup writes, sent as pieces
+//! A backup over the protocol: the zip a store's backup writes, sent as pieces
 //! of DATA within the client's credit, then what it holds. The backup writes
 //! on a worker into a few pieces held here, and waits while they are all
 //! held; the client's credit sends them, and a client that cancels or leaves

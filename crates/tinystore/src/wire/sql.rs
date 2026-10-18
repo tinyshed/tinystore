@@ -1,4 +1,4 @@
-//! sql over protocol 2: databases by handle; a query's rows in parts, within
+//! sql over the protocol: databases by handle; a query's rows in parts, within
 //! the client's credit; writes and batches through the shared commit's
 //! completion, so an event loop fills commits; and a transaction whose calls
 //! come as DATA on one stream, rolled back by the server's own timer when its

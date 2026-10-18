@@ -63,7 +63,7 @@ fn downloaded<M: Message>(client: &mut Client, called: u16, request: &impl Messa
 /// A client of `store` whose bodies are `max_body` bytes at most.
 fn client(store: &Store, max_body: u64) -> Client {
     let mut client = Client::over(Pipe::connect(store, Connect::default()).unwrap());
-    let hello = Hello { protocol: 2, client: "test/0".to_owned(), max_body: Some(max_body), ..Hello::default() };
+    let hello = Hello { protocol: 1, client: "test/0".to_owned(), max_body: Some(max_body), ..Hello::default() };
     client.greet(hello).unwrap();
     client
 }

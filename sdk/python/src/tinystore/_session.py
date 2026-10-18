@@ -31,7 +31,7 @@ from .errors import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-PROTOCOL = 2
+PROTOCOL = 1
 
 DOWNLOAD_WINDOW = 2 << 20
 """What this client lets the server send on a stream before it grants more: a body at least."""

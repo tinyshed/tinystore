@@ -43,7 +43,7 @@ fn a_read_goes_to_the_workers_while_they_have_reads_of_its_connection() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let handle = client.bucket("sessions");
     let crowd = CROWD as u32;
 

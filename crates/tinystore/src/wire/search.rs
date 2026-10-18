@@ -1,4 +1,4 @@
-//! search's methods of protocol 2, protocol/search.wire: indexes a
+//! search's methods of the protocol, protocol/search.wire: indexes a
 //! connection opened by handle, documents of JSON set, read and deleted by
 //! id, searches with their vector and `where`, an index's status, a drop and
 //! the list. A vector travels as its floats' bytes, little-endian. A table's

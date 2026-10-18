@@ -27,7 +27,7 @@ impl Client {
         let admit: super::Admit = std::sync::Arc::new(move |_: Option<&str>| Some(capability));
         let connect = super::Connect { admit: Some(admit), ..super::Connect::default() };
         let mut client = Client::over(Pipe::connect(store, connect).unwrap());
-        let welcome = client.greet(Hello { protocol: 2, token: Some("a token".to_owned()), ..Hello::default() });
+        let welcome = client.greet(Hello { protocol: 1, token: Some("a token".to_owned()), ..Hello::default() });
         assert!(welcome.is_ok(), "{welcome:?}");
         client
     }
@@ -38,8 +38,8 @@ impl Client {
 
     pub(crate) fn open(dir: &Path) -> Client {
         let mut client = Client::connect(dir);
-        let welcome = client.hello(2).unwrap();
-        assert_eq!(welcome.protocol, 2);
+        let welcome = client.hello(1).unwrap();
+        assert_eq!(welcome.protocol, 1);
         client
     }
 

@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use tinystore::pipe::Prove;
 
 /// The protocol `SERVE` says the server speaks.
-const PROTOCOL: u64 = 2;
+const PROTOCOL: u64 = 1;
 
 /// What a client needs to find and trust the server: where it listens, and
 /// the secret it proves itself with.
@@ -177,7 +177,7 @@ mod tests {
         mac.update(b"0123456789abcdef");
         assert_eq!(serve.prove()(b"0123456789abcdef"), mac.finalize().into_bytes().to_vec());
         let published: serde_json::Value = serde_json::from_str(&serve.json()).unwrap();
-        assert_eq!((published["protocol"].as_u64(), published["sidecar"].as_bool()), (Some(2), Some(true)));
+        assert_eq!((published["protocol"].as_u64(), published["sidecar"].as_bool()), (Some(1), Some(true)));
         assert_eq!(published["secret"].as_str().unwrap().len(), 43, "32 bytes, unpadded");
     }
 }

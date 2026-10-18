@@ -30,7 +30,7 @@ fn admin(store: &Store) -> Client {
     let admit: Admit = Arc::new(|_: Option<&str>| Some(Capability::Admin));
     let mut client = Client::over(Pipe::connect(store, Connect { admit: Some(admit), ..Connect::default() }).unwrap());
     let token = Some("a token".to_owned());
-    client.greet(Hello { protocol: 2, token, stream_credit: Some(WINDOW), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, token, stream_credit: Some(WINDOW), ..Hello::default() }).unwrap();
     client
 }
 

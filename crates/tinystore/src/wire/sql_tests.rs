@@ -122,7 +122,7 @@ fn rows_past_one_message_come_in_parts_within_the_clients_credit() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
     let credit = 64 << 10;
-    client.greet(Hello { protocol: 2, stream_credit: Some(credit), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() }).unwrap();
     let handle = open(&mut client);
     let title = "x".repeat(1000);
     for n in 0..200 {
@@ -167,7 +167,7 @@ fn a_download_holds_the_stores_memory_until_its_last_part_is_sent() {
     let options = crate::Options { memory: Some(4 << 20), background: false, ..crate::Options::default() };
     let store = crate::Store::open(dir.path(), options).unwrap();
     let mut client = Client::over(crate::pipe::Pipe::connect(&store, crate::pipe::Connect::default()).unwrap());
-    client.greet(Hello { protocol: 2, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
     let handle = open(&mut client);
     let title = "x".repeat(1000);
     for n in 0..200 {
@@ -355,7 +355,7 @@ fn writes_through_a_query_in_flight_hold_no_thread_of_the_session() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
     let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
-    client.hello(2).unwrap();
+    client.hello(1).unwrap();
     let handle = open(&mut client);
     let held = store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
     let (began, begun) = std::sync::mpsc::channel();
@@ -517,7 +517,7 @@ fn columns_past_one_message_come_in_parts_of_the_same_rows_within_the_clients_cr
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
     let credit = 64 << 10;
-    client.greet(Hello { protocol: 2, stream_credit: Some(credit), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, stream_credit: Some(credit), ..Hello::default() }).unwrap();
     let handle = open(&mut client);
     let title = "x".repeat(1000);
     for n in 0..200 {
@@ -571,7 +571,7 @@ fn columns_past_one_message_come_in_parts_of_the_same_rows_within_the_clients_cr
 fn a_row_larger_than_a_message_is_limit_by_columns_as_by_rows() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::connect(dir.path());
-    client.greet(Hello { protocol: 2, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
+    client.greet(Hello { protocol: 1, stream_credit: Some(64 << 10), ..Hello::default() }).unwrap();
     let handle = open(&mut client);
     exec(&mut client, handle, "insert into notes (id, title) values ('n1', printf('%.*c', 100000, 'x'))", Vec::new());
 

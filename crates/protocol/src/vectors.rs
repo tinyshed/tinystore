@@ -33,11 +33,11 @@ pub(crate) fn write(schema: &Schema) -> String {
         vectors.push(vector(&format!("{} with no field", message.name), message, Sample::Fields(Vec::new())));
     }
     let file = json!({
-        "about": "Every message of protocol 2, written by crates/protocol from protocol/*.wire: its bytes, and its \
+        "about": "Every message of the protocol, written by crates/protocol from protocol/*.wire: its bytes, and its \
                   fields by their names in the schema, each typed as bool, uint, int, float (its bits in hex), str, \
                   bin (hex), list, names or fields, a nested message. A field a vector leaves out is absent from its \
                   bytes, and reads back at its zero value. `just protocol` writes it again.",
-        "protocol": 2,
+        "protocol": 1,
         "methods": methods,
         "messages": vectors,
     });

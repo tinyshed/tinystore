@@ -163,7 +163,7 @@ func reachServe(ctx context.Context, serve string) *served {
 		Sidecar   bool     `json:"sidecar"`
 		Instance  any      `json:"instance"`
 	}
-	if json.Unmarshal(text, &published) != nil || len(published.Endpoints) == 0 || published.Protocol != 2 {
+	if json.Unmarshal(text, &published) != nil || len(published.Endpoints) == 0 || published.Protocol != ProtocolVersion {
 		return nil
 	}
 	secret, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(published.Secret, "="))
