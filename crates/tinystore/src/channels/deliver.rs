@@ -16,6 +16,7 @@
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle, ThreadId};
 
@@ -66,6 +67,9 @@ pub(crate) struct Subscriber {
     pool: Weak<Pool>,
     run: Mutex<Run>,
     turn: Mutex<Turn>,
+    /// Set as `stop` begins, before it waits out the running batch, so that
+    /// no call of that batch starts after it.
+    stopping: AtomicBool,
     changed: Condvar,
 }
 
@@ -89,6 +93,7 @@ impl Deliverer {
             pool: Arc::downgrade(&self.pool),
             run: Mutex::new(run),
             turn: Mutex::new(Turn::Idle),
+            stopping: AtomicBool::new(false),
             changed: Condvar::new(),
         });
         let woken = Arc::downgrade(&subscriber);
@@ -98,7 +103,12 @@ impl Deliverer {
             }
         });
         let place = hub.join(&subscriber.key, wake)?;
-        let _ = subscriber.place.set(place);
+        let (log, reader) = subscriber.place.get_or_init(|| place);
+        // A publish between joining and the place being set found no place to
+        // deliver from; it is delivered now.
+        if log.holds_for(*reader) {
+            subscriber.wake();
+        }
         Ok(subscriber)
     }
 
@@ -193,7 +203,11 @@ impl Subscriber {
             }
             *turn = Turn::Running { on: thread::current().id(), again: false };
         }
-        let Some((log, reader)) = self.place.get() else { return };
+        let Some((log, reader)) = self.place.get() else {
+            // Woken before its place was set: `subscribe` wakes it again.
+            *lock(&self.turn) = Turn::Idle;
+            return;
+        };
         let taken = log.take(*reader, BATCH);
         let missed = (taken.missed > 0).then_some(Delivery::Missed(taken.missed));
         for delivery in missed.into_iter().chain(taken.messages.into_iter().map(Delivery::Message)) {
@@ -230,12 +244,13 @@ impl Subscriber {
     }
 
     fn stopped(&self) -> bool {
-        *lock(&self.turn) == Turn::Stopped
+        self.stopping.load(Ordering::SeqCst)
     }
 
     /// No call starts after it, and it returns once the running one ended;
     /// called from that call's own thread, at once.
     pub(crate) fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let current = thread::current().id();
         let turn = lock(&self.turn);
         let mut turn = self

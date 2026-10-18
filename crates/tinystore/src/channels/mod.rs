@@ -265,10 +265,14 @@ impl<T: DeserializeOwned> Iterator for Each<T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
+            if self.signal.stopped() {
+                self.taken.clear();
+                return None;
+            }
             match self.taken.pop_front() {
                 Some(Delivery::Missed(count)) => self.told.missed(Missed { count }),
                 Some(Delivery::Message(released)) => return Some(decoded(&self.told.shown, &released)),
-                None if self.signal.stopped() || self.hub.closed() => return None,
+                None if self.hub.closed() => return None,
                 None => self.take(),
             }
         }

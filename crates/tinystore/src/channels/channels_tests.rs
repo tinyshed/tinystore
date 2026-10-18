@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 use std::thread;
 
@@ -266,4 +267,46 @@ fn a_store_short_of_memory_drops_the_oldest_unread_messages_rather_than_refuse_a
     slow.next().unwrap().unwrap();
     let missed = *missed.lock().unwrap();
     assert!((20..30).contains(&missed), "the oldest went to make room: {missed} missed");
+}
+
+#[test]
+fn no_call_of_the_running_batch_starts_once_stop_was_called() {
+    let (_dir, store) = opened();
+    let chat = store.channel::<u32>("chat").open().unwrap();
+    let (entered, in_handler) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&calls);
+    let sub = Arc::new(
+        chat.subscribe(move |_: Message<u32>| {
+            counting.fetch_add(1, Ordering::SeqCst);
+            let _ = entered.send(());
+            let _ = released.lock().unwrap().recv();
+        })
+        .unwrap(),
+    );
+    for value in 0..5 {
+        chat.publish(&value).unwrap();
+    }
+    in_handler.recv_timeout(PATIENCE).unwrap();
+    let stopping = Arc::clone(&sub);
+    let stopped = thread::spawn(move || stopping.stop());
+    thread::sleep(Duration::from_millis(50));
+    drop(release);
+    stopped.join().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the batch's other four calls never start");
+}
+
+#[test]
+fn a_stopped_loop_answers_none_though_its_last_batch_held_more() {
+    let (_dir, store) = opened();
+    let chat = store.channel::<u32>("chat").open().unwrap();
+    let mut each = chat.each().unwrap();
+    for value in 0..3 {
+        chat.publish(&value).unwrap();
+    }
+    assert_eq!(each.next().unwrap().unwrap().value, 0);
+    each.stopper().stop();
+    assert!(each.next().is_none());
 }
