@@ -219,7 +219,7 @@ abstract class Searchable<T> {
 			if (status.state === 'failed') {
 				throw new InvalidError(`index ${this.name}: its rebuild failed: ${status.error}`)
 			}
-			await Bun.sleep(readyEvery)
+			await new Promise(resolve => setTimeout(resolve, readyEvery))
 		}
 	}
 
