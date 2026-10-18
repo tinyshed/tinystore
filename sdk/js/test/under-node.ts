@@ -1,13 +1,15 @@
-// The SDK under Node, through Node's runtime, against a real tinystore: the
-// sidecar, a private child, and a remote server over TCP and TLS. Node runs
-// the TypeScript as it is: node --test test/under-node.ts.
+// The SDK under Node, through Node's runtime: the core in this process
+// through its addon, when TINYSTORE_ADDON names the tinystore.node that just
+// sdk-node made, and a real tinystore as the sidecar, a private child and a
+// remote server over TCP and TLS. Node runs the TypeScript as it is: node
+// --test test/under-node.ts.
 
 import assert from 'node:assert/strict'
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 
@@ -17,20 +19,13 @@ import { nodeRuntime } from '../src/runtime/node.ts'
 const scratch = mkdtempSync(join(tmpdir(), 'tinystore-node-'))
 const servers: ChildProcess[] = []
 
+const addon = process.env.TINYSTORE_ADDON
+
 before(() => {
-	if (process.env.TINYSTORE_BIN !== undefined) {
-		return
-	}
-	const out = join(import.meta.dirname, '..', '.bin')
-	mkdirSync(out, { recursive: true })
-	const binary = join(out, process.platform === 'win32' ? 'tinystore.exe' : 'tinystore')
-	const built = spawnSync('go', ['build', '-o', binary, '.'], {
-		cwd: resolve(import.meta.dirname, '../../../cmd/tinystore'),
-		env: { ...process.env, GOWORK: 'off', CGO_ENABLED: '0' },
-		encoding: 'utf8',
-	})
-	assert.equal(built.status, 0, `go build of tinystore failed: ${built.stderr}`)
-	process.env.TINYSTORE_BIN = binary
+	assert.ok(
+		process.env.TINYSTORE_BIN !== undefined,
+		'TINYSTORE_BIN names the tinystore that just build made',
+	)
 })
 
 // on Windows a server still exiting holds its files, and so does the sidecar
@@ -60,6 +55,68 @@ test('the runtime is Node’s, and finds what is on PATH', () => {
 	assert.match(nodeRuntime.client, /^tinystore-js\/\S+ node\/\d+/)
 	assert.ok(nodeRuntime.which('node') !== undefined)
 	assert.equal(nodeRuntime.which('no-such-program-of-tinystore'), undefined)
+})
+
+test('the core in this process answers under Node: values, many writes, a file, a message, a job', {
+	skip: addon === undefined && 'TINYSTORE_ADDON names no tinystore.node',
+}, async () => {
+	const dir = join(scratch, 'embedded')
+	const store = await open(dir, { embedded: true, library: addon })
+	const sessions = store.bucket<{ user: number }>('sessions')
+	await sessions.set('token', { user: 42 })
+	assert.deepEqual(await sessions.get('token'), { user: 42 })
+
+	const counts = store.bucket<number>('counts')
+	await Promise.all(Array.from({ length: 200 }, (_, n) => counts.set(`k${n}`, n)))
+	const read = await Promise.all(Array.from({ length: 200 }, (_, n) => counts.get(`k${n}`)))
+	assert.deepEqual(
+		read,
+		Array.from({ length: 200 }, (_, n) => n),
+	)
+
+	// past a frame and past the credit a stream starts with: pieces both ways
+	const bytes = Uint8Array.from({ length: (3 << 20) + 17 }, (_, n) => n % 251)
+	const files = store.files('pictures')
+	await files.put('big.bin', bytes)
+	assert.deepEqual(await (await files.get('big.bin'))?.bytes(), bytes)
+
+	// what nobody asked for at that moment comes by the core's wake
+	const chat = store.channel<string>('chat')
+	const received: string[] = []
+	const sub = await chat.subscribe(m => {
+		received.push(m.value)
+	})
+	for (const text of ['a', 'b', 'c']) {
+		await chat.publish(text)
+	}
+	await until(() => received.length === 3)
+	assert.deepEqual(received, ['a', 'b', 'c'])
+	await sub.stop()
+
+	const emails = store.queue<{ to: string }>('emails')
+	const sent: string[] = []
+	const worker = emails.work(async ({ to }) => {
+		sent.push(to)
+	})
+	await emails.add({ to: 'ada@example.com' })
+	await until(() => sent.length === 1)
+	await worker.stop()
+	assert.deepEqual(sent, ['ada@example.com'])
+	await store.close()
+
+	// closed, the store lets go of its directory, and opens again with what it kept
+	const again = await open(dir, { embedded: true, library: addon })
+	assert.deepEqual(await again.bucket<{ user: number }>('sessions').get('token'), { user: 42 })
+	await again.close()
+	rmSync(dir, { recursive: true, force: true })
+})
+
+test('a directory the core cannot open fails under Node with its reason', {
+	skip: addon === undefined && 'TINYSTORE_ADDON names no tinystore.node',
+}, async () => {
+	const file = join(scratch, 'a-file')
+	writeFileSync(file, 'not a directory')
+	await assert.rejects(open(file, { embedded: true, library: addon }), /cannot open/)
 })
 
 test('a store opens through its sidecar under Node, and again through the one running', async () => {
@@ -114,33 +171,39 @@ test('a remote server is reached over TLS, its certificate checked, under Node',
 	await assert.rejects(connect(endpoint, { token }), 'a certificate nobody vouches for was trusted')
 })
 
-/** A server listening on a port of its choosing, its endpoint read from its log. */
+async function until(done: () => boolean): Promise<void> {
+	for (let tried = 0; !done() && tried < 500; tried++) {
+		await sleep(20)
+	}
+}
+
+/** A server listening on a port of its choosing, its endpoint read from its SERVE. */
 async function serveRemote(
 	scheme: 'tcp' | 'tls',
 	flags: string[],
 ): Promise<{ endpoint: string; token: string }> {
 	const token = randomBytes(32).toString('base64url')
 	const tokens = join(scratch, `${scheme}-tokens`)
-	writeFileSync(tokens, `admin ${token}\n`)
+	writeFileSync(
+		tokens,
+		`admin ${token}
+`,
+	)
 	const dir = join(scratch, `${scheme}-store`)
 	const server = spawn(
 		process.env.TINYSTORE_BIN!,
-		['serve', '--dir', dir, '--listen', `${scheme}://127.0.0.1:0`, '--tokens', tokens, ...flags],
-		{ stdio: ['ignore', 'ignore', 'pipe'] },
+		['serve', dir, '--listen', `${scheme}://127.0.0.1:0`, '--tokens', tokens, ...flags],
+		{ stdio: 'ignore' },
 	)
 	servers.push(server)
-	let log = ''
-	server.stderr!.setEncoding('utf8')
-	const endpoint = await new Promise<string>((found, failed) => {
-		server.stderr!.on('data', (text: string) => {
-			log += text
-			const serving = new RegExp(`endpoints=(${scheme}://\\S+)`).exec(log)
-			if (serving !== null) {
-				found(serving[1]!)
-			}
-		})
-		server.once('exit', code => failed(new Error(`serve exited with ${code}: ${log}`)))
-	})
+	const serve = join(dir, 'server', 'SERVE')
+	for (let tried = 0; !existsSync(serve); tried++) {
+		assert.ok(tried < 500 && server.exitCode === null, `serve did not start: ${server.exitCode}`)
+		await sleep(20)
+	}
+	const endpoints: string[] = JSON.parse(readFileSync(serve, 'utf8')).endpoints
+	const endpoint = endpoints.find(at => at.startsWith(`${scheme}://`))
+	assert.ok(endpoint !== undefined, `no ${scheme} endpoint in ${endpoints.join(', ')}`)
 	return { endpoint, token }
 }
 

@@ -81,10 +81,14 @@ export interface OpenOptions {
 	private?: boolean
 	/**
 	 * The core inside this process, loaded from its library, rather than a
-	 * server beside it: no process and no socket. Bun alone for now.
+	 * server beside it: no process and no socket.
 	 */
 	embedded?: boolean
-	/** The core's library for `embedded`: TINYSTORE_LIBRARY when absent. */
+	/**
+	 * The core's library for `embedded`: under Bun the C library,
+	 * TINYSTORE_LIBRARY when absent, and under Node its addon, tinystore.node,
+	 * TINYSTORE_ADDON when absent.
+	 */
 	library?: string | undefined
 	/** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
 	binary?: string
@@ -600,10 +604,11 @@ function findBinary(runtime: Runtime, given: string | undefined): string {
 
 /** The core's library an embedded store loads. */
 function findLibrary(library: string | undefined): string {
-	const found = library ?? process.env.TINYSTORE_LIBRARY
+	const variable = typeof Bun === 'undefined' ? 'TINYSTORE_ADDON' : 'TINYSTORE_LIBRARY'
+	const found = library ?? process.env[variable]
 	if (found === undefined || found === '') {
 		throw new InvalidError(
-			'an embedded store needs the core library: pass library or set TINYSTORE_LIBRARY',
+			`an embedded store needs the core library: pass library or set ${variable}`,
 		)
 	}
 	return found

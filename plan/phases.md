@@ -69,7 +69,9 @@ them; the workspace builds and tests on three operating systems.
   `db.search_index`, and backups, each suite through all four. Then the Go SDK, a package an engine in `sdk/go`,
   module `tinyshed.org/tinystore`, the core in its own process through cgo's dlopen, or its DLL without cgo on
   Windows, every engine's suite through all four, its loggers `slog.Handler`s that `testing/slogtest` passes.
-  Both SDKs closed by the owner on 18 October. Left: napi-rs, and the Node SDK on it.
+  Both SDKs closed by the owner on 18 October. Then, on 19 October, napi-rs's addon in `crates/ffi` behind its
+  feature `node`, `tinystore.node`, which the JS SDK loads under Node for `embedded`, its wake a threadsafe
+  function; every suite of the core in its process passes through it under Bun, and `under-node.ts` under Node.
 
 A smoke comparison, not a research round, 9 October on Windows 11 with Bun
 1.4.2, FULL durability, medians of five passes: through the existing Bun SDK,

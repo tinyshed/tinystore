@@ -153,7 +153,7 @@ tables:
 fuzz target="records_rows" time="60":
     docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src/fuzz {{rust_image}} sh -c 'rustup toolchain install nightly --profile minimal >/dev/null && cargo +nightly install cargo-fuzz --locked --quiet && cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}'
 
-check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-node sdk-go sdk-python sdk-python-check lint-actions
+check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-go sdk-python sdk-python-check sdk-node lint-actions
 
 # remove build output
 clean:

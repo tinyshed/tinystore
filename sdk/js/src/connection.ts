@@ -520,8 +520,8 @@ export function privateChild(
 }
 
 /**
- * The core in this process, through its C ABI: no server and no socket, the
- * frames handed to the library and back. Bun alone, through bun:ffi.
+ * The core in this process: no server and no socket, the frames handed to
+ * the core and back, through bun:ffi under Bun and its addon under Node.
  */
 export function embedded(
 	runtime: Runtime,
@@ -552,12 +552,18 @@ export function embedded(
 		synchronousWith: node?.synchronousWith ?? [],
 	})
 	return async () => {
-		const { openPipe } = await import('./runtime/pipe.ts')
 		let session: Session | undefined
-		const transport = openPipe(library(), resolve(dir), options, {
-			frames: (bytes, length) => session?.read(bytes, length) ?? length,
-			end: err => session?.end(err),
-		})
+		const end = (err: Error) => session?.end(err)
+		const transport =
+			typeof Bun === 'undefined'
+				? (await import('./runtime/addon.ts')).openAddon(library(), resolve(dir), options, {
+						data: bytes => session?.receive(bytes),
+						end,
+					})
+				: (await import('./runtime/pipe.ts')).openPipe(library(), resolve(dir), options, {
+						frames: (bytes, length) => session?.read(bytes, length) ?? length,
+						end,
+					})
 		session = new Session(bytes => transport.write(bytes), { client: runtime.client })
 		return await Connection.overPipe(session, transport)
 	}
