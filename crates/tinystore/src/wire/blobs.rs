@@ -378,9 +378,16 @@ impl Getting {
             let ended = left == 0 || bytes.is_empty();
             if !bytes.is_empty() {
                 let body = BlobsPiece { bytes }.encode();
+                // sent under the lock a cancel's end takes, as records' and
+                // metrics' are: a piece read while a cancel ended the read
+                // never goes after the stream's last frame
+                let mut state = lock(&self.state);
+                if state.ended {
+                    return;
+                }
                 // the message's bytes, which the client gives back, and not the room:
                 // counted apart, the two drift until the stream waits for good
-                lock(&self.state).credit -= body.len() as u64;
+                state.credit -= body.len() as u64;
                 (self.link.send)(body);
             }
             if ended {

@@ -223,6 +223,24 @@ fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
 }
 
 #[test]
+fn a_read_cancelled_mid_way_sends_nothing_after_its_last_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, credit) = connect(dir.path(), Hello { protocol: 2, ..Hello::default() });
+    let handle = open(&mut client, "films");
+    let write = BlobsWrite { handle, path: "film.mp4".to_owned(), ..BlobsWrite::default() };
+    answered::<BlobsWritten>(&upload(&mut client, &write, &bytes(16 << 20), 1 << 20, credit)).unwrap();
+    let film = BlobsRead { handle, path: "film.mp4".to_owned(), ..BlobsRead::default() };
+    for _ in 0..20 {
+        let stream = client.start(method::BLOBS_READ, &film);
+        assert_eq!(client.next_on(stream).flags, 0, "the read goes on past its RESPONSE");
+        // the cancel meets a piece the worker read and is about to send
+        client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
+        while client.next_on(stream).flags & frame::END == 0 {}
+        assert!(client.silent_on(stream, Duration::from_millis(50)), "a piece went after the read's last frame");
+    }
+}
+
+#[test]
 fn an_upload_cancelled_or_refused_leaves_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
