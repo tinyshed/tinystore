@@ -84,6 +84,26 @@ jobs:
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
           bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts
 
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # the Go SDK through the core in its own process, a private child, a sidecar and a remote server:
+      # the core through syscall on Windows and cgo elsewhere
+      - name: Go over the core and tinystore serve
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) library=tinystore_ffi.dll binary=tinystore.exe ;;
+            macOS) library=libtinystore_ffi.dylib binary=tinystore ;;
+            *) library=libtinystore_ffi.so binary=tinystore ;;
+          esac
+          export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
+          export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+
       - uses: astral-sh/setup-uv@v10.2.0
 
       # the Python SDK through the core in its own process, a private child, a sidecar and a remote server;

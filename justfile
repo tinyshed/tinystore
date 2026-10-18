@@ -79,6 +79,12 @@ sdk: build
     bun install --frozen-lockfile
     bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts test/channels.test.ts test/search.test.ts test/node.test.ts
 
+# run the Go SDK over the core in its own process, a private child, a sidecar and a remote server; gofmt checks its layout
+sdk-go: build
+    test -z "$(gofmt -l .)"
+    go vet ./...
+    go test ./...
+
 # build the core's library as the Python SDK's tinystore._core, beside its sources: a build apart from Bun's, since it links Python
 python-core:
     cargo build --release --locked -p tinystore-ffi --features python
@@ -128,7 +134,7 @@ tables:
 fuzz target="records_rows" time="60":
     docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src/fuzz {{rust_image}} sh -c 'rustup toolchain install nightly --profile minimal >/dev/null && cargo +nightly install cargo-fuzz --locked --quiet && cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}'
 
-check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-python sdk-python-check lint-actions
+check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-go sdk-python sdk-python-check lint-actions
 
 # remove build output
 clean:
