@@ -115,10 +115,10 @@ fn redis_level(text: &[u8]) -> Option<i32> {
 /// space.
 fn logfmt_level(line: &[u8]) -> Option<i32> {
     for key in [&b"level="[..], b"lvl="] {
-        let Some(at) = line.windows(key.len()).position(|window| window == key) else { continue };
-        if at > 0 && line[at - 1] != b' ' {
-            continue;
-        }
+        // `log_level=debug level=warn`: the first `level=` ends a word, the second begins one.
+        let begins_a_word = |at: &usize| *at == 0 || line[*at - 1] == b' ';
+        let mut found = line.windows(key.len()).enumerate().filter(|(_, window)| *window == key).map(|(at, _)| at);
+        let Some(at) = found.find(begins_a_word) else { continue };
         let value = &line[at + key.len()..];
         let value = &value[..value.iter().position(|byte| matches!(byte, b' ' | b'\t')).unwrap_or(value.len())];
         let start = value.iter().position(|byte| *byte != b'"').unwrap_or(value.len());
@@ -200,6 +200,7 @@ mod tests {
             (r#"{"level":"warn","msg":"slow"}"#, Some(WARN)),
             (r#"level=warn msg="slow request" ms=1200"#, Some(WARN)),
             ("ts=2026-09-26T12:00:01Z lvl=error msg=boom", Some(ERROR)),
+            ("log_level=debug level=warn msg=slow", Some(WARN)),
             ("E0926 12:00:01.000000  1 main.go:12] boom", Some(ERROR)),
             ("I20260923 00:47:32.100929   141 raft_server.h:60] ok", Some(INFO)),
             ("1:M 26 Sep 2026 12:00:01.500 # WARNING Memory overcommit", Some(WARN)),

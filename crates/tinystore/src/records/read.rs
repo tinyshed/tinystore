@@ -280,6 +280,10 @@ impl List {
             return Err(self.within(Error::invalid(refused.clone())));
         }
         let streams = match &self.stream {
+            Some(_) if !query.streams.is_empty() => {
+                let why = "streams, which a read of every stream takes: a stream reads its own";
+                return Err(self.within(Error::invalid(why)));
+            }
             Some(stream) => Some(vec![stream.name.to_string()]),
             None if query.streams.is_empty() => None,
             None => Some(query.streams.clone()),
@@ -420,7 +424,7 @@ const SEGMENT_BODY: &str = "select body from segments where id = ?1";
 const SEGMENT_KEYS: &str = "select distinct key from segment_keys where kind in (1, 2) and key >= ?3
     and segment in (select id from segments where holder is null and last_at >= ?1 and first_at <= ?2
     and (?4 is null or stream in (select value from json_each(?4))))";
-const HEAD_BODIES: &str = "select body from heads where last_at >= ?1 and first_at <= ?2
+const HEAD_BODIES: &str = "select id, stream, body from heads where last_at >= ?1 and first_at <= ?2
     and (?3 is null or stream in (select value from json_each(?3)))";
 const HAS_KEY: &str = "select exists (select 1 from segment_keys where segment = ?1 and kind = ?2 and key = ?3)";
 const TRACES_BLOOM: &str = "select bloom from block_traces where block = ?1";
@@ -449,13 +453,18 @@ impl Records {
             let keys = segments.query_map(params![asked.first, asked.last, prefix, asked.only], |row| row.get(0));
             let keys: BTreeSet<String> = keys.and_then(Iterator::collect).map_err(failed)?;
             let mut heads = connection.prepare_cached(HEAD_BODIES).map_err(failed)?;
-            let bodies = heads.query_map(params![asked.first, asked.last, asked.only], |row| row.get(0));
-            let bodies: Vec<Vec<u8>> = bodies.and_then(Iterator::collect).map_err(failed)?;
+            let bodies = heads.query_map(params![asked.first, asked.last, asked.only], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            });
+            let bodies: Vec<(i64, i64, Vec<u8>)> = bodies.and_then(Iterator::collect).map_err(failed)?;
             Ok((keys, bodies))
         })?;
         let mut codec = Codec::default();
-        for body in heads {
-            let events = head::parse(&body, &mut codec)?
+        for (id, stream, body) in heads {
+            // A head row that no longer reads is damage, listed as a read over it lists it.
+            let shown = asked.streams.get(&stream).map_or_else(|| stream.to_string(), |(name, _)| name.to_string());
+            let events = head::parse(&body, &mut codec)
+                .map_err(|error| self.met((Part::HeadRow, id), &shown, error))?
                 .into_iter()
                 .filter(|event| (asked.first..=asked.last).contains(&event.at));
             keys.extend(events.flat_map(|event| {

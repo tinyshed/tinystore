@@ -141,3 +141,29 @@ fn what_no_longer_reads_is_said_once_however_often_it_is_met() {
     });
     assert_eq!(said.load(Ordering::Relaxed), 1, "three reads and two packings met it");
 }
+
+#[test]
+fn a_poll_that_meets_a_damaged_holder_through_a_place_lists_the_holder() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let all = fixture.store.all_events().unwrap();
+    for round in 0..4 {
+        api.append_all((0..4).map(|n| NewEvent::new(&format!("{round}-{n}")))).unwrap();
+        fixture.pass(HOUR);
+        maintain(&fixture.store).unwrap();
+    }
+    zero(&fixture, "blocks");
+    let place: i64 = fixture
+        .records()
+        .file
+        .read(|c| {
+            c.query_row("select min(id) from segments where holder is not null and holder != id", [], |row| row.get(0))
+                .map_err(|error| sql_error("a place", error))
+        })
+        .unwrap();
+    assert!(all.poll(Some(&format!("{place}:0"))).is_err());
+    let damaged = all.damaged().unwrap();
+    let [damage] = damaged.as_slice() else { panic!("{damaged:?}") };
+    all.drop(damage).unwrap();
+    assert_eq!(fixture.rows("segments"), 0, "dropped, the holder goes with its places");
+}

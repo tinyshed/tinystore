@@ -145,7 +145,8 @@ impl Tail {
     /// The next batch, waiting up to `wait` for it: none when none came in
     /// that time, and `Closed` once the store has closed.
     pub fn next_within(&mut self, wait: Duration) -> Result<Option<TailBatch>> {
-        let deadline = Instant::now() + wait;
+        // A wait past what an instant holds waits without end.
+        let deadline = Instant::now().checked_add(wait);
         let recent = &self.records.recent;
         let mut held = recent.held();
         loop {
@@ -159,6 +160,10 @@ impl Tail {
                     return Ok(Some(batch));
                 }
             }
+            let Some(deadline) = deadline else {
+                held = recent.arrived.wait(held).unwrap_or_else(PoisonError::into_inner);
+                continue;
+            };
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return Ok(None);

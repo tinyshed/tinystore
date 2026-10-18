@@ -98,10 +98,18 @@ impl Engine for Records {
 
     /// The streams a copy knows are those its home had made when it last
     /// read them: read again once its home's commits arrive.
-    fn applied(&self, _: &str) {
-        if let (Ok(streams), Ok(waiting)) = (read_streams(&self.file), read_waiting(&self.file)) {
-            *self.streams() = streams;
-            *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = waiting;
+    fn applied(&self, file: &str) {
+        if file != FILE {
+            return;
+        }
+        match (read_streams(&self.file), read_waiting(&self.file)) {
+            (Ok(streams), Ok(waiting)) => {
+                *self.streams() = streams;
+                *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = waiting;
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                tracing::warn!(target: "tinystore", %error, "records: a copy's streams, read again after its home's commit");
+            }
         }
     }
 }
@@ -184,7 +192,8 @@ impl Records {
     /// never shortens what another keeps.
     pub(crate) fn open_stream(&self, name: &str, keep: Option<Duration>) -> Result<Stream> {
         check_name(name)?;
-        if keep.is_some_and(|keep| keep.is_zero()) {
+        // Kept in whole milliseconds: one under a millisecond would read back as none.
+        if keep.is_some_and(|keep| keep.as_millis() == 0) {
             return Err(Error::invalid("a stream keeps its events for more than no time"));
         }
         let mut streams = self.streams();

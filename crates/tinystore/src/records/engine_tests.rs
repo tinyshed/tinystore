@@ -53,6 +53,8 @@ fn a_stream_has_a_name_as_a_bucket_has_and_keeps_for_more_than_no_time() {
         assert_eq!(fixture.store.events(name).open().unwrap_err().kind(), ErrorKind::Invalid, "{name:?}");
     }
     assert_eq!(fixture.store.events("api").keep(Duration::ZERO).open().unwrap_err().kind(), ErrorKind::Invalid);
+    let under_a_millisecond = fixture.store.events("api").keep(Duration::from_micros(500)).open().unwrap_err();
+    assert_eq!(under_a_millisecond.kind(), ErrorKind::Invalid, "it would be kept as none");
     fixture.store.events("a-1_b").open().unwrap();
     assert_eq!(fixture.rows("streams"), 1);
 }

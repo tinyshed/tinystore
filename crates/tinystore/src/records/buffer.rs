@@ -101,7 +101,13 @@ impl Buffer {
             dropped: AtomicU64::new(0),
             full: AtomicU64::new(0),
         });
-        records.lock_held().buffers.push(Arc::clone(&buffer));
+        // Checked again under the lock it is pushed under: a close since
+        // `held_wake` drained the buffers without this one.
+        let mut held = records.lock_held();
+        if held.closed {
+            return Err(Error::closed("records"));
+        }
+        held.buffers.push(Arc::clone(&buffer));
         Ok(buffer)
     }
 

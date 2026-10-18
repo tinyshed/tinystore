@@ -73,6 +73,9 @@ fn parse(cursor: &str) -> Result<(i64, i64)> {
 /// What one read of the file fetched for a batch.
 struct Fetched {
     segment: i64,
+    /// The segment whose bytes the batch reads: the segment's own id, or the
+    /// one a merge put its events in, under which damage is listed.
+    holder: i64,
     stream: i64,
     /// Where the batch's events lie among its holder's, and the place among
     /// the segment's own events where the batch begins.
@@ -108,7 +111,7 @@ impl Records {
         let _held = self.memory.reserve(fetched_bytes as u64 + events * EVENT_HELD, "records: a poll", PATIENCE)?;
         let name = self.name_of(fetched.stream);
         let mut codec = Codec::default();
-        let within = |error: Error| self.met((Part::Segment, fetched.segment), &name, error);
+        let within = |error: Error| self.met((Part::Segment, fetched.holder), &name, error);
         let schema = Schema::parse(&fetched.row, &mut codec).map_err(within)?;
         let mut events = Vec::with_capacity((fetched.to - fetched.from) as usize);
         for (begins, body) in &fetched.blocks {
@@ -163,7 +166,7 @@ impl Records {
                 .prepare_cached(SEGMENT_ROW)
                 .and_then(|mut select| select.query_row([holder], |row| row.get(0)));
             let row = row.map_err(failed)?;
-            Ok(Some(Fetched { segment: id, stream, from, to, skip, count, row, blocks, expired }))
+            Ok(Some(Fetched { segment: id, holder, stream, from, to, skip, count, row, blocks, expired }))
         })
     }
 }

@@ -76,6 +76,9 @@ fn put_reduced(out: &mut Vec<u8>, values: impl Iterator<Item = i64> + Clone) {
 fn read_reduced(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
     let base = reader.int();
     let divisor = reader.count(usize::MAX) as u64;
+    if divisor == 0 {
+        reader.fail("a divisor of integers that is zero, which no writer writes");
+    }
     let (packer, parameter) = (reader.byte(), u32::from(reader.byte()));
     let quotients = match packer {
         WIDTH if parameter <= 64 => {
