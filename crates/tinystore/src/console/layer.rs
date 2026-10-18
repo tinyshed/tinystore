@@ -561,7 +561,8 @@ pub(crate) fn float(value: f64) -> String {
 /// Hex of `N` bytes, the case ignored; all zeros is none, as OpenTelemetry
 /// reads an id.
 fn hex<const N: usize>(text: &str) -> Option<[u8; N]> {
-    if text.len() != 2 * N {
+    // `from_str_radix` takes a leading `+`, which is no hex digit of an id.
+    if text.len() != 2 * N || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..N).map(|at| u8::from_str_radix(text.get(2 * at..2 * at + 2)?, 16).ok()).collect();
