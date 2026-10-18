@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"sync"
+	"time"
 
 	"github.com/tinyshed/tinystore/internal/wire"
 )
@@ -201,6 +202,7 @@ func (s *Session) Open(ctx context.Context, method uint16, body []byte, end bool
 		Method:       method,
 		ready:        make(chan struct{}, 1),
 		credited:     make(chan struct{}, 1),
+		ended:        make(chan struct{}),
 		uploadCredit: agreed.StreamCredit,
 	}
 	s.streams[st.ID] = st
@@ -344,7 +346,7 @@ func (s *Session) dropQueued(st *Stream, requests bool) {
 // release takes a stream out of use, dropping what of it has not left: its
 // number may be named again at once.
 func (s *Session) release(st *Stream) {
-	st.finished = true
+	st.finish()
 	st.signalCredit()
 	if s.streams[st.ID] == st {
 		delete(s.streams, st.ID)
@@ -535,7 +537,7 @@ func (s *Session) end(err error) {
 	}
 	for _, st := range s.streams {
 		st.fail(lost(err, st.sent))
-		st.finished = true
+		st.finish()
 		st.signalCredit()
 	}
 	s.streams = map[uint32]*Stream{}
@@ -603,6 +605,8 @@ type Stream struct {
 	uploadCredit uint64
 	credited     chan struct{}
 	granting     uint64
+	// ended is closed once finished is set
+	ended chan struct{}
 }
 
 // Next is the next frame of the answer, or its error; events already
@@ -692,6 +696,25 @@ func (st *Stream) Cancel() {
 	st.cancelled = true
 	st.s.cancel(st)
 	st.fail(Errorf(Cancelled, "the call was cancelled"))
+}
+
+// CancelAndWait cancels the stream and waits, wait at most, for the server's
+// final frame, so that a close that follows leaves nothing in flight: a
+// private child or a sidecar otherwise drains the stream before it goes.
+func (st *Stream) CancelAndWait(wait time.Duration) {
+	st.Cancel()
+	select {
+	case <-st.ended:
+	case <-time.After(wait):
+	}
+}
+
+// finish marks the stream finished; the caller holds the session's lock.
+func (st *Stream) finish() {
+	if !st.finished {
+		st.finished = true
+		close(st.ended)
+	}
 }
 
 // Finished says the server's final frame came, or the connection ended.
