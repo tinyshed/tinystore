@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Unpack, overload
 
-from ._handles import handle_on, key_text
+from ._handles import Home, handle_on, key_text
 from ._time import Duration, ms
 from ._wire.protocol import KvCall, KvEntry, KvTx, methods
 from .errors import ConflictError, InvalidError
@@ -118,13 +118,13 @@ class Tx:
         self._open()
         self._jobs.append(op)
 
-    def _takes(self, link: Link, home: str | None, file: Literal["kv.db", "jobs.db"], what: str) -> None:
+    def _takes(self, link: Link, home: Home | None, file: Literal["kv.db", "jobs.db"], what: str) -> None:
         """Refuses a handle of another store, one kept in a database's file, and one of the store's other file."""
         if link is not self._link:
             raise InvalidError(f"{what}: a handle of another store, in a transaction of this one")
         if home is not None:
             raise InvalidError(
-                f"{home}: {what}: kept in the database's file, outside this transaction of the store: "
+                f"{home.describe}: {what}: kept in the database's file, outside this transaction of the store: "
                 "take it in with db.tx"
             )
         if self._file is not None and self._file != file:

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
 
 from ._connection import check_name
-from ._handles import Opener, Via, key_text, via_link
+from ._handles import Home, Opener, Via, key_text, via_link
 from ._time import Duration, date_of, ms, unix_ms
 from ._wire.protocol import (
     KvBranch,
@@ -85,8 +85,8 @@ class Parts:
     under: tuple[str, ...]
     values: Values[Any] | None
     """a bucket's values; None for counters"""
-    home: str | None
-    """the database whose file keeps the handle, as errors name it; None for the store's own"""
+    home: Home | None
+    """the database whose file keeps the handle; None for the store's own"""
 
 
 def write_fields(

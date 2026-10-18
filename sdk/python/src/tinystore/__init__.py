@@ -36,6 +36,8 @@ from .jobs import Backoff, Concurrency, Job, JobPage, LastRun, Outcome, Queue, R
 from .kv import Bucket, Counters, Entry, Page
 from .limits import Allowance, Quota, RateLimit, WindowUse
 from .once import Once
+from .query import Query, RowPage, Table
+from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import Status, Store, connect, open
 from .tx import Tx, TxBucket, TxCounters
 
@@ -52,6 +54,8 @@ __all__ = [
     "Constraint",
     "CorruptError",
     "Counters",
+    "Database",
+    "Done",
     "Entry",
     "InUseError",
     "InternalError",
@@ -68,21 +72,27 @@ __all__ = [
     "Page",
     "PermissionDeniedError",
     "ProtocolError",
+    "Query",
     "Queue",
     "Quota",
     "RateLimit",
+    "RowPage",
     "Run",
     "Schedule",
+    "Sql",
+    "SqlTx",
     "Status",
     "Store",
     "StoreTxQueue",
     "SuspendedError",
+    "Table",
     "TinystoreError",
     "TooNewError",
     "TooOldError",
     "Tx",
     "TxBucket",
     "TxCounters",
+    "TxQueue",
     "UnauthenticatedError",
     "UnavailableError",
     "UnimplementedError",
@@ -90,4 +100,5 @@ __all__ = [
     "Worker",
     "connect",
     "open",
+    "sql",
 ]

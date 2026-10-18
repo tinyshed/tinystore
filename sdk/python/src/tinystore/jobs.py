@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, cast
 
 from ._background import FailureLog, message_of
 from ._connection import check_name
-from ._handles import Opener, Via, handle_on, via_link
+from ._handles import Home, Opener, Via, handle_on, via_link
 from ._session import ConnectionLostError, Stream
 from ._time import Duration, moment, ms, unix_ms
 from ._values import from_json, to_json
@@ -324,8 +324,8 @@ class Source[T]:
     """a run's timeout, in seconds"""
     workers: set[Worker]
     """the store's running workers, which its close stops"""
-    home: str | None = None
-    """the database whose file keeps the queue, as errors name it; the store's jobs.db when None"""
+    home: Home | None = None
+    """the database whose file keeps the queue; the store's jobs.db when None"""
 
     def encode(self, value: T) -> str:
         return _json_text(value, f"{self.describe}: a value")
@@ -758,14 +758,27 @@ def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, A
     }
 
 
-def open_queue(link: Link, workers: set[Worker], name: str, of: Any, options: QueueOptions) -> Queue[Any]:
-    """A queue of the store's jobs.db."""
-    describe = f"jobs queue {name}"
-    opener = JobsQueueOpen.encode(queue_fields(name, describe, options))
+def open_queue(
+    link: Link, workers: set[Worker], name: str, of: Any, options: QueueOptions, home: Home | None = None
+) -> Queue[Any]:
+    """A queue, its open checked before anything leaves.
+
+    home is the database whose file keeps it, its open naming the database's
+    handle on each connection; the store's jobs.db when None.
+    """
+    describe = f"jobs queue {name}" if home is None else f"{home.describe}: jobs queue {name}"
+    fields = queue_fields(name, describe, options)
+    opener: Opener = JobsQueueOpen.encode(fields)
+    via = via_link(link)
+    if home is not None:
+
+        async def make(connection: Connection) -> bytes:
+            return JobsQueueOpen.encode(fields, database=await home.handle(connection))
+
+        opener = home.keep(methods["jobs.queue.open"], opener, make)
+        via = home.via(f"jobs queue {name}")
     timeout = 60.0 if options.timeout is None else ms(options.timeout) / 1000
-    source: Source[Any] = Source(
-        link, describe, methods["jobs.queue.open"], opener, via_link(link), of, timeout, workers
-    )
+    source: Source[Any] = Source(link, describe, methods["jobs.queue.open"], opener, via, of, timeout, workers, home)
     return Queue(source, name)
 
 

@@ -26,6 +26,31 @@ file, what makes them once the database is open on the connection, since the
 open names the database by its handle there."""
 
 
+class Home(Protocol):
+    """A database a bucket or a queue is kept in: its handle on a connection, and its name as errors say it."""
+
+    @property
+    def describe(self) -> str: ...
+
+    async def handle(self, connection: Connection) -> int: ...
+
+    def keep(self, method: int, body: bytes, make: Callable[[Connection], Awaitable[bytes]]) -> Opener:
+        """The opener of a handle kept in the database's file: the one made first for the same open.
+
+        So that the database's transaction opens each once, before it holds
+        the writer, and knows the handles it opened.
+        """
+        ...
+
+    def via(self, what: str) -> Via:
+        """How a handle kept in the database's file reaches the store outside a transaction.
+
+        Refused from inside the database's own transaction, where it would
+        wait for the writer the transaction holds.
+        """
+        ...
+
+
 class Via(Protocol):
     """How a handle's calls reach the store."""
 

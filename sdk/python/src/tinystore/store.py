@@ -34,6 +34,7 @@ from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Sched
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
 from .once import Once, once_open
+from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
 
 if TYPE_CHECKING:
@@ -226,6 +227,19 @@ class Store:
             backoff=backoff,
             timeout=timeout,
         )
+
+    async def database(
+        self, name: str, *, migrations: Migrations | None = None, durability: Durability | None = None
+    ) -> Database:
+        """The application's database name, sql/<name>.db, once its migrations are applied and checked.
+
+        A migration that fails, or one changed after it was applied, is told
+        here, at the start. Without migrations the file opens as it is, an
+        empty one when there is none::
+
+            db = await store.database("app", migrations=Path(__file__).parent / "migrations")
+        """
+        return await open_database(self._link, self._workers, name, migrations, durability)
 
     async def tx[R](self, fn: Callable[[Tx], Awaitable[R]]) -> R:
         """Runs fn as one transaction over the handles it takes in with ``tx.with_(handle)``, and gives what it returns.
