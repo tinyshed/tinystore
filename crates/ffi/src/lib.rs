@@ -81,9 +81,9 @@ pub unsafe extern "C" fn tinystore_open(
     error_room: usize,
 ) -> usize {
     // SAFETY: the caller promises dir points to dir_len readable bytes.
-    let dir = unsafe { std::slice::from_raw_parts(dir, dir_len) };
+    let dir = unsafe { host_read(dir, dir_len) };
     // SAFETY: the caller promises options points to options_len readable bytes.
-    let options = if options_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(options, options_len) } };
+    let options = unsafe { host_read(options, options_len) };
     let opened = catch_unwind(AssertUnwindSafe(|| {
         let dir = std::str::from_utf8(dir).map_err(|_| "a directory name that is not UTF-8".to_owned())?;
         let wake = wake.map(|wake| {
@@ -102,7 +102,11 @@ pub unsafe extern "C" fn tinystore_open(
         Err(message) => {
             // SAFETY: the caller promises error points to error_room writable bytes.
             let room = unsafe { host_bytes(error, error_room) };
-            let written = message.len().min(room.len());
+            // Cut on a character's boundary, so that what the host reads is UTF-8.
+            let mut written = message.len().min(room.len());
+            while !message.is_char_boundary(written) {
+                written -= 1;
+            }
             room[..written].copy_from_slice(&message.as_bytes()[..written]);
             written
         }
@@ -133,7 +137,7 @@ pub unsafe extern "C" fn tinystore_send(
     room: usize,
 ) -> usize {
     // SAFETY: the caller promises a live connection and len readable bytes.
-    let (connection, frames) = unsafe { (&*connection, std::slice::from_raw_parts(frames, len)) };
+    let (connection, frames) = unsafe { (&*connection, host_read(frames, len)) };
     // SAFETY: the caller promises into points to room writable bytes of its own.
     let into = unsafe { host_bytes(into, room) };
     catch_unwind(AssertUnwindSafe(|| connection.pipe.send_into(frames, into))).unwrap_or_default()
@@ -177,6 +181,21 @@ pub unsafe extern "C" fn tinystore_close(connection: *mut Connection) {
     // is closed once, so this box is the only owner.
     let connection = unsafe { Box::from_raw(connection) };
     let _ = catch_unwind(AssertUnwindSafe(move || drop(connection)));
+}
+
+/// The host's `len` bytes at `bytes`; none when it gave none, since a null
+/// pointer makes a slice undefined behaviour even at length 0.
+///
+/// # Safety
+///
+/// `bytes` is null, `len` is 0, or it points to `len` readable bytes that
+/// outlive the call.
+unsafe fn host_read<'host>(bytes: *const u8, len: usize) -> &'host [u8] {
+    if len == 0 || bytes.is_null() {
+        return &[];
+    }
+    // SAFETY: the caller promises len readable bytes at bytes.
+    unsafe { std::slice::from_raw_parts(bytes, len) }
 }
 
 /// The host's bytes to write into; none where it gave no room, whatever the
@@ -319,5 +338,32 @@ mod tests {
             )
         };
         assert_eq!(cut, 8, "a message longer than its room is cut to it");
+    }
+
+    #[test]
+    fn a_message_cut_to_its_room_stays_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("файл-ёжик");
+        std::fs::write(&file, b"not a directory").unwrap();
+        let name = file.to_str().unwrap().as_bytes();
+        for room in 1..200 {
+            let mut connection = ptr::null_mut();
+            let mut error = vec![0u8; room];
+            // SAFETY: every pointer is to a live value of this function, of the length said.
+            let written = unsafe {
+                tinystore_open(
+                    name.as_ptr(),
+                    name.len(),
+                    ptr::null(),
+                    0,
+                    None,
+                    ptr::null_mut(),
+                    &mut connection,
+                    error.as_mut_ptr(),
+                    room,
+                )
+            };
+            assert!(std::str::from_utf8(&error[..written]).is_ok(), "{room} bytes of room");
+        }
     }
 }
