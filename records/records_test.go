@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/slogtest"
 	"time"
@@ -437,4 +438,57 @@ func grouped(t *testing.T, line []byte) map[string]any {
 		at[path[len(path)-1]] = value
 	}
 	return out
+}
+
+func TestAStoresHandlerTakesItsLevelFromTheConfigLogWhichAChangeSetsAndResetGivesBack(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		t.Setenv("APP_LOG_LEVEL", "warning")
+		var written bytes.Buffer
+		var mu sync.Mutex
+		log := slog.New(records.NewHandler(store, "logged", console.Level(slog.LevelDebug), console.JSON,
+			console.To(lockedWriter{&written, &mu}), console.FromEnv("APP")))
+		printed := func(message string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return strings.Contains(written.String(), `"msg":"`+message+`"`)
+		}
+		probes := 0
+		probed := func() bool {
+			probes++
+			log.Debug(fmt.Sprintf("probe %d", probes))
+			return printed(fmt.Sprintf("probe %d", probes))
+		}
+		if probed() {
+			t.Fatal("APP_LOG_LEVEL=warning let a debug line through")
+		}
+		type Log struct {
+			Level string `json:"level" config:"live"`
+		}
+		settings := ways.Must(tinystore.OpenConfig(ctx, store, "log", Log{Level: "info"}))
+		ways.Must(0, settings.Update(ctx, func(l *Log) { l.Level = "debug" }))
+		ways.Until(t, probed)
+		err := settings.Update(ctx, func(l *Log) { l.Level = "verbose" })
+		if err == nil || !strings.Contains(err.Error(), `"verbose" is not one of debug, trace, info, warn, error`) {
+			t.Fatalf("a level no handler means: %v", err)
+		}
+		ways.Must(0, settings.Reset(ctx, "level"))
+		ways.Until(t, func() bool { return !probed() })
+		log.Warn("warned")
+		if !printed("warned") {
+			t.Fatal("a warning was not printed")
+		}
+	})
+}
+
+// lockedWriter is a writer the test reads while the handler writes it.
+type lockedWriter struct {
+	out *bytes.Buffer
+	mu  *sync.Mutex
+}
+
+func (w lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.out.Write(p)
 }

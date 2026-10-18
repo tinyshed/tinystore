@@ -42,21 +42,27 @@ type Handler struct {
 }
 
 // NewHandler is a store's handler of a stream, with console's options and
-// Keep and Buffer. A stream's name the store refuses panics, as a pattern
+// Keep and Buffer. Its level follows the config log, which it opens in the
+// background: a change of it reaches every handler of the store, in every
+// process, until it is reset. A stream's name the store refuses panics, as a pattern
 // regexp.MustCompile refuses does: it is the program's, not its input's.
 func NewHandler(store *tinystore.Store, stream string, options ...console.Option) *Handler {
-	s, ignored := logline.Read(options)
-	events, err := openEvents(store.CoreHome().Store, stream, s.Keep)
+	told := logline.Read(options)
+	events, err := openEvents(store.CoreHome().Store, stream, told.Keep)
 	if err != nil {
 		panic(err)
 	}
-	most := s.Buffer
+	most := told.Buffer
 	if most <= 0 {
 		most = 1024
 	}
 	k := &keeper{events: events, most: most, failures: core.FailureLog{Work: "records flush " + stream}}
 	events.store.OnClose(core.StopLoggers, k.stop)
-	return &Handler{inner: logline.NewHandler(stream, k, s, ignored), keeper: k}
+	level := leveled(told)
+	settings := told.Settings
+	settings.Level = level
+	followLog(events.store, told, level)
+	return &Handler{inner: logline.NewHandler(stream, k, settings, told.Ignored), keeper: k}
 }
 
 type buffer int

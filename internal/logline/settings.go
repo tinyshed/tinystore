@@ -3,6 +3,7 @@ package logline
 import (
 	"io"
 	"log/slog"
+	"os"
 	"time"
 )
 
@@ -30,12 +31,51 @@ type Settings struct {
 // own, so only console's and records' options are options.
 type Option interface{ Apply(*Settings) }
 
-// Read is the settings the options give, the environment's variables over
-// them, and what of the environment could not be read.
-func Read(options []Option) (Settings, []Unread) {
-	s := Settings{Env: DefaultEnvironment}
+// Told is what a handler was told: the options' settings with the
+// environment's variables over them, the code's alone, and what the
+// environment gave and could not be read.
+type Told struct {
+	Settings
+	Code Settings
+	// Spelled is each variable the environment gave, by its name, as LOG_ spells it.
+	Spelled map[string]string
+	Ignored []Unread
+}
+
+// Read is what the options and the environment tell a handler.
+func Read(options []Option) Told {
+	code := Settings{Env: DefaultEnvironment}
 	for _, option := range options {
-		option.Apply(&s)
+		option.Apply(&code)
 	}
-	return s.Env.over(s)
+	told := Told{Code: code}
+	told.Settings, told.Spelled, told.Ignored = code.Env.over(code)
+	return told
+}
+
+// Shown is how a handler of s prints its lines, as a logger's config names
+// it: pretty, json or off, what its console chose when s says none.
+func Shown(s Settings) string {
+	out := s.To
+	if out == nil {
+		out = os.Stderr
+	}
+	switch echo := NewEcho(out, s.Format); {
+	case echo == nil:
+		return "off"
+	case echo.Pretty:
+		return "pretty"
+	}
+	return "json"
+}
+
+// TimeName is how a pretty line shows its time, as a logger's config names it.
+func TimeName(t Time) string {
+	switch t {
+	case Full:
+		return "full"
+	case NoTime:
+		return "off"
+	}
+	return "clock"
 }

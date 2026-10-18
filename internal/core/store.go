@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -75,6 +76,16 @@ func (s *Store) Kept(key string, make func() any) any {
 		s.kept[key] = found
 	}
 	return found
+}
+
+// Unkept lets go of what Kept made under key, while it is still value: an
+// open that failed is made again by the next.
+func (s *Store) Unkept(key string, value any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.kept[key] == value {
+		delete(s.kept, key)
+	}
 }
 
 // Close stops what runs, a stage at a time, then closes the link.
@@ -220,4 +231,57 @@ func Spelled(ms uint64) string {
 		}
 	}
 	return text
+}
+
+// spanUnits are a span's units, largest first, as every SDK writes a span.
+var spanUnits = []struct {
+	name string
+	size uint64
+}{{"w", 604_800_000}, {"d", 86_400_000}, {"h", 3_600_000}, {"m", 60_000}, {"s", 1000}, {"ms", 1}}
+
+// ParseSpan reads a span as every SDK writes one, each unit once and largest
+// first, into milliseconds: 1h30m, 250ms, 2w1d; a bare number is refused, so
+// that 30 is never thirty milliseconds to one reader and thirty seconds to another.
+func ParseSpan(text, of string) (uint64, error) {
+	refused := Errorf(Invalid, "%s %q: write it as 30d, 1h30m, 15m, 1s or 250ms", of, text)
+	rest := strings.TrimSpace(text)
+	if rest == "" {
+		return 0, refused
+	}
+	var total uint64
+	next := 0
+	for rest != "" {
+		digits := 0
+		for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+			digits++
+		}
+		if digits == 0 {
+			return 0, refused
+		}
+		n, err := strconv.ParseUint(rest[:digits], 10, 64)
+		if err != nil {
+			return 0, Errorf(Invalid, "%s %q: past what 64 bits of milliseconds hold", of, text)
+		}
+		rest = rest[digits:]
+		unit := -1
+		for i := next; i < len(spanUnits); i++ {
+			// ms before m, so that 250ms is not 250m and an s
+			name := spanUnits[i].name
+			if strings.HasPrefix(rest, name) && !(name == "m" && strings.HasPrefix(rest, "ms")) {
+				unit = i
+				break
+			}
+		}
+		if unit < 0 {
+			return 0, refused
+		}
+		size := spanUnits[unit].size
+		if n > (1<<63-1-total)/size {
+			return 0, Errorf(Invalid, "%s %q: past what 64 bits of milliseconds hold", of, text)
+		}
+		total += n * size
+		rest = rest[len(spanUnits[unit].name):]
+		next = unit + 1
+	}
+	return total, nil
 }

@@ -47,12 +47,15 @@ type Unread struct {
 	Name, Value, Expected string
 }
 
-// over is s with the environment over it, and what it could not read.
-func (e Environment) over(s Settings) (Settings, []Unread) {
+// over is s with the environment over it, what it gave as LOG_ spells it,
+// and what it could not read.
+func (e Environment) over(s Settings) (Settings, map[string]string, []Unread) {
 	var ignored []Unread
+	spelled := map[string]string{}
 	if text, ok := e.value(envLevel); ok {
 		if level, read := ReadLevel(text); read {
 			s.Level = level
+			spelled[e.name(envLevel)] = LevelName(level)
 		} else {
 			ignored = append(ignored, Unread{e.name(envLevel), text, "trace, debug, info, warn or error"})
 		}
@@ -62,21 +65,37 @@ func (e Environment) over(s Settings) (Settings, []Unread) {
 			ignored = append(ignored, Unread{e.name(envFormat), text, "pretty, json or off"})
 		} else if s.Format != Off {
 			s.Format = format
+			spelled[e.name(envFormat)] = strings.ToLower(text)
 		}
 	}
 	if text, ok := e.value(envTime); ok {
 		if shown, read := ReadTime(text); read {
 			s.Time = shown
+			spelled[e.name(envTime)] = strings.ToLower(text)
 		} else {
 			ignored = append(ignored, Unread{e.name(envTime), text, "clock, full or off"})
 		}
 	}
-	return s, ignored
+	return s, spelled, ignored
 }
 
 // LevelTrace is the level below debug that other programs write, which a
 // handler at trace takes with every other.
 const LevelTrace = slog.Level(-8)
+
+// LevelNames are the levels a logger's config allows, lowest first.
+var LevelNames = []string{"trace", "debug", "info", "warn", "error"}
+
+// LevelName is the name of the lowest level at or above level: trace, debug,
+// info, warn or error.
+func LevelName(level slog.Level) string {
+	for _, name := range LevelNames {
+		if named, _ := ReadLevel(name); named >= level {
+			return name
+		}
+	}
+	return "error"
+}
 
 // ReadLevel reads a level's name as LOG_LEVEL spells it.
 func ReadLevel(text string) (slog.Level, bool) {

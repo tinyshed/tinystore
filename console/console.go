@@ -19,8 +19,8 @@ import (
 
 // NewHandler writes a logger's lines to standard error, and keeps none.
 func NewHandler(stream string, options ...Option) slog.Handler {
-	s, ignored := logline.Read(options)
-	return logline.NewHandler(stream, nil, s, ignored)
+	told := logline.Read(options)
+	return logline.NewHandler(stream, nil, told.Settings, told.Ignored)
 }
 
 // Option changes a logger's lines: on the console, and in the store when the
