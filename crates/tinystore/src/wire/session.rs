@@ -113,8 +113,11 @@ struct Shared {
     /// was cancelled, and its number named again, finds another run there.
     asked: AtomicU64,
     /// Streams whose final frame has not left, which a closing server waits
-    /// for.
-    in_flight: AtomicUsize,
+    /// for, each with the DATA bytes its client may still send on it.
+    open: Mutex<HashMap<u32, u64>>,
+    /// The largest body both sides agreed, once WELCOME went out: no frame of
+    /// the server's passes it.
+    agreed: AtomicUsize,
     /// Point reads the workers have of this connection, not yet answered.
     reads_away: AtomicUsize,
     /// The connection's HELLO admitted it to read only.
@@ -228,7 +231,8 @@ impl Session {
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
             asked: AtomicU64::new(0),
-            in_flight: AtomicUsize::new(0),
+            open: Mutex::new(HashMap::new()),
+            agreed: AtomicUsize::new(HELLO_MOST),
             reads_away: AtomicUsize::new(0),
             read_only: AtomicBool::new(false),
             #[cfg(feature = "channels")]
@@ -336,7 +340,7 @@ impl Session {
     }
 
     pub(crate) fn streams(&self) -> usize {
-        self.shared.in_flight.load(Ordering::Acquire)
+        self.shared.lock_open().len()
     }
 
     pub(crate) fn welcomed(&self) -> bool {
@@ -436,6 +440,7 @@ impl Shared {
         let stream_credit = hello.stream_credit.unwrap_or(CLIENT_STREAM_CREDIT);
         let max_body = MAX_BODY.min(client_most).min(stream_credit);
         input.max_body = Some(max_body as usize);
+        self.agreed.store(max_body as usize, Ordering::Release);
         input.stream_credit = stream_credit;
         let proof = hello.challenge.zip(self.connect.prove.as_ref()).map(|(challenge, prove)| prove(&challenge));
         self.send(&[Frame::new(Kind::Welcome, 0, self.welcome_body(max_body, capability, proof))]);
@@ -472,12 +477,10 @@ impl Shared {
     /// anything else on a worker.
     fn request(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
-        // WELCOME said how many streams a client keeps open: past it is the
+        // A number in use, or one past the streams WELCOME allowed, is the
         // client's fault, and ends the connection as the protocol says.
-        if self.in_flight.fetch_add(1, Ordering::AcqRel) >= IN_FLIGHT as usize {
-            self.in_flight.fetch_sub(1, Ordering::AcqRel);
-            let past = format!("a REQUEST past the {IN_FLIGHT} streams in flight WELCOME allowed");
-            return self.go_away(input, "protocol", &past);
+        if let Err(refused) = self.open_stream(frame.stream) {
+            return self.go_away(input, "protocol", &refused);
         }
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
@@ -943,6 +946,9 @@ impl Shared {
     /// dropped, its credit still given back.
     fn data(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         self.release(input, frame.body.len() as u64);
+        if let Err(refused) = self.spend_stream_credit(frame.stream, frame.body.len() as u64) {
+            return self.go_away(input, "protocol", &refused);
+        }
         #[cfg(feature = "blobs")]
         if let Some(uploading) = self.blobs.uploading(frame.stream) {
             let last = frame.flags & frame::END != 0;
@@ -1160,7 +1166,7 @@ impl Shared {
 
     /// Ends a stream with its RESPONSE.
     fn answer(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
-        let response = match answered {
+        let response = match self.within_agreed(answered) {
             Ok(body) => Frame::new(Kind::Response, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Response, stream, failure.encode()).failing(),
         };
@@ -1169,7 +1175,7 @@ impl Shared {
 
     /// Ends a stream whose RESPONSE went out already, with its last DATA.
     fn end_stream(&self, stream: u32, answered: std::result::Result<Vec<u8>, Failure>) {
-        let data = match answered {
+        let data = match self.within_agreed(answered) {
             Ok(body) => Frame::new(Kind::Data, stream, body).ending(),
             Err(failure) => Frame::new(Kind::Data, stream, failure.encode()).failing(),
         };
@@ -1259,7 +1265,7 @@ impl Shared {
     }
 
     fn send(&self, frames: &[Frame]) {
-        self.queue(frames, 0);
+        self.queue(frames, None);
     }
 
     /// Runs what waited for the output once it owes less than its low mark.
@@ -1292,7 +1298,50 @@ impl Shared {
 
     /// Sends a stream's last frame.
     fn send_last(&self, frame: Frame) {
-        self.queue(&[frame], 1);
+        let stream = frame.stream;
+        self.queue(&[frame], Some(stream));
+    }
+
+    /// Takes a stream number into use, refusing one in use already or one
+    /// past the streams in flight WELCOME allowed.
+    fn open_stream(&self, stream: u32) -> std::result::Result<(), String> {
+        let mut open = self.lock_open();
+        if open.contains_key(&stream) {
+            return Err(format!("a REQUEST on stream {stream}, which is in use"));
+        }
+        if open.len() >= IN_FLIGHT as usize {
+            return Err(format!("a REQUEST past the {IN_FLIGHT} streams in flight WELCOME allowed"));
+        }
+        open.insert(stream, STREAM_CREDIT);
+        Ok(())
+    }
+
+    /// Counts a DATA body against its stream's credit; one past it is the
+    /// client's fault. A DATA of a stream no longer in use is dropped, as the
+    /// protocol says, and counts against nothing.
+    fn spend_stream_credit(&self, stream: u32, bytes: u64) -> std::result::Result<(), String> {
+        let mut open = self.lock_open();
+        let Some(left) = open.get_mut(&stream) else { return Ok(()) };
+        *left = left.checked_sub(bytes).ok_or_else(|| format!("a DATA on stream {stream} past its credit"))?;
+        Ok(())
+    }
+
+    /// A body as it may go out: one past the agreed body is `limit`, which a
+    /// client takes, rather than a frame it would end the connection over.
+    fn within_agreed(&self, answered: std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
+        let agreed = self.agreed.load(Ordering::Acquire);
+        match answered {
+            Ok(body) if body.len() > agreed => Err(Failure {
+                code: "limit".to_owned(),
+                message: format!("an answer of {} bytes, past the {agreed} a body holds", body.len()),
+                what: None,
+            }),
+            answered => answered,
+        }
+    }
+
+    fn lock_open(&self) -> MutexGuard<'_, HashMap<u32, u64>> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Queues frames for the host to take, `ended` of them their streams'
@@ -1301,7 +1350,7 @@ impl Shared {
     /// `streams` without it, and whoever finds no stream finds every last
     /// frame queued. Counted after the lock instead, a client that had read
     /// its answer could still see its stream in flight.
-    fn queue(&self, frames: &[Frame], ended: usize) {
+    fn queue(&self, frames: &[Frame], ended: Option<u32>) {
         let mut output = self.lock_output();
         let dropped = output.ended && frames.iter().all(|frame| frame.kind != Kind::GoAway);
         if !dropped {
@@ -1309,7 +1358,18 @@ impl Shared {
                 frame.encode_into(&mut output.bytes);
             }
         }
-        self.in_flight.fetch_sub(ended, Ordering::AcqRel);
+        {
+            let mut open = self.lock_open();
+            // a grant of the server's on a stream is room its client may send into
+            for frame in frames.iter().filter(|frame| frame.kind == Kind::Credit && frame.stream != 0) {
+                if let (Some(left), Ok(granted)) = (open.get_mut(&frame.stream), <[u8; 4]>::try_from(&frame.body[..])) {
+                    *left = left.saturating_add(u64::from(u32::from_le_bytes(granted)));
+                }
+            }
+            if let Some(stream) = ended {
+                open.remove(&stream);
+            }
+        }
         if dropped {
             return;
         }

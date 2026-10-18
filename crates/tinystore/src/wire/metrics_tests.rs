@@ -304,3 +304,17 @@ fn a_read_connection_reads_metrics_and_neither_ingests_nor_counts() {
     let stream = reader.start(method::METRICS_INSTRUMENTS, &MetricsSession { id: vec![1; 16], after: 0 });
     assert_eq!(answered::<MetricsAck>(&reader.next_on(stream)).unwrap_err().code, "permission");
 }
+
+#[test]
+fn an_answer_past_the_agreed_body_is_limit_and_the_connection_goes_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let long = MetricsDescription { name: "cpu".to_owned(), unit: "%".to_owned(), help: "h".repeat(1000) };
+    client(&store, 1 << 20).call::<Empty>(method::METRICS_DESCRIBE, &long).unwrap();
+    let mut small = client(&store, 512);
+    let asked = MetricsNameAsked { name: "cpu".to_owned() };
+    let refused = small.call::<MetricsDescription>(method::METRICS_DESCRIPTION, &asked).unwrap_err();
+    assert_eq!(refused.code, "limit", "{}", refused.message);
+    let short = MetricsDescription { name: "mem".to_owned(), unit: "B".to_owned(), help: "Used.".to_owned() };
+    small.call::<Empty>(method::METRICS_DESCRIBE, &short).unwrap();
+}

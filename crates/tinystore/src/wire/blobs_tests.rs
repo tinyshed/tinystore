@@ -275,3 +275,46 @@ fn a_connection_that_ends_mid_upload_leaves_nothing() {
     }
     assert_eq!(std::fs::read_dir(dir.path().join("blobs/uploads")).unwrap().count(), 0);
 }
+
+/// The GOAWAY that ends a connection, past whatever frames came before it.
+fn gone_away(client: &mut Client) -> crate::wire::protocol::GoAway {
+    loop {
+        let frame = client.read();
+        if frame.kind == Kind::GoAway {
+            return crate::wire::protocol::GoAway::decode(&frame.body).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_request_on_a_stream_in_use_ends_the_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "docs");
+    let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
+    let stream = client.open_stream(method::BLOBS_UPLOAD, &write);
+    client.write(Frame { method: method::BLOBS_UPLOAD, ..Frame::new(Kind::Request, stream, write.encode()) });
+    let gone = gone_away(&mut client);
+    assert_eq!(gone.code, "protocol");
+    assert!(gone.message.contains("in use"), "{}", gone.message);
+}
+
+#[test]
+fn data_past_its_streams_credit_ends_the_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, credit) =
+        connect(dir.path(), Hello { protocol: 2, client: "test/0".to_owned(), ..Hello::default() });
+    let handle = open(&mut client, "docs");
+    let write = BlobsWrite { handle, path: "a".to_owned(), ..BlobsWrite::default() };
+    let stream = client.open_stream(method::BLOBS_UPLOAD, &write);
+    // two pieces of the whole credit in one write: the second cannot have been granted
+    let piece = Frame::new(Kind::Data, stream, BlobsPiece { bytes: bytes(credit as usize - 16) }.encode());
+    let mut flood = Vec::new();
+    piece.encode_into(&mut flood);
+    piece.encode_into(&mut flood);
+    let ready = client.pipe.send(&flood);
+    client.reader.push(&ready);
+    let gone = gone_away(&mut client);
+    assert_eq!(gone.code, "protocol");
+    assert!(gone.message.contains("past its credit"), "{}", gone.message);
+}
