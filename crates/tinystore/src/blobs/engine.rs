@@ -227,7 +227,11 @@ impl Blobs {
         })?;
         self.revision.store(revision, Ordering::SeqCst);
         self.ids.start(reserved);
-        self.disk.sweep_uploads(&self.ids)?;
+        // An upload left that will not go now, as one Windows still shares, is
+        // swept later and keeps no store from opening.
+        if let Err(error) = self.disk.sweep_uploads(&self.ids) {
+            tracing::warn!(target: "tinystore", %error, "blobs: an upload left by a process that died stays for now");
+        }
         if settled < reserved {
             for fan in Disk::fan(settled + 1)..=Disk::fan(reserved) {
                 self.remove_unnamed_in(fan, settled, reserved)?;

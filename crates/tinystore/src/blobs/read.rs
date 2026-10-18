@@ -193,10 +193,13 @@ impl StoredFile {
 
     /// The store's error an `io::Error` of this reader carries, or one of its own.
     fn error_of(&self, error: io::Error) -> Error {
+        // An OS error carries no inner error, and `into_inner` would drop it whole.
+        if !error.get_ref().is_some_and(|inner| inner.is::<Error>()) {
+            return Error::io("blobs: read a file", error).within(&self.label);
+        }
         match error.into_inner().map(|inner| inner.downcast::<Error>()) {
             Some(Ok(error)) => *error,
-            Some(Err(inner)) => Error::io("blobs: read a file", io::Error::other(inner)).within(&self.label),
-            None => Error::internal("blobs: a read failed").within(&self.label),
+            _ => Error::internal("blobs: a read failed").within(&self.label),
         }
     }
 }
