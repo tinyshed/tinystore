@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -28,16 +28,28 @@ const TURN: usize = 8 << 20;
 
 /// Listens at `address`, a thread accepting the links of other nodes.
 pub(crate) fn start(state: &Arc<State>, address: &str) -> Result<()> {
+    refuse_plain_beyond_loopback(state, address)?;
     let listener = TcpListener::bind(address).map_err(|error| Error::io(format!("node: serve {address}"), error))?;
     let bound = listener.local_addr().map_err(|error| Error::io(format!("node: serve {address}"), error))?;
-    if !bound.ip().is_loopback() && !state.tls.serves() && !state.options.insecure {
-        let why = super::transport::plain_refused();
-        return Err(Error::invalid(format!("node: serve {address}: {why}")));
-    }
     *lock(&state.listening) = Some(bound);
     tracing::info!(target: "tinystore", address = %bound, "a node serves its files");
     let accepting = Arc::clone(state);
     state.spawn("tinystore node: serve", move || accept(&accepting, &listener));
+    Ok(())
+}
+
+/// Refuses plain TCP beyond this machine before anything binds, so that a
+/// refused node opens no port on every interface.
+fn refuse_plain_beyond_loopback(state: &State, address: &str) -> Result<()> {
+    if state.tls.serves() || state.options.insecure {
+        return Ok(());
+    }
+    let addresses = address.to_socket_addrs().map_err(|error| Error::io(format!("node: serve {address}"), error))?;
+    let mut addresses = addresses.peekable();
+    if addresses.peek().is_none() || addresses.any(|resolved| !resolved.ip().is_loopback()) {
+        let why = super::transport::plain_refused();
+        return Err(Error::invalid(format!("node: serve {address}: {why}")));
+    }
     Ok(())
 }
 
