@@ -214,8 +214,13 @@ fn act_on_home(state: &Arc<State>, store: &Store, file: &str, home: &Home, last:
 
 /// Makes the file this node handed over a copy of its new home at `address`,
 /// going on from `last`, the commit it ended at.
+///
+/// An engine's open that chose the home's route before the copy's mark and
+/// kept its file after the switch would write beside the copy's applier, so
+/// opens wait it out.
 pub(crate) fn let_go(state: &Arc<State>, store: &Store, file: &str, address: &str, last: Point) -> Result<()> {
     let dir = state.log_dir(file);
+    let _rerouting = state.wait_to_reroute(file)?;
     let paused = state.pause_readers(file)?;
     state.switch_each(file, |switch| switch.become_copy())?;
     Log::unfence_in(&dir)?;

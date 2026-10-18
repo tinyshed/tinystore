@@ -8,6 +8,7 @@ use super::entry::Point;
 use super::node_tests::write_through_every_engine;
 use super::snapshot::{self, Part, Taking};
 use super::*;
+use crate::sqlite::{Config, File, sql_error};
 use crate::{Options, Store};
 
 /// The files a node that copies every file takes from its home: all but its
@@ -1384,6 +1385,113 @@ fn an_engine_opening_a_file_its_node_takes_over_waits_for_the_takeover_and_write
     assert_eq!(sessions.get("before").unwrap().as_deref(), Some("the takeover"));
     assert_eq!(home_point(&copy, "kv.db").epoch, copied.epoch + 1, "the node writes the file as its home");
     copy.close().unwrap();
+}
+
+/// Waits until `holds`, `bound` at most, and goes on either way: time for a
+/// change under way on another thread to reach a point, which it may not.
+fn for_at_most(bound: Duration, mut holds: impl FnMut() -> bool) {
+    let deadline = Instant::now() + bound;
+    while !holds() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn an_engine_opening_a_file_its_node_hands_over_opens_it_as_the_new_home_s_copy() {
+    let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let us = node_with(us_dir.path(), Node { serve: Some("127.0.0.1:0".into()), catalog: true, ..Node::default() });
+    let us_address = bound(us.node().unwrap()).unwrap().to_string();
+    let eu_node = |serve: String| Node { serve: Some(serve), from: vec![us_address.clone()], ..Node::default() };
+    let eu = node_with(eu_dir.path(), eu_node("127.0.0.1:0".into()));
+    let eu_address = bound(eu.node().unwrap()).unwrap().to_string();
+    let eu_db = eu.database("users").migrations(NOTES).open().unwrap();
+    eu_db.exec(crate::sql!("insert into notes (body) values ('before the move')")).unwrap();
+    let us_db = us.database("users").migrations(NOTES).open().unwrap();
+    eventually("america holds europe's row", || bodies(&us_db).len() == 1);
+    // europe starts again, so that the open below is the file's one open there
+    drop(eu_db);
+    eu.close().unwrap();
+    let eu = node_with(eu_dir.path(), eu_node(eu_address));
+    let (node, name) = (eu.node().unwrap(), "sql/users.db");
+
+    // an engine's open under way, as Store::open_file makes it: the file opened as europe's own, not yet kept
+    let opening = node.wait_to_open(name).unwrap();
+    assert!(!node.is_new(name) && !node.takes(name) && !super::copy::is_copy(&node.log_dir(name)));
+    let log = node.open_log(name).unwrap();
+    let file = File::open_observed(eu.dir().join(name), Config::default(), Some(log)).unwrap();
+    caught_up(&eu, &us, &[name]);
+    crate::replication::move_home(&us, name).unwrap();
+    // time for europe to hand the file over before the open goes on
+    for_at_most(Duration::from_secs(1), || node.copy(name).is_some());
+    let file = node.opened(name, file);
+    drop(opening);
+
+    eventually("europe becomes a copy of america", || node.copy(name).is_some());
+    assert!(file.is_copy(), "the file opened meanwhile is a copy, not a second writer beside the copy's applier");
+    us_db.exec(crate::sql!("insert into notes (body) values ('at the new home')")).unwrap();
+    eventually("it reads what the new home writes", || count_notes(&file) == 2);
+    drop((file, us_db));
+    eu.close().unwrap();
+    us.close().unwrap();
+}
+
+#[test]
+fn an_engine_opening_a_copy_a_snapshot_taken_again_replaces_reads_the_snapshot() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    sessions.set("before", &"the snapshot".to_owned()).unwrap();
+    let copy =
+        node_with(copy_dir.path(), Node { from: vec![address], files: Some(vec!["kv.db".into()]), ..Node::default() });
+    caught_up(&home, &copy, &["kv.db"]);
+    let (node, name) = (copy.node().unwrap(), "kv.db");
+    let (taken, held) = (node.snapshots.load(Relaxed), copy_point(&copy, name));
+
+    // an engine's open under way, as Store::open_file makes it: the copy held now opened and read, not yet kept
+    let opening = node.wait_to_open(name).unwrap();
+    assert!(node.takes(name));
+    node.wait_ready(name).unwrap();
+    let file = File::open_copy(copy.dir().join(name), Config::default()).unwrap();
+    assert!(!has_table(&file, "beside"));
+    // a writer beside the home's starts its WAL over: its log says so, and the copy takes a snapshot again
+    {
+        let beside = rusqlite::Connection::open(home_dir.path().join(name)).unwrap();
+        for statement in ["create table beside (v)", "insert into beside (v) values (1)"] {
+            beside.execute(statement, []).unwrap();
+            beside.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(())).unwrap();
+        }
+    }
+    sessions.set("after", &"the snapshot".to_owned()).unwrap();
+    eventually("the copy takes a snapshot again", || node.snapshots.load(Relaxed) > taken);
+    // time for the snapshot to take the file's place before the open goes on
+    for_at_most(Duration::from_secs(1), || copy_point(&copy, name) != held);
+    let file = node.opened(name, file);
+    drop(opening);
+
+    caught_up(&home, &copy, &[name]);
+    assert!(has_table(&file, "beside"), "the file opened meanwhile reads the snapshot, not the file it replaced");
+    assert_eq!(node.snapshots.load(Relaxed), taken + 1, "the snapshot took the file's place at its first try");
+    drop((file, sessions));
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+fn count_notes(file: &File) -> i64 {
+    file.read(|connection| {
+        connection.query_row("select count(*) from notes", [], |row| row.get(0)).map_err(|e| sql_error("notes", e))
+    })
+    .unwrap()
+}
+
+fn has_table(file: &File, table: &str) -> bool {
+    let tables: i64 = file
+        .read(|connection| {
+            let named = "select count(*) from sqlite_master where name = ?1";
+            connection.query_row(named, [table], |row| row.get(0)).map_err(|e| sql_error(table, e))
+        })
+        .unwrap();
+    tables == 1
 }
 
 #[test]

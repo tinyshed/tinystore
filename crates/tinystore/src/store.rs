@@ -248,7 +248,8 @@ impl Store {
         }
         #[cfg(feature = "replication")]
         if let Some(node) = &self.inner.node {
-            // the route is chosen and the file opened on one side of a takeover
+            // the route is chosen and the file opened on one side of a change of
+            // the route: a takeover, a hand-over or a snapshot taken again
             let _opening = node.wait_to_open(name).map_err(|error| error.within(self.describe()))?;
             if node.is_new(name) && node.uses_catalog() {
                 return self.open_new_in_the_catalog(node, name, config);

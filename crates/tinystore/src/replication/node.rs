@@ -43,9 +43,10 @@ pub(crate) struct State {
     /// The copies this node holds whole.
     copies: Mutex<HashMap<String, Arc<Copy>>>,
     copied: Condvar,
-    /// An open waits out a takeover of its file, and a takeover the opens
-    /// begun before it, so that an engine's file opens either as a copy the
-    /// takeover switches or after it, as this node's own.
+    /// An open waits out a change of its file's route, and the change the
+    /// opens begun before it, so that an engine's file opens on one side of
+    /// the change: before it, as a file the change switches or pauses, or
+    /// after it, by the route it leaves.
     routes: Mutex<Routes>,
     rerouted: Condvar,
     pub(crate) upstream: Upstream,
@@ -111,16 +112,18 @@ enum Verifying {
 /// takes it from, so that the link is made again when the node starts.
 const DIRECT: &str = "from";
 
-/// The files whose route may be changing now, by their name.
+/// The files whose route may be changing now, by their name: a takeover, a
+/// hand-over or a snapshot taken again changes how an engine's file is reached.
 #[derive(Default)]
 struct Routes {
     /// How many engines are opening each.
     opening: HashMap<String, usize>,
-    taking_over: HashSet<String>,
+    /// How many changes of each are under way, which do not wait for one another.
+    rerouting: HashMap<String, usize>,
 }
 
-/// An engine's open of a file under way, which a takeover of the file waits
-/// for.
+/// An engine's open of a file under way, which a change of the file's route
+/// waits for.
 pub(crate) struct Opening<'a> {
     state: &'a State,
     name: String,
@@ -128,27 +131,32 @@ pub(crate) struct Opening<'a> {
 
 impl Drop for Opening<'_> {
     fn drop(&mut self) {
-        let mut routes = lock(&self.state.routes);
-        if let Some(opens) = routes.opening.get_mut(&self.name) {
-            *opens -= 1;
-            if *opens == 0 {
-                routes.opening.remove(&self.name);
-            }
-        }
+        release(&mut lock(&self.state.routes).opening, &self.name);
         self.state.rerouted.notify_all();
     }
 }
 
-/// A takeover of a file under way, which an engine's open of it waits out.
-struct TakingOver<'a> {
+/// A change of a file's route under way, which an engine's open of it waits
+/// out.
+pub(crate) struct Rerouting<'a> {
     state: &'a State,
     name: String,
 }
 
-impl Drop for TakingOver<'_> {
+impl Drop for Rerouting<'_> {
     fn drop(&mut self) {
-        lock(&self.state.routes).taking_over.remove(&self.name);
+        release(&mut lock(&self.state.routes).rerouting, &self.name);
         self.state.rerouted.notify_all();
+    }
+}
+
+/// Counts one fewer of `name` under way, forgetting it at none.
+fn release(under_way: &mut HashMap<String, usize>, name: &str) {
+    if let Some(count) = under_way.get_mut(name) {
+        *count -= 1;
+        if *count == 0 {
+            under_way.remove(name);
+        }
     }
 }
 
@@ -468,7 +476,7 @@ impl State {
         copy: Arc<Copy>,
         at_least: u64,
     ) -> Result<()> {
-        let _taking_over = self.wait_to_take_over(name)?;
+        let _rerouting = self.wait_to_reroute(name)?;
         let paused = self.pause_readers(name)?;
         if let Some(direct) = lock(&self.direct).values().find(|direct| direct.follows(name)) {
             direct.remove(name);
@@ -491,15 +499,15 @@ impl State {
         Ok(())
     }
 
-    /// Begins an engine's open of `name` once no takeover of it is under way,
-    /// `READY_WAIT` at most: until the open ends, no takeover begins.
+    /// Begins an engine's open of `name` once no change of its route is under
+    /// way, `READY_WAIT` at most: until the open ends, no change begins.
     pub(crate) fn wait_to_open(&self, name: &str) -> Result<Opening<'_>> {
         let deadline = Instant::now() + READY_WAIT;
         let mut routes = lock(&self.routes);
-        while routes.taking_over.contains(name) {
+        while routes.rerouting.contains_key(name) {
             let now = Instant::now();
             if now >= deadline || self.stopping() {
-                return Err(Error::new(ErrorKind::Unavailable, format!("{name}: this node is taking it over still")));
+                return Err(Error::new(ErrorKind::Unavailable, format!("{name}: its route changes still")));
             }
             let turn = (deadline - now).min(Duration::from_millis(250));
             routes = self.rerouted.wait_timeout(routes, turn).unwrap_or_else(PoisonError::into_inner).0;
@@ -508,22 +516,26 @@ impl State {
         Ok(Opening { state: self, name: name.to_owned() })
     }
 
-    /// Begins a takeover of `name` once the engines' opens of it under way
-    /// end, `PAUSE_AT_MOST` at most; an open begun meanwhile waits for it.
-    fn wait_to_take_over(&self, name: &str) -> Result<TakingOver<'_>> {
+    /// Begins a change of the route of `name` once the engines' opens of it
+    /// under way end, `PAUSE_AT_MOST` at most; an open begun meanwhile waits
+    /// for it.
+    ///
+    /// A thread inside `Store::open_file` of `name` must not call it, nor wait
+    /// for one that does: the change would wait out the bound for that open.
+    pub(crate) fn wait_to_reroute(&self, name: &str) -> Result<Rerouting<'_>> {
         let deadline = Instant::now() + PAUSE_AT_MOST;
         let mut routes = lock(&self.routes);
-        routes.taking_over.insert(name.to_owned());
+        *routes.rerouting.entry(name.to_owned()).or_default() += 1;
         while routes.opening.contains_key(name) {
             let now = Instant::now();
             if now >= deadline {
-                routes.taking_over.remove(name);
+                release(&mut routes.rerouting, name);
                 self.rerouted.notify_all();
                 return Err(Error::new(ErrorKind::Unavailable, format!("{name}: an engine still opens it")));
             }
             routes = self.rerouted.wait_timeout(routes, deadline - now).unwrap_or_else(PoisonError::into_inner).0;
         }
-        Ok(TakingOver { state: self, name: name.to_owned() })
+        Ok(Rerouting { state: self, name: name.to_owned() })
     }
 
     /// Takes writes of `name` again, after a move that did not finish.

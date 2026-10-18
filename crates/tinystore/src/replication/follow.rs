@@ -687,6 +687,11 @@ impl Link<'_> {
             return Ok(());
         }
         let store = self.store.upgrade().ok_or_else(|| Error::closed("the node's store"))?;
+        // The opens that saw the copy held now end first, so that their files
+        // pause too, and the opens after wait for the snapshot. A first copy
+        // waits for none: its opens wait for it, holding theirs.
+        let state = self.state;
+        let _rerouting = state.copy(file).map(|_| state.wait_to_reroute(file)).transpose()?;
         // the engines reading the copy held before let go of its file, and the
         // copy its writer, so that the snapshot takes its name: an open file
         // keeps its name on Windows, and elsewhere a reader would go on
