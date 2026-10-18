@@ -58,7 +58,7 @@ fn node_of(node: &args::Node) -> Result<tinystore::replication::Node, String> {
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     let started = Instant::now();
-    let serve = match args::serve(args) {
+    let mut serve = match args::serve(args) {
         Ok(serve) => serve,
         Err(refused) => {
             eprintln!("tinystore serve: {refused}");
@@ -68,7 +68,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     let shown = Shown::of(&serve);
     // a remote server's tokens and certificate are read first, so that a
     // mistake in them leaves no files behind
-    let remote = match serve.remote.map(remote::Ready::of).transpose() {
+    let remote = match serve.remote.take().map(remote::Ready::of).transpose() {
         Ok(remote) => remote,
         Err(refused) => {
             eprintln!("tinystore serve: {refused}");
@@ -90,15 +90,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let options = Options {
-        memory: serve.memory,
-        clock: clock.clone().map(|clock| clock as Arc<dyn Clock>),
-        durability: serve.durability,
-        keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
-        encryption_key_file: serve.encryption_key_file.clone(),
-        node,
-        ..Options::default()
-    };
+    let options = options_of(&serve, clock.clone(), node);
     let store = match open(&serve.dir, options) {
         Ok(store) => store,
         Err((code, error)) => {
@@ -117,9 +109,30 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             }
         })
     });
+    close(&store, served, &console)
+}
+
+/// The store's options as the flags give them.
+fn options_of(
+    serve: &args::Serve,
+    clock: Option<Arc<TestClock>>,
+    node: Option<tinystore::replication::Node>,
+) -> Options {
+    Options {
+        memory: serve.memory,
+        clock: clock.map(|clock| clock as Arc<dyn Clock>),
+        durability: serve.durability,
+        keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
+        encryption_key_file: serve.encryption_key_file.clone(),
+        node,
+        ..Options::default()
+    }
+}
+
+/// Closes the store once the server stopped, and says how it went.
+fn close(store: &Store, served: std::io::Result<()>, console: &Console) -> ExitCode {
     let closing = Instant::now();
-    let closed = store.close();
-    let failed = match (served, closed) {
+    let failed = match (served, store.close()) {
         (Ok(()), Ok(())) => {
             tracing::info!(target: "tinystore", took = %format!("{:.1}s", closing.elapsed().as_secs_f64()), "stopped");
             return ExitCode::SUCCESS;

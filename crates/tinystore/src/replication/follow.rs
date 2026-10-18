@@ -224,51 +224,28 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
         node: state.id.clone(),
         address: state.address(),
     })?;
-    let mut link = Link {
-        state,
-        store,
-        scope,
-        out: Arc::clone(&out),
-        held: HashMap::new(),
-        retries: Vec::new(),
-        said: HashMap::new(),
-        awaiting: HashMap::new(),
-        peer: String::new(),
-        refused: HashSet::new(),
-        #[cfg(feature = "blobs")]
-        fetching: Fetching::default(),
-    };
+    let mut link = Link::new(state, store, scope, Arc::clone(&out));
     let mut frames = Frames::default();
-    let mut heard = Instant::now();
-    let mut listed = Instant::now();
-    let mut welcomed = false;
+    let (mut heard, mut listed, mut welcomed) = (Instant::now(), Instant::now(), false);
     loop {
         if state.stopping() {
             return Ok(());
         }
         while let Some(message) = frames.next()? {
             heard = Instant::now();
-            if !welcomed {
-                match message {
-                    Message::Welcome { node, files } => {
-                        welcomed = true;
-                        frames.unpack_from_here()?;
-                        out.pack()?;
-                        link.peer = node;
-                        link.upstream().linked(Some(Arc::clone(&out)));
-                        if matches!(link.scope, Scope::From) {
-                            *lock(&state.upstream_at) = Some(address.to_owned());
-                            *lock(&state.served) = Some(files.clone());
-                        }
-                        tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
-                        link.follow_new(&files)?;
-                        continue;
-                    }
-                    Message::Refused { why } => return Err(Error::new(ErrorKind::Invalid, format!("refused: {why}"))),
-                    other => return Err(Error::invalid(format!("a link began with {other:?}, not a welcome"))),
-                }
+            if welcomed {
+                link.take(message)?;
+                continue;
             }
-            link.take(message)?;
+            match message {
+                Message::Welcome { node, files } => {
+                    welcomed = true;
+                    frames.unpack_from_here()?;
+                    link.welcomed(address, node, &files)?;
+                }
+                Message::Refused { why } => return Err(Error::new(ErrorKind::Invalid, format!("refused: {why}"))),
+                other => return Err(Error::invalid(format!("a link began with {other:?}, not a welcome"))),
+            }
         }
         if welcomed {
             link.forget_copies_gone();
@@ -285,20 +262,61 @@ fn follow(state: &Arc<State>, store: &WeakStore, address: &str, scope: Scope) ->
             return Err(Error::new(ErrorKind::Unavailable, "the node said nothing for too long"));
         }
         if welcomed {
-            link.retry_due()?;
-            #[cfg(feature = "blobs")]
-            link.fetch_due()?;
-            if matches!(link.scope, Scope::Direct(_)) {
-                link.follow_new(&[])?;
-            }
-            let wanted = matches!(link.scope, Scope::From) && state.wanted.swap(false, Ordering::SeqCst);
-            if wanted || (state.options.files.is_none() && listed.elapsed() > LIST_EVERY) {
-                out.send(&Message::List)?;
-                listed = Instant::now();
-            } else if out.idle_for() >= PING_EVERY {
-                out.send(&Message::Ping)?;
-            }
+            link.tend(&mut listed)?;
         }
+    }
+}
+
+impl<'a> Link<'a> {
+    fn new(state: &'a Arc<State>, store: &'a WeakStore, scope: Scope, out: Arc<Out>) -> Link<'a> {
+        Link {
+            state,
+            store,
+            scope,
+            out,
+            held: HashMap::new(),
+            retries: Vec::new(),
+            said: HashMap::new(),
+            awaiting: HashMap::new(),
+            peer: String::new(),
+            refused: HashSet::new(),
+            #[cfg(feature = "blobs")]
+            fetching: Fetching::default(),
+        }
+    }
+
+    /// Takes the node at `address` welcoming this one: what follows is
+    /// packed, and the files it serves are followed.
+    fn welcomed(&mut self, address: &str, node: String, files: &[String]) -> Result<()> {
+        self.out.pack()?;
+        self.peer = node;
+        self.upstream().linked(Some(Arc::clone(&self.out)));
+        if matches!(self.scope, Scope::From) {
+            *lock(&self.state.upstream_at) = Some(address.to_owned());
+            *lock(&self.state.served) = Some(files.to_vec());
+        }
+        tracing::info!(target: "tinystore", from = %address, "a node is linked to the node it copies");
+        self.follow_new(files)
+    }
+
+    /// What a link does between messages: the retries and fetches due, the
+    /// files to follow, and a list or a ping when the link was quiet.
+    fn tend(&mut self, listed: &mut Instant) -> Result<()> {
+        self.retry_due()?;
+        #[cfg(feature = "blobs")]
+        self.fetch_due()?;
+        if matches!(self.scope, Scope::Direct(_)) {
+            self.follow_new(&[])?;
+        }
+        let state = self.state;
+        let wanted = matches!(self.scope, Scope::From) && state.wanted.swap(false, Ordering::SeqCst);
+        if wanted || (state.options.files.is_none() && listed.elapsed() > LIST_EVERY) {
+            self.out.send(&Message::List)?;
+            *listed = Instant::now();
+        } else if self.out.idle_for() >= PING_EVERY {
+            self.out.send(&Message::Ping)?;
+        }
+        Ok(())
     }
 }
 

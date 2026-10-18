@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use super::entry::Point;
 use super::log::Log;
-use super::message::{Frames, LeaseAsk, Message, VERSION, timed_out};
+use super::message::{Frames, LeaseAsk, LeaseHolder, Message, VERSION, timed_out};
 use super::node::State;
 use super::serve::Out;
 use super::witness::{Holder, TTL};
@@ -63,11 +63,7 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
         address: state.address(),
     })?;
     let mut frames = Frames::default();
-    let mut welcomed = false;
-    let mut turn = Instant::now();
-    let mut sent = None;
-    // what failed of each file's lease, said once until it is acted on again
-    let mut failing: HashMap<String, String> = HashMap::new();
+    let (mut welcomed, mut turn, mut asks) = (false, Instant::now(), Asks::default());
     loop {
         if state.stopping() {
             return Ok(());
@@ -84,28 +80,14 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
                     let Some(store) = store.upgrade() else {
                         return Ok(());
                     };
-                    for held in holders {
-                        let file = held.file;
-                        match leased(state, &store, &file, &held.holder, sent.unwrap_or_else(Instant::now)) {
-                            Err(error) if failing.get(&file) != Some(&error.to_string()) => {
-                                tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
-                                failing.insert(file, error.to_string());
-                            }
-                            Err(_) => {}
-                            Ok(()) => {
-                                if failing.remove(&file).is_some() {
-                                    tracing::info!(target: "tinystore", %file, "a node acts on its lease again");
-                                }
-                            }
-                        }
-                    }
+                    asks.answered(state, &store, holders);
                 }
                 _ => {}
             }
         }
-        if welcomed && turn.elapsed() >= RENEW || welcomed && sent.is_none() {
+        if welcomed && turn.elapsed() >= RENEW || welcomed && asks.sent.is_none() {
             turn = Instant::now();
-            sent = Some(turn);
+            asks.sent = Some(turn);
             let asks = state.judged_files();
             tracing::debug!(target: "tinystore", asks = asks.len(), "a node asks its witness for its leases");
             if !asks.is_empty() {
@@ -117,6 +99,37 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
             Ok(false) => return Err(Error::new(ErrorKind::Unavailable, "the witness closed the link")),
             Err(error) if timed_out(&error) => {}
             Err(error) => return Err(Error::io("a link to the witness", error)),
+        }
+    }
+}
+
+/// What a judged node knows of its asks of its witness.
+#[derive(Default)]
+struct Asks {
+    /// When the last left, from which a lease granted counts.
+    sent: Option<Instant>,
+    /// What failed of each file's lease, said once until it is acted on again.
+    failing: HashMap<String, String>,
+}
+
+impl Asks {
+    /// Acts on each holder the witness answered.
+    fn answered(&mut self, state: &Arc<State>, store: &Store, holders: Vec<LeaseHolder>) {
+        let sent = self.sent.unwrap_or_else(Instant::now);
+        for held in holders {
+            let file = held.file;
+            match leased(state, store, &file, &held.holder, sent) {
+                Err(error) if self.failing.get(&file) != Some(&error.to_string()) => {
+                    tracing::warn!(target: "tinystore", %file, %error, "a node could not act on its lease");
+                    self.failing.insert(file, error.to_string());
+                }
+                Err(_) => {}
+                Ok(()) => {
+                    if self.failing.remove(&file).is_some() {
+                        tracing::info!(target: "tinystore", %file, "a node acts on its lease again");
+                    }
+                }
+            }
         }
     }
 }

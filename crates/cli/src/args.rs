@@ -89,73 +89,41 @@ pub(crate) enum Transport {
 }
 
 pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
-    let mut dir = None;
-    let (mut stdio, mut local, mut quiet) = (false, false, false);
-    let (mut log, mut idle, mut clock) = (None, None, None);
-    let (mut listen, mut cert, mut key, mut tokens, mut memory) = (None, None, None, None, None);
-    let (mut durability, mut keep_free, mut encryption_key_file) = (None, None, None);
-    let (mut node, mut node_config) = (Node::default(), None);
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
-        match arg.as_str() {
-            "--dir" => dir = Some(PathBuf::from(value("--dir")?)),
-            "--stdio" => stdio = true,
-            "--local" => local = true,
-            "--log-file" => log = Some(PathBuf::from(value("--log-file")?)),
-            "--quiet" => quiet = true,
-            "--idle" => idle = Some(span(&value("--idle")?)?),
-            "--clock" => clock = Some(time(&value("--clock")?)?),
-            "--listen" => listen = Some(Address::parse(&value("--listen")?)?),
-            "--tls-cert" => cert = Some(PathBuf::from(value("--tls-cert")?)),
-            "--tls-key" => key = Some(PathBuf::from(value("--tls-key")?)),
-            "--tokens" => tokens = Some(PathBuf::from(value("--tokens")?)),
-            "--memory" => memory = Some(size(&value("--memory")?)?),
-            "--keep-free" => keep_free = Some(size(&value("--keep-free")?)?),
-            "--encryption-key-file" => encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?)),
-            "--node-listen" => node.listen = Some(value("--node-listen")?),
-            "--from" => node.from.push(value("--from")?),
-            "--node-config" => node_config = Some(PathBuf::from(value("--node-config")?)),
-            "--durability" => {
-                let word = value("--durability")?;
-                durability = Some(word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?);
-            }
-            flag if flag.starts_with("--") => return Err(format!("no flag {flag}{}", crate::meant(flag, &flags()))),
-            _ if dir.is_none() => dir = Some(PathBuf::from(arg)),
-            _ => return Err(format!("one directory, not {arg} too")),
-        }
-    }
-    let dir = dir.ok_or("a store's directory: tinystore serve <dir>")?;
-    let transport = match (stdio, local) {
+    let given = Given::parse(args)?;
+    let dir = given.dir.ok_or("a store's directory: tinystore serve <dir>")?;
+    let transport = match (given.stdio, given.local) {
         (true, true) => return Err("--stdio or --local, not both".to_owned()),
         (true, false) => Transport::Stdio,
         (false, sidecar) => Transport::Local { sidecar },
     };
-    if clock.is_some() && transport != Transport::Stdio {
+    if given.clock.is_some() && transport != Transport::Stdio {
         return Err("--clock is a private server's: --stdio".to_owned());
     }
-    let remote = match listen {
-        None if cert.is_some() || key.is_some() || tokens.is_some() => {
+    let remote = match given.listen {
+        None if given.cert.is_some() || given.key.is_some() || given.tokens.is_some() => {
             return Err("--tls-cert, --tls-key and --tokens are --listen's".to_owned());
         }
         None => None,
         Some(_) if transport == Transport::Stdio => return Err("--listen or --stdio, not both".to_owned()),
-        Some(address) => Some(remote(address, tokens, cert, key)?),
+        Some(address) => Some(remote(address, given.tokens, given.cert, given.key)?),
     };
-    let memory = memory.or(remote.as_ref().map(|_| REMOTE_MEMORY));
-    let idle = match (idle, &transport) {
+    let memory = given.memory.or(remote.as_ref().map(|_| REMOTE_MEMORY));
+    let idle = match (given.idle, &transport) {
         (Some(Duration::ZERO), _) => None,
         (Some(idle), _) => Some(idle),
         (None, Transport::Local { sidecar: true }) => Some(SIDECAR_IDLE),
         (None, _) => None,
     };
-    if let Some(file) = node_config {
+    let mut node = given.node;
+    if let Some(file) = given.node_config {
         node.config = Some((file.clone(), NodeConfig::read(&file)?));
     }
     let node = (node.listen.is_some() || !node.from.is_empty() || node.config.is_some()).then_some(node);
     if let Some(node) = &node {
         refuse_an_unreachable_catalog(node)?;
     }
+    let (log, quiet, clock, durability) = (given.log, given.quiet, given.clock, given.durability);
+    let (keep_free, encryption_key_file) = (given.keep_free, given.encryption_key_file);
     Ok(Serve {
         dir,
         transport,
@@ -170,6 +138,71 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         encryption_key_file,
         node,
     })
+}
+
+/// `serve`'s flags as they were given, before what they say together is checked.
+#[derive(Default)]
+struct Given {
+    dir: Option<PathBuf>,
+    stdio: bool,
+    local: bool,
+    quiet: bool,
+    log: Option<PathBuf>,
+    idle: Option<Duration>,
+    clock: Option<SystemTime>,
+    listen: Option<Address>,
+    cert: Option<PathBuf>,
+    key: Option<PathBuf>,
+    tokens: Option<PathBuf>,
+    memory: Option<u64>,
+    durability: Option<Durability>,
+    keep_free: Option<u64>,
+    encryption_key_file: Option<PathBuf>,
+    node: Node,
+    node_config: Option<PathBuf>,
+}
+
+impl Given {
+    fn parse(args: &[String]) -> Result<Given, String> {
+        let mut given = Given::default();
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            let mut value = |flag: &str| args.next().cloned().ok_or_else(|| format!("{flag} takes a value"));
+            match arg.as_str() {
+                "--dir" => given.dir = Some(PathBuf::from(value("--dir")?)),
+                "--stdio" => given.stdio = true,
+                "--local" => given.local = true,
+                "--log-file" => given.log = Some(PathBuf::from(value("--log-file")?)),
+                "--quiet" => given.quiet = true,
+                "--idle" => given.idle = Some(span(&value("--idle")?)?),
+                "--clock" => given.clock = Some(time(&value("--clock")?)?),
+                "--listen" => given.listen = Some(Address::parse(&value("--listen")?)?),
+                "--tls-cert" => given.cert = Some(PathBuf::from(value("--tls-cert")?)),
+                "--tls-key" => given.key = Some(PathBuf::from(value("--tls-key")?)),
+                "--tokens" => given.tokens = Some(PathBuf::from(value("--tokens")?)),
+                "--memory" => given.memory = Some(size(&value("--memory")?)?),
+                "--keep-free" => given.keep_free = Some(size(&value("--keep-free")?)?),
+                "--encryption-key-file" => {
+                    given.encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?));
+                }
+                "--node-listen" => given.node.listen = Some(value("--node-listen")?),
+                "--from" => given.node.from.push(value("--from")?),
+                "--node-config" => given.node_config = Some(PathBuf::from(value("--node-config")?)),
+                "--durability" => {
+                    let word = value("--durability")?;
+                    let durability =
+                        word.parse::<Durability>().map_err(|_| format!("--durability {word}: full or os"))?;
+                    given.durability = Some(durability);
+                }
+                flag if flag.starts_with("--") => {
+                    return Err(format!("no flag {flag}{}", crate::meant(flag, &flags())));
+                }
+                _ if given.dir.is_none() => given.dir = Some(PathBuf::from(arg)),
+                _ => return Err(format!("one directory, not {arg} too")),
+            }
+        }
+        Ok(given)
+    }
 }
 
 /// Every flag `serve` takes, for a misspelt one's nearest.

@@ -9,6 +9,7 @@
 //! ```
 
 use std::io::Read;
+use std::time::Duration;
 
 use super::entry::Point;
 use super::witness::Holder;
@@ -55,6 +56,17 @@ impl Refusal {
     pub(crate) fn of(error: &Error) -> Refusal {
         let facts = error.facts().iter().map(|(name, value)| (name.to_string(), value.clone())).collect();
         Refusal { kind: error.kind(), why: error.what().to_owned(), facts }
+    }
+
+    fn write<'a>(&self, out: &'a mut Out) -> &'a mut Out {
+        out.text(self.kind.as_str()).text(&self.why).list(&self.facts, |out, (name, value)| {
+            out.text(name).text(value);
+        })
+    }
+
+    fn read(at: &mut In<'_>) -> Result<Refusal> {
+        let (kind, why) = (kind_of(&at.text()?), at.text()?);
+        Ok(Refusal { kind, why, facts: at.list(16, |at| Ok((at.text()?, at.text()?)))? })
     }
 
     pub(crate) fn into_error(self) -> Error {
@@ -175,149 +187,56 @@ impl Message {
     /// The message's bytes, its length first.
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Out(vec![0; 4]);
-        match self {
-            Message::Hello { version, token, node, address } => {
-                out.byte(1);
-                out.word(*version);
-                out.text(token);
-                out.text(node);
-                out.text(address);
-            }
-            Message::Welcome { node, files } => {
-                out.byte(2);
-                out.text(node);
-                out.texts(files);
-            }
-            Message::Refused { why } => {
-                out.byte(3);
-                out.text(why);
-            }
-            Message::List => out.byte(4),
-            Message::Listed { files } => {
-                out.byte(5);
-                out.texts(files);
-            }
-            Message::Follow { file, at } => {
-                out.byte(6);
-                out.text(file);
-                out.point(at);
-            }
-            Message::SnapshotBegin { file, page_size, at } => {
-                out.byte(7);
-                out.text(file);
-                out.word(*page_size);
-                out.point(at);
-            }
-            Message::SnapshotPages { file, pages } => {
-                out.byte(8);
-                out.text(file);
-                out.count(pages.len());
-                for (number, page) in pages {
-                    out.word(*number);
-                    out.bytes(page);
-                }
-            }
-            Message::SnapshotEnd { file, ready_at } => {
-                out.byte(9);
-                out.text(file);
-                out.long(*ready_at);
-            }
-            Message::Entry { file, bytes } => {
-                out.byte(10);
-                out.text(file);
-                out.bytes(bytes);
-            }
-            Message::Failed { file, kind, why } => {
-                out.byte(11);
-                out.text(file);
-                out.text(kind.as_str());
-                out.text(why);
-            }
-            Message::Write { id, op } => {
-                out.byte(12);
-                out.long(*id);
-                out.bytes(op);
-            }
-            Message::Written { id, outcome, waits } => {
-                out.byte(13);
-                out.long(*id);
-                match outcome {
-                    Ok(answer) => {
-                        out.byte(0);
-                        out.bytes(answer);
-                    }
-                    Err(Refusal { kind, why, facts }) => {
-                        out.byte(1);
-                        out.text(kind.as_str());
-                        out.text(why);
-                        out.count(facts.len());
-                        for (name, value) in facts {
-                            out.text(name);
-                            out.text(value);
-                        }
-                    }
-                }
-                out.count(waits.len());
-                for (file, sequence) in waits {
-                    out.text(file);
-                    out.long(*sequence);
-                }
-            }
-            Message::Ping => out.byte(14),
-            Message::Fetch { path } => {
-                out.byte(15);
-                out.text(path);
-            }
-            Message::Object { path, offset, bytes, last } => {
-                out.byte(16);
-                out.text(path);
-                out.long(*offset);
-                out.bytes(bytes);
-                out.byte(u8::from(*last));
-            }
-            Message::Verify { file } => {
-                out.byte(18);
-                out.text(file);
-            }
-            Message::Lease { node, address, asks } => {
-                out.byte(20);
-                out.text(node);
-                out.text(address);
-                out.count(asks.len());
-                for ask in asks {
-                    out.text(&ask.file);
-                    out.long(ask.epoch);
-                    out.long(ask.position);
-                    out.byte(u8::from(ask.holding));
-                    out.texts(&ask.synchronous);
-                }
-            }
-            Message::Leased { holders } => {
-                out.byte(21);
-                out.count(holders.len());
-                for held in holders {
-                    out.text(&held.file);
-                    out.text(&held.holder.node);
-                    out.text(&held.holder.address);
-                    out.long(held.holder.epoch);
-                }
-            }
-            Message::Verified { file, at, sum, why } => {
-                out.byte(19);
-                out.text(file);
-                out.point(at);
-                out.bytes(sum);
-                out.text(why);
-            }
-            Message::Applied { file, sequence } => {
-                out.byte(17);
-                out.text(file);
-                out.long(*sequence);
-            }
-        }
+        self.write(&mut out);
         let length = u32::try_from(out.0.len() - 4).unwrap_or(u32::MAX);
         out.0[..4].copy_from_slice(&length.to_le_bytes());
         out.0
+    }
+
+    /// Writes the message's kind, then its fields in order.
+    fn write(&self, out: &mut Out) {
+        match self {
+            Message::Hello { version, token, node, address } => {
+                out.byte(1).word(*version).text(token).text(node).text(address)
+            }
+            Message::Welcome { node, files } => out.byte(2).text(node).texts(files),
+            Message::Refused { why } => out.byte(3).text(why),
+            Message::List => out.byte(4),
+            Message::Listed { files } => out.byte(5).texts(files),
+            Message::Follow { file, at } => out.byte(6).text(file).point(at),
+            Message::SnapshotBegin { file, page_size, at } => out.byte(7).text(file).word(*page_size).point(at),
+            Message::SnapshotPages { file, pages } => out.byte(8).text(file).list(pages, |out, (number, page)| {
+                out.word(*number).bytes(page);
+            }),
+            Message::SnapshotEnd { file, ready_at } => out.byte(9).text(file).long(*ready_at),
+            Message::Entry { file, bytes } => out.byte(10).text(file).bytes(bytes),
+            Message::Failed { file, kind, why } => out.byte(11).text(file).text(kind.as_str()).text(why),
+            Message::Write { id, op } => out.byte(12).long(*id).bytes(op),
+            Message::Written { id, outcome, waits } => {
+                match outcome {
+                    Ok(answer) => out.byte(13).long(*id).byte(0).bytes(answer),
+                    Err(refusal) => refusal.write(out.byte(13).long(*id).byte(1)),
+                };
+                out.list(waits, |out, (file, sequence)| {
+                    out.text(file).long(*sequence);
+                })
+            }
+            Message::Ping => out.byte(14),
+            Message::Fetch { path } => out.byte(15).text(path),
+            Message::Object { path, offset, bytes, last } => {
+                out.byte(16).text(path).long(*offset).bytes(bytes).byte(u8::from(*last))
+            }
+            Message::Applied { file, sequence } => out.byte(17).text(file).long(*sequence),
+            Message::Verify { file } => out.byte(18).text(file),
+            Message::Verified { file, at, sum, why } => out.byte(19).text(file).point(at).bytes(sum).text(why),
+            Message::Lease { node, address, asks } => out.byte(20).text(node).text(address).list(asks, |out, ask| {
+                out.text(&ask.file).long(ask.epoch).long(ask.position);
+                out.byte(u8::from(ask.holding)).texts(&ask.synchronous);
+            }),
+            Message::Leased { holders } => out.byte(21).list(holders, |out, held| {
+                out.text(&held.file).text(&held.holder.node).text(&held.holder.address).long(held.holder.epoch);
+            }),
+        };
     }
 
     /// Reads one message from `from`; `None` when the link ended cleanly
@@ -341,7 +260,16 @@ impl Message {
 
     fn decode(body: &[u8]) -> Result<Message> {
         let mut at = In { bytes: body, at: 0 };
-        let message = match at.byte()? {
+        let message = Self::read_fields(&mut at)?;
+        if at.at != body.len() {
+            return Err(corrupt("a message holds more than its fields"));
+        }
+        Ok(message)
+    }
+
+    /// Reads a message's kind, then its fields in order.
+    fn read_fields(at: &mut In<'_>) -> Result<Message> {
+        Ok(match at.byte()? {
             1 => Message::Hello { version: at.word()?, token: at.text()?, node: at.text()?, address: at.text()? },
             2 => Message::Welcome { node: at.text()?, files: at.texts()? },
             3 => Message::Refused { why: at.text()? },
@@ -349,41 +277,23 @@ impl Message {
             5 => Message::Listed { files: at.texts()? },
             6 => Message::Follow { file: at.text()?, at: at.point()? },
             7 => Message::SnapshotBegin { file: at.text()?, page_size: at.word()?, at: at.point()? },
-            8 => {
-                let file = at.text()?;
-                let count = at.count()?;
-                let mut pages = Vec::with_capacity(count.min(1 << 16));
-                for _ in 0..count {
-                    pages.push((at.word()?, at.bytes()?.to_vec()));
-                }
-                Message::SnapshotPages { file, pages }
-            }
+            8 => Message::SnapshotPages {
+                file: at.text()?,
+                pages: at.list(1 << 16, |at| Ok((at.word()?, at.bytes()?.to_vec())))?,
+            },
             9 => Message::SnapshotEnd { file: at.text()?, ready_at: at.long()? },
             10 => Message::Entry { file: at.text()?, bytes: at.bytes()?.to_vec() },
             11 => Message::Failed { file: at.text()?, kind: kind_of(&at.text()?), why: at.text()? },
             12 => Message::Write { id: at.long()?, op: at.bytes()?.to_vec() },
-            13 => {
-                let id = at.long()?;
-                let outcome = match at.byte()? {
+            13 => Message::Written {
+                id: at.long()?,
+                outcome: match at.byte()? {
                     0 => Ok(at.bytes()?.to_vec()),
-                    1 => {
-                        let (kind, why) = (kind_of(&at.text()?), at.text()?);
-                        let count = at.count()?;
-                        let mut facts = Vec::with_capacity(count.min(16));
-                        for _ in 0..count {
-                            facts.push((at.text()?, at.text()?));
-                        }
-                        Err(Refusal { kind, why, facts })
-                    }
+                    1 => Err(Refusal::read(at)?),
                     _ => return Err(corrupt("a write's outcome is neither an answer nor an error")),
-                };
-                let count = at.count()?;
-                let mut waits = Vec::with_capacity(count.min(1 << 10));
-                for _ in 0..count {
-                    waits.push((at.text()?, at.long()?));
-                }
-                Message::Written { id, outcome, waits }
-            }
+                },
+                waits: at.list(1 << 10, |at| Ok((at.text()?, at.long()?)))?,
+            },
             14 => Message::Ping,
             15 => Message::Fetch { path: at.text()? },
             16 => Message::Object {
@@ -394,33 +304,26 @@ impl Message {
             },
             17 => Message::Applied { file: at.text()?, sequence: at.long()? },
             18 => Message::Verify { file: at.text()? },
-            20 => {
-                let (node, address) = (at.text()?, at.text()?);
-                let asks = (0..at.count()?)
-                    .map(|_| {
-                        let (file, epoch, position, holding) = (at.text()?, at.long()?, at.long()?, at.byte()? == 1);
-                        Ok(LeaseAsk { file, epoch, position, holding, synchronous: at.texts()? })
-                    })
-                    .collect::<Result<_>>()?;
-                Message::Lease { node, address, asks }
-            }
-            21 => {
-                let holders = (0..at.count()?)
-                    .map(|_| {
-                        let file = at.text()?;
-                        let holder = Holder { node: at.text()?, address: at.text()?, epoch: at.long()? };
-                        Ok(LeaseHolder { file, holder })
-                    })
-                    .collect::<Result<_>>()?;
-                Message::Leased { holders }
-            }
             19 => Message::Verified { file: at.text()?, at: at.point()?, sum: at.bytes()?.to_vec(), why: at.text()? },
+            20 => Message::Lease {
+                node: at.text()?,
+                address: at.text()?,
+                asks: at.list(1 << 12, |at| {
+                    let (file, epoch, position, holding) = (at.text()?, at.long()?, at.long()?, at.byte()? == 1);
+                    Ok(LeaseAsk { file, epoch, position, holding, synchronous: at.texts()? })
+                })?,
+            },
+            21 => Message::Leased {
+                holders: at.list(1 << 12, |at| {
+                    let file = at.text()?;
+                    Ok(LeaseHolder {
+                        file,
+                        holder: Holder { node: at.text()?, address: at.text()?, epoch: at.long()? },
+                    })
+                })?,
+            },
             _ => return Err(corrupt("a message of a kind the link does not have")),
-        };
-        if at.at != body.len() {
-            return Err(corrupt("a message holds more than its fields"));
-        }
-        Ok(message)
+        })
     }
 }
 
@@ -538,42 +441,67 @@ fn corrupt(what: &str) -> Error {
 pub(crate) struct Out(pub(crate) Vec<u8>);
 
 impl Out {
-    pub(crate) fn byte(&mut self, value: u8) {
+    pub(crate) fn byte(&mut self, value: u8) -> &mut Out {
         self.0.push(value);
+        self
     }
 
-    pub(crate) fn word(&mut self, value: u32) {
+    pub(crate) fn word(&mut self, value: u32) -> &mut Out {
         self.0.extend_from_slice(&value.to_le_bytes());
+        self
     }
 
-    pub(crate) fn long(&mut self, value: u64) {
+    pub(crate) fn long(&mut self, value: u64) -> &mut Out {
         self.0.extend_from_slice(&value.to_le_bytes());
+        self
     }
 
-    pub(crate) fn count(&mut self, count: usize) {
-        self.word(u32::try_from(count).unwrap_or(u32::MAX));
+    pub(crate) fn count(&mut self, count: usize) -> &mut Out {
+        self.word(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
-    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
-        self.count(bytes.len());
-        self.0.extend_from_slice(bytes);
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) -> &mut Out {
+        self.count(bytes.len()).0.extend_from_slice(bytes);
+        self
     }
 
-    pub(crate) fn text(&mut self, text: &str) {
-        self.bytes(text.as_bytes());
+    pub(crate) fn text(&mut self, text: &str) -> &mut Out {
+        self.bytes(text.as_bytes())
     }
 
-    fn texts(&mut self, texts: &[String]) {
-        self.count(texts.len());
-        for text in texts {
-            self.text(text);
+    /// A byte saying whether `text` is there, then it, or an empty text.
+    pub(crate) fn maybe_text(&mut self, text: Option<&str>) -> &mut Out {
+        self.byte(u8::from(text.is_some())).text(text.unwrap_or(""))
+    }
+
+    /// A byte saying whether `value` is there, then it, or zero.
+    pub(crate) fn maybe_long(&mut self, value: Option<u64>) -> &mut Out {
+        self.byte(u8::from(value.is_some())).long(value.unwrap_or(0))
+    }
+
+    /// A span as its milliseconds.
+    pub(crate) fn span(&mut self, span: Duration) -> &mut Out {
+        self.long(crate::clock::millis(span) as u64)
+    }
+
+    pub(crate) fn texts(&mut self, texts: &[String]) -> &mut Out {
+        self.list(texts, |out, text| {
+            out.text(text);
+        })
+    }
+
+    /// Writes how many `items` there are, then each with `each`.
+    pub(crate) fn list<T>(&mut self, items: &[T], mut each: impl FnMut(&mut Out, &T)) -> &mut Out {
+        self.count(items.len());
+        for item in items {
+            each(self, item);
         }
+        self
     }
 
-    pub(crate) fn point(&mut self, point: &Point) {
-        self.long(point.sequence);
-        self.long(point.epoch);
-        self.0.extend_from_slice(&point.check);
+    pub(crate) fn point(&mut self, point: &Point) -> &mut Out {
+        self.long(point.sequence).long(point.epoch).0.extend_from_slice(&point.check);
+        self
     }
 }
 
@@ -618,13 +546,35 @@ impl<'a> In<'a> {
         String::from_utf8(self.bytes()?.to_vec()).map_err(|_| corrupt("a text is not UTF-8"))
     }
 
-    fn texts(&mut self) -> Result<Vec<String>> {
+    pub(crate) fn maybe_text(&mut self) -> Result<Option<String>> {
+        let there = self.byte()? == 1;
+        let text = self.text()?;
+        Ok(there.then_some(text))
+    }
+
+    pub(crate) fn maybe_long(&mut self) -> Result<Option<u64>> {
+        let there = self.byte()? == 1;
+        let value = self.long()?;
+        Ok(there.then_some(value))
+    }
+
+    pub(crate) fn span(&mut self) -> Result<Duration> {
+        Ok(Duration::from_millis(self.long()?))
+    }
+
+    pub(crate) fn texts(&mut self) -> Result<Vec<String>> {
+        self.list(1 << 12, In::text)
+    }
+
+    /// Reads how many items follow, then each with `each`, holding room for
+    /// `at_most` until they are read: a count is the sender's word.
+    pub(crate) fn list<T>(&mut self, at_most: usize, mut each: impl FnMut(&mut In<'a>) -> Result<T>) -> Result<Vec<T>> {
         let count = self.count()?;
-        let mut texts = Vec::with_capacity(count.min(1 << 12));
+        let mut items = Vec::with_capacity(count.min(at_most));
         for _ in 0..count {
-            texts.push(self.text()?);
+            items.push(each(self)?);
         }
-        Ok(texts)
+        Ok(items)
     }
 
     pub(crate) fn point(&mut self) -> Result<Point> {

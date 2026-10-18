@@ -84,23 +84,35 @@ fn failure(id: Value, code: i64, message: &str) -> Value {
 
 /// The tools, each with what it takes.
 fn tools() -> Value {
-    let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": { "type": "object", "properties": properties, "required": required },
-        })
-    };
-    let text = |description: &str| json!({ "type": "string", "description": description });
-    let count = |description: &str| json!({ "type": "integer", "description": description });
-    json!([
-        tool(
+    Value::Array([store_tools(), data_tools()].concat())
+}
+
+fn described(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": { "type": "object", "properties": properties, "required": required },
+    })
+}
+
+fn text(description: &str) -> Value {
+    json!({ "type": "string", "description": description })
+}
+
+fn count(description: &str) -> Value {
+    json!({ "type": "integer", "description": description })
+}
+
+/// The tools that say how the store stands and what it logged.
+fn store_tools() -> Vec<Value> {
+    vec![
+        described(
             "status",
             "What the store holds: its files and their sizes, the server that serves it, and how its node stands.",
             json!({}),
-            &[]
+            &[],
         ),
-        tool(
+        described(
             "logs",
             "The application's latest log lines and events, newest last.",
             json!({
@@ -112,13 +124,19 @@ fn tools() -> Value {
             }),
             &[],
         ),
-        tool(
+    ]
+}
+
+/// The tools that read what the application keeps.
+fn data_tools() -> Vec<Value> {
+    vec![
+        described(
             "kv_get",
             "One value of a kv bucket by its key.",
             json!({ "bucket": text("the bucket"), "key": text("the key") }),
-            &["bucket", "key"]
+            &["bucket", "key"],
         ),
-        tool(
+        described(
             "kv_list",
             "A kv bucket's keys and values, in key order.",
             json!({
@@ -128,7 +146,7 @@ fn tools() -> Value {
             }),
             &["bucket"],
         ),
-        tool(
+        described(
             "jobs_list",
             "A queue's jobs that have ids, in the order of their ids, with their state, attempts and last error; \
              or, with state failed and no prefix, its failed jobs, the last failed first.",
@@ -140,7 +158,7 @@ fn tools() -> Value {
             }),
             &["queue"],
         ),
-        tool(
+        described(
             "sql_query",
             "Rows of a read-only SQL query on one of the application's databases, sql/<database>.db.",
             json!({
@@ -149,8 +167,8 @@ fn tools() -> Value {
             }),
             &["database", "query"],
         ),
-        tool("search_list", "The store's search indexes, with their documents.", json!({}), &[]),
-    ])
+        described("search_list", "The store's search indexes, with their documents.", json!({}), &[]),
+    ]
 }
 
 /// A tool's answer: its text, or what went wrong as the tool's own error.

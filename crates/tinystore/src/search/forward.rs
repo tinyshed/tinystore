@@ -43,33 +43,23 @@ impl Passed {
 /// search's file is.
 pub(super) fn pass_on_set(store: &Store, name: &str, documents: &[Passed]) -> Result<()> {
     let mut out = Out(vec![crate::replication::SEARCH]);
-    out.text(name);
-    out.byte(0);
-    out.count(documents.len());
-    for document in documents {
-        out.text(&document.id);
-        out.bytes(&document.json);
+    out.text(name).byte(0).list(documents, |out, document| {
+        out.text(&document.id).bytes(&document.json);
         match &document.vector {
             None => out.byte(0),
             Some(None) => out.byte(1),
-            Some(Some(vector)) => {
-                out.byte(2);
-                out.count(vector.len());
-                for x in vector {
-                    out.word(x.to_bits());
-                }
-            }
-        }
-    }
+            Some(Some(vector)) => out.byte(2).list(vector, |out, x| {
+                out.word(x.to_bits());
+            }),
+        };
+    });
     crate::replication::pass_on(store, FILE, out.0).map(drop)
 }
 
 /// Passes a delete of the document `id` to the home.
 pub(super) fn pass_on_delete(store: &Store, name: &str, id: &str) -> Result<bool> {
     let mut out = Out(vec![crate::replication::SEARCH]);
-    out.text(name);
-    out.byte(1);
-    out.text(id);
+    out.text(name).byte(1).text(id);
     let answer = crate::replication::pass_on(store, FILE, out.0)?;
     In { bytes: &answer, at: 0 }.byte().map(|found| found == 1)
 }
@@ -81,21 +71,18 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     let index = open_as_it_is::<serde_json::Value>(store, &name)?;
     match at.byte()? {
         0 => {
-            let mut documents = Vec::new();
-            for _ in 0..at.count()? {
+            let documents = at.list(1 << 12, |at| {
                 let id = at.text()?;
                 let value: serde_json::Value =
                     serde_json::from_slice(at.bytes()?).map_err(|_| corrupt("a document's JSON"))?;
                 let vector = match at.byte()? {
                     0 => None,
                     1 => Some(None),
-                    2 => {
-                        Some(Some((0..at.count()?).map(|_| at.word().map(f32::from_bits)).collect::<Result<Vec<_>>>()?))
-                    }
+                    2 => Some(Some(at.list(1 << 16, |at| at.word().map(f32::from_bits))?)),
                     _ => return Err(corrupt("a document's vector")),
                 };
-                documents.push((id, value, vector));
-            }
+                Ok((id, value, vector))
+            })?;
             let given = documents
                 .iter()
                 .map(|(id, value, vector)| Given {

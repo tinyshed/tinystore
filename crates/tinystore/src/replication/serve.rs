@@ -156,11 +156,13 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         }
         lock(&asked).ended = true;
     });
-    let mut following = false;
-    let ended = read_requests(state, &mut reading, &mut frames, &out, &asked, &mut following);
+    let mut requests = Requests { state, out: &out, asked: &asked, following: false };
+    let ended = read_requests(&mut requests, &mut reading, &mut frames);
     let mut asked_last = lock(&asked);
     asked_last.ended = true;
-    if following && let Some(gone) = asked_last.following.take() {
+    if requests.following
+        && let Some(gone) = asked_last.following.take()
+    {
         state.acks.unlinked(gone.node());
     }
     drop(asked_last);
@@ -169,86 +171,114 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
 }
 
 /// Reads what the other node asks until the link ends.
-fn read_requests(
-    state: &Arc<State>,
-    reading: &mut Reading,
-    frames: &mut Frames,
-    out: &Arc<Out>,
-    asked: &Arc<Mutex<Asked>>,
-    following: &mut bool,
-) -> Result<()> {
+/// What the thread that reads a link's requests answers them with.
+struct Requests<'a> {
+    state: &'a Arc<State>,
+    out: &'a Arc<Out>,
+    asked: &'a Arc<Mutex<Asked>>,
+    /// Whether the other node follows a file here, counted among the node's
+    /// followers once.
+    following: bool,
+}
+
+fn read_requests(requests: &mut Requests<'_>, reading: &mut Reading, frames: &mut Frames) -> Result<()> {
     loop {
-        let Some(message) = read_one(state, reading, frames, SILENT_AT_MOST)? else {
+        let Some(message) = read_one(requests.state, reading, frames, SILENT_AT_MOST)? else {
             return Ok(());
         };
-        if lock(asked).ended {
+        if lock(requests.asked).ended {
             return Ok(());
         }
+        requests.answer(message)?;
+    }
+}
+
+impl Requests<'_> {
+    fn answer(&mut self, message: Message) -> Result<()> {
+        let state = self.state;
         match message {
-            Message::Follow { file, at } => {
-                if !plain_name(&file) {
-                    return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
-                }
-                let mut held = lock(asked);
-                held.follows.push((file, at));
-                if !*following && let Some(follower) = &held.following {
-                    *following = true;
-                    state.acks.linked(follower.node(), follower.address());
-                }
-                drop(held);
-                state.notify.appended();
-            }
-            Message::List => out.send(&Message::Listed { files: state.files_served()? })?,
+            Message::Follow { file, at } => self.follow(file, at)?,
+            Message::List => self.out.send(&Message::Listed { files: state.files_served()? })?,
             Message::Write { id, op } => {
-                let (state, out) = (Arc::clone(state), Arc::clone(out));
+                let (state, out) = (Arc::clone(state), Arc::clone(self.out));
                 state.clone().spawn("tinystore node: write", move || {
                     let written = super::forward::run(&state, &op);
                     let _ = out.send(&written.into_message(id));
                 });
             }
             Message::Ping => {}
-            Message::Lease { node, address, asks } => {
-                tracing::debug!(target: "tinystore", from = %node, asks = asks.len(), "a witness hears a node's asks");
-                let Some(witness) = &state.witness else {
-                    return Err(Error::invalid("a lease asked of a node that is no witness"));
-                };
-                let mut holders = Vec::with_capacity(asks.len());
-                for asked in asks {
-                    let LeaseAsk { file, epoch, position, holding, synchronous } = asked;
-                    let (node, address, synchronous) = (&node, &address, &synchronous);
-                    let ask = super::witness::Ask { file: &file, node, address, epoch, position, holding, synchronous };
-                    if let Some(holder) = witness.ask(&ask)? {
-                        holders.push(LeaseHolder { file, holder });
-                    }
-                }
-                if !holders.is_empty() {
-                    out.send(&Message::Leased { holders })?;
-                }
-            }
+            Message::Lease { node, address, asks } => self.lease(&node, &address, asks)?,
             Message::Verify { file } => {
-                lock(asked).verifies.push(file);
+                lock(self.asked).verifies.push(file);
                 state.notify.appended();
             }
             Message::Applied { file, sequence } => {
-                if let Some(following) = &lock(asked).following {
+                if let Some(following) = &lock(self.asked).following {
                     state.acks.held(following.node(), &file, sequence);
                     following.applied(&file, sequence);
                 }
             }
             #[cfg(feature = "blobs")]
-            Message::Fetch { path } => {
-                if !crate::blobs::is_object(&path) {
-                    return Err(Error::invalid(format!("a link asked for {path:?}, which is no file blobs keeps")));
-                }
-                let (state, out) = (Arc::clone(state), Arc::clone(out));
-                state.clone().spawn("tinystore node: fetch", move || {
-                    if let Err(error) = send_object(&state, &out, &path) {
-                        let _ = out.send(&Message::Failed { file: path, kind: error.kind(), why: error.to_string() });
-                    }
-                });
-            }
+            Message::Fetch { path } => self.fetch(path)?,
             other => return Err(Error::invalid(format!("a link said {other:?}, which a server is not asked"))),
         }
+        Ok(())
+    }
+
+    /// Follows `file` from `at` for the other node, which this node counts
+    /// among its followers from its first.
+    fn follow(&mut self, file: String, at: Point) -> Result<()> {
+        if !plain_name(&file) {
+            return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
+        }
+        let mut held = lock(self.asked);
+        held.follows.push((file, at));
+        if !self.following
+            && let Some(follower) = &held.following
+        {
+            self.following = true;
+            self.state.acks.linked(follower.node(), follower.address());
+        }
+        drop(held);
+        self.state.notify.appended();
+        Ok(())
+    }
+
+    /// Answers a judged node's asks, as its witness, with the holder of each
+    /// lease that changed.
+    fn lease(&self, node: &str, address: &str, asks: Vec<LeaseAsk>) -> Result<()> {
+        tracing::debug!(target: "tinystore", from = %node, asks = asks.len(), "a witness hears a node's asks");
+        let Some(witness) = &self.state.witness else {
+            return Err(Error::invalid("a lease asked of a node that is no witness"));
+        };
+        let mut holders = Vec::with_capacity(asks.len());
+        for asked in asks {
+            let LeaseAsk { file, epoch, position, holding, synchronous } = asked;
+            let synchronous = &synchronous;
+            let ask = super::witness::Ask { file: &file, node, address, epoch, position, holding, synchronous };
+            if let Some(holder) = witness.ask(&ask)? {
+                holders.push(LeaseHolder { file, holder });
+            }
+        }
+        if !holders.is_empty() {
+            self.out.send(&Message::Leased { holders })?;
+        }
+        Ok(())
+    }
+
+    /// Sends a file blobs keeps on a thread of its own.
+    #[cfg(feature = "blobs")]
+    fn fetch(&self, path: String) -> Result<()> {
+        if !crate::blobs::is_object(&path) {
+            return Err(Error::invalid(format!("a link asked for {path:?}, which is no file blobs keeps")));
+        }
+        let (state, out) = (Arc::clone(self.state), Arc::clone(self.out));
+        state.clone().spawn("tinystore node: fetch", move || {
+            if let Err(error) = send_object(&state, &out, &path) {
+                let _ = out.send(&Message::Failed { file: path, kind: error.kind(), why: error.to_string() });
+            }
+        });
+        Ok(())
     }
 }
 

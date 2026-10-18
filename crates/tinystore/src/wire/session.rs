@@ -496,24 +496,23 @@ impl Shared {
         if let Err(refused) = opened {
             return self.go_away(input, "protocol", &refused);
         }
+        if input.going_away {
+            let closing = Failure::unavailable("the server is closing; ask another connection");
+            return self.answer(frame.stream, Err(closing));
+        }
+        if let Some(refused) = refused_to(input.capability, frame.method) {
+            return self.answer(frame.stream, Err(Failure::permission(refused)));
+        }
+        if frame.method >> 8 == 0x00 {
+            return self.server_call(frame.stream, frame.method, &frame.body);
+        }
+        self.route_call(input, frame);
+    }
+
+    /// Runs an admitted call where its method's route says.
+    fn route_call(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
-        if input.going_away {
-            return self.answer(stream, Err(Failure::unavailable("the server is closing; ask another connection")));
-        }
-        let refused = match method::access(method) {
-            Some(Access::Admin) if input.capability != Some(Capability::Admin) => {
-                "the server's own calls are an admin's"
-            }
-            Some(Access::Write) if input.capability == Some(Capability::Read) => "a read connection writes nothing",
-            _ => "",
-        };
-        if !refused.is_empty() {
-            return self.answer(stream, Err(Failure::permission(refused)));
-        }
-        if method >> 8 == 0x00 {
-            return self.server_call(stream, method, &body);
-        }
         // A point read is answered where it is read, in less time than
         // another thread takes to wake, while its host waits for nothing
         // else. A crowd of them would each wait its turn on this thread,
@@ -527,32 +526,8 @@ impl Shared {
         }
         match route {
             Route::Inline => self.answer(stream, guarded(|| self.call(method, &body, max_body))),
-            Route::Submit => {
-                let shared = Arc::clone(self);
-                self.workers.run(Box::new(move || {
-                    let answering = Arc::clone(&shared);
-                    let done = move |answered| answering.answer(stream, answered);
-                    let queued = guarded(|| {
-                        match method >> 8 {
-                            #[cfg(feature = "jobs")]
-                            0x02 => jobs::submit(&shared.jobs, method, &body, done),
-                            #[cfg(feature = "sql")]
-                            0x03 => sql::submit(&shared.sql, method, &body, done),
-                            _ => kv::submit(&shared.kv, method, &body, done),
-                        }
-                        Ok(())
-                    });
-                    if let Err(failure) = queued {
-                        shared.answer(stream, Err(failure));
-                    }
-                }));
-            }
-            Route::Handover => {
-                let asked = self.asked.fetch_add(1, Ordering::Relaxed);
-                self.lock_runs().insert(stream, ClientRun::Asking(asked));
-                let shared = Arc::clone(self);
-                self.workers.run(Box::new(move || shared.run_once(stream, asked, body)));
-            }
+            Route::Submit => self.submit(stream, method, body),
+            Route::Handover => self.hand_over(stream, body),
             #[cfg(feature = "jobs")]
             Route::Exchange => self.exchange(input, stream, &body),
             #[cfg(feature = "jobs")]
@@ -588,6 +563,38 @@ impl Shared {
                 }));
             }
         }
+    }
+
+    /// Hands a write to its engine on a worker, which answers once its group
+    /// commits.
+    fn submit(self: &Arc<Self>, stream: u32, method: u16, body: Vec<u8>) {
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || {
+            let answering = Arc::clone(&shared);
+            let done = move |answered| answering.answer(stream, answered);
+            let queued = guarded(|| {
+                match method >> 8 {
+                    #[cfg(feature = "jobs")]
+                    0x02 => jobs::submit(&shared.jobs, method, &body, done),
+                    #[cfg(feature = "sql")]
+                    0x03 => sql::submit(&shared.sql, method, &body, done),
+                    _ => kv::submit(&shared.kv, method, &body, done),
+                }
+                Ok(())
+            });
+            if let Err(failure) = queued {
+                shared.answer(stream, Err(failure));
+            }
+        }));
+    }
+
+    /// Asks for a once's key on a worker, the run handed to the client when
+    /// it is its to run.
+    fn hand_over(self: &Arc<Self>, stream: u32, body: Vec<u8>) {
+        let asked = self.asked.fetch_add(1, Ordering::Relaxed);
+        self.lock_runs().insert(stream, ClientRun::Asking(asked));
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || shared.run_once(stream, asked, body)));
     }
 
     /// Answers a point read on a worker, counted as away until it is.
@@ -1455,6 +1462,15 @@ impl Shared {
 /// Whether the run asked as `asked` is still the one on its stream.
 fn still_asking(runs: &HashMap<u32, ClientRun>, stream: u32, asked: u64) -> bool {
     matches!(runs.get(&stream), Some(ClientRun::Asking(asking)) if *asking == asked)
+}
+
+/// Why a connection admitted as `capability` may not call `method`, if it may not.
+fn refused_to(capability: Option<Capability>, method: u16) -> Option<&'static str> {
+    match method::access(method) {
+        Some(Access::Admin) if capability != Some(Capability::Admin) => Some("the server's own calls are an admin's"),
+        Some(Access::Write) if capability == Some(Capability::Read) => Some("a read connection writes nothing"),
+        _ => None,
+    }
 }
 
 /// How a method runs: kv's and jobs' say theirs; every other engine's runs on

@@ -92,10 +92,7 @@ pub(crate) fn pass_on_open(store: &Store, queue: (&str, Option<&str>)) -> Result
 /// keeps it, jobs.db when none.
 fn head((name, database): (&str, Option<&str>), call: u8) -> Out {
     let mut out = Out(vec![crate::replication::JOBS]);
-    out.text(name);
-    out.byte(u8::from(database.is_some()));
-    out.text(database.unwrap_or(""));
-    out.byte(call);
+    out.text(name).maybe_text(database).byte(call);
     out
 }
 
@@ -103,8 +100,8 @@ fn head((name, database): (&str, Option<&str>), call: u8) -> Out {
 /// `head` wrote: a database's queue goes where that database is written.
 fn answered(store: &Store, out: Out) -> Result<bool> {
     let mut head = In { bytes: &out.0, at: 1 };
-    let (_, lent, database) = (head.text()?, head.byte()? == 1, head.text()?);
-    let file = if lent { crate::replication::database_file(&database) } else { FILE.to_owned() };
+    let (_, database) = (head.text()?, head.maybe_text()?);
+    let file = database.map_or_else(|| FILE.to_owned(), |database| crate::replication::database_file(&database));
     let answer = crate::replication::pass_on(store, &file, out.0)?;
     In { bytes: &answer, at: 0 }.byte().map(|changed| changed == 1)
 }
@@ -113,14 +110,10 @@ fn answered(store: &Store, out: Out) -> Result<bool> {
 /// and the file it wrote: jobs.db, or the database's that keeps the queue.
 pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes: &[u8]) -> Result<(Vec<u8>, String)> {
     let mut at = In { bytes, at: 0 };
-    let name = at.text()?;
-    let lent = at.byte()? == 1;
-    let database = at.text()?;
-    let call = at.byte()?;
-    let (jobs, file) = if lent {
-        (Jobs::at(&lenders(&database)?)?, crate::replication::database_file(&database))
-    } else {
-        (Jobs::of(store)?, FILE.to_owned())
+    let (name, database, call) = (at.text()?, at.maybe_text()?, at.byte()?);
+    let (jobs, file) = match database {
+        Some(database) => (Jobs::at(&lenders(&database)?)?, crate::replication::database_file(&database)),
+        None => (Jobs::of(store)?, FILE.to_owned()),
     };
     let kind = if call == 5 { Kind::Schedule } else { Kind::Queue };
     let state = jobs.queue_as_open(&name, kind)?;

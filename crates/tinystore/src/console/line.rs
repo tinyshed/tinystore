@@ -125,24 +125,16 @@ pub(crate) fn json(line: &Line) -> String {
 pub(crate) fn pretty(line: &Line, look: &Look) -> String {
     let paint = Painter(look.color);
     let mut out = String::new();
-    match look.time {
-        Time::Off => {}
-        Time::Full => {
-            paint.text(&mut out, DIM, &stamp(line.at, &look.zone, false));
-            out.push(' ');
-        }
-        Time::Clock => {
-            paint.text(&mut out, DIM, &clock(line.at, &look.zone));
-            out.push(' ');
-        }
-    }
-    let (label, hue) = match line.level {
-        None => ("EVENT".to_owned(), MAGENTA),
-        Some(level) if level < 0 => (level_name(level), BLUE),
-        Some(level) if level < 4 => (level_name(level), GREEN),
-        Some(level) if level < 8 => (level_name(level), YELLOW),
-        Some(level) => (level_name(level), RED),
+    let time = match look.time {
+        Time::Off => None,
+        Time::Full => Some(stamp(line.at, &look.zone, false)),
+        Time::Clock => Some(clock(line.at, &look.zone)),
     };
+    if let Some(time) = time {
+        paint.text(&mut out, DIM, &time);
+        out.push(' ');
+    }
+    let (label, hue) = label_of(line.level);
     paint.text(&mut out, hue, &label);
     // the level is padded to five; the columns after it are two spaces apart
     let mut separator = " ".repeat(5_usize.saturating_sub(label.len()) + 1);
@@ -175,19 +167,36 @@ pub(crate) fn pretty(line: &Line, look: &Look) -> String {
         field(&mut out, "trace", &crate::text::hex(&trace[..4]));
     }
     for (key, text) in below {
-        let trimmed = text.trim_end_matches(['\r', '\n']);
-        for (place, part) in trimmed.split('\n').enumerate() {
-            let part = part.strip_suffix('\r').unwrap_or(part);
-            out.push_str("\n    ");
-            if place == 0 {
-                paint.text(&mut out, DIM, &format!("{key}: {part}"));
-            } else {
-                paint.text(&mut out, DIM, part);
-            }
-        }
+        push_below(&mut out, paint, key, &text);
     }
     out.push('\n');
     out
+}
+
+/// A level's label and its colour; an event's is `EVENT`.
+fn label_of(level: Option<i32>) -> (String, &'static str) {
+    match level {
+        None => ("EVENT".to_owned(), MAGENTA),
+        Some(level) if level < 0 => (level_name(level), BLUE),
+        Some(level) if level < 4 => (level_name(level), GREEN),
+        Some(level) if level < 8 => (level_name(level), YELLOW),
+        Some(level) => (level_name(level), RED),
+    }
+}
+
+/// A value of more than one line, below its line: each line of it indented,
+/// the first after its key.
+fn push_below(out: &mut String, paint: Painter, key: &str, text: &str) {
+    let trimmed = text.trim_end_matches(['\r', '\n']);
+    for (place, part) in trimmed.split('\n').enumerate() {
+        let part = part.strip_suffix('\r').unwrap_or(part);
+        out.push_str("\n    ");
+        if place == 0 {
+            paint.text(out, DIM, &format!("{key}: {part}"));
+        } else {
+            paint.text(out, DIM, part);
+        }
+    }
 }
 
 /// A log line's message, or an event's name and the message it may carry.

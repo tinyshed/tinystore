@@ -42,33 +42,17 @@ pub(crate) struct Set<'a> {
 /// wrote or found a file.
 pub(crate) fn pass_on(store: &Store, set: &Set<'_>, call: &Call<'_>) -> Result<bool> {
     let mut out = Out(vec![crate::replication::BLOBS]);
-    out.text(set.name);
-    optional_long(&mut out, set.ttl.map(millis));
-    optional_long(&mut out, set.max_file_size);
+    out.text(set.name).maybe_long(set.ttl.map(millis)).maybe_long(set.max_file_size);
     match call {
         Call::Put { path, options, bytes, create } => {
-            out.byte(u8::from(*create));
-            out.text(path);
-            options_out(&mut out, options);
-            out.bytes(bytes);
+            options_out(out.byte(u8::from(*create)).text(path), options).bytes(bytes)
         }
-        Call::Delete { path, if_match } => {
-            out.byte(2);
-            out.text(path);
-            optional_text(&mut out, *if_match);
-        }
+        Call::Delete { path, if_match } => out.byte(2).text(path).maybe_text(*if_match),
         Call::Copy { from, to, options, rename } => {
-            out.byte(3 + u8::from(*rename));
-            out.text(from);
-            out.text(to);
-            options_out(&mut out, options);
+            options_out(out.byte(3 + u8::from(*rename)).text(from).text(to), options)
         }
-        Call::Expire { path, after } => {
-            out.byte(5);
-            out.text(path);
-            out.long(millis(*after));
-        }
-    }
+        Call::Expire { path, after } => out.byte(5).text(path).span(*after),
+    };
     let answer = crate::replication::pass_on(store, FILE, out.0)?;
     In { bytes: &answer, at: 0 }.byte().map(|did| did == 1)
 }
@@ -78,8 +62,8 @@ pub(crate) fn pass_on(store: &Store, set: &Set<'_>, call: &Call<'_>) -> Result<b
 pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     let mut at = In { bytes, at: 0 };
     let name = at.text()?;
-    let ttl = optional_long_in(&mut at)?.map(Duration::from_millis);
-    let max_file_size = optional_long_in(&mut at)?;
+    let ttl = at.maybe_long()?.map(Duration::from_millis);
+    let max_file_size = at.maybe_long()?;
     let mut builder = store.files(&name);
     if let Some(ttl) = ttl {
         builder = builder.ttl(ttl);
@@ -97,7 +81,7 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
         }
         2 => {
             let path = at.text()?;
-            let if_match = optional_text_in(&mut at)?;
+            let if_match = at.maybe_text()?;
             let mut call = files.key(&path);
             if let Some(etag) = if_match {
                 call = call.if_match(etag);
@@ -118,7 +102,7 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
         }
         5 => {
             let path = at.text()?;
-            files.expire(&path, Duration::from_millis(at.long()?))?
+            files.expire(&path, at.span()?)?
         }
         _ => return Err(corrupt("a call")),
     };
@@ -128,56 +112,30 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(vec![u8::from(did)])
 }
 
-fn options_out(out: &mut Out, options: &Options) {
-    optional_text(out, options.content_type.as_deref());
-    out.byte(u8::from(options.meta_given));
+fn options_out<'a>(out: &'a mut Out, options: &Options) -> &'a mut Out {
+    out.maybe_text(options.content_type.as_deref()).byte(u8::from(options.meta_given));
     out.count(options.meta.len());
     for (name, value) in &options.meta {
-        out.text(name);
-        out.text(value);
+        out.text(name).text(value);
     }
-    optional_long(out, options.ttl.map(millis));
-    optional_text(out, options.if_match.as_deref());
-    optional_long(out, options.size);
+    out.maybe_long(options.ttl.map(millis)).maybe_text(options.if_match.as_deref()).maybe_long(options.size)
 }
 
 fn options_in(at: &mut In<'_>) -> Result<Options> {
-    let content_type = optional_text_in(at)?;
+    let content_type = at.maybe_text()?;
     let meta_given = at.byte()? == 1;
     let mut meta = std::collections::BTreeMap::new();
     for _ in 0..at.count()? {
         meta.insert(at.text()?, at.text()?);
     }
-    let ttl = optional_long_in(at)?.map(Duration::from_millis);
-    let if_match = optional_text_in(at)?;
-    let size = optional_long_in(at)?;
+    let ttl = at.maybe_long()?.map(Duration::from_millis);
+    let if_match = at.maybe_text()?;
+    let size = at.maybe_long()?;
     Ok(Options { content_type, meta, meta_given, ttl, if_match, size })
 }
 
-fn optional_text(out: &mut Out, text: Option<&str>) {
-    out.byte(u8::from(text.is_some()));
-    out.text(text.unwrap_or(""));
-}
-
-fn optional_text_in(at: &mut In<'_>) -> Result<Option<String>> {
-    let there = at.byte()? == 1;
-    let text = at.text()?;
-    Ok(there.then_some(text))
-}
-
-fn optional_long(out: &mut Out, value: Option<u64>) {
-    out.byte(u8::from(value.is_some()));
-    out.long(value.unwrap_or(0));
-}
-
-fn optional_long_in(at: &mut In<'_>) -> Result<Option<u64>> {
-    let there = at.byte()? == 1;
-    let value = at.long()?;
-    Ok(there.then_some(value))
-}
-
 fn millis(span: Duration) -> u64 {
-    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+    crate::clock::millis(span) as u64
 }
 
 fn corrupt(what: &str) -> Error {

@@ -16,6 +16,8 @@ use super::bucket::{Bucket, Expires, Expiry, Put, Stamp, Version, WriteOptions};
 use super::cells::Cell;
 use super::counters::Counters;
 use super::engine::Kv;
+use super::quota::Quota;
+use super::rate_limit::RateLimit;
 use super::scope::Kind;
 use super::value::Raw;
 use crate::clock::from_unix_millis;
@@ -145,196 +147,77 @@ pub(crate) enum Claimed {
 /// The bytes of a call on `key` of `handle` under `owners`.
 pub(crate) fn encode(handle: &Handle, owners: &[String], key: &str, call: &Call) -> Vec<u8> {
     let mut out = Out(vec![crate::replication::KV]);
+    handle_out(&mut out, handle);
+    out.texts(owners).text(key);
+    call_out(&mut out, call);
+    out.0
+}
+
+fn handle_out(out: &mut Out, handle: &Handle) {
     match handle {
         Handle::Bucket { name, expiry, encrypted, database } => {
-            out.byte(0);
-            out.text(name);
             let (kind, span) = match expiry {
                 Expiry::Never => (0, Duration::ZERO),
                 Expiry::Ttl(span) => (1, *span),
                 Expiry::Idle(span) => (2, *span),
             };
-            out.byte(kind);
-            out.long(millis(span));
-            out.byte(u8::from(*encrypted));
-            database_out(&mut out, database.as_deref());
+            out.byte(0).text(name).byte(kind).span(span).byte(u8::from(*encrypted)).maybe_text(database.as_deref())
         }
         Handle::Counters { name, ttl } => {
-            out.byte(1);
-            out.text(name);
-            out.byte(u8::from(ttl.is_some()));
-            out.long(ttl.map_or(0, millis));
+            out.byte(1).text(name).maybe_long(ttl.map(|ttl| crate::clock::millis(ttl) as u64))
         }
-        Handle::Name { name, role, database } => {
-            out.byte(2);
-            out.text(name);
-            out.text(role);
-            database_out(&mut out, database.as_deref());
-        }
-        Handle::Once { name, keep } => {
-            out.byte(5);
-            out.text(name);
-            out.long(*keep);
-        }
+        Handle::Name { name, role, database } => out.byte(2).text(name).text(role).maybe_text(database.as_deref()),
         Handle::RateLimit { name, interval, burst } => {
-            out.byte(3);
-            out.text(name);
-            out.long(*interval as u64);
-            out.long(*burst as u64);
+            out.byte(3).text(name).long(*interval as u64).long(*burst as u64)
         }
-        Handle::Quota { name, windows } => {
-            out.byte(4);
-            out.text(name);
-            out.count(windows.len());
-            for (window, limit, span) in windows {
-                out.text(window);
-                out.long(*limit);
-                out.long(*span as u64);
-            }
-        }
-    }
-    out.count(owners.len());
-    for owner in owners {
-        out.text(owner);
-    }
-    out.text(key);
+        Handle::Quota { name, windows } => out.byte(4).text(name).list(windows, |out, (window, limit, span)| {
+            out.text(window).long(*limit).long(*span as u64);
+        }),
+        Handle::Once { name, keep } => out.byte(5).text(name).long(*keep),
+    };
+}
+
+fn call_out(out: &mut Out, call: &Call) {
     match call {
         Call::Put { raw, put, options } => {
-            out.byte(0);
-            raw_out(&mut out, raw);
-            out.byte(u8::from(*put == Put::OnlyNew));
-            options_out(&mut out, options);
+            raw_out(out.byte(0), raw).byte(u8::from(*put == Put::OnlyNew));
+            options_out(out, options)
         }
-        Call::Remove(options) => {
-            out.byte(1);
-            options_out(&mut out, options);
-        }
-        Call::Take(options) => {
-            out.byte(2);
-            options_out(&mut out, options);
-        }
-        Call::Expire(options) => {
-            out.byte(3);
-            options_out(&mut out, options);
-        }
+        Call::Remove(options) => options_out(out.byte(1), options),
+        Call::Take(options) => options_out(out.byte(2), options),
+        Call::Expire(options) => options_out(out.byte(3), options),
         Call::Clear => out.byte(4),
-        Call::Add(n) => {
-            out.byte(5);
-            out.long(*n as u64);
-        }
+        Call::Add(n) => out.byte(5).long(*n as u64),
         Call::DeleteCounter => out.byte(6),
         Call::ClearCounters => out.byte(7),
         Call::Open => out.byte(8),
-        Call::Allow(n) => {
-            out.byte(10);
-            out.long(*n);
+        Call::PutSealed { raw, key_id, put, options } => {
+            raw_out(out.byte(9), raw).text(key_id).byte(u8::from(*put == Put::OnlyNew));
+            options_out(out, options)
         }
-        Call::Refund(n) => {
-            out.byte(11);
-            out.long(*n);
-        }
+        Call::Allow(n) => out.byte(10).long(*n),
+        Call::Refund(n) => out.byte(11).long(*n),
         Call::Reset => out.byte(12),
         Call::OnceClaim => out.byte(13),
-        Call::OnceKeep { token, answer } => {
-            out.byte(14);
-            out.long(*token);
-            out.byte(u8::from(answer.is_some()));
-            if let Some(raw) = answer {
-                raw_out(&mut out, raw);
-            }
-        }
-        Call::TakeSealed { options, key_id } => {
-            out.byte(16);
-            options_out(&mut out, options);
-            out.text(key_id);
-        }
-        Call::AddQueued { n, from } => {
-            out.byte(15);
-            out.long(*n as u64);
-            if let Some((node, op)) = from {
-                out.text(node);
-                out.long(*op);
-            }
-        }
-        Call::PutSealed { raw, key_id, put, options } => {
-            out.byte(9);
-            raw_out(&mut out, raw);
-            out.text(key_id);
-            out.byte(u8::from(*put == Put::OnlyNew));
-            options_out(&mut out, options);
-        }
-    }
-    out.0
+        Call::OnceKeep { token, answer } => match answer {
+            Some(raw) => raw_out(out.byte(14).long(*token).byte(1), raw),
+            None => out.byte(14).long(*token).byte(0),
+        },
+        Call::AddQueued { n, from } => match from {
+            Some((node, op)) => out.byte(15).long(*n as u64).text(node).long(*op),
+            None => out.byte(15).long(*n as u64),
+        },
+        Call::TakeSealed { options, key_id } => options_out(out.byte(16), options).text(key_id),
+    };
 }
 
 /// Runs at the home a call another node passed on, and gives its answer's
 /// bytes and the file it wrote: kv.db, or the database's that keeps it.
 pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes: &[u8]) -> Result<(Vec<u8>, String)> {
     let mut at = In { bytes, at: 0 };
-    let handle = match at.byte()? {
-        0 => {
-            let name = at.text()?;
-            let (kind, span) = (at.byte()?, Duration::from_millis(at.long()?));
-            let expiry = match kind {
-                0 => Expiry::Never,
-                1 => Expiry::Ttl(span),
-                2 => Expiry::Idle(span),
-                _ => return Err(corrupt("a bucket's expiry")),
-            };
-            Handle::Bucket { name, expiry, encrypted: at.byte()? == 1, database: database_in(&mut at)? }
-        }
-        1 => {
-            let name = at.text()?;
-            let ttl = (at.byte()? == 1).then_some(Duration::from_millis(at.long()?));
-            Handle::Counters { name, ttl }
-        }
-        2 => Handle::Name { name: at.text()?, role: at.text()?, database: database_in(&mut at)? },
-        5 => Handle::Once { name: at.text()?, keep: at.long()? },
-        3 => Handle::RateLimit { name: at.text()?, interval: at.long()? as i64, burst: at.long()? as i64 },
-        4 => {
-            let name = at.text()?;
-            let windows = (0..at.count()?)
-                .map(|_| Ok((at.text()?, at.long()?, at.long()? as i64)))
-                .collect::<Result<Vec<_>>>()?;
-            Handle::Quota { name, windows }
-        }
-        _ => return Err(corrupt("a handle")),
-    };
-    let owners: Vec<String> = (0..at.count()?).map(|_| at.text()).collect::<Result<_>>()?;
-    let key = at.text()?;
-    let call = match at.byte()? {
-        0 => {
-            let raw = raw_in(&mut at)?;
-            let put = if at.byte()? == 1 { Put::OnlyNew } else { Put::Always };
-            Call::Put { raw, put, options: options_in(&mut at)? }
-        }
-        1 => Call::Remove(options_in(&mut at)?),
-        2 => Call::Take(options_in(&mut at)?),
-        3 => Call::Expire(options_in(&mut at)?),
-        4 => Call::Clear,
-        5 => Call::Add(at.long()? as i64),
-        6 => Call::DeleteCounter,
-        7 => Call::ClearCounters,
-        8 => Call::Open,
-        10 => Call::Allow(at.long()?),
-        11 => Call::Refund(at.long()?),
-        12 => Call::Reset,
-        13 => Call::OnceClaim,
-        14 => {
-            let token = at.long()?;
-            let answer = if at.byte()? == 1 { Some(raw_in(&mut at)?) } else { None };
-            Call::OnceKeep { token, answer }
-        }
-        16 => Call::TakeSealed { options: options_in(&mut at)?, key_id: at.text()? },
-        15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
-        9 => {
-            let raw = raw_in(&mut at)?;
-            let key_id = at.text()?;
-            let put = if at.byte()? == 1 { Put::OnlyNew } else { Put::Always };
-            Call::PutSealed { raw, key_id, put, options: options_in(&mut at)? }
-        }
-        _ => return Err(corrupt("a call")),
-    };
+    let handle = handle_in(&mut at)?;
+    let (owners, key) = (at.texts()?, at.text()?);
+    let call = call_in(&mut at)?;
     if !at.done() {
         return Err(corrupt("a call that holds more than its fields"));
     }
@@ -347,6 +230,55 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
     Ok((answer_bytes(&call_here(store, lenders, handle, &owners, &key, call)?), file))
 }
 
+fn handle_in(at: &mut In<'_>) -> Result<Handle> {
+    Ok(match at.byte()? {
+        0 => {
+            let name = at.text()?;
+            let expiry = match (at.byte()?, at.span()?) {
+                (0, _) => Expiry::Never,
+                (1, span) => Expiry::Ttl(span),
+                (2, span) => Expiry::Idle(span),
+                _ => return Err(corrupt("a bucket's expiry")),
+            };
+            Handle::Bucket { name, expiry, encrypted: at.byte()? == 1, database: at.maybe_text()? }
+        }
+        1 => Handle::Counters { name: at.text()?, ttl: at.maybe_long()?.map(Duration::from_millis) },
+        2 => Handle::Name { name: at.text()?, role: at.text()?, database: at.maybe_text()? },
+        3 => Handle::RateLimit { name: at.text()?, interval: at.long()? as i64, burst: at.long()? as i64 },
+        4 => Handle::Quota {
+            name: at.text()?,
+            windows: at.list(1 << 10, |at| Ok((at.text()?, at.long()?, at.long()? as i64)))?,
+        },
+        5 => Handle::Once { name: at.text()?, keep: at.long()? },
+        _ => return Err(corrupt("a handle")),
+    })
+}
+
+fn call_in(at: &mut In<'_>) -> Result<Call> {
+    Ok(match at.byte()? {
+        0 => Call::Put { raw: raw_in(at)?, put: put_in(at)?, options: options_in(at)? },
+        1 => Call::Remove(options_in(at)?),
+        2 => Call::Take(options_in(at)?),
+        3 => Call::Expire(options_in(at)?),
+        4 => Call::Clear,
+        5 => Call::Add(at.long()? as i64),
+        6 => Call::DeleteCounter,
+        7 => Call::ClearCounters,
+        8 => Call::Open,
+        9 => Call::PutSealed { raw: raw_in(at)?, key_id: at.text()?, put: put_in(at)?, options: options_in(at)? },
+        10 => Call::Allow(at.long()?),
+        11 => Call::Refund(at.long()?),
+        12 => Call::Reset,
+        13 => Call::OnceClaim,
+        14 => Call::OnceKeep { token: at.long()?, answer: if at.byte()? == 1 { Some(raw_in(at)?) } else { None } },
+        15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
+        16 => Call::TakeSealed { options: options_in(at)?, key_id: at.text()? },
+        _ => return Err(corrupt("a call")),
+    })
+}
+
+/// Opens at the home the handle a call was made on, under its owners, and
+/// makes the call on it.
 fn call_here(
     store: &Store,
     lenders: crate::replication::Lenders<'_>,
@@ -377,68 +309,22 @@ fn call_here(
                 Expiry::Idle(span) => builder.idle(span),
             };
             let builder = if encrypted { builder.encrypted() } else { builder };
-            let bucket: Bucket<()> = owners.iter().fold(builder.open()?, |bucket, owner| bucket.under(owner));
-            Ok(match call {
-                Call::Put { raw, put, options } => Answer::Stamp(bucket.put_raw(key, raw, options, put)?),
-                Call::PutSealed { raw, key_id, put, options } => {
-                    Answer::Stamp(bucket.put_sealed(key, raw, &key_id, options, put)?)
-                }
-                Call::Remove(options) => Answer::Found(bucket.remove(key, options)?),
-                Call::Take(options) => Answer::Cell(bucket.take_cell(key, options)?),
-                Call::TakeSealed { options, key_id } => Answer::Cell(bucket.take_sealed(key, options, &key_id)?),
-                Call::Expire(options) => Answer::Found(bucket.expire_as(key, options)?),
-                Call::Clear => {
-                    bucket.clear()?;
-                    Answer::Done
-                }
-                _ => return Err(Error::invalid("a counter's call on a bucket")),
-            })
+            on_bucket(&owners.iter().fold(builder.open()?, |bucket, owner| bucket.under(owner)), key, call)
         }
         Handle::Once { name, keep } => {
             let answers = super::once::rows(store, &name, Some(Duration::from_millis(keep)))?;
-            let answers: Bucket<()> = owners.iter().fold(answers, |answers, owner| answers.under(owner));
-            match call {
-                Call::OnceClaim => Ok(Answer::Claimed(claim_here(&answers, key)?)),
-                Call::OnceKeep { token, answer } => {
-                    let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
-                        Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
-                    })?;
-                    handed.keep(answer)?;
-                    Ok(Answer::Done)
-                }
-                _ => Err(Error::invalid("a call once's answers do not take")),
-            }
+            on_once(&owners.iter().fold(answers, |answers, owner| answers.under(owner)), key, call)
         }
         Handle::RateLimit { name, interval, burst } => {
             let per = Duration::from_nanos(u64::try_from(interval).map_err(|_| corrupt("a rate"))?);
             let limit = store.rate_limit(&name).rate(1, per).burst(u64::try_from(burst).unwrap_or(1)).open()?;
-            let limit = owners.iter().fold(limit, |limit, owner| limit.under(owner));
-            Ok(match call {
-                Call::Allow(n) => Answer::Allowance(limit.allow_n(key, n)?),
-                Call::Reset => {
-                    limit.reset(key)?;
-                    Answer::Done
-                }
-                _ => return Err(Error::invalid("a call a rate limit does not take")),
-            })
+            on_rate_limit(&owners.iter().fold(limit, |limit, owner| limit.under(owner)), key, call)
         }
         Handle::Quota { name, windows } => {
             let builder = windows.iter().fold(store.quota(&name), |quota, (window, limit, span)| {
                 quota.window(window, *limit, Duration::from_millis(u64::try_from(*span).unwrap_or(0)))
             });
-            let quota = owners.iter().fold(builder.open()?, |quota, owner| quota.under(owner));
-            Ok(match call {
-                Call::Allow(n) => Answer::Allowance(quota.allow_n(key, n)?),
-                Call::Refund(n) => {
-                    quota.refund_n(key, n)?;
-                    Answer::Done
-                }
-                Call::Reset => {
-                    quota.reset(key)?;
-                    Answer::Done
-                }
-                _ => return Err(Error::invalid("a call a quota does not take")),
-            })
+            on_quota(&owners.iter().fold(builder.open()?, |quota, owner| quota.under(owner)), key, call)
         }
         Handle::Counters { name, ttl } => {
             let builder = store.counters(&name);
@@ -446,66 +332,108 @@ fn call_here(
                 Some(ttl) => builder.ttl(ttl),
                 None => builder,
             };
-            let counters: Counters = owners.iter().fold(builder.open()?, |counters, owner| counters.under(owner));
-            Ok(match call {
-                Call::Add(n) => Answer::Sum(counters.add(key, n)?),
-                // the node that queued it answered its caller already
-                Call::AddQueued { n, from: Some((node, op)) } => {
-                    Answer::Sum(crate::sqlite::own_work(|| counters.add_queued(key, n, &node, op))?)
-                }
-                Call::DeleteCounter => Answer::Found(counters.delete(key)?),
-                Call::ClearCounters => {
-                    counters.clear()?;
-                    Answer::Done
-                }
-                _ => return Err(Error::invalid("a bucket's call on counters")),
-            })
+            on_counters(&owners.iter().fold(builder.open()?, |counters, owner| counters.under(owner)), key, call)
         }
     }
+}
+
+fn on_bucket(bucket: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
+    Ok(match call {
+        Call::Put { raw, put, options } => Answer::Stamp(bucket.put_raw(key, raw, options, put)?),
+        Call::PutSealed { raw, key_id, put, options } => {
+            Answer::Stamp(bucket.put_sealed(key, raw, &key_id, options, put)?)
+        }
+        Call::Remove(options) => Answer::Found(bucket.remove(key, options)?),
+        Call::Take(options) => Answer::Cell(bucket.take_cell(key, options)?),
+        Call::TakeSealed { options, key_id } => Answer::Cell(bucket.take_sealed(key, options, &key_id)?),
+        Call::Expire(options) => Answer::Found(bucket.expire_as(key, options)?),
+        Call::Clear => {
+            bucket.clear()?;
+            Answer::Done
+        }
+        _ => return Err(Error::invalid("a counter's call on a bucket")),
+    })
+}
+
+fn on_once(answers: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
+    match call {
+        Call::OnceClaim => Ok(Answer::Claimed(claim_here(answers, key)?)),
+        Call::OnceKeep { token, answer } => {
+            let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
+                Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
+            })?;
+            handed.keep(answer)?;
+            Ok(Answer::Done)
+        }
+        _ => Err(Error::invalid("a call once's answers do not take")),
+    }
+}
+
+fn on_rate_limit(limit: &RateLimit, key: &str, call: Call) -> Result<Answer> {
+    Ok(match call {
+        Call::Allow(n) => Answer::Allowance(limit.allow_n(key, n)?),
+        Call::Reset => {
+            limit.reset(key)?;
+            Answer::Done
+        }
+        _ => return Err(Error::invalid("a call a rate limit does not take")),
+    })
+}
+
+fn on_quota(quota: &Quota, key: &str, call: Call) -> Result<Answer> {
+    Ok(match call {
+        Call::Allow(n) => Answer::Allowance(quota.allow_n(key, n)?),
+        Call::Refund(n) => {
+            quota.refund_n(key, n)?;
+            Answer::Done
+        }
+        Call::Reset => {
+            quota.reset(key)?;
+            Answer::Done
+        }
+        _ => return Err(Error::invalid("a call a quota does not take")),
+    })
+}
+
+fn on_counters(counters: &Counters, key: &str, call: Call) -> Result<Answer> {
+    Ok(match call {
+        Call::Add(n) => Answer::Sum(counters.add(key, n)?),
+        // the node that queued it answered its caller already
+        Call::AddQueued { n, from: Some((node, op)) } => {
+            Answer::Sum(crate::sqlite::own_work(|| counters.add_queued(key, n, &node, op))?)
+        }
+        Call::DeleteCounter => Answer::Found(counters.delete(key)?),
+        Call::ClearCounters => {
+            counters.clear()?;
+            Answer::Done
+        }
+        _ => return Err(Error::invalid("a bucket's call on counters")),
+    })
 }
 
 fn answer_bytes(answer: &Answer) -> Vec<u8> {
     let mut out = Out(Vec::new());
     match answer {
         Answer::Stamp(stamp) => {
-            out.byte(u8::from(stamp.written));
-            out.long(stamp.version.revision() as u64);
-            expires_out(&mut out, stamp.expires);
+            out.byte(u8::from(stamp.written)).long(stamp.version.revision() as u64).maybe_long(expiry(stamp.expires))
         }
         Answer::Found(found) => out.byte(u8::from(*found)),
-        Answer::Cell(cell) => match cell {
-            Some(cell) => {
-                out.byte(1);
-                raw_out(&mut out, &cell.raw);
-                out.long(cell.version as u64);
-                expires_out(&mut out, cell.expires);
-            }
-            None => out.byte(0),
-        },
+        Answer::Cell(Some(cell)) => {
+            raw_out(out.byte(1), &cell.raw).long(cell.version as u64).maybe_long(expiry(cell.expires))
+        }
+        Answer::Cell(None) => out.byte(0),
         Answer::Sum(sum) => out.long(*sum as u64),
-        Answer::Claimed(Claimed::Kept(raw)) => {
-            out.byte(0);
-            raw_out(&mut out, raw);
-        }
-        Answer::Claimed(Claimed::Yours(token)) => {
-            out.byte(1);
-            out.long(*token);
-        }
+        Answer::Claimed(Claimed::Kept(raw)) => raw_out(out.byte(0), raw),
+        Answer::Claimed(Claimed::Yours(token)) => out.byte(1).long(*token),
         Answer::Allowance(allowance) => {
-            out.byte(u8::from(allowance.ok));
-            out.long(allowance.left);
-            expires_out(&mut out, allowance.retry_at.map(unix_millis));
-            out.count(allowance.windows.len());
-            for window in &allowance.windows {
-                out.text(&window.name);
-                out.long(window.used);
-                out.long(window.limit);
-                out.long(window.left);
-                expires_out(&mut out, window.resets_at.map(unix_millis));
-            }
+            out.byte(u8::from(allowance.ok)).long(allowance.left);
+            out.maybe_long(expiry(allowance.retry_at.map(unix_millis))).list(&allowance.windows, |out, window| {
+                out.text(&window.name).long(window.used).long(window.limit).long(window.left);
+                out.maybe_long(expiry(window.resets_at.map(unix_millis)));
+            })
         }
-        Answer::Done => {}
-    }
+        Answer::Done => &mut out,
+    };
     out.0
 }
 
@@ -536,12 +464,11 @@ pub(crate) fn allowance(bytes: &[u8]) -> Result<Allowance> {
     let ok = at.byte()? == 1;
     let left = at.long()?;
     let retry_at = expires_in(&mut at)?.map(from_unix_millis);
-    let mut windows = Vec::new();
-    for _ in 0..at.count()? {
+    let windows = at.list(1 << 10, |at| {
         let name = at.text()?;
         let (used, limit, left) = (at.long()?, at.long()?, at.long()?);
-        windows.push(WindowUse { name, used, limit, left, resets_at: expires_in(&mut at)?.map(from_unix_millis) });
-    }
+        Ok(WindowUse { name, used, limit, left, resets_at: expires_in(at)?.map(from_unix_millis) })
+    })?;
     Ok(Allowance { ok, left, retry_at, windows })
 }
 
@@ -580,12 +507,7 @@ fn claim_here(answers: &Bucket<()>, key: &str) -> Result<Claimed> {
 /// adds a copy's read counts: the counters' name, the branch's owners, the key.
 pub(crate) fn subject(name: &str, owners: &[String], key: &str) -> Vec<u8> {
     let mut out = Out(Vec::new());
-    out.text(name);
-    out.count(owners.len());
-    for owner in owners {
-        out.text(owner);
-    }
-    out.text(key);
+    out.text(name).texts(owners).text(key);
     out.0
 }
 
@@ -616,28 +538,11 @@ pub(crate) fn pass_on(store: &Store, handle: &Handle, owners: &[String], key: &s
     crate::replication::pass_on(store, FILE, encode(handle, owners, key, call))
 }
 
-fn database_out(out: &mut Out, database: Option<&str>) {
-    out.byte(u8::from(database.is_some()));
-    out.text(database.unwrap_or(""));
-}
-
-fn database_in(at: &mut In<'_>) -> Result<Option<String>> {
-    let there = at.byte()? == 1;
-    let database = at.text()?;
-    Ok(there.then_some(database))
-}
-
-fn raw_out(out: &mut Out, raw: &Raw) {
+fn raw_out<'a>(out: &'a mut Out, raw: &Raw) -> &'a mut Out {
     match raw {
         Raw::None => out.byte(0),
-        Raw::Int(n) => {
-            out.byte(1);
-            out.long(*n as u64);
-        }
-        Raw::Bytes(bytes) => {
-            out.byte(2);
-            out.bytes(bytes);
-        }
+        Raw::Int(n) => out.byte(1).long(*n as u64),
+        Raw::Bytes(bytes) => out.byte(2).bytes(bytes),
     }
 }
 
@@ -650,55 +555,37 @@ fn raw_in(at: &mut In<'_>) -> Result<Raw> {
     })
 }
 
-fn options_out(out: &mut Out, options: &WriteOptions) {
+fn put_in(at: &mut In<'_>) -> Result<Put> {
+    Ok(if at.byte()? == 1 { Put::OnlyNew } else { Put::Always })
+}
+
+fn options_out<'a>(out: &'a mut Out, options: &WriteOptions) -> &'a mut Out {
     match options.expires {
         None => out.byte(0),
-        Some(Expires::In(span)) => {
-            out.byte(1);
-            out.long(millis(span));
-        }
-        Some(Expires::At(time)) => {
-            out.byte(2);
-            out.long(unix_millis(time) as u64);
-        }
-    }
-    match options.if_version {
-        None => out.byte(0),
-        Some(version) => {
-            out.byte(1);
-            out.long(version.revision() as u64);
-        }
-    }
+        Some(Expires::In(span)) => out.byte(1).span(span),
+        Some(Expires::At(time)) => out.byte(2).long(unix_millis(time) as u64),
+    };
+    out.maybe_long(options.if_version.map(|version| version.revision() as u64))
 }
 
 fn options_in(at: &mut In<'_>) -> Result<WriteOptions> {
     let expires = match at.byte()? {
         0 => None,
-        1 => Some(Expires::In(Duration::from_millis(at.long()?))),
+        1 => Some(Expires::In(at.span()?)),
         2 => Some(Expires::At(from_unix_millis(at.long()? as i64))),
         _ => return Err(corrupt("an expiry")),
     };
-    let if_version = match at.byte()? {
-        0 => None,
-        1 => Some(Version::new(at.long()? as i64)),
-        _ => return Err(corrupt("a version")),
-    };
+    let if_version = at.maybe_long()?.map(|revision| Version::new(revision as i64));
     Ok(WriteOptions { expires, if_version })
 }
 
-fn expires_out(out: &mut Out, expires: Option<i64>) {
-    out.byte(u8::from(expires.is_some()));
-    out.long(expires.unwrap_or(0) as u64);
+/// An expiry in Unix milliseconds as the link carries it.
+fn expiry(expires: Option<i64>) -> Option<u64> {
+    expires.map(|at| at as u64)
 }
 
 fn expires_in(at: &mut In<'_>) -> Result<Option<i64>> {
-    let some = at.byte()? == 1;
-    let at_time = at.long()? as i64;
-    Ok(some.then_some(at_time))
-}
-
-fn millis(span: Duration) -> u64 {
-    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+    Ok(at.maybe_long()?.map(|at| at as i64))
 }
 
 fn corrupt(what: &str) -> Error {

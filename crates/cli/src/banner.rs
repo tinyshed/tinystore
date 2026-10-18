@@ -93,14 +93,7 @@ pub(crate) fn text(colours: bool, shown: &Shown, store: &Path, endpoints: &[Stri
     let paint = |style: Style, text: &str| paint(colours, style, text);
     let (bold, dim, on, address) =
         (Style::new().bold(), Style::new().dimmed(), Color::Green.bold(), Color::Cyan.normal());
-    let new = if shown.new_store { format!("  {}", paint(Color::Yellow.normal(), "new store")) } else { String::new() };
-    let mut banner = format!(
-        "\n  {} {} {} {}{new}\n\n",
-        paint(bold, "tinystore"),
-        paint(dim, env!("CARGO_PKG_VERSION")),
-        paint(dim, "·"),
-        paint(bold, &shown.dir)
-    );
+    let mut banner = heading(colours, shown);
     // a row with no label goes on the one above it
     let mut row = |lit: bool, label: &str, what: String, how: String| {
         let (dot, label) = match (label.is_empty(), lit) {
@@ -143,17 +136,36 @@ pub(crate) fn text(colours: bool, shown: &Shown, store: &Path, endpoints: &[Stri
             row(false, "node", column("off", dim), paint(dim, "--node-listen <host>:<port> lets other nodes copy it"))
         }
     }
-    banner.push('\n');
-    banner.push_str(&format!("  {}\n", files_line(colours, store)));
-    let next = |command: &str| paint(Style::new(), command);
-    banner.push_str(&format!(
-        "  {} {} {} {}\n\n",
-        paint(dim, &format!("ready in {} ms · Ctrl+C stops ·", ready.as_millis())),
-        next(&format!("tinystore logs {} -f", shown.dir)),
-        paint(dim, "·"),
-        next(&format!("tinystore status {}", shown.dir)),
-    ));
+    banner.push_str(&footing(colours, shown, store, ready));
     banner
+}
+
+/// The banner's first line: the version and the store's directory.
+fn heading(colours: bool, shown: &Shown) -> String {
+    let paint = |style: Style, text: &str| paint(colours, style, text);
+    let (bold, dim) = (Style::new().bold(), Style::new().dimmed());
+    let new = if shown.new_store { format!("  {}", paint(Color::Yellow.normal(), "new store")) } else { String::new() };
+    format!(
+        "\n  {} {} {} {}{new}\n\n",
+        paint(bold, "tinystore"),
+        paint(dim, env!("CARGO_PKG_VERSION")),
+        paint(dim, "·"),
+        paint(bold, &shown.dir)
+    )
+}
+
+/// The banner's last lines: the store's files, and the commands that come next.
+fn footing(colours: bool, shown: &Shown, store: &Path, ready: Duration) -> String {
+    let paint = |style: Style, text: &str| paint(colours, style, text);
+    let dim = Style::new().dimmed();
+    format!(
+        "\n  {}\n  {} {} {} {}\n\n",
+        files_line(colours, store),
+        paint(dim, &format!("ready in {} ms · Ctrl+C stops ·", ready.as_millis())),
+        paint(Style::new(), &format!("tinystore logs {} -f", shown.dir)),
+        paint(dim, "·"),
+        paint(Style::new(), &format!("tinystore status {}", shown.dir)),
+    )
 }
 
 /// The node's rows: where it listens and what it copies, then what decides

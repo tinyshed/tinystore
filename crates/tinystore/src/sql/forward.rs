@@ -59,34 +59,20 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<(Vec<u8>, String)> {
     let db = store.database(&name).open()?;
     let done = if batch { db.batch(statements)? } else { vec![db.exec(statements.remove(0))?] };
     let mut out = Out(Vec::new());
-    out.count(done.len());
-    for one in done {
-        out.long(one.changes);
-        out.long(one.last_insert_rowid as u64);
-    }
+    out.list(&done, |out, one| {
+        out.long(one.changes).long(one.last_insert_rowid as u64);
+    });
     Ok((out.0, file_of(&name)))
 }
 
 fn value_out(out: &mut Out, value: &Value) {
     match value {
         Value::Null => out.byte(0),
-        Value::Integer(n) => {
-            out.byte(1);
-            out.long(*n as u64);
-        }
-        Value::Real(x) => {
-            out.byte(2);
-            out.long(x.to_bits());
-        }
-        Value::Text(text) => {
-            out.byte(3);
-            out.text(text);
-        }
-        Value::Blob(bytes) => {
-            out.byte(4);
-            out.bytes(bytes);
-        }
-    }
+        Value::Integer(n) => out.byte(1).long(*n as u64),
+        Value::Real(x) => out.byte(2).long(x.to_bits()),
+        Value::Text(text) => out.byte(3).text(text),
+        Value::Blob(bytes) => out.byte(4).bytes(bytes),
+    };
 }
 
 fn value_in(at: &mut In<'_>) -> Result<Value> {
