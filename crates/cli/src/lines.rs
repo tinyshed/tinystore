@@ -314,6 +314,12 @@ impl Visit for Fields {
         self.keep(field, Value::Bool(value));
     }
 
+    // Without it tracing hands a float to `record_debug`, and JSON gets a string.
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        let number = serde_json::Number::from_f64(value);
+        self.keep(field, number.map_or_else(|| Value::Text(value.to_string()), Value::Number));
+    }
+
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.keep(field, Value::Text(format!("{value:?}")));
     }

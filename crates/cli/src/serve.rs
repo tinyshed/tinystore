@@ -34,7 +34,6 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 const FIRST_CLIENT: Duration = Duration::from_secs(15);
 /// How long a server waits before it takes clients again after one failed
 /// to connect, so that a lack of handles does not spin it.
-#[cfg(unix)]
 const AGAIN: Duration = Duration::from_millis(10);
 
 /// The node the flags and the node's config make the store, its token read
@@ -219,7 +218,16 @@ async fn accept_remote(
     clients: &Arc<watch::Sender<usize>>,
 ) -> io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        // A client that failed to connect, or a process out of descriptors for
+        // a moment, ends no server: the local endpoint retries the same way.
+        let stream = match listener.accept().await {
+            Ok((stream, _)) => stream,
+            Err(error) => {
+                tracing::debug!(target: "tinystore", %error, "a remote client did not connect");
+                tokio::time::sleep(AGAIN).await;
+                continue;
+            }
+        };
         let _ = stream.set_nodelay(true);
         let visit = served(clients);
         let (store, connect, closed) = (store.clone(), visit.connect(connect), closed.clone());

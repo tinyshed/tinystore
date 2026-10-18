@@ -52,6 +52,13 @@ pub(crate) fn failed(why: impl fmt::Display) -> Refused {
     Refused::Failed(why.to_string())
 }
 
+/// Refuses a directory that is not there: opening a store makes one, so a
+/// command that reads or changes a store would otherwise work on an empty
+/// one it made of a typo.
+pub(crate) fn existing(dir: &std::path::Path) -> Result<(), Refused> {
+    if dir.is_dir() { Ok(()) } else { Err(failed(format!("{}: no store is there", dir.display()))) }
+}
+
 impl From<tinystore::Error> for Refused {
     fn from(error: tinystore::Error) -> Refused {
         Refused::Failed(error.to_string())

@@ -62,3 +62,13 @@ fn backup_reads_beside_a_program_that_holds_the_directory() {
     let usage = tinystore(&[&"backup", &data]);
     assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
 }
+
+#[test]
+fn backup_of_a_directory_that_is_not_there_makes_no_store() {
+    let dirs = tempfile::tempdir().unwrap();
+    let (typo, zip) = (dirs.path().join("dta"), dirs.path().join("backup.zip"));
+    let backed = tinystore(&[&"backup", &typo, &zip]);
+    assert!(!backed.status.success(), "{}", said(&backed));
+    assert!(said(&backed).contains("no store is there"), "{}", said(&backed));
+    assert!(!typo.exists() && !zip.exists());
+}

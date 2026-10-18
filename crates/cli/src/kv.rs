@@ -33,6 +33,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
 fn kv(asked: Asked) -> Done {
     let at = asked.words.iter().position(|word| word == "get" || word == "list");
     let (dir, verb, rest) = match (at, &asked.dir) {
+        (Some(1), Some(_)) => return Err(wrong("a directory given twice: --dir, and a word before the verb")),
         (Some(at @ (0 | 1)), dir) => {
             let dir = dir.clone().or_else(|| asked.words.get(..at).and_then(|words| words.first()).map(Into::into));
             (dir.unwrap_or_else(|| ".".into()), asked.words[at].as_str(), &asked.words[at + 1..])

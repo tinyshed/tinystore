@@ -90,6 +90,7 @@ fn write(store: &Store, database: &str, statement: &str, json: bool) -> Done {
 /// The store, held by this process alone: a write and a migration need the
 /// directory no program or server holds.
 fn held(dir: &Path) -> Result<Store, asked::Refused> {
+    asked::existing(dir)?;
     match Store::open(dir, Options { background: false, ..Options::default() }) {
         Ok(store) => Ok(store),
         Err(error) if error.kind() == ErrorKind::InUse => {
@@ -124,9 +125,9 @@ fn apply(asked: Asked) -> Done {
         return Err(failed(format!("{migrations}: no such directory of migrations")));
     }
     let store = held(&dir)?;
-    let before = applied(&store, database);
+    let before = applied(&store, database)?;
     let opened = store.database(database).migrations(Path::new(migrations)).open();
-    let after = opened.map(|_| applied(&store, database));
+    let after = opened.map_err(asked::Refused::from).and_then(|_| applied(&store, database));
     store.close()?;
     let after = after?;
     let new: Vec<&String> = after.iter().filter(|name| !before.contains(name)).collect();
@@ -139,14 +140,15 @@ fn apply(asked: Asked) -> Done {
     Ok(())
 }
 
-/// The migrations a database applied, by their names; none for a database
-/// the store does not hold yet.
-fn applied(store: &Store, database: &str) -> Vec<String> {
+/// The migrations a database applied, by their names: its own, not those of
+/// the buckets and queues it keeps; none for a database the store does not
+/// hold yet.
+fn applied(store: &Store, database: &str) -> Result<Vec<String>, asked::Refused> {
     if !store.dir().join("sql").join(format!("{database}.db")).exists() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let Ok(db) = store.database(database).open() else { return Vec::new() };
-    db.all("select name from _tinystore_migrations order by history, version").unwrap_or_default()
+    let db = store.database(database).open()?;
+    Ok(db.all("select name from _tinystore_migrations where history = 'migrations' order by version")?)
 }
 
 fn tables(asked: Asked) -> Done {

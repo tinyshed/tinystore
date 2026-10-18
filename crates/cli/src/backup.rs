@@ -32,6 +32,7 @@ fn back_up(asked: Asked) -> Done {
     let zip = PathBuf::from(zip);
     let key_file = asked.value("--encryption-key-file").map(PathBuf::from);
     let options = Options { background: false, encryption_key_file: key_file, ..Options::default() };
+    asked::existing(&dir)?;
     let store = match Store::open(&dir, options) {
         Ok(store) => store,
         Err(error) if error.kind() == ErrorKind::InUse => Store::open_beside(&dir)?,

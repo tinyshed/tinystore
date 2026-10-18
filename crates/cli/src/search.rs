@@ -77,6 +77,7 @@ fn line(index: &Listed) -> String {
 
 /// Drops an index, in a store that no server or program may hold meanwhile.
 fn drop(dir: &Path, name: &str) -> Done {
+    asked::existing(dir)?;
     let store = match Store::open(dir, Options { background: false, ..Options::default() }) {
         Ok(store) => store,
         Err(error) if error.kind() == ErrorKind::InUse => {

@@ -249,7 +249,8 @@ fn span(text: &str) -> Result<Duration, String> {
         "" if number == 0 => 0,
         _ => return Err(format!("the span {text}: a unit of ms, s, m or h")),
     };
-    Ok(Duration::from_millis(number.saturating_mul(millis)))
+    let millis = number.checked_mul(millis).ok_or_else(|| format!("the span {text}: past what a u64 holds"))?;
+    Ok(Duration::from_millis(millis))
 }
 
 /// A time as JavaScript's `toISOString` writes it, in UTC.
@@ -268,6 +269,17 @@ fn time(text: &str) -> Result<SystemTime, String> {
     let (&[year, month, day], &[hour, minute, second]) = (&day[..], &hms[..]) else {
         return Err(refused());
     };
+    // A byte slice of a fraction that is not digits could cut a character.
+    // Each field within its range, so that no product below can overflow.
+    let ranged = (0..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && (0..=23).contains(&hour)
+        && (0..=59).contains(&minute)
+        && (0..=60).contains(&second);
+    if !ranged || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(refused());
+    }
     let millis = format!("{fraction:0<3}")[..3].parse::<i64>().map_err(|_| refused())?;
     let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
     let unix = u64::try_from(seconds * 1_000 + millis).map_err(|_| refused())?;
@@ -387,8 +399,12 @@ mod tests {
         assert_eq!(span("30000ms").unwrap(), Duration::from_secs(30));
         assert_eq!(span("5m").unwrap(), Duration::from_secs(300));
         assert!(span("30").is_err(), "a unit");
+        assert!(span("99999999999999999h").is_err(), "past what a u64 holds, not for ever");
         assert_eq!(time("1970-01-01T00:00:00Z").unwrap(), UNIX_EPOCH);
         assert_eq!(time("2000-03-01T00:00:00.5Z").unwrap(), UNIX_EPOCH + Duration::from_millis(951_868_800_500));
         assert!(time("2026-10-09 12:00:00").is_err());
+        assert!(time("2026-10-09T12:00:00.ééZ").is_err(), "a fraction that is not digits");
+        assert!(time("300000000000-10-09T12:00:00Z").is_err(), "a year past 9999");
+        assert!(time("2026-10-09T99999999999999:00:00Z").is_err(), "an hour past 23");
     }
 }
