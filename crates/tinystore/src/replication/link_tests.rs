@@ -192,6 +192,34 @@ fn a_link_cut_goes_on_from_its_position_and_a_node_reads_its_copy_while_cut() {
 }
 
 #[test]
+fn a_copy_whose_position_no_longer_reads_opens_and_is_taken_again_from_a_snapshot() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..50 {
+        sessions.set(format!("{i}"), &format!("first {i}")).unwrap();
+    }
+    let options = Node { from: vec![address], files: Some(vec!["kv.db".into()]), ..Node::default() };
+    let copy = node_with(copy_dir.path(), options.clone());
+    caught_up(&home, &copy, &["kv.db"]);
+    copy.close().unwrap();
+    let position = copy_dir.path().join(DIR).join("kv.db").join(super::copy::Position::FILE);
+    let mut kept = std::fs::read(&position).unwrap();
+    kept[0] ^= 0xff;
+    std::fs::write(&position, kept).unwrap();
+
+    let copy = node_with(copy_dir.path(), options);
+    sessions.set("after", &"the damage".to_owned()).unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    let read = copy.bucket::<String>("sessions").open().unwrap();
+    assert_eq!(read.get("after").unwrap().as_deref(), Some("the damage"));
+    let snapshots = copy.node().unwrap().snapshots.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(snapshots, 1, "the copy was taken again whole");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
 fn a_node_with_another_token_takes_nothing() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let home = node_with(
@@ -256,6 +284,8 @@ fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once()
     assert_eq!(read, ["far"], "the copy holds the row the write made");
     let taken = db.exec(crate::sql!("insert into notes (body) values (?)", "far")).unwrap_err();
     assert_eq!(taken.kind(), crate::ErrorKind::Conflict, "the home's unique index: {taken}");
+    let broken = taken.constraint().expect("the constraint the home named");
+    assert_eq!((broken.kind, broken.columns), (crate::ConstraintKind::Unique, vec!["body".to_owned()]));
     db.batch([
         crate::sql!("insert into notes (body) values ('a')"),
         crate::sql!("insert into notes (body) values ('b')"),
@@ -1260,6 +1290,37 @@ fn a_copy_checked_against_its_home_is_its_home_page_for_page_and_a_page_changed_
     drop(beside);
     let found = crate::replication::verify(&copy, "kv.db").unwrap_err();
     assert_eq!(found.kind(), crate::ErrorKind::Corrupt, "{found}");
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
+fn a_copy_checked_while_its_home_writes_is_checked_at_the_point_the_home_answered() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    sessions.set("seed", &"value".to_owned()).unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    let writing = std::sync::atomic::AtomicBool::new(true);
+    let checks = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for i in 0.. {
+                if !writing.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                sessions.set(format!("{i}"), &"x".repeat(2000)).unwrap();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let checks: Vec<_> = (0..10).map(|_| crate::replication::verify(&copy, "kv.db")).collect();
+        writing.store(false, std::sync::atomic::Ordering::Relaxed);
+        checks
+    });
+    for checked in checks {
+        assert!(checked.is_ok(), "a check on a busy home: {}", checked.unwrap_err());
+    }
     copy.close().unwrap();
     home.close().unwrap();
 }

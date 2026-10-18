@@ -113,6 +113,9 @@ impl Out {
 #[derive(Default)]
 struct Asked {
     follows: Vec<(String, Point)>,
+    /// The files whose copies the other node asked to check, answered by the
+    /// thread that sends entries: see `send_files`.
+    verifies: Vec<String>,
     ended: bool,
     /// The node at the link's other end, among the node's followers.
     following: Option<Following>,
@@ -223,16 +226,8 @@ fn read_requests(
                 }
             }
             Message::Verify { file } => {
-                let (state, out) = (Arc::clone(state), Arc::clone(out));
-                state.clone().spawn("tinystore node: verify", move || {
-                    let answer = match super::verify::here(&state, &file) {
-                        Ok((at, sum)) => Message::Verified { file, at, sum: sum.to_vec(), why: String::new() },
-                        Err(error) => {
-                            Message::Verified { file, at: Point::default(), sum: Vec::new(), why: error.to_string() }
-                        }
-                    };
-                    let _ = out.send(&answer);
-                });
+                lock(asked).verifies.push(file);
+                state.notify.appended();
             }
             Message::Applied { file, sequence } => {
                 if let Some(following) = &lock(asked).following {
@@ -378,7 +373,7 @@ fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()>
             listed = state.notify.served();
             out.send(&Message::Listed { files: state.files_served()? })?;
         }
-        {
+        let verifies = {
             let mut asked = lock(asked);
             if asked.ended || state.stopping() {
                 return Ok(());
@@ -392,6 +387,14 @@ fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()>
                     objects: None,
                 });
             }
+            std::mem::take(&mut asked.verifies)
+        };
+        // A check is answered here, between entries, so that its point comes
+        // before any entry past it and the copy stops there to hash its own;
+        // answered beside them, entries past it could reach the copy first.
+        // The entries of the link wait while the file is hashed.
+        for file in verifies {
+            out.send(&verified(state, file))?;
         }
         let mut sent = false;
         for one in &mut followed {
@@ -403,6 +406,14 @@ fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()>
             }
             state.notify.wait_past(seen, Duration::from_millis(500));
         }
+    }
+}
+
+/// The point this node holds `file` at and the hash of its pages there.
+fn verified(state: &State, file: String) -> Message {
+    match super::verify::here(state, &file) {
+        Ok((at, sum)) => Message::Verified { file, at, sum: sum.to_vec(), why: String::new() },
+        Err(error) => Message::Verified { file, at: Point::default(), sum: Vec::new(), why: error.to_string() },
     }
 }
 

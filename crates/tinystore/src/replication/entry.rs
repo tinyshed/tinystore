@@ -133,6 +133,17 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Option<(Entry<'_>, usize)>> {
     Ok(Some((parse(body, check.try_into().expect("sixteen bytes"))?, 4 + length + CHECK)))
 }
 
+/// Whether `rest`, where an entry fails to decode, is a tail a crash tore
+/// rather than damage: that entry is the last, with nothing after it but the
+/// zeros a file grows by before its bytes land.
+pub(crate) fn torn(rest: &[u8]) -> bool {
+    let end = rest.get(..4).map_or(rest.len(), |length| {
+        let length = u32::from_le_bytes(length.try_into().expect("four bytes")) as usize;
+        if (FIXED..=LARGEST).contains(&length) { (4 + length + CHECK).min(rest.len()) } else { 0 }
+    });
+    rest[end..].iter().all(|&byte| byte == 0)
+}
+
 fn parse(body: &[u8], check: [u8; CHECK]) -> Result<Entry<'_>> {
     let mut at = Cursor { bytes: body, at: 0 };
     let kind = match at.byte() {

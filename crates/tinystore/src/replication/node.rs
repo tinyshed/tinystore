@@ -942,10 +942,23 @@ impl State {
     fn open_copies_held(&self, store: &Store) -> Result<()> {
         for name in self.files_logged()? {
             if copy::is_ready(&self.log_dir(&name), &self.dir.join(&name)) {
-                let copy = Copy::open(store, &name)?;
-                self.keep_copy(&name, Arc::new(copy));
+                match Copy::open(store, &name) {
+                    Ok(copy) => self.keep_copy(&name, Arc::new(copy)),
+                    Err(error) if error.kind() == ErrorKind::Corrupt => self.take_again(&name, &error)?,
+                    Err(error) => return Err(error),
+                }
             }
         }
+        Ok(())
+    }
+
+    /// Makes a copy whose position or log no longer reads one the link takes
+    /// again from a snapshot, as it takes a first copy, rather than a store
+    /// that does not open: a copy is only ever its home's file again.
+    fn take_again(&self, name: &str, error: &Error) -> Result<()> {
+        let position = self.log_dir(name).join(copy::Position::FILE);
+        fs::remove_file(&position).map_err(|error| Error::io(position.display().to_string(), error))?;
+        tracing::warn!(target: "tinystore", file = name, %error, "a copy starts again from a snapshot");
         Ok(())
     }
 

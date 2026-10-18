@@ -2,6 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use super::entry::Kind;
+use super::log::{segment_path, segments_in};
 use super::*;
 use crate::sqlite::{Config, File, sql_error};
 
@@ -108,4 +109,43 @@ fn a_log_keeps_the_segments_a_node_linked_now_has_not_applied_within_four_times_
     write(&file, 1500, 100);
     assert!(bytes() <= bounds.keep + bounds.segment, "once applied, the bound again: {} bytes", bytes());
     file.close().unwrap();
+}
+
+#[test]
+fn a_torn_tail_is_cut_and_damage_before_other_entries_is_corrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join(DIR).join("test.db");
+    let observer: Arc<dyn crate::sqlite::Observe> =
+        Arc::new(Log::open(logs.clone(), Bounds::default(), Arc::default()).unwrap());
+    let file = File::open_observed(dir.path().join("test.db"), Config::default(), Some(observer)).unwrap();
+    file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
+        .unwrap();
+    for i in 0..20 {
+        let value = format!("row {i}");
+        file.write(value.len(), move |tx| {
+            tx.execute("insert into t (v) values (?1)", [&value]).map(drop).map_err(|error| sql_error("insert", error))
+        })
+        .unwrap();
+    }
+    file.close().unwrap();
+    let segment = segment_path(&logs, segments_in(&logs).unwrap()[0]);
+    let whole = fs::read(&segment).unwrap();
+    let last = |bytes: &[u8]| {
+        fs::write(&segment, bytes).unwrap();
+        Log::last_in(&logs).map(|point| point.map(|point| point.sequence))
+    };
+
+    assert_eq!(last(&whole).unwrap(), Some(22), "a beginning, the table and each row");
+    assert_eq!(last(&whole[..whole.len() - 10]).unwrap(), Some(21), "the last entry cut short");
+    let grown = [&whole[..whole.len() - 10], &[0; 4096][..]].concat();
+    assert_eq!(last(&grown).unwrap(), Some(21), "the zeros a file grew by");
+
+    let mut damaged = whole.clone();
+    damaged[whole.len() / 2] ^= 0xff;
+    let refused = last(&damaged).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Corrupt);
+    assert!(refused.to_string().contains(&segment.display().to_string()), "{refused}");
+    let refused = Log::open(logs.clone(), Bounds::default(), Arc::default()).err().expect("damage is not an end");
+    assert_eq!(refused.kind(), crate::ErrorKind::Corrupt);
+    assert_eq!(fs::read(&segment).unwrap(), damaged, "nothing after the damage was cut");
 }

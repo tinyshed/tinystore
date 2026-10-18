@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::copy::{self, Copy};
 use super::entry::{self, Point};
-use super::message::{Frames, Message, VERSION, plain_name, timed_out};
+use super::message::{Frames, Message, Refusal, VERSION, plain_name, timed_out};
 use super::node::State;
 use super::serve::{Out, PING_EVERY, SILENT_AT_MOST};
 use super::snapshot::Taking;
@@ -27,7 +27,7 @@ const LINK_WAIT: Duration = Duration::from_secs(10);
 
 /// A write passed on toward the home and what came back.
 pub(crate) struct Written {
-    pub(crate) outcome: std::result::Result<Vec<u8>, (ErrorKind, String)>,
+    pub(crate) outcome: std::result::Result<Vec<u8>, Refusal>,
     pub(crate) waits: Vec<(String, u64)>,
 }
 

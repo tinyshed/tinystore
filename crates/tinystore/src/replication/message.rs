@@ -41,6 +41,28 @@ pub(crate) struct LeaseHolder {
 }
 
 /// A message of the link.
+/// A write the home refused, as the link carries it: its kind, what it says
+/// and its facts by name, so that a program on a copy reads the constraint or
+/// the bound it would read at the home.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub(crate) kind: ErrorKind,
+    pub(crate) why: String,
+    pub(crate) facts: Vec<(String, String)>,
+}
+
+impl Refusal {
+    pub(crate) fn of(error: &Error) -> Refusal {
+        let facts = error.facts().iter().map(|(name, value)| (name.to_string(), value.clone())).collect();
+        Refusal { kind: error.kind(), why: error.what().to_owned(), facts }
+    }
+
+    pub(crate) fn into_error(self) -> Error {
+        let error = Error::new(self.kind, self.why);
+        self.facts.into_iter().fold(error, |error, (name, value)| error.naming(name, value))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Message {
     /// The first a node says to the one it takes files from.
@@ -104,7 +126,7 @@ pub(crate) enum Message {
     /// before the write answers.
     Written {
         id: u64,
-        outcome: std::result::Result<Vec<u8>, (ErrorKind, String)>,
+        outcome: std::result::Result<Vec<u8>, Refusal>,
         waits: Vec<(String, u64)>,
     },
     /// Said when nothing else was for a while, so a dead link is noticed.
@@ -224,10 +246,15 @@ impl Message {
                         out.byte(0);
                         out.bytes(answer);
                     }
-                    Err((kind, why)) => {
+                    Err(Refusal { kind, why, facts }) => {
                         out.byte(1);
                         out.text(kind.as_str());
                         out.text(why);
+                        out.count(facts.len());
+                        for (name, value) in facts {
+                            out.text(name);
+                            out.text(value);
+                        }
                     }
                 }
                 out.count(waits.len());
@@ -339,7 +366,15 @@ impl Message {
                 let id = at.long()?;
                 let outcome = match at.byte()? {
                     0 => Ok(at.bytes()?.to_vec()),
-                    1 => Err((kind_of(&at.text()?), at.text()?)),
+                    1 => {
+                        let (kind, why) = (kind_of(&at.text()?), at.text()?);
+                        let count = at.count()?;
+                        let mut facts = Vec::with_capacity(count.min(16));
+                        for _ in 0..count {
+                            facts.push((at.text()?, at.text()?));
+                        }
+                        Err(Refusal { kind, why, facts })
+                    }
                     _ => return Err(corrupt("a write's outcome is neither an answer nor an error")),
                 };
                 let count = at.count()?;
@@ -654,7 +689,15 @@ mod tests {
             Message::Failed { file: "kv.db".into(), kind: ErrorKind::Unavailable, why: "later".into() },
             Message::Write { id: 4, op: vec![1, 2, 3] },
             Message::Written { id: 4, outcome: Ok(vec![5]), waits: vec![("kv.db".into(), 12)] },
-            Message::Written { id: 5, outcome: Err((ErrorKind::Conflict, "taken".into())), waits: vec![] },
+            Message::Written {
+                id: 5,
+                outcome: Err(Refusal {
+                    kind: ErrorKind::Conflict,
+                    why: "taken".into(),
+                    facts: vec![("constraint".into(), "unique".into()), ("columns".into(), "email".into())],
+                }),
+                waits: vec![],
+            },
             Message::Ping,
             Message::Fetch { path: "blobs/objects/1/1a3f".into() },
             Message::Object { path: "blobs/objects/1/1a3f".into(), offset: 4, bytes: vec![7; 3], last: true },

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::fmt;
 
@@ -75,7 +76,7 @@ pub struct Error {
     /// What a program acts on without reading `what`, by name: the constraint
     /// a write broke, the bound a limit reached. The wire carries them by the
     /// same names, which every SDK reads.
-    facts: Vec<(&'static str, String)>,
+    facts: Vec<(Cow<'static, str>, String)>,
 }
 
 /// A constraint a write broke, as SQLite names it: its kind always, and the
@@ -181,8 +182,8 @@ impl Error {
 
     /// The same error with one fact more, which a program reads by its name.
     #[cfg(feature = "store")]
-    pub(crate) fn naming(mut self, name: &'static str, value: impl Into<String>) -> Self {
-        self.facts.push((name, value.into()));
+    pub(crate) fn naming(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<String>) -> Self {
+        self.facts.push((name.into(), value.into()));
         self
     }
 
@@ -193,8 +194,8 @@ impl Error {
         self.facts.iter().find(|(named, _)| *named == name).map(|(_, value)| value.as_str())
     }
 
-    #[cfg(feature = "wire")]
-    pub(crate) fn facts(&self) -> &[(&'static str, String)] {
+    #[cfg(any(feature = "wire", feature = "replication"))]
+    pub(crate) fn facts(&self) -> &[(Cow<'static, str>, String)] {
         &self.facts
     }
 

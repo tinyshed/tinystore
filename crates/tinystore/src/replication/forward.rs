@@ -14,7 +14,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::message::Message;
+use super::message::{Message, Refusal};
 use super::node::State;
 use crate::{Error, ErrorKind, Result, Store};
 
@@ -57,7 +57,7 @@ pub(crate) struct Outcome {
 
 impl Outcome {
     pub(crate) fn into_message(self, id: u64) -> Message {
-        let outcome = self.result.map_err(|error| (error.kind(), error.what().to_owned()));
+        let outcome = self.result.map_err(|error| Refusal::of(&error));
         Message::Written { id, outcome, waits: self.waits }
     }
 }
@@ -87,7 +87,7 @@ pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Ve
     }
     // the home's error names what failed there already; this node's own says the file
     let written = node.write_toward(file, op, ANSWER_WAIT).map_err(|error| error.within(file))?;
-    let answer = written.outcome.map_err(|(kind, why)| Error::new(kind, why))?;
+    let answer = written.outcome.map_err(Refusal::into_error)?;
     let mut held = true;
     for (name, sequence) in &written.waits {
         held &= wait_applied(node, name, *sequence);
@@ -101,7 +101,7 @@ pub(crate) fn make(node: &State, name: &str) -> Result<()> {
     let mut out = super::Out(vec![MAKE]);
     out.text(name);
     let written = node.write_toward(name, out.0, ANSWER_WAIT)?;
-    written.outcome.map(drop).map_err(|(kind, why)| Error::new(kind, why))
+    written.outcome.map(drop).map_err(Refusal::into_error)
 }
 
 /// The tag of the engine whose migrations' history is `history`, which a

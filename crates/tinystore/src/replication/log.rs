@@ -378,10 +378,11 @@ impl Log {
     /// open on it: `None` for a log that holds no entry.
     pub(crate) fn last_in(dir: &Path) -> Result<Option<Point>> {
         for first in segments_in(dir)?.into_iter().rev() {
-            let bytes = read_segment(&segment_path(dir, first))?;
+            let path = segment_path(dir, first);
+            let bytes = read_segment(&path)?;
             let mut at = MAGIC.len();
             let mut last = None;
-            while let Some((entry, used)) = entry::decode(&bytes[at..]).unwrap_or(None) {
+            while let Some((entry, used)) = next_whole(&path, &bytes[at..])? {
                 if last.is_some_and(|point| !entry.follows(&point)) {
                     break;
                 }
@@ -551,7 +552,7 @@ impl Log {
             let bytes = read_segment(&path)?;
             let mut at = MAGIC.len();
             let mut last: Option<(Point, Position)> = None;
-            while let Some((entry, used)) = entry::decode(&bytes[at..]).unwrap_or(None) {
+            while let Some((entry, used)) = next_whole(&path, &bytes[at..])? {
                 if last.is_some_and(|(point, _)| !entry.follows(&point)) {
                     break;
                 }
@@ -725,6 +726,17 @@ pub(crate) fn segments_in(dir: &Path) -> Result<Vec<u64>> {
 
 pub(crate) fn segment_path(dir: &Path, first: u64) -> PathBuf {
     dir.join(format!("{first:020}.log"))
+}
+
+/// The next whole entry of a segment, or `None` where its entries end: at its
+/// end or at a tail a crash tore. A bad entry with others after it is damage
+/// and `Corrupt`, never an end, since cutting there would drop every entry
+/// after it, which the WAL may no longer hold.
+fn next_whole<'a>(path: &Path, rest: &'a [u8]) -> Result<Option<(Entry<'a>, usize)>> {
+    match entry::decode(rest) {
+        Err(_) if entry::torn(rest) => Ok(None),
+        decoded => decoded.map_err(|error| error.within(path.display())),
+    }
 }
 
 fn read_segment(path: &Path) -> Result<Vec<u8>> {
