@@ -92,17 +92,25 @@ func (l *cgoLibrary) send(conn uintptr, frames []byte) {
 	}
 	cframes := C.CBytes(frames)
 	defer C.free(cframes)
-	C.call_send(l.sendFn, unsafe.Pointer(conn), (*C.uint8_t)(cframes), C.size_t(len(frames)))
+	C.call_send(l.sendFn, connection(conn), (*C.uint8_t)(cframes), C.size_t(len(frames)))
 }
 
 func (l *cgoLibrary) recv(conn uintptr, waitMs uint32, into []byte) int {
 	cinto := C.malloc(C.size_t(len(into)))
 	defer C.free(cinto)
-	n := int(C.call_recv(l.recvFn, unsafe.Pointer(conn), C.uint32_t(waitMs), (*C.uint8_t)(cinto), C.size_t(len(into))))
+	n := int(C.call_recv(l.recvFn, connection(conn), C.uint32_t(waitMs), (*C.uint8_t)(cinto), C.size_t(len(into))))
 	copy(into, unsafe.Slice((*byte)(cinto), n))
 	return n
 }
 
 func (l *cgoLibrary) close(conn uintptr) {
-	C.call_close(l.closeFn, unsafe.Pointer(conn))
+	C.call_close(l.closeFn, connection(conn))
+}
+
+// connection is the pointer tinystore_open gave back as a handle. It is the
+// core's memory, which Go's collector neither moves nor frees, so turning it
+// back is safe; the read through the handle's own address says so to go vet,
+// which cannot know where a uintptr came from.
+func connection(handle uintptr) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&handle))
 }

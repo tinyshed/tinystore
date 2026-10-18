@@ -287,6 +287,31 @@ func TestATailEndsWhenItsStoreCloses(t *testing.T) {
 	})
 }
 
+func TestATailOpenedAsItsStoreClosesEndsQuietly(t *testing.T) {
+	ways.EachWay(t, func(t *testing.T, way ways.Way) {
+		store := way.Open(t, t.TempDir())
+		every := ways.Must(records.OpenAllEvents(store))
+		ended := make(chan error, 1)
+		go func() {
+			var failed error
+			for _, err := range every.Tail(context.Background(), records.Query{}) {
+				failed = err
+			}
+			ended <- failed
+		}()
+		// no wait: the close may come before the tail is open on the server
+		ways.Must(0, store.Close())
+		select {
+		case err := <-ended:
+			if err != nil {
+				t.Fatalf("a tail opened as its store closed says %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("a tail outlived its store")
+		}
+	})
+}
+
 func TestAnotherProgramsOutputBecomesEventsHoweverItWasCut(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

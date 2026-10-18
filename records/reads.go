@@ -328,7 +328,10 @@ func (r reads) tail(ctx context.Context, q Query) iter.Seq2[TailBatch, error] {
 			return err
 		})
 		if err != nil {
-			yield(TailBatch{}, err)
+			// a store that closed before the tail opened ends it as one closed after
+			if !closing(r.store) {
+				yield(TailBatch{}, err)
+			}
 			return
 		}
 		// the store's close waits for the server's end of the tail, which a
