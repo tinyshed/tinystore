@@ -1,6 +1,6 @@
 # Jobs API for Python
 
-Every public class, function and type of the Jobs engine in `tinystore`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md) and [Go](../go/jobs.md) pages list the same API.
+Every public class, function and type of the Jobs engine in `tinystore`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Go](../go/jobs.md) and [Rust](../rust/jobs.md) pages list the same API.
 
 ## Concurrency
 

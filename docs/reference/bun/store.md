@@ -1,6 +1,6 @@
 # Store API for Bun and Node
 
-Every public class, function and type of the store in `@tinyshed/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Python](../python/store.md) and [Go](../go/store.md) pages list the same API.
+Every public class, function and type of the store in `@tinyshed/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Python](../python/store.md), [Go](../go/store.md) and [Rust](../rust/store.md) pages list the same API.
 
 ## OpenOptions
 

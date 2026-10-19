@@ -1,6 +1,6 @@
 # Config API for Go
 
-Every public type, function and constant of the Config engine in `tinyshed.org/tinystore`, generated from its source. The [Config guide](../../kv/configs.md) explains how to use them, and the [Bun and Node](../bun/config.md) and [Python](../python/config.md) pages list the same API.
+Every public type, function and constant of the Config engine in `tinyshed.org/tinystore`, generated from its source. The [Config guide](../../kv/configs.md) explains how to use them, and the [Bun and Node](../bun/config.md), [Python](../python/config.md) and [Rust](../rust/config.md) pages list the same API.
 
 ## Config
 

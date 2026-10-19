@@ -1,6 +1,6 @@
 # Records API for Python
 
-Every public class, function and type of the Records engine in `tinystore`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Go](../go/records.md) pages list the same API.
+Every public class, function and type of the Records engine in `tinystore`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Go](../go/records.md) and [Rust](../rust/records.md) pages list the same API.
 
 ## Event
 

@@ -4,7 +4,7 @@
  * docs/reference/api.md, and docs/reference/<language>/<engine>.md beside it.
  */
 
-export const apiLanguages = ['bun', 'python', 'go'] as const
+export const apiLanguages = ['bun', 'python', 'go', 'rust'] as const
 
 export type ApiLanguage = (typeof apiLanguages)[number]
 
@@ -12,6 +12,7 @@ export const apiLanguageNames: Record<ApiLanguage, string> = {
 	bun: 'Bun and Node',
 	python: 'Python',
 	go: 'Go',
+	rust: 'Rust',
 }
 
 export interface ApiEngine {
@@ -44,7 +45,7 @@ export function apiFile(language: ApiLanguage, engine: string): string {
 
 /** A generated API page's language and engine, or undefined for any other file. */
 export function apiPageOf(file: string): { language: ApiLanguage; engine: string } | undefined {
-	const match = /^docs\/reference\/(go|bun|python)\/([^/]+)\.md$/.exec(file)
+	const match = /^docs\/reference\/(go|bun|python|rust)\/([^/]+)\.md$/.exec(file)
 	if (match === null) {
 		return undefined
 	}

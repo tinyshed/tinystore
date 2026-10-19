@@ -13,5 +13,7 @@ export interface NavGroup {
 
 /** The sidebar entry a path belongs to: an API page is under the API reference, which links it. */
 export function sidebarPath(path: string): string {
-	return /^\/docs\/reference\/(bun|python|go)\/[^/]+$/.test(path) ? '/docs/reference/api' : path
+	return /^\/docs\/reference\/(bun|python|go|rust)\/[^/]+$/.test(path)
+		? '/docs/reference/api'
+		: path
 }

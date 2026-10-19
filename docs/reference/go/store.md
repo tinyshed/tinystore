@@ -1,6 +1,6 @@
 # Store API for Go
 
-Every public type, function and constant of the store in `tinyshed.org/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md) and [Python](../python/store.md) pages list the same API.
+Every public type, function and constant of the store in `tinyshed.org/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Python](../python/store.md) and [Rust](../rust/store.md) pages list the same API.
 
 ## Invalid
 

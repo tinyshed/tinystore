@@ -1,6 +1,6 @@
 # KV API for Go
 
-Every public type, function and constant of the KV engine in `tinyshed.org/tinystore/kv`, generated from its source. The [KV guide](../../kv/README.md) explains how to use them, and the [Bun and Node](../bun/kv.md) and [Python](../python/kv.md) pages list the same API.
+Every public type, function and constant of the KV engine in `tinyshed.org/tinystore/kv`, generated from its source. The [KV guide](../../kv/README.md) explains how to use them, and the [Bun and Node](../bun/kv.md), [Python](../python/kv.md) and [Rust](../rust/kv.md) pages list the same API.
 
 ## After
 

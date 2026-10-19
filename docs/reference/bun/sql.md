@@ -1,6 +1,6 @@
 # SQL API for Bun and Node
 
-Every public class, function and type of the SQL engine in `@tinyshed/tinystore`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Python](../python/sql.md) and [Go](../go/sql.md) pages list the same API.
+Every public class, function and type of the SQL engine in `@tinyshed/tinystore`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Python](../python/sql.md), [Go](../go/sql.md) and [Rust](../rust/sql.md) pages list the same API.
 
 ## Columns
 

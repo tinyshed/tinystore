@@ -1,6 +1,6 @@
 # Records API for Go
 
-Every public type, function and constant of the Records engine in `tinyshed.org/tinystore/records` and `tinyshed.org/tinystore/console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Python](../python/records.md) pages list the same API.
+Every public type, function and constant of the Records engine in `tinyshed.org/tinystore/records` and `tinyshed.org/tinystore/console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Rust](../rust/records.md) pages list the same API.
 
 ## Buffer
 

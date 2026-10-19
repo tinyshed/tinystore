@@ -1,6 +1,6 @@
 # Locks API for Bun and Node
 
-Every public class, function and type of the Locks engine in `@tinyshed/tinystore`, generated from its source. The [Locks guide](../../languages.md) explains how to use them, and the [Python](../python/locks.md) and [Go](../go/locks.md) pages list the same API.
+Every public class, function and type of the Locks engine in `@tinyshed/tinystore`, generated from its source. The [Locks guide](../../languages.md) explains how to use them, and the [Python](../python/locks.md), [Go](../go/locks.md) and [Rust](../rust/locks.md) pages list the same API.
 
 ## LockOptions
 

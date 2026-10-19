@@ -1,6 +1,6 @@
 # Config API for Python
 
-Every public class, function and type of the Config engine in `tinystore`, generated from its source. The [Config guide](../../kv/configs.md) explains how to use them, and the [Bun and Node](../bun/config.md) and [Go](../go/config.md) pages list the same API.
+Every public class, function and type of the Config engine in `tinystore`, generated from its source. The [Config guide](../../kv/configs.md) explains how to use them, and the [Bun and Node](../bun/config.md), [Go](../go/config.md) and [Rust](../rust/config.md) pages list the same API.
 
 ## Secret
 

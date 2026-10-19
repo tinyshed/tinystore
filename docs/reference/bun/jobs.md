@@ -1,6 +1,6 @@
 # Jobs API for Bun and Node
 
-Every public class, function and type of the Jobs engine in `@tinyshed/tinystore`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
+Every public class, function and type of the Jobs engine in `@tinyshed/tinystore`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Python](../python/jobs.md), [Go](../go/jobs.md) and [Rust](../rust/jobs.md) pages list the same API.
 
 ## Concurrency
 

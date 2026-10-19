@@ -59,18 +59,21 @@ reader's language before the first paint and the stylesheet shows it.
 are generated: `task reference` writes them, and `bun test` fails when one is
 not what the source says. Edit the doc comments, never the pages.
 
-| Language | Read by                                               | Public is                                     |
-|----------|-------------------------------------------------------|-----------------------------------------------|
-| Go       | `web/reference/go`, `go/doc` and its markdown printer | exported                                      |
-| Bun      | `src/lib/content/reference.ts`, the emitted `.d.ts`   | exported by `index.ts`, or a field of `Store` |
-| Python   | `web/reference/python.py`, `ast` without importing    | in `__all__`, or set on `Store` in `__init__` |
+| Language | Read by                                             | Public is                                                                    |
+|----------|-----------------------------------------------------|------------------------------------------------------------------------------|
+| Go       | `web/reference/go`, `go/doc` on `sdk/go`            | exported                                                                     |
+| Bun      | `src/lib/content/reference.ts`, the emitted `.d.ts` | exported by `index.ts`, or a field of `Store`                                |
+| Python   | `web/reference/python.py`, `ast` without importing  | in `__all__`, or set on `Store` in `__init__`                                |
+| Rust     | `src/lib/content/rustdoc.ts`, rustdoc's JSON        | reachable from the crate's root, `Store`'s methods by the engine's directory |
 
 An engine's modules in each language are `sources` in `reference.ts`, its
 name and guide `src/lib/content/api.ts`. The sidebar lists the index alone;
 the pages switch between languages and engines, and `llms-full.txt` leaves
-them to `llms-bun.txt`, `llms-python.txt` and `llms-go.txt`, one per
-language, since an agent needs one of the three. The test needs Go and
-Python 3.12 or later beside Bun, as CI's web job has them.
+them to `llms-bun.txt`, `llms-python.txt`, `llms-go.txt` and
+`llms-rust.txt`, one per language, since an agent needs one of the four.
+The test needs Go, Python 3.12 or later and the pinned Rust toolchain
+beside Bun: rustdoc's JSON is asked of it through `RUSTC_BOOTSTRAP`, so no
+nightly is needed.
 
 ## The server
 

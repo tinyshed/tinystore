@@ -1,6 +1,6 @@
 # Search API for Python
 
-Every public class, function and type of the Search engine in `tinystore`, generated from its source. The [Search guide](../../sql/search.md) explains how to use them, and the [Bun and Node](../bun/search.md) and [Go](../go/search.md) pages list the same API.
+Every public class, function and type of the Search engine in `tinystore`, generated from its source. The [Search guide](../../sql/search.md) explains how to use them, and the [Bun and Node](../bun/search.md), [Go](../go/search.md) and [Rust](../rust/search.md) pages list the same API.
 
 ## Vectors
 

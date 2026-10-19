@@ -1,6 +1,6 @@
 # SQL API for Go
 
-Every public type, function and constant of the SQL engine in `tinyshed.org/tinystore/sqldb`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md) and [Python](../python/sql.md) pages list the same API.
+Every public type, function and constant of the SQL engine in `tinyshed.org/tinystore/sqldb`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md), [Python](../python/sql.md) and [Rust](../rust/sql.md) pages list the same API.
 
 ## All
 
