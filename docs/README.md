@@ -54,15 +54,15 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 
 ## Beyond one machine
 
-- The server
-- Readers in another region
-- When the home dies
+- [The server](nodes/server.md)
+- [Readers in another region](nodes/copies.md)
+- [When the home dies](nodes/home-dies.md)
 
 ## Production
 
-- What TinyStore promises
-- Limits and defaults
-- Running it
+- [What TinyStore promises](production/promises.md)
+- [Limits and defaults](production/limits.md)
+- [Running it](production/running-it.md)
 
 ## Reference
 

@@ -53,8 +53,7 @@ should be a fact a ten-second grep would answer.
 Not built: the Node addon's package a platform.
 [plan/phases.md](plan/phases.md) has their order and what closes each phase.
 The guides in [docs/](docs/README.md) are being rewritten as the book that
-[plan/docs.md](plan/docs.md) plans: its Start, Building the chat and Under the
-hood are written, for this branch.
+[plan/docs.md](plan/docs.md) plans: every part is written, for this branch.
 
 Nothing is released, so nothing is compatible: formats, schemas, the protocol
 and every name change freely until `v0.1.0`, the first Rust release. An

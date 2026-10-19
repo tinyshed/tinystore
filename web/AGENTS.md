@@ -12,8 +12,8 @@ Built: the landing page, a page for every file `docs/README.md` links, search, s
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
-are the book of `plan/docs.md`, written a part at a time: Start, Building
-the chat and Under the hood are.
+are the book of `plan/docs.md`, written for this branch: Start, Building the
+chat, Under the hood, Beyond one machine and Production.
 
 Not built: a page of the site's own statistics.
 

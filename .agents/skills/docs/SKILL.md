@@ -16,8 +16,8 @@ TinyStore. Every page has to work in two ways:
   its own.
 
 > **The docs are being rewritten as the book of `plan/docs.md`.** The Go
-> release candidates' guides are gone; `docs/start/` is written, and each
-> later chapter replaces an item without a link in `docs/README.md`. A page
+> release candidates' guides are gone; every part of the book is written,
+> and the guides by engine, `docs/<engine>/`, come after it. A page
 > is written from its engine's book in `plan/api/`, which holds every call
 > site in Rust, TypeScript, Python and Go, and checked against the code.
 
