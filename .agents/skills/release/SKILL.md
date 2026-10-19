@@ -161,7 +161,7 @@ dist-tag allowed) and for `tinystore` and `tinystore-cli` on crates.io
 (`release.yml`, environment `crates`). A job uses its token while one is set,
 and OIDC once it is gone: with `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN`
 deleted, every publish goes through OIDC. npm marks a new trusted publisher
-pending until a publish through it, and drops it unused after two days.
+pending, and asks for a publish through it within about two days to validate it.
 
 ## Where a Go program finds its core
 
