@@ -39,7 +39,7 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 - [Settings](chat/settings.md)
 - [What it is doing](chat/what-it-is-doing.md)
 - [How fast it is](chat/how-fast-it-is.md)
-- Keeping it
+- [Keeping it](chat/keeping-it.md)
 
 ## Under the hood
 

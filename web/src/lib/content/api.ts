@@ -34,7 +34,7 @@ export const apiEngines: ApiEngine[] = [
 	{ slug: 'config', title: 'Config', guide: 'chat/settings.md' },
 	{ slug: 'records', title: 'Records', guide: 'chat/what-it-is-doing.md' },
 	{ slug: 'metrics', title: 'Metrics', guide: 'chat/how-fast-it-is.md' },
-	{ slug: 'backup', title: 'Backup', guide: 'start/why.md#the-engines' },
+	{ slug: 'backup', title: 'Backup', guide: 'chat/keeping-it.md' },
 ]
 
 export const apiIndexFile = 'docs/reference/api.md'

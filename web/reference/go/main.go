@@ -20,6 +20,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -59,7 +60,9 @@ func main() {
 
 func extract(dir, importPath string, only []string) (Package, error) {
 	fset := token.NewFileSet()
-	files, err := parseDir(fset, dir, only)
+	// Every file is read, so that a method in one file finds its type in
+	// another; only the names declared in `only` are written.
+	files, err := parseDir(fset, dir, nil)
 	if err != nil {
 		return Package{}, err
 	}
@@ -68,21 +71,45 @@ func extract(dir, importPath string, only []string) (Package, error) {
 		return Package{}, fmt.Errorf("reading %s: %w", importPath, err)
 	}
 
-	w := writer{fset: fset, pkg: p}
+	w := writer{fset: fset, pkg: p, only: only}
 	items := make([]Item, 0, len(p.Consts)+len(p.Vars)+len(p.Funcs)+len(p.Types))
 	for _, v := range p.Consts {
-		items = append(items, w.value(v))
+		if w.declared(v.Decl.Pos()) {
+			items = append(items, w.value(v))
+		}
 	}
 	for _, v := range p.Vars {
-		items = append(items, w.value(v))
+		if w.declared(v.Decl.Pos()) {
+			items = append(items, w.value(v))
+		}
 	}
 	for _, f := range p.Funcs {
-		items = append(items, w.function(f, ""))
+		if w.declared(f.Decl.Pos()) {
+			items = append(items, w.function(f, ""))
+		}
 	}
 	for _, t := range p.Types {
-		items = append(items, w.typ(t))
+		if w.declared(t.Decl.Pos()) {
+			items = append(items, w.typ(t))
+			continue
+		}
+		// a method of a type another file declares, as Store.Backup in backup.go
+		for _, f := range t.Methods {
+			if w.declared(f.Decl.Pos()) {
+				items = append(items, w.function(f, t.Name))
+			}
+		}
 	}
 	return Package{Doc: w.markdown(p.Doc), Items: items}, nil
+}
+
+// declared says whether a name is declared in one of the files asked for, or
+// in any when none were.
+func (w writer) declared(pos token.Pos) bool {
+	if len(w.only) == 0 {
+		return true
+	}
+	return slices.Contains(w.only, filepath.Base(w.fset.Position(pos).Filename))
 }
 
 func parseDir(fset *token.FileSet, dir string, only []string) ([]*ast.File, error) {
@@ -112,6 +139,7 @@ func isSource(e fs.DirEntry) bool {
 type writer struct {
 	fset *token.FileSet
 	pkg  *doc.Package
+	only []string
 }
 
 // value names a const or var group after its first exported name.
@@ -141,10 +169,14 @@ func (w writer) typ(t *doc.Type) Item {
 		item.Members = append(item.Members, w.value(v))
 	}
 	for _, f := range t.Funcs {
-		item.Members = append(item.Members, w.function(f, t.Name))
+		if w.declared(f.Decl.Pos()) {
+			item.Members = append(item.Members, w.function(f, t.Name))
+		}
 	}
 	for _, f := range t.Methods {
-		item.Members = append(item.Members, w.function(f, t.Name))
+		if w.declared(f.Decl.Pos()) {
+			item.Members = append(item.Members, w.function(f, t.Name))
+		}
 	}
 	return item
 }

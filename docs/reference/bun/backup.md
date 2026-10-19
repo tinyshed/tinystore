@@ -1,6 +1,6 @@
 # Backup API for Bun and Node
 
-Every public class, function and type of the Backup engine in `@tinyshed/tinystore`, generated from its source. The [Backup guide](../../start/why.md#the-engines) explains how to use them, and the [Python](../python/backup.md), [Go](../go/backup.md) and [Rust](../rust/backup.md) pages list the same API.
+Every public class, function and type of the Backup engine in `@tinyshed/tinystore`, generated from its source. The [Backup guide](../../chat/keeping-it.md) explains how to use them, and the [Python](../python/backup.md), [Go](../go/backup.md) and [Rust](../rust/backup.md) pages list the same API.
 
 ## BackupOptions
 
