@@ -368,6 +368,7 @@ where
             for _ in &claimed.abandoned {
                 self.state.failures.observe(&self.state.name, "its attempts ended without a settlement");
             }
+            self.jobs.measure_claims(&self.state.name, &claimed.leases, now);
             if let Some(lease) = claimed.leases.into_iter().next() {
                 let lease = Arc::new(lease);
                 self.state.hold(&lease);
@@ -617,7 +618,9 @@ impl<V> Claimed<V> {
         let now = jobs.now();
         let how = outcome.into().how(now);
         let (settling, kept) = (Arc::clone(lease), Arc::clone(queue));
+        let measured = how.clone();
         let settled = jobs.file().write(0, move |tx| claim::settle(tx, &kept, &settling, &how, now))?;
+        jobs.measure_settled(&queue.name, lease, &measured, &settled, now);
         lease.apply(&settled, false);
         queue.release(lease);
         queue.watchers.changed();

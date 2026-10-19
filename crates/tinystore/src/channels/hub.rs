@@ -35,6 +35,7 @@ pub(crate) struct LogKey {
 }
 
 pub(crate) struct Hub {
+    probe: Arc<crate::probe::Probe>,
     held: Arc<Memory>,
     store: Arc<Memory>,
     logs: Mutex<Logs>,
@@ -54,6 +55,7 @@ impl Hub {
     pub(crate) fn of(store: &Store) -> Result<Arc<Hub>> {
         store.engine(|store| {
             Ok(Arc::new(Hub {
+                probe: Arc::clone(store.probe()),
                 held: Memory::new(MOST_HELD),
                 store: Arc::clone(store.memory()),
                 logs: Mutex::default(),
@@ -74,6 +76,7 @@ impl Hub {
         if self.closed() {
             return Err(Error::closed(format!("channel {channel}")));
         }
+        self.probe.count("tinystore_channels_published_total", &[("channel", channel)], 1.0);
         let logs = self.logs_reached(channel, &branch);
         if logs.is_empty() {
             return Ok(());
@@ -133,7 +136,8 @@ impl Hub {
         if logs.readers >= MOST_SUBSCRIPTIONS {
             return Err(Error::limit(format!("{MOST_SUBSCRIPTIONS} subscriptions of the store's channels")));
         }
-        let log = Arc::clone(logs.by_key.entry(key.clone()).or_insert_with(|| Arc::new(Log::new())));
+        let made = || Arc::new(Log::new().measured(Arc::clone(&self.probe), Arc::clone(&key.channel)));
+        let log = Arc::clone(logs.by_key.entry(key.clone()).or_insert_with(made));
         let reader = self.next_reader.fetch_add(1, Ordering::Relaxed);
         log.join(reader, wake);
         logs.readers += 1;

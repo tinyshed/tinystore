@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use super::entry::{self, Entry, Head, Kind, MAGIC, Point};
+use crate::probe::Probe;
 use crate::sqlite::{Commit, Observe, Position};
 use crate::{Error, ErrorKind, Result};
 
@@ -100,6 +101,8 @@ pub(crate) struct Acks {
     said: AtomicBool,
     /// The synchronous commits answered with no copy holding them.
     pub(crate) unheld: AtomicU64,
+    /// Told how long each synchronous commit waited, once the node starts.
+    pub(crate) probe: std::sync::OnceLock<Arc<Probe>>,
 }
 
 #[derive(Default)]
@@ -120,6 +123,17 @@ impl Acks {
     /// their ids or addresses, or for any node copying the file when none.
     pub(crate) fn waiting_for(chosen: Vec<String>) -> Acks {
         Acks { chosen, ..Acks::default() }
+    }
+
+    /// How far behind `last` each node linked now is in `file`'s entries, by
+    /// the node's id.
+    pub(crate) fn behind(&self, file: &str, last: u64) -> Vec<(String, u64)> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        let behind = |node: &String| {
+            let at = held.entries.get(&(node.clone(), file.to_owned())).copied().unwrap_or(0);
+            (node.clone(), last.saturating_sub(at))
+        };
+        held.linked.keys().map(behind).collect()
     }
 
     /// The last entry of `file` that every node linked now holds, a node
@@ -160,7 +174,20 @@ impl Acks {
     /// bound at most, or not at all while none such follows it: a commit no
     /// copy held is `CommittedLocally`, counted, and said once an outage.
     fn wait(&self, file: &str, sequence: u64) -> Result<()> {
-        let deadline = Instant::now() + ACK_WAIT;
+        let started = Instant::now();
+        let waited = self.wait_for_a_copy(file, sequence, started + ACK_WAIT);
+        if let Some(probe) = self.probe.get() {
+            let file = crate::probe::label(file);
+            let labels = [("file", file.as_str())];
+            probe.time("tinystore_replication_ack_wait_ms", &labels, started.elapsed());
+            if waited.is_err() {
+                probe.count("tinystore_replication_committed_locally_total", &labels, 1.0);
+            }
+        }
+        waited
+    }
+
+    fn wait_for_a_copy(&self, file: &str, sequence: u64, deadline: Instant) -> Result<()> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             let counted: Vec<&String> = held
@@ -636,6 +663,11 @@ impl Log {
             fs::remove_file(&path).map_err(|error| io_error(&path, error))?;
         }
         Ok(())
+    }
+
+    /// The last entry the log holds, 0 for none.
+    pub(crate) fn last(&self) -> u64 {
+        self.lock().next.saturating_sub(1)
     }
 
     fn lock(&self) -> MutexGuard<'_, Tail> {

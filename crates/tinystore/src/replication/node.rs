@@ -265,6 +265,9 @@ impl State {
             ));
         }
         *lock(&self.store) = Some(store.downgrade());
+        let _ = self.acks.probe.set(Arc::clone(store.probe()));
+        let sampler: Weak<dyn crate::probe::Sample> = Arc::downgrade(self) as Weak<State>;
+        store.probe().sampled(sampler);
         // the catalog's home serves it from its first link on, so that no node
         // takes a network that keeps one for a network that keeps none
         if self.options.catalog {
@@ -1200,5 +1203,20 @@ impl Source for CopySource {
 
     fn stable(&self) -> Result<Point> {
         Ok(self.0.point())
+    }
+}
+
+impl crate::probe::Sample for State {
+    /// How far each node copying a file of this home is behind it.
+    fn sample(&self, probe: &crate::probe::Probe) {
+        let logs: Vec<(String, Arc<Log>)> =
+            lock(&self.logs).iter().filter_map(|(name, log)| Some((name.clone(), log.upgrade()?))).collect();
+        for (name, log) in logs {
+            let file = crate::probe::label(&name);
+            for (node, behind) in self.acks.behind(&name, log.last()) {
+                let labels = [("file", file.as_str()), ("node", node.as_str())];
+                probe.set("tinystore_replication_behind_entries", &labels, behind as f64);
+            }
+        }
     }
 }

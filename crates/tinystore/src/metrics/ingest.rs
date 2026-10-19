@@ -77,9 +77,11 @@ impl Engine {
         if batches.is_empty() {
             return Ok(());
         }
+        let samples: usize = series.iter().map(|series| series.samples().len()).sum();
         if self.write(batches, bytes)? {
             self.wake();
         }
+        self.probe.count("tinystore_metrics_samples_total", &[], samples as f64);
         Ok(())
     }
 

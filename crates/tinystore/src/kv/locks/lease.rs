@@ -28,6 +28,11 @@ impl Place {
     pub(crate) fn new(kind: Kind, name: Arc<str>, key: String) -> Place {
         Place { kind, name, key }
     }
+
+    /// The lock's or the semaphore's name, never its key.
+    pub(crate) fn name(&self) -> &Arc<str> {
+        &self.name
+    }
 }
 
 impl fmt::Display for Place {

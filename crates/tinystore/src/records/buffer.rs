@@ -46,6 +46,7 @@ pub(super) struct Held {
 /// The lines held for one stream until a flush writes them.
 pub(super) struct Buffer {
     records: Weak<Records>,
+    probe: Arc<crate::probe::Probe>,
     clock: Arc<dyn Clock>,
     stream: Stream,
     /// Where a logger's buffer says its drops; a writer of lines has no
@@ -91,6 +92,7 @@ impl Buffer {
     ) -> Result<Arc<Buffer>> {
         let buffer = Arc::new(Buffer {
             records: Arc::downgrade(records),
+            probe: Arc::clone(&records.probe),
             clock: records.clock(),
             stream,
             console,
@@ -119,7 +121,7 @@ impl Buffer {
         let mut waiting = lock(&self.waiting);
         if waiting.closed {
             drop(waiting);
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+            self.drop_lines(1);
             return;
         }
         waiting.lines.push(line);
@@ -128,7 +130,13 @@ impl Buffer {
     /// Counts a line dropped before it reached the buffer: one longer than
     /// an event holds.
     pub(super) fn count_dropped(&self) {
-        self.dropped.fetch_add(1, Ordering::Relaxed);
+        self.drop_lines(1);
+    }
+
+    /// Counts lines dropped, here and in the store's own metrics.
+    fn drop_lines(&self, lines: u64) {
+        self.dropped.fetch_add(lines, Ordering::Relaxed);
+        self.probe.count("tinystore_records_lines_dropped_total", &[("stream", &self.stream.name)], lines as f64);
     }
 
     /// Writes what waits, and says the drops due. `closing` refuses every
@@ -151,11 +159,11 @@ impl Buffer {
             return Ok(());
         }
         let Some(records) = self.records.upgrade() else {
-            self.dropped.fetch_add(lines.len() as u64, Ordering::Relaxed);
+            self.drop_lines(lines.len() as u64);
             return Err(Error::closed(format!("events {}", self.stream.name)));
         };
         let (lost, written) = records.append_held(&self.stream, lines.into_iter().map(event_of).collect());
-        self.dropped.fetch_add(lost, Ordering::Relaxed);
+        self.drop_lines(lost);
         written.map_err(|error| error.within(format!("events {}", self.stream.name)))
     }
 
@@ -192,7 +200,7 @@ impl Keep for Buffer {
         if waiting.closed || waiting.lines.len() >= self.most {
             let full = !waiting.closed;
             drop(waiting);
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+            self.drop_lines(1);
             self.full.fetch_add(u64::from(full), Ordering::Relaxed);
             return;
         }

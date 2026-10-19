@@ -34,6 +34,8 @@ const MAINTENANCE: Duration = Duration::from_secs(60);
 
 pub(crate) struct Blobs {
     pub(crate) file: File,
+    /// What blobs tells the store's own metrics.
+    pub(crate) probe: Arc<crate::probe::Probe>,
     pub(crate) disk: Disk,
     pub(crate) ids: Ids,
     pub(crate) memory: Arc<Memory>,
@@ -170,6 +172,7 @@ impl Blobs {
             file.migrate("blobs", MIGRATIONS)?;
             let blobs = Arc::new(Blobs {
                 file,
+                probe: Arc::clone(store.probe()),
                 disk: Disk::new(dir, durable),
                 ids: Ids::default(),
                 memory: Arc::clone(store.memory()),

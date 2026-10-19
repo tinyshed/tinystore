@@ -69,6 +69,9 @@ impl Records {
         let packing = self.pack(now)?;
         let merged = self.merge(packing.streams)?;
         self.codec.lock().unwrap_or_else(PoisonError::into_inner).rest();
+        self.probe.count("tinystore_records_segments_packed_total", &[], packing.segments as f64);
+        self.probe.count("tinystore_records_segments_merged_total", &[], merged as f64);
+        self.probe.count("tinystore_records_expired_total", &[], expired as f64);
         Ok(Maintenance { expired, packed: packing.events, segments: packing.segments, merged })
     }
 

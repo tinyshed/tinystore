@@ -482,7 +482,7 @@ impl Store {
     }
 
     /// What the store measures of itself goes through.
-    #[cfg(feature = "metrics")]
+    #[allow(dead_code, reason = "each engine reports what it measures: a store of none of them reads it not")]
     pub(crate) fn probe(&self) -> &Arc<Probe> {
         &self.inner.probe
     }

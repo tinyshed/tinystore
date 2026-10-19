@@ -40,6 +40,8 @@ pub(crate) struct Jobs {
     closed: AtomicBool,
     /// One maintenance at a time.
     maintaining: Mutex<()>,
+    /// What jobs tells the store's own metrics.
+    probe: Arc<crate::probe::Probe>,
     _claim: Option<Claim>,
 }
 
@@ -86,8 +88,11 @@ impl Jobs {
             workers: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
             maintaining: Mutex::new(()),
+            probe: Arc::clone(store.probe()),
             _claim: claim,
         });
+        let sampler: std::sync::Weak<dyn crate::probe::Sample> = Arc::downgrade(&jobs) as std::sync::Weak<Jobs>;
+        store.probe().sampled(sampler);
         let weak = Arc::downgrade(&jobs);
         // A copy's maintenance is its home's, and reaches it as pages: each turn
         // asks, since a file's home may move while it is open.
@@ -126,6 +131,10 @@ impl Jobs {
     /// The file as an error names it: `jobs.db`, or `sql app`.
     pub(crate) fn place(&self) -> &str {
         self.lent_by.as_deref().unwrap_or(FILE)
+    }
+
+    pub(crate) fn probe(&self) -> &crate::probe::Probe {
+        &self.probe
     }
 
     pub(crate) fn now(&self) -> i64 {

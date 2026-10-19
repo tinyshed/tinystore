@@ -60,6 +60,8 @@ pub(crate) struct Engine {
     pub(super) writing: Mutex<()>,
     /// Run as each write of the totals begins: the store's own gauges read.
     before_write: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// What the engine tells the store's own metrics.
+    pub(super) probe: Arc<crate::probe::Probe>,
     /// The sessions of clients' instruments: the last batch each applied.
     #[cfg(feature = "wire")]
     pub(super) sessions: Sessions,
@@ -88,8 +90,9 @@ impl crate::engine::Engine for Engine {
         if self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        // A copy's totals are its home's to write.
-        let written = if self.file.is_copy() { Ok(()) } else { self.write_totals() };
+        // A copy's totals are its home's to write; a closing store's are its
+        // own work, which waits for no copy of a synchronous home.
+        let written = if self.file.is_copy() { Ok(()) } else { crate::sqlite::own_work(|| self.write_totals()) };
         let closed = self.file.close();
         written.and(closed)
     }
@@ -136,6 +139,7 @@ impl Engine {
                 wake: Mutex::default(),
                 writing: Mutex::default(),
                 before_write: OnceLock::new(),
+                probe: Arc::clone(store.probe()),
                 #[cfg(feature = "wire")]
                 sessions: Sessions::default(),
                 closed: AtomicBool::new(false),

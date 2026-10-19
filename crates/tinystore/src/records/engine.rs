@@ -40,6 +40,8 @@ pub(super) const LATENESS: Duration = Duration::from_secs(10);
 
 pub(crate) struct Records {
     store: WeakStore,
+    /// What records tells the store's own metrics.
+    pub(super) probe: Arc<crate::probe::Probe>,
     pub(crate) file: File,
     pub(crate) memory: Arc<Memory>,
     clock: Arc<dyn Clock>,
@@ -136,6 +138,7 @@ impl Records {
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {
                 store: store.downgrade(),
+                probe: Arc::clone(store.probe()),
                 streams: Mutex::new(read_streams(&file)?),
                 waiting: Mutex::new(read_waiting(&file)?),
                 file,

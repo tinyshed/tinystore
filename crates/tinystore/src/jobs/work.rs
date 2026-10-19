@@ -370,6 +370,7 @@ impl Loop {
             Ok((settled, ClaimResult { leases, abandoned, full, next }))
         })?;
         self.settled(settled, now);
+        self.jobs.measure_claims(&self.queue.name, &result.leases, now);
         if seen || !result.leases.is_empty() || !result.abandoned.is_empty() {
             self.queue.watchers.changed();
         }
@@ -383,6 +384,7 @@ impl Loop {
     fn settled(&mut self, settled: Vec<Settled>, now: i64) {
         let mut room = false;
         for ((lease, how), settled) in std::mem::take(&mut self.pending).into_iter().zip(settled) {
+            self.jobs.measure_settled(&self.queue.name, &lease, &how, &settled, now);
             let extension = matches!(how, How::Extend { .. });
             lease.apply(&settled, extension);
             if let Some(due) = settled.due {

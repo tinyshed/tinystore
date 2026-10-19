@@ -41,6 +41,8 @@ pub(crate) struct Kv {
     clock: Arc<dyn Clock>,
     /// Weak, so that the application's last handle on the store closes it.
     store: WeakStore,
+    /// What kv tells the store's own metrics.
+    probe: Arc<crate::probe::Probe>,
     revision: Arc<AtomicI64>,
     names: Mutex<HashMap<String, (i64, Kind)>>,
     /// How each name of counters counts in this process, every handle on it
@@ -110,6 +112,7 @@ impl Kv {
             lent_by,
             clock: store.clock(),
             store: store.downgrade(),
+            probe: Arc::clone(store.probe()),
             revision: Arc::new(AtomicI64::new(revision)),
             names: Mutex::new(HashMap::new()),
             counting: Mutex::new(HashMap::new()),
@@ -295,6 +298,10 @@ impl Kv {
             done.cleared += self.drop_hidden(mark)?;
         }
         self.file.sweep();
+        // kv.db, or a database's file that lends kv, `sql app`, as `sql/app`
+        let file = crate::probe::label(&self.place().replacen(' ', "/", 1));
+        self.probe.count("tinystore_kv_expired_total", &[("file", &file)], done.expired as f64);
+        self.probe.count("tinystore_kv_cleared_total", &[("file", &file)], done.cleared as f64);
         Ok(done)
     }
 

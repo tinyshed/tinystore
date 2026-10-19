@@ -51,6 +51,11 @@ impl Effects {
         self.answers.push((reply, answer));
     }
 
+    /// How many leases the change ended before their holder let them go.
+    pub(super) fn lost(&self) -> usize {
+        self.endings.iter().filter(|(_, ending)| matches!(ending, Ending::Lost)).count()
+    }
+
     pub(super) fn run(self) {
         for (watch, ending) in self.endings {
             watch.end(ending);

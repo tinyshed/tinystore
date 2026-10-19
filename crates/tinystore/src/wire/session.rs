@@ -253,6 +253,7 @@ impl Session {
             ready: Condvar::new(),
             connect,
         };
+        shared.store.probe().shift("tinystore_wire_connections", &[], 1.0);
         Ok(Session { shared: Arc::new(shared) })
     }
 
@@ -513,6 +514,9 @@ impl Shared {
     fn route_call(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         let max_body = input.max_body.unwrap_or(HELLO_MOST);
         let (method, stream, body) = (frame.method, frame.stream, frame.body);
+        if self.store.probe().listening() {
+            self.store.probe().count("tinystore_wire_requests_total", &[("method", method_name(method))], 1.0);
+        }
         // A point read is answered where it is read, in less time than
         // another thread takes to wake, while its host waits for nothing
         // else. A crowd of them would each wait its turn on this thread,
@@ -1204,6 +1208,15 @@ impl Shared {
     }
 
     fn call(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
+        let started = self.store.probe().start();
+        let answered = self.call_engine(method, body, max_body);
+        if let Some(started) = started {
+            self.store.probe().time("tinystore_wire_call_ms", &[("method", method_name(method))], started.elapsed());
+        }
+        answered
+    }
+
+    fn call_engine(&self, method: u16, body: &[u8], max_body: usize) -> std::result::Result<Vec<u8>, Failure> {
         let lent = |handle| self.lent(handle);
         match method >> 8 {
             0x01 => {
@@ -1540,3 +1553,14 @@ fn instance() -> Vec<u8> {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        self.store.probe().shift("tinystore_wire_connections", &[], -1.0);
+    }
+}
+
+/// A method's name as the protocol spells it, `kv.get`.
+fn method_name(method: u16) -> &'static str {
+    super::protocol::METHODS.iter().find(|(_, id, _)| *id == method).map_or("unknown", |(name, ..)| name)
+}

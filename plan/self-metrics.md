@@ -115,23 +115,62 @@ second write, 15 seconds after the store opens. The machine is the one the
 process runs on: a store beside another process's in a container reads that
 container's.
 
-### Then, engine by engine
+### Each engine's
 
-Each is a slice of its own, in this order, its names written here when it is
-built:
+Each engine tells the store's probe what it counts, times and holds, by a
+name of the table below; the metrics engine, which no engine names, opens
+every one of them when the store opens. A gauge of an engine is read as the
+totals are written, by what the engine registered for it.
 
-- **replication**: `tinystore_replication_ack_wait_ms`, a synchronous home's
-  wait for a copy to hold its commit, apart from `tinystore_commit_ms`, so
-  that a slow disk and a slow link far away read apart; a copy's lag in
-  entries and in milliseconds; `CommittedLocally`; links cut.
-- **jobs**: jobs waiting and running by queue, completed, failed and retried,
-  the wait from a job's due time to its claim, its run's time.
-- **kv**: calls by kind, keys expired, transactions that ran again.
-- **records**, **metrics**: events and samples taken, a logger's lines
-  dropped, a sample refused by why, sets of labels past `__overflow`.
-- **channels**, **locks**, **search**, **blobs**, **wire**: messages missed,
-  waits for a lock and leases lost, the head waiting to be packed, bytes
-  written and read and what the scrub found, connections and calls by method.
+| Name                                            | Kind    | Labels         | What it is                                                   |
+|-------------------------------------------------|---------|----------------|--------------------------------------------------------------|
+| `tinystore_replication_ack_wait_ms`             | timer   | `file`         | a synchronous home's wait for a copy to hold a commit        |
+| `tinystore_replication_committed_locally_total` | counter | `file`         | synchronous commits no copy held in time                     |
+| `tinystore_replication_behind_entries`          | gauge   | `file`, `node` | how far a node copying a file of this home is behind it      |
+| `tinystore_jobs_completed_total`                | counter | `queue`        | jobs done                                                    |
+| `tinystore_jobs_failed_total`                   | counter | `queue`        | jobs failed for good                                         |
+| `tinystore_jobs_retried_total`                  | counter | `queue`        | attempts that failed and go again                            |
+| `tinystore_jobs_run_ms`                         | timer   | `queue`        | a run, from its claim to its settlement                      |
+| `tinystore_jobs_claim_delay_ms`                 | timer   | `queue`        | how late a claim took a job past its time                    |
+| `tinystore_jobs_waiting`                        | gauge   | `queue`        | jobs waiting                                                 |
+| `tinystore_jobs_running`                        | gauge   | `queue`        | jobs a lease holds                                           |
+| `tinystore_kv_expired_total`                    | counter | `file`         | keys deleted once they expired                               |
+| `tinystore_kv_cleared_total`                    | counter | `file`         | keys deleted after a large clear hid them                    |
+| `tinystore_records_events_total`                | counter | `stream`       | events appended                                              |
+| `tinystore_records_lines_dropped_total`         | counter | `stream`       | a logger's lines dropped                                     |
+| `tinystore_records_segments_packed_total`       | counter |                | segments packed from heads                                   |
+| `tinystore_records_segments_merged_total`       | counter |                | segments merged into larger ones                             |
+| `tinystore_records_expired_total`               | counter |                | head rows and segments past what their stream keeps          |
+| `tinystore_metrics_samples_total`               | counter |                | samples an `ingest` wrote                                    |
+| `tinystore_channels_published_total`            | counter | `channel`      | messages published                                           |
+| `tinystore_channels_delivered_total`            | counter | `channel`      | messages a subscriber took                                   |
+| `tinystore_channels_missed_total`               | counter | `channel`      | messages a subscriber fell too far behind to take            |
+| `tinystore_locks_wait_ms`                       | timer   | `lock`         | an ask's wait, until it held its key or gave up              |
+| `tinystore_locks_busy_total`                    | counter | `lock`         | asks whose key stayed held past their wait                   |
+| `tinystore_locks_lost_total`                    | counter |                | leases that ran out or were revoked while held               |
+| `tinystore_search_ms`                           | timer   | `index`        | a search                                                     |
+| `tinystore_search_head_sets`                    | gauge   | `index`        | sets an index holds in its head, waiting to be packed        |
+| `tinystore_blobs_written_total`                 | counter |                | files written                                                |
+| `tinystore_blobs_written_bytes_total`           | counter |                | their bytes                                                  |
+| `tinystore_blobs_read_total`                    | counter |                | files opened to be read                                      |
+| `tinystore_blobs_read_bytes_total`              | counter |                | their bytes                                                  |
+| `tinystore_blobs_damaged_total`                 | counter |                | contents the scrub found changed or missing                  |
+| `tinystore_wire_connections`                    | gauge   |                | connections open: the pipe's, a server's clients             |
+| `tinystore_wire_requests_total`                 | counter | `method`       | requests, by their method as the protocol names it, `kv.get` |
+| `tinystore_wire_call_ms`                        | timer   | `method`       | a call answered in one response                              |
+
+Not measured, and why:
+
+- kv's calls by kind: a point read through the pipe costs a microsecond or
+  two, which an instrument's count would add to; the wire's requests count
+  them by method instead.
+- a transaction that ran again: the SDKs run it again, and the core sees two
+  transactions.
+- a sample refused, and a set of labels past `__overflow`: the store says
+  each once in its log, and the next `flush` fails with it.
+- a synchronous home's `metrics.db`: no copy takes it, so a program's
+  `flush` there waits for one in vain and answers `CommittedLocally`; the
+  store's own writes of it, every 15 seconds and at its close, wait for none.
 
 ## Labels
 
@@ -143,22 +182,19 @@ gives at a call: no key, no SQL text, no job's id, no path of a file.
   databases would make a hundred thousand series, so the first 32 databases
   a store opens are named, and every one after them counts into
   `sql/__overflow`, which a program that holds more names as it sees fit.
-- `task` is the name an engine gives its periodic work, a fixed set.
-- Later slices bound `queue`, `index` and `node` the same way: 32 named, then
-  `__overflow`.
+- `task` is the name an engine gives its periodic work, a fixed set;
+  `method` one of the protocol's; `core` and `span` the machine's.
+- Every other label of an engine's, `queue`, `stream`, `channel`, `lock`,
+  `index` and `node`, names its first 32 values for each name, and every
+  value after them counts into `__overflow`.
 
 ## Tests
 
-- a store opened with its own metrics holds `tinystore_commits_total` and the
-  rest after a write and a `flush`, with the values those writes made; one
-  opened without holds none of them.
-- the metrics engine's writes of its totals add nothing to
-  `tinystore_commits_total{file="metrics"}`, an `ingest` adds one.
-- a total survives the store's close and its opening again, its run beginning
-  with a zero as an instrument's does.
-- the 33rd database counts into `sql/__overflow`.
-- a name of `tinystore_` from the program is `Invalid`.
-- a failure of periodic work counts by its task.
+The tests of `metrics::own`, of `probe` and one of `replication::link_tests`, as
+GATES.md lists them: the store's own names with their values after a write
+and a `flush`, none without the option, the totals' writes counting
+nothing, a total through a close, a database and a label past the ones
+named, a failure of periodic work, the machine, and each engine's names.
 
 ## Cost
 
@@ -182,5 +218,14 @@ more, the runs move by 6 % either way between passes, and on is not the
 slower of the two. Linux and macOS are not measured.
 
 ```sh
-cargo test --release -p tinystore --lib metrics::own::own_tests::sets_measured_and_not -- --ignored --nocapture
+cargo test --release -p tinystore --lib probe::probe_tests::sets_measured_and_not -- --ignored --nocapture
+```
+
+Again once every engine reported, the same day and machine, one run: one
+thread −1.0 %, eight +2.9 %, 64 +0.3 %. And through the pipe, where each
+request now counts and times itself, kv's `set` in 20 batches of 1,000 in
+flight, the median of five passes, three runs: +1.1 %, −0.1 %, +5.2 %.
+
+```sh
+cargo test --release -p tinystore --lib pipe::tests::sets_in_flight_measured_and_not -- --ignored --nocapture
 ```

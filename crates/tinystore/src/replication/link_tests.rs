@@ -1809,3 +1809,36 @@ fn a_node_that_stops_refuses_at_once_the_writes_waiting_for_a_lease() {
     assert!(began.elapsed() < Duration::from_secs(2), "the close waited {:?} for a lease", began.elapsed());
     assert!(waiting.join().unwrap().is_err(), "a write no lease holds is refused");
 }
+
+#[cfg(feature = "metrics")]
+#[test]
+fn a_synchronous_home_measures_its_waits_for_a_copy_and_how_far_behind_each_copy_is() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let node = Node { serve: Some("127.0.0.1:0".into()), synchronous: true, ..Node::default() };
+    let measured = Some(crate::metrics::SelfMetrics { system: false });
+    let options = Options { node: Some(node), background: false, self_metrics: measured, ..Options::default() };
+    let home = Store::open(home_dir.path(), options).unwrap();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..2 {
+        sessions.set(format!("alone {i}"), &"no copy follows".to_owned()).unwrap_err();
+    }
+    let address = bound(home.node().unwrap()).unwrap().to_string();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    copy.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &copy, &["kv.db"]);
+    sessions.set("held", &"by the copy".to_owned()).unwrap();
+
+    let metrics = home.metrics().unwrap();
+    // as the store's background writes them: no copy takes metrics.db, which a write of the program's waits for
+    crate::sqlite::own_work(|| metrics.flush()).unwrap();
+    let hour = Duration::from_secs(3600);
+    let newest = |name: &str| {
+        let latest = metrics.query().name(name).filter("file", "kv").since(hour).latest().unwrap();
+        latest.iter().map(|latest| latest.value).collect::<Vec<f64>>()
+    };
+    assert_eq!(newest("tinystore_replication_committed_locally_total"), [2.0]);
+    assert!(newest("tinystore_replication_ack_wait_ms_count").first().is_some_and(|waits| *waits >= 3.0));
+    assert_eq!(newest("tinystore_replication_behind_entries"), [0.0], "the copy held every commit it answered");
+    copy.close().unwrap();
+    home.close().unwrap();
+}

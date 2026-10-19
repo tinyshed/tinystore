@@ -44,6 +44,8 @@ const READ_VALUE: &str = "select value from _tinystore_search_docs where index_i
 
 pub(crate) struct Search {
     pub(crate) file: Arc<File>,
+    /// What search tells the store's own metrics.
+    probe: Arc<crate::probe::Probe>,
     /// What the log calls a file another engine lends: `sql app`.
     pub(super) lent_by: Option<String>,
     memory: Arc<Memory>,
@@ -139,6 +141,7 @@ impl Search {
         let tasks = lent_by.as_ref().map_or_else(|| "search".to_owned(), |owner| format!("search in {owner}"));
         let search = Arc::new(Search {
             file,
+            probe: Arc::clone(store.probe()),
             lent_by,
             memory: Arc::clone(store.memory()),
             clock: store.clock(),
@@ -151,6 +154,8 @@ impl Search {
             reached: Mutex::default(),
             _claim: claim,
         });
+        let sampler: std::sync::Weak<dyn crate::probe::Sample> = Arc::downgrade(&search) as std::sync::Weak<Search>;
+        store.probe().sampled(sampler);
         // A copy's packing and purges are its home's, and reach it as pages:
         // each turn asks, since a file's home may move while it is open.
         let weak = Arc::downgrade(&search);
@@ -403,11 +408,15 @@ impl Search {
         then: impl FnOnce(&Connection, &Answer) -> Result<R>,
     ) -> Result<(Answer, R)> {
         open.refuse_dropped()?;
+        let started = self.probe.start();
         let serving = open.current().serving.clone();
         let asked =
             Asked { index: serving.id, settings: &serving.settings, kept: &serving.kept, memory: &self.memory, query };
         let answer = read::search(connection, asked)?;
         let then = then(connection, &answer)?;
+        if let Some(started) = started {
+            self.probe.time("tinystore_search_ms", &[("index", &open.name)], started.elapsed());
+        }
         if answer.behind {
             self.wake();
         }
@@ -562,4 +571,15 @@ pub(crate) fn check_name(name: &str) -> Result<()> {
         return Ok(());
     }
     Err(Error::invalid(format!("an index's name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))
+}
+
+impl crate::probe::Sample for Search {
+    /// The sets each open index holds in its head, waiting to be packed.
+    fn sample(&self, probe: &crate::probe::Probe) {
+        let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
+        for index in indexes {
+            let sets = index.sets.load(std::sync::atomic::Ordering::Relaxed);
+            probe.set("tinystore_search_head_sets", &[("index", &index.name)], sets as f64);
+        }
+    }
 }

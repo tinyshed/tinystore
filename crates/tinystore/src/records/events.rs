@@ -243,6 +243,7 @@ impl Records {
             })
         })?;
         self.recent.add(&name, on_time.iter().chain(&late));
+        self.probe.count("tinystore_records_events_total", &[("stream", &name)], (on_time.len() + late.len()) as f64);
         if let Some(newest) = on_time.iter().map(|event| event.at).max() {
             let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
             waiting.entry(stream).and_modify(|waits| *waits = newest.max(*waits)).or_insert(newest);

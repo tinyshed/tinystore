@@ -181,6 +181,7 @@ impl Blobs {
             tx.execute(MARK_DAMAGED, [id]).map_err(|error| sql_error("blobs: mark a content damaged", error))
         })? == 1;
         if marked {
+            self.probe.count("tinystore_blobs_damaged_total", &[], 1.0);
             let paths: Vec<String> = self.file.read(|connection| {
                 let mut statement = connection
                     .prepare_cached(PATHS_OF)

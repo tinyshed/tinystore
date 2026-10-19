@@ -80,7 +80,13 @@ impl StoredFile {
             }
             match StoredFile::of(files, whole, found) {
                 Err(Gone(content)) => failed = Some(content),
-                Ok(opened) => return opened.map(Some),
+                Ok(opened) => {
+                    if let Ok(opened) = &opened {
+                        files.blobs.probe.count("tinystore_blobs_read_total", &[], 1.0);
+                        files.blobs.probe.count("tinystore_blobs_read_bytes_total", &[], opened.info().size as f64);
+                    }
+                    return opened.map(Some);
+                }
             }
         }
         Err(Error::new(crate::ErrorKind::Conflict, format!("the path changed {LOOKUPS} times while it was read")))

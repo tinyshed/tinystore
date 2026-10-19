@@ -533,3 +533,60 @@ fn a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name() {
     let other = Pipe::open(&data, &named(&dir.path().join("another.key")), None).unwrap_err();
     assert!(other.to_string().contains("another encryption key file"), "{other}");
 }
+
+/// kv's sets through the pipe, 20 batches of 1000 in flight, the store measured and not in
+/// turns, the median of five passes: what a request costs the store's own
+/// metrics, its count and its time by method.
+///
+/// cargo test --release -p tinystore pipe::tests::sets_in_flight_measured_and_not -- --ignored --nocapture
+#[cfg(feature = "metrics")]
+#[test]
+#[ignore = "a timing, not a check"]
+fn sets_in_flight_measured_and_not() {
+    const BATCHES: u32 = 20;
+    let rate = |measured: bool| {
+        let dir = tempfile::tempdir().unwrap();
+        let self_metrics = measured.then(crate::metrics::SelfMetrics::default);
+        let options = Options { self_metrics, durability: Some(crate::Durability::Os), ..Options::default() };
+        let store = Store::open(dir.path(), options).unwrap();
+        let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+        client.hello(1).unwrap();
+        let handle = client.bucket("smoke");
+        let started = std::time::Instant::now();
+        for batch in 0..BATCHES {
+            let mut bytes = Vec::new();
+            for n in 0..1000u32 {
+                let key = format!("{batch}-{n}");
+                let set = KvCall { handle, key, value: Some(Row::Bin(vec![b'x'; 100])), ..KvCall::default() };
+                Frame { method: method::KV_SET, ..Frame::new(Kind::Request, client.next_stream + 1 + n, set.encode()) }
+                    .ending()
+                    .encode_into(&mut bytes);
+            }
+            client.reader.push(&client.pipe.send(&bytes));
+            let mut answered = 0;
+            while answered < 1000 {
+                match client.reader.next(1 << 22).unwrap() {
+                    Some(frame) if frame.kind == Kind::Response => answered += 1,
+                    Some(frame) => panic!("a {:?} among the answers", frame.kind),
+                    None => {
+                        let ready = client.pipe.recv(Duration::from_secs(10));
+                        assert!(!ready.is_empty(), "the pipe answered {answered} of 1000 sets, then nothing");
+                        client.reader.push(&ready);
+                    }
+                }
+            }
+        }
+        let rate = f64::from(BATCHES * 1000) / started.elapsed().as_secs_f64();
+        drop(client);
+        store.close().unwrap();
+        rate
+    };
+    let (mut off, mut on) = (Vec::new(), Vec::new());
+    for _ in 0..5 {
+        off.push(rate(false));
+        on.push(rate(true));
+    }
+    off.sort_by(f64::total_cmp);
+    on.sort_by(f64::total_cmp);
+    println!("off {:.0}/s, on {:.0}/s, {:+.1} %", off[2], on[2], (on[2] / off[2] - 1.0) * 100.0);
+}

@@ -105,65 +105,6 @@ fn a_failure_of_periodic_work_is_counted_by_its_task() {
     store.close().unwrap();
 }
 
-#[cfg(feature = "kv")]
-#[test]
-fn every_file_is_measured_by_its_own_label() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = store(dir.path(), true);
-    let sessions = store.bucket::<String>("sessions").open().unwrap();
-    sessions.set("a", &"x".to_owned()).unwrap();
-    sessions.set("b", &"y".to_owned()).unwrap();
-    let metrics = store.metrics().unwrap();
-    metrics.flush().unwrap();
-    assert!(newest(&metrics, "tinystore_commits_total", "kv").is_some_and(|commits| commits >= 2.0));
-    assert!(newest(&metrics, "tinystore_writer_wait_ms_count", "kv").is_some_and(|waits| waits >= 2.0));
-    store.close().unwrap();
-}
-
-/// kv's sets a second from 1, 8 and 64 threads, the store measured and not,
-/// in turns, the median of five passes; what plan/self-metrics.md's cost asks.
-///
-/// cargo test --release -p tinystore metrics::own::own_tests::sets_measured_and_not -- --ignored --nocapture
-#[cfg(feature = "kv")]
-#[test]
-#[ignore = "a timing, not a check"]
-fn sets_measured_and_not() {
-    use std::time::Instant;
-    const SETS: usize = 20_000;
-    let rate = |self_metrics: bool, threads: usize| {
-        let dir = tempfile::tempdir().unwrap();
-        let self_metrics = self_metrics.then(SelfMetrics::default);
-        let options = Options { self_metrics, durability: Some(crate::Durability::Os), ..Options::default() };
-        let store = Store::open(dir.path(), options).unwrap();
-        let bucket = store.bucket::<u64>("counts").open().unwrap();
-        let started = Instant::now();
-        std::thread::scope(|scope| {
-            for thread in 0..threads {
-                let bucket = &bucket;
-                scope.spawn(move || {
-                    for n in 0..SETS / threads {
-                        bucket.set(format!("{thread}-{n}"), &(n as u64)).unwrap();
-                    }
-                });
-            }
-        });
-        let rate = SETS as f64 / started.elapsed().as_secs_f64();
-        store.close().unwrap();
-        rate
-    };
-    for threads in [1, 8, 64] {
-        let (mut off, mut on) = (Vec::new(), Vec::new());
-        for _ in 0..5 {
-            off.push(rate(false, threads));
-            on.push(rate(true, threads));
-        }
-        off.sort_by(f64::total_cmp);
-        on.sort_by(f64::total_cmp);
-        let (off, on) = (off[2], on[2]);
-        println!("{threads:>2} threads: off {off:>9.0}/s, on {on:>9.0}/s, {:+.1} %", (on / off - 1.0) * 100.0);
-    }
-}
-
 #[cfg(feature = "system")]
 #[test]
 fn the_machine_is_measured_unless_left_out() {
@@ -195,5 +136,23 @@ fn the_machine_is_measured_unless_left_out() {
     assert_eq!(latest(&metrics, "tinystore_system_memory_bytes"), None);
     assert_eq!(latest(&metrics, "tinystore_process_cpu_percent"), None);
     assert!(latest(&metrics, "tinystore_memory_used_bytes").is_some(), "the store's own still are");
+    store.close().unwrap();
+}
+
+/// The newest value of the store's own `name`, which has no labels.
+fn alone(metrics: &Metrics, name: &str) -> Option<f64> {
+    metrics.query().name(name).since(HOUR).latest().unwrap().first().map(|latest| latest.value)
+}
+
+#[test]
+fn an_ingest_counts_its_samples() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path(), true);
+    let metrics = store.metrics().unwrap();
+    let now = SystemTime::now();
+    let cpu = Series::gauge("cpu").sample(now - Duration::from_secs(2), 0.1).sample(now, 0.2);
+    metrics.ingest(&[cpu]).unwrap();
+    metrics.flush().unwrap();
+    assert_eq!(alone(&metrics, "tinystore_metrics_samples_total"), Some(2.0));
     store.close().unwrap();
 }

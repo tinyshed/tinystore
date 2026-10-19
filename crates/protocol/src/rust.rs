@@ -237,11 +237,8 @@ fn write_methods(out: &mut String, schema: &Schema) {
     );
     out.push_str(
         "/// Every method: its name, its number and the shape of its answer, `call` for
-/// one message, for the tests that the server answers each, and as its line says.
-",
-    );
-    out.push_str(
-        "#[cfg(test)]
+/// one message, for the tests that the server answers each, and as its line
+/// says, and for a store's own metrics, which count requests by their name.
 ",
     );
     out.push_str(

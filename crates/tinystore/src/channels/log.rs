@@ -55,6 +55,8 @@ pub(crate) struct Taken {
 
 pub(crate) struct Log {
     state: Mutex<State>,
+    /// Where what its subscribers take and miss is counted, by its channel.
+    measured: Option<(Arc<crate::probe::Probe>, Arc<str>)>,
 }
 
 #[derive(Default)]
@@ -76,7 +78,13 @@ struct Place {
 
 impl Log {
     pub(super) fn new() -> Log {
-        Log { state: Mutex::default() }
+        Log { state: Mutex::default(), measured: None }
+    }
+
+    /// The log, what its subscribers take and miss counted in the store's own
+    /// metrics under `channel`.
+    pub(super) fn measured(self, probe: Arc<crate::probe::Probe>, channel: Arc<str>) -> Log {
+        Log { measured: Some((probe, channel)), ..self }
     }
 
     /// Takes a subscriber in, at the end of the log: it reads what comes from
@@ -173,7 +181,16 @@ impl Log {
         place.woken = false;
         let missed = std::mem::take(&mut place.missed);
         state.drop_read();
-        (Taken { missed, messages }, waits)
+        drop(state);
+        let taken = Taken { missed, messages };
+        if let (Some((probe, channel)), false) = (&self.measured, taken.messages.is_empty() && taken.missed == 0) {
+            let labels = [("channel", &**channel)];
+            probe.count("tinystore_channels_delivered_total", &labels, taken.messages.len() as f64);
+            if taken.missed > 0 {
+                probe.count("tinystore_channels_missed_total", &labels, taken.missed as f64);
+            }
+        }
+        (taken, waits)
     }
 
     /// Counts a subscriber's next message missed, as though the log had let

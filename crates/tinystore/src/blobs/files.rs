@@ -258,6 +258,10 @@ impl Files {
             Ok((Some(version.info(&files.folder, &path)?), change.freed))
         })?;
         self.blobs.remove_freed(&freed);
+        if let Some(info) = &info {
+            self.blobs.probe.count("tinystore_blobs_written_total", &[], 1.0);
+            self.blobs.probe.count("tinystore_blobs_written_bytes_total", &[], info.size as f64);
+        }
         Ok(info)
     }
 

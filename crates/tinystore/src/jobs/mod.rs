@@ -31,6 +31,7 @@ mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
 mod maintain;
+mod measure;
 mod policy;
 mod queue;
 mod rate;

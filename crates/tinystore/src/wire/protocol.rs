@@ -11234,8 +11234,8 @@ pub(crate) mod method {
 }
 
 /// Every method: its name, its number and the shape of its answer, `call` for
-/// one message, for the tests that the server answers each, and as its line says.
-#[cfg(test)]
+/// one message, for the tests that the server answers each, and as its line
+/// says, and for a store's own metrics, which count requests by their name.
 pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     #[cfg(feature = "backup")]
     ("backup.write", 0x0801, "download"),

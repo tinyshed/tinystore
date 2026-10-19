@@ -180,7 +180,7 @@ impl Lease {
 
     /// The run a settlement at `now` records: when it began and how long it
     /// took; none when nothing began it.
-    fn last_run(&self, now: i64) -> (Option<i64>, Option<i64>) {
+    pub(crate) fn last_run(&self, now: i64) -> (Option<i64>, Option<i64>) {
         let began = self.lock().began;
         (began, began.map(|began| (now - began).max(0)))
     }

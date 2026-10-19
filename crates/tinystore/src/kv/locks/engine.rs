@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use super::lease::{Ask, LeaseId, Reply};
+use super::lease::{Answer, Ask, LeaseId, Reply};
 use super::state::{Effects, Mint, State};
 use crate::engine::{Engine, Host};
 use crate::kv::engine::Kv;
@@ -37,6 +37,7 @@ pub(crate) struct Locks {
 }
 
 struct Inner {
+    probe: Arc<crate::probe::Probe>,
     mint: Mint,
     clock: Arc<dyn Clock>,
     state: Mutex<State>,
@@ -56,7 +57,8 @@ impl Locks {
         let clock = store.clock();
         let epoch = next_epoch(kv, unix_millis(clock.now()))?;
         let mint = Mint { epoch, count: AtomicU64::new(0) };
-        let inner = Arc::new(Inner { mint, clock, state: Mutex::default(), timer: Timer::default() });
+        let probe = Arc::clone(store.probe());
+        let inner = Arc::new(Inner { probe, mint, clock, state: Mutex::default(), timer: Timer::default() });
         let timed = Arc::clone(&inner);
         let thread = thread::Builder::new()
             .name("tinystore-locks".to_owned())
@@ -68,6 +70,20 @@ impl Locks {
     /// Grants the key, puts the ask in line, or answers busy through `reply`;
     /// says the waiter's id when it waits.
     pub(crate) fn ask(&self, ask: Ask, reply: Reply) -> Option<u64> {
+        let reply = match self.inner.probe.start() {
+            None => reply,
+            Some(started) => {
+                let (probe, name) = (Arc::clone(&self.inner.probe), Arc::clone(ask.place.name()));
+                Box::new(move |answer: Result<Answer>| {
+                    let labels = [("lock", &*name)];
+                    probe.time("tinystore_locks_wait_ms", &labels, started.elapsed());
+                    if matches!(answer, Ok(Answer::Busy)) {
+                        probe.count("tinystore_locks_busy_total", &labels, 1.0);
+                    }
+                    reply(answer);
+                }) as Reply
+            }
+        };
         self.inner.change(|state, now, mint, effects| state.ask(ask, reply, now, mint, effects))
     }
 
@@ -110,6 +126,10 @@ impl Inner {
         let value = work(&mut lock(&self.state), now, &self.mint, &mut effects);
         if effects.sooner {
             self.timer.wake();
+        }
+        let lost = effects.lost();
+        if lost > 0 {
+            self.probe.count("tinystore_locks_lost_total", &[], lost as f64);
         }
         effects.run();
         value
