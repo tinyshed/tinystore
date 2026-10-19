@@ -10,11 +10,11 @@ jobs, blobs, sql, records and metrics, are built in `server/wire`, and why the
 server behaves as it does is
 [its design](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md).
 Every example on this page is a vector of
-[server/wire/testdata/vectors.json](../server/wire/testdata/vectors.json),
+[testdata/wire/vectors.json](../testdata/wire/vectors.json),
 which the server and every SDK are tested against: a value in a typed
 notation, the bytes it is, and the bytes a decoder refuses, each named after
 the rule it breaks. Every message is also a vector of
-[messages.json](../server/wire/testdata/messages.json), its bytes and its
+[messages.json](../testdata/wire/messages.json), its bytes and its
 fields by the names the tables below give them, with the methods' numbers and
 the errors' codes, so that an SDK checks each field of each message in one
 loop; the Go types write it, through a schema of each message's keys that

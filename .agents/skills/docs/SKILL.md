@@ -15,13 +15,11 @@ TinyStore. Every page has to work in two ways:
   agent's `llms.txt`, and see nothing but this one page. It must make sense on
   its own.
 
-> **The guides describe the Go release candidates.** On the `rust` branch
-> they are to be rewritten from the API books in `plan/api/`, which hold
-> every call site, in Rust, TypeScript, Python and Go, and what each
-> promises: a page is written from its engine's book and checked against
-> the code, never carried over from the Go guide it replaces. Until then
-> AGENTS.md says the guides promise nothing for this branch. The rules
-> below for shape, voice and checks hold as they are.
+> **The docs are being rewritten as the book of `plan/docs.md`.** The Go
+> release candidates' guides are gone; `docs/start/` is written, and each
+> later chapter replaces an item without a link in `docs/README.md`. A page
+> is written from its engine's book in `plan/api/`, which holds every call
+> site in Rust, TypeScript, Python and Go, and checked against the code.
 
 A guide only describes what is built. The old design documents in research's
 `tinystore/design/` are a good source of facts and examples, but never copy
@@ -42,13 +40,15 @@ greyed out. To add a page:
    `/docs/kv/quotas`, and an engine's overview `docs/kv/README.md` becomes
    `/docs/kv`.
 
-| Section                                | Files                             | What its pages cover                                                                                                        |
-|----------------------------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| Start here                             | `docs/*.md`                       | what TinyStore is, a first program, how Go, Bun and Python connect to a store, a tour of every engine                       |
-| SQL, KV, Jobs, Blobs, Records, Metrics | `docs/<engine>/`                  | `README.md` is the overview: what the engine is for, a short tour, and links to its other pages; then one page per feature  |
-| Running it                             | `docs/running/`                   | the sidecar, a remote server, the command line, AI agents, backups, testing, upgrading                                      |
-| How it works                           | `docs/concepts/`                  | durability, concurrency, time, memory and limits, errors, the files on disk: why the store behaves the way it does          |
-| Reference                              | `docs/reference/`, `docs/wire.md` | tables to look things up: limits and defaults, the API reference, and the wire protocol last, for people who write a client |
+| Section            | Files                             | What its pages cover                                                                           |
+|--------------------|-----------------------------------|------------------------------------------------------------------------------------------------|
+| Start              | `docs/start/`                     | why TinyStore, a first store, the directory and the ways to reach it, the chat the book builds |
+| Building the chat  | `docs/chat/`                      | one chapter per engine, each adding one capability to the chat                                 |
+| Under the hood     | `docs/inside/`                    | how a write, a job, packing and search work, and why they were built that way                  |
+| Beyond one machine | `docs/nodes/`                     | the server, nodes and copies, a home that dies                                                 |
+| Production         | `docs/production/`                | what TinyStore promises by contract, every limit, running it                                   |
+| an engine's guides | `docs/<engine>/`                  | after the book: `README.md` the overview, then one page per feature a reader would search for  |
+| Reference          | `docs/reference/`, `docs/wire.md` | the generated API pages, and the wire protocol last, for people who write a client             |
 
 A feature gets its own page if a reader would search for it by name, such as
 Sessions, Quotas, Once or Steps. If a page needs more than six sections, split
@@ -73,8 +73,13 @@ table.
    are also link anchors: if you rename one, the build tells you which links
    to fix.
 5. **`## Limits and defaults`**: a table, if the feature has any.
-6. **`## See also`**: the package's README for the full contract, and the
-   design document in research for why it works this way.
+6. **`## Why this design?`**: in a chapter of the book, the decisions a
+   reader would not guess, each a bold question and a paragraph: what the
+   obvious alternative was, what goes wrong with it, and what TinyStore does
+   instead. A newcomer skips it; an engineer reads it first. A number in it
+   carries its environment and its report, as everywhere.
+7. **`## See also`**: the next pages to read, and the design document in
+   research for why it works this way.
 
 Use a callout only for something that can lose data, surprise the reader or
 stop a program, such as a limit, a rejected value or an operation that is not
@@ -351,8 +356,8 @@ page. The example tests compile and run, so they are the safest to copy from.
 | To check                                     | Read                                                                                                                                         |
 |----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | a call in any language                       | the engine's book, `plan/api/<engine>.md`, then the code and its tests                                                                       |
-| a Bun or Node call                           | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                            |
-| a Python call                                | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                                      |
+| a Bun or Node call                           | `docs/reference/bun/<engine>.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                   |
+| a Python call                                | `docs/reference/python/<engine>.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                             |
 | a Rust call                                  | `crates/tinystore/src/<engine>/`, its doc comments and `*_tests.rs`                                                                          |
 | what a guarantee rests on                    | CONTRACTS.md: each promise by its id, and the tests that name it                                                                             |
 | a limit or a default                         | the engine's book, then the constant in the code                                                                                             |
@@ -410,8 +415,7 @@ npm shows `sdk/js/README.md` and PyPI shows `sdk/python/README.md`. Each is a
 short page for someone who found the package there: the headline, a paragraph
 on how the SDK reaches a store, the sample in its own language, the engines,
 how to connect, the command line, and links to the guides. Keep every call and
-option in `docs/reference/bun.md` and `docs/reference/python.md`, not on the
-package page.
+option in the API reference, `docs/reference/`, not on the package page.
 
 - `bun run readme` in `web/` writes the headline, the sample and the engines from
   `web/landing.md`, in the package's language only.

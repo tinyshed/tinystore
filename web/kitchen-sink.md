@@ -7,8 +7,8 @@ where a change to the styles shows everything it touches at once.
 ## Text
 
 A paragraph with `inline code`, **bold**, _emphasis_, a link to
-[another page](../docs/metrics/README.md#ask-how-much), one to
-[a file of the repository](../kv/kv.go) and one
+[another page](../docs/start/first-store.md#what-a-crash-does), one to
+[a file of the repository](../crates/tinystore/src/kv/mod.rs) and one
 [elsewhere](https://github.com/tinyshed/tinystore).
 
 - A list item
@@ -50,7 +50,7 @@ requests.labels(route="/users").inc()
 ```
 
 ```go title="metrics.go"
-requests := store.Counter("http_requests_total")
+requests, err := metrics.OpenCounter(store, "http_requests_total")
 ```
 
 ```go title="routes.go"

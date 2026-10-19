@@ -1,6 +1,6 @@
 # Store API for Python
 
-Every public class, function and type of the store in `tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Go](../go/store.md) and [Rust](../rust/store.md) pages list the same API.
+Every public class, function and type of the store in `tinystore`, generated from its source. The [Store guide](../../start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Go](../go/store.md) and [Rust](../rust/store.md) pages list the same API.
 
 ## SelfMetrics
 
@@ -28,7 +28,8 @@ What a server is, as its WELCOME said it to this store's connection.
 
 ```python
 class Store:
-    ...
+    metrics: Metrics  # Series by name and labels, their reads and aggregates, and the program's instruments.
+    clock: Clock  # The test's clock of a private store opened with ``clock``; on any other, its calls are InvalidError.
 ```
 
 The store in a directory, as this process reaches it. Close it once: ``async with`` does.

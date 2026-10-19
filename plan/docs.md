@@ -1,7 +1,8 @@
 # The documentation for the Rust release
 
-The guides in `docs/` describe the Go release candidates. This file is the
-plan for replacing them: what the new documentation is made of, its contents,
+The guides in `docs/` described the Go release candidates; they were removed
+on 19 October, and Part I, `docs/start/`, was written in their place. This
+file is the plan for the rest: what the new documentation is made of, its contents,
 what each old page becomes, what the site needs before the pages are written,
 and what ships with `v0.1.0`. Draft, 19 October 2026, for the owner.
 

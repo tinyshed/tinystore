@@ -1,6 +1,6 @@
 # Search API for Bun and Node
 
-Every public class, function and type of the Search engine in `@tinyshed/tinystore`, generated from its source. The [Search guide](../../sql/search.md) explains how to use them, and the [Python](../python/search.md), [Go](../go/search.md) and [Rust](../rust/search.md) pages list the same API.
+Every public class, function and type of the Search engine in `@tinyshed/tinystore`, generated from its source. The [Search guide](../../start/why.md#the-engines) explains how to use them, and the [Python](../python/search.md), [Go](../go/search.md) and [Rust](../rust/search.md) pages list the same API.
 
 ## IndexOptions
 

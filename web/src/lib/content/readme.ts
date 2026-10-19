@@ -30,7 +30,7 @@ export interface Readme {
 
 // GitHub has no language switch, so the language that embeds TinyStore shows and the others fold
 export const readmes: Readme[] = [
-	{ file: readmeFile, languages: ['go', 'bun', 'python'], page: 'repository' },
+	{ file: readmeFile, languages: ['bun', 'python', 'go', 'rust'], page: 'repository' },
 	{ file: 'sdk/js/README.md', languages: ['bun'], page: 'package' },
 	{ file: 'sdk/python/README.md', languages: ['python'], page: 'package' },
 ]

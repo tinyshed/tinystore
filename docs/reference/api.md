@@ -2,20 +2,20 @@
 
 Every public type, function and method of TinyStore in Bun and Node, Python, Go and Rust, generated from the source with its signature and doc comment. Use it to look up an exact name or type. The guides explain how to use each engine.
 
-| Engine                          | Bun and Node                    | Python                             | Go                             | Rust                             |
-|---------------------------------|---------------------------------|------------------------------------|--------------------------------|----------------------------------|
-| [Store](../languages.md)        | [Store API](bun/store.md)       | [Store API](python/store.md)       | [Store API](go/store.md)       | [Store API](rust/store.md)       |
-| [SQL](../sql/README.md)         | [SQL API](bun/sql.md)           | [SQL API](python/sql.md)           | [SQL API](go/sql.md)           | [SQL API](rust/sql.md)           |
-| [KV](../kv/README.md)           | [KV API](bun/kv.md)             | [KV API](python/kv.md)             | [KV API](go/kv.md)             | [KV API](rust/kv.md)             |
-| [Jobs](../jobs/README.md)       | [Jobs API](bun/jobs.md)         | [Jobs API](python/jobs.md)         | [Jobs API](go/jobs.md)         | [Jobs API](rust/jobs.md)         |
-| [Blobs](../blobs/README.md)     | [Blobs API](bun/blobs.md)       | [Blobs API](python/blobs.md)       | [Blobs API](go/blobs.md)       | [Blobs API](rust/blobs.md)       |
-| [Search](../sql/search.md)      | [Search API](bun/search.md)     | [Search API](python/search.md)     | [Search API](go/search.md)     | [Search API](rust/search.md)     |
-| [Channels](../languages.md)     | [Channels API](bun/channels.md) | [Channels API](python/channels.md) | [Channels API](go/channels.md) | [Channels API](rust/channels.md) |
-| [Locks](../languages.md)        | [Locks API](bun/locks.md)       | [Locks API](python/locks.md)       | [Locks API](go/locks.md)       | [Locks API](rust/locks.md)       |
-| [Config](../kv/configs.md)      | [Config API](bun/config.md)     | [Config API](python/config.md)     | [Config API](go/config.md)     | [Config API](rust/config.md)     |
-| [Records](../records/README.md) | [Records API](bun/records.md)   | [Records API](python/records.md)   | [Records API](go/records.md)   | [Records API](rust/records.md)   |
-| [Metrics](../metrics/README.md) | [Metrics API](bun/metrics.md)   | [Metrics API](python/metrics.md)   | [Metrics API](go/metrics.md)   | [Metrics API](rust/metrics.md)   |
-| [Backup](../running/backups.md) | [Backup API](bun/backup.md)     | [Backup API](python/backup.md)     | [Backup API](go/backup.md)     | [Backup API](rust/backup.md)     |
+| Engine                                  | Bun and Node                    | Python                             | Go                             | Rust                             |
+|-----------------------------------------|---------------------------------|------------------------------------|--------------------------------|----------------------------------|
+| [Store](../start/directory.md)          | [Store API](bun/store.md)       | [Store API](python/store.md)       | [Store API](go/store.md)       | [Store API](rust/store.md)       |
+| [SQL](../start/why.md#the-engines)      | [SQL API](bun/sql.md)           | [SQL API](python/sql.md)           | [SQL API](go/sql.md)           | [SQL API](rust/sql.md)           |
+| [KV](../start/why.md#the-engines)       | [KV API](bun/kv.md)             | [KV API](python/kv.md)             | [KV API](go/kv.md)             | [KV API](rust/kv.md)             |
+| [Jobs](../start/why.md#the-engines)     | [Jobs API](bun/jobs.md)         | [Jobs API](python/jobs.md)         | [Jobs API](go/jobs.md)         | [Jobs API](rust/jobs.md)         |
+| [Blobs](../start/why.md#the-engines)    | [Blobs API](bun/blobs.md)       | [Blobs API](python/blobs.md)       | [Blobs API](go/blobs.md)       | [Blobs API](rust/blobs.md)       |
+| [Search](../start/why.md#the-engines)   | [Search API](bun/search.md)     | [Search API](python/search.md)     | [Search API](go/search.md)     | [Search API](rust/search.md)     |
+| [Channels](../start/why.md#the-engines) | [Channels API](bun/channels.md) | [Channels API](python/channels.md) | [Channels API](go/channels.md) | [Channels API](rust/channels.md) |
+| [Locks](../start/why.md#the-engines)    | [Locks API](bun/locks.md)       | [Locks API](python/locks.md)       | [Locks API](go/locks.md)       | [Locks API](rust/locks.md)       |
+| [Config](../start/why.md#the-engines)   | [Config API](bun/config.md)     | [Config API](python/config.md)     | [Config API](go/config.md)     | [Config API](rust/config.md)     |
+| [Records](../start/why.md#the-engines)  | [Records API](bun/records.md)   | [Records API](python/records.md)   | [Records API](go/records.md)   | [Records API](rust/records.md)   |
+| [Metrics](../start/why.md#the-engines)  | [Metrics API](bun/metrics.md)   | [Metrics API](python/metrics.md)   | [Metrics API](go/metrics.md)   | [Metrics API](rust/metrics.md)   |
+| [Backup](../start/why.md#the-engines)   | [Backup API](bun/backup.md)     | [Backup API](python/backup.md)     | [Backup API](go/backup.md)     | [Backup API](rust/backup.md)     |
 
 ## For AI agents
 

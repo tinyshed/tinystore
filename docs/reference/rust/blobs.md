@@ -1,6 +1,6 @@
 # Blobs API for Rust
 
-Every public type, trait and function of the Blobs engine in `tinystore::blobs`, generated from its source. The [Blobs guide](../../blobs/README.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Python](../python/blobs.md) and [Go](../go/blobs.md) pages list the same API.
+Every public type, trait and function of the Blobs engine in `tinystore::blobs`, generated from its source. The [Blobs guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Python](../python/blobs.md) and [Go](../go/blobs.md) pages list the same API.
 
 ## Store
 

@@ -1,6 +1,6 @@
 # Config API for Bun and Node
 
-Every public class, function and type of the Config engine in `@tinyshed/tinystore`, generated from its source. The [Config guide](../../kv/configs.md) explains how to use them, and the [Python](../python/config.md), [Go](../go/config.md) and [Rust](../rust/config.md) pages list the same API.
+Every public class, function and type of the Config engine in `@tinyshed/tinystore`, generated from its source. The [Config guide](../../start/why.md#the-engines) explains how to use them, and the [Python](../python/config.md), [Go](../go/config.md) and [Rust](../rust/config.md) pages list the same API.
 
 ## Setting
 

@@ -430,6 +430,9 @@ function start(
 	return undefined
 }
 
+// what a Rust type has from a trait it derives, which rustdoc lists apart from its methods
+const derived = new Set(['default', 'clone', 'into', 'from', 'to_owned', 'to_string'])
+
 // a function a program calls by its name alone, `open('./data')`, and not a type
 function isFunction(code: string): boolean {
 	return /^(declare )?(async )?(function|def|pub (async )?fn) /.test(code)
@@ -450,7 +453,7 @@ function follow(
 			: api.types.get(receiver.name)?.get(name)
 	if (entry === undefined) {
 		const known = receiver.kind === 'package' || api.types.has(receiver.name)
-		if (known) {
+		if (known && !(language === 'rust' && derived.has(name))) {
 			const owner = receiver.kind === 'package' ? `package ${receiver.name}` : receiver.name
 			out.problems.push({
 				line: text.slice(0, at).split('\n').length,

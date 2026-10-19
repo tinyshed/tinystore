@@ -1,6 +1,6 @@
 # Metrics API for Bun and Node
 
-Every public class, function and type of the Metrics engine in `@tinyshed/tinystore`, generated from its source. The [Metrics guide](../../metrics/README.md) explains how to use them, and the [Python](../python/metrics.md), [Go](../go/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
+Every public class, function and type of the Metrics engine in `@tinyshed/tinystore`, generated from its source. The [Metrics guide](../../start/why.md#the-engines) explains how to use them, and the [Python](../python/metrics.md), [Go](../go/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
 
 ## SeriesKind
 

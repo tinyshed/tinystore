@@ -1,6 +1,6 @@
 # SQL API for Rust
 
-Every public type, trait and function of the SQL engine in `tinystore::sql`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md), [Python](../python/sql.md) and [Go](../go/sql.md) pages list the same API.
+Every public type, trait and function of the SQL engine in `tinystore::sql`, generated from its source. The [SQL guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/sql.md), [Python](../python/sql.md) and [Go](../go/sql.md) pages list the same API.
 
 ## Store
 

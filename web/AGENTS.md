@@ -12,8 +12,7 @@ Built: the landing page, a page for every file `docs/README.md` links, search, s
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
-themselves are the design documents until the guides are written; `Metrics`
-under Store is the one guide, and the shape the others follow.
+are the book of `plan/docs.md`, written a part at a time: Start is.
 
 Not built: a page of the site's own statistics.
 
@@ -25,7 +24,7 @@ private `tinyshed/landing` repository runs on the server.
 
 **`docs/README.md` is the sidebar.** Each second-level heading is a section,
 each item of its list an entry in order: a link to a file under `docs/` is a
-page at the same path, `docs/store/metrics.md` → `/docs/store/metrics`; a link
+page at the same path, `docs/start/why.md` → `/docs/start/why`; a link
 anywhere else is a link out; an item without a link is a page not written yet,
 shown and not linked. GitHub shows the same file as the table of contents.
 

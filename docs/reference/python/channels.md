@@ -1,6 +1,6 @@
 # Channels API for Python
 
-Every public class, function and type of the Channels engine in `tinystore`, generated from its source. The [Channels guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/channels.md), [Go](../go/channels.md) and [Rust](../rust/channels.md) pages list the same API.
+Every public class, function and type of the Channels engine in `tinystore`, generated from its source. The [Channels guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/channels.md), [Go](../go/channels.md) and [Rust](../rust/channels.md) pages list the same API.
 
 ## Message
 

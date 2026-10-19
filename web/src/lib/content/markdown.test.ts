@@ -75,7 +75,7 @@ describe('a page as HTML', () => {
 describe('a page as markdown elsewhere', () => {
 	test("links absolutely and leaves the editors' notes out", () => {
 		const markdown = exportMarkdown(
-			parse('# Page\n\n<!-- a note -->\n\n[KV](kv.md#expiry), [code](../kv/kv.go)\n'),
+			parse('# Page\n\n<!-- a note -->\n\n[KV](kv.md#expiry), [code](../sdk/js/README.md)\n'),
 			links(),
 			from,
 			new Set(),
@@ -83,7 +83,9 @@ describe('a page as markdown elsewhere', () => {
 		)
 
 		expect(markdown).toContain('[KV](https://docs.example/docs/kv#expiry)')
-		expect(markdown).toContain('[code](https://github.com/tinyshed/tinystore/blob/abc123/kv/kv.go)')
+		expect(markdown).toContain(
+			'[code](https://github.com/tinyshed/tinystore/blob/abc123/sdk/js/README.md)',
+		)
 		expect(markdown).not.toContain('a note')
 	})
 })

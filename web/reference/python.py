@@ -109,6 +109,8 @@ def klass(node: ast.ClassDef) -> dict:
             lines.append("    " + field(child, body[at + 1] if at + 1 < len(body) else None))
         elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and public(child.name):
             add_method(members, node.name, child)
+        elif isinstance(child, ast.FunctionDef) and child.name == "__init__":
+            lines.extend("    " + line for line in set_in_init(child))
     if len(lines) == 1:
         lines.append("    ...")
     return {
@@ -117,6 +119,23 @@ def klass(node: ast.ClassDef) -> dict:
         "doc": markdown(ast.get_docstring(node)),
         "members": members,
     }
+
+
+def set_in_init(init: ast.FunctionDef) -> list[str]:
+    """The public attributes __init__ sets from a class, `self.metrics = Metrics(link)`, as fields."""
+    lines = []
+    body = init.body
+    for at, child in enumerate(body):
+        if not (isinstance(child, ast.Assign) and isinstance(child.value, ast.Call)):
+            continue
+        target = child.targets[0]
+        kind = getattr(child.value.func, "id", "")
+        if isinstance(target, ast.Attribute) and getattr(target.value, "id", "") == "self" and public(target.attr) and kind:
+            line = f"{target.attr}: {kind}"
+            following = body[at + 1] if at + 1 < len(body) else None
+            doc = docstring_after(following)
+            lines.append(line if doc is None else f"{line}  # {' '.join(doc.split())}")
+    return lines
 
 
 def head(node: ast.ClassDef) -> str:

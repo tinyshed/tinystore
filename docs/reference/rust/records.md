@@ -1,6 +1,6 @@
 # Records API for Rust
 
-Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
+Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console`, generated from its source. The [Records guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
 
 ## Store
 

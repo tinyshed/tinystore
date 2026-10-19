@@ -42,7 +42,7 @@ describe('the README', () => {
 		)
 	})
 
-	test('centres the headline, shows the Go sample, folds the others and links from the top', () => {
+	test('centres the headline, shows the TypeScript sample, folds the others and links from the top', () => {
 		const readme = [
 			'<!-- landing:headline -->',
 			'<!-- /landing:headline -->',
@@ -72,18 +72,9 @@ describe('the README', () => {
 				'',
 				'<!-- landing:sample -->',
 				'',
-				'```go',
-				'store, err := tinystore.Open(ctx, "./data", tinystore.Options{})',
-				'```',
-				'',
-				'<details>',
-				'<summary><b>Bun</b></summary>',
-				'',
 				'```ts',
 				"import { open } from '@tinyshed/tinystore'",
 				'```',
-				'',
-				'</details>',
 				'',
 				'<details>',
 				'<summary><b>Python</b></summary>',
@@ -94,10 +85,19 @@ describe('the README', () => {
 				'',
 				'</details>',
 				'',
+				'<details>',
+				'<summary><b>Go</b></summary>',
+				'',
+				'```go',
+				'store, err := tinystore.Open(ctx, "./data", tinystore.Options{})',
+				'```',
+				'',
+				'</details>',
+				'',
 				'```sh',
-				'go get github.com/tinyshed/tinystore',
 				'bun add @tinyshed/tinystore',
 				'pip install tinyshed-tinystore',
+				'go get github.com/tinyshed/tinystore',
 				'```',
 				'',
 				'<!-- /landing:sample -->',
@@ -168,9 +168,9 @@ describe('the README', () => {
 		const readme = readFileSync(join(checkout(), readmeFile), 'utf8')
 
 		expect(readmeProblems(readme, site)).toEqual([])
-		expect(readmeProblems('[gone](docs/gone.md), [kv](docs/kv/README.md#nowhere)', site)).toEqual([
+		expect(readmeProblems('[gone](docs/gone.md), [why](docs/start/why.md#nowhere)', site)).toEqual([
 			'docs/gone.md does not exist',
-			'docs/kv/README.md has no heading #nowhere',
+			'docs/start/why.md has no heading #nowhere',
 		])
 	})
 

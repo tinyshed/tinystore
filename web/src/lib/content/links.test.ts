@@ -29,11 +29,11 @@ describe('a link written for GitHub', () => {
 	})
 
 	test('to another file of the repository opens on GitHub at the built commit', () => {
-		expect(resolveLink(links(), from, '../../metrics/README.md#public-use', here, 'link')).toEqual({
-			href: 'https://github.com/tinyshed/tinystore/blob/abc123/metrics/README.md#public-use',
+		expect(resolveLink(links(), from, '../../sdk/js/README.md#engines', here, 'link')).toEqual({
+			href: 'https://github.com/tinyshed/tinystore/blob/abc123/sdk/js/README.md#engines',
 		})
-		expect(resolveLink(links(), from, '../../metrics', here, 'link')).toEqual({
-			href: 'https://github.com/tinyshed/tinystore/tree/abc123/metrics',
+		expect(resolveLink(links(), from, '../../sdk/js', here, 'link')).toEqual({
+			href: 'https://github.com/tinyshed/tinystore/tree/abc123/sdk/js',
 		})
 	})
 

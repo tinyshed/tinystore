@@ -1,6 +1,6 @@
 # Channels API for Rust
 
-Every public type, trait and function of the Channels engine in `tinystore::channels`, generated from its source. The [Channels guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/channels.md), [Python](../python/channels.md) and [Go](../go/channels.md) pages list the same API.
+Every public type, trait and function of the Channels engine in `tinystore::channels`, generated from its source. The [Channels guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/channels.md), [Python](../python/channels.md) and [Go](../go/channels.md) pages list the same API.
 
 ## Store
 

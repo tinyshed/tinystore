@@ -1,6 +1,6 @@
 # Store API for Rust
 
-Every public type, trait and function of the store in `tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Python](../python/store.md) and [Go](../go/store.md) pages list the same API.
+Every public type, trait and function of the store in `tinystore`, generated from its source. The [Store guide](../../start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Python](../python/store.md) and [Go](../go/store.md) pages list the same API.
 
 ## Clock
 

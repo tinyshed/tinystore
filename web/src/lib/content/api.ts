@@ -23,18 +23,18 @@ export interface ApiEngine {
 }
 
 export const apiEngines: ApiEngine[] = [
-	{ slug: 'store', title: 'Store', guide: 'languages.md' },
-	{ slug: 'sql', title: 'SQL', guide: 'sql/README.md' },
-	{ slug: 'kv', title: 'KV', guide: 'kv/README.md' },
-	{ slug: 'jobs', title: 'Jobs', guide: 'jobs/README.md' },
-	{ slug: 'blobs', title: 'Blobs', guide: 'blobs/README.md' },
-	{ slug: 'search', title: 'Search', guide: 'sql/search.md' },
-	{ slug: 'channels', title: 'Channels', guide: 'languages.md' },
-	{ slug: 'locks', title: 'Locks', guide: 'languages.md' },
-	{ slug: 'config', title: 'Config', guide: 'kv/configs.md' },
-	{ slug: 'records', title: 'Records', guide: 'records/README.md' },
-	{ slug: 'metrics', title: 'Metrics', guide: 'metrics/README.md' },
-	{ slug: 'backup', title: 'Backup', guide: 'running/backups.md' },
+	{ slug: 'store', title: 'Store', guide: 'start/directory.md' },
+	{ slug: 'sql', title: 'SQL', guide: 'start/why.md#the-engines' },
+	{ slug: 'kv', title: 'KV', guide: 'start/why.md#the-engines' },
+	{ slug: 'jobs', title: 'Jobs', guide: 'start/why.md#the-engines' },
+	{ slug: 'blobs', title: 'Blobs', guide: 'start/why.md#the-engines' },
+	{ slug: 'search', title: 'Search', guide: 'start/why.md#the-engines' },
+	{ slug: 'channels', title: 'Channels', guide: 'start/why.md#the-engines' },
+	{ slug: 'locks', title: 'Locks', guide: 'start/why.md#the-engines' },
+	{ slug: 'config', title: 'Config', guide: 'start/why.md#the-engines' },
+	{ slug: 'records', title: 'Records', guide: 'start/why.md#the-engines' },
+	{ slug: 'metrics', title: 'Metrics', guide: 'start/why.md#the-engines' },
+	{ slug: 'backup', title: 'Backup', guide: 'start/why.md#the-engines' },
 ]
 
 export const apiIndexFile = 'docs/reference/api.md'

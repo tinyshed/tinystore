@@ -1,6 +1,6 @@
 # Blobs API for Python
 
-Every public class, function and type of the Blobs engine in `tinystore`, generated from its source. The [Blobs guide](../../blobs/README.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Go](../go/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
+Every public class, function and type of the Blobs engine in `tinystore`, generated from its source. The [Blobs guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Go](../go/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
 
 ## FileInfo
 

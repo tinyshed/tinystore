@@ -1,6 +1,6 @@
 # Channels API for Go
 
-Every public type, function and constant of the Channels engine in `tinyshed.org/tinystore/channels`, generated from its source. The [Channels guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/channels.md), [Python](../python/channels.md) and [Rust](../rust/channels.md) pages list the same API.
+Every public type, function and constant of the Channels engine in `tinyshed.org/tinystore/channels`, generated from its source. The [Channels guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/channels.md), [Python](../python/channels.md) and [Rust](../rust/channels.md) pages list the same API.
 
 ## Channel
 
