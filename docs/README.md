@@ -153,11 +153,11 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Config
 
 - [Overview](guides/config/README.md)
-- Layers and files
-- Secrets and required settings
-- Live settings
-- Watching
-- Explain and validate
+- [Layers and files](guides/config/layers.md)
+- [Secrets and required settings](guides/config/secrets.md)
+- [Live settings](guides/config/live.md)
+- [Watching](guides/config/watching.md)
+- [Explain and validate](guides/config/explain.md)
 
 ### Records
 

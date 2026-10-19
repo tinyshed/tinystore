@@ -69,13 +69,13 @@ println!("{}", config.explain());
 
 ## In these guides
 
-| Page                          | Covers                                              |
-|-------------------------------|-----------------------------------------------------|
-| Layers and files              | objects, TOML, YAML and JSON files, the environment |
-| Secrets and required settings | `secret`, `required`, `_FILE` variables             |
-| Live settings                 | `live`, `update`, `reset`, `ifVersion`              |
-| Watching                      | `watch` in this process and others                  |
-| Explain and validate          | where a value came from, the program's own checks   |
+| Page                                        | Covers                                              |
+|---------------------------------------------|-----------------------------------------------------|
+| [Layers and files](layers.md)               | objects, TOML, YAML and JSON files, the environment |
+| [Secrets and required settings](secrets.md) | `secret`, `required`, `_FILE` variables             |
+| [Live settings](live.md)                    | `live`, `update`, `reset`, `ifVersion`              |
+| [Watching](watching.md)                     | `watch` in this process and others                  |
+| [Explain and validate](explain.md)          | where a value came from, the program's own checks   |
 
 New to Config? [Settings](../../handbook/chat/settings.md) in the Handbook
 declares a chat's settings and turns its replies off live.
