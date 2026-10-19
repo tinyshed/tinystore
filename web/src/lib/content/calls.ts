@@ -512,7 +512,10 @@ function follow(
 			? api.top.get(`${receiver.name}.${name}`)
 			: memberOf(api, receiver.name, name)
 	if (entry === undefined) {
-		const known = receiver.kind === 'package' || api.types.has(receiver.name)
+		// a snapshot that derefs to the program's own type, `T`, has members nobody lists
+		const target = api.derefs.get(receiver.name)
+		const opaque = target !== undefined && !api.types.has(target)
+		const known = receiver.kind === 'package' || (api.types.has(receiver.name) && !opaque)
 		if (known && !(language === 'rust' && derived.has(name))) {
 			const owner = receiver.kind === 'package' ? `package ${receiver.name}` : receiver.name
 			out.problems.push({

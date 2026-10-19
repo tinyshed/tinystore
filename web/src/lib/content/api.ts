@@ -31,7 +31,7 @@ export const apiEngines: ApiEngine[] = [
 	{ slug: 'search', title: 'Search', guide: 'chat/finding-old-messages.md' },
 	{ slug: 'channels', title: 'Channels', guide: 'chat/live-updates.md' },
 	{ slug: 'locks', title: 'Locks', guide: 'chat/live-updates.md#one-summary-per-chat-at-a-time' },
-	{ slug: 'config', title: 'Config', guide: 'start/why.md#the-engines' },
+	{ slug: 'config', title: 'Config', guide: 'chat/settings.md' },
 	{ slug: 'records', title: 'Records', guide: 'start/why.md#the-engines' },
 	{ slug: 'metrics', title: 'Metrics', guide: 'start/why.md#the-engines' },
 	{ slug: 'backup', title: 'Backup', guide: 'start/why.md#the-engines' },

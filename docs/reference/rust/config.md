@@ -1,6 +1,6 @@
 # Config API for Rust
 
-Every public type, trait and function of the Config engine in `tinystore::config`, generated from its source. The [Config guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/config.md), [Python](../python/config.md) and [Go](../go/config.md) pages list the same API.
+Every public type, trait and function of the Config engine in `tinystore::config`, generated from its source. The [Config guide](../../chat/settings.md) explains how to use them, and the [Bun and Node](../bun/config.md), [Python](../python/config.md) and [Go](../go/config.md) pages list the same API.
 
 ## Store
 

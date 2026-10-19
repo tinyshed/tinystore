@@ -114,6 +114,15 @@ describe('a block of a guide', () => {
 		])
 	})
 
+	test("leaves alone what a snapshot of the program's own type holds", () => {
+		expect(
+			calls(
+				'rust',
+				'let config = store.config("chat", Settings::default()).open()?;\nlet settings = config.get();\nsettings.model.name',
+			),
+		).toEqual(['config → Store.config', 'open → ConfigBuilder.open', 'get → Config.get'])
+	})
+
 	test("knows a Rust enum's variants", () => {
 		expect(calls('rust', 'let kind = ConstraintKind::ForeignKey;')).toEqual([
 			'ForeignKey → ConstraintKind.ForeignKey',
