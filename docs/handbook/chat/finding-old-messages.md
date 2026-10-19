@@ -334,5 +334,5 @@ have every number.
 - [Messages](messages.md): the table this index follows.
 - [Replies in the background](replies.md): the worker that can fill the
   vectors.
-- [Search API reference](../reference/bun/search.md): every call of indexes
+- [Search API reference](../../reference/bun/search.md): every call of indexes
   and searches.

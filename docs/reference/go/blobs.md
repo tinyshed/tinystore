@@ -1,6 +1,6 @@
 # Blobs API for Go
 
-Every public type, function and constant of the Blobs engine in `tinyshed.org/tinystore/blobs`, generated from its source. The [Blobs guide](../../chat/attachments.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Python](../python/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
+Every public type, function and constant of the Blobs engine in `tinyshed.org/tinystore/blobs`, generated from its source. The [Blobs guide](../../guides/blobs/README.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Python](../python/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
 
 ## After
 

@@ -10,12 +10,15 @@
 
 	let sidebar: HTMLElement | undefined = $state()
 
+	// the sidebar is the current part's: the Handbook's at /docs, which belongs to none
+	const book = $derived((page.data.page as { book?: string } | undefined)?.book || 'Handbook')
+
 	afterNavigate(() => revealCurrent(sidebar))
 </script>
 
 <div class="docs">
 	<aside class="sidebar" bind:this={sidebar}>
-		<Sidebar nav={data.nav} current={sidebarPath(unbase(page.url.pathname))} />
+		<Sidebar nav={data.nav.filter(group => group.book === book)} current={sidebarPath(unbase(page.url.pathname))} />
 	</aside>
 	{@render children()}
 </div>

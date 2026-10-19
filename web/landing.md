@@ -99,19 +99,19 @@ store.metrics()?.counter("signups_total").open()?.inc();
 
 ## Engines
 
-|                                                                      |                   |                                                                         |
-|----------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
-| [SQL](../docs/chat/messages.md)                                      | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](../docs/chat/sessions-and-limits.md)                            | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](../docs/chat/replies.md)                                      | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
-| [Blobs](../docs/chat/attachments.md)                                 | Files             | Files by path, written whole or not at all, checked when read.          |
-| [Search](../docs/chat/finding-old-messages.md)                       | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
-| [Channels](../docs/chat/live-updates.md)                             | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
-| [Locks](../docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
-| [Config](../docs/chat/settings.md)                                   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](../docs/chat/what-it-is-doing.md)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](../docs/chat/how-fast-it-is.md)                            | Time series       | Samples kept bit for bit, answered exactly.                             |
-| [Backup](../docs/chat/keeping-it.md)                                 | The whole store   | One checked zip of every engine, taken while it runs.                   |
+|                                               |                   |                                                                         |
+|-----------------------------------------------|-------------------|-------------------------------------------------------------------------|
+| [SQL](../docs/guides/sql/README.md)           | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
+| [KV](../docs/guides/kv/README.md)             | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [Jobs](../docs/guides/jobs/README.md)         | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Blobs](../docs/guides/blobs/README.md)       | Files             | Files by path, written whole or not at all, checked when read.          |
+| [Search](../docs/guides/search/README.md)     | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
+| [Channels](../docs/guides/channels/README.md) | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
+| [Locks](../docs/guides/locks/README.md)       | Coordination      | Locks and semaphores with fences, across processes and connections.     |
+| [Config](../docs/guides/config/README.md)     | Settings          | Files and the environment in layers; secrets; settings changed live.    |
+| [Records](../docs/guides/records/README.md)   | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Metrics](../docs/guides/metrics/README.md)   | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Backup](../docs/guides/backup/README.md)     | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 ## Measured against what it replaces.
 

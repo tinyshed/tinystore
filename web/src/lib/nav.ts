@@ -7,6 +7,8 @@ export interface NavLink {
 }
 
 export interface NavGroup {
+	/** the part it is in, a tab of the header */
+	book: string
 	title: string
 	items: NavLink[]
 }

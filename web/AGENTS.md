@@ -12,8 +12,8 @@ Built: the landing page, a page for every file `docs/README.md` links, search, s
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
-are the book of `plan/docs.md`, written for this branch: Start, Building the
-chat, Under the hood, Beyond one machine and Production.
+are the book of `plan/docs.md`, written for this branch: the Handbook's
+five parts in `docs/handbook/`, and the Guides' overviews in `docs/guides/`.
 
 Not built: a page of the site's own statistics.
 
@@ -23,8 +23,10 @@ private `tinyshed/landing` repository runs on the server.
 
 ## The docs are the source, the site a reading of them
 
-**`docs/README.md` is the sidebar.** Each second-level heading is a section,
-each item of its list an entry in order: a link to a file under `docs/` is a
+**`docs/README.md` is the sidebar.** Each second-level heading is a part, a
+tab of the header with a sidebar of its own (Handbook, Guides, Reference),
+each third-level heading a section of it, and each item of its list an entry
+in order: a link to a file under `docs/` is a
 page at the same path, `docs/start/why.md` → `/docs/start/why`; a link
 anywhere else is a link out; an item without a link is a page not written yet,
 shown and not linked. GitHub shows the same file as the table of contents.

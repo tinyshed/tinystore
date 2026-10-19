@@ -1,6 +1,6 @@
 # Locks API for Go
 
-Every public type, function and constant of the Locks engine in `tinyshed.org/tinystore/locks`, generated from its source. The [Locks guide](../../chat/live-updates.md#one-summary-per-chat-at-a-time) explains how to use them, and the [Bun and Node](../bun/locks.md), [Python](../python/locks.md) and [Rust](../rust/locks.md) pages list the same API.
+Every public type, function and constant of the Locks engine in `tinyshed.org/tinystore/locks`, generated from its source. The [Locks guide](../../guides/locks/README.md) explains how to use them, and the [Bun and Node](../bun/locks.md), [Python](../python/locks.md) and [Rust](../rust/locks.md) pages list the same API.
 
 ## Fence
 

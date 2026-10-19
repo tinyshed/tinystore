@@ -1,6 +1,6 @@
 # Backup API for Go
 
-Every public type, function and constant of the Backup engine in `tinyshed.org/tinystore`, generated from its source. The [Backup guide](../../chat/keeping-it.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Python](../python/backup.md) and [Rust](../rust/backup.md) pages list the same API.
+Every public type, function and constant of the Backup engine in `tinyshed.org/tinystore`, generated from its source. The [Backup guide](../../guides/backup/README.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Python](../python/backup.md) and [Rust](../rust/backup.md) pages list the same API.
 
 ## Backup
 

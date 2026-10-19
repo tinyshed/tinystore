@@ -132,7 +132,7 @@ to another server is copying a folder.
 there is, and its file format survives crashes and power loss. It needs no
 server. TinyStore runs it in a specific way: one writer per file, writes from
 many callers grouped into one disk sync, and readers that never block the
-writer. [Under the hood](../README.md#under-the-hood) explains each choice.
+writer. [Under the hood](../../README.md#under-the-hood) explains each choice.
 
 **Why a file per engine.** SQLite lets one connection write a file at a time.
 If logs, jobs and sessions shared a file, a burst of log lines would make a

@@ -1,6 +1,6 @@
 # Backup API for Python
 
-Every public class, function and type of the Backup engine in `tinystore`, generated from its source. The [Backup guide](../../chat/keeping-it.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Go](../go/backup.md) and [Rust](../rust/backup.md) pages list the same API.
+Every public class, function and type of the Backup engine in `tinystore`, generated from its source. The [Backup guide](../../guides/backup/README.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Go](../go/backup.md) and [Rust](../rust/backup.md) pages list the same API.
 
 ## Backup
 

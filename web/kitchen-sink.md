@@ -7,7 +7,7 @@ where a change to the styles shows everything it touches at once.
 ## Text
 
 A paragraph with `inline code`, **bold**, _emphasis_, a link to
-[another page](../docs/start/first-store.md#what-a-crash-does), one to
+[another page](../docs/handbook/start/first-store.md#what-a-crash-does), one to
 [a file of the repository](../crates/tinystore/src/kv/mod.rs) and one
 [elsewhere](https://github.com/tinyshed/tinystore).
 

@@ -168,10 +168,9 @@ describe('the README', () => {
 		const readme = readFileSync(join(checkout(), readmeFile), 'utf8')
 
 		expect(readmeProblems(readme, site)).toEqual([])
-		expect(readmeProblems('[gone](docs/gone.md), [why](docs/start/why.md#nowhere)', site)).toEqual([
-			'docs/gone.md does not exist',
-			'docs/start/why.md has no heading #nowhere',
-		])
+		expect(
+			readmeProblems('[gone](docs/gone.md), [why](docs/handbook/start/why.md#nowhere)', site),
+		).toEqual(['docs/gone.md does not exist', 'docs/handbook/start/why.md has no heading #nowhere'])
 	})
 
 	test.each(readmes.filter(shape => shape.page === 'package'))(

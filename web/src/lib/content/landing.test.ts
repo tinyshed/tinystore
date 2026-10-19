@@ -25,7 +25,7 @@ describe('the landing page', () => {
 		expect(landing.numbers.legend.length).toBeGreaterThan(0)
 		expect(landing.numbers.caveat).toContain('<a href="https://')
 		expect(landingSummary()).toStartWith(`${landing.headline.replace(/\.$/, '')}: `)
-	})
+	}, 30_000) // the first to build the whole site, every page highlighted
 
 	test('fails the build when a part is missing or a link leads nowhere', async () => {
 		const site = await loadSite()

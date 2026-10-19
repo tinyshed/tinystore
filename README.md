@@ -154,31 +154,31 @@ cargo add tinystore
 
 <!-- /landing:sample -->
 
-[Your first store](docs/start/first-store.md) builds a first program step by step.
+[Your first store](docs/handbook/start/first-store.md) builds a first program step by step.
 
 ## Engines
 
 <!-- landing:engines -->
 
-|                                                                   |                   |                                                                         |
-|-------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
-| [SQL](docs/chat/messages.md)                                      | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](docs/chat/sessions-and-limits.md)                            | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](docs/chat/replies.md)                                      | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
-| [Blobs](docs/chat/attachments.md)                                 | Files             | Files by path, written whole or not at all, checked when read.          |
-| [Search](docs/chat/finding-old-messages.md)                       | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
-| [Channels](docs/chat/live-updates.md)                             | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
-| [Locks](docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
-| [Config](docs/chat/settings.md)                                   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](docs/chat/what-it-is-doing.md)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](docs/chat/how-fast-it-is.md)                            | Time series       | Samples kept bit for bit, answered exactly.                             |
-| [Backup](docs/chat/keeping-it.md)                                 | The whole store   | One checked zip of every engine, taken while it runs.                   |
+|                                            |                   |                                                                         |
+|--------------------------------------------|-------------------|-------------------------------------------------------------------------|
+| [SQL](docs/guides/sql/README.md)           | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
+| [KV](docs/guides/kv/README.md)             | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [Jobs](docs/guides/jobs/README.md)         | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Blobs](docs/guides/blobs/README.md)       | Files             | Files by path, written whole or not at all, checked when read.          |
+| [Search](docs/guides/search/README.md)     | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
+| [Channels](docs/guides/channels/README.md) | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
+| [Locks](docs/guides/locks/README.md)       | Coordination      | Locks and semaphores with fences, across processes and connections.     |
+| [Config](docs/guides/config/README.md)     | Settings          | Files and the environment in layers; secrets; settings changed live.    |
+| [Records](docs/guides/records/README.md)   | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Metrics](docs/guides/metrics/README.md)   | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Backup](docs/guides/backup/README.md)     | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 <!-- /landing:engines -->
 
 By default each engine has its own file and its own writer. An application can
 keep its jobs in its SQL database and commit a job together with its rows in
-one commit, as [One directory, many engines](docs/start/directory.md#two-engines-in-one-file)
+one commit, as [One directory, many engines](docs/handbook/start/directory.md#two-engines-in-one-file)
 shows. One call backs up every engine into one checked zip.
 
 ## Documentation
@@ -186,10 +186,10 @@ shows. One call backs up every engine into one checked zip.
 The [documentation](docs/README.md) is a book that builds one application, an
 AI chat, with each example in TypeScript, Python, Go and Rust. Start with these:
 
-- [Why TinyStore](docs/start/why.md): what TinyStore is for and what it replaces
-- [Your first store](docs/start/first-store.md): install it and write a first program
-- [One directory, many engines](docs/start/directory.md): the files, and how each language reaches a store
-- [The chat we build](docs/start/chat.md): the application the book builds
+- [Why TinyStore](docs/handbook/start/why.md): what TinyStore is for and what it replaces
+- [Your first store](docs/handbook/start/first-store.md): install it and write a first program
+- [One directory, many engines](docs/handbook/start/directory.md): the files, and how each language reaches a store
+- [The chat we build](docs/handbook/start/chat.md): the application the book builds
 
 For reference, see the [API reference](docs/reference/api.md) and the
 [wire protocol](docs/wire.md).
@@ -210,9 +210,9 @@ tinystore stop ./data                              # its server, once its work i
 claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for an agent, read only
 ```
 
-[Your first store](docs/start/first-store.md#look-inside) shows the commands
+[Your first store](docs/handbook/start/first-store.md#look-inside) shows the commands
 at work. The image `ghcr.io/tinyshed/tinystore` serves a store to
-remote clients, as [One directory, many engines](docs/start/directory.md#four-ways-to-open-a-store) shows.
+remote clients, as [One directory, many engines](docs/handbook/start/directory.md#four-ways-to-open-a-store) shows.
 
 ## Numbers
 

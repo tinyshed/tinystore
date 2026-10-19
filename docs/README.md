@@ -6,63 +6,197 @@ directory on its own disk. The core is written in Rust. Rust programs call it
 directly, and Bun, Node, Python and Go programs reach the same core through
 their SDK.
 
-These pages are a book. Start reads in twenty minutes and ends with a working
-store. Building the chat writes one application, an AI chat, a chapter per
-engine, so that you can stop after any chapter with a program that runs.
-Under the hood explains how each part works and why it was built that way.
+The documentation has three parts, each for a different moment:
+
+- **[Learn from scratch](handbook/README.md)**: the Handbook builds one
+  application, an AI chat, chapter by chapter, from a first store to copies
+  in another region, and explains why TinyStore is built the way it is.
+- **[Explore the engines](guides/README.md)**: the Guides cover each engine,
+  a page per feature, for when you know what you need: expiry in KV, retries
+  in Jobs, filters in Search.
+- **[Browse the API](reference/api.md)**: the Reference lists every call of
+  every SDK, generated from the source.
+
 Every example is shown in TypeScript, Python, Go and Rust.
 
 <!--
 This file is the documentation's table of contents, here and on the site,
-which is built from these files: each second-level heading is a section of
-its sidebar and each item a page, in this order, which is also the order the
-pages' previous and next links follow. An item without a link is a page
-nobody has written yet; the site shows it and links nowhere. The docs skill
-has the shape and the voice: .agents/skills/docs/SKILL.md.
+which is built from these files. Each second-level heading is a part, a tab
+of the site's header; each third-level heading a section of that part's
+sidebar, and each item a page, in this order, which is also the order the
+pages' previous and next links follow. A part with no third-level heading is
+one section of its own name. An item without a link is a page nobody has
+written yet; the site shows it and links nowhere. The docs skill has the shape
+and the voice: .agents/skills/docs/SKILL.md.
 -->
 
-## Start
+## Handbook
 
-- [Why TinyStore](start/why.md)
-- [Your first store](start/first-store.md)
-- [One directory, many engines](start/directory.md)
-- [The chat we build](start/chat.md)
+### Start
 
-## Building the chat
+- [Learn TinyStore](handbook/README.md)
+- [Why TinyStore](handbook/start/why.md)
+- [Your first store](handbook/start/first-store.md)
+- [One directory, many engines](handbook/start/directory.md)
+- [The chat we build](handbook/start/chat.md)
 
-- [Messages](chat/messages.md)
-- [Sessions and limits](chat/sessions-and-limits.md)
-- [Replies in the background](chat/replies.md)
-- [Attachments](chat/attachments.md)
-- [Finding old messages](chat/finding-old-messages.md)
-- [Live updates](chat/live-updates.md)
-- [Settings](chat/settings.md)
-- [What it is doing](chat/what-it-is-doing.md)
-- [How fast it is](chat/how-fast-it-is.md)
-- [Keeping it](chat/keeping-it.md)
+### Building the chat
 
-## Under the hood
+- [Messages](handbook/chat/messages.md)
+- [Sessions and limits](handbook/chat/sessions-and-limits.md)
+- [Replies in the background](handbook/chat/replies.md)
+- [Attachments](handbook/chat/attachments.md)
+- [Finding old messages](handbook/chat/finding-old-messages.md)
+- [Live updates](handbook/chat/live-updates.md)
+- [Settings](handbook/chat/settings.md)
+- [What it is doing](handbook/chat/what-it-is-doing.md)
+- [How fast it is](handbook/chat/how-fast-it-is.md)
+- [Keeping it](handbook/chat/keeping-it.md)
 
-- [The journey of a write](inside/journey-of-a-write.md)
-- [SQLite as TinyStore runs it](inside/sqlite.md)
-- [One budget of memory](inside/memory.md)
-- [Time and errors](inside/time-and-errors.md)
-- [How a job lives](inside/how-a-job-lives.md)
-- [How logs and metrics pack](inside/how-logs-and-metrics-pack.md)
-- [How search finds](inside/how-search-finds.md)
-- [One core, four languages](inside/one-core.md)
+### Under the hood
 
-## Beyond one machine
+- [The journey of a write](handbook/inside/journey-of-a-write.md)
+- [SQLite as TinyStore runs it](handbook/inside/sqlite.md)
+- [One budget of memory](handbook/inside/memory.md)
+- [Time and errors](handbook/inside/time-and-errors.md)
+- [How a job lives](handbook/inside/how-a-job-lives.md)
+- [How logs and metrics pack](handbook/inside/how-logs-and-metrics-pack.md)
+- [How search finds](handbook/inside/how-search-finds.md)
+- [One core, four languages](handbook/inside/one-core.md)
 
-- [The server](nodes/server.md)
-- [Readers in another region](nodes/copies.md)
-- [When the home dies](nodes/home-dies.md)
+### Beyond one machine
 
-## Production
+- [The server](handbook/nodes/server.md)
+- [Readers in another region](handbook/nodes/copies.md)
+- [When the home dies](handbook/nodes/home-dies.md)
 
-- [What TinyStore promises](production/promises.md)
-- [Limits and defaults](production/limits.md)
-- [Running it](production/running-it.md)
+### Production
+
+- [What TinyStore promises](handbook/production/promises.md)
+- [Limits and defaults](handbook/production/limits.md)
+- [Running it](handbook/production/running-it.md)
+
+## Guides
+
+### Engines
+
+- [All engines](guides/README.md)
+- Connecting
+
+### SQL
+
+- [Overview](guides/sql/README.md)
+- Migrations
+- Writes and transactions
+- Tables and queries
+- Rows that include rows
+- Buckets and queues in a database
+- FTS5 and R*Tree
+
+### KV
+
+- [Overview](guides/kv/README.md)
+- Expiry
+- Versions
+- Branches
+- Encrypted buckets
+- Counters
+- Rate limits
+- Quotas
+- Once
+- Transactions
+
+### Jobs
+
+- [Overview](guides/jobs/README.md)
+- Ids
+- Schedules and cron
+- Concurrency and rate
+- Watching a job
+- Steps
+- Jobs in your database
+- Testing
+
+### Blobs
+
+- [Overview](guides/blobs/README.md)
+- Uploads
+- Serving files
+- Copies and expiry
+- Integrity
+
+### Search
+
+- [Overview](guides/search/README.md)
+- Fields and weights
+- Typos
+- Filters
+- Vectors
+- Words and vectors together
+- A table's index
+- Rebuilds
+
+### Channels
+
+- [Overview](guides/channels/README.md)
+- Subscriptions and missed messages
+- Publishing from a transaction
+
+### Locks
+
+- [Overview](guides/locks/README.md)
+- Holding and waiting
+- Leases over a connection
+- Fences
+- Semaphores
+
+### Config
+
+- [Overview](guides/config/README.md)
+- Layers and files
+- Secrets and required settings
+- Live settings
+- Watching
+- Explain and validate
+
+### Records
+
+- [Overview](guides/records/README.md)
+- Logging
+- Console output
+- Events
+- Reading
+- Traces
+- Tail and poll
+- Other programs' output
+- Repair
+
+### Metrics
+
+- [Overview](guides/metrics/README.md)
+- Instruments
+- Reading
+- Aggregates
+- Ingesting
+- Prometheus
+- The store's own metrics
+- The metrics crate
+
+### Backup
+
+- [Overview](guides/backup/README.md)
+- Restore
+- The encryption key
+
+### Command line
+
+- [Overview](guides/cli/README.md)
+- serve
+- status and logs
+- kv, sql and schema
+- Backup and restore
+- Nodes
+- AI agents
 
 ## Reference
 

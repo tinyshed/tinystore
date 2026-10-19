@@ -235,5 +235,5 @@ How logs and metrics pack, explains the format.
 
 - [Your first store](../start/first-store.md#look-inside): `tinystore logs`
   while a program runs.
-- [Records API reference](../reference/bun/records.md): every call of
+- [Records API reference](../../reference/bun/records.md): every call of
   loggers, events and reads.

@@ -24,6 +24,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			html: page.html,
 			headings: page.headings,
 			section: page.section,
+			book: page.book,
 			updated: page.updated,
 			editUrl: page.editUrl,
 			markdown: `${page.url}.md`,

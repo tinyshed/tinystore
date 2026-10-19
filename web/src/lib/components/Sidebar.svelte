@@ -102,7 +102,7 @@
 
 	.planned {
 		color: var(--ts-muted);
-		opacity: 0.45;
+		opacity: 0.7;
 		cursor: default;
 	}
 

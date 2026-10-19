@@ -17,14 +17,15 @@
 	let searching = $state(false)
 	let menu = $state(false)
 
-	const section = $derived((page.data.page as { section?: string } | undefined)?.section ?? '')
+	const book = $derived((page.data.page as { book?: string } | undefined)?.book ?? '')
 	const path = $derived(unbase(page.url.pathname))
-	const inDocs = $derived(path === '/docs' || path.startsWith('/docs/'))
 
-	const tabs = $derived([
-		{ title: 'Docs', href: '/docs', active: inDocs && section.toLowerCase() !== 'reference' },
-		{ title: 'Reference', href: data.reference, active: section.toLowerCase() === 'reference' },
-	])
+	const tabs = $derived(
+		data.books.map((part: { title: string; href: string }) => ({
+			...part,
+			active: part.title === book,
+		})),
+	)
 
 	function onkeydown(event: KeyboardEvent) {
 		const typing =
@@ -46,7 +47,7 @@
 <Search bind:open={searching} />
 <MobileMenu
 	bind:open={menu}
-	nav={data.nav}
+	nav={data.nav.filter((group: { book: string }) => group.book === (book || 'Handbook'))}
 	current={sidebarPath(path)}
 	onsearch={() => (searching = true)}
 />

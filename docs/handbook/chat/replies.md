@@ -419,5 +419,5 @@ times per second.
   builds on.
 - [Your first store](../start/first-store.md#what-a-crash-does): a job that
   survives a crash before any worker runs it.
-- [Jobs API reference](../reference/bun/jobs.md): every call of queues,
+- [Jobs API reference](../../reference/bun/jobs.md): every call of queues,
   workers and runs.

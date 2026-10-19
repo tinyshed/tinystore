@@ -527,4 +527,4 @@ code.
 - [One directory, many engines](../start/directory.md#two-engines-in-one-file):
   keep a bucket or a queue inside this database, so that it commits with the
   rows.
-- [SQL API reference](../reference/bun/sql.md): every call of the SQL engine.
+- [SQL API reference](../../reference/bun/sql.md): every call of the SQL engine.

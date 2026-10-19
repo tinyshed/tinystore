@@ -42,11 +42,11 @@ greyed out. To add a page:
 
 | Section            | Files                             | What its pages cover                                                                           |
 |--------------------|-----------------------------------|------------------------------------------------------------------------------------------------|
-| Start              | `docs/start/`                     | why TinyStore, a first store, the directory and the ways to reach it, the chat the book builds |
-| Building the chat  | `docs/chat/`                      | one chapter per engine, each adding one capability to the chat                                 |
-| Under the hood     | `docs/inside/`                    | how a write, a job, packing and search work, and why they were built that way                  |
-| Beyond one machine | `docs/nodes/`                     | the server, nodes and copies, a home that dies                                                 |
-| Production         | `docs/production/`                | what TinyStore promises by contract, every limit, running it                                   |
+| Start              | `docs/handbook/start/`            | why TinyStore, a first store, the directory and the ways to reach it, the chat the book builds |
+| Building the chat  | `docs/handbook/chat/`             | one chapter per engine, each adding one capability to the chat                                 |
+| Under the hood     | `docs/handbook/inside/`           | how a write, a job, packing and search work, and why they were built that way                  |
+| Beyond one machine | `docs/handbook/nodes/`            | the server, nodes and copies, a home that dies                                                 |
+| Production         | `docs/handbook/production/`       | what TinyStore promises by contract, every limit, running it                                   |
 | an engine's guides | `docs/<engine>/`                  | after the book: `README.md` the overview, then one page per feature a reader would search for  |
 | Reference          | `docs/reference/`, `docs/wire.md` | the generated API pages, and the wire protocol last, for people who write a client             |
 

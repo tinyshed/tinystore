@@ -1,6 +1,6 @@
 # Store API for Python
 
-Every public class, function and type of the store in `tinystore`, generated from its source. The [Store guide](../../start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Go](../go/store.md) and [Rust](../rust/store.md) pages list the same API.
+Every public class, function and type of the store in `tinystore`, generated from its source. The [Store guide](../../handbook/start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Go](../go/store.md) and [Rust](../rust/store.md) pages list the same API.
 
 ## SelfMetrics
 

@@ -18,12 +18,12 @@ describe('the docs as a site', () => {
 
 	test('give an agent markdown whose links still lead somewhere', async () => {
 		const site = await loadSite()
-		const why = site.pages.find(page => page.slug === 'start/why')
+		const why = site.pages.find(page => page.slug === 'handbook/start/why')
 
 		expect(why?.markdown).toStartWith('# Why TinyStore')
 		expect(why?.markdown).not.toContain('](../')
-		expect(llmsIndex(site)).toContain(`(${site.origin}/docs/start/why.md)`)
-		expect(llmsFull(site)).toContain(`Source: ${site.origin}/docs/start/why`)
-		expect(sitemap(site)).toContain(`<loc>${site.origin}/docs/start/why</loc>`)
+		expect(llmsIndex(site)).toContain(`(${site.origin}/docs/handbook/start/why.md)`)
+		expect(llmsFull(site)).toContain(`Source: ${site.origin}/docs/handbook/start/why`)
+		expect(sitemap(site)).toContain(`<loc>${site.origin}/docs/handbook/start/why</loc>`)
 	})
 })

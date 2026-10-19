@@ -275,5 +275,5 @@ keeps one total. A send that a lost connection repeats is counted once.
 - [Replies in the background](replies.md): the worker the timer measures.
 - [What it is doing](what-it-is-doing.md): logs and events beside the
   numbers.
-- [Metrics API reference](../reference/bun/metrics.md): every instrument, read
+- [Metrics API reference](../../reference/bun/metrics.md): every instrument, read
   and aggregate.

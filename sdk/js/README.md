@@ -58,19 +58,19 @@ contains. With npm, pnpm or Yarn, install it as `npm install @tinyshed/tinystore
 
 <!-- landing:engines -->
 
-|                                                                                                                   |                   |                                                                         |
-|-------------------------------------------------------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
-| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/chat/messages.md)                                      | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/chat/sessions-and-limits.md)                            | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/replies.md)                                      | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
-| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/attachments.md)                                 | Files             | Files by path, written whole or not at all, checked when read.          |
-| [Search](https://github.com/tinyshed/tinystore/blob/main/docs/chat/finding-old-messages.md)                       | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
-| [Channels](https://github.com/tinyshed/tinystore/blob/main/docs/chat/live-updates.md)                             | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
-| [Locks](https://github.com/tinyshed/tinystore/blob/main/docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
-| [Config](https://github.com/tinyshed/tinystore/blob/main/docs/chat/settings.md)                                   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/chat/what-it-is-doing.md)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/chat/how-fast-it-is.md)                            | Time series       | Samples kept bit for bit, answered exactly.                             |
-| [Backup](https://github.com/tinyshed/tinystore/blob/main/docs/chat/keeping-it.md)                                 | The whole store   | One checked zip of every engine, taken while it runs.                   |
+|                                                                                            |                   |                                                                         |
+|--------------------------------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
+| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/guides/sql/README.md)           | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
+| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/guides/kv/README.md)             | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/guides/jobs/README.md)         | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/guides/blobs/README.md)       | Files             | Files by path, written whole or not at all, checked when read.          |
+| [Search](https://github.com/tinyshed/tinystore/blob/main/docs/guides/search/README.md)     | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
+| [Channels](https://github.com/tinyshed/tinystore/blob/main/docs/guides/channels/README.md) | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
+| [Locks](https://github.com/tinyshed/tinystore/blob/main/docs/guides/locks/README.md)       | Coordination      | Locks and semaphores with fences, across processes and connections.     |
+| [Config](https://github.com/tinyshed/tinystore/blob/main/docs/guides/config/README.md)     | Settings          | Files and the environment in layers; secrets; settings changed live.    |
+| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/guides/records/README.md)   | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/guides/metrics/README.md)   | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Backup](https://github.com/tinyshed/tinystore/blob/main/docs/guides/backup/README.md)     | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 <!-- /landing:engines -->
 
@@ -84,7 +84,7 @@ await using alone = await open('./data', { private: true }) // a server for this
 await using remote = await connect('tls://db.internal:7070', { token })
 ```
 
-[One directory, many engines](https://github.com/tinyshed/tinystore/blob/main/docs/start/directory.md#four-ways-to-open-a-store)
+[One directory, many engines](https://github.com/tinyshed/tinystore/blob/main/docs/handbook/start/directory.md#four-ways-to-open-a-store)
 explains each one.
 
 ## The command line
@@ -98,13 +98,13 @@ bunx @tinyshed/tinystore logs ./data -f                         # the applicatio
 claude mcp add tinystore -- bunx @tinyshed/tinystore mcp ./data # read-only access for an AI agent
 ```
 
-See [Your first store](https://github.com/tinyshed/tinystore/blob/main/docs/start/first-store.md#look-inside)
+See [Your first store](https://github.com/tinyshed/tinystore/blob/main/docs/handbook/start/first-store.md#look-inside)
 for the commands at work.
 
 ## Documentation
 
-- [Your first store](https://github.com/tinyshed/tinystore/blob/main/docs/start/first-store.md): install it and write a first program
-- [The chat we build](https://github.com/tinyshed/tinystore/blob/main/docs/start/chat.md): the application the book builds
+- [Your first store](https://github.com/tinyshed/tinystore/blob/main/docs/handbook/start/first-store.md): install it and write a first program
+- [The chat we build](https://github.com/tinyshed/tinystore/blob/main/docs/handbook/start/chat.md): the application the book builds
 - [The documentation](https://github.com/tinyshed/tinystore/blob/main/docs/README.md): the book, each example in TypeScript, Python, Go and Rust
 - [API reference](https://github.com/tinyshed/tinystore/blob/main/docs/reference/api.md): every call, by engine
 

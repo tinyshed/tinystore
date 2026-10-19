@@ -23,18 +23,18 @@ export interface ApiEngine {
 }
 
 export const apiEngines: ApiEngine[] = [
-	{ slug: 'store', title: 'Store', guide: 'start/directory.md' },
-	{ slug: 'sql', title: 'SQL', guide: 'chat/messages.md' },
-	{ slug: 'kv', title: 'KV', guide: 'chat/sessions-and-limits.md' },
-	{ slug: 'jobs', title: 'Jobs', guide: 'chat/replies.md' },
-	{ slug: 'blobs', title: 'Blobs', guide: 'chat/attachments.md' },
-	{ slug: 'search', title: 'Search', guide: 'chat/finding-old-messages.md' },
-	{ slug: 'channels', title: 'Channels', guide: 'chat/live-updates.md' },
-	{ slug: 'locks', title: 'Locks', guide: 'chat/live-updates.md#one-summary-per-chat-at-a-time' },
-	{ slug: 'config', title: 'Config', guide: 'chat/settings.md' },
-	{ slug: 'records', title: 'Records', guide: 'chat/what-it-is-doing.md' },
-	{ slug: 'metrics', title: 'Metrics', guide: 'chat/how-fast-it-is.md' },
-	{ slug: 'backup', title: 'Backup', guide: 'chat/keeping-it.md' },
+	{ slug: 'store', title: 'Store', guide: 'handbook/start/directory.md' },
+	{ slug: 'sql', title: 'SQL', guide: 'guides/sql/README.md' },
+	{ slug: 'kv', title: 'KV', guide: 'guides/kv/README.md' },
+	{ slug: 'jobs', title: 'Jobs', guide: 'guides/jobs/README.md' },
+	{ slug: 'blobs', title: 'Blobs', guide: 'guides/blobs/README.md' },
+	{ slug: 'search', title: 'Search', guide: 'guides/search/README.md' },
+	{ slug: 'channels', title: 'Channels', guide: 'guides/channels/README.md' },
+	{ slug: 'locks', title: 'Locks', guide: 'guides/locks/README.md' },
+	{ slug: 'config', title: 'Config', guide: 'guides/config/README.md' },
+	{ slug: 'records', title: 'Records', guide: 'guides/records/README.md' },
+	{ slug: 'metrics', title: 'Metrics', guide: 'guides/metrics/README.md' },
+	{ slug: 'backup', title: 'Backup', guide: 'guides/backup/README.md' },
 ]
 
 export const apiIndexFile = 'docs/reference/api.md'

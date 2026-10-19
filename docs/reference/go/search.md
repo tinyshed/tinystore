@@ -1,6 +1,6 @@
 # Search API for Go
 
-Every public type, function and constant of the Search engine in `tinyshed.org/tinystore/search`, generated from its source. The [Search guide](../../chat/finding-old-messages.md) explains how to use them, and the [Bun and Node](../bun/search.md), [Python](../python/search.md) and [Rust](../rust/search.md) pages list the same API.
+Every public type, function and constant of the Search engine in `tinyshed.org/tinystore/search`, generated from its source. The [Search guide](../../guides/search/README.md) explains how to use them, and the [Bun and Node](../bun/search.md), [Python](../python/search.md) and [Rust](../rust/search.md) pages list the same API.
 
 ## Drop
 

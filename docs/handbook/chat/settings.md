@@ -357,5 +357,5 @@ page from overwriting a change it never showed.
 
 - [Replies in the background](replies.md): the worker that the switch
   pauses.
-- [Config API reference](../reference/bun/config.md): every call and rule of
+- [Config API reference](../../reference/bun/config.md): every call and rule of
   configs.

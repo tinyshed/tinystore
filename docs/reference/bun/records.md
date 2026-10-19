@@ -1,6 +1,6 @@
 # Records API for Bun and Node
 
-Every public class, function and type of the Records engine in `@tinyshed/tinystore`, generated from its source. The [Records guide](../../chat/what-it-is-doing.md) explains how to use them, and the [Python](../python/records.md), [Go](../go/records.md) and [Rust](../rust/records.md) pages list the same API.
+Every public class, function and type of the Records engine in `@tinyshed/tinystore`, generated from its source. The [Records guide](../../guides/records/README.md) explains how to use them, and the [Python](../python/records.md), [Go](../go/records.md) and [Rust](../rust/records.md) pages list the same API.
 
 ## Level
 

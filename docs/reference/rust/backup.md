@@ -1,6 +1,6 @@
 # Backup API for Rust
 
-Every public type, trait and function of the Backup engine in `tinystore::backup`, generated from its source. The [Backup guide](../../chat/keeping-it.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Python](../python/backup.md) and [Go](../go/backup.md) pages list the same API.
+Every public type, trait and function of the Backup engine in `tinystore::backup`, generated from its source. The [Backup guide](../../guides/backup/README.md) explains how to use them, and the [Bun and Node](../bun/backup.md), [Python](../python/backup.md) and [Go](../go/backup.md) pages list the same API.
 
 ## Store
 

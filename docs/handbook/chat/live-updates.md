@@ -388,5 +388,5 @@ needs an idempotency key: a lock makes double work rare, never impossible.
 
 - [Replies in the background](replies.md): the worker that publishes the
   events.
-- [Channels API reference](../reference/bun/channels.md) and
-  [Locks API reference](../reference/bun/locks.md): every call of both.
+- [Channels API reference](../../reference/bun/channels.md) and
+  [Locks API reference](../../reference/bun/locks.md): every call of both.

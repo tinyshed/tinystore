@@ -218,5 +218,5 @@ test passes the same way on a laptop and on a slow CI machine.
 - [One directory, many engines](../start/directory.md): what is in the
   directory a backup copies.
 - [Replies in the background](replies.md): schedules are queues' jobs.
-- [Backup API reference](../reference/bun/backup.md): every option of a
+- [Backup API reference](../../reference/bun/backup.md): every option of a
   backup.

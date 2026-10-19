@@ -318,5 +318,5 @@ full disk never breaks the store's other files.
 - [Messages](messages.md): the database that names a message and its chat.
 - [One directory, many engines](../start/directory.md#what-is-in-the-directory):
   where `blobs/` sits in the store.
-- [Blobs API reference](../reference/bun/blobs.md): every call of files,
+- [Blobs API reference](../../reference/bun/blobs.md): every call of files,
   folders and uploads.

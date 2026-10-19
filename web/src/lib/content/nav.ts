@@ -10,6 +10,8 @@ export type NavItem =
 	| { kind: 'planned'; title: string }
 
 export interface NavSection {
+	/** the part of the documentation it is in, a tab of the header: Handbook, Guides, Reference */
+	book: string
 	title: string
 	items: NavItem[]
 }
@@ -23,9 +25,11 @@ export interface Index {
 export const indexFile = 'docs/README.md'
 
 /**
- * Reads the index: each second-level heading is a section, each item of the
- * list under it an entry, in the order written. GitHub shows the same file as
- * the table of contents of docs/.
+ * Reads the index: each second-level heading is a part of the documentation,
+ * each third-level heading a section of it, and each item of the list under
+ * it an entry, in the order written. A list right under a part is a section
+ * of the part's own name. GitHub shows the same file as the table of
+ * contents of docs/.
  *
  *     ## KV                         KV
  *     - [Overview](kv/README.md)    Overview, /docs/kv
@@ -37,11 +41,27 @@ export function readIndex(tree: Root, root: string, commit: string): Index {
 	let title = ''
 	const sections: NavSection[] = []
 
+	let book = ''
 	for (const node of tree.children) {
 		if (node.type === 'heading' && node.depth === 1) {
 			title = textOf(node)
 		} else if (node.type === 'heading' && node.depth === 2) {
-			sections.push({ title: textOf(node), items: [] })
+			book = textOf(node)
+			sections.push({ book, title: book, items: [] })
+		} else if (node.type === 'heading' && node.depth === 3) {
+			const last = sections.at(-1)
+			const section = { book, title: textOf(node), items: [] }
+			// a part's heading followed at once by its first section names no section of its own
+			if (
+				last !== undefined &&
+				last.book === book &&
+				last.title === book &&
+				last.items.length === 0
+			) {
+				sections[sections.length - 1] = section
+			} else {
+				sections.push(section)
+			}
 		} else if (node.type === 'list') {
 			sections.at(-1)?.items.push(...items(node, root, commit))
 		}

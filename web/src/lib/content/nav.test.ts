@@ -11,7 +11,7 @@ describe('the index', () => {
 				[
 					'# Docs',
 					'## Metrics',
-					'- [Why](start/why.md)',
+					'- [Why](handbook/start/why.md)',
 					'- Instruments',
 					'## Reference',
 					'- [Bun API](../sdk/js/README.md)',
@@ -25,7 +25,12 @@ describe('the index', () => {
 		expect(index.title).toBe('Docs')
 		expect(index.sections.map(section => section.title)).toEqual(['Metrics', 'Reference'])
 		expect(index.sections[0]?.items).toEqual([
-			{ kind: 'page', title: 'Why', file: 'docs/start/why.md', slug: 'start/why' },
+			{
+				kind: 'page',
+				title: 'Why',
+				file: 'docs/handbook/start/why.md',
+				slug: 'handbook/start/why',
+			},
 			{ kind: 'planned', title: 'Instruments' },
 		])
 		expect(index.sections[1]?.items).toEqual([

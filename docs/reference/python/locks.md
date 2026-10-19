@@ -1,6 +1,6 @@
 # Locks API for Python
 
-Every public class, function and type of the Locks engine in `tinystore`, generated from its source. The [Locks guide](../../chat/live-updates.md#one-summary-per-chat-at-a-time) explains how to use them, and the [Bun and Node](../bun/locks.md), [Go](../go/locks.md) and [Rust](../rust/locks.md) pages list the same API.
+Every public class, function and type of the Locks engine in `tinystore`, generated from its source. The [Locks guide](../../guides/locks/README.md) explains how to use them, and the [Bun and Node](../bun/locks.md), [Go](../go/locks.md) and [Rust](../rust/locks.md) pages list the same API.
 
 ## Lease
 

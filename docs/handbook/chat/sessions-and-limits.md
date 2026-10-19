@@ -494,5 +494,5 @@ its own deduplication covers that gap.
 - [Messages](messages.md): the database that `once` writes into.
 - [Your first store](../start/first-store.md#look-inside): `tinystore kv`
   lists a bucket's keys while the chat runs.
-- [KV API reference](../reference/bun/kv.md): every call of buckets, limits
+- [KV API reference](../../reference/bun/kv.md): every call of buckets, limits
   and `once`.

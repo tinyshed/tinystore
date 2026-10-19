@@ -33,6 +33,8 @@ export interface Page {
 	headings: { id: string; text: string }[]
 	/** the index's section the page is listed under, its breadcrumb */
 	section: string
+	/** the part it is in, a tab of the header: Handbook, Guides or Reference */
+	book: string
 	kind: Kind
 	/** when the file last changed, from the history */
 	updated?: string
@@ -74,6 +76,7 @@ interface Entry {
 	file: string
 	slug: string
 	section: string
+	book: string
 	kind: Kind
 	hidden?: boolean
 	unlisted?: boolean
@@ -161,17 +164,18 @@ function entriesOf(index: Index, root: string): Entry[] {
 							file: item.file,
 							slug: item.slug,
 							section: section.title,
-							kind: kindOf(section.title),
+							book: section.book,
+							kind: kindOf(section.book),
 						},
 					]
 				: [],
 		),
 	)
 	return [
-		{ file: indexFile, slug: '', section: '', kind: 'guide' },
+		{ file: indexFile, slug: '', section: '', book: '', kind: 'guide' },
 		...linked,
 		...apiEntries(root),
-		{ file: kitchenSink, slug: 'kitchen-sink', section: '', kind: 'guide', hidden: true },
+		{ file: kitchenSink, slug: 'kitchen-sink', section: '', book: '', kind: 'guide', hidden: true },
 	]
 }
 
@@ -183,6 +187,7 @@ function apiEntries(root: string): Entry[] {
 						file,
 						slug: slugOf(file),
 						section: 'Reference',
+						book: 'Reference',
 						kind: 'reference' as const,
 						unlisted: true,
 					},
@@ -251,6 +256,7 @@ function finishPage(
 			html: finished.html,
 			headings: page.headings,
 			section: page.section,
+			book: page.book,
 			kind: page.kind,
 			...(updated === undefined ? {} : { updated }),
 			editUrl: editUrl(page.file),
@@ -269,8 +275,9 @@ function linkNeighbours(pages: Page[]): void {
 		page => page.slug !== '' && page.hidden !== true && page.unlisted !== true,
 	)
 	listed.forEach((page, at) => {
-		const before = listed[at - 1]
-		const after = listed[at + 1]
+		// previous and next stay inside a part: the Handbook's last chapter leads to no guide
+		const before = listed[at - 1]?.book === page.book ? listed[at - 1] : undefined
+		const after = listed[at + 1]?.book === page.book ? listed[at + 1] : undefined
 		if (before !== undefined) {
 			page.previous = { title: before.title, url: before.url }
 		}

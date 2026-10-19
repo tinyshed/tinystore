@@ -43,7 +43,7 @@ A body is one MessagePack value: a map from small integer keys to values, the
 same keys in every language, generated from one schema per engine in
 `protocol/*.wire`. The schema writes the codec of every language and the test
 vectors each of them must read and write byte for byte, so the four SDKs
-cannot drift apart. The [wire protocol](../wire.md) page has every rule.
+cannot drift apart. The [wire protocol](../../wire.md) page has every rule.
 
 ## Credit
 
@@ -139,4 +139,4 @@ saves a hop per call.
   layers.
 - [One directory, many engines](../start/directory.md#four-ways-to-open-a-store):
   the four ways to open a store from the program's side.
-- [Wire protocol](../wire.md): every frame, rule and method.
+- [Wire protocol](../../wire.md): every frame, rule and method.
