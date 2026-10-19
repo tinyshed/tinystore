@@ -117,6 +117,27 @@ that list, so it cannot show behaviour that is not built. A markdown page
 places one by a directive that GitHub shows as a link and the site as the
 simulator. Chapter 25 shows a manual promotion, not an automatic failover.
 
+## Scenes, by engine
+
+The situations each engine's pages play, chosen by the docs skill's rule:
+two parties or more, a guarantee at stake, and code on the page that handles
+it. Each names the contract it shows.
+
+| Engine      | Scene                                                                                 | Contract         |
+|-------------|---------------------------------------------------------------------------------------|------------------|
+| durability  | the power goes out at each stage of a write; what the app heard, what the disk holds  | DUR-01, DUR-04   |
+| KV          | a buyer double-clicks Pay; the second request waits and gets the same receipt         | KV-11            |
+| KV          | two tabs save one draft; the second write fails `conflict` and reads again            | KV-05            |
+| KV          | a script floods the API; the fourth request gets `ok: false` and when to retry        | KV-09            |
+| jobs        | a worker crashes mid-email; after `timeout` another worker sends it                   | JOB-05           |
+| jobs        | a job of three steps crashes after the second; the retry skips the two that were kept | JOB-06           |
+| sql         | six writes share a commit and one breaks a constraint; it fails alone                 | DUR-03, SQL-08   |
+| blobs       | an upload is cut halfway; nothing is published, and the old file still reads          | BLOB-01          |
+| channels    | a slow subscriber falls behind; it is told how many messages it missed                | CHAN-02          |
+| locks       | a lock's holder stalls past its lease; its late write is refused by the fence         | LOCK-02, LOCK-05 |
+| replication | the home is cut off; a promotion loses the writes no copy had, or warns in sync mode  | REPL-08, REPL-09 |
+| replication | a write on a copy travels to the home and is answered once the copy holds it          | REPL-06          |
+
 ## The guides
 
 Grouped by engine, in the handbook's order. An overview opens each group;

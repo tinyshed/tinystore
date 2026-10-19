@@ -272,6 +272,39 @@ step "Stripe charges the card once." line=2
 | `say a "…"`, `pulse a`, `wait 400`       | a word beside an actor, a ring, a pause                                      |
 | `&` before an action                     | runs it with the action before it                                            |
 
+### When a page gets a scene
+
+A scene costs the reader half a minute, so it has to show what code and a
+sentence cannot. A section gets one when all three hold:
+
+1. **Something happens over time between two or more parties**: requests at
+   once, a worker and a queue, a home and its copies. One call that returns a
+   value is a code block with its result in a comment.
+2. **The outcome is a guarantee the reader would otherwise have to take on
+   trust**: a card charged once, a job that survives a crash, a write lost in
+   a failover. If nothing can go wrong, there is nothing to show.
+3. **The page shows the code that handles it**, and the scene plays that code
+   with `line=` on each step.
+
+Never for options, defaults or limits (a table), for how the parts fit
+together at rest, or to decorate.
+
+### Where it goes
+
+- **Under the heading that names the situation**, `## What a crash does` or
+  `## Clicks that arrive twice`, after the code block that introduces the
+  call, never before the page's lead and first code.
+- **The sentence after it states the rule** the scene showed, in one plain
+  sentence, with the contract's id where one exists. The page must say
+  everything without the scene: GitHub, an agent and a reader with motion
+  turned off read the text.
+- **At most one scene a section and two a guide.** A handbook chapter has one
+  in `Learn`, and a chapter of Parts III and IV may have a second under
+  `Understand`.
+- `plan/docs.md` lists the scenes each engine's pages are meant to have.
+
+### How to write one
+
 - **Tell one situation a reader recognises**, three to six steps, each caption
   one or two plain sentences about what happens and why it matters.
 - **Show the code that handles it**, with `line=` on each step, so that the
