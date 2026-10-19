@@ -135,9 +135,12 @@ jobs:
           path: native/${{ matrix.target }}
           if-no-files-found: error
 
+  # Each job past the builds says when it runs: by default a job is skipped
+  # once any job before it was, and ci is whenever a push passed it already.
   package:
     name: pack
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -186,6 +189,7 @@ jobs:
   smoke:
     name: try ${{ matrix.target }}
     needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -223,6 +227,7 @@ jobs:
   smoke-musl:
     name: try ${{ matrix.target }}
     needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
