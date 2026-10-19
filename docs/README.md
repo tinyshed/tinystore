@@ -43,14 +43,14 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 
 ## Under the hood
 
-- The journey of a write
-- SQLite as TinyStore runs it
-- One budget of memory
-- Time and errors
-- How a job lives
-- How logs and metrics pack
-- How search finds
-- One core, four languages
+- [The journey of a write](inside/journey-of-a-write.md)
+- [SQLite as TinyStore runs it](inside/sqlite.md)
+- [One budget of memory](inside/memory.md)
+- [Time and errors](inside/time-and-errors.md)
+- [How a job lives](inside/how-a-job-lives.md)
+- [How logs and metrics pack](inside/how-logs-and-metrics-pack.md)
+- [How search finds](inside/how-search-finds.md)
+- [One core, four languages](inside/one-core.md)
 
 ## Beyond one machine
 

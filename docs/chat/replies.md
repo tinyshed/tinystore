@@ -298,7 +298,7 @@ step "It asks the model, which takes eight seconds and costs money. The answer i
   send worker -> db "keep answer"
   add db "answer"
 
-step "A deploy kills the process before the reply is inserted. The job is still running, so after its timeout it runs again." line=4
+step "A deploy kills the process before the reply is inserted. Its lease on the job ends: at once when the store opens again, or within 30 seconds if only the worker died." line=4
   mark worker down
   cut worker db
   cut worker model
