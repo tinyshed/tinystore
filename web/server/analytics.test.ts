@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fields, open } from '@tinyshed/tinystore'
+import { open } from '@tinyshed/tinystore'
 
 import { createAnalytics, language, origin } from './analytics.ts'
 import type { SiteFile } from './files.ts'
@@ -35,7 +35,7 @@ const reader = (headers: Record<string, string> = {}) =>
 describe('the site in its own store', () => {
 	test('keeps a view and an event as records and counts both, through a restart', async () => {
 		const store = await open(dir, { private: true })
-		const readers = store.records.logger('readers', { console: 'off' })
+		const readers = store.logger('readers', { console: 'off' })
 		const analytics = createAnalytics(store, readers, new Set(['/docs/kv']))
 
 		await analytics.view(
@@ -63,10 +63,10 @@ describe('the site in its own store', () => {
 		const again = await open(dir, { private: true })
 		try {
 			const records = []
-			for await (const record of again.records.all({ since: '1h' })) {
+			for await (const record of again.events().all({ since: '1h' })) {
 				records.push(record)
 			}
-			const kept = records.map(record => ({ name: record.name, ...fields(record.attrs) }))
+			const kept = records.map(record => ({ name: record.name, ...record.fields }))
 			expect(kept).toContainEqual(
 				expect.objectContaining({
 					name: 'view',
@@ -84,7 +84,7 @@ describe('the site in its own store', () => {
 			)
 			expect(kept).toContainEqual(expect.objectContaining({ name: 'search', page: 'other' }))
 
-			const visitors = new Set(records.map(record => fields(record.attrs).visitor))
+			const visitors = new Set(records.map(record => record.fields.visitor))
 			expect(visitors.size).toBe(1)
 
 			const views = await again.metrics.read({ name: 'site_views_total', since: '1h' })

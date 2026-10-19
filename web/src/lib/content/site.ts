@@ -131,7 +131,7 @@ async function buildSite(root: string): Promise<Site> {
 		if (import.meta.env?.DEV !== true) {
 			throw new Error(report)
 		}
-		console.warn(`${report}\n(the dev server goes on; a build fails on these)`)
+		process.stderr.write(`${report}\n(the dev server goes on; a build fails on these)\n`)
 	}
 
 	const pages = finished.map(result => result.page)

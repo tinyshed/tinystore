@@ -18,10 +18,13 @@ export interface HttpServer {
 	stop(): Promise<void>
 }
 
-/** What the health routes ask the store: whether it answers, whether its counters and lines reach it. */
+/**
+ * What the health routes ask the store: whether it answers, and how many lines
+ * its loggers dropped. A failed write of the counters the SDK says once in its
+ * own log.
+ */
 export interface Readiness {
 	status(): Promise<unknown>
-	metrics: { failures: number; lastFailure: Error | undefined }
 	/** the loggers whose dropped lines health reports, by their stream */
 	loggers: Record<string, { readonly dropped: number }>
 }
@@ -53,8 +56,6 @@ export function createRouter(
 		'GET /api/health': () =>
 			Response.json({
 				status: 'ok',
-				flushesFailed: store.metrics.failures,
-				lastFlushFailure: store.metrics.lastFailure?.message,
 				linesDropped: Object.fromEntries(
 					Object.entries(store.loggers).map(([stream, each]) => [stream, each.dropped]),
 				),

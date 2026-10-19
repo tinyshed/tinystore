@@ -31,7 +31,6 @@ const store = {
 		}
 		return {}
 	},
-	metrics: { failures: 0, lastFailure: undefined },
 	loggers: { readers: { dropped: 2 } },
 }
 
@@ -137,7 +136,6 @@ describe('health', () => {
 	test('says the process is up, and readiness whether the store answers', async () => {
 		expect(await (await call('/api/health')).json()).toMatchObject({
 			status: 'ok',
-			flushesFailed: 0,
 			linesDropped: { readers: 2 },
 		})
 		expect((await call('/api/ready')).status).toBe(200)

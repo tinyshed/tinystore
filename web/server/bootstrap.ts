@@ -25,17 +25,16 @@ export async function start(): Promise<App> {
 	const store = await openStore(config.DATA_DIR)
 
 	// the console and the store at once: the server needs no other logger
-	const logger = store.records.logger('site')
+	const logger = store.logger('site')
 
 	// readers' views and events: kept, and too many to print
-	const readers = store.records.logger('readers', { console: 'off' })
+	const readers = store.logger('readers', { console: 'off' })
 
 	const analytics = createAnalytics(store, readers, site.pages)
 
 	// health reports both loggers' drops: the readers' carry every view
 	const readiness = {
 		status: () => store.status(),
-		metrics: store.metrics,
 		loggers: { site: logger, readers },
 	}
 

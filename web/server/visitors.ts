@@ -38,11 +38,14 @@ export class Visitors {
 			.slice(0, 16)
 	}
 
-	// one write, which keeps the salt already there: two servers starting the same day agree
+	// the first server of the day makes the salt and the others read it, so that they agree
 	private async saltOf(day: string): Promise<string> {
-		const { entry } = await this.salts.setEntryIfAbsent(`salt/${day}`, crypto.randomUUID(), {
-			ttl: '36h',
-		})
-		return entry.value
+		const key = `salt/${day}`
+		await this.salts.create(key, crypto.randomUUID(), { ttl: '36h' })
+		const salt = await this.salts.get(key)
+		if (salt === undefined) {
+			throw new Error(`the salt of ${day} was made and is gone`)
+		}
+		return salt
 	}
 }

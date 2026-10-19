@@ -33,8 +33,8 @@ export interface Analytics {
 export function createAnalytics(store: Store, logger: Logger, pages: Set<string>): Analytics {
 	const views = store.metrics.counter('site_views_total')
 	const events = store.metrics.counter('site_events_total')
-	const visitors = new Visitors(store.kv.bucket<string>('site'))
-	const limiter = store.kv.limiter('site-events', { rate: '60/m', burst: 30 })
+	const visitors = new Visitors(store.bucket<string>('site'))
+	const limiter = store.rateLimit('site-events', { rate: '60/m', burst: 30 })
 
 	return {
 		view(request, file, address) {
