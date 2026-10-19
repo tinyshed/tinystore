@@ -8,7 +8,7 @@ the Go engine. [ffi.md](ffi.md)'s "What ships" is the promise this keeps.
 ## One run
 
 A release is one run of `.github/workflows/release.yml`, dispatched from
-`rust` (from `main` once `rust` replaces it) with its version and whether to
+`main` with its version and whether to
 publish. Nothing is tagged or published by hand.
 
 1. CI runs on the commit unless a push passed it already.
@@ -20,8 +20,8 @@ publish. Nothing is tagged or published by hand.
    with nothing of the repository's on `PATH`, and opens a store through its
    core and through a private child, from Bun, Node and Python.
 5. Asked to publish, the run waits for a reviewer of the `release`
-   environment; once approved it pushes the tags, publishes npm, PyPI and
-   the server image, and makes the GitHub release last.
+   environment; once approved it pushes the tags, publishes npm, PyPI,
+   crates.io and the server image, and makes the GitHub release last.
 
 A run that does not publish keeps `dist` as its artifact, to try by hand.
 
@@ -61,12 +61,13 @@ feature set, each copied out before the next writes over it:
 
 ## Packages
 
-| Channel | What                                                                                                                                         |
-|---------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| GitHub  | `tinystore-<v>-<target>.tar.gz`, `.zip` on Windows: `bin/` the executable, `lib/` the core's library and the Node addon; `SHA256SUMS`        |
-| npm     | `@tinyshed/tinystore-<target>` a target, `bin/` and `lib/`, with `os`, `cpu` and `libc`; `@tinyshed/tinystore`, naming the seven as optional |
-| PyPI    | `tinyshed-tinystore`, one abi3 wheel a target for CPython 3.12 on: the SDK, `tinystore/_core` and `tinystore/bin/`                           |
-| GHCR    | `ghcr.io/tinyshed/tinystore:<v>`, the glibc executables for amd64 and arm64 on `gcr.io/distroless/cc-debian12`                               |
+| Channel | What                                                                                                                                          |
+|---------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| GitHub  | `tinystore-<v>-<target>.tar.gz`, `.zip` on Windows: `bin/` the executable, `lib/` the core's library and the Node addon; `SHA256SUMS`         |
+| npm     | `@tinyshed/tinystore-<target>` a target, `bin/` and `lib/`, with `os`, `cpu` and `libc`; `@tinyshed/tinystore`, naming the seven as optional  |
+| PyPI    | `tinyshed-tinystore`, one abi3 wheel a target for CPython 3.12 on: the SDK, `tinystore/_core` and `tinystore/bin/`                            |
+| crates  | `tinystore`, the library, and `tinystore-cli`, the command, which names it at the same version exactly; `ffi` and `protocol` stay unpublished |
+| GHCR    | `ghcr.io/tinyshed/tinystore:<v>`, the glibc executables for amd64 and arm64 on `gcr.io/distroless/cc-debian12`                                |
 
 - An SDK finds what its platform's package carries before it asks
   `PATH`: the executable for a sidecar or a private child, and, for
@@ -84,8 +85,6 @@ feature set, each copied out before the next writes over it:
   [ffi.md](ffi.md) promises. Until then a Go program takes the library and
   the executable from the GitHub release, through `TINYSTORE_LIBRARY` and
   `TINYSTORE_BIN`, or `tinystore.Library` and `tinystore.Binary`.
-- Not yet: crates.io. The workspace says `publish = false` until the crate's
-  name is the project's.
 
 ## Tags
 
@@ -101,6 +100,10 @@ moved: a mistake is the next patch.
   of the eight packages trusts `release.yml` and the token goes.
 - PyPI: a pending trusted publisher for `tinyshed-tinystore`, the workflow
   `release.yml`, the environment `pypi`.
+- crates.io: the environment `crates`; the first publish takes
+  `CARGO_REGISTRY_TOKEN`, a token scoped to publishing new crates, then
+  `tinystore` and `tinystore-cli` each trust `release.yml` in the
+  environment `crates` and the token goes.
 - GHCR: the package made public after its first push.
 - A tag ruleset for `v*` and `sdk/go/v*` that refuses moving or deleting
   them.

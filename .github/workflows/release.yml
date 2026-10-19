@@ -5,8 +5,8 @@ name: Release
 # seven builds make each target's executable and core, one job packs them, and
 # a smoke test on each platform installs what was packed. Nothing leaves before
 # that has passed. Asked to publish, and approved in the release environment,
-# it pushes the tags, publishes npm, PyPI and the server image, and makes the
-# GitHub release last, once everything it announces is there.
+# it pushes the tags, publishes npm, PyPI, crates.io and the server image, and
+# makes the GitHub release last, once everything it announces is there.
 on:
   workflow_dispatch:
     inputs:
@@ -28,6 +28,7 @@ concurrency:
 
 env:
   VERSION: ${{ inputs.version }}
+  CRATES_AGENT: tinystore-release (https://github.com/tinyshed/tinystore)
 
 jobs:
   # a commit whose push CI passed needs no second run of it
@@ -77,6 +78,10 @@ jobs:
           fi
           if curl -fsS -o /dev/null "https://pypi.org/pypi/tinyshed-tinystore/$python/json"; then
             echo "PyPI has tinyshed-tinystore $python already"; exit 1
+          fi
+          # crates.io refuses a request without a User-Agent that names its sender
+          if curl -fsS -o /dev/null -A "$CRATES_AGENT" "https://crates.io/api/v1/crates/tinystore/$plain"; then
+            echo "crates.io has tinystore $plain already"; exit 1
           fi
           if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$VERSION" >/dev/null; then
             echo "the tag $VERSION exists already"; exit 1
@@ -330,6 +335,46 @@ jobs:
           packages-dir: dist/pypi/
           skip-existing: true
 
+  # The library, then the command that names it at the same version, each
+  # built from the stamped source as cargo publish verifies it; one published
+  # by an earlier attempt is left as it is, since crates.io refuses a version
+  # twice. A token only until each crate trusts release.yml, which crates.io
+  # allows once a crate exists.
+  crates:
+    name: crates.io
+    needs: tags
+    if: ${{ !cancelled() && needs.tags.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: crates
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TOKEN_GIVEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stamp the version
+        run: sh tools/stamp.sh
+
+      - id: auth
+        if: env.TOKEN_GIVEN != 'true'
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+        run: |
+          plain="${VERSION#v}"
+          for crate in tinystore tinystore-cli; do
+            if curl -fsS -o /dev/null -A "$CRATES_AGENT" "https://crates.io/api/v1/crates/$crate/$plain"; then
+              echo "$crate $plain is published already"
+            else
+              # dirty with the stamp alone, which tools/stamp.sh checks took
+              cargo publish --locked --allow-dirty -p "$crate"
+            fi
+          done
+
   image:
     name: server image
     needs: [version, tags]
@@ -399,10 +444,10 @@ jobs:
   # last, so that what it announces is all there
   github:
     name: GitHub release
-    needs: [version, npm, pypi, image]
+    needs: [version, npm, pypi, crates, image]
     if: >-
       ${{ !cancelled() && needs.npm.result == 'success' && needs.pypi.result == 'success'
-      && needs.image.result == 'success' }}
+      && needs.crates.result == 'success' && needs.image.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write

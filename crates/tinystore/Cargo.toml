@@ -1,12 +1,17 @@
 [package]
 name = "tinystore"
-description = "An embedded data runtime on SQLite: KV, jobs, SQL, blobs, records and metrics in one directory"
+description = "A small storage runtime for applications on SQLite: SQL, key-value state, durable jobs, files, search, logs and metrics in one directory"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/tinystore"
+readme = "README.md"
+keywords = ["sqlite", "embedded", "kv", "jobs", "metrics"]
+categories = ["database-implementations", "database"]
+publish = true
 
 [features]
 default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records", "metrics", "system", "search", "backup", "replication", "wire"]

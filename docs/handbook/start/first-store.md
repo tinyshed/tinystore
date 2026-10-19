@@ -31,6 +31,12 @@ cargo add serde --features derive
 cargo add tracing tracing-subscriber
 ```
 
+```toml title=".cargo/config.toml" for=rust
+# the SQLite build TinyStore expects, which a dependency cannot set for you
+[env]
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB"
+```
+
 | Language     | Needs                     | The core comes as                                         |
 |--------------|---------------------------|-----------------------------------------------------------|
 | Bun and Node | Bun 1.4 or Node 22        | the `tinystore` program and libraries, in the npm package |
@@ -38,7 +44,9 @@ cargo add tracing tracing-subscriber
 | Go           | Go 1.25                   | the `tinystore` program, found on `PATH`                  |
 | Rust         | the Rust toolchain itself | the crate, compiled into your program                     |
 
-Rust programs compile the core in, so a Rust program is the store. The other
+Rust programs compile the core in, so a Rust program is the store. It builds
+SQLite too, with the flags in `.cargo/config.toml`: without them readers wait
+on one another, which the store logs once when it opens. The other
 languages talk to the same core in a separate process by default, as
 [How the store runs](#how-the-store-runs) explains below.
 

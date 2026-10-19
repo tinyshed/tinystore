@@ -6,14 +6,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["sqlite", "server", "database", "cli"]
+categories = ["command-line-utilities", "database"]
+publish = true
 
 [[bin]]
 name = "tinystore"
 path = "src/main.rs"
 
 [dependencies]
-tinystore = { path = "../tinystore" }
+tinystore.workspace = true
 # the server's sockets and pipes; the library itself runs no async runtime
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "io-std", "macros", "signal", "sync", "time"] }
 # a remote server's TLS, with ring's cryptography: it builds with a C compiler alone

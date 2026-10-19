@@ -100,7 +100,8 @@ Do not describe unbuilt behaviour as though it works.
 ## Crates
 
 One library crate, `tinystore`, so that a Rust program writes `tinystore::kv`
-and one crate is published (decision 14). A crate of its own exists only for a
+and one library is published (decision 14), with `tinystore-cli` beside it for
+`cargo install`. A crate of its own exists only for a
 separate artifact: `crates/ffi`, whose feature `python` builds the Python
 SDK's extension module from the same pipe and a later `node` Node's addon,
 `crates/cli`, and `crates/protocol`, a tool that writes code and ships in

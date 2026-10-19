@@ -37,13 +37,7 @@ aarch64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=11.0 ;;
 x86_64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=10.13 ;;
 esac
 
-# the workspace's version, and the lockfile's line for each of its crates,
-# the dependencies fetched first so that the update needs no network
-cargo fetch --locked
-plain="${VERSION#v}"
-sed "s/^version = \"0.0.0\"/version = \"$plain\"/" Cargo.toml >Cargo.toml.stamped
-mv Cargo.toml.stamped Cargo.toml
-cargo update --workspace --offline
+sh tools/stamp.sh
 
 built="target/$TRIPLE/release"
 out="native/$TARGET"

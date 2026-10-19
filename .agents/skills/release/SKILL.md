@@ -1,6 +1,6 @@
 ---
 name: release
-description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the seven targets, tools/native.sh, tools/release.ts and tools/smoke.sh, npm's packages, PyPI's wheels, the GitHub release, the server image and the tags - or when changing any of them.
+description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the seven targets, tools/native.sh, tools/stamp.sh, tools/release.ts and tools/smoke.sh, npm's packages, PyPI's wheels, the crates on crates.io, the GitHub release, the server image and the tags - or when changing any of them.
 ---
 
 # Releasing TinyStore
@@ -24,11 +24,11 @@ said to, for that version.
 A release is one run of `.github/workflows/release.yml`, dispatched from
 `main` with the version and publish.
 
-1. `version` refuses a version npm, PyPI or a tag has already, and one
+1. `version` refuses a version npm, PyPI, crates.io or a tag has already, and one
    published from another branch.
 2. `ci` runs on the commit unless a push passed it already.
 3. `build`, seven jobs: `tools/native.sh` stamps the version into the
-   workspace and builds the target's `tinystore` and its core three times,
+   workspace through `tools/stamp.sh` and builds the target's `tinystore` and its core three times,
    plain, with `node` and with `python`, into `native/<target>/`. Linux's run
    in `manylinux_2_28` and `alpine` through `docker run`.
 4. `package`: `tools/release.ts` packs `native/` into `dist/`: the archives,
@@ -37,7 +37,7 @@ A release is one run of `.github/workflows/release.yml`, dispatched from
    projects and opens a store embedded and as a private child, from Node, Bun
    and Python. Intel macOS is not tried: no machine runs it.
 6. With publish: `tags` waits for a reviewer, then pushes `vX.Y.Z` and
-   `sdk/go/vX.Y.Z` atomically; `npm`, `pypi` and `image` publish; `github`
+   `sdk/go/vX.Y.Z` atomically; `npm`, `pypi`, `crates` and `image` publish; `github`
    makes the release last, with the archives and `SHA256SUMS`.
 
 Without publish the run stops after the smoke tests and keeps `dist` as an
@@ -78,7 +78,8 @@ artifact: that is how a release is tried in CI.
 - The two tags go in one `git push --atomic`, both or neither, on the commit
   CI passed. A tag is never moved: a mistake is the next patch.
 - A publish that failed is run again with "Re-run failed jobs", which reuses
-  `dist`: npm skips what it has, PyPI skips files it has, the GitHub release
+  `dist`: npm skips what it has, PyPI skips files it has, `crates` skips a
+  crate whose version crates.io has, the GitHub release
   is made once. Never build again once the tags are pushed: what the build
   made wrong is the next version.
 - The repository keeps `0.0.0` everywhere; only a build stamps a version, and
@@ -89,9 +90,11 @@ artifact: that is how a release is tried in CI.
 plan/release.md lists it: the environments `release`, `npm` and `pypi`;
 npm's first publish through `NPM_TOKEN`, then trusted publishing for each of
 the eight packages; PyPI's pending trusted publisher; GHCR's package made
-public; a tag ruleset for `v*` and `sdk/go/v*`.
+public; the environment `crates` and crates.io's first publish through
+`CARGO_REGISTRY_TOKEN`, then trusted publishing for `tinystore` and
+`tinystore-cli`; a tag ruleset for `v*` and `sdk/go/v*`.
 
 ## Not built yet
 
 Go's modules a platform with the core's static library ([ffi.md](../../../plan/ffi.md)),
-crates.io, a `tinystore` console script in the wheel, Windows on ARM.
+a `tinystore` console script in the wheel, Windows on ARM.

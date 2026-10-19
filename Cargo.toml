@@ -8,7 +8,13 @@ edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/tinyshed/tinystore"
+homepage = "https://tinyshed.org/tinystore"
 publish = false
+
+# The library the command line and the FFI build on. crates.io takes a path
+# only beside a version: tools/stamp.sh writes the release's here, exact.
+[workspace.dependencies]
+tinystore = { path = "crates/tinystore", version = "0.0.0" }
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
