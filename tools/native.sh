@@ -12,7 +12,7 @@ set -eu
 
 : "${VERSION:?the release, such as v0.1.0}"
 : "${TARGET:?the target, such as linux-x64}"
-: "${TRIPLE:?Rust's triple, such as x86_64-unknown-linux-gnu}"
+: "${TRIPLE:?the Rust triple, such as x86_64-unknown-linux-gnu}"
 
 if [ -f /etc/alpine-release ]; then
 	apk add --no-cache bash curl gcc g++ make musl-dev perl >/dev/null
@@ -66,8 +66,10 @@ cp "$built/$library" "$out/lib/tinystore.node"
 PYO3_BUILD_EXTENSION_MODULE=1 cargo build --release --locked --target "$TRIPLE" -p tinystore-ffi --features python
 cp "$built/$library" "$out/python/$module"
 
-# a build for another processor than this machine's is not run here
-if [ "$(rustc -vV | sed -n 's/^host: //p')" = "$TRIPLE" ]; then
+# a build for another processor than this machine is not run here; macOS's
+# sh, bash 3.2, misreads a quoted pattern inside "$(...)", so none is there
+host=$(rustc -vV | grep '^host:' | cut -d ' ' -f 2)
+if [ "$host" = "$TRIPLE" ]; then
 	"$out/bin/$exe" version
 fi
 ls -l "$out/bin" "$out/lib" "$out/python"

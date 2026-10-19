@@ -55,6 +55,12 @@ Each line cost a debugging session once. The fix named is the one in the code.
   the runner has no Node for it there. Linux's release builds and Alpine's
   smoke tests run through `docker run` from the host.
 
+- **macOS's `/bin/sh` is bash 3.2**, which takes an apostrophe inside
+  `"${VAR:?message}"` for a quote and fails at the end of the file:
+  `unexpected EOF while looking for matching`. A script `sh` runs on macOS
+  keeps every apostrophe out of `${…}`; `docker run bash:3.2 bash --posix -n
+  script.sh` checks it from any machine.
+
 ## Rust and its libraries
 
 - **Rust's stdout holds what it is given until a newline**: frames have none,
