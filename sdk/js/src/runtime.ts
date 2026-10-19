@@ -52,6 +52,9 @@ export interface Runtime {
 	readFile(path: string): Promise<Uint8Array | undefined>
 	/** The executable a name finds on PATH. */
 	which(name: string): string | undefined
-	/** The server binary a package of this runtime carries for this platform. */
-	packagedBinary(): string | undefined
+	/**
+	 * A file this platform's package carries, `bin/tinystore` or the core's
+	 * library in `lib/`, installed beside this one; undefined without it.
+	 */
+	packaged(file: string): string | undefined
 }

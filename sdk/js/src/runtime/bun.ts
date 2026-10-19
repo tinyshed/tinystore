@@ -8,7 +8,7 @@ import net from 'node:net'
 import manifest from '../../package.json' with { type: 'json' }
 import { ClosedError } from '../errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport, TransportEvents } from '../runtime.ts'
-import { address, exitedWith, spawnDetached, stderrKept } from './shared.ts'
+import { address, exitedWith, platformPackage, spawnDetached, stderrKept } from './shared.ts'
 
 export const bunRuntime: Runtime = {
 	get client() {
@@ -30,7 +30,7 @@ export const bunRuntime: Runtime = {
 		}
 	},
 	which: name => Bun.which(name) ?? undefined,
-	packagedBinary,
+	packaged,
 }
 
 async function connect(
@@ -178,12 +178,10 @@ function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
 	}
 }
 
-/** The platform's package of the server binary, installed beside this one. */
-function packagedBinary(): string | undefined {
-	const name = `@tinyshed/tinystore-${process.platform}-${process.arch}`
-	const binary = process.platform === 'win32' ? 'tinystore.exe' : 'tinystore'
+/** A file of the platform's package, installed beside this one. */
+function packaged(file: string): string | undefined {
 	try {
-		return Bun.resolveSync(`${name}/bin/${binary}`, import.meta.dir)
+		return Bun.resolveSync(`${platformPackage()}/${file}`, import.meta.dir)
 	} catch {
 		return undefined
 	}

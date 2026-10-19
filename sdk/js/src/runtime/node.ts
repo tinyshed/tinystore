@@ -13,7 +13,7 @@ import tls from 'node:tls'
 import manifest from '../../package.json' with { type: 'json' }
 import { ClosedError } from '../errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport, TransportEvents } from '../runtime.ts'
-import { address, exitedWith, spawnDetached, stderrKept } from './shared.ts'
+import { address, exitedWith, platformPackage, spawnDetached, stderrKept } from './shared.ts'
 
 export const nodeRuntime: Runtime = {
 	client: `tinystore-js/${manifest.version} node/${process.versions.node}`,
@@ -32,7 +32,7 @@ export const nodeRuntime: Runtime = {
 		}
 	},
 	which,
-	packagedBinary,
+	packaged,
 }
 
 function connect(
@@ -165,12 +165,10 @@ function executable(path: string, windows: boolean): boolean {
 	}
 }
 
-/** The platform's package of the server binary, installed beside this one. */
-function packagedBinary(): string | undefined {
-	const name = `@tinyshed/tinystore-${process.platform}-${process.arch}`
-	const binary = process.platform === 'win32' ? 'tinystore.exe' : 'tinystore'
+/** A file of the platform's package, installed beside this one. */
+function packaged(file: string): string | undefined {
 	try {
-		return createRequire(import.meta.url).resolve(`${name}/bin/${binary}`)
+		return createRequire(import.meta.url).resolve(`${platformPackage()}/${file}`)
 	} catch {
 		return undefined
 	}

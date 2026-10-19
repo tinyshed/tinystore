@@ -5,11 +5,22 @@
 // nothing else installed. Plain JavaScript, so that Node and Bun both run it.
 
 import { spawn } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { constants } from 'node:os'
 
 const executable = process.platform === 'win32' ? 'tinystore.exe' : 'tinystore'
-const platform = `@tinyshed/tinystore-${process.platform}-${process.arch}`
+// Linux's package is musl's where its loader is in /lib, as npm chose it by libc
+const musl = process.platform === 'linux' && runsOnMusl()
+const platform = `@tinyshed/tinystore-${process.platform}-${process.arch}${musl ? '-musl' : ''}`
+
+function runsOnMusl() {
+	try {
+		return readdirSync('/lib').some(name => name.startsWith('ld-musl-'))
+	} catch {
+		return false
+	}
+}
 
 function packagedBinary() {
 	try {

@@ -3,6 +3,7 @@
 // last lines of a child's stderr.
 
 import { spawn } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 
 import { ClosedError } from '../errors.ts'
 import type { Child } from '../runtime.ts'
@@ -58,4 +59,23 @@ export function exitedWith(code: number, stderr: string): ClosedError {
 	return new ClosedError(
 		`the private server exited with ${code}${stderr === '' ? '' : `: ${lastLines(stderr)}`}`,
 	)
+}
+
+/**
+ * The package that carries this platform's executable and libraries:
+ * `@tinyshed/tinystore-linux-x64`, or `-musl` after it where Linux's C
+ * library is musl, as npm chose it by its `libc` at install.
+ */
+export function platformPackage(): string {
+	const musl = process.platform === 'linux' && runsOnMusl()
+	return `@tinyshed/tinystore-${process.platform}-${process.arch}${musl ? '-musl' : ''}`
+}
+
+/** Whether this Linux runs musl: its loader, `ld-musl-<arch>.so.1`, is in /lib. */
+function runsOnMusl(): boolean {
+	try {
+		return readdirSync('/lib').some(name => name.startsWith('ld-musl-'))
+	} catch {
+		return false
+	}
 }

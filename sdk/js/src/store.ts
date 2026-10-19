@@ -59,6 +59,7 @@ import {
 } from './records.ts'
 import { bunRuntime } from './runtime/bun.ts'
 import { nodeRuntime } from './runtime/node.ts'
+import { platformPackage } from './runtime/shared.ts'
 import type { Runtime, TlsOptions } from './runtime.ts'
 import type { StandardSchemaV1 } from './schema.ts'
 import {
@@ -86,9 +87,9 @@ export interface OpenOptions {
 	 */
 	embedded?: boolean
 	/**
-	 * The core's library for `embedded`: under Bun the C library,
-	 * TINYSTORE_LIBRARY when absent, and under Node its addon, tinystore.node,
-	 * TINYSTORE_ADDON when absent.
+	 * The core for `embedded`: under Bun the C library, TINYSTORE_LIBRARY when
+	 * absent, and under Node its addon, tinystore.node, TINYSTORE_ADDON when
+	 * absent; then this platform's package's.
 	 */
 	library?: string | undefined
 	/**
@@ -558,7 +559,7 @@ export async function openWith(
 	}
 	const dial =
 		options.embedded === true
-			? embedded(runtime, dir, () => findLibrary(options.library), started)
+			? embedded(runtime, dir, () => findLibrary(runtime, options.library), started)
 			: options.private === true
 				? privateChild(runtime, dir, binary, clock, started)
 				: sidecar(runtime, dir, binary, { idle, ...started })
@@ -604,24 +605,37 @@ function checkDirectory(dir: string): void {
 }
 
 function findBinary(runtime: Runtime, given: string | undefined): string {
+	const executable = runtime.windows ? 'tinystore.exe' : 'tinystore'
 	const found =
-		given ?? process.env.TINYSTORE_BIN ?? runtime.packagedBinary() ?? runtime.which('tinystore')
+		given ??
+		process.env.TINYSTORE_BIN ??
+		runtime.packaged(`bin/${executable}`) ??
+		runtime.which('tinystore')
 	if (found === undefined || found === '') {
 		throw new ClosedError(
-			`no tinystore binary: @tinyshed/tinystore-${process.platform}-${process.arch} is not installed; ` +
+			`no tinystore binary: ${platformPackage()} is not installed; ` +
 				'install it, put tinystore on PATH, or set TINYSTORE_BIN',
 		)
 	}
 	return found
 }
 
-/** The core's library an embedded store loads. */
-function findLibrary(library: string | undefined): string {
-	const variable = typeof Bun === 'undefined' ? 'TINYSTORE_ADDON' : 'TINYSTORE_LIBRARY'
-	const found = library ?? process.env[variable]
+/**
+ * The core an embedded store loads: under Bun the C library, under Node its
+ * addon; the one given, the variable's, or this platform's package's.
+ */
+function findLibrary(runtime: Runtime, library: string | undefined): string {
+	const node = typeof Bun === 'undefined'
+	const variable = node ? 'TINYSTORE_ADDON' : 'TINYSTORE_LIBRARY'
+	const file = node
+		? 'tinystore.node'
+		: ({ win32: 'tinystore_ffi.dll', darwin: 'libtinystore_ffi.dylib' }[
+				process.platform as string
+			] ?? 'libtinystore_ffi.so')
+	const found = library ?? process.env[variable] ?? runtime.packaged(`lib/${file}`)
 	if (found === undefined || found === '') {
 		throw new InvalidError(
-			`an embedded store needs the core library: pass library or set ${variable}`,
+			`an embedded store needs the core: ${platformPackage()} is not installed; pass library or set ${variable}`,
 		)
 	}
 	return found
