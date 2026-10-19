@@ -37,9 +37,10 @@
 		}
 	}
 
+	// a step still playing counts as seen: Next moves on, rather than playing it again from its start
 	function next() {
 		if (last) play(0)
-		else play(played ? at + 1 : at)
+		else play(played || playing ? at + 1 : at)
 	}
 
 	function back() {
