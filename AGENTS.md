@@ -374,7 +374,7 @@ bytes a sample in a real file.
 
 How recurring work is done is a skill in `.agents/skills/`, which
 `.claude/skills/` points to: `api-change`, `sdk`, `wire-change`, `verify`,
-`release`, `platform-traps` and `docs`; fix one where it is wrong before
+`release`, `platform-traps`, `docs` and `delegate`; fix one where it is wrong before
 relying on it, as you would this file.
 
 ## Rules that are gates
@@ -468,7 +468,8 @@ Ask first before anything that rewrites history, deletes data or costs hours.
 **Who writes what.** The owner trusts the Rust code to one model: Opus writes
 and edits every line of Rust. Helper agents, Haiku among them, take
 inventories, run builds, tests and measurements, and do mechanical chores
-outside Rust from an exact brief; they never write or edit Rust code.
+outside Rust from an exact brief, as the `delegate` skill writes one; they
+never write or edit Rust code.
 
 ## Branches and releases
 
