@@ -37,6 +37,14 @@ fn a_whole_number_is_whole_and_a_rule_says_what_it_refused() {
 }
 
 #[test]
+fn a_variable_of_a_number_reads_whole_when_it_is_written_whole() {
+    assert_eq!(parse_kind(&Kind::Number, "9000"), Ok(json!(9000)));
+    assert_eq!(parse_kind(&Kind::Number, "0.75"), Ok(json!(0.75)));
+    assert_eq!(parse_kind(&Kind::Number, "1e3"), Ok(json!(1000.0)));
+    assert!(parse_kind(&Kind::Number, "fast").is_err());
+}
+
+#[test]
 fn one_of_names_the_set_and_a_span_its_bound_spelled() {
     let allowed = Some(vec!["info".to_owned(), "debug".to_owned()]);
     let level = setting(Kind::Text, Rules { one_of: allowed, ..Rules::default() });
@@ -72,7 +80,7 @@ fn a_lists_items_are_checked_each_its_length_counted_and_a_group_item_filled() {
 fn a_variables_text_reads_as_its_settings_kind() {
     let list =
         setting(Kind::List(Box::new(Item::Value { kind: Kind::Number, rules: Rules::default() })), Rules::default());
-    assert_eq!(parse(&list, "1.5, 2"), Ok(json!([1.5, 2.0])));
+    assert_eq!(parse(&list, "1.5, 2"), Ok(json!([1.5, 2])), "a whole number stays whole, as in JSON");
     assert_eq!(parse(&list, "[3]"), Ok(json!([3])));
     assert_eq!(parse(&list, ""), Ok(json!([])));
     let whole = setting(Kind::Integer, Rules::default());

@@ -168,7 +168,12 @@ fn parse_kind(kind: &Kind, text: &str) -> Result<Value, String> {
             Err(_) if trimmed.parse::<f64>().is_ok() => Err(refused()),
             Err(_) => Err(format!("{text:?} is not a number")),
         },
-        Kind::Number => trimmed.parse::<f64>().ok().and_then(Number::from_f64).map(Value::Number).ok_or_else(refused),
+        // `PORT=9000` for a TypeScript program's `port: 8080` stays 9000 and is
+        // never shown as 9000.0
+        Kind::Number => match trimmed.parse::<i64>() {
+            Ok(whole) => Ok(Value::from(whole)),
+            Err(_) => trimmed.parse::<f64>().ok().and_then(Number::from_f64).map(Value::Number).ok_or_else(refused),
+        },
         Kind::Boolean => boolean(trimmed).map(Value::Bool).ok_or_else(refused),
         Kind::Duration => span(trimmed).map(Value::from),
         Kind::List(item) => list(item, trimmed),
