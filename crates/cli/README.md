@@ -5,8 +5,8 @@ storage runtime for applications. It serves a store's directory to Bun, Node,
 Python and Go programs and to remote clients, and reads a store while its
 program runs.
 
-> **A release candidate.** Until `v0.1.0`, the commands, the files and the
-> protocol may still change.
+> **Version 0.1, the first release.** Until `1.0`, a minor release may still
+> change the commands.
 
 ```sh
 LIBSQLITE3_FLAGS="SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB" cargo install tinystore-cli

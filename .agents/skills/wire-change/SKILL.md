@@ -70,10 +70,9 @@ SDK that starts a server passes the same as `tinystore serve`'s flags
 - An answer is checked against the agreed body before it leaves; one past it
   comes in `DATA` pieces within the stream's credit.
 
-Only candidates are released, so a field may still be renumbered or
-repurposed (AGENTS.md: no versions before `v0.1.0`). After the first release a message
-never changes meaning: a new field is added, its zero what an older client
-meant, and a new method takes a new number.
+`v0.1.0` is released, so a message never changes meaning: a new field is
+added, its zero what an older client meant, and a new method takes a new
+number.
 
 ## Bytes you can trust
 

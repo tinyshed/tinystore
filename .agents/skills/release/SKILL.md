@@ -12,8 +12,8 @@ how to work on it without publishing by mistake.
 One version covers everything: the executable, the core's library, the Node
 addon, Python's module, the npm packages, the wheels, the crates, the image
 and the Go SDK's tag. The Go engine's candidates `0.1.0-rc.1` to `rc.5` sit on
-npm and PyPI under the same names; the Rust core's began at `v0.1.0-rc.6` on
-19 October, and `v0.1.0` is the first release that is not a candidate.
+npm and PyPI under the same names; the Rust core's were `v0.1.0-rc.6` and `rc.7` on
+19 October, and `v0.1.0` on 20 October is the first release.
 
 Tagging and publishing are outward-facing and cannot be taken back. Dispatch
 with publish on, or approve the `release` environment, only when the user has

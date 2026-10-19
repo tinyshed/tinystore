@@ -6,10 +6,9 @@ store with the `tinystore` command. It takes about ten minutes, in
 TypeScript, Python, Go or Rust.
 
 > [!NOTE]
-> **A release candidate**
-> The commands below install the latest candidate of `v0.1.0`, the first
-> release. Until `v0.1.0`, the API and the files may still change, and a
-> store written by one candidate may not open in the next.
+> **Version 0.1**
+> TinyStore's first release. Until `1.0`, a minor release may still change
+> the API, and its notes say what changed.
 
 ## Install
 

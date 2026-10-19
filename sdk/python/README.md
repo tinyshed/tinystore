@@ -13,8 +13,8 @@ one. Every call, by engine, is in docs/reference/python/.
 
 <!-- /landing:headline -->
 
-> **A release candidate.** Until `v0.1.0`, the API may still change, and a
-> file written by one candidate may not open in the next.
+> **Version 0.1, the first release.** Until `1.0`, a minor release may still
+> change the API, and its notes say what changed.
 
 The SDK starts a small `tinystore` server next to your program, called the
 sidecar, and talks to it over a local connection, so that several processes

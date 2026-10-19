@@ -25,9 +25,9 @@ should be a fact a ten-second grep would answer.
 ## Status
 
 Every engine is built in the Rust core, over the wire and in the Bun and
-Node, Python and Go SDKs. The Rust core's first candidates, `v0.1.0-rc.6` and
-`rc.7`, were published on 19 October to npm, PyPI, crates.io, GHCR and
-GitHub; `v0.1.0` comes next. npm and PyPI also hold the Go engine's
+Node, Python and Go SDKs. `v0.1.0`, the first release, was published on
+20 October to npm, PyPI, crates.io, GHCR and GitHub, after the candidates
+`v0.1.0-rc.6` and `rc.7`. npm and PyPI also hold the Go engine's
 `0.1.0-rc.1` to `rc.5`, the tags of the same names stay, and research's
 submodule is pinned to `v0.1.0-rc.5`.
 
@@ -54,9 +54,10 @@ submodule is pinned to `v0.1.0-rc.5`.
 | SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server      | [one directory](docs/handbook/start/directory.md)    |
 | release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                 | the `release` skill                                  |
 
-Only candidates are released, so nothing is compatible yet: formats, schemas,
-the protocol and every name change freely until `v0.1.0`. An engine's schema changes
-inside its `0001` migration; a second one is added only after `v0.1.0`.
+From `v0.1.0` on, a store a release wrote opens in the next: an engine's
+schema changes through a migration of its own after `0001`, and the
+protocol's messages keep their meaning. Names may still change in a minor
+release until `1.0`, and its notes say which.
 
 Do not describe unbuilt behaviour as though it works.
 
