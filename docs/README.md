@@ -86,12 +86,12 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### SQL
 
 - [Overview](guides/sql/README.md)
-- Migrations
-- Writes and transactions
-- Tables and queries
-- Rows that include rows
-- Buckets and queues in a database
-- FTS5 and R*Tree
+- [Migrations](guides/sql/migrations.md)
+- [Writes and transactions](guides/sql/writes.md)
+- [Tables and queries](guides/sql/tables.md)
+- [Rows that include rows](guides/sql/include.md)
+- [Buckets and queues in a database](guides/sql/buckets-and-queues.md)
+- [FTS5 and R*Tree](guides/sql/fts5.md)
 
 ### KV
 
@@ -128,13 +128,13 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Search
 
 - [Overview](guides/search/README.md)
-- Fields and weights
-- Typos
-- Filters
-- Vectors
-- Words and vectors together
-- A table's index
-- Rebuilds
+- [Fields and weights](guides/search/fields.md)
+- [Typos](guides/search/typos.md)
+- [Filters](guides/search/filters.md)
+- [Vectors](guides/search/vectors.md)
+- [Words and vectors together](guides/search/hybrid.md)
+- [A table's index](guides/search/table-index.md)
+- [Rebuilds](guides/search/rebuilds.md)
 
 ### Channels
 

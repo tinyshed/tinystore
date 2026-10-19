@@ -64,14 +64,14 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 
 ## In these guides
 
-| Page                             | Covers                                                  |
-|----------------------------------|---------------------------------------------------------|
-| Migrations                       | files, their order, checksums, changing a schema        |
-| Writes and transactions          | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
-| Tables and queries               | the builder: conditions, joins, pages, updates, deletes |
-| Rows that include rows           | `include`: each row with the rows of a query            |
-| Buckets and queues in a database | keys and jobs that commit with rows                     |
-| FTS5 and R*Tree                  | SQLite's own full-text and spatial indexes              |
+| Page                                                      | Covers                                                  |
+|-----------------------------------------------------------|---------------------------------------------------------|
+| [Migrations](migrations.md)                               | files, their order, checksums, changing a schema        |
+| [Writes and transactions](writes.md)                      | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
+| [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
+| [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
+| [Buckets and queues in a database](buckets-and-queues.md) | keys and jobs that commit with rows                     |
+| [FTS5 and R*Tree](fts5.md)                                | SQLite's own full-text and spatial indexes              |
 
 New to SQL in TinyStore? [Messages](../../handbook/chat/messages.md) in the
 Handbook builds a chat's tables, writes and pages step by step.

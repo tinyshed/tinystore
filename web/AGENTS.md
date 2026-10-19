@@ -13,7 +13,7 @@ both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
 are the book of `plan/docs.md`, written for this branch: the Handbook's
-five parts in `docs/handbook/`, and the Guides in `docs/guides/`, KV and Jobs page by page.
+five parts in `docs/handbook/`, and the Guides in `docs/guides/`, KV, Jobs, SQL and Search page by page.
 
 Not built: a page of the site's own statistics.
 

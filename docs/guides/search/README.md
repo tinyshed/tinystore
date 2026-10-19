@@ -52,15 +52,15 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
 
 ## In these guides
 
-| Page                       | Covers                                              |
-|----------------------------|-----------------------------------------------------|
-| Fields and weights         | which text is read, and how much each field counts  |
-| Typos                      | the nearest word, `corrected`, `typoTolerance`      |
-| Filters                    | `where`, lists, ranges, `search.or`                 |
-| Vectors                    | dimensions, exact search, `recall` and clusters     |
-| Words and vectors together | `vectorWeight`, `rerank`                            |
-| A table's index            | `db.searchIndex`, triggers, `ready`                 |
-| Rebuilds                   | changing fields and filters while the index answers |
+| Page                                    | Covers                                              |
+|-----------------------------------------|-----------------------------------------------------|
+| [Fields and weights](fields.md)         | which text is read, and how much each field counts  |
+| [Typos](typos.md)                       | the nearest word, `corrected`, `typoTolerance`      |
+| [Filters](filters.md)                   | `where`, lists, ranges, `search.or`                 |
+| [Vectors](vectors.md)                   | dimensions, exact search, `recall` and clusters     |
+| [Words and vectors together](hybrid.md) | `vectorWeight`, `rerank`                            |
+| [A table's index](table-index.md)       | `db.searchIndex`, triggers, `ready`                 |
+| [Rebuilds](rebuilds.md)                 | changing fields and filters while the index answers |
 
 New to Search? [Finding old messages](../../handbook/chat/finding-old-messages.md)
 in the Handbook indexes a chat's messages, and [How search
