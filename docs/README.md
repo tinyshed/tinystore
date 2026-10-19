@@ -120,10 +120,10 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Blobs
 
 - [Overview](guides/blobs/README.md)
-- Uploads
-- Serving files
-- Copies and expiry
-- Integrity
+- [Uploads](guides/blobs/uploads.md)
+- [Serving files](guides/blobs/serving.md)
+- [Copies and expiry](guides/blobs/copies-and-expiry.md)
+- [Integrity](guides/blobs/integrity.md)
 
 ### Search
 

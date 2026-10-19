@@ -53,12 +53,12 @@ avatars.folder("users").folder(42).clear()?; // every file of user 42
 
 ## In these guides
 
-| Page              | Covers                                                    |
-|-------------------|-----------------------------------------------------------|
-| Uploads           | streams, `upload` and `commit`, `size`, `maxFileSize`     |
-| Serving files     | ETags, ranges, `content-disposition`, Go's `ServeContent` |
-| Copies and expiry | `copy`, `rename`, `ttl`, `expire`                         |
-| Integrity         | checked reads, the scrub, `ifMatch` and `create`          |
+| Page                                      | Covers                                                    |
+|-------------------------------------------|-----------------------------------------------------------|
+| [Uploads](uploads.md)                     | streams, `upload` and `commit`, `size`, `maxFileSize`     |
+| [Serving files](serving.md)               | ETags, ranges, `content-disposition`, Go's `ServeContent` |
+| [Copies and expiry](copies-and-expiry.md) | `copy`, `rename`, `ttl`, `expire`                         |
+| [Integrity](integrity.md)                 | checked reads, the scrub, `ifMatch` and `create`          |
 
 New to Blobs? [Attachments](../../handbook/chat/attachments.md) in the
 Handbook stores and serves a chat's uploads.
