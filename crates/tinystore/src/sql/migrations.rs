@@ -120,6 +120,7 @@ mod tests {
         }
     }
 
+    // contract: SQL-03
     #[test]
     fn migrations_load_in_the_order_of_their_numbers_however_wide_each_is_written() {
         let files = ["10_tenth.sql", "9_ninth.sql", "0001_first.sql"].map(|name| (name.to_owned(), String::new()));

@@ -26,6 +26,7 @@ fn messages(events: &[Event]) -> Vec<&str> {
     events.iter().filter_map(|event| event.message.as_deref()).collect()
 }
 
+// contract: REC-10
 #[test]
 fn the_lines_of_a_stack_trace_a_traceback_or_a_json_value_make_one_event() {
     let f = fixture();
@@ -182,6 +183,7 @@ fn however_a_text_is_cut_its_lines_come_back_but_those_longer_than_an_event_hold
     }
 }
 
+// contract: REC-10
 #[test]
 fn a_stack_trace_goes_on_with_a_cause_a_traceback_and_an_exceptions_name() {
     let lines = [

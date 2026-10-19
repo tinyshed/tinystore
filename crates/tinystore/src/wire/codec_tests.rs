@@ -11,6 +11,7 @@ fn hex(text: &str) -> Vec<u8> {
     (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
 }
 
+// contract: WIRE-08
 #[test]
 fn every_vector_of_the_schema_reads_and_writes_its_own_bytes() {
     let vectors: Json = serde_json::from_str(include_str!("../../../../testdata/wire/protocol.json")).unwrap();
@@ -27,6 +28,7 @@ fn every_vector_of_the_schema_reads_and_writes_its_own_bytes() {
     }
 }
 
+// contract: WIRE-02
 #[test]
 fn a_field_of_another_type_is_refused_by_its_name() {
     let body = tree::encode(&Value::Map(vec![(Value::Uint(3), Value::Bool(true))]));

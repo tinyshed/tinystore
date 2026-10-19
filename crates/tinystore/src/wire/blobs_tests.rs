@@ -222,6 +222,7 @@ fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     assert_eq!(failed.code, "corrupt", "{}", failed.message);
 }
 
+// contract: WIRE-04
 #[test]
 fn a_read_cancelled_mid_way_sends_nothing_after_its_last_frame() {
     let dir = tempfile::tempdir().unwrap();

@@ -93,6 +93,7 @@ fn assert_each_log_rebuilds_its_file(dir: &Path) {
     }
 }
 
+// contract: REPL-01
 #[test]
 fn a_node_logs_every_file_and_each_log_rebuilds_its_file_across_restarts() {
     let dir = tempfile::tempdir().unwrap();
@@ -129,6 +130,7 @@ fn copy_as_left(from: &Path, to: &Path) {
     }
 }
 
+// contract: REPL-03
 #[test]
 fn a_log_whose_tail_a_crash_took_is_mended_from_the_wal_at_any_byte() {
     let dir = tempfile::tempdir().unwrap();
@@ -158,6 +160,7 @@ fn a_log_whose_tail_a_crash_took_is_mended_from_the_wal_at_any_byte() {
     store.close().unwrap();
 }
 
+// contract: REPL-03
 #[test]
 fn a_crash_after_the_wal_started_over_loses_nothing_its_log_had_not_synced() {
     let dir = tempfile::tempdir().unwrap();

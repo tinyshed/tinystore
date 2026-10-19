@@ -21,6 +21,7 @@ interface Session {
 	seenAt: number
 }
 
+// contract: WIRE-01
 for (const way of ways) {
 	describe.skipIf(!way.ready)(`kv through ${way.name}`, () => {
 		let dir: string

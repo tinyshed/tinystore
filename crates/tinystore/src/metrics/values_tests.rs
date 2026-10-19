@@ -20,6 +20,7 @@ fn round_trip(values: &[f64], hint: i64) -> (Option<u8>, i64) {
     (body.map(|body| body[0]), hint)
 }
 
+// contract: MET-01
 #[test]
 fn every_way_keeps_the_bits_and_the_shortest_wins() {
     assert_eq!(round_trip(&[42.0; 240], UNTRIED), (None, UNTRIED), "a constant block keeps no body");
@@ -38,6 +39,7 @@ fn every_way_keeps_the_bits_and_the_shortest_wins() {
     assert_eq!(round_trip(&cents, NO_GRID).1, NO_GRID, "a series no grid won for tries none");
 }
 
+// contract: MET-01
 #[test]
 fn the_extremes_keep_their_bits_in_every_way() {
     let extremes =
@@ -48,6 +50,7 @@ fn the_extremes_keep_their_bits_in_every_way() {
     assert_eq!(round_trip(&mostly, UNTRIED).0, Some(CHANGES));
 }
 
+// contract: MET-01
 #[test]
 fn a_body_read_as_another_blocks_is_refused() {
     let written = points(&(0..240).map(|index| (index % 7) as f64).collect::<Vec<_>>());

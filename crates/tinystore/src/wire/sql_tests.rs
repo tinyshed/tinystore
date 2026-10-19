@@ -251,6 +251,7 @@ fn a_transaction_holds_its_calls_until_its_last_data_commits_or_rolls_back() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+// contract: WIRE-06
 #[test]
 fn a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server() {
     let dir = tempfile::tempdir().unwrap();
@@ -410,6 +411,7 @@ fn a_client_says_how_far_a_databases_commits_go_and_one_open_keeps_what_it_has()
     assert_eq!(refused.message, "sql other: durability \"fast\": it is full or os: invalid");
 }
 
+// contract: SEC-01
 #[test]
 fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -446,6 +448,7 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     assert!(!copy.exists() && !other.exists(), "no file was made");
 }
 
+// contract: SQL-02
 #[test]
 fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
     let dir = tempfile::tempdir().unwrap();
@@ -465,6 +468,7 @@ fn a_connection_that_writes_attaches_no_file_and_ends_no_transaction() {
     assert_eq!(query(&mut client, handle, "select title from notes", "all").rows.len(), 1);
 }
 
+// contract: SQL-06
 #[test]
 fn a_statements_columns_hold_what_its_rows_hold() {
     let dir = tempfile::tempdir().unwrap();

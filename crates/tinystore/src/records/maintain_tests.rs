@@ -2,6 +2,7 @@ use super::super::fixture::{DAY, SECOND, fixture, names};
 use super::*;
 use crate::records::NewEvent;
 
+// contract: REC-09
 #[test]
 fn an_event_older_than_its_stream_keeps_is_never_read_and_maintenance_removes_its_row() {
     let fixture = fixture();
@@ -71,6 +72,7 @@ fn names_after_crash(fixture: &super::super::fixture::Fixture, image: &tempfile:
     events.into_iter().map(|event| event.name).collect()
 }
 
+// contract: DUR-01, REC-03
 #[test]
 fn an_abrupt_exit_loses_no_appended_event_before_or_after_a_pack() {
     let fixture = fixture();
@@ -85,6 +87,7 @@ fn an_abrupt_exit_loses_no_appended_event_before_or_after_a_pack() {
     assert_eq!(names_after_crash(&fixture, &after), ["a", "b", "c"], "packed and waiting alike");
 }
 
+// contract: DUR-08
 #[test]
 fn a_reader_finds_each_event_once_while_heads_pack_and_segments_merge() {
     use std::collections::BTreeSet;

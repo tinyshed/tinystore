@@ -262,12 +262,14 @@ mod tests {
         assert_eq!(next("0 20 * * *", "Europe/Berlin", "2026-07-01T12:00:00Z"), "2026-07-01T18:00:00Z");
     }
 
+    // contract: JOB-08
     #[test]
     fn a_time_daylight_saving_skips_runs_when_the_skip_ends() {
         // Berlin's clocks went from 02:00 to 03:00 on 29 March 2026
         assert_eq!(next("30 2 * * *", "Europe/Berlin", "2026-03-28T12:00:00Z"), "2026-03-29T01:00:00Z");
     }
 
+    // contract: JOB-08
     #[test]
     fn a_time_daylight_saving_repeats_runs_once() {
         // Berlin's clocks went from 03:00 back to 02:00 on 25 October 2026

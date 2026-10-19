@@ -148,6 +148,7 @@ fn a_store_opened_again_within_the_millisecond_it_closed_writes_after_its_last_s
     assert_eq!(samples(&f, "jobs_total", &[]), [(-1, 0.0), (0, 2.0), (1, 0.0), (2, 5.0)]);
 }
 
+// contract: MET-09
 #[test]
 fn instruments_of_two_connections_add_into_one_total() {
     let f = fixture();
@@ -176,6 +177,7 @@ fn instruments_of_two_connections_add_into_one_total() {
     assert_eq!(samples(&f, "queue_depth", &[("queue", "mail")]).last(), Some(&(ms(30 * SECOND), 4.0)));
 }
 
+// contract: MET-11
 #[test]
 fn the_overflow_is_a_group_of_its_own() {
     let f = fixture();
@@ -302,6 +304,7 @@ fn a_histogram_records_numbers_and_its_bounds_read_as_javascript_writes_them() {
     assert_eq!(samples(&f, "response_bytes_count", &[]).last().unwrap().1, 2.0, "what it refused counts nowhere");
 }
 
+// contract: ERR-06, MET-10
 #[test]
 fn a_call_it_refuses_changes_nothing() {
     let f = fixture();
@@ -329,6 +332,7 @@ fn a_call_it_refuses_changes_nothing() {
     assert!(samples(&f, "http_request_ms_count", &[]).is_empty(), "a timer's `le` is its buckets'");
 }
 
+// contract: MET-10
 #[test]
 fn an_instrument_opens_against_what_the_store_and_its_file_hold() {
     let f = fixture();
@@ -362,6 +366,7 @@ fn an_instrument_opens_against_what_the_store_and_its_file_hold() {
     refused(stats.gauge("read_once").open().map(drop));
 }
 
+// contract: MET-10
 #[test]
 fn one_refused_instrument_keeps_no_other_out() {
     let f = fixture();
@@ -443,6 +448,7 @@ fn a_timer_the_store_refuses_writes_none_of_its_series() {
     }
 }
 
+// contract: MET-09
 #[test]
 fn calls_from_many_threads_count_once_each_while_the_store_writes() {
     let f = fixture();

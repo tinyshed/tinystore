@@ -11,7 +11,8 @@ module; the calls a program writes are in the guides.
 **MUST** and **MUST NOT** are absolute. **MAY** says what a program cannot rely
 on either way. Each contract has an id that never changes meaning; a contract
 removed leaves its id unused. A test that keeps a contract names its id in a
-comment, `// contract: KV-04`; nothing checks those comments yet.
+comment, `// contract: KV-04`, and `just contracts` fails when a contract that
+says MUST is named by no test, or a comment names an id this file lacks.
 
 Nothing is released, so formats, schemas, the protocol and names change freely
 until `v0.1.0`. These contracts are what does not.

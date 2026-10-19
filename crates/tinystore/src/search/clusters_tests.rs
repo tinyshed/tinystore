@@ -114,6 +114,7 @@ fn k_means_gathers_the_rows_drawn_about_each_center() {
     }
 }
 
+// contract: SRCH-02
 #[test]
 fn a_search_with_recall_is_exact_until_its_clusters_serve_and_then_finds_its_share() {
     let fixture = fixture();

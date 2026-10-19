@@ -111,6 +111,7 @@ fn a_server_started_with_a_durability_opens_its_store_with_it_and_says_so() {
     assert_eq!(wait(&mut child), 0);
 }
 
+// contract: WIRE-09
 #[test]
 fn a_private_child_answers_hello_and_leaves_when_its_stdin_ends() {
     let dir = tempfile::tempdir().unwrap();
@@ -184,6 +185,7 @@ fn remote(dir: &Path, listen: &str, tls: &[&Path]) -> (Child, serde_json::Value)
     (server, serve)
 }
 
+// contract: SEC-02
 #[test]
 fn a_remote_client_is_admitted_by_its_token_and_may_do_what_its_line_says() {
     let dir = tempfile::tempdir().unwrap();
@@ -279,6 +281,7 @@ fn a_mistake_in_the_tokens_leaves_no_files_behind() {
     assert!(!store.exists(), "the store never opened");
 }
 
+// contract: CLI-03, SEC-05
 #[test]
 fn status_finds_a_running_server_and_stop_stops_it_its_serve_gone() {
     let dir = tempfile::tempdir().unwrap();

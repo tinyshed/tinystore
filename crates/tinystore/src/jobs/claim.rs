@@ -732,6 +732,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    // contract: JOB-07
     #[test]
     fn a_retry_waits_longer_each_time_within_a_tenth_either_way() {
         let policy = Policy { backoff: (Duration::from_secs(1), Duration::from_secs(60)), ..Policy::default() };

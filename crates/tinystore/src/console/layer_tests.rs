@@ -194,6 +194,7 @@ fn json_said(name: &str) -> Option<String> {
     (name == "LOG_FORMAT").then(|| "json".to_owned())
 }
 
+// contract: LOG-05
 #[test]
 fn the_environment_wins_over_the_code_and_never_turns_a_console_on() {
     let printed = Printed::default();
@@ -218,6 +219,7 @@ fn loud_said(name: &str) -> Option<String> {
     (name == "APP_LOG_LEVEL").then(|| "loud-in-a-layer-test".to_owned())
 }
 
+// contract: LOG-05
 #[test]
 fn a_variable_none_can_mean_is_said_once_and_ignored() {
     let printed = Printed::default();

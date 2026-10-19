@@ -16,6 +16,7 @@ fn expect(usage: &Allowance, ok: bool, left: u64, used: &[u64]) {
     }
 }
 
+// contract: KV-10
 #[test]
 fn a_use_counts_in_every_window_or_in_none() {
     let f = fixture();
@@ -52,6 +53,7 @@ fn a_window_starts_at_the_first_use_after_the_last_ended() {
     assert_eq!((session.used, session.resets_at), (1, Some(start + 10 * HOUR + 25 * MINUTE)));
 }
 
+// contract: KV-10
 #[test]
 fn peek_counts_nothing_and_a_refund_never_goes_below_nothing() {
     let f = fixture();
@@ -71,6 +73,7 @@ fn peek_counts_nothing_and_a_refund_never_goes_below_nothing() {
     expect(&tokens.peek("user-1").unwrap(), true, 1000, &[0, 0]);
 }
 
+// contract: KV-10
 #[test]
 fn a_quotas_windows_outlive_a_restart_and_follow_its_new_windows() {
     let f = fixture();
@@ -83,6 +86,7 @@ fn a_quotas_windows_outlive_a_restart_and_follow_its_new_windows() {
     expect(&tokens.peek("user-1").unwrap(), true, 2000, &[0, 0]);
 }
 
+// contract: KV-10
 #[test]
 fn uses_racing_for_a_key_pass_no_more_than_its_limit() {
     let f = fixture();

@@ -5,6 +5,7 @@
 // | changed                          | runs                                                     |
 // |----------------------------------|----------------------------------------------------------|
 // | any .rs                          | cargo fmt --check                                        |
+// | CONTRACTS.md, any test's source  | just contracts                                           |
 // | crates/tinystore/src/<area>/...  | clippy, the tests of <area>, the lint sets naming it     |
 // | crates/tinystore/src/<root>.rs   | clippy, every library test, every lint set               |
 // | crates/tinystore/src/wire/...    | as an area, and the Bun SDK                              |
@@ -44,6 +45,7 @@ const add = (...step: string[]) => {
 }
 
 if (files.some((file) => file.endsWith('.rs'))) add('cargo', 'fmt', '--all', '--check')
+if (files.some((file) => file === 'CONTRACTS.md' || /\.(rs|ts|py|go)$/.test(file))) add('just', 'contracts')
 
 const inLibrary = files.filter((file) => file.startsWith(library) && file.endsWith('.rs'))
 if (inLibrary.length > 0) {

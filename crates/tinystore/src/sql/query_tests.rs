@@ -132,6 +132,7 @@ fn kept(value: &Value) -> Json {
     }
 }
 
+// contract: SQL-10
 #[test]
 fn every_query_of_the_vectors_is_the_statement_every_sdk_writes() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/sql/queries.json");
@@ -235,6 +236,7 @@ fn a_table_inserts_rows_and_reads_them_back_as_its_type() {
     assert_eq!(titles, ["Buy milk", "Call mom"]);
 }
 
+// contract: SQL-09
 #[test]
 fn an_update_or_a_delete_changes_what_its_condition_says_and_refuses_every_row() {
     let f = fixture();

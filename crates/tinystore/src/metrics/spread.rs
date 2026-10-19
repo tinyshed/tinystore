@@ -201,6 +201,7 @@ mod tests {
         }
     }
 
+    // contract: MET-08
     #[test]
     fn a_rank_lies_in_the_first_bound_whose_count_reaches_it() {
         let mut spread = Spread::default();

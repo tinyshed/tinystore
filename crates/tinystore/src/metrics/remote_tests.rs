@@ -42,6 +42,7 @@ fn counted(number: u64, n: f64) -> Batch {
     }
 }
 
+// contract: MET-09
 #[test]
 fn a_batch_applies_once_in_order_and_one_sent_again_changes_nothing() {
     let f = fixture();
@@ -77,6 +78,7 @@ fn a_store_started_again_knows_no_session_and_numbers_on_from_its_clients_last_a
     assert_eq!(remote.apply(counted(3, 1.0)).unwrap().applied, 3);
 }
 
+// contract: MET-10
 #[test]
 fn an_instrument_the_store_refuses_is_answered_and_its_changes_go_nowhere() {
     let f = fixture();

@@ -215,6 +215,7 @@ fn a_copy_whose_position_no_longer_reads_opens_and_is_taken_again_from_a_snapsho
     home.close().unwrap();
 }
 
+// contract: REPL-11
 #[test]
 fn a_node_with_another_token_takes_nothing() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -238,6 +239,7 @@ fn a_node_with_another_token_takes_nothing() {
     home.close().unwrap();
 }
 
+// contract: REPL-12
 #[test]
 fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once() {
     let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
@@ -437,6 +439,7 @@ fn a_copy_promoted_once_its_home_stopped_is_the_home_the_nodes_behind_it_go_on_f
     europe.close().unwrap();
 }
 
+// contract: REPL-08
 #[test]
 fn an_old_home_back_without_its_demotion_hands_no_node_of_a_later_epoch_its_file() {
     use std::sync::atomic::Ordering::Relaxed;
@@ -537,6 +540,7 @@ fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
     us.close().unwrap();
 }
 
+// contract: REPL-09
 #[test]
 fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -754,6 +758,7 @@ fn a_copy_s_rate_limits_and_quotas_are_decided_at_their_home() {
     home.close().unwrap();
 }
 
+// contract: REPL-06
 #[test]
 fn a_bucket_and_a_queue_kept_in_a_database_s_file_pass_a_copy_s_writes_to_its_home() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -884,6 +889,7 @@ fn nodes_linked_through_tls_copy_and_pass_writes_on_and_a_stranger_s_certificate
     home.close().unwrap();
 }
 
+// contract: REPL-12
 #[test]
 fn a_counter_s_adds_on_a_copy_answer_at_once_and_reach_its_home_each_once() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -1101,6 +1107,7 @@ fn a_copy_promoted_once_its_home_stopped_moves_the_route_the_catalog_names() {
     us.close().unwrap();
 }
 
+// contract: REPL-10
 #[test]
 fn a_live_move_hands_a_file_s_home_over_and_loses_no_commit() {
     let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -1211,6 +1218,7 @@ fn an_old_home_whose_move_went_silent_stays_fenced_while_the_catalog_is_out_of_r
     eu.close().unwrap();
 }
 
+// contract: REPL-09
 #[test]
 fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_held() {
     use std::sync::atomic::Ordering::Relaxed;
@@ -1551,6 +1559,7 @@ fn has_table(file: &File, table: &str) -> bool {
     tables == 1
 }
 
+// contract: REPL-08
 #[test]
 fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     use std::sync::Mutex;
@@ -1623,6 +1632,7 @@ fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     witness.close().unwrap();
 }
 
+// contract: REPL-08
 #[test]
 fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_born_on_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -1745,6 +1755,7 @@ fn a_synchronous_node_a_witness_judges_names_the_copies_it_waits_for() {
     assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
 }
 
+// contract: REPL-11
 #[test]
 fn a_node_that_serves_beyond_this_machine_takes_tls_or_says_insecure() {
     let dir = tempfile::tempdir().unwrap();

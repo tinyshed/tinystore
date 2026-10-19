@@ -31,6 +31,7 @@ fn ran(queue: &Queue<Note>) -> Vec<String> {
     seen.into_inner().unwrap()
 }
 
+// contract: JOB-01
 #[test]
 fn a_job_runs_at_its_time_and_not_before() {
     let f = fixture();
@@ -45,6 +46,7 @@ fn a_job_runs_at_its_time_and_not_before() {
     assert!(ran(&notes).is_empty(), "a done job leaves the queue");
 }
 
+// contract: DUR-01
 #[test]
 fn an_added_job_survives_a_reopen() {
     let mut f = fixture();
@@ -55,6 +57,7 @@ fn an_added_job_survives_a_reopen() {
     assert_eq!(ran(&notes), ["kept"]);
 }
 
+// contract: JOB-01
 #[test]
 fn jobs_run_in_the_order_of_their_time_equal_times_in_the_order_added() {
     let f = fixture();
@@ -66,6 +69,7 @@ fn jobs_run_in_the_order_of_their_time_equal_times_in_the_order_added() {
     assert_eq!(ran(&notes), ["first", "second", "third"]);
 }
 
+// contract: JOB-03
 #[test]
 fn add_adds_only_to_an_id_that_is_free() {
     let f = fixture();
@@ -83,6 +87,7 @@ fn add_adds_only_to_an_id_that_is_free() {
     assert!(!notes.id("a").add(&note("after the failure")).unwrap(), "a failed job is kept to be looked at");
 }
 
+// contract: JOB-03
 #[test]
 fn add_of_an_id_whose_job_runs_adds_nothing() {
     let f = fixture();
@@ -115,6 +120,7 @@ fn dedupe_keeps_a_done_id_taken_until_its_span_passes() {
     assert!(pushes.id("m1:u1").add(&note("push")).unwrap());
 }
 
+// contract: JOB-03
 #[test]
 fn set_makes_the_ids_job_this_value_at_this_time_whatever_it_was() {
     let f = fixture();
@@ -161,6 +167,7 @@ fn note_of(text: &str) -> Note {
     note(text)
 }
 
+// contract: JOB-04
 #[test]
 fn update_changes_only_a_job_that_has_not_started() {
     let f = fixture();
@@ -185,6 +192,7 @@ fn update_changes_only_a_job_that_has_not_started() {
     assert!(!later.update("m1", &note("after it was sent")).unwrap());
 }
 
+// contract: JOB-04
 #[test]
 fn cancel_says_whether_there_was_a_job_and_tells_a_running_handler_to_stop() {
     let f = fixture();
@@ -290,6 +298,7 @@ fn a_value_comes_back_as_the_json_it_went_in() {
     assert_eq!(notes.get("plain").unwrap().unwrap().value, note("from another language"));
 }
 
+// contract: JOB-12
 #[test]
 fn a_value_that_no_longer_reads_fails_its_job_not_its_queue() {
     let f = fixture();
@@ -303,6 +312,7 @@ fn a_value_that_no_longer_reads_fails_its_job_not_its_queue() {
     assert!(failed.error.unwrap().contains("no longer reads"));
 }
 
+// contract: JOB-10
 #[test]
 fn a_queue_past_max_waiting_refuses_the_next_job() {
     let f = fixture();
@@ -370,6 +380,7 @@ fn an_id_a_done_job_left_behind_names_nothing_and_maintenance_drops_it() {
     assert_eq!(super::maintain(&f.store).unwrap().ids, 0);
 }
 
+// contract: JOB-08
 #[test]
 fn a_repeating_job_neither_overlaps_nor_piles_up() {
     let f = fixture();
@@ -402,6 +413,7 @@ fn ids_repeating_together_run_each_at_a_phase_of_its_own() {
     assert!(times.len() > 10, "{} instants for 20 ids", times.len());
 }
 
+// contract: JOB-08
 #[test]
 fn a_cron_runs_on_its_zones_wall_clock() {
     let f = fixture();
@@ -523,6 +535,7 @@ fn synchronous(file: &crate::sqlite::File) -> i64 {
     .unwrap()
 }
 
+// contract: DUR-01
 #[test]
 fn jobs_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() {
     for (durability, level) in [(None, 2), (Some(crate::Durability::Os), 1)] {

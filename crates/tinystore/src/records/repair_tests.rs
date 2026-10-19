@@ -35,6 +35,7 @@ fn a_changed_head_row_is_named_as_a_drop_names_it_and_once_dropped_reads_go_past
     assert_eq!(names(&audit.list().page().unwrap().events), ["again"]);
 }
 
+// contract: ERR-07
 #[test]
 fn only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_told() {
     let fixture = fixture();
@@ -67,6 +68,7 @@ fn only_what_no_longer_reads_is_dropped_a_segment_whole_and_a_poll_behind_it_tol
     assert_eq!((names(&behind.events), behind.expired), (vec!["c"], 2), "its events counted as expired");
 }
 
+// contract: ERR-07
 #[test]
 fn a_damaged_head_row_is_left_for_a_drop_and_the_rows_around_it_still_pack() {
     let fixture = fixture();
@@ -111,6 +113,7 @@ fn a_merged_segment_is_dropped_with_its_places_and_a_poll_behind_it_told_of_all(
     assert_eq!((names(&behind.events), behind.expired), (vec!["after"], 16), "the places' events too");
 }
 
+// contract: STORE-06
 #[test]
 fn what_no_longer_reads_is_said_once_however_often_it_is_met() {
     use std::sync::Arc;

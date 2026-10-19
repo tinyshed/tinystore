@@ -28,6 +28,7 @@ fn a_file_without_a_type_is_octets_and_its_etag_is_its_hash() {
     assert_eq!(info.etag, "\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"");
 }
 
+// contract: BLOB-01, BLOB-04
 #[test]
 fn create_writes_only_where_nothing_is_and_says_so() {
     let f = fixture();
@@ -40,6 +41,7 @@ fn create_writes_only_where_nothing_is_and_says_so() {
     assert!(f.uploads().is_empty());
 }
 
+// contract: BLOB-04
 #[test]
 fn of_two_writes_that_read_one_etag_one_conflicts() {
     let f = fixture();
@@ -58,6 +60,7 @@ fn of_two_writes_that_read_one_etag_one_conflicts() {
     assert_eq!(error.kind(), ErrorKind::Conflict, "an ETag names a file that is there");
 }
 
+// contract: BLOB-05
 #[test]
 fn a_copy_shares_the_bytes_and_outlives_its_source() {
     let f = fixture();
@@ -74,6 +77,7 @@ fn a_copy_shares_the_bytes_and_outlives_its_source() {
     assert!(f.objects().is_empty(), "the bytes go with the last file that names them");
 }
 
+// contract: BLOB-05
 #[test]
 fn copy_and_rename_never_replace_a_file_by_surprise() {
     let f = fixture();
@@ -120,6 +124,7 @@ fn a_write_again_lives_its_term_again() {
     assert!(reports.head("daily").unwrap().is_some());
 }
 
+// contract: BLOB-08
 #[test]
 fn a_path_or_a_name_that_is_not_one_is_refused() {
     let f = fixture();
@@ -146,6 +151,7 @@ fn an_error_names_the_files_and_the_path() {
     assert!(error.what().starts_with("files docs: \"users/42/b\": "), "{error}");
 }
 
+// contract: BLOB-08
 #[test]
 fn a_path_is_its_own_bytes_whatever_the_file_system() {
     let f = fixture();
@@ -158,6 +164,7 @@ fn a_path_is_its_own_bytes_whatever_the_file_system() {
     assert_eq!(docs.get("CON").unwrap().unwrap().read_all().unwrap(), b"a name windows keeps");
 }
 
+// contract: DUR-01
 #[test]
 fn a_put_that_returned_is_there_after_a_reopen() {
     let f = fixture();

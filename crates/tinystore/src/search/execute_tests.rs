@@ -52,6 +52,7 @@ fn postings(random: &mut Random, span: u32) -> Vec<Posting> {
     }
 }
 
+// contract: SRCH-01
 #[test]
 fn the_best_by_their_blocks_bounds_are_the_best_by_every_posting() {
     for seed in 0..400 {
@@ -87,6 +88,7 @@ fn cut(seed: u64, postings: &[Vec<Posting>], memory: &mut Memory) -> Vec<List> {
     lists
 }
 
+// contract: SRCH-03
 #[test]
 fn the_best_a_filter_passes_are_the_best_of_every_posting_it_passes_on_either_path() {
     for seed in 0..300 {
@@ -106,6 +108,7 @@ fn the_best_a_filter_passes_are_the_best_of_every_posting_it_passes_on_either_pa
     }
 }
 
+// contract: SRCH-01
 #[test]
 fn of_equal_scores_the_lower_document_comes_first() {
     let mut memory = Memory::default();

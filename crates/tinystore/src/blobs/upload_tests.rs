@@ -1,6 +1,7 @@
 use super::*;
 use crate::blobs::fixture::{bytes, fixture};
 
+// contract: BLOB-01
 #[test]
 fn an_upload_appears_whole_at_its_commit_and_never_before() {
     let f = fixture();
@@ -29,6 +30,7 @@ fn a_small_upload_stays_inline() {
     assert_eq!(f.rows("bodies"), 1);
 }
 
+// contract: BLOB-01
 #[test]
 fn an_upload_aborted_or_dropped_leaves_nothing() {
     let f = fixture();
@@ -46,6 +48,7 @@ fn an_upload_aborted_or_dropped_leaves_nothing() {
     assert_eq!(f.rows("contents"), 0);
 }
 
+// contract: BLOB-01
 #[test]
 fn a_body_that_disagrees_with_its_size_is_refused_and_leaves_nothing() {
     let f = fixture();
@@ -59,6 +62,7 @@ fn a_body_that_disagrees_with_its_size_is_refused_and_leaves_nothing() {
     assert!(f.objects().is_empty());
 }
 
+// contract: BLOB-07
 #[test]
 fn a_file_past_its_bound_is_refused_and_leaves_nothing() {
     let f = fixture();
@@ -78,6 +82,7 @@ fn a_file_past_its_bound_is_refused_and_leaves_nothing() {
     assert_eq!(f.objects().len(), 1);
 }
 
+// contract: BLOB-07
 #[test]
 fn a_file_that_would_leave_less_free_disk_than_the_store_keeps_is_refused_and_leaves_nothing() {
     let dir = tempfile::tempdir().unwrap();

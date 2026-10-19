@@ -65,6 +65,7 @@ fn host(name: &str) -> Labels {
     Labels::from([("host".to_owned(), name.to_owned())])
 }
 
+// contract: ERR-01, ERR-07, MET-13
 #[test]
 fn a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_neighbours_go_on() {
     let f = fixture();
@@ -97,6 +98,7 @@ fn a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_n
     stats.ingest(&[Series::gauge("cpu").label("host", "a").sample(f.now(), 1.0)]).unwrap();
 }
 
+// contract: ERR-07
 #[test]
 fn packing_suspends_a_series_whose_head_changed_and_packs_the_rest() {
     let f = fixture();
@@ -113,6 +115,7 @@ fn packing_suspends_a_series_whose_head_changed_and_packs_the_rest() {
     assert!(stats.damaged().unwrap().is_empty());
 }
 
+// contract: ERR-07, MET-13
 #[test]
 fn a_deleted_series_whose_group_no_longer_reads_leaves_that_groups_values_in_the_file() {
     let f = fixture();

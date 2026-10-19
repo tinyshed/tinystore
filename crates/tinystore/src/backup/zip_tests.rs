@@ -52,6 +52,7 @@ fn zip64s_fields_read_back_where_a_size_or_an_offset_is_past_its_field() {
     assert_eq!(read_back(&zip)[2].1, files[2].1);
 }
 
+// contract: BAK-02
 #[test]
 fn a_changed_byte_fails_its_crc_and_a_zip_cut_short_reads_as_none() {
     let mut zip = zipped(&files(), MAX32);

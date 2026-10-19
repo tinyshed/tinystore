@@ -695,6 +695,7 @@ mod tests {
         }
     }
 
+    // contract: STORE-01
     #[test]
     #[cfg(all(feature = "kv", feature = "jobs", feature = "replication"))]
     fn a_store_opened_beside_its_holder_reads_what_it_commits_and_writes_nothing() {
@@ -766,6 +767,7 @@ mod tests {
         store.close().unwrap();
     }
 
+    // contract: STORE-04
     #[test]
     fn a_store_dropped_without_close_closes_its_engines_and_lets_go() {
         let dir = tempfile::tempdir().unwrap();

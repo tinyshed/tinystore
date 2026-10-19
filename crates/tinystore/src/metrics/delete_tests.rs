@@ -17,6 +17,7 @@ fn left(f: &Fixture) -> Vec<i64> {
         .collect()
 }
 
+// contract: ERR-07, MET-13
 #[test]
 fn a_series_is_deleted_whole_and_its_neighbours_keep_theirs() {
     let f = fixture();
@@ -41,6 +42,7 @@ fn a_series_is_deleted_whole_and_its_neighbours_keep_theirs() {
     stats.ingest(&[Series::counter("cpu").sample(f.now(), 1.0)]).unwrap();
 }
 
+// contract: MET-13
 #[test]
 fn a_name_whose_newest_series_is_deleted_finds_its_newest_among_the_rest() {
     let f = fixture();
@@ -53,6 +55,7 @@ fn a_name_whose_newest_series_is_deleted_finds_its_newest_among_the_rest() {
     assert_eq!(stats.names().page().unwrap().names[0].newest, now - 2 * MINUTE);
 }
 
+// contract: MET-13
 #[test]
 fn a_series_of_the_stores_own_labels_and_one_an_instrument_writes_again_are_deleted() {
     let f = fixture();
@@ -71,6 +74,7 @@ fn a_series_of_the_stores_own_labels_and_one_an_instrument_writes_again_are_dele
     assert_eq!(stats.query().name("db_ms_bucket").read().unwrap().len(), 1);
 }
 
+// contract: MET-13
 #[test]
 fn a_delete_names_its_series_and_refuses_what_no_series_is() {
     let f = fixture();

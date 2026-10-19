@@ -13,6 +13,7 @@ fn counting(runs: &AtomicUsize) -> impl Fn() -> Result<String> + '_ {
     move || Ok(format!("receipt {}", runs.fetch_add(1, Ordering::SeqCst) + 1))
 }
 
+// contract: KV-11
 #[test]
 fn a_run_keeps_its_answer_and_runs_a_key_once() {
     let f = fixture();
@@ -40,6 +41,7 @@ fn a_run_keeps_its_answer_and_runs_a_key_once() {
     assert_eq!(f.store.bucket::<String>("charges").open().unwrap_err().kind(), ErrorKind::Invalid);
 }
 
+// contract: KV-11
 #[test]
 fn an_error_keeps_nothing_and_a_panic_lets_its_key_go() {
     let f = fixture();
@@ -62,6 +64,7 @@ fn slow(started: mpsc::Sender<()>, release: mpsc::Receiver<()>, answer: Result<i
     }
 }
 
+// contract: KV-11
 #[test]
 fn a_run_waits_for_the_run_of_its_key_and_takes_its_answer() {
     let f = fixture();
@@ -81,6 +84,7 @@ fn a_run_waits_for_the_run_of_its_key_and_takes_its_answer() {
     });
 }
 
+// contract: KV-11
 #[test]
 fn a_run_after_one_that_failed_runs_its_own_function() {
     let f = fixture();
@@ -118,6 +122,7 @@ fn a_run_takes_the_callers_own_error_type() {
     assert!(matches!(refused, Err(Payment::Store(error)) if error.kind() == ErrorKind::Invalid));
 }
 
+// contract: DUR-07
 #[test]
 fn a_run_of_a_key_inside_its_own_run_fails_rather_than_waits() {
     let f = fixture();

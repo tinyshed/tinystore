@@ -42,6 +42,7 @@ test:
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
 # hides one's code from another
+# contract: STORE-07
 lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "system") (lint-alone "search") (lint-alone "wire") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "sql,search") (lint-alone "wire,search") (lint-alone "kv,replication") (lint-alone "kv,replication,replication-tls") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
@@ -153,6 +154,10 @@ web-dev:
     bun install
     bun run dev
 
+# every MUST of CONTRACTS.md named by a test, and no test naming an id it lacks
+contracts:
+    bun tools/contracts.ts
+
 # align every markdown table of the repository as an IDE formats it
 [working-directory: 'web']
 tables:
@@ -165,7 +170,7 @@ tables:
 fuzz target="records_rows" time="60":
     docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src/fuzz {{rust_image}} sh -c 'rustup toolchain install nightly --profile minimal >/dev/null && cargo +nightly install cargo-fuzz --locked --quiet && cargo +nightly fuzz run {{target}} -- -max_total_time={{time}}'
 
-check: fmt-check lint test protocol-check codec-go codec-python sdk sdk-check sdk-go sdk-python sdk-python-check sdk-node lint-actions
+check: fmt-check contracts lint test protocol-check codec-go codec-python sdk sdk-check sdk-go sdk-python sdk-python-check sdk-node lint-actions
 
 # remove build output
 clean:

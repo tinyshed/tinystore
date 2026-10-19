@@ -9,6 +9,7 @@ fn allowed(left: u64) -> Allowance {
     Allowance { ok: true, left, retry_at: None, windows: Vec::new() }
 }
 
+// contract: KV-09
 #[test]
 fn a_rate_limit_lets_a_burst_through_then_its_rate() {
     let f = fixture();
@@ -26,6 +27,7 @@ fn a_rate_limit_lets_a_burst_through_then_its_rate() {
     assert!(!api.allow("user-1").unwrap().ok, "but not two");
 }
 
+// contract: KV-09
 #[test]
 fn requests_asked_together_pass_together_or_not_at_all() {
     let f = fixture();
@@ -63,6 +65,7 @@ fn a_quiet_key_is_forgotten_once_its_time_has_come() {
     assert_eq!(api.allow("k").unwrap(), allowed(4), "a whole burst again");
 }
 
+// contract: KV-09
 #[test]
 fn requests_racing_for_a_key_pass_no_more_than_the_burst() {
     let f = fixture();
@@ -101,6 +104,7 @@ fn a_rate_limit_without_a_rate_does_not_open() {
     assert!(f.store.rate_limit("taken").rate(1, SECOND).open().is_err(), "a bucket's name");
 }
 
+// contract: KV-09
 #[test]
 fn peek_uses_nothing_and_reset_gives_a_key_its_whole_burst() {
     let f = fixture();

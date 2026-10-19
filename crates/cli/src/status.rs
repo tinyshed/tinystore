@@ -257,6 +257,7 @@ mod tests {
     use super::*;
     use tinystore::{Options, Store};
 
+    // contract: SEC-05
     #[test]
     fn a_store_no_server_holds_shows_its_files_and_says_it_is_not_served() {
         let dir = tempfile::tempdir().unwrap();
@@ -281,6 +282,7 @@ mod tests {
         assert_eq!(ago(2 * 86_400 + 4 * 3600), "2d 4h");
     }
 
+    // contract: SEC-05
     #[test]
     fn a_nodes_file_says_whether_it_writes_or_copies_it() {
         let kv = StoreFile { name: "kv".to_owned(), file: "kv.db".to_owned(), bytes: 1 };

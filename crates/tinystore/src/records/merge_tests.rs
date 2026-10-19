@@ -75,6 +75,7 @@ fn a_merge_leaves_overlapping_segments_out() {
     assert_eq!(pick(three), None);
 }
 
+// contract: DUR-08
 #[test]
 fn four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places() {
     let fixture = fixture();
@@ -97,6 +98,7 @@ fn four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places() {
     assert_eq!(names(&read.events), expected);
 }
 
+// contract: REC-07
 #[test]
 fn a_merged_segment_merges_again_and_each_place_still_names_its_own_events() {
     let fixture = fixture();
@@ -131,6 +133,7 @@ fn a_merged_segment_expires_whole_with_its_places() {
     assert_eq!((fixture.rows("segments"), fixture.rows("blocks")), (0, 0));
 }
 
+// contract: DUR-08
 #[test]
 fn a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was() {
     let fixture = fixture();
@@ -157,6 +160,7 @@ fn a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was() {
     assert_eq!(fixture.events("api").list().page().unwrap().events.len(), 16);
 }
 
+// contract: REC-07
 #[test]
 fn places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earliest() {
     let fixture = fixture();

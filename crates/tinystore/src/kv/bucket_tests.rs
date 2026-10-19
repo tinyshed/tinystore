@@ -8,6 +8,7 @@ use crate::kv::fixture::{MINUTE, SECOND, Session, fixture, session};
 use crate::kv::path::Branch;
 use crate::kv::{self, Bytes};
 
+// contract: KV-01
 #[test]
 fn a_value_comes_back_as_its_type() {
     let f = fixture();
@@ -66,6 +67,7 @@ fn of_two_takes_of_one_key_one_gets_the_value() {
     assert_eq!(codes.get("code").unwrap(), None);
 }
 
+// contract: KV-05
 #[test]
 fn a_write_at_a_stale_version_is_a_conflict_naming_its_key() {
     let f = fixture();
@@ -84,6 +86,7 @@ fn a_write_at_a_stale_version_is_a_conflict_naming_its_key() {
     assert_eq!(settings.get("home").unwrap().as_deref(), Some("c"));
 }
 
+// contract: KV-05
 #[test]
 fn a_version_never_repeats_across_a_delete_and_a_reopen() {
     let dir = tempfile::tempdir().unwrap();
@@ -162,6 +165,7 @@ fn a_read_of_an_idle_key_waits_for_no_commit() {
     assert_eq!(kv::maintain(&f.store).unwrap().renewed, 1, "they asked for one renewal");
 }
 
+// contract: KV-07
 #[test]
 fn an_idle_key_read_in_its_last_minute_is_renewed_before_the_read_returns() {
     let f = fixture();
@@ -174,6 +178,7 @@ fn an_idle_key_read_in_its_last_minute_is_renewed_before_the_read_returns() {
     assert!(sessions.get("token").unwrap().is_some(), "renewed with no flush between");
 }
 
+// contract: KV-07
 #[test]
 fn a_renewal_never_extends_a_key_written_again_since_its_read() {
     let f = fixture();
@@ -208,6 +213,7 @@ fn a_take_whose_value_no_longer_reads_keeps_it() {
     assert_eq!(f.store.bucket::<String>("mixed").open().unwrap().get("a").unwrap().as_deref(), Some("text"));
 }
 
+// contract: KV-06
 #[test]
 fn clearing_a_branch_removes_the_branches_under_it_and_no_other() {
     let f = fixture();
@@ -224,6 +230,7 @@ fn clearing_a_branch_removes_the_branches_under_it_and_no_other() {
     assert!(sessions.under("1\0x").has("laptop").unwrap(), "an owner that starts like another is not under it");
 }
 
+// contract: KV-06
 #[test]
 fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     let f = fixture();
@@ -257,6 +264,7 @@ fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     assert!(items.under("small").has("a").unwrap());
 }
 
+// contract: KV-13
 #[test]
 fn a_branch_reads_in_pages_in_the_order_of_its_keys() {
     let f = fixture();
@@ -330,6 +338,7 @@ fn values_outlive_the_store_that_wrote_them() {
     store.close().unwrap();
 }
 
+// contract: KV-05
 #[test]
 fn a_key_call_says_its_expiry_and_version_before_its_last_step() {
     let f = fixture();
@@ -348,6 +357,7 @@ fn a_key_call_says_its_expiry_and_version_before_its_last_step() {
     assert!(!notes.key("b").create(&"three".to_owned()).unwrap(), "create writes only a key that is not there");
 }
 
+// contract: KV-03
 #[test]
 fn an_expired_key_is_absent_to_every_call() {
     let f = fixture();
@@ -378,6 +388,7 @@ fn synchronous(file: &crate::sqlite::File) -> i64 {
     .unwrap()
 }
 
+// contract: DUR-01
 #[test]
 fn kv_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() {
     for (durability, level) in [(None, 2), (Some(crate::Durability::Full), 2), (Some(crate::Durability::Os), 1)] {

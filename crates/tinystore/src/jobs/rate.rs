@@ -106,6 +106,7 @@ impl RateLog {
 mod tests {
     use super::*;
 
+    // contract: JOB-09
     #[test]
     fn a_rate_never_lets_more_than_its_count_start_in_a_span() {
         let rate = RateLog::new(3, Duration::from_secs(1));
@@ -117,6 +118,7 @@ mod tests {
         assert_eq!(rate.take(1400, 5), 1);
     }
 
+    // contract: JOB-09
     #[test]
     fn starts_given_back_start_again() {
         let rate = RateLog::new(2, Duration::from_secs(1));

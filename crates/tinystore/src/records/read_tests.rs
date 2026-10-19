@@ -29,6 +29,7 @@ fn pages(list: &List) -> Vec<Vec<String>> {
     }
 }
 
+// contract: REC-04
 #[test]
 fn events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_written() {
     let fixture = fixture();
@@ -41,6 +42,7 @@ fn events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_wr
     assert_eq!(names(&api.list().newest().page().unwrap().events), ["d", "c", "b2", "b1", "a"]);
 }
 
+// contract: REC-05
 #[test]
 fn pages_go_on_without_losing_or_repeating_an_event_from_either_end() {
     let fixture = fixture();
@@ -52,6 +54,7 @@ fn pages_go_on_without_losing_or_repeating_an_event_from_either_end() {
     assert_eq!(backward, [vec!["9", "8", "7", "6"], vec!["5", "4", "3", "2"], vec!["1", "0"]]);
 }
 
+// contract: REC-05
 #[test]
 fn a_page_never_splits_a_time_and_more_at_one_time_than_it_holds_is_limit() {
     let fixture = fixture();
@@ -65,6 +68,7 @@ fn a_page_never_splits_a_time_and_more_at_one_time_than_it_holds_is_limit() {
     assert_eq!(refused.kind(), ErrorKind::Limit);
 }
 
+// contract: REC-05
 #[test]
 fn a_page_ends_at_the_rows_it_fetched_and_the_next_goes_on_from_there() {
     let fixture = fixture();

@@ -74,6 +74,7 @@ mod tests {
         rusqlite::Error::SqliteFailure(code, Some(message.to_owned()))
     }
 
+    // contract: ERR-03, SQL-08
     #[test]
     fn a_constraint_is_named_as_sqlite_says_it() {
         let said = |code, message| broken(&failure(code, message));

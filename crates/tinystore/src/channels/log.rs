@@ -266,6 +266,7 @@ mod tests {
         taken.messages.iter().map(|message| String::from_utf8(message.value.clone()).unwrap()).collect()
     }
 
+    // contract: CHAN-02
     #[test]
     fn a_log_holds_what_its_subscribers_have_not_all_read_and_says_what_one_missed() {
         let log = Log::new();

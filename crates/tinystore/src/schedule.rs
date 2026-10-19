@@ -246,6 +246,7 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), after);
     }
 
+    // contract: STORE-06
     #[test]
     fn without_background_work_nothing_runs_and_no_thread_starts() {
         let scheduler = Scheduler::new(false, Arc::default());

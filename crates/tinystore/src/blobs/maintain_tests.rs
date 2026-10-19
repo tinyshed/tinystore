@@ -44,6 +44,7 @@ fn bytes_no_file_names_are_removed_when_their_removal_failed_before() {
     assert_eq!(f.rows("contents"), 0);
 }
 
+// contract: BLOB-06
 #[test]
 fn an_open_removes_what_a_process_that_died_left() {
     let f = fixture();
@@ -66,6 +67,7 @@ fn an_open_removes_what_a_process_that_died_left() {
     assert_eq!(docs.get("kept").unwrap().unwrap().read_all().unwrap(), kept);
 }
 
+// contract: BLOB-02
 #[test]
 fn the_scrub_finds_a_changed_byte_and_a_read_of_it_is_corrupt() {
     let f = fixture();
@@ -82,6 +84,7 @@ fn the_scrub_finds_a_changed_byte_and_a_read_of_it_is_corrupt() {
     assert_eq!(maintain(&f.store).unwrap().damaged, 0, "a damaged content is judged once");
 }
 
+// contract: BLOB-02
 #[test]
 fn a_changed_inline_body_is_found_by_the_scrub() {
     let f = fixture();

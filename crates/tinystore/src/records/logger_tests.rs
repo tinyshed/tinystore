@@ -50,6 +50,7 @@ fn a_line_is_printed_as_it_is_logged_and_kept_once_its_logger_flushes() {
     assert_eq!(events[1].level, Some(Level::WARN));
 }
 
+// contract: LOG-01
 #[test]
 fn a_full_buffer_drops_a_line_counts_it_and_a_flush_says_so_once_in_ten_minutes() {
     let (f, printed) = (fixture(), Printed::default());
@@ -70,6 +71,7 @@ fn a_full_buffer_drops_a_line_counts_it_and_a_flush_says_so_once_in_ten_minutes(
     assert_eq!((log.dropped(), f.events("api").list().page().unwrap().events.len()), (4, 8));
 }
 
+// contract: LOG-02
 #[test]
 fn a_store_that_closes_keeps_what_its_loggers_held_and_drops_a_line_after() {
     let (f, printed) = (fixture(), Printed::default());
@@ -84,6 +86,7 @@ fn a_store_that_closes_keeps_what_its_loggers_held_and_drops_a_line_after() {
     assert!(printed.lines().is_empty(), "a console turned off prints nothing, and the lines are kept");
 }
 
+// contract: LOG-06
 #[test]
 fn the_stores_own_lines_are_printed_and_never_kept() {
     let (f, printed) = (fixture(), Printed::default());
@@ -147,6 +150,7 @@ fn half_a_buffer_wakes_the_flush_before_its_second() {
     }
 }
 
+// contract: LOG-04
 #[test]
 fn a_secret_is_hidden_where_it_prints_and_where_it_is_kept() {
     let (f, printed) = (fixture(), Printed::default());
@@ -165,6 +169,7 @@ fn a_secret_is_hidden_where_it_prints_and_where_it_is_kept() {
     assert!(printed[0].contains(r#""api_key":"[redacted]""#) && printed[0].contains(r#""password":"[redacted]""#));
 }
 
+// contract: LOG-02
 #[test]
 fn a_logger_dropped_with_lines_waiting_loses_none_of_them() {
     let (f, printed) = (fixture(), Printed::default());

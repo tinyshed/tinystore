@@ -110,6 +110,7 @@ test('calls made in one turn leave in one write, and each gets its own answer', 
 	expect(inPlace).toBe(3)
 })
 
+// contract: WIRE-05
 test('a read whose connection ends goes on the next one, and a write says its outcome is unknown', async () => {
 	let ending = false
 	const dialled: Served[] = []

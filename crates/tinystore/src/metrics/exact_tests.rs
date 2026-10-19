@@ -23,6 +23,7 @@ fn floats(count: usize) -> Vec<f64> {
         .collect()
 }
 
+// contract: MET-04
 #[test]
 fn a_sum_of_two_rounds_as_their_float_sum_does() {
     let values = floats(4000);
@@ -35,6 +36,7 @@ fn a_sum_of_two_rounds_as_their_float_sum_does() {
     }
 }
 
+// contract: MET-04
 #[test]
 fn a_quotient_rounds_as_a_float_division_does() {
     let values = floats(2000);

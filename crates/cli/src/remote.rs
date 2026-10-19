@@ -168,6 +168,7 @@ mod tests {
     const DATA: &str = "Yq8wHn2xLz5Rb7Tc0Vm3Kj6Fd9Gs1Ap4Ue8Wo2Ni5Qt";
     const READ: &str = "9xK2pQ7vLm4Ns8Bt1Cw5Dz3Fy6Gh0Jk2Al9Ro4Su7Ve";
 
+    // contract: SEC-01
     #[test]
     fn a_token_admits_its_capability_and_nothing_else_admits() {
         let tokens =

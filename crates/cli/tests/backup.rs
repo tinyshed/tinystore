@@ -24,6 +24,7 @@ fn filled(data: &Path) {
     store.close().unwrap();
 }
 
+// contract: BAK-03
 #[test]
 fn backup_writes_a_zip_that_restore_takes_back_into_an_empty_directory() {
     let dirs = tempfile::tempdir().unwrap();
@@ -43,6 +44,7 @@ fn backup_writes_a_zip_that_restore_takes_back_into_an_empty_directory() {
     assert!(!again.status.success() && said(&again).contains("not empty"), "{}", said(&again));
 }
 
+// contract: CLI-01
 #[test]
 fn backup_reads_beside_a_program_that_holds_the_directory() {
     let dirs = tempfile::tempdir().unwrap();
@@ -63,6 +65,7 @@ fn backup_reads_beside_a_program_that_holds_the_directory() {
     assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
 }
 
+// contract: CLI-01
 #[test]
 fn backup_of_a_directory_that_is_not_there_makes_no_store() {
     let dirs = tempfile::tempdir().unwrap();

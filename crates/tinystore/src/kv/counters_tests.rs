@@ -42,6 +42,7 @@ fn a_counters_window_starts_at_its_first_add_and_does_not_slide() {
     }
 }
 
+// contract: KV-04
 #[test]
 fn an_overflowing_counter_is_refused_rather_than_rounded() {
     let f = fixture();
@@ -77,6 +78,7 @@ fn adds_from_many_threads_each_count_once() {
     assert_eq!(in_memory.get("page").unwrap(), 320);
 }
 
+// contract: KV-08
 #[test]
 fn counters_in_memory_reach_the_file_at_a_flush_and_at_close() {
     let f = fixture();
@@ -97,6 +99,7 @@ fn counters_in_memory_reach_the_file_at_a_flush_and_at_close() {
     assert_eq!((hits.get("page").unwrap(), hits.get("other").unwrap()), (101, 7), "close wrote what memory held");
 }
 
+// contract: KV-08
 #[test]
 fn counters_in_memory_reach_the_file_when_the_store_is_dropped_unclosed() {
     let f = fixture();
@@ -131,6 +134,7 @@ fn a_name_holding_counters_opens_as_nothing_else() {
     assert_eq!(error.to_string(), "kv bucket hits: the name holds counters, not values: invalid");
 }
 
+// contract: KV-06
 #[test]
 fn a_clear_of_counters_in_memory_never_brings_them_back() {
     let f = fixture();

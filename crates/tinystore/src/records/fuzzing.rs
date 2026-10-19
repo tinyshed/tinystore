@@ -108,6 +108,7 @@ mod tests {
     use super::super::pack::made_of;
     use super::*;
 
+    // contract: ERR-04
     #[test]
     fn a_block_with_any_byte_changed_or_cut_gives_its_events_or_fails_corrupt() {
         let made = made_of(&seeds(), &mut Codec::default()).unwrap();
@@ -144,6 +145,7 @@ mod tests {
         }
     }
 
+    // contract: ERR-04
     #[test]
     fn bytes_of_no_row_fail_corrupt() {
         for bytes in [&b""[..], b"\x00", b"\x01\x02\x03", &[0xff; 64], b"\x28\xb5\x2f\xfd\x00\x00"] {

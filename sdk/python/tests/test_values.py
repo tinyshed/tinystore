@@ -24,6 +24,7 @@ CODECS: dict[str, Any] = {
 }
 
 
+# contract: KV-02
 @pytest.mark.parametrize("case", VECTORS["values"], ids=lambda case: case["kind"])
 def test_every_language_writes_and_reads_the_same_rows(case: dict[str, Any]) -> None:
     given = bytes.fromhex(case["bytes"]) if case["kind"] == "bytes" else case[case["kind"]]
@@ -34,6 +35,7 @@ def test_every_language_writes_and_reads_the_same_rows(case: dict[str, Any]) -> 
     assert codec.decode(bytes.fromhex(case["row"])) == given
 
 
+# contract: ERR-03, KV-01
 @pytest.mark.parametrize("case", VECTORS["refused"], ids=lambda case: case["read_as"])
 def test_a_row_read_as_another_kind_than_wrote_it_is_corrupt(case: dict[str, Any]) -> None:
     with pytest.raises(CorruptError, match=case["says"]):

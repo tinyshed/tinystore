@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::metrics::fixture::{DAY, HOUR, SECOND, fixture};
 use crate::metrics::{Series, maintain};
 
+// contract: MET-12
 #[test]
 fn samples_past_what_their_name_keeps_go_and_the_rest_stay() {
     let f = fixture();

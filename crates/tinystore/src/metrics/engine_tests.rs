@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use crate::metrics::Series;
 use crate::{Options, Store};
 
+// contract: STORE-02
 #[test]
 fn a_failed_open_lets_its_file_go_and_the_store_opens_one_engine() {
     let dir = tempfile::tempdir().unwrap();

@@ -34,6 +34,7 @@ fn block_of(events: &[Kept], codec: &mut Codec) -> (Schema, Row) {
     (schema, row)
 }
 
+// contract: REC-01
 #[test]
 fn a_block_gives_back_its_events_each_value_as_it_was_spelled() {
     let mut codec = Codec::default();

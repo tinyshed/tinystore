@@ -83,6 +83,7 @@ fn line(config: &Config<Settings>, path: &str) -> Line {
     config.explain().settings.into_iter().find(|line| line.path == path).unwrap()
 }
 
+// contract: CFG-01
 #[test]
 fn a_config_is_its_declaration_then_each_layer_in_the_order_written() {
     let f = fixture();
@@ -100,6 +101,7 @@ fn a_config_is_its_declaration_then_each_layer_in_the_order_written() {
     assert_eq!(swapped.get().port, 8000, "a file written after the environment goes over it");
 }
 
+// contract: CFG-03
 #[test]
 fn a_variable_is_read_as_its_settings_kind_and_every_bad_one_is_said_at_once() {
     let f = fixture();
@@ -165,6 +167,7 @@ struct Deploy {
     token: Secret<String>,
 }
 
+// contract: CFG-03
 #[test]
 fn a_required_setting_is_given_by_a_layer_or_the_config_does_not_open_naming_what_would() {
     let f = fixture();
@@ -183,6 +186,7 @@ fn a_required_setting_is_given_by_a_layer_or_the_config_does_not_open_naming_wha
     assert_eq!((config.get().region.as_str(), config.get().token.reveal().as_str()), ("eu", "t"));
 }
 
+// contract: CFG-05, CFG-06, SEC-05
 #[test]
 fn a_secret_prints_as_stars_wherever_it_goes_and_no_change_keeps_one() {
     let f = fixture();
@@ -212,6 +216,7 @@ fn a_secret_prints_as_stars_wherever_it_goes_and_no_change_keeps_one() {
     assert!(error.to_string().contains("db.url: a secret is text") && !error.to_string().contains("12345"), "{error}");
 }
 
+// contract: CFG-02
 #[test]
 fn only_a_live_setting_changes_while_the_program_runs() {
     let f = fixture();
@@ -225,6 +230,7 @@ fn only_a_live_setting_changes_while_the_program_runs() {
     config.update(|_| {}).unwrap();
 }
 
+// contract: CFG-01
 #[test]
 fn a_change_goes_over_every_layer_survives_a_restart_and_reset_gives_the_layers_back() {
     let f = fixture();
@@ -251,6 +257,7 @@ fn a_change_goes_over_every_layer_survives_a_restart_and_reset_gives_the_layers_
     assert_eq!(*config.get().limits.rps, 1000);
 }
 
+// contract: CFG-04
 #[test]
 fn two_changes_of_different_settings_both_stay_and_if_version_refuses_a_change_made_since() {
     let f = fixture();
@@ -279,6 +286,7 @@ fn watched(config: &Config<Settings>) -> (Watching, Seen) {
     (watching, seen)
 }
 
+// contract: CFG-04
 #[test]
 fn every_handle_and_watcher_sees_a_change_before_update_returns() {
     let f = fixture();
@@ -296,6 +304,7 @@ fn every_handle_and_watcher_sees_a_change_before_update_returns() {
     assert_eq!(seen_too.lock().unwrap().len(), 3);
 }
 
+// contract: CFG-04
 #[test]
 fn a_watcher_that_changes_the_config_sees_each_version_in_order() {
     let f = fixture();
@@ -323,6 +332,7 @@ struct FixedLimits {
     rps: u32,
 }
 
+// contract: CFG-05
 #[test]
 fn a_change_another_handles_declaration_refuses_keeps_nothing() {
     let f = fixture();
@@ -333,6 +343,7 @@ fn a_change_another_handles_declaration_refuses_keeps_nothing() {
     assert_eq!(*live.get().limits.rps, 100);
 }
 
+// contract: CFG-07
 #[test]
 fn a_kept_change_that_no_longer_fits_is_ignored_and_said_and_strict_refuses_to_open() {
     let f = fixture();
@@ -352,6 +363,7 @@ fn a_kept_change_that_no_longer_fits_is_ignored_and_said_and_strict_refuses_to_o
     assert_eq!(*wider.get().limits.rps, 5000, "a kept change applies again once it fits");
 }
 
+// contract: CFG-05
 #[test]
 fn validate_refuses_at_open_and_keeps_no_change_it_refuses() {
     let f = fixture();
@@ -368,6 +380,7 @@ fn validate_refuses_at_open_and_keeps_no_change_it_refuses() {
     assert_eq!((config.get().version(), *config.get().limits.rps), (version, 100));
 }
 
+// contract: CFG-07
 #[test]
 fn a_change_of_a_setting_this_program_does_not_declare_is_another_programs() {
     let f = fixture();

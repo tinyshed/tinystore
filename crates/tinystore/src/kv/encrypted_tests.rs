@@ -32,6 +32,7 @@ fn passwords(store: &Store) -> Bucket<String> {
     store.bucket::<String>("passwords").encrypted().open().unwrap()
 }
 
+// contract: SEC-03
 #[test]
 fn an_encrypted_bucket_keeps_no_value_a_file_shows() {
     let f = fixture();
@@ -48,6 +49,7 @@ fn an_encrypted_bucket_keeps_no_value_a_file_shows() {
     assert_eq!(passwords(&f.store).get("source-42").unwrap().as_deref(), Some(PASSWORD), "the key is read again");
 }
 
+// contract: SEC-03
 #[test]
 fn every_call_of_an_encrypted_bucket_gives_what_was_written() {
     let f = fixture();
@@ -84,6 +86,7 @@ fn every_call_of_an_encrypted_bucket_gives_what_was_written() {
     assert_eq!((moved.unwrap(), counts.get("m").unwrap()), (Some(i64::MIN), Some(42)));
 }
 
+// contract: SEC-03
 #[test]
 fn a_value_copied_under_another_key_does_not_open_and_can_be_deleted() {
     let f = fixture();
@@ -107,6 +110,7 @@ fn a_value_copied_under_another_key_does_not_open_and_can_be_deleted() {
     assert!(passwords.delete("mine").unwrap(), "a delete reads no value");
 }
 
+// contract: SEC-04
 #[test]
 fn a_store_opened_with_another_key_reads_and_writes_nothing_until_the_bucket_is_cleared() {
     let f = fixture();
@@ -131,6 +135,7 @@ fn a_store_opened_with_another_key_reads_and_writes_nothing_until_the_bucket_is_
     assert_eq!(passwords.get("source-43").unwrap().as_deref(), Some("another"), "cleared whole, it takes this key");
 }
 
+// contract: SEC-04
 #[test]
 fn a_key_lost_is_not_replaced_while_a_bucket_holds_values_sealed_with_it() {
     let f = fixture();

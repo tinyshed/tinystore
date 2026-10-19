@@ -52,6 +52,7 @@ fn a_hold_answers_once_the_key_is_given_and_a_hold_that_would_not_wait_says_it_i
     assert!(!client.call::<LocksHeld>(method::LOCKS_HOLD, &hold("42", 0, 4)).unwrap().acquired, "nor let go by it");
 }
 
+// contract: LOCK-06
 #[test]
 fn a_cancelled_hold_leaves_the_line_and_is_answered_cancelled() {
     let dir = tempfile::tempdir().unwrap();

@@ -79,6 +79,7 @@ fn floats(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|value| value.to_le_bytes()).collect()
 }
 
+// contract: SRCH-07
 #[test]
 fn every_way_a_row_changes_reaches_its_index_and_a_hit_is_the_row() {
     let f = fixture();
@@ -112,6 +113,7 @@ fn every_way_a_row_changes_reaches_its_index_and_a_hit_is_the_row() {
     assert!(dairy.hits.iter().all(|hit| hit.value.category.as_deref() == Some("dairy")));
 }
 
+// contract: SRCH-07
 #[test]
 fn a_search_in_the_transaction_that_wrote_sees_its_writes() {
     let f = fixture();
@@ -128,6 +130,7 @@ fn a_search_in_the_transaction_that_wrote_sees_its_writes() {
     assert_eq!(around.kind(), ErrorKind::Invalid, "a search beside the transaction would not see its writes");
 }
 
+// contract: SRCH-07
 #[test]
 fn a_write_that_rolls_back_changes_neither_the_table_nor_its_index() {
     let f = fixture();
@@ -171,6 +174,7 @@ fn a_row_whose_vector_does_not_read_fails_its_write_and_one_beside_the_store_is_
     assert_eq!(ids(&index.search("after").run().unwrap()), ["6"]);
 }
 
+// contract: SRCH-08
 #[test]
 fn a_write_from_beside_the_store_reaches_the_index_at_the_store_s_next_write() {
     let f = fixture();
@@ -186,6 +190,7 @@ fn a_write_from_beside_the_store_reaches_the_index_at_the_store_s_next_write() {
     assert!(articles.search("first").run().unwrap().hits.is_empty());
 }
 
+// contract: SRCH-08
 #[test]
 fn a_row_written_while_no_process_had_its_index_open_reaches_it_at_its_next_open() {
     let f = fixture();
@@ -350,6 +355,7 @@ fn same_as_afresh(f: &Fixture, articles: &TableIndex<Article>, round: u32) {
     }
 }
 
+// contract: SRCH-08
 #[test]
 fn a_write_from_beside_the_store_reaches_the_index_within_a_second_when_the_store_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();

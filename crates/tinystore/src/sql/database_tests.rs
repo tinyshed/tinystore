@@ -84,6 +84,7 @@ fn insert(db: &Database, note: &Note) -> Done {
     .unwrap()
 }
 
+// contract: SQL-03
 #[test]
 fn a_database_applies_each_migration_once_and_checks_them_at_every_open() {
     let mut f = fixture();
@@ -116,6 +117,7 @@ fn a_database_opens_without_migrations_as_it_is() {
     assert_eq!(scratch.scalar::<i64>("select x from t").unwrap(), 7, "both handles are one database");
 }
 
+// contract: SQL-03
 #[test]
 fn a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open() {
     let f = fixture();
@@ -139,6 +141,7 @@ fn a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open() {
     }
 }
 
+// contract: SQL-04
 #[test]
 fn migrations_run_without_foreign_keys_and_leave_none_broken() {
     let f = fixture();
@@ -164,6 +167,7 @@ fn migrations_run_without_foreign_keys_and_leave_none_broken() {
     assert_eq!(db.scalar::<i64>("select count(*) from books").unwrap(), 2, "the failed migration left nothing");
 }
 
+// contract: SQL-05
 #[test]
 fn a_row_reads_as_the_programs_type_and_each_value_as_it_went_in() {
     let f = fixture();
@@ -195,6 +199,7 @@ fn a_row_reads_as_the_programs_type_and_each_value_as_it_went_in() {
     assert_eq!(nothing, None, "max over no rows is NULL");
 }
 
+// contract: ERR-02
 #[test]
 fn a_value_that_does_not_read_as_its_field_names_its_column() {
     let f = fixture();
@@ -205,6 +210,7 @@ fn a_value_that_does_not_read_as_its_field_names_its_column() {
     assert!(error.to_string().contains(r#"column title: TEXT "Buy milk" does not read as a bool"#), "{error}");
 }
 
+// contract: SQL-05
 #[test]
 fn a_value_sqlite_would_change_is_refused_and_every_placeholder_takes_one() {
     let f = fixture();
@@ -241,6 +247,7 @@ fn exec_says_what_it_changed_and_the_rowid_of_its_insert() {
     assert_eq!(made, Done::default(), "a schema change counts no rows, whatever wrote before it");
 }
 
+// contract: SQL-01
 #[test]
 fn a_write_with_returning_runs_on_the_writer_and_gives_its_rows_once_durable() {
     let mut f = fixture();
@@ -264,6 +271,7 @@ fn a_write_with_returning_runs_on_the_writer_and_gives_its_rows_once_durable() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 4);
 }
 
+// contract: SQL-01
 #[test]
 fn one_given_two_rows_of_a_write_rolls_the_write_back() {
     let f = fixture();
@@ -276,6 +284,7 @@ fn one_given_two_rows_of_a_write_rolls_the_write_back() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes where done = 1").unwrap(), 0, "rolled back");
 }
 
+// contract: SQL-01
 #[test]
 fn a_constraint_failing_after_rows_came_rolls_the_whole_write_back() {
     let f = fixture();
@@ -288,6 +297,7 @@ fn a_constraint_failing_after_rows_came_rolls_the_whole_write_back() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 1, "n1 is not kept either");
 }
 
+// contract: ERR-03, SQL-08
 #[test]
 fn a_key_already_held_is_a_conflict_and_another_constraint_is_invalid() {
     let f = fixture();
@@ -302,6 +312,7 @@ fn a_key_already_held_is_a_conflict_and_another_constraint_is_invalid() {
     assert!(taken.to_string().starts_with(r#"sql app: statement "insert into notes"#), "{taken}");
 }
 
+// contract: ERR-03, SQL-08
 #[test]
 fn a_broken_constraint_says_which_as_sqlite_names_it() {
     let f = fixture();
@@ -365,6 +376,7 @@ fn a_broken_constraint_says_which_as_sqlite_names_it() {
     );
 }
 
+// contract: DUR-03
 #[test]
 fn a_batch_writes_all_of_its_statements_or_none() {
     let f = fixture();
@@ -387,6 +399,7 @@ fn a_batch_writes_all_of_its_statements_or_none() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 2, "n3 went back with the batch");
 }
 
+// contract: DUR-02, SQL-07
 #[test]
 fn a_transaction_sees_its_writes_and_rolls_back_on_an_error() {
     let f = fixture();
@@ -418,6 +431,7 @@ fn a_transaction_sees_its_writes_and_rolls_back_on_an_error() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 1, "the delete rolled back");
 }
 
+// contract: SQL-07
 #[test]
 fn a_transaction_past_its_bound_rolls_back() {
     let f = fixture();
@@ -441,6 +455,7 @@ fn a_transaction_past_its_bound_rolls_back() {
     assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 0);
 }
 
+// contract: DUR-07
 #[test]
 fn a_call_around_a_transaction_from_inside_it_is_invalid() {
     let f = fixture();
@@ -451,6 +466,7 @@ fn a_call_around_a_transaction_from_inside_it_is_invalid() {
     assert_eq!(read.kind(), ErrorKind::Invalid, "{read}");
 }
 
+// contract: SQL-11
 #[test]
 fn a_name_that_could_leave_sql_or_meet_another_is_refused() {
     let f = fixture();
@@ -460,6 +476,7 @@ fn a_name_that_could_leave_sql_or_meet_another_is_refused() {
     }
 }
 
+// contract: STORE-03
 #[test]
 fn a_database_closes_with_its_store() {
     let f = fixture();
@@ -469,6 +486,7 @@ fn a_database_closes_with_its_store() {
     assert_eq!(error.kind(), ErrorKind::Closed, "{error}");
 }
 
+// contract: ERR-05
 #[test]
 fn reading_past_the_bound_is_a_limit() {
     // as the adapter does before a connection of its own, so that this one
@@ -520,6 +538,7 @@ fn synchronous(db: &Database) -> i64 {
     db.tx(|tx| tx.scalar(sql!("pragma synchronous"))).unwrap()
 }
 
+// contract: DUR-01
 #[test]
 fn a_database_commits_as_far_as_it_says_or_as_its_store_does() {
     use crate::Durability::{Full, Os};
@@ -547,6 +566,7 @@ fn a_database_commits_as_far_as_it_says_or_as_its_store_does() {
     store.close().unwrap();
 }
 
+// contract: SEC-01
 #[test]
 fn a_query_is_known_by_its_first_word_past_spaces_and_comments() {
     for query in
@@ -581,6 +601,7 @@ const CHANGES_ITS_CONNECTION: [&str; 17] = [
     "/* tinystore */ commit",
 ];
 
+// contract: SQL-02
 #[test]
 fn a_statement_changes_nothing_of_the_connection_it_runs_on() {
     let fixture = fixture();
@@ -603,6 +624,7 @@ fn a_statement_changes_nothing_of_the_connection_it_runs_on() {
     insert(&db, &note("n1", "the writer still writes"));
 }
 
+// contract: SQL-02
 #[test]
 fn a_statement_reads_no_other_database_through_an_attach() {
     let fixture = fixture();
@@ -641,6 +663,7 @@ fn a_pragma_that_only_reads_runs() {
     assert!(!db.all::<IgnoredAny>("explain query plan select * from notes").unwrap().is_empty());
 }
 
+// contract: SQL-02
 #[test]
 fn a_migration_changes_tables_and_nothing_of_its_connection() {
     let fixture = fixture();

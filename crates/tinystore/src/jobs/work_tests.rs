@@ -20,6 +20,7 @@ fn eventually(condition: impl Fn() -> bool) {
     crate::testing::holds_within(crate::testing::PATIENCE, "the condition", condition);
 }
 
+// contract: JOB-07
 #[test]
 fn a_handler_settles_its_job_by_what_it_returns() {
     let f = fixture();
@@ -51,6 +52,7 @@ fn a_handler_settles_its_job_by_what_it_returns() {
     assert_eq!((fail.state, fail.error.as_deref()), (State::Failed, Some("the provider no longer knows the token")));
 }
 
+// contract: JOB-07
 #[test]
 fn a_retry_waits_longer_each_time_then_fails_for_good() {
     let f = fixture();
@@ -84,6 +86,7 @@ fn a_panic_is_an_error_with_its_message() {
     assert_eq!(failed.error.as_deref(), Some("the handler panicked: a bug"));
 }
 
+// contract: JOB-07
 #[test]
 fn a_job_that_kills_its_process_fails_after_its_attempts() {
     let mut f = fixture();
@@ -103,6 +106,7 @@ fn a_job_that_kills_its_process_fails_after_its_attempts() {
     assert!(failed.error.unwrap().contains("each of its 3 attempts ended without a settlement"));
 }
 
+// contract: JOB-05
 #[test]
 fn a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing() {
     let f = fixture();
@@ -118,6 +122,7 @@ fn a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing() {
     assert!(pushes.get("p").unwrap().is_none());
 }
 
+// contract: JOB-11
 #[test]
 fn a_worker_runs_jobs_on_the_stores_threads_until_it_stops() {
     let f = fixture();
@@ -140,6 +145,7 @@ fn a_worker_runs_jobs_on_the_stores_threads_until_it_stops() {
     assert_eq!(seen.load(Ordering::SeqCst), 50, "a stopped worker takes nothing more");
 }
 
+// contract: JOB-11
 #[test]
 fn a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_started() {
     let f = fixture();
@@ -234,6 +240,7 @@ fn jobs_due_together_are_claimed_and_settled_in_batches() {
     assert!(commits < 100, "{commits} commits for 200 jobs");
 }
 
+// contract: JOB-09
 #[test]
 fn a_total_holds_a_queue_to_its_places_across_claims() {
     let f = fixture();
@@ -248,6 +255,7 @@ fn a_total_holds_a_queue_to_its_places_across_claims() {
     assert!(videos.claim().unwrap().is_some(), "a settlement gives its place back");
 }
 
+// contract: JOB-09
 #[test]
 fn a_group_bounds_its_running_jobs_and_holds_back_no_other_group() {
     let f = fixture();
@@ -263,6 +271,7 @@ fn a_group_bounds_its_running_jobs_and_holds_back_no_other_group() {
     assert_eq!(refreshes.claim().unwrap().unwrap().value.user, 2, "db:1's place went to its next job");
 }
 
+// contract: JOB-09
 #[test]
 fn a_rate_lets_no_more_than_its_count_start_in_a_span() {
     let f = fixture();
@@ -276,6 +285,7 @@ fn a_rate_lets_no_more_than_its_count_start_in_a_span() {
     assert_eq!(telegram.run_due(|_: Push, _run| -> Result<()> { Ok(()) }).unwrap(), 1);
 }
 
+// contract: JOB-06
 #[test]
 fn a_step_runs_once_across_the_attempts_of_a_run() {
     let f = fixture();
@@ -300,6 +310,7 @@ fn a_step_runs_once_across_the_attempts_of_a_run() {
     assert!(agents.get("question").unwrap().is_none());
 }
 
+// contract: JOB-09
 #[test]
 fn a_job_cancelled_while_it_runs_gives_its_groups_place_to_the_next() {
     let f = fixture();

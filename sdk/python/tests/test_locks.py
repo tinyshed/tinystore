@@ -14,6 +14,7 @@ import pytest
 import tinystore
 
 
+# contract: LOCK-01
 async def test_a_key_is_held_by_one_holder_at_a_time_the_next_in_line_given_it_when_it_is_let_go(
     store: tinystore.Store,
 ) -> None:
@@ -67,6 +68,7 @@ async def test_a_key_still_held_past_the_wait_is_in_use_and_a_raise_lets_the_key
         assert lease is not None
 
 
+# contract: LOCK-04
 async def test_a_hold_inside_its_own_hold_of_the_key_or_inside_a_transaction_is_invalid(
     store: tinystore.Store,
 ) -> None:
@@ -88,6 +90,7 @@ async def test_a_hold_inside_its_own_hold_of_the_key_or_inside_a_transaction_is_
     assert await stock.get("sku") is None
 
 
+# contract: LOCK-05
 async def test_a_lease_renewed_by_this_program_outlives_its_ttl(store: tinystore.Store) -> None:
     jobs = store.lock("long", ttl="1s")
     holding, let_go = asyncio.Event(), asyncio.Event()
@@ -106,6 +109,7 @@ async def test_a_lease_renewed_by_this_program_outlives_its_ttl(store: tinystore
     await holder
 
 
+# contract: LOCK-03
 async def test_max_hold_revokes_a_lease_gives_the_key_on_and_ends_the_block_lost(store: tinystore.Store) -> None:
     exports = store.lock("exports", max_hold="300ms")
     holding = asyncio.Event()
@@ -126,6 +130,7 @@ async def test_max_hold_revokes_a_lease_gives_the_key_on_and_ends_the_block_lost
     assert reached == []
 
 
+# contract: LOCK-03
 async def test_a_lease_lost_after_the_blocks_last_await_still_ends_it_lost(store: tinystore.Store) -> None:
     exports = store.lock("late", max_hold="100ms")
     with pytest.raises(tinystore.LostError):

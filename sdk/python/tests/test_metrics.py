@@ -56,6 +56,7 @@ async def test_a_series_comes_back_bit_for_bit_its_samples_as_two_columns(store:
     ]
 
 
+# contract: MET-04
 async def test_an_aggregates_buckets_are_exact_by_group_and_a_timers_percentile_is_its_bounds(
     store: tinystore.Store,
 ) -> None:
@@ -136,6 +137,7 @@ async def test_a_timers_measure_records_whether_its_block_returns_or_raises(stor
     assert await last(store.metrics, "measured_ms_count") == {"{}": 3}
 
 
+# contract: MET-10
 async def test_an_instrument_the_store_refuses_fails_the_next_flush_and_keeps_no_other_out(
     store: tinystore.Store,
 ) -> None:
@@ -179,6 +181,7 @@ async def test_a_gauges_functions_read_a_set_of_labels_each_and_a_set_is_read_by
     assert await last(store.metrics, "queue_depth_jobs") == {'{"queue": "emails"}': 3, '{"queue": "sms"}': 5}
 
 
+# contract: MET-10
 async def test_a_call_an_instrument_refuses_raises_where_the_program_made_it(store: tinystore.Store) -> None:
     counter = store.metrics.counter("refusals_total")
     refused = [

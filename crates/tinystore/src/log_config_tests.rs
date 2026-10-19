@@ -61,6 +61,7 @@ fn explained(following: &Arc<dyn std::any::Any + Send + Sync>, path: &str) -> cr
     config.explain().settings.into_iter().find(|line| line.path == path).unwrap()
 }
 
+// contract: LOG-07
 #[test]
 fn a_change_of_the_level_reaches_the_logger_at_once_and_a_reset_gives_its_own_back() {
     let ((_dir, store), printed) = (store(), Printed::default());
@@ -75,6 +76,7 @@ fn a_change_of_the_level_reaches_the_logger_at_once_and_a_reset_gives_its_own_ba
     assert_eq!(messages(&printed), ["warn", "error", "debug", "info", "warn", "error", "warn", "error"]);
 }
 
+// contract: LOG-07
 #[test]
 fn a_stores_logger_follows_the_config_log_while_a_clone_of_it_lives() {
     let ((_dir, store), printed) = (store(), Printed::default());
@@ -88,6 +90,7 @@ fn a_stores_logger_follows_the_config_log_while_a_clone_of_it_lives() {
     assert_eq!(messages(&printed), ["followed"]);
 }
 
+// contract: LOG-07
 #[test]
 fn a_level_no_logger_means_is_refused_while_a_logger_has_the_config_open() {
     let ((_dir, store), printed) = (store(), Printed::default());
@@ -99,6 +102,7 @@ fn a_level_no_logger_means_is_refused_while_a_logger_has_the_config_open() {
     assert!(error.to_string().contains(refused), "{error}");
 }
 
+// contract: LOG-07
 #[test]
 fn a_kept_change_is_the_level_of_a_logger_that_opens_after_it() {
     let ((_dir, store), printed) = (store(), Printed::default());
@@ -117,6 +121,7 @@ fn warning_said(name: &str) -> Option<String> {
     (name == "LOG_LEVEL").then(|| "WARNING".to_owned())
 }
 
+// contract: LOG-07
 #[test]
 fn the_environment_goes_over_the_code_as_a_layer_that_explain_names() {
     let ((_dir, store), printed) = (store(), Printed::default());
@@ -151,6 +156,7 @@ fn json_said(name: &str) -> Option<String> {
     (name == "APP_LOG_FORMAT").then(|| "json".to_owned())
 }
 
+// contract: LOG-07
 #[test]
 fn a_logger_declares_its_codes_options_and_the_variables_it_read_and_off_stays_off() {
     let printed = Printed::default();

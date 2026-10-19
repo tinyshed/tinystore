@@ -37,6 +37,7 @@ fn spelled(names: &[&str]) -> Vec<String> {
     names.iter().map(|name| (*name).to_owned()).collect()
 }
 
+// contract: REC-07
 #[test]
 fn a_poll_gives_every_packed_event_once_a_segment_of_one_stream_at_a_time() {
     let fixture = fixture();
@@ -64,6 +65,7 @@ fn a_poll_gives_every_packed_event_once_a_segment_of_one_stream_at_a_time() {
     }
 }
 
+// contract: REC-07
 #[test]
 fn a_cursor_keeps_its_place_across_merges_the_middle_of_a_merged_segment_included() {
     let fixture = fixture();
@@ -94,6 +96,7 @@ fn a_cursor_keeps_its_place_across_merges_the_middle_of_a_merged_segment_include
     assert_eq!((given, last.as_str()), (every, "5:0"));
 }
 
+// contract: REC-07
 #[test]
 fn a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them() {
     let fixture = fixture();

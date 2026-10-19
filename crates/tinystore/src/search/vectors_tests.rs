@@ -100,6 +100,7 @@ fn near(random: &mut Random, pool: &[Vec<f32>]) -> Vec<f32> {
     values
 }
 
+// contract: SRCH-02, SRCH-03
 #[test]
 fn the_best_by_codes_are_the_best_by_every_vector_bit_for_bit_of_all_or_of_those_a_filter_passes() {
     for seed in 0..60 {

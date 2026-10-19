@@ -33,6 +33,7 @@ fn groups(answer: &[Aggregate]) -> Vec<(String, Vec<f64>)> {
     answer.iter().map(group).collect()
 }
 
+// contract: MET-04
 #[test]
 fn buckets_of_any_width_add_up_to_the_range() {
     let f = fixture();
@@ -69,6 +70,7 @@ fn buckets_of_any_width_add_up_to_the_range() {
     }
 }
 
+// contract: MET-04
 #[test]
 fn a_restart_counts_the_same_across_blocks() {
     // 2, then a run that began at 0 and reached 5: minutes apart in one block, days apart in three
@@ -93,6 +95,7 @@ fn a_restart_counts_the_same_across_blocks() {
     }
 }
 
+// contract: MET-05
 #[test]
 fn only_a_step_across_an_empty_bucket_is_a_gap() {
     let f = fixture();
@@ -128,6 +131,7 @@ fn only_a_step_across_an_empty_bucket_is_a_gap() {
     assert!(!moved[0].buckets[0].gap, "a count takes no step");
 }
 
+// contract: MET-04, MET-12
 #[test]
 fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
     // in the head, where retention takes each sample; and packed, the day before in one block that goes whole
@@ -162,6 +166,7 @@ fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
     }
 }
 
+// contract: MET-05
 #[test]
 fn a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial() {
     let f = fixture();
@@ -248,6 +253,7 @@ fn last_adds_only_series_with_a_sample_in_the_bucket() {
     assert_eq!(number(&first_of[0].buckets[0]).to_bits(), (-0.0_f64).to_bits());
 }
 
+// contract: MET-04, MET-06
 #[test]
 fn a_block_inside_a_bucket_answers_as_its_samples_would() {
     let gauge_ops = [Op::Count, Op::Sum, Op::Avg, Op::Min, Op::Max, Op::Delta, Op::First, Op::Last];
@@ -384,6 +390,7 @@ fn an_answer_past_its_buckets_is_a_limit() {
     assert_eq!(fits[0].buckets.len(), 100_000);
 }
 
+// contract: MET-08
 #[test]
 fn a_gauges_percentile_is_the_sample_at_its_nearest_rank_among_every_series_of_its_group() {
     let f = fixture();
@@ -420,6 +427,7 @@ fn a_gauges_percentile_is_the_sample_at_its_nearest_rank_among_every_series_of_i
     assert_eq!(Op::Percentile(99.9).to_string(), "p99.9");
 }
 
+// contract: MET-11
 #[test]
 fn an_overflowed_set_is_a_group_of_its_own_whatever_a_query_groups_by() {
     let kept = |pairs: &[(&str, &str)]| {

@@ -74,6 +74,7 @@ async def test_a_backup_is_one_zip_of_every_engine_which_restore_takes_back_into
     await restored(way, zip_, check)
 
 
+# contract: BAK-03
 @pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
 async def test_a_backup_keeps_a_file_of_the_programs_only_when_include_names_it(way: Way, directory: Path) -> None:
     store = await filled(way, directory / "store")

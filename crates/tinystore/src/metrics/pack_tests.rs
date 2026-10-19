@@ -40,6 +40,7 @@ fn groups(f: &crate::metrics::fixture::Fixture) -> Vec<Found> {
         .collect()
 }
 
+// contract: MET-01
 #[test]
 fn a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole() {
     let f = fixture();
@@ -81,6 +82,7 @@ fn a_range_reads_the_blocks_and_the_head_it_touches_and_no_more() {
     assert!(budget.decoded <= 480, "one or two hourly blocks, not ten: {budget:?}");
 }
 
+// contract: DUR-08
 #[test]
 fn a_read_sees_one_state_while_ingests_and_packing_go_on_beside_it() {
     let f = fixture();
@@ -108,6 +110,7 @@ fn a_read_sees_one_state_while_ingests_and_packing_go_on_beside_it() {
     });
 }
 
+// contract: ERR-01, MET-03
 #[test]
 fn a_sample_behind_what_its_series_has_packed_is_too_old() {
     let f = fixture();
@@ -214,6 +217,7 @@ fn a_quiet_series_is_not_forced_into_a_block() {
     assert_eq!((done.expired, done.reclaimed, done.blocks), (10, 1, 0), "its head expired whole");
 }
 
+// contract: DUR-03, MET-03
 #[test]
 fn a_publication_another_write_raced_is_dropped_and_tried_again() {
     let f = fixture();

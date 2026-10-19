@@ -525,6 +525,7 @@ fn saying(said: &Arc<Mutex<Vec<String>>>, name: &str, fails: bool) -> Call<()> {
     })
 }
 
+// contract: CHAN-03
 #[cfg(feature = "channels")]
 #[test]
 fn what_a_write_asks_to_run_after_its_commit_runs_in_commit_order_and_never_after_a_rollback() {

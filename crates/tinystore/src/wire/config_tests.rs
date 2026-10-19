@@ -41,6 +41,7 @@ fn a_config_opened_over_the_wire_reads_the_layers_its_program_sent() {
     assert_eq!(client.call::<ConfigValue>(method::CONFIG_RESET, &unknown).unwrap_err().code, "invalid");
 }
 
+// contract: CFG-04
 #[test]
 fn a_follow_sends_the_value_now_then_each_change_until_cancelled() {
     let dir = tempfile::tempdir().unwrap();

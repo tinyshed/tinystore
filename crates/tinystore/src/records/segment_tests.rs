@@ -36,6 +36,7 @@ fn a_segment_keeps_each_name_context_and_shape_once() {
     assert_eq!((schema.shapes[1].columns.clone(), schema.shapes[2].presence), (vec![2], 0));
 }
 
+// contract: REC-01
 #[test]
 fn a_key_written_twice_has_a_column_each_time_which_another_shape_shares_by_its_place() {
     let events = [spelled("a", 1, r#"{"user": 1, "tag": 2, "tag": 3}"#), spelled("b", 2, r#"{"tag": 4, "user": 5}"#)];

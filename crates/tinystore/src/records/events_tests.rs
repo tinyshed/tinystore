@@ -21,6 +21,7 @@ struct Slow {
     ms: u32,
 }
 
+// contract: REC-03
 #[test]
 fn an_appended_event_is_read_at_once_with_what_it_carries() {
     let fixture = fixture();
@@ -53,6 +54,7 @@ fn events_are_there_after_the_store_opens_again() {
     assert_eq!(names(&fixture.events("audit").list().page().unwrap().events), ["first", "second"]);
 }
 
+// contract: REC-02
 #[test]
 fn a_list_is_written_whole_or_not_at_all_and_a_refused_event_names_itself() {
     let fixture = fixture();
@@ -69,6 +71,7 @@ fn a_list_is_written_whole_or_not_at_all_and_a_refused_event_names_itself() {
     assert_eq!(fixture.rows("heads"), 1);
 }
 
+// contract: REC-09, STORE-08
 #[test]
 fn an_events_time_is_from_as_long_ago_as_its_stream_keeps_to_ten_minutes_ahead() {
     let fixture = fixture();

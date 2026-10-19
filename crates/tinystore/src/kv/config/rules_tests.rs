@@ -8,6 +8,7 @@ fn setting(kind: Kind, rules: Rules) -> Setting {
     Setting { kind, rules, default: None, required: false, live: false, secret: false }
 }
 
+// contract: CFG-08
 #[test]
 fn a_span_reads_as_every_language_reads_it_and_spells_back() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
@@ -47,6 +48,7 @@ fn one_of_names_the_set_and_a_span_its_bound_spelled() {
     assert_eq!(check(&timeout, &json!("soon")), Err(r#""soon" is not a span, as 30s or 1h30m"#.to_owned()));
 }
 
+// contract: CFG-03
 #[test]
 fn a_lists_items_are_checked_each_its_length_counted_and_a_group_item_filled() {
     let items = Item::Value { kind: Kind::Integer, rules: Rules { min: Some(1.0), ..Rules::default() } };

@@ -68,6 +68,7 @@ fn a_word_is_found_as_written_and_by_its_stem_in_any_script() {
     assert!(found("run").is_empty(), "English is not stemmed: search-plan measured a loss");
 }
 
+// contract: SRCH-04
 #[test]
 fn a_set_is_seen_by_the_next_search_and_a_deleted_document_never_answers() {
     let fixture = fixture();
@@ -97,6 +98,7 @@ fn get_answers_the_value_set_or_none() {
     assert_eq!(other.get("a-17").unwrap(), None, "each index keeps its own documents");
 }
 
+// contract: SRCH-05
 #[test]
 fn set_many_sets_every_document_in_one_commit_or_none() {
     let fixture = fixture();
@@ -115,6 +117,7 @@ fn set_many_sets_every_document_in_one_commit_or_none() {
     assert!(checked(|| notes.search("kept").run()).unwrap().hits.is_empty());
 }
 
+// contract: SRCH-05
 #[test]
 fn a_set_many_past_its_bound_is_a_limit_and_sets_nothing() {
     let fixture = fixture();
@@ -146,6 +149,7 @@ fn pages_of_a_search_join_into_its_whole_ranking() {
     assert_eq!(paged, whole);
 }
 
+// contract: SRCH-09
 #[test]
 fn a_misspelt_word_is_read_as_the_nearest_and_corrected_says_the_text_read() {
     let fixture = fixture();
@@ -164,6 +168,7 @@ fn a_misspelt_word_is_read_as_the_nearest_and_corrected_says_the_text_read() {
     assert!(search(&strict, "replicaiton").hits.is_empty());
 }
 
+// contract: SRCH-09
 #[test]
 fn a_word_that_matches_is_never_changed() {
     let fixture = fixture();
@@ -228,6 +233,7 @@ fn a_changed_weight_rebuilds_nothing_and_the_next_search_reads_it() {
     assert_eq!(ids(&search(&articles, "bread"))[0], "body", "every handle of the index reads it");
 }
 
+// contract: SRCH-06
 #[test]
 fn a_field_removed_leaves_searches_at_once_and_one_added_is_read_beside_the_index_until_it_switches_in() {
     let fixture = fixture();
@@ -250,6 +256,7 @@ fn a_field_removed_leaves_searches_at_once_and_one_added_is_read_beside_the_inde
     assert_eq!(empty.status().unwrap(), crate::search::Status::Ready, "an empty index takes a field at once");
 }
 
+// contract: SRCH-10
 #[test]
 fn an_index_answers_after_a_restart_as_it_did_before() {
     let fixture = fixture();
@@ -268,6 +275,7 @@ fn an_index_answers_after_a_restart_as_it_did_before() {
     assert_eq!(checked(|| articles.search("loaf bread").run()).unwrap(), before);
 }
 
+// contract: ERR-02
 #[test]
 fn errors_name_the_index_the_id_and_what_failed() {
     let fixture = fixture();
@@ -515,6 +523,7 @@ fn agrees(index: &Index<Article>, model: &Model, random: &mut Random, seed: u64)
     }
 }
 
+// contract: SRCH-01
 #[test]
 fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packing_and_purging() {
     for seed in 0..4 {
@@ -554,6 +563,7 @@ fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packi
     }
 }
 
+// contract: DUR-09
 #[test]
 fn packing_and_purging_change_no_answer() {
     let fixture = fixture();
@@ -658,6 +668,7 @@ fn crash_image(dir: &Path) -> tempfile::TempDir {
     image
 }
 
+// contract: DUR-09
 #[test]
 fn a_crash_between_steps_of_packing_or_purging_leaves_the_last_commit() {
     let fixture = fixture();
@@ -873,6 +884,7 @@ fn set_with(index: &Index<Article>, id: &str, value: &Article, vector: Option<&[
     call.set(value).unwrap();
 }
 
+// contract: SRCH-02
 #[test]
 fn searches_by_a_vector_and_by_both_answer_what_scoring_every_document_answers() {
     for seed in 0..4 {
@@ -1060,6 +1072,7 @@ fn agrees_filtered(index: &Index<Article>, model: &Model, random: &mut Random, s
     assert_eq!(got, expected, "seed {seed}: {text:?} {tests:?}");
 }
 
+// contract: SRCH-03
 #[test]
 fn a_filtered_search_answers_what_scoring_every_document_it_passes_answers() {
     for seed in 0..4 {
@@ -1189,6 +1202,7 @@ fn mixed(index: &Index<Article>, model: &mut Model, random: &mut Random) {
     }
 }
 
+// contract: SRCH-06
 #[test]
 fn writes_while_an_index_is_read_again_reach_its_new_rows_and_it_answers_by_them_once_switched() {
     for seed in 0..3 {
@@ -1304,6 +1318,7 @@ fn an_index_whose_numbers_pass_twice_its_documents_is_numbered_again_and_answers
     assert_eq!(answers(&articles), before);
 }
 
+// contract: SRCH-06
 #[test]
 fn an_index_reopened_in_the_middle_of_a_rebuild_goes_on_from_where_it_stood() {
     let fixture = fixture();

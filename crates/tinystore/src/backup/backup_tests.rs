@@ -102,6 +102,7 @@ fn tree(dir: &Path) -> Vec<String> {
     names
 }
 
+// contract: BAK-01
 #[test]
 fn a_backup_restores_every_engine_while_its_store_keeps_working() {
     let f = fixture();
@@ -118,6 +119,7 @@ fn a_backup_restores_every_engine_while_its_store_keeps_working() {
     assert_eq!(restored.bucket::<String>("codes").open().unwrap().get("after").unwrap(), None);
 }
 
+// contract: BAK-01
 #[test]
 fn an_engine_no_handle_opened_is_backed_up_from_its_files() {
     let f = fixture();
@@ -130,6 +132,7 @@ fn an_engine_no_handle_opened_is_backed_up_from_its_files() {
     f.holds_everything(&f.open(&f.restored));
 }
 
+// contract: BAK-02
 #[test]
 fn a_changed_byte_is_refused_and_leaves_nothing() {
     let f = fixture();
@@ -143,6 +146,7 @@ fn a_changed_byte_is_refused_and_leaves_nothing() {
     assert!(tree(&f.restored).is_empty(), "{:?}", tree(&f.restored));
 }
 
+// contract: BAK-02
 #[test]
 fn a_restore_writes_into_an_empty_directory_and_none_other() {
     let f = fixture();
@@ -154,6 +158,7 @@ fn a_restore_writes_into_an_empty_directory_and_none_other() {
     assert_eq!(tree(&f.restored), ["left.txt"], "what was there stays");
 }
 
+// contract: BAK-03
 #[test]
 fn a_file_of_the_programs_is_kept_only_when_named_and_one_of_the_stores_never() {
     let f = fixture();
@@ -180,6 +185,7 @@ fn a_file_of_the_programs_is_kept_only_when_named_and_one_of_the_stores_never() 
     assert!(error.to_string().contains("include_encryption_key()"), "{error}");
 }
 
+// contract: BAK-04
 #[test]
 fn a_backup_that_fails_leaves_no_zip() {
     let f = fixture();
@@ -192,6 +198,7 @@ fn a_backup_that_fails_leaves_no_zip() {
     assert!(!tree(&f.data).iter().any(|name| name.starts_with(".snapshot-")), "the snapshot is gone");
 }
 
+// contract: BAK-03
 #[test]
 fn the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so() {
     let f = fixture();
@@ -214,6 +221,7 @@ fn the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so() {
     assert_eq!(passwords.get("db").unwrap().as_deref(), Some("hunter2"));
 }
 
+// contract: BAK-04
 #[test]
 fn a_closed_store_takes_no_backup() {
     let f = fixture();
@@ -225,6 +233,7 @@ fn a_closed_store_takes_no_backup() {
     assert!(!f.zip.exists());
 }
 
+// contract: BAK-01
 #[test]
 fn a_backup_copies_while_a_writer_writes_and_holds_a_moment_of_it() {
     let f = fixture();
@@ -253,6 +262,7 @@ fn a_backup_copies_while_a_writer_writes_and_holds_a_moment_of_it() {
     assert!((held..300).all(|n| counted.get(format!("k{n:03}")).unwrap().is_none()), "a moment: nothing after a gap");
 }
 
+// contract: BAK-02
 #[test]
 fn a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zips() {
     let f = fixture();

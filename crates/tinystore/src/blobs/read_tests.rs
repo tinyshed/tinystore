@@ -6,6 +6,7 @@ use super::*;
 use crate::ErrorKind;
 use crate::blobs::fixture::{bytes, fixture, flip};
 
+// contract: BLOB-02
 #[test]
 fn a_whole_read_of_a_changed_byte_fails_before_its_end() {
     let f = fixture();
@@ -31,6 +32,7 @@ fn a_whole_read_of_a_changed_byte_fails_before_its_end() {
     assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
 }
 
+// contract: BLOB-02
 #[test]
 fn a_range_is_not_checked() {
     let f = fixture();
@@ -48,6 +50,7 @@ fn a_range_is_not_checked() {
     assert_eq!(rest, body[500_000..]);
 }
 
+// contract: BLOB-02
 #[test]
 fn an_inline_file_whose_bytes_changed_is_corrupt_when_read() {
     let f = fixture();
@@ -65,6 +68,7 @@ fn an_inline_file_whose_bytes_changed_is_corrupt_when_read() {
     assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
 }
 
+// contract: BLOB-03
 #[test]
 fn a_reader_keeps_what_it_opened_through_a_replace_and_a_delete() {
     let f = fixture();

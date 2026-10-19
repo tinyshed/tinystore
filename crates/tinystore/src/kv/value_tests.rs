@@ -43,6 +43,7 @@ fn a_primitive_is_kept_as_its_row() {
     round_trip(Some(5i64), Raw::Int(5));
 }
 
+// contract: KV-01
 #[test]
 fn a_float_keeps_its_bits() {
     round_trip(-0.0f64, row(4, &[0x80, 0, 0, 0, 0, 0, 0, 0]));
@@ -73,6 +74,7 @@ fn a_row_that_is_not_the_type_says_what_it_holds() {
     assert!(decode::<u8>(&Raw::Int(300)).is_err());
 }
 
+// contract: ERR-03, KV-01
 #[test]
 fn a_value_read_as_another_kind_than_it_was_written_is_refused_not_guessed() {
     let session = encode(&Session { user: 1, device: "a".to_owned() }).unwrap();
@@ -106,6 +108,7 @@ fn unhex(text: &str) -> Vec<u8> {
     (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
 }
 
+// contract: KV-02
 #[test]
 fn every_language_writes_and_reads_the_same_rows() {
     let vectors: serde_json::Value = serde_json::from_str(VECTORS).unwrap();

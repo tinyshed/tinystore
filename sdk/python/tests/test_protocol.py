@@ -61,6 +61,7 @@ def test_the_methods_are_the_schemas_by_name_and_number() -> None:
     assert protocol.methods == VECTORS["methods"]
 
 
+# contract: WIRE-08
 @pytest.mark.parametrize("vector", VECTORS["messages"], ids=lambda vector: vector["name"])
 def test_a_messages_fields_write_its_bytes_and_its_bytes_read_back(vector: dict[str, Any]) -> None:
     message = protocol.messages[vector["message"]]

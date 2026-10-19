@@ -47,6 +47,7 @@ fn a_store_measured_counts_its_commits_and_its_own_writes_of_them_count_nothing(
     store.close().unwrap();
 }
 
+// contract: MET-14
 #[test]
 fn a_store_not_measured_holds_none_of_its_own_names() {
     let dir = tempfile::tempdir().unwrap();
@@ -58,6 +59,7 @@ fn a_store_not_measured_holds_none_of_its_own_names() {
     store.close().unwrap();
 }
 
+// contract: MET-02
 #[test]
 fn a_name_of_the_stores_own_is_refused_from_the_program() {
     let dir = tempfile::tempdir().unwrap();

@@ -50,6 +50,7 @@ fn orders(db: &Database) -> i64 {
     db.scalar(sql!("select count(*) from orders")).unwrap()
 }
 
+// contract: DUR-06
 #[test]
 fn a_bucket_and_a_queue_opened_from_a_database_live_in_its_file() {
     let mut f = fixture();
@@ -73,6 +74,7 @@ fn a_bucket_and_a_queue_opened_from_a_database_live_in_its_file() {
     );
 }
 
+// contract: DUR-06
 #[test]
 fn rows_keys_and_jobs_commit_together_or_not_at_all() {
     let f = fixture();
@@ -104,6 +106,7 @@ fn rows_keys_and_jobs_commit_together_or_not_at_all() {
     assert_eq!(sessions.get("t-1").unwrap().as_deref(), Some("ann"), "and the delete");
 }
 
+// contract: JOB-02
 #[test]
 fn a_worker_runs_a_job_added_in_a_transaction_once_it_commits() {
     let f = fixture();
@@ -148,6 +151,7 @@ fn a_transaction_refuses_a_handle_kept_in_another_file() {
     assert_eq!(error.kind(), ErrorKind::Invalid, "a call around the transaction would wait for its writer: {error}");
 }
 
+// contract: DUR-06
 #[test]
 fn a_cancel_that_rolls_back_leaves_the_job() {
     let f = fixture();
@@ -184,6 +188,7 @@ fn the_store_closes_what_a_database_keeps_before_its_file() {
     assert_eq!(expires, Duration::from_secs(3600), "the renewal was written before the file closed");
 }
 
+// contract: DUR-01
 #[cfg(feature = "kv")]
 #[test]
 fn a_bucket_kept_in_a_database_commits_as_far_as_the_database_does() {
@@ -200,6 +205,7 @@ fn a_bucket_kept_in_a_database_commits_as_far_as_the_database_does() {
     store.close().unwrap();
 }
 
+// contract: SEC-03
 #[test]
 fn an_encrypted_bucket_of_a_database_commits_with_its_rows_and_shows_no_value_in_its_file() {
     let fixture = fixture();

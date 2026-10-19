@@ -25,6 +25,7 @@ fn value_mode(flags: u8) -> u8 {
     (flags >> 2) & 7
 }
 
+// contract: MET-01
 #[test]
 fn every_value_representation_keeps_the_bits() {
     let cases: [(&str, Vec<Point>, u8); 6] = [

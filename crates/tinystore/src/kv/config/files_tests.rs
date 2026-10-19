@@ -37,6 +37,7 @@ fn toml_yaml_and_json_with_comments_give_the_same_settings() {
     assert_eq!(read_text("app.json", jsonc), Ok(want), "a .json file takes comments too");
 }
 
+// contract: CFG-03
 #[test]
 fn a_key_no_setting_has_and_a_value_of_another_kind_are_each_named() {
     let refused = read_text("app.yaml", "prot: 1\nport: eighty\nlimits: 3\n").unwrap_err();

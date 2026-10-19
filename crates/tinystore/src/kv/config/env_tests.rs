@@ -9,6 +9,7 @@ fn vectors() -> Value {
     serde_json::from_str(VECTORS).unwrap()
 }
 
+// contract: CFG-08
 #[test]
 fn a_settings_variable_is_its_prefix_and_its_path_in_upper_snake_case_as_every_language_spells_it() {
     for name in vectors()["names"].as_array().unwrap() {
@@ -17,6 +18,7 @@ fn a_settings_variable_is_its_prefix_and_its_path_in_upper_snake_case_as_every_l
     }
 }
 
+// contract: CFG-08
 #[test]
 fn a_dotenv_file_reads_as_every_language_reads_it() {
     for case in vectors()["dotenv"].as_array().unwrap() {
@@ -69,6 +71,7 @@ fn read_refused(env: &Env, declared: &Declaration) -> Vec<String> {
     refused
 }
 
+// contract: CFG-03
 #[test]
 fn a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share_one() {
     let declared = declaration(json!({ "port": 8080, "db": { "url": "" }, "dbUrl": "" }));
@@ -109,6 +112,7 @@ fn name_file_gives_its_files_text_without_its_last_newline_and_both_set_is_refus
     assert_eq!(read_refused(&both, &declared), ["APP_DB_URL and APP_DB_URL_FILE are both set"]);
 }
 
+// contract: CFG-03
 #[test]
 fn a_dotenv_files_variables_count_where_the_process_has_none() {
     let dir = tempfile::tempdir().unwrap();

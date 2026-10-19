@@ -196,6 +196,7 @@ mod tests {
         pool: Live<u32>,
     }
 
+    // contract: CFG-06, SEC-05
     #[test]
     fn a_mark_is_its_value_to_the_program_and_a_map_to_the_core() {
         let db = Db { token: Secret::new("t".into()), pool: Live::new(10), ..Db::default() };

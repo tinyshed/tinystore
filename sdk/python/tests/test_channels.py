@@ -23,6 +23,7 @@ class Chat:
     text: str
 
 
+# contract: CHAN-01
 async def test_a_subscriber_receives_what_is_published_from_now_on_in_order_until_it_stops(
     store: tinystore.Store,
 ) -> None:
@@ -77,6 +78,7 @@ async def test_a_loop_receives_the_messages_published_from_its_first_turn_and_br
     await loop.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
 
+# contract: CHAN-03
 async def test_a_transactions_messages_are_handed_over_once_it_commits_and_never_when_it_rolls_back(
     store: tinystore.Store,
 ) -> None:
@@ -117,6 +119,7 @@ async def test_a_transactions_messages_are_handed_over_once_it_commits_and_never
     await sub.stop()
 
 
+# contract: CHAN-04
 async def test_a_handler_that_raises_is_told_and_the_next_message_follows_and_stop_inside_it_answers_at_once(
     store: tinystore.Store,
 ) -> None:
@@ -141,6 +144,7 @@ async def test_a_handler_that_raises_is_told_and_the_next_message_follows_and_st
     assert str(failures[0]) == "two is refused"
 
 
+# contract: CHAN-02
 async def test_a_slow_handler_falls_behind_and_is_told_how_many_it_missed(store: tinystore.Store) -> None:
     photos = store.channel("photos", str)
     photo = "p" * 4096

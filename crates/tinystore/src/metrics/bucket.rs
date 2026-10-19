@@ -446,6 +446,7 @@ mod tests {
         assert_eq!(value(Some(7.5), &[7.0], Op::Delta), -0.5);
     }
 
+    // contract: MET-04
     #[test]
     fn sums_are_exact_and_rounded_once() {
         assert_eq!(value(None, &[1e308, 1e308, -1e308], Op::Sum), 1e308, "no infinity on the way");
@@ -464,6 +465,7 @@ mod tests {
         assert_eq!(value(None, &[1.0, -0.0], Op::Last).to_bits(), (-0.0_f64).to_bits());
     }
 
+    // contract: MET-08
     #[test]
     fn a_gauges_percentile_is_the_sample_at_its_nearest_rank_bit_for_bit() {
         let values: Vec<f64> = (1..=20).rev().map(f64::from).collect();

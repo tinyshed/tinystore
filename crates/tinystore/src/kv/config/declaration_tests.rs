@@ -80,6 +80,7 @@ fn a_rust_declaration_gives_each_setting_its_kind_default_and_marks() {
     assert!(host.required && host.default.is_none());
 }
 
+// contract: CFG-02
 #[test]
 fn a_mark_that_means_nothing_is_refused() {
     #[derive(Serialize, Default)]

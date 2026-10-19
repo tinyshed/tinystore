@@ -198,6 +198,7 @@ fn a_tail_slower_than_the_writers_says_how_many_left_the_hold_before_it_read_the
     assert!(first.starts_with(&format!(r#"{{"n":{missed},"#)), "the first read follows those missed: {first}");
 }
 
+// contract: REC-10
 #[test]
 fn a_writers_pieces_become_events_however_its_lines_were_cut() {
     let dir = tempfile::tempdir().unwrap();

@@ -50,6 +50,7 @@ fn a_method_the_core_does_not_have_is_unimplemented() {
     assert_eq!(failed.code, "unimplemented");
 }
 
+// contract: WIRE-02
 #[test]
 fn a_field_the_core_does_not_know_is_unimplemented_and_named() {
     let dir = tempfile::tempdir().unwrap();
@@ -84,6 +85,7 @@ fn a_frame_before_hello_ends_the_pipe_with_goaway() {
     assert_eq!(reader.next(1 << 20).unwrap().unwrap().kind, Kind::GoAway);
 }
 
+// contract: KV-11
 #[test]
 fn a_run_of_once_is_handed_to_the_client_and_its_answer_kept_for_the_next() {
     let dir = tempfile::tempdir().unwrap();
@@ -108,6 +110,7 @@ fn a_run_of_once_is_handed_to_the_client_and_its_answer_kept_for_the_next() {
     assert_eq!(KvAnswer::decode(&waited.body).unwrap(), charged);
 }
 
+// contract: KV-11
 #[test]
 fn a_run_that_failed_or_was_cancelled_hands_the_key_to_the_next_caller() {
     let dir = tempfile::tempdir().unwrap();
@@ -132,6 +135,7 @@ fn a_run_that_failed_or_was_cancelled_hands_the_key_to_the_next_caller() {
     assert_eq!(client.next_on(third).flags, 0, "handed again after the cancel");
 }
 
+// contract: KV-11
 #[test]
 fn a_run_cancelled_while_it_waits_is_never_handed_the_key() {
     let dir = tempfile::tempdir().unwrap();
@@ -258,6 +262,7 @@ fn a_challenge_of_another_length_is_a_hello_the_server_cannot_take() {
     assert_eq!(refused.code, "protocol");
 }
 
+// contract: WIRE-07
 #[test]
 fn a_closing_server_says_goaway_and_answers_a_later_request_unavailable_unrun() {
     let dir = tempfile::tempdir().unwrap();
@@ -466,6 +471,7 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     assert_eq!(unknown.to_string(), "pipe: durability \"fast\": it is full or os: invalid");
 }
 
+// contract: SEC-01
 #[test]
 fn a_read_connection_reads_and_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();

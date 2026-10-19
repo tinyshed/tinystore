@@ -10,6 +10,7 @@ fn names(batch: &TailBatch) -> Vec<&str> {
     batch.events.iter().map(|event| event.name.as_str()).collect()
 }
 
+// contract: REC-08
 #[test]
 fn a_tail_gives_the_events_appended_after_it_opened_a_batch_as_they_come() {
     let fixture = fixture();
@@ -24,6 +25,7 @@ fn a_tail_gives_the_events_appended_after_it_opened_a_batch_as_they_come() {
     assert_eq!(tail.next_within(Duration::ZERO).unwrap(), None);
 }
 
+// contract: REC-08
 #[test]
 fn a_tail_takes_a_reads_conditions_and_no_range_order_or_limit() {
     let fixture = fixture();
@@ -41,6 +43,7 @@ fn a_tail_takes_a_reads_conditions_and_no_range_order_or_limit() {
     }
 }
 
+// contract: REC-08
 #[test]
 fn a_tail_slower_than_its_writers_says_how_many_left_before_it_read_them() {
     let fixture = fixture();
@@ -58,6 +61,7 @@ fn a_tail_slower_than_its_writers_says_how_many_left_before_it_read_them() {
     assert_eq!((names(&after), after.missed), (vec!["after"], 0));
 }
 
+// contract: REC-08
 #[test]
 fn a_tail_ends_when_the_store_closes() {
     let fixture = fixture();

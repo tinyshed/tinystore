@@ -4,6 +4,7 @@ use crate::ErrorKind;
 use crate::metrics::fixture::{DAY, HOUR, MINUTE, SECOND, bits, fixture};
 use crate::metrics::{Kind, Series};
 
+// contract: MET-01
 #[test]
 fn a_sample_comes_back_bit_for_bit() {
     let f = fixture();
@@ -44,6 +45,7 @@ fn a_histograms_bound_is_written_as_javascript_writes_it_and_one_without_is_refu
     }
 }
 
+// contract: MET-01
 #[test]
 fn a_sample_survives_a_restart() {
     let f = fixture();
@@ -55,6 +57,7 @@ fn a_sample_survives_a_restart() {
     assert_eq!(read[0].labels()["host"], "web-1");
 }
 
+// contract: MET-02
 #[test]
 fn a_series_is_its_name_and_its_labels_in_any_order() {
     let f = fixture();
@@ -68,6 +71,7 @@ fn a_series_is_its_name_and_its_labels_in_any_order() {
     assert_eq!(read[0].samples().iter().map(|sample| sample.value).collect::<Vec<_>>(), [1.0, 2.0]);
 }
 
+// contract: MET-02
 #[test]
 fn an_ingest_is_atomic_and_a_time_given_twice_keeps_the_last_value() {
     let f = fixture();
@@ -85,6 +89,7 @@ fn an_ingest_is_atomic_and_a_time_given_twice_keeps_the_last_value() {
     assert_eq!(read[0].samples().iter().map(|sample| sample.value).collect::<Vec<_>>(), [6.0, 7.0]);
 }
 
+// contract: ERR-01, ERR-02
 #[test]
 fn a_refused_series_names_itself_and_its_sample() {
     let f = fixture();
@@ -111,6 +116,7 @@ fn a_name_has_one_kind_while_it_has_series() {
     assert_eq!(f.metrics().ingest(&both).unwrap_err().kind(), ErrorKind::Invalid);
 }
 
+// contract: MET-12
 #[test]
 fn a_names_keep_is_its_own_and_another_while_the_store_is_open_is_refused() {
     let f = fixture();
@@ -133,6 +139,7 @@ fn a_names_keep_is_its_own_and_another_while_the_store_is_open_is_refused() {
     );
 }
 
+// contract: ERR-05, MET-07
 #[test]
 fn an_ingest_past_its_bound_is_a_limit() {
     let f = fixture();
@@ -143,6 +150,7 @@ fn an_ingest_past_its_bound_is_a_limit() {
     f.metrics().ingest(&[fits]).unwrap();
 }
 
+// contract: ERR-05, MET-07
 #[test]
 fn a_series_past_the_stores_bound_is_a_limit() {
     let f = fixture();

@@ -182,6 +182,7 @@ mod tests {
         EncryptionKey::of(&CipherKey::try_generate().unwrap())
     }
 
+    // contract: SEC-03
     #[test]
     fn a_value_opens_only_at_its_place_with_its_key_and_unchanged() {
         let key = key();

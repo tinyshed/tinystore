@@ -29,6 +29,7 @@ fn held_elsewhere(lock: &Lock, key: &'static str) -> (mpsc::Sender<()>, thread::
     (go, holder)
 }
 
+// contract: LOCK-01
 #[test]
 fn a_key_is_held_by_one_holder_at_a_time_and_given_on_when_let_go() {
     let f = fixture();
@@ -51,6 +52,7 @@ fn a_key_is_held_by_one_holder_at_a_time_and_given_on_when_let_go() {
     assert_eq!(locks.waiting(), 0);
 }
 
+// contract: LOCK-01
 #[test]
 fn waiters_are_served_in_the_order_they_came() {
     let f = fixture();
@@ -102,6 +104,7 @@ fn a_key_still_held_after_the_wait_is_in_use() {
     first.join().unwrap().unwrap();
 }
 
+// contract: LOCK-03
 #[test]
 fn max_hold_revokes_a_lease_gives_the_key_on_and_fails_the_hold_lost() {
     let f = fixture();
@@ -133,6 +136,7 @@ fn max_hold_revokes_a_lease_gives_the_key_on_and_fails_the_hold_lost() {
     assert_eq!(error.kind(), ErrorKind::Lost, "{error}");
 }
 
+// contract: LOCK-04
 #[test]
 fn a_hold_inside_its_own_hold_or_inside_a_transaction_is_invalid() {
     let f = fixture();
@@ -152,6 +156,7 @@ fn a_hold_inside_its_own_hold_or_inside_a_transaction_is_invalid() {
     assert!(invoices.try_hold("42", |_| Ok::<_, Error>(())).unwrap().is_some(), "nothing was left held");
 }
 
+// contract: LOCK-02
 #[test]
 fn fences_grow_with_every_lease_and_across_a_restart() {
     let f = fixture();
@@ -208,6 +213,7 @@ fn a_semaphore_admits_its_limit_a_key_and_a_lock_of_its_name_is_another() {
     }
 }
 
+// contract: LOCK-06
 #[test]
 fn a_panic_lets_the_key_go() {
     let f = fixture();
@@ -219,6 +225,7 @@ fn a_panic_lets_the_key_go() {
     assert!(invoices.try_hold("42", |_| Ok::<_, Error>(())).unwrap().is_some());
 }
 
+// contract: LOCK-06
 #[test]
 fn closing_the_store_ends_every_lease_and_answers_every_waiter() {
     let f = fixture();
@@ -287,6 +294,7 @@ fn granted(answer: &mpsc::Receiver<Result<Answer>>) -> Granted {
     }
 }
 
+// contract: LOCK-05
 #[cfg(feature = "wire")]
 #[test]
 fn a_lease_through_a_connection_lasts_its_ttl_from_its_last_renewal() {
@@ -339,6 +347,7 @@ fn a_request_asked_again_answers_its_lease_or_takes_over_its_place_in_line() {
     granted(&taken_over);
 }
 
+// contract: LOCK-06
 #[cfg(feature = "wire")]
 #[test]
 fn a_cancelled_waiter_leaves_its_line() {

@@ -34,6 +34,7 @@ fn api(fixture: &Fixture) -> (Events, SystemTime) {
     (api, base)
 }
 
+// contract: REC-06
 #[test]
 fn a_count_finds_what_a_list_finds_packed_and_waiting() {
     let fixture = fixture();
@@ -98,6 +99,7 @@ fn an_aggregate_gives_a_row_a_span_and_a_value_of_its_keys() {
     assert_eq!(api.list().aggregate(&Aggregate::new().every(Duration::ZERO)).unwrap_err().kind(), ErrorKind::Invalid);
 }
 
+// contract: REC-06
 #[test]
 fn a_sum_of_integers_is_exact_and_a_fraction_makes_it_a_floats() {
     let fixture = fixture();
@@ -114,6 +116,7 @@ fn a_sum_of_integers_is_exact_and_a_fraction_makes_it_a_floats() {
     assert_eq!(stats.sum, Number::Float(3.0 * huge as f64 + 1.5));
 }
 
+// contract: ERR-05
 #[test]
 fn an_aggregate_past_ten_thousand_rows_is_limit_and_never_a_smaller_answer() {
     let fixture = fixture();

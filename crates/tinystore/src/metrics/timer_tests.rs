@@ -132,6 +132,7 @@ fn scraped(first: SystemTime, count: u32) -> Vec<Series> {
     scraped
 }
 
+// contract: MET-08
 #[test]
 fn a_timers_percentile_lies_in_the_bucket_that_holds_its_rank_and_whole_blocks_answer_from_summaries() {
     let f = fixture();

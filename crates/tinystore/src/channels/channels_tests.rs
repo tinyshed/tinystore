@@ -26,6 +26,7 @@ fn values<T: Clone>(messages: &Kept<T>) -> Vec<T> {
     messages.lock().unwrap().iter().map(|message| message.value.clone()).collect()
 }
 
+// contract: CHAN-01
 #[test]
 fn a_subscriber_receives_what_is_published_from_now_on_in_order() {
     let (_dir, store) = opened();
@@ -48,6 +49,7 @@ fn a_subscriber_receives_what_is_published_from_now_on_in_order() {
     assert_eq!(each.next().unwrap().unwrap().value, "to the loop");
 }
 
+// contract: CHAN-01
 #[test]
 fn a_subscription_takes_its_exact_branch_and_recursive_the_branches_below_too() {
     let (_dir, store) = opened();
@@ -76,6 +78,7 @@ fn a_subscription_takes_its_exact_branch_and_recursive_the_branches_below_too() 
     }
 }
 
+// contract: CHAN-02
 #[test]
 fn a_subscriber_that_falls_behind_misses_messages_counted_and_the_publisher_never_waits() {
     let (_dir, store) = opened();
@@ -92,6 +95,7 @@ fn a_subscriber_that_falls_behind_misses_messages_counted_and_the_publisher_neve
     assert_eq!(*missed.lock().unwrap(), [5], "said once, before the next message");
 }
 
+// contract: CHAN-03
 #[cfg(all(feature = "kv", feature = "sql"))]
 #[test]
 fn a_message_of_a_transaction_is_handed_over_after_its_commit_and_never_after_a_rollback() {
@@ -181,6 +185,7 @@ fn stop_from_inside_its_handler_answers_at_once_and_from_outside_waits_for_the_r
     assert!(stopper.join().unwrap() >= released, "stop waited for the running call");
 }
 
+// contract: CHAN-04
 #[test]
 fn a_handler_that_panics_or_a_message_of_another_type_is_told_and_the_next_follows() {
     let (_dir, store) = opened();

@@ -191,6 +191,7 @@ mod tests {
         assert_eq!(again.text(), repeat.text());
     }
 
+    // contract: JOB-08
     #[test]
     fn a_repeat_is_refused_for_what_it_lacks() {
         let error = Asked::Cron { expr: "0 9 * * *".into(), zone: String::new() }.check().unwrap_err();

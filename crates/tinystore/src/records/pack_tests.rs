@@ -48,6 +48,7 @@ fn a_segments_worth_is_packed_at_once_and_what_is_left_waits() {
     assert_eq!(read, 17_000);
 }
 
+// contract: REC-04
 #[test]
 fn a_segment_holds_its_events_in_the_order_of_their_times_those_of_one_time_as_they_were_written() {
     let fixture = fixture();
@@ -73,6 +74,7 @@ fn a_segment_holds_its_events_in_the_order_of_their_times_those_of_one_time_as_t
     assert_eq!(times.1 - times.0, 200_000_000);
 }
 
+// contract: REC-04
 #[test]
 fn a_read_finds_each_event_once_in_what_is_packed_and_what_waits() {
     let fixture = fixture();
@@ -170,6 +172,7 @@ fn each_stream_is_packed_by_itself() {
     assert_eq!(names(&all.list().page().unwrap().events), ["request", "click"]);
 }
 
+// contract: DUR-01, DUR-09, REC-03
 #[test]
 fn a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_written() {
     let fixture = fixture();

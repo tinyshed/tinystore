@@ -5,6 +5,7 @@ use crate::metrics::aggregate::Asking;
 use crate::metrics::fixture::{HOUR, MINUTE, SECOND, fixture};
 use crate::metrics::{Op, Series, maintain};
 
+// contract: MET-06, MET-07
 #[test]
 fn a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing() {
     let f = fixture();
@@ -43,6 +44,7 @@ fn a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing() {
     assert_eq!(hours().every(HOUR).aggregate(Op::Avg).unwrap()[0].buckets.len(), 8);
 }
 
+// contract: MET-07
 #[test]
 fn a_plan_names_the_bound_a_call_would_stop_at() {
     let f = fixture();
@@ -60,6 +62,7 @@ fn a_plan_names_the_bound_a_call_would_stop_at() {
     assert_eq!((nothing.series, nothing.bytes, nothing.decoded, nothing.exceeds), (0, 0, 0, None));
 }
 
+// contract: MET-07
 #[test]
 fn a_plan_counts_every_sample_a_call_would_decode_past_their_bound() {
     let f = fixture();

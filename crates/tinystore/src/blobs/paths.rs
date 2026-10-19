@@ -115,6 +115,7 @@ pub(crate) fn past(prefix: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    // contract: BLOB-08
     #[test]
     fn a_folder_is_whole_segments_and_a_path_is_its_folders_and_its_own() {
         let folder = Folder::default().folder("users").unwrap().folder("42").unwrap();

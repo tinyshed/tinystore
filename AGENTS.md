@@ -360,7 +360,8 @@ file.
 
 Every rule worth keeping is worth the twenty lines that make it fail loudly.
 [CONTRACTS.md](CONTRACTS.md) lists what is promised, never which test keeps it;
-a test that keeps a contract names its id in a comment, `// contract: KV-04`.
+a test that keeps a contract names its id in a comment, `// contract: KV-04`,
+and `just contracts` fails when a MUST is named by no test.
 A change that makes or moves a promise changes that file in the same commit.
 
 `just check` runs what CI gates on, so that a failure arrives before a push
@@ -483,6 +484,7 @@ just sdk-check   # the Bun SDK's lint and types
 just protocol    # every codec and vector written again from protocol/*.wire
 just test-linux  # clippy and the tests in a Linux container, for a host that is not Linux
 just tables      # every markdown table aligned
+just contracts   # every MUST of CONTRACTS.md named by a test
 just fuzz        # a fuzz target of fuzz/ for a minute, by hand, in a Linux container
 ```
 

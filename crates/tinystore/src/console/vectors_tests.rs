@@ -45,6 +45,7 @@ fn bytes<const N: usize>(text: Option<&Value>) -> Option<[u8; N]> {
     bytes.try_into().ok()
 }
 
+// contract: LOG-03
 #[test]
 fn every_line_is_the_vectors_bytes_pretty_and_as_json() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();

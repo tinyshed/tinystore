@@ -105,6 +105,7 @@ fn the_file_after_close(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
+// contract: REPL-01
 #[test]
 fn every_commit_of_every_kind_is_handed_once_and_rebuilds_the_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -159,6 +160,7 @@ fn every_commit_of_every_kind_is_handed_once_and_rebuilds_the_file() {
     assert_eq!(kept.rebuilt(), the_file_after_close(&path));
 }
 
+// contract: DUR-05, REPL-02
 #[test]
 fn a_commit_its_observer_refuses_is_outcome_unknown_and_the_next_open_hands_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -188,6 +190,7 @@ fn a_commit_its_observer_refuses_is_outcome_unknown_and_the_next_open_hands_it()
     assert_eq!(kept.rebuilt(), the_file_after_close(&path), "the reopened file handed what its observer lacked");
 }
 
+// contract: REPL-03
 #[test]
 fn a_process_that_died_leaves_the_commits_its_observer_lost_to_the_next_open() {
     let dir = tempfile::tempdir().unwrap();

@@ -32,6 +32,7 @@ fn batches(client: &mut Client, stream: u32) -> Vec<ChannelsBatch> {
     batches
 }
 
+// contract: CHAN-01
 #[test]
 fn a_subscription_answers_once_it_is_registered_then_sends_what_is_published_under_its_branch() {
     let dir = tempfile::tempdir().unwrap();
@@ -56,6 +57,7 @@ fn a_subscription_answers_once_it_is_registered_then_sends_what_is_published_und
     assert_eq!(answered::<ChannelsBatch>(&client.next_on(stream)).unwrap_err().code, "cancelled");
 }
 
+// contract: CHAN-02
 #[test]
 fn a_client_that_grants_no_credit_falls_behind_and_is_told_how_many_it_missed() {
     let dir = tempfile::tempdir().unwrap();
@@ -108,6 +110,7 @@ fn a_read_connection_subscribes_but_publishes_nothing_and_a_publish_is_checked()
     assert_eq!(writing.call::<Empty>(method::CHANNELS_PUBLISH, &unnamed).unwrap_err().code, "invalid");
 }
 
+// contract: WIRE-03
 #[test]
 fn a_connection_whose_host_reads_nothing_stops_its_subscriptions_near_its_bound_and_goes_on_once_read() {
     let dir = tempfile::tempdir().unwrap();

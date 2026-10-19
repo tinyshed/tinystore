@@ -326,6 +326,7 @@ fn base64url(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    // contract: CLI-03
     #[test]
     fn a_messages_fields_are_found_past_the_others() {
         // {1: 2, 2: "0.1.0", 9: ["kv", "sql"], 11: bin 3}
@@ -370,6 +371,7 @@ mod tests {
         (format!("pipe:{name}"), Box::new((pipe.unwrap(), runtime)))
     }
 
+    // contract: CLI-03
     #[test]
     fn a_secret_reads_as_serve_spells_it() {
         assert_eq!(base64url("Zm9vYmFy").unwrap(), b"foobar");

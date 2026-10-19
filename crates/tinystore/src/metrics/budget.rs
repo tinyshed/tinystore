@@ -115,6 +115,7 @@ impl Budget {
 mod tests {
     use super::*;
 
+    // contract: ERR-05, MET-07
     #[test]
     fn a_limit_names_its_bound_what_was_wanted_and_the_bound() {
         let mut budget = Budget { decoded: DECODED.most - 10, ..Budget::default() };
@@ -126,6 +127,7 @@ mod tests {
         assert_eq!(budget.decoded, DECODED.most, "a refused take spends nothing");
     }
 
+    // contract: MET-07
     #[test]
     fn a_plan_counts_on_past_the_samples_a_call_decodes_and_stops_at_the_bytes_it_reads() {
         let mut plan = Budget::planning();

@@ -10,6 +10,7 @@ fn a_stream_nobody_gave_a_keep_keeps_fourteen_days() {
     assert_eq!(fixture.records().stream("api").unwrap().keeps(), 14 * DAY);
 }
 
+// contract: REC-09
 #[test]
 fn a_stream_keeps_what_an_open_gave_it_across_runs_and_an_open_that_gives_none_changes_nothing() {
     let fixture = fixture();
@@ -25,6 +26,7 @@ fn a_stream_keeps_what_an_open_gave_it_across_runs_and_an_open_that_gives_none_c
     assert_eq!(fixture.reopen().records().stream("audit").unwrap().keeps(), 30 * DAY);
 }
 
+// contract: REC-09
 #[test]
 fn another_keep_while_the_store_is_open_is_invalid_and_names_both() {
     let fixture = fixture();

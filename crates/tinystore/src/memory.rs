@@ -207,6 +207,7 @@ mod tests {
         assert!(memory.try_reserve(30, "records scan").is_ok());
     }
 
+    // contract: STORE-05
     #[test]
     fn a_request_larger_than_the_whole_budget_fails_without_waiting() {
         let memory = Memory::new(100);
@@ -216,6 +217,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
+    // contract: STORE-05
     #[test]
     fn a_waiting_reservation_takes_the_bytes_another_gives_back() {
         let memory = Memory::new(100);
@@ -253,6 +255,7 @@ mod tests {
         assert_eq!(memory.used(), 0);
     }
 
+    // contract: STORE-05
     #[test]
     fn shrinking_gives_back_the_difference() {
         let memory = Memory::new(100);

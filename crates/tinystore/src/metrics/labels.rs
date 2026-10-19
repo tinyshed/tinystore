@@ -255,6 +255,7 @@ mod tests {
         pairs.iter().map(|(label, value)| ((*label).to_owned(), (*value).to_owned())).collect()
     }
 
+    // contract: MET-02
     #[test]
     fn a_series_is_its_name_and_its_labels_in_any_order() {
         let one = Kept::of("cpu", &labels(&[("zone", "a"), ("host", "web-1"), ("Region", "eu")])).unwrap();

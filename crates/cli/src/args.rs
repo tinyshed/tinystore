@@ -351,6 +351,7 @@ mod tests {
         text.split_whitespace().map(str::to_owned).collect()
     }
 
+    // contract: CLI-02
     #[test]
     fn a_misspelt_flag_is_told_its_nearest_and_every_flag_named_is_one() {
         assert_eq!(serve(&args("--dri d")).unwrap_err(), "no flag --dri; did you mean --dir?");

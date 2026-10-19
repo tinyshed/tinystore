@@ -120,6 +120,7 @@ mod tests {
         }
     }
 
+    // contract: ERR-04
     #[test]
     fn a_run_read_from_any_bytes_gives_its_samples_or_fails_corrupt() {
         for values in
@@ -132,6 +133,7 @@ mod tests {
         }
     }
 
+    // contract: ERR-04
     #[test]
     fn a_head_a_clock_and_a_directory_read_from_any_bytes_give_what_they_hold_or_fail_corrupt() {
         let points = run(|n| n as f64);

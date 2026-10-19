@@ -62,6 +62,7 @@ const NOTES: [(&str, &str); 2] = [
     ("0002_owner.sql", "alter table notes add column owner text;"),
 ];
 
+// contract: REPL-04, REPL-06
 #[test]
 fn a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -95,6 +96,7 @@ fn a_copy_is_its_home_at_each_commit_and_its_engines_read_it_and_write_nothing()
     home.close().unwrap();
 }
 
+// contract: REPL-05
 #[test]
 fn a_copy_takes_what_its_home_writes_next_its_caches_following() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -121,6 +123,7 @@ fn a_copy_takes_what_its_home_writes_next_its_caches_following() {
     home.close().unwrap();
 }
 
+// contract: DUR-08, REPL-04
 #[test]
 fn a_reader_of_a_copy_never_sees_half_a_commit() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -163,6 +166,7 @@ fn a_reader_of_a_copy_never_sees_half_a_commit() {
     home.close().unwrap();
 }
 
+// contract: REPL-07
 #[test]
 fn a_copy_refuses_an_entry_that_does_not_follow_and_takes_one_it_has_as_nothing() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -262,6 +266,7 @@ fn each_entry(home: &Path, mut apply: impl FnMut(&entry::Entry<'_>) -> crate::Re
     Log::read(&home.join(DIR).join("kv.db"), |entry| apply(&entry)).unwrap();
 }
 
+// contract: REPL-07
 #[test]
 fn a_copy_killed_between_a_commit_and_its_position_names_what_its_file_holds_and_writes_none_of_it_again() {
     let (home_dir, copy_dir, last) = a_home_and_a_copy();

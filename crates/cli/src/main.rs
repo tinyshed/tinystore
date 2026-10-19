@@ -102,6 +102,7 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    // contract: CLI-02
     #[test]
     fn a_misspelt_command_is_told_its_nearest_and_a_word_far_from_any_none() {
         let commands = help::first_words();

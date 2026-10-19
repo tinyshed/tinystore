@@ -101,6 +101,7 @@ fn a_read_comes_back_in_parts_each_value_bit_for_bit() {
     assert_eq!((pieces[0].kind.as_str(), &pieces[0].labels), ("gauge", &labels(&[("host", "a")])));
 }
 
+// contract: MET-04
 #[test]
 fn an_aggregate_and_the_newest_samples_answer_over_the_wire() {
     let dir = tempfile::tempdir().unwrap();
@@ -242,6 +243,7 @@ fn sent(client: &mut Client, stream: u32, batch: &MetricsBatch) -> Frame {
     client.next_on(stream)
 }
 
+// contract: MET-09
 #[test]
 fn an_instruments_batch_sent_again_on_another_connection_counts_once() {
     let dir = tempfile::tempdir().unwrap();

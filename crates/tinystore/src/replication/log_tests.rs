@@ -42,6 +42,7 @@ fn a_log_keeps_its_bounds_and_counts_on_past_the_segments_it_removed() {
     assert_eq!(*sequences.last().unwrap(), 600 + 2, "a beginning, the table and each insert");
 }
 
+// contract: REPL-04
 #[test]
 fn a_copy_takes_a_file_s_log_whole_with_no_engine_open() {
     let home = tempfile::tempdir().unwrap();

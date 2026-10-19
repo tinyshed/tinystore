@@ -6,6 +6,7 @@ use super::*;
 use crate::kv::fixture::*;
 use crate::{Error, ErrorKind, Options, Store};
 
+// contract: DUR-02
 #[test]
 fn a_transaction_commits_what_it_wrote_or_nothing() {
     let f = fixture();
@@ -50,6 +51,7 @@ fn a_transaction_reads_its_own_writes() {
     assert_eq!(seen, (Some("written".to_owned()), false));
 }
 
+// contract: KV-12
 #[test]
 fn of_two_transactions_taking_the_last_item_one_gets_it() {
     let f = fixture();
@@ -83,6 +85,7 @@ fn of_two_transactions_taking_the_last_item_one_gets_it() {
     assert_eq!(orders.all().count(), 1);
 }
 
+// contract: DUR-07
 #[test]
 fn a_call_made_around_a_transaction_from_inside_it_fails_rather_than_waits() {
     let f = fixture();
@@ -141,6 +144,7 @@ fn a_handle_of_another_store_is_refused() {
     other.close().unwrap();
 }
 
+// contract: DUR-02
 #[test]
 fn a_key_call_inside_a_transaction_commits_with_it() {
     let f = fixture();

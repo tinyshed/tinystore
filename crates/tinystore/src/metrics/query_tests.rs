@@ -97,6 +97,7 @@ fn a_range_is_its_start_to_its_end_excluded_or_now_included() {
     assert_eq!(values(query().since(Duration::ZERO).read().unwrap()), Vec::<f64>::new());
 }
 
+// contract: ERR-01, ERR-05, MET-07
 #[test]
 fn a_read_past_a_bound_is_a_limit_naming_it() {
     let f = fixture();
