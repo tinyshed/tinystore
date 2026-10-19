@@ -48,7 +48,7 @@ tracing::warn!(route = "/notes", ms = 1200, "slow request");
 let span = tracing::info_span!("request", request_id = %request_id).entered(); // its lines carry it
 ```
 
-```text
+```log
 16:42:24.094 INFO  api  signed in  user=42
 16:42:24.094 WARN  api  slow request  requestId=r-1 route=/notes ms=1200
 ```
@@ -122,7 +122,7 @@ log.dropped();
 `redact` hides a value wherever its key names a secret, on the console and in
 the store, at any depth:
 
-```text
+```json
 {"msg":"signed in","user":42,"apiKey":"[redacted]","url":"postgres://u:[redacted]@h/db"}
 ```
 

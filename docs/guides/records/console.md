@@ -4,7 +4,7 @@ A logger prints each line to standard error, pretty on a terminal and as JSON
 anywhere else, so a developer reads it and a log collector parses it. Every
 language prints the same bytes for the same line.
 
-```text
+```log
 16:42:24.094 INFO  api  signed in  user=42
 16:42:24.094 WARN  api  slow request  requestId=r-1 route=/notes ms=1200
 16:42:24.094 ERROR api  charge failed  order=7
@@ -12,7 +12,7 @@ language prints the same bytes for the same line.
         at charge (billing.ts:41:9)
 ```
 
-```text
+```json
 {"time":"2026-10-19T16:42:24.094Z","level":"INFO","stream":"api","msg":"signed in","user":42}
 ```
 

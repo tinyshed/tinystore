@@ -25,3 +25,6 @@ reading it while it runs, backups and nodes.
 
 Every engine opens from the store, which [Your first
 store](../handbook/start/first-store.md) opens in each language.
+A program reaches the store in its own process, through a sidecar, a private
+child or a server on another machine: [Connecting](connecting.md) compares
+the four.

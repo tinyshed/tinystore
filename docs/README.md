@@ -81,7 +81,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Engines
 
 - [All engines](guides/README.md)
-- Connecting
+- [Connecting](guides/connecting.md)
 
 ### SQL
 
@@ -190,12 +190,12 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Command line
 
 - [Overview](guides/cli/README.md)
-- serve
-- status and logs
-- kv, sql and schema
-- Backup and restore
-- Nodes
-- AI agents
+- [serve](guides/cli/serve.md)
+- [status and logs](guides/cli/status-and-logs.md)
+- [kv, sql and schema](guides/cli/kv-sql-schema.md)
+- [Backup and restore](guides/cli/backup.md)
+- [Nodes](guides/cli/nodes.md)
+- [AI agents](guides/cli/mcp.md)
 
 ## Reference
 
