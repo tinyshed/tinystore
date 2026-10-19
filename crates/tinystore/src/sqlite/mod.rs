@@ -62,7 +62,6 @@ pub(crate) use migrate::Migration;
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
 pub(crate) use pages::{Chunk, Pages, Snapshot};
 pub(crate) use prefix::{TextBytes, prefix_end};
-#[cfg(feature = "replication")]
 pub(crate) use readers::Readers;
 pub(crate) use settle::{Left, Settle, Settlers};
 

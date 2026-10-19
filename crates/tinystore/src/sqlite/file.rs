@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
@@ -13,6 +14,7 @@ use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Committed, Config, Left, Settle, Settlers, Tx};
+use crate::probe::FileProbe;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
@@ -125,9 +127,13 @@ impl File {
         }
         let settlers = Arc::new(Settlers::default());
         let capture: Logged = Arc::new(std::sync::RwLock::new(capture));
+        let readers = Arc::new(Readers::new(path.clone(), Arc::clone(&config)));
+        if let Some(probe) = &config.probe {
+            probe.opened(path.clone(), Arc::downgrade(&readers));
+        }
         Ok(Self {
-            group: Group::new(config.group, Arc::clone(&settlers), Arc::clone(&capture)),
-            readers: Arc::new(Readers::new(path.clone(), Arc::clone(&config))),
+            group: Group::new(config.group, Arc::clone(&settlers), Arc::clone(&capture), config.probe.clone()),
+            readers,
             writer,
             path,
             closed: AtomicBool::new(false),
@@ -210,8 +216,10 @@ impl File {
         if self.is_copy() {
             return self.as_a_copy(work);
         }
+        let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
         let connection = lock(&self.writer);
-        self.transaction_on(&connection, work)
+        let waited = queued.map(|queued| queued.elapsed());
+        self.transaction_on(&connection, waited, work)
     }
 
     /// Runs what would write the file, on a copy, in one snapshot of a reader:
@@ -229,9 +237,12 @@ impl File {
         outcome.expect("the read ran")
     }
 
+    /// `waited` is how long the transaction waited for the writer, when it
+    /// is measured.
     fn transaction_on<T, E: From<Error>>(
         &self,
         connection: &Connection,
+        waited: Option<Duration>,
         work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
         self.refuse_when_unlogged()?;
@@ -244,7 +255,7 @@ impl File {
         let value = work(&tx)?;
         tx.settle(Left::Here)?;
         open.finished = true;
-        let handed = self.commit(connection);
+        let handed = self.commit(connection, waited);
         if in_the_file(&handed) {
             committed.run();
         }
@@ -252,13 +263,19 @@ impl File {
     }
 
     /// Commits the transaction on `connection`; a commit that fails may or may
-    /// not be in the file.
-    fn commit(&self, connection: &Connection) -> Result<()> {
+    /// not be in the file. One that waited `waited` for the writer is told to
+    /// the probe.
+    fn commit(&self, connection: &Connection, waited: Option<Duration>) -> Result<()> {
         let capture = logged(&self.capture);
         if let Some(capture) = &capture {
             capture.arm(!super::capture::is_own_work());
         }
-        execute(connection, COMMIT).map_err(|error| {
+        let started = Instant::now();
+        let committed = execute(connection, COMMIT);
+        if let (Some(probe), Some(waited), true) = (&self.config.probe, waited, committed.is_ok()) {
+            probe.committed(started.elapsed(), &[waited]);
+        }
+        committed.map_err(|error| {
             if !connection.is_autocommit() {
                 let _ = execute(connection, ROLLBACK);
             }
@@ -296,10 +313,12 @@ impl File {
         if self.is_copy() {
             return Err(a_copy_takes_no_transaction(&self.describe()));
         }
+        let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
         let connection = lock(&self.writer);
+        let waited = queued.map(|queued| queued.elapsed());
         self.refuse_when_unlogged()?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
-        let begun = Begun { file: self, connection, hooks: Committed::default(), committed: false };
+        let begun = Begun { file: self, connection, hooks: Committed::default(), committed: false, waited };
         begun.tx().settle(Left::Before)?;
         Ok(begun)
     }
@@ -372,7 +391,7 @@ impl File {
         // foreign_keys cannot change inside a transaction, so it changes around one.
         execute(&connection, FOREIGN_KEYS_OFF).map_err(|error| sql_error(what(), error))?;
         let applied = own_work(|| {
-            self.transaction_on(&connection, |tx| {
+            self.transaction_on(&connection, None, |tx| {
                 migrate::apply(tx, history, migrations)?;
                 migrate::check_foreign_keys(tx, history)
             })
@@ -538,6 +557,8 @@ pub(crate) struct Begun<'f> {
     connection: MutexGuard<'f, Connection>,
     hooks: Committed,
     committed: bool,
+    /// How long it waited for the writer, when it is measured.
+    waited: Option<Duration>,
 }
 
 impl Begun<'_> {
@@ -555,7 +576,7 @@ impl Begun<'_> {
     pub(crate) fn commit(mut self) -> Result<()> {
         self.tx().settle(Left::Here)?;
         self.committed = true;
-        let handed = self.file.commit(&self.connection);
+        let handed = self.file.commit(&self.connection, self.waited);
         if in_the_file(&handed) {
             self.hooks.run();
         }

@@ -172,6 +172,14 @@ module defines.
 - a name's labels and a label's values come in order by prefix and page, a value going with the last series that held it, the store's own never among them — `a_names_labels_and_a_labels_values_come_in_order_by_prefix_and_page`, `the_stores_own_labels_are_not_among_a_names_labels`, `a_page_past_its_bounds_is_refused` in `metrics::listing`
 - a delete takes exactly one series, of the store's own labels too, an instrument that writes it again starts a new one, and its name's newest time is found again among the rest — `a_name_whose_newest_series_is_deleted_finds_its_newest_among_the_rest`, `a_series_of_the_stores_own_labels_and_one_an_instrument_writes_again_are_deleted`, `a_delete_names_its_series_and_refuses_what_no_series_is` in `metrics::delete`
 
+## The store's own metrics
+
+- a store opened with `self_metrics` counts its commits, their writes, their time and each write's wait by file, and the metrics engine's writes of its totals count nothing — `a_store_measured_counts_its_commits_and_its_own_writes_of_them_count_nothing`, `every_file_is_measured_by_its_own_label` in `metrics::own`
+- a store opened without holds none of its own names — `a_store_not_measured_holds_none_of_its_own_names` in `metrics::own`
+- a name that starts with `tinystore_` is refused from the program's instruments and its ingest — `a_name_of_the_stores_own_is_refused_from_the_program` in `metrics::own`
+- what the store measured is kept through its close, the next run starting from a zero — `what_the_store_measured_is_kept_through_its_close_and_counted_on_after` in `metrics::own`
+- a failure of periodic work counts by its task, and a database past the 32 named counts into `sql/__overflow` — `a_failure_of_periodic_work_is_counted_by_its_task`, `a_database_past_those_named_counts_into_the_overflow` in `metrics::own`
+
 ## Records
 
 - a log line never waits for the file: a full buffer drops it and counts it — `a_full_buffer_drops_a_line_counts_it_and_a_flush_says_so_once_in_ten_minutes` in `records::logger`

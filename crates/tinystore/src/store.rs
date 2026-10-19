@@ -3,7 +3,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "sql",
+    feature = "records",
+    feature = "metrics",
+    feature = "replication"
+))]
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +19,7 @@ use std::time::{Duration, SystemTime};
 #[cfg(feature = "kv")]
 use crate::encryption::{self, EncryptionKey};
 use crate::engine::{Claim, Engine, Host, Wake};
+use crate::probe::Probe;
 use crate::schedule::Scheduler;
 #[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::sqlite::File as EngineFile;
@@ -45,6 +53,11 @@ pub struct Options {
     /// other nodes to copy; `None` is a store alone.
     #[cfg(feature = "replication")]
     pub node: Option<crate::replication::Node>,
+    /// Measures the store into its own `metrics.db`, under names that start
+    /// with `tinystore_`: its commits, their waits, its files and its memory,
+    /// as plan/self-metrics.md lists them. Off unless asked for.
+    #[cfg(feature = "metrics")]
+    pub self_metrics: bool,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
@@ -61,6 +74,8 @@ impl Default for Options {
             encryption_key_file: None,
             #[cfg(feature = "replication")]
             node: None,
+            #[cfg(feature = "metrics")]
+            self_metrics: false,
         }
     }
 }
@@ -77,6 +92,8 @@ impl fmt::Debug for Options {
             .field("encryption_key_file", &self.encryption_key_file);
         #[cfg(feature = "replication")]
         let f = f.field("node", &self.node);
+        #[cfg(feature = "metrics")]
+        let f = f.field("self_metrics", &self.self_metrics);
         f.finish()
     }
 }
@@ -92,19 +109,47 @@ pub struct Store {
 /// A store that its engines reach without keeping it open: an engine holds
 /// this, so that dropping the application's last handle closes the store.
 #[derive(Clone, Debug)]
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "sql",
+    feature = "records",
+    feature = "metrics",
+    feature = "replication"
+))]
 pub(crate) struct WeakStore(
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication", feature = "search")),
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "replication",
+            feature = "search"
+        )),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     Weak<Inner>,
 );
 
-#[cfg(any(feature = "kv", feature = "jobs", feature = "sql", feature = "records", feature = "replication"))]
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "sql",
+    feature = "records",
+    feature = "metrics",
+    feature = "replication"
+))]
 impl WeakStore {
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "records", feature = "replication", feature = "search")),
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "records",
+            feature = "metrics",
+            feature = "replication",
+            feature = "search"
+        )),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
     pub(crate) fn upgrade(&self) -> Option<Store> {
@@ -120,6 +165,9 @@ struct Inner {
     lock: Mutex<Option<File>>,
     clock: Arc<dyn Clock>,
     memory: Arc<Memory>,
+    /// What the store measures of itself goes through, heard only when it
+    /// was opened with `self_metrics`.
+    probe: Arc<Probe>,
     scheduler: Scheduler,
     engines: Mutex<Vec<Arc<dyn Engine>>>,
     /// The engine of each kind this store has open, which every handle of that
@@ -186,11 +234,15 @@ impl Store {
 
     fn open_with(dir: PathBuf, options: Options, lock: Option<File>) -> Result<Store> {
         let beside = lock.is_none();
+        #[cfg(feature = "metrics")]
+        let self_metrics = options.self_metrics && !beside;
+        let probe = Arc::new(Probe::default());
         let inner = Inner {
             lock: Mutex::new(lock),
             clock: options.clock.unwrap_or_else(|| Arc::new(SystemClock)),
             memory: Memory::new(options.memory.unwrap_or(u64::MAX)),
-            scheduler: Scheduler::new(options.background),
+            scheduler: Scheduler::new(options.background, Arc::clone(&probe)),
+            probe,
             engines: Mutex::new(Vec::new()),
             open: Mutex::new(HashMap::new()),
             claims: Arc::default(),
@@ -215,6 +267,11 @@ impl Store {
         #[cfg(feature = "replication")]
         if let Some(node) = &store.inner.node {
             node.start(&store)?;
+        }
+        // before any engine, so that every file is measured from its first commit
+        #[cfg(feature = "metrics")]
+        if self_metrics {
+            crate::metrics::measure_the_store(&store)?;
         }
         Ok(store)
     }
@@ -244,7 +301,8 @@ impl Store {
     )]
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
-        let config = crate::sqlite::Config { memory: Some(Arc::clone(&self.inner.memory)), ..config };
+        let probe = Some(self.inner.probe.for_file(crate::probe::label(name)));
+        let config = crate::sqlite::Config { memory: Some(Arc::clone(&self.inner.memory)), probe, ..config };
         if self.inner.beside {
             if !path.exists() {
                 return Err(Error::not_found(format!("{}: it holds no {name}", self.describe())));
@@ -422,6 +480,12 @@ impl Store {
         &self.inner.memory
     }
 
+    /// What the store measures of itself goes through.
+    #[cfg(feature = "metrics")]
+    pub(crate) fn probe(&self) -> &Arc<Probe> {
+        &self.inner.probe
+    }
+
     /// Stops background work, waiting for the task under way, closes every
     /// engine, the last opened first, and lets go of the directory. The first
     /// engine that fails to close is the error; the others still close. A
@@ -447,7 +511,7 @@ impl Store {
         Arc::clone(&self.inner.clock)
     }
 
-    #[cfg(any(feature = "kv", feature = "sql", feature = "records", feature = "replication"))]
+    #[cfg(any(feature = "kv", feature = "sql", feature = "records", feature = "metrics", feature = "replication"))]
     pub(crate) fn downgrade(&self) -> WeakStore {
         WeakStore(Arc::downgrade(&self.inner))
     }

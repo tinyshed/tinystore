@@ -59,6 +59,11 @@ impl Engine {
     /// of themselves.
     pub(super) fn write_totals(&self) -> Result<()> {
         let _one = lock(&self.writing);
+        self.before_write();
+        crate::probe::unmeasured(|| self.write_totals_now())
+    }
+
+    fn write_totals_now(&self) -> Result<()> {
         let now = self.now();
         let planned = self.totals.collect(now);
         let described = self.totals.take_descriptions();

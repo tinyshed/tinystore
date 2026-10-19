@@ -11,6 +11,7 @@ use super::capture::{Capture, Logged, in_the_file, logged};
 use super::connection::{execute, sql_error};
 use super::given::own;
 use super::{Committed, GroupLimits, Left, Settlers, Tx};
+use crate::probe::FileProbe;
 use crate::{Error, ErrorKind, Result};
 
 pub(crate) type Work = Box<dyn FnOnce(&Tx<'_>) -> Result<()> + Send>;
@@ -57,6 +58,7 @@ pub(crate) struct Group {
     commits: AtomicU64,
     settlers: Arc<Settlers>,
     capture: Logged,
+    probe: Option<FileProbe>,
 }
 
 #[derive(Default)]
@@ -79,6 +81,8 @@ struct Queue {
 /// One caller's write, from its queueing to its answer.
 struct Write {
     bytes: usize,
+    /// When it was queued, if it is measured.
+    queued: Option<Instant>,
     /// Queued by a caller who waits for it, not by the store's own work.
     for_a_caller: bool,
     work: Mutex<Option<Work>>,
@@ -102,9 +106,9 @@ struct Answer {
 }
 
 impl Group {
-    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>, capture: Logged) -> Self {
+    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>, capture: Logged, probe: Option<FileProbe>) -> Self {
         let queue = Mutex::new(Queue::default());
-        Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers, capture }
+        Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers, capture, probe }
     }
 
     #[cfg(test)]
@@ -124,7 +128,7 @@ impl Group {
     /// write heavier than the group's bytes commits alone. A failed commit fails
     /// every write that ran in it with `OutcomeUnknown`.
     pub(crate) fn write(&self, writer: &Mutex<Connection>, bytes: usize, work: Work) -> Result<()> {
-        let write = Arc::new(Write::new(bytes, work));
+        let write = Arc::new(Write::new(bytes, work, self.queued()));
         let leads = self.enqueue(&write)?;
         if leads || write.wait_for_turn() {
             self.lead(writer, Some(&write));
@@ -136,12 +140,16 @@ impl Group {
     /// its commit ends. When no commit runs, this caller's thread commits the
     /// queue first, as long as submitted writes keep arriving at its front.
     pub(crate) fn submit(&self, writer: &Mutex<Connection>, bytes: usize, work: Work, done: Done) {
-        let write = Arc::new(Write::submitted(bytes, work, done));
+        let write = Arc::new(Write::submitted(bytes, work, done, self.queued()));
         match self.enqueue(&write) {
             Ok(true) => self.lead(writer, None),
             Ok(false) => {}
             Err(error) => write.answer(Err(error), Vec::new()),
         }
+    }
+
+    fn queued(&self) -> Option<Instant> {
+        self.probe.as_ref().and_then(FileProbe::queued)
     }
 
     /// Refuses new writes and answers those still waiting; a commit under way
@@ -183,12 +191,14 @@ impl Group {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();
+            let waits = waits(&batch, started);
             // read while the writer is held, which a change of the file's home holds too
             let capture = logged(&self.capture);
             // A panic past the writes' own savepoints, in a settler or a hook,
             // must still reach `hand_off`, or no thread leads again.
+            let committing = (&*self.settlers, capture.as_deref());
             let answers =
-                catch_unwind(AssertUnwindSafe(|| commit(&connection, &batch, &self.settlers, capture.as_deref())))
+                catch_unwind(AssertUnwindSafe(|| commit(&connection, &batch, committing, &waits, self.probe.as_ref())))
                     .unwrap_or_else(|_| {
                         if !connection.is_autocommit() {
                             let _ = execute(&connection, ROLLBACK);
@@ -270,14 +280,14 @@ impl Group {
 }
 
 impl Write {
-    fn new(bytes: usize, work: Work) -> Self {
+    fn new(bytes: usize, work: Work, queued: Option<Instant>) -> Self {
         let (done, turn) = (Mutex::new(None), Mutex::new(Turn::Waiting));
         let for_a_caller = !super::capture::is_own_work();
-        Self { bytes, for_a_caller, work: Mutex::new(Some(work)), done, turn, changed: Condvar::new() }
+        Self { bytes, queued, for_a_caller, work: Mutex::new(Some(work)), done, turn, changed: Condvar::new() }
     }
 
-    fn submitted(bytes: usize, work: Work, done: Done) -> Self {
-        Self { done: Mutex::new(Some(done)), ..Self::new(bytes, work) }
+    fn submitted(bytes: usize, work: Work, done: Done, queued: Option<Instant>) -> Self {
+        Self { done: Mutex::new(Some(done)), ..Self::new(bytes, work, queued) }
     }
 
     fn is_submitted(&self) -> bool {
@@ -374,14 +384,23 @@ fn answer_in_halves(mut callers: Vec<(Arc<Write>, Result<()>)>) {
     }
 }
 
+/// How long each measured write of a batch waited for the commit that began
+/// at `started`.
+fn waits(batch: &[Arc<Write>], started: Instant) -> Vec<Duration> {
+    batch.iter().filter_map(|write| write.queued).map(|queued| started.saturating_duration_since(queued)).collect()
+}
+
 /// Runs a batch in one transaction, each write in a savepoint, and says how
 /// each one ended. What the writes that succeeded asked to run once they
-/// commit runs after the commit, in their order, the writer still held.
+/// commit runs after the commit, in their order, the writer still held. A
+/// commit that holds measured writes, whose `waits` are given, is told to the
+/// probe.
 fn commit(
     connection: &Connection,
     batch: &[Arc<Write>],
-    settlers: &Settlers,
-    capture: Option<&Capture>,
+    (settlers, capture): (&Settlers, Option<&Capture>),
+    waits: &[Duration],
+    probe: Option<&FileProbe>,
 ) -> Vec<Result<()>> {
     if batch.is_empty() {
         return Vec::new();
@@ -411,7 +430,12 @@ fn commit(
     if let Some(capture) = capture {
         capture.arm(batch.iter().any(|write| write.for_a_caller));
     }
-    let Err(error) = execute(connection, COMMIT) else {
+    let started = Instant::now();
+    let finished = execute(connection, COMMIT);
+    if let (Some(probe), true) = (probe, finished.is_ok()) {
+        probe.committed(started.elapsed(), waits);
+    }
+    let Err(error) = finished else {
         let handed = capture.map_or(Ok(()), |capture| capture.committed(connection));
         if in_the_file(&handed) {
             committed.run();

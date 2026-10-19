@@ -53,6 +53,7 @@ mod listing;
 mod maintain;
 mod matching;
 mod names;
+mod own;
 mod pack;
 mod publish;
 mod query;
@@ -85,6 +86,7 @@ pub use instruments::{Builder, Counter, Gauge, GaugeFunc, Histogram, Reading, Ti
 pub use latest::Latest;
 pub use listing::{LabelPage, List, NameInfo, NamePage, ValuePage};
 pub use maintain::{Maintenance, maintain};
+pub(crate) use own::measure_the_store;
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use recorder::Recorder;
 #[cfg(feature = "wire")]

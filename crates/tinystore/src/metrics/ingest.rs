@@ -107,6 +107,7 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
     let (mut gathered, mut samples, mut bytes) = (BTreeMap::new(), 0, 0);
     for given in series {
         let named = || format!("metrics {given}");
+        super::instruments::refuse_the_stores_own(&given.name).map_err(|error| error.within(named()))?;
         let labels = bounded(given).map_err(|error| error.within(named()))?;
         let kept = Kept::of(&given.name, &labels).map_err(|error| error.within(named()))?;
         if given.samples.is_empty() {

@@ -3,6 +3,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::probe::Probe;
 use crate::{Error, Result};
 
 type Work = Box<dyn FnMut() -> Result<()> + Send>;
@@ -18,6 +19,8 @@ pub(crate) struct Scheduler {
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
+    /// Told of each failure, when the store measures itself.
+    probe: Arc<Probe>,
 }
 
 #[derive(Default)]
@@ -72,9 +75,9 @@ impl Wake {
 }
 
 impl Scheduler {
-    pub(crate) fn new(background: bool) -> Self {
+    pub(crate) fn new(background: bool, probe: Arc<Probe>) -> Self {
         Self {
-            shared: Arc::new(Shared { state: Mutex::new(State::default()), changed: Condvar::new() }),
+            shared: Arc::new(Shared { state: Mutex::new(State::default()), changed: Condvar::new(), probe }),
             thread: Mutex::new(None),
             background,
         }
@@ -162,6 +165,9 @@ impl Shared {
             .unwrap_or_else(|_| Err(Error::internal("it panicked")));
         let mut state = self.lock();
         let task = &mut state.tasks[due];
+        if outcome.is_err() {
+            self.probe.failed(&task.name);
+        }
         task.report(outcome);
         task.work = Some(work);
         let wait = if std::mem::take(&mut task.woken) { Duration::ZERO } else { task.period };
@@ -230,7 +236,7 @@ mod tests {
 
     #[test]
     fn work_runs_every_period_until_the_scheduler_stops() {
-        let scheduler = Scheduler::new(true);
+        let scheduler = Scheduler::new(true, Arc::default());
         let (runs, work) = counting();
         scheduler.add("test: tick", Duration::from_millis(5), work).unwrap();
         assert!(wait_until(|| runs.load(Ordering::SeqCst) >= 3));
@@ -242,7 +248,7 @@ mod tests {
 
     #[test]
     fn without_background_work_nothing_runs_and_no_thread_starts() {
-        let scheduler = Scheduler::new(false);
+        let scheduler = Scheduler::new(false, Arc::default());
         let (runs, work) = counting();
         scheduler.add("test: tick", Duration::from_millis(1), work).unwrap();
         thread::sleep(Duration::from_millis(20));
@@ -252,7 +258,7 @@ mod tests {
 
     #[test]
     fn a_task_that_panics_keeps_running_on_its_period() {
-        let scheduler = Scheduler::new(true);
+        let scheduler = Scheduler::new(true, Arc::default());
         let runs = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&runs);
         let work: Work = Box::new(move || {
@@ -268,7 +274,7 @@ mod tests {
 
     #[test]
     fn a_woken_task_runs_before_its_period_and_again_when_woken_while_it_runs() {
-        let scheduler = Scheduler::new(true);
+        let scheduler = Scheduler::new(true, Arc::default());
         let (started, finished) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let (counter, done) = (Arc::clone(&started), Arc::clone(&finished));
         let work: Work = Box::new(move || {
@@ -289,7 +295,7 @@ mod tests {
 
     #[test]
     fn a_wake_without_background_work_does_nothing() {
-        let scheduler = Scheduler::new(false);
+        let scheduler = Scheduler::new(false, Arc::default());
         let (runs, work) = counting();
         scheduler.add("test: tick", Duration::from_millis(1), work).unwrap().wake();
         thread::sleep(Duration::from_millis(20));
@@ -298,7 +304,7 @@ mod tests {
 
     #[test]
     fn work_added_after_stop_is_refused() {
-        let scheduler = Scheduler::new(true);
+        let scheduler = Scheduler::new(true, Arc::default());
         scheduler.stop();
         let (_, work) = counting();
         let error = scheduler.add("test: late", Duration::from_millis(5), work).unwrap_err();

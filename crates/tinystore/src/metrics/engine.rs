@@ -10,7 +10,7 @@
 //! ```
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rusqlite::types::FromSql;
@@ -58,11 +58,27 @@ pub(crate) struct Engine {
     pub(super) totals: Arc<Totals>,
     /// Held by a write of the totals, so that two never write at once.
     pub(super) writing: Mutex<()>,
+    /// Run as each write of the totals begins: the store's own gauges read.
+    before_write: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// The sessions of clients' instruments: the last batch each applied.
     #[cfg(feature = "wire")]
     pub(super) sessions: Sessions,
     closed: AtomicBool,
     _claim: Claim,
+}
+
+impl Engine {
+    /// Runs `work` as each write of the totals begins, before it collects
+    /// them; a second is ignored, as the store has one listener.
+    pub(super) fn before_each_write(&self, work: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.before_write.set(work);
+    }
+
+    pub(super) fn before_write(&self) {
+        if let Some(work) = self.before_write.get() {
+            work();
+        }
+    }
 }
 
 impl crate::engine::Engine for Engine {
@@ -119,6 +135,7 @@ impl Engine {
                 pack_cursor: AtomicI64::new(0),
                 wake: Mutex::default(),
                 writing: Mutex::default(),
+                before_write: OnceLock::new(),
                 #[cfg(feature = "wire")]
                 sessions: Sessions::default(),
                 closed: AtomicBool::new(false),

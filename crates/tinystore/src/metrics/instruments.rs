@@ -77,6 +77,8 @@ pub struct Builder<T> {
     /// The set of labels a gauge's function reads.
     labels: Labels,
     owner: u64,
+    /// One of the store's own, whose name may start with `tinystore_`.
+    own: bool,
     made: PhantomData<fn() -> T>,
 }
 
@@ -149,6 +151,7 @@ impl<T> Builder<T> {
             read: None,
             labels: Labels::new(),
             owner: LOCAL,
+            own: false,
             made: PhantomData,
         }
     }
@@ -162,6 +165,12 @@ impl<T> Builder<T> {
     /// How long its name's samples stay, as `ingest` takes it.
     pub fn keep(mut self, keep: Duration) -> Self {
         self.keep = Some(keep);
+        self
+    }
+
+    /// One of the store's own instruments.
+    pub(super) fn own(mut self) -> Self {
+        self.own = true;
         self
     }
 
@@ -281,6 +290,9 @@ impl Engine {
     /// the file holds of its names, the instrument the store holds of its
     /// name, and its names settled with their keep.
     fn open_instrument<T>(&self, builder: &mut Builder<T>) -> Result<Arc<Instrument>> {
+        if !builder.own {
+            refuse_the_stores_own(&builder.name)?;
+        }
         let bounds = builder.buckets.as_ref().map(Bounds::of).transpose()?;
         check_description(builder)?;
         let keep = builder.keep.map(checked_keep).transpose()?;
@@ -538,3 +550,14 @@ impl fmt::Debug for Timing {
 #[cfg(test)]
 #[path = "instruments_tests.rs"]
 mod tests;
+
+/// Refuses a name of the store's own, `tinystore_…`, from the program.
+pub(super) fn refuse_the_stores_own(name: &str) -> Result<()> {
+    if name.starts_with(super::own::PREFIX) {
+        return Err(Error::invalid(format!(
+            "{name}: a name that starts with {} is the store's own, which it writes when opened with self_metrics",
+            super::own::PREFIX
+        )));
+    }
+    Ok(())
+}

@@ -980,8 +980,8 @@ snapshot. A program meets them only as the bounds above. `durability` is the
 store's, `'os'` for this file unless it says `'full'`.
 
 Names that start with `tinystore_` are the store's own: the store writes
-there what it measures of itself, its writers' waits, its queues' depths,
-its expirations (Dashbin's A10, phase 4). A label that starts with `__` is
+there what it measures of itself when it is opened with `self_metrics`, as
+[self-metrics.md](../self-metrics.md) says. A label that starts with `__` is
 the store's too.
 
 ## Gates the engine adds

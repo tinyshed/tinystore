@@ -41,6 +41,8 @@ mod memory;
 pub mod metrics;
 #[cfg(feature = "wire")]
 pub mod pipe;
+#[cfg(feature = "store")]
+mod probe;
 #[cfg(feature = "records")]
 pub mod records;
 #[cfg(feature = "replication")]
@@ -49,7 +51,7 @@ pub mod replication;
 mod schedule;
 #[cfg(feature = "search")]
 pub mod search;
-#[cfg(any(feature = "blobs", feature = "replication"))]
+#[cfg(any(feature = "blobs", feature = "metrics", feature = "replication"))]
 mod space;
 #[cfg(feature = "sql")]
 pub mod sql;

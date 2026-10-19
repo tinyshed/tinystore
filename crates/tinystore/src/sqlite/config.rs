@@ -27,6 +27,8 @@ pub(crate) struct Config {
     pub(crate) keep_wal: bool,
     /// The store's memory, which a capture's reads of the WAL count against.
     pub(crate) memory: Option<std::sync::Arc<crate::Memory>>,
+    /// What the file tells of its commits, when the store measures itself.
+    pub(crate) probe: Option<crate::probe::FileProbe>,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             group: GroupLimits::default(),
             keep_wal: false,
             memory: None,
+            probe: None,
         }
     }
 }
