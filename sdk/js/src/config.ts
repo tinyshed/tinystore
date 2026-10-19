@@ -1,4 +1,4 @@
-// A program's settings as one typed value, as plan/api/config.md has it: a
+// A program's settings as one typed value, as docs/guides/config/README.md has it: a
 // declaration, then objects, files and the environment in the order the
 // program writes them, each declaring again what came before, and the live
 // settings' changes, which the store keeps and every process sees. The core
@@ -32,7 +32,7 @@ const layerMark = '~layer'
 /** The tries a change makes while other changes race it. */
 const attempts = 8
 
-// The declaration as the core reads it: plan/api/config.md, and
+// The declaration as the core reads it: docs/guides/config/README.md, and
 // crates/tinystore/src/kv/config/data.rs, which reads this JSON.
 type Kind =
 	| 'text'

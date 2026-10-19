@@ -7,10 +7,10 @@ description: Use when building or changing a TinyStore SDK (sdk/js for Bun and N
 
 An SDK is the protocol's client and nothing more: every call is a message the
 core answers, so a behaviour is the core's, and an SDK only says it in its
-language. Read [plan/protocol.md](../../../plan/protocol.md),
-[plan/ffi.md](../../../plan/ffi.md) and [docs/wire.md](../../../docs/wire.md)
-first, and the engine's book in `plan/api/` for its call sites in every
-language.
+language. Read [docs/wire.md](../../../docs/wire.md) and
+[protocol/README.md](../../../protocol/README.md) first, and the engine's
+guide in `docs/guides/` and its pages in `docs/reference/` for its call sites
+in every language.
 
 | SDK    | Where        | Its core in the process                                       |
 |--------|--------------|---------------------------------------------------------------|

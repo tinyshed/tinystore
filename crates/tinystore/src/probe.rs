@@ -1,7 +1,7 @@
-//! What the store measures of itself, plan/self-metrics.md: each file tells
+//! What the store measures of itself, docs/guides/metrics/self-metrics.md: each file tells
 //! the store's probe of its commits, its periodic work of its failures, and
 //! each engine of what it counts and times by the names
-//! plan/self-metrics.md lists. Nobody listens unless the store was opened
+//! docs/guides/metrics/self-metrics.md lists. Nobody listens unless the store was opened
 //! with `self_metrics`, and then it is the metrics engine, which no engine
 //! names: the probe is the root's, so that no engine imports another.
 //!

@@ -1,4 +1,4 @@
-"""jobs as plan/api/jobs.md has it, through each way a store is reached.
+"""jobs as docs/guides/jobs/README.md has it, through each way a store is reached.
 
 Ids, answers, steps, progress, cancels, schedules, pages, concurrency and
 dedupe, the handlers running here while the store's loop claims their jobs.

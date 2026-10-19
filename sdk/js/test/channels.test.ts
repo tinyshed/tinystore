@@ -1,4 +1,4 @@
-// Channels as plan/api/channels.md has them, through each way a store is
+// Channels as docs/guides/channels/README.md has them, through each way a store is
 // reached: messages to whoever listens now, in order, a branch and the ones
 // below it, a transaction's messages handed over once it commits, and a slow
 // handler told what it missed.

@@ -1,4 +1,4 @@
-"""Channels as plan/api/channels.md has them, through each way a store is reached.
+"""Channels as docs/guides/channels/README.md has them, through each way a store is reached.
 
 Messages published on a branch and received by whoever listens now, in
 order, a loop over them, a transaction's messages handed over at its commit,

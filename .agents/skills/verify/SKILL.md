@@ -20,14 +20,17 @@ which checks ran, where, and which could not.
   and new files included, in minutes: formatting, clippy, the tests of each
   area touched, every lint set that names it, and each SDK the change
   reaches. Its table of what runs for what is at the top of
-  `tools/quick.ts`. Commits pile up locally on it.
+  `tools/quick.ts`. Then commit and push: the owner does not wait on a
+  local full run.
 
-## Before every push
+## After the push
 
-- `just check`: formatting, clippy and every feature set, every crate's
-  tests, the protocol's files, the Bun SDK's suites under Bun and under
-  Node, Go's and Python's, their lint and types, and the workflows: half an
-  hour, once for the commits a push carries.
+- CI is the full run: `gh run list --branch main`, then `gh run view <id>
+  --log-failed` for what failed, fixed in the next commit. A push cancels
+  the run before it on the same branch, and a change of `docs/`, `web/`,
+  `.agents/` or the root's README and AGENTS alone starts none.
+- `just check` runs all of CI here, half an hour: for a change too wide for
+  `just quick`, or a platform's failure to reproduce before pushing again.
 - Run `just` from Git Bash on Windows: a recipe runs in PowerShell, and
   `sdk-go`'s `test -z` finds `test` only on Git's `PATH`.
 - `just lint-actions` needs Docker; Docker Desktop may be stopped
@@ -59,8 +62,7 @@ which checks ran, where, and which could not.
 A timing beside the code is an `#[ignore]` test, run by hand with
 `cargo test --release -p tinystore --lib <name> -- --ignored --nocapture`.
 It compares what it measures against what it replaces in the same run, in
-turns, the median of several passes, and its numbers go into the plan or a
-research round with the machine, the versions and the command (AGENTS.md
+turns, the median of several passes, and its numbers go into a research round with the machine, the versions and the command (AGENTS.md
 "Measurements"). A run whose passes differ by more than the effect measured
 says nothing: make each pass longer before believing it.
 

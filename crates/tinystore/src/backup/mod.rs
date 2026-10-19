@@ -2,7 +2,7 @@
 //! engine's files, each copied as one moment of its engine, the files of the
 //! program's it is told to take, and a manifest of their sizes and SHA-256;
 //! and its restore into an empty directory, before a store opens there,
-//! checking every byte. The book is `plan/api/backup.md`.
+//! checking every byte. The guide is `docs/guides/backup/README.md`.
 //!
 //! ```text
 //! backup.zip

@@ -1,7 +1,7 @@
 //! Locks and semaphores: a key that one holder at a time, or `limit`, may
 //! hold while a function runs, across every process of a store. They live in
 //! the memory of the process that holds the store, which sees every holder;
-//! kv.db keeps the epoch their fences start from. plan/api/locks.md is the
+//! kv.db keeps the epoch their fences start from. docs/guides/locks/README.md is the
 //! book.
 //!
 //! ```no_run

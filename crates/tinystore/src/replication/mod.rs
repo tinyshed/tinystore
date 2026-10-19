@@ -1,5 +1,5 @@
 //! Replication: every store a node, each file written by one home and copied
-//! by the nodes that ask for it, as [plan/scaling.md] describes.
+//! by the nodes that ask for it, as [the nodes guide] describes.
 //!
 //! A node keeps a log of each file it writes, as the pages each commit
 //! wrote, in `log/<file>/` of its directory. Another node takes a file from
@@ -7,7 +7,7 @@
 //! grows, applied to a copy its engines read; and it serves what it copies to
 //! the nodes that take from it in turn, the same bytes its home wrote.
 //!
-//! [plan/scaling.md]: https://github.com/tinyshed/tinystore/blob/rust/plan/scaling.md
+//! [the nodes guide]: https://github.com/tinyshed/tinystore/blob/main/docs/handbook/nodes/copies.md
 
 mod ask;
 mod catalog;

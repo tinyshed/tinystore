@@ -18,7 +18,7 @@
 //! # }
 //! ```
 //!
-//! plan/api/sqldb.md is the book: the TypeScript, Python and Go spellings, and
+//! docs/guides/sql/README.md is the guide: the TypeScript, Python and Go spellings, and
 //! why each call is as it is.
 
 #[cfg(feature = "wire")]

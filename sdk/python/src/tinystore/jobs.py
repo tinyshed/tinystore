@@ -1,6 +1,6 @@
 """Work an application must do later, or now but outside the request that asked for it.
 
-As plan/api/jobs.md has it: queues of JSON values run in the order of their
+As docs/guides/jobs/README.md has it: queues of JSON values run in the order of their
 time, ids that find a job again, repeats, schedules and limits. A worker's
 handlers run here while the store's loop claims the queue's jobs and hands
 each over on one stream, the answers going back on it::

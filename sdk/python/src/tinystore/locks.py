@@ -1,4 +1,4 @@
-"""Locks and semaphores, as plan/api/locks.md has them.
+"""Locks and semaphores, as docs/guides/locks/README.md has them.
 
 A key that one holder at a time, or ``limit``, may hold while a block runs,
 across every program of a store. The store keeps them in its process's

@@ -1,5 +1,5 @@
 // Package channels is messages a program publishes on a named channel, as
-// plan/api/channels.md has them: every subscriber listening at that moment
+// docs/guides/channels/README.md has them: every subscriber listening at that moment
 // receives one, in memory and at most once. A subscription's handler is
 // called one message at a time; a slow one lets the store's log run ahead and
 // is told what it missed, and a connection lost is subscribed again and told

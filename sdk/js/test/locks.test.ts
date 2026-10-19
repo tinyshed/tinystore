@@ -1,4 +1,4 @@
-// Locks and semaphores as plan/api/locks.md has them, through each way a
+// Locks and semaphores as docs/guides/locks/README.md has them, through each way a
 // store is reached: a key held by one holder at a time while a function
 // runs, a line of holds behind it, a lease this program renews, and one lost
 // at its maxHold failing its hold though the function succeeded.

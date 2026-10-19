@@ -39,7 +39,7 @@ fn every_file_is_measured_by_its_own_label() {
 }
 
 /// kv's sets a second from 1, 8 and 64 threads, the store measured and not,
-/// in turns, the median of five passes; what plan/self-metrics.md's cost asks.
+/// in turns, the median of five passes; what docs/guides/metrics/self-metrics.md's cost asks.
 ///
 /// cargo test --release -p tinystore probe::probe_tests::sets_measured_and_not -- --ignored --nocapture
 #[cfg(feature = "kv")]

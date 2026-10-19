@@ -1,5 +1,5 @@
 # A key of a lock or a semaphore that a holder through a connection asks
-# for, as plan/api/locks.md has it: the lease lasts `ttl` from its grant and
+# for, as docs/guides/locks/README.md has it: the lease lasts `ttl` from its grant and
 # from each renewal, so that a holder whose program froze loses it.
 message locks.Hold {
   1 kind: str            # lock or semaphore

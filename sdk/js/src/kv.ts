@@ -1,4 +1,4 @@
-// The application's current state in kv.db, as plan/api/kv.md has it: buckets
+// The application's current state in kv.db, as docs/guides/kv/README.md has it: buckets
 // of one value type by key, keys in branches, expiry by the store's clock and
 // versions that never repeat, with counters beside them. A handle opens with
 // its first call on a connection.

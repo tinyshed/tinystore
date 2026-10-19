@@ -1,4 +1,4 @@
-# sql, as plan/api/sqldb.md has it: the application's databases, their
+# sql, as docs/guides/sql/README.md has it: the application's databases, their
 # migrations, statements as text and the values of their ?s, rows, batches
 # and transactions. A value travels as SQLite keeps it, nil, an integer, a
 # float, a str or bin; an SDK turns its types into those and back, and builds

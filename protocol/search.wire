@@ -1,11 +1,11 @@
-# search, as plan/api/search.md has it: indexes by name, documents of JSON
+# search, as docs/guides/search/README.md has it: indexes by name, documents of JSON
 # set by id with a vector or none, found again by their words, their vector
 # or both, kept to the documents a filter passes; and a table's index, kept
 # in a database's file, whose documents are the table's rows. A vector
 # travels as its floats' bytes, little-endian, four a dimension.
 
 # Opens an index, made the first time; one that holds other settings is
-# changed to these, as the book's "Change an index" has it. A read
+# changed to these, as docs/guides/search/rebuilds.md has it. A read
 # connection opens an index only as it is. With a database, the index
 # follows a table of it: its fields and filters are columns.
 message search.Open {

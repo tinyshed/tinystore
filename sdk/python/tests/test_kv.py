@@ -1,4 +1,4 @@
-"""kv as plan/api/kv.md has it, through each way a store is reached.
+"""kv as docs/guides/kv/README.md has it, through each way a store is reached.
 
 Buckets, counters, limits, once and transactions.
 """

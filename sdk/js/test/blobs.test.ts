@@ -1,4 +1,4 @@
-// files as plan/api/blobs.md has them over the protocol, through each way a
+// files as docs/guides/blobs/README.md has them over the protocol, through each way a
 // store is reached: writes in one call and in pieces, whole reads checked,
 // folders, conditions, copies, expiry, and uploads that appear at their
 // commit and leave nothing otherwise.

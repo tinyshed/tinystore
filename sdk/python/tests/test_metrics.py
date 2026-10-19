@@ -1,4 +1,4 @@
-"""Metrics as plan/api/metrics.md has them, through each way a store is reached.
+"""Metrics as docs/guides/metrics/README.md has them, through each way a store is reached.
 
 Series ingested whole and read back bit for bit, the buckets of an
 aggregate, the newest samples, what a store holds and its removal, and

@@ -1,4 +1,4 @@
-// Package locks is locks and semaphores, as plan/api/locks.md has them: a
+// Package locks is locks and semaphores, as docs/guides/locks/README.md has them: a
 // key that one holder at a time, or a semaphore's limit, may hold while a
 // function runs, across every program of a store. The store keeps them in
 // its process's memory; a holder here renews its lease at a third of its ttl

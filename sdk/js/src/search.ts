@@ -1,4 +1,4 @@
-// Search, as plan/api/search.md has it: documents of one type set by id in a
+// Search, as docs/guides/search/README.md has it: documents of one type set by id in a
 // named index and found again by their words, by vectors the program's own
 // model gives them, or by both, kept to the documents a `where` passes. A
 // search answers the exact best ten, or `limit`, of what the index holds; an

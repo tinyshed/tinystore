@@ -1,4 +1,4 @@
-"""The application's current state, as plan/api/kv.md has it.
+"""The application's current state, as docs/guides/kv/README.md has it.
 
 Buckets of one value type by key, keys in branches, expiry by the store's
 clock and versions that never repeat, with counters beside them. A handle

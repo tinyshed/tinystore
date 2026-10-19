@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds one target of a release, as plan/release.md says: the version stamped
+# Builds one target of a release, as the release skill says: the version stamped
 # into the workspace, then `tinystore` and the core three times, copied into
 # native/<target>/ as tools/release.ts reads them.
 #

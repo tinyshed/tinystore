@@ -1,4 +1,4 @@
-# A backup of the whole store as one zip, as plan/api/backup.md has it: the
+# A backup of the whole store as one zip, as docs/guides/backup/README.md has it: the
 # zip in pieces as the server writes it, within the client's credit, then
 # what it holds; for a connection that may administer, since a backup holds
 # every byte of the store.

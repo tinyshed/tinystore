@@ -11,7 +11,7 @@ import (
 )
 
 // The core in this process, through its pipe: the four C functions of
-// plan/ffi.md over the library crates/ffi builds. The frames go in from any
+// docs/handbook/inside/one-core.md over the library crates/ffi builds. The frames go in from any
 // goroutine with no room for an answer, and come out on one goroutine of the
 // connection's own, which waits in recv; nothing the core does waits for Go.
 

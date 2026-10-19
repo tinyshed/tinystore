@@ -1,4 +1,4 @@
-# jobs, as plan/api/jobs.md has it: queues of JSON values by their time, ids
+# jobs, as docs/guides/jobs/README.md has it: queues of JSON values by their time, ids
 # that add, set, update and cancel, repeats, schedules, limits, and workers
 # whose handlers run in the client. A value travels as its JSON, which the
 # server checks and keeps as it came.

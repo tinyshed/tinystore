@@ -1,4 +1,4 @@
-// Streams of events as plan/api/records.md has them over the protocol, through
+// Streams of events as docs/guides/records/README.md has them over the protocol, through
 // each way a store is reached: appends written whole, reads by time and by
 // what events hold a page at a time, counts, what a store holds, a poll's
 // cursor, and a store's logger keeping its lines.

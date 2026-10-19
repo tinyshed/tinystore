@@ -1,4 +1,4 @@
-// Packs a release from what its seven builds made, as plan/release.md says:
+// Packs a release from what its seven builds made, as the release skill says:
 // the archives, npm's packages and PyPI's wheels, `SHA256SUMS` and the notes.
 //
 //     bun tools/release.ts --version v0.1.0 --native native --out dist

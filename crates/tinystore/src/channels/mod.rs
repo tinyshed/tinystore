@@ -1,7 +1,7 @@
 //! Channels: messages a program publishes on a named channel, which every
 //! subscriber listening at that moment receives, in memory and at most once.
 //! A message published while nobody listens is gone; work that must be done
-//! is a job's, and events to read again are records'. plan/api/channels.md is
+//! is a job's, and events to read again are records'. docs/guides/channels/README.md is
 //! the book.
 //!
 //! ```no_run

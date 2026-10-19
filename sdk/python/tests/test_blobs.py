@@ -1,4 +1,4 @@
-"""Files as plan/api/blobs.md has them, through each way a store is reached.
+"""Files as docs/guides/blobs/README.md has them, through each way a store is reached.
 
 Writes in one call and in pieces, whole reads checked, folders, conditions,
 copies, expiry, and uploads that appear at their commit and leave nothing

@@ -1,4 +1,4 @@
-// Locks and semaphores, as plan/api/locks.md has them: a key that one holder
+// Locks and semaphores, as docs/guides/locks/README.md has them: a key that one holder
 // at a time, or `limit`, may hold while a function runs, across every
 // program of a store. The store keeps them in its process's memory; a holder
 // here renews its lease at a third of its ttl from this program, so that a

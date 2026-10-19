@@ -1,4 +1,4 @@
-// Package blobs is the application's files, as plan/api/blobs.md has them:
+// Package blobs is the application's files, as docs/guides/blobs/README.md has them:
 // files by path in named sets, written whole and replaced whole. A file's
 // bytes go in pieces within the credit of the side that takes them, and a
 // whole read fails Corrupt before its last piece when its bytes changed.

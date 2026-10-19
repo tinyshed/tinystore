@@ -1,4 +1,4 @@
-// Numbers that move over time, as plan/api/metrics.md has them, over
+// Numbers that move over time, as docs/guides/metrics/README.md has them, over
 // the protocol: series by their name and labels, written whole by ingest and
 // read back by range, in buckets and as their newest samples; what a store
 // holds of them; and a program's instruments, whose totals the store keeps.

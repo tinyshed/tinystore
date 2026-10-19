@@ -1,4 +1,4 @@
-// Package records is streams of events, as plan/api/records.md has them: a
+// Package records is streams of events, as docs/guides/records/README.md has them: a
 // stream opened by name, its events appended whole and read back by time and
 // by what they hold, a page at a time, and every stream read together. A
 // store's slog handler keeps its lines in a stream through the same append; a

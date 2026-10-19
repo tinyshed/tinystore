@@ -1,4 +1,5 @@
-"""A backup of the whole store as plan/api/backup.md has it, through each way a store is reached.
+"""A backup of the whole store as docs/guides/backup/README.md has it,
+through each way a store is reached.
 
 One zip of every engine that the server writes while the store keeps
 working, which ``tinystore restore`` takes back into an empty directory, and

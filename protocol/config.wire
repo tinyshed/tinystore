@@ -1,5 +1,5 @@
 # A config a program opens: its declaration and its layers as data, as
-# plan/api/config.md has them, with what the program read itself, a file's
+# docs/guides/config/README.md has them, with what the program read itself, a file's
 # text and its variables, since those belong to it and not to the server.
 message config.Open {
   1 name: str          # [a-z0-9][a-z0-9_-]{0,63}

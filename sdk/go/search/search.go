@@ -1,5 +1,5 @@
 // Package search is documents found again by their words, by vectors the
-// program's own model gives them, or by both, as plan/api/search.md has it:
+// program's own model gives them, or by both, as docs/guides/search/README.md has it:
 // documents of one type set by id in a named index, or a database's table
 // whose rows the index follows. A search answers the exact best ten, or
 // Limit, of what the index holds, kept to the documents a Where passes.

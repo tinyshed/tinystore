@@ -1,4 +1,4 @@
-"""A program's settings as one typed value, as plan/api/config.md has it.
+"""A program's settings as one typed value, as docs/guides/config/README.md has it.
 
 A dataclass declares every setting, its type and its default; then objects,
 files and the environment, in the order the program writes them, each

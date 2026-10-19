@@ -1,4 +1,4 @@
-"""Streams of events, as plan/api/records.md has them.
+"""Streams of events, as docs/guides/records/README.md has them.
 
 A stream opened by name, its events appended whole and read back by time and
 by what they hold, a page at a time, and every stream read together. A

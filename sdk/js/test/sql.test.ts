@@ -1,4 +1,4 @@
-// sql as plan/api/sqldb.md has it over the protocol, through each way a store
+// sql as docs/guides/sql/README.md has it over the protocol, through each way a store
 // is reached: migrations checked at every open, the verbs that say what comes
 // back, writes, batches and transactions, and the values between JavaScript
 // and SQLite.

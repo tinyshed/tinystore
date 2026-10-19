@@ -1,4 +1,4 @@
-# metrics, as plan/api/metrics.md has it: series by their name and labels,
+# metrics, as docs/guides/metrics/README.md has it: series by their name and labels,
 # their samples read back by range and in buckets, what a store holds of
 # them, and the instruments of a program, whose totals the store keeps. Times
 # are Unix milliseconds; a column of a series' samples holds an int64 or a

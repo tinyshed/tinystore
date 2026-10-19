@@ -1,5 +1,5 @@
 // Package sqldb is the application's own SQLite databases, sql/<name>.db, as
-// plan/api/sqldb.md has them. The application writes its SQL, or builds it
+// docs/guides/sql/README.md has them. The application writes its SQL, or builds it
 // with a table's queries, and the store owns the file, its connections and
 // its migrations, which every open applies and checks. A statement leaves as
 // its text and the values of its ?s, each as SQLite keeps it.

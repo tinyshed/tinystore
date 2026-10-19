@@ -1,4 +1,4 @@
-"""A backup of the whole store, as plan/api/backup.md has it.
+"""A backup of the whole store, as docs/guides/backup/README.md has it.
 
 One zip of every engine that the server writes while the store keeps working
 and sends in pieces, written beside the name the program gives and renamed

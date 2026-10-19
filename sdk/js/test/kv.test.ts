@@ -1,4 +1,4 @@
-// kv as plan/api/kv.md has it, buckets, counters, limits, once and
+// kv as docs/guides/kv/README.md has it, buckets, counters, limits, once and
 // transactions over the protocol, through each way a store is reached.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'

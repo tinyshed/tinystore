@@ -7,7 +7,7 @@ from them, so a message is declared once, here.
 
 This page is the whole language. The bytes a message becomes are
 [docs/wire.md](../docs/wire.md); why the protocol has its shape is
-[plan/protocol.md](../plan/protocol.md).
+[docs/wire.md](../docs/wire.md).
 
 ```wire
 # What a call on a key carries. A comment above a message documents it.
@@ -115,7 +115,7 @@ byte is the engine, `00` the server, `01` kv, `02` jobs, `03` sql, `04`
 blobs, `05` records, `06` metrics, `07` config, `08` backup, `09` locks,
 `0a` channels and `0b` search, and its second the method.
 
-**The name** is the call as the engine's book has it: `kv.bucket.open` is
+**The name** is the call as the engine's guide has it: `kv.bucket.open` is
 `method::KV_BUCKET_OPEN` in Rust and `methods['kv.bucket.open']` in
 TypeScript. **The request** is one message.
 

@@ -1,4 +1,4 @@
-"""The application's files, as plan/api/blobs.md has them.
+"""The application's files, as docs/guides/blobs/README.md has them.
 
 Files by path in named sets, written whole and replaced whole. A file's bytes
 go in pieces within the credit of the side that takes them, and a whole read

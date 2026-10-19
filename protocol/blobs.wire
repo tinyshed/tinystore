@@ -1,4 +1,4 @@
-# blobs, as plan/api/blobs.md has it: files by path in named sets, written
+# blobs, as docs/guides/blobs/README.md has it: files by path in named sets, written
 # whole and replaced whole. A file's bytes travel as DATA, a piece a message,
 # within the credit the side that takes them grants: a get's from the server,
 # an upload's from the client. Every call names its files by a handle, the

@@ -1,4 +1,4 @@
-"""Configs as plan/api/config.md has them, through each way a store is reached.
+"""Configs as docs/guides/config/README.md has them, through each way a store is reached.
 
 A declaration in layers, each declaring again what came before, the rules of
 one value the core checks, live settings whose change every handle sees on

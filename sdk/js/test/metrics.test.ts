@@ -1,4 +1,4 @@
-// Metrics as plan/api/metrics.md has them over the protocol, through each way a
+// Metrics as docs/guides/metrics/README.md has them over the protocol, through each way a
 // store is reached: series ingested whole and read back bit for bit, the
 // buckets of an aggregate, the newest samples, what a store holds and its
 // removal, and instruments whose changes reach the store's totals once.

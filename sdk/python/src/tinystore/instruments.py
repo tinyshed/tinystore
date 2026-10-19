@@ -1,4 +1,4 @@
-"""A program's instruments, as plan/api/metrics.md has them.
+"""A program's instruments, as docs/guides/metrics/README.md has them.
 
 Counters, gauges, a gauge read from a function, timers and histograms, each
 set of labels a series of its own. A call changes a number here and never

@@ -1,4 +1,4 @@
-//! The store's own metrics, plan/self-metrics.md: the listener of the
+//! The store's own metrics, docs/guides/metrics/self-metrics.md: the listener of the
 //! store's probe, which counts what the probe tells into instruments of the
 //! store's, and reads the gauges of its files, its memory and its disk as
 //! the instruments' totals are written.

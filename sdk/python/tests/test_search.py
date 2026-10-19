@@ -1,4 +1,4 @@
-"""Search as plan/api/search.md has it, through each way a store is reached.
+"""Search as docs/guides/search/README.md has it, through each way a store is reached.
 
 Documents set by id and found by their words, a vector, or both, kept to what
 a where passes, an index read again beside itself, a table's index, and an

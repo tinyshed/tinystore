@@ -1,4 +1,4 @@
-# kv, as plan/api/kv.md has it: buckets, counters, rate limits, quotas, once
+# kv, as docs/guides/kv/README.md has it: buckets, counters, rate limits, quotas, once
 # and transactions. A value travels as its row keeps it, nil, an integer or
 # bin, a bin's first byte the kind that wrote it (1 text, 2 bytes, 3 JSON, 4 a
 # float), so that the server reads what any language wrote; an SDK turns its

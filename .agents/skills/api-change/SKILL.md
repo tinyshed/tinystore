@@ -1,36 +1,54 @@
 ---
 name: api-change
-description: Use when adding, renaming or changing anything a program writes against TinyStore - a call, option, type, field or error of the Rust core or of the Bun and Node, Python or Go SDK - so that the four keep one vocabulary and every book, test and example says the same.
+description: Use when adding, renaming or changing anything a program writes against TinyStore - a call, option, type, field or error of the Rust core or of the Bun and Node, Python or Go SDK - so that the four keep one vocabulary and every guide, test and example says the same.
 ---
 
 # Changing what a program writes
 
 A call is one promise in four languages: Rust, which calls the engines
 directly, and Bun and Node, Python and Go, which reach the same core through
-the protocol. It is done when each of them says it the same way, its book
-first.
+the protocol. It is done when each of them says it the same way and the
+guide shows it in all four.
 
 ## Before the code
 
-- Each engine's book, `plan/api/<engine>.md`, is the vocabulary the owner
-  accepted: its call sites in Rust, TypeScript, Python and Go, then what each
-  call promises. A change starts there, call site first, in all four
-  (AGENTS.md: a proposal shows the call site first).
-- [plan/dx.md](../../../plan/dx.md) is the rules every name keeps: one
-  concept one word, two words at most, a flag never changes what a call
-  does, time typed and never a bare number, storage words kept inside, the
-  word people know already, names on the store saying what a thing is
-  (`store.bucket`, never `store.kv.bucket`). A type is given once, where a
-  handle opens; the daily calls are plain verbs; what the engine chooses
-  goes into the builder that opens a handle, never into a call.
+- A change starts from the call site, in all four languages, before any
+  code: what a program writes and what it gets back. The owner accepts the
+  names. The engine's guide, `docs/guides/<engine>/`, shows the call sites
+  as they are today; research's `tinystore/plan/api/` keeps the books they
+  were accepted in, and why.
+- The rules every name keeps:
+  - **One concept, one word,** in every engine and every language.
+  - **A name is at most two words.** A third means the concept wants a
+    nested option or a verb of its own.
+  - **A flag never changes what a call does.** Another behaviour is another
+    verb (`set`, `runDue`), an enumeration, or another constructor; a boolean
+    only turns a feature on or off.
+  - **Time is typed**: text such as `'30s'`, `Duration`, `timedelta`,
+    `Date`. A bare number is refused, as input and as output.
+  - **Storage words stay inside**: head, segment, block, seal, merge, lease,
+    lookback, watermark.
+  - **Take the word people already know**: BullMQ (`add`, `delay`,
+    `concurrency`), Redis (`ttl`, `publish`), S3 (`ifMatch`), Prometheus
+    (`rate`, `increase`), `tracing` and `slog`.
+  - **Names on the store say what a thing is**, not which engine keeps it:
+    `store.bucket`, never `store.kv.bucket`; where it lives is said by what
+    opened it, the store or a database (`db.bucket`). Go is the exception
+    its language makes, since a Go method takes no type parameter:
+    `kv.OpenBucket[T](store, …)`, and `kv.OpenBucket[T](db, …)`.
+  - A type is given once, where a handle opens; the daily calls are plain
+    verbs; what the engine chooses goes into the builder that opens a
+    handle, never into a call.
 - Each language its own syntax: Rust a builder ending in `open()`, Bun an
   options object, Python keyword arguments, Go functional options or a
   struct; none imitates another. A name keeps one word across them,
   camelCase in TypeScript, snake_case in Python and Rust, exported in Go, a
   trailing `_` only where Python reserves the word (`search.or_`).
-- After an API slice: three agents with no context of the project read the
-  new call sites as newcomers and say what they misread; the owner has the
-  last word on names.
+- **The newcomer check.** After an API change, three agents that have read
+  nothing about TinyStore each get one call site, a line or a few, and say
+  in one sentence what it does and what it returns. A wrong or hesitant
+  answer means a rename, never a comment. The owner has the last word on
+  names.
 
 ## Where a change goes, in one commit
 
@@ -42,11 +60,11 @@ first.
    the process, a private child, a sidecar and a remote server: `sdk/js`
    (Bun's suites run under Node too), `sdk/python`, `sdk/go`. The `sdk`
    skill has how.
-4. The book, `plan/api/<engine>.md`, and AGENTS.md's Status row when what is
-   built changed.
-5. What a program reads: the guides in `docs/` once they describe the Rust
-   branch (they still describe the Go candidates), `web/landing.md`'s
-   sample, the SDKs' READMEs.
+4. What a program reads: the engine's guide in `docs/guides/<engine>/` and
+   any handbook page that shows the call, in all four languages; the
+   reference, written again from the doc comments with `cd web && bun run
+   reference`; `web/landing.md`'s sample, then `task readme`; the SDKs' and
+   the crates' READMEs; AGENTS.md's Status row when what is built changed.
 
 Then look for the old spelling everywhere, documents first, since no
 compiler reads them:
@@ -72,5 +90,5 @@ git grep -n -e 'oldName' -e 'old_name' -e 'OldName'
 
 ## Checks
 
-`just quick` before the commit, which runs every SDK a change reaches;
-`just check` before the push. The `verify` skill has the rest.
+`just quick` before the commit, which runs every SDK a change reaches, then
+push and watch CI. The `verify` skill has the rest.

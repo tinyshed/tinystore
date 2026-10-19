@@ -1,4 +1,4 @@
-//! What jobs tells the store's own metrics, plan/self-metrics.md: each
+//! What jobs tells the store's own metrics, docs/guides/metrics/self-metrics.md: each
 //! queue's jobs done, failed and retried, how long a run took, how late a
 //! claim took a job past its time, and how many wait and run now.
 

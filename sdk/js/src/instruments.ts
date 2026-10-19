@@ -1,4 +1,4 @@
-// A program's instruments, as plan/api/metrics.md has them: counters, gauges,
+// A program's instruments, as docs/guides/metrics/README.md has them: counters, gauges,
 // a gauge read from a function, timers and histograms, each set of labels a
 // series of its own. A call changes a number here and never waits. What
 // changed goes to the store's totals on a stream of its own, a batch a

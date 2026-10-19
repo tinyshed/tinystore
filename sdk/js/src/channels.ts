@@ -1,4 +1,4 @@
-// Channels, as plan/api/channels.md has them: messages a program publishes
+// Channels, as docs/guides/channels/README.md has them: messages a program publishes
 // on a named channel, which every subscriber listening at that moment
 // receives, in memory and at most once. A subscription's handler is called
 // one message at a time; a slow one lets the store's log run ahead and is

@@ -55,7 +55,7 @@ pub struct Options {
     pub node: Option<crate::replication::Node>,
     /// Measures the store into its own `metrics.db`, under names that start
     /// with `tinystore_`: its commits, their waits, its files, its memory and
-    /// the machine it runs on, as plan/self-metrics.md lists them. `None`
+    /// the machine it runs on, as docs/guides/metrics/self-metrics.md lists them. `None`
     /// unless asked for.
     #[cfg(feature = "metrics")]
     pub self_metrics: Option<crate::metrics::SelfMetrics>,

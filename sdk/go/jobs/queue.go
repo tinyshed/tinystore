@@ -1,5 +1,5 @@
 // Package jobs is work an application must do later, or now but outside the
-// request that asked for it, as plan/api/jobs.md has it: queues of values run
+// request that asked for it, as docs/guides/jobs/README.md has it: queues of values run
 // in the order of their time, ids that find a job again, repeats, schedules
 // and limits. A worker's handlers run in this process while the store claims
 // the queue's jobs and hands each over on one stream.

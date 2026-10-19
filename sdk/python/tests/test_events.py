@@ -1,4 +1,4 @@
-"""Streams of events as plan/api/records.md has them, through each way a store is reached.
+"""Streams of events as docs/guides/records/README.md has them, through each way a store is reached.
 
 Appends written whole, reads by time and by what events hold a page at a
 time, counts, what a store holds, a poll's cursor, a tail, another program's

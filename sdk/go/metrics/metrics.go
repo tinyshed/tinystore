@@ -1,4 +1,4 @@
-// Package metrics is numbers that move over time, as plan/api/metrics.md has
+// Package metrics is numbers that move over time, as docs/guides/metrics/README.md has
 // them: series by their name and labels, written whole by Ingest and read back
 // by range, in buckets and as their newest samples; what a store holds of
 // them; and a program's instruments, whose totals the store keeps. A sample

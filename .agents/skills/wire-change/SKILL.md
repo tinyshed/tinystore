@@ -56,7 +56,7 @@ language [protocol/README.md](../../../protocol/README.md) defines;
 `store.Options` reaches the core two ways and both change together: the
 pipe's `open` decodes it (`asked` in `crates/tinystore/src/pipe.rs`), and an
 SDK that starts a server passes the same as `tinystore serve`'s flags
-(`crates/cli/src/args.rs`, `help.rs`, and plan/api/cli.md's table).
+(`crates/cli/src/args.rs`, `help.rs`, and `docs/guides/cli/serve.md`).
 
 ## The profile's rules
 

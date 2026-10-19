@@ -2,7 +2,7 @@ name: CI
 
 # every branch, so that one pushed for review shows its checks before a merge,
 # and every release, which runs it first on the commit it tags. A change of
-# the guides, the site or the plan alone runs nothing here: no job reads them,
+# the guides, the site or the skills alone runs nothing here: no job reads them,
 # and the Site workflow builds and checks the site.
 on:
   push:
@@ -10,7 +10,6 @@ on:
     paths-ignore: &prose
       - docs/**
       - web/**
-      - plan/**
       - .agents/**
       - .github/assets/**
       - README.md

@@ -1,4 +1,4 @@
-"""Channels, as plan/api/channels.md has them.
+"""Channels, as docs/guides/channels/README.md has them.
 
 Messages a program publishes on a named channel, which every subscriber
 listening at that moment receives, in memory and at most once. A

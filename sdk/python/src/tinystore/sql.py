@@ -1,4 +1,4 @@
-"""The application's own SQLite databases, sql/<name>.db, as plan/api/sqldb.md has them.
+"""The application's own SQLite databases, sql/<name>.db, as docs/guides/sql/README.md has them.
 
 The application writes its SQL, or builds it with a table's queries, and the
 store owns the file, its connections and its migrations, which every open

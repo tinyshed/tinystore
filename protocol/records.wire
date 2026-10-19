@@ -1,4 +1,4 @@
-# records, as plan/api/records.md has it: streams of events by name, written
+# records, as docs/guides/records/README.md has it: streams of events by name, written
 # whole and read back by time and by what they hold, a page at a time. A
 # stream's calls name it by a handle; a read without one reads every stream.
 # Times are nanoseconds since 1970, a level is slog's number, and fields and

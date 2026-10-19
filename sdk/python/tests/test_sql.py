@@ -1,4 +1,4 @@
-"""sql as plan/api/sqldb.md has it, through each way a store is reached.
+"""sql as docs/guides/sql/README.md has it, through each way a store is reached.
 
 Migrations checked at every open, the verbs that say what comes back, writes,
 batches and transactions, tables and their queries, and the values between

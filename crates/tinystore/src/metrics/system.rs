@@ -1,4 +1,4 @@
-//! The machine among the store's own metrics, plan/self-metrics.md: its
+//! The machine among the store's own metrics, docs/guides/metrics/self-metrics.md: its
 //! process's memory and processor, the system's memory, swap, processors by
 //! core and, off Windows, its load, read through sysinfo as the instruments'
 //! totals are written.

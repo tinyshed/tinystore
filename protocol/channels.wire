@@ -1,4 +1,4 @@
-# A message published on a channel's branch, as plan/api/channels.md has
+# A message published on a channel's branch, as docs/guides/channels/README.md has
 # it: every subscription listening there now receives it.
 message channels.Publish {
   1 name: str     # [a-z0-9][a-z0-9_-]{0,63}

@@ -1,7 +1,7 @@
 name: Release
 
 # A release is one run of this workflow, dispatched with its version, as
-# plan/release.md says. CI runs on the commit unless a push passed it already;
+# the release skill says. CI runs on the commit unless a push passed it already;
 # seven builds make each target's executable and core, one job packs them, and
 # a smoke test on each platform installs what was packed. Nothing leaves before
 # that has passed. Asked to publish, and approved in the release environment,

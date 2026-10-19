@@ -1,4 +1,4 @@
-// Package kv is the application's current state, as plan/api/kv.md has it:
+// Package kv is the application's current state, as docs/guides/kv/README.md has it:
 // buckets of one value type by key, keys in branches, expiry by the store's
 // clock and versions that never repeat, with counters, rate limits, quotas
 // and answers kept once a key beside them. A handle opens with its first call.

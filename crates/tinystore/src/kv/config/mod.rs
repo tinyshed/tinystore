@@ -3,7 +3,7 @@
 //! again what the ones before it gave; and, for the settings marked `Live`,
 //! changes made while the program runs, kept in kv.db, over every layer
 //! until they are reset, and seen by every handle at once. The book is
-//! `plan/api/config.md`.
+//! `docs/guides/config/README.md`.
 //!
 //! ```no_run
 //! use serde::{Deserialize, Serialize};

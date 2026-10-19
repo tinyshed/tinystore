@@ -15,11 +15,10 @@ TinyStore. Every page has to work in two ways:
   agent's `llms.txt`, and see nothing but this one page. It must make sense on
   its own.
 
-> **The docs are being rewritten as the book of `plan/docs.md`.** The Go
-> release candidates' guides are gone; every part of the book is written,
-> and the guides by engine, `docs/<engine>/`, come after it. A page
-> is written from its engine's book in `plan/api/`, which holds every call
-> site in Rust, TypeScript, Python and Go, and checked against the code.
+> **Every part is written**: the handbook in `docs/handbook/`, a guide an
+> engine in `docs/guides/<engine>/`, and the reference generated into
+> `docs/reference/`. A page changes with the code it describes, in the same
+> commit, and is checked against the code, never against memory.
 
 A guide only describes what is built. The old design documents in research's
 `tinystore/design/` are a good source of facts and examples, but never copy
@@ -221,7 +220,7 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   who chose Python and only finds Go has learned nothing.
 - **Use the same names for handles on every page**: `store` for the store and
   `db` for an SQL database, in every language. Everything else opens from
-  them, as each engine's book in `plan/api/` shows.
+  them, as each engine's guide shows.
 - **In Go, check the errors that the page is about**, and leave the others as
   plain `err` assignments, like the package READMEs do. A short tour may start
   its Go block with `// errors left out`.
@@ -306,7 +305,6 @@ together at rest (a [diagram](#diagrams)), or to decorate.
 - **At most one scene a section and two a guide.** A handbook chapter has one
   in `Learn`, and a chapter of Parts III and IV may have a second under
   `Understand`.
-- `plan/docs.md` lists the scenes each engine's pages are meant to have.
 
 ### How to write one
 
@@ -405,15 +403,15 @@ page. The example tests compile and run, so they are the safest to copy from.
 
 | To check                                     | Read                                                                                                                                         |
 |----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| a call in any language                       | the engine's book, `plan/api/<engine>.md`, then the code and its tests                                                                       |
+| a call in any language                       | the reference, `docs/reference/<language>/<engine>.md`, then the code and its tests                                                          |
 | a Bun or Node call                           | `docs/reference/bun/<engine>.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                   |
 | a Python call                                | `docs/reference/python/<engine>.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                             |
 | a Rust call                                  | `crates/tinystore/src/<engine>/`, its doc comments and `*_tests.rs`                                                                          |
 | what a guarantee rests on                    | CONTRACTS.md: each promise by its id, and the tests that name it                                                                             |
-| a limit or a default                         | the engine's book, then the constant in the code                                                                                             |
+| a limit or a default                         | the constant in the code and the test that keeps it                                                                                          |
 | why it works this way, and what was measured | research's `tinystore/design/<engine>.md` and `reports/`. They are not updated anymore, so if they disagree with the code, the code is right |
 | a good real-world example                    | the "Five cases" sections of the kv, jobs, blobs and sqldb design documents                                                                  |
-| the command line                             | `tinystore` without arguments lists its commands; the book is `plan/api/cli.md`, the code `crates/cli/`                                      |
+| the command line                             | `tinystore` without arguments lists its commands; its help is `crates/cli/src/help.rs`, the code `crates/cli/`                               |
 | the bytes on the wire                        | `docs/wire.md`                                                                                                                               |
 
 ## Callouts, tables, links

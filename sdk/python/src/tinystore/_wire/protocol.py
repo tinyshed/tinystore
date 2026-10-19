@@ -1251,7 +1251,7 @@ def _read_channels_publish(r: Reader) -> dict[str, Any]:
     return read
 
 
-# A message published on a channel's branch, as plan/api/channels.md has
+# A message published on a channel's branch, as docs/guides/channels/README.md has
 # it: every subscription listening there now receives it.
 ChannelsPublish = Message(
     "channels.Publish",
@@ -1407,7 +1407,7 @@ def _read_config_open(r: Reader) -> dict[str, Any]:
 
 
 # A config a program opens: its declaration and its layers as data, as
-# plan/api/config.md has them, with what the program read itself, a file's
+# docs/guides/config/README.md has them, with what the program read itself, a file's
 # text and its variables, since those belong to it and not to the server.
 ConfigOpen = Message(
     "config.Open",
@@ -4462,7 +4462,7 @@ def _read_locks_hold(r: Reader) -> dict[str, Any]:
 
 
 # A key of a lock or a semaphore that a holder through a connection asks
-# for, as plan/api/locks.md has it: the lease lasts `ttl` from its grant and
+# for, as docs/guides/locks/README.md has it: the lease lasts `ttl` from its grant and
 # from each renewal, so that a holder whose program froze loses it.
 LocksHold = Message(
     "locks.Hold",
@@ -9522,7 +9522,7 @@ def _read_search_open(r: Reader) -> dict[str, Any]:
 
 
 # Opens an index, made the first time; one that holds other settings is
-# changed to these, as the book's "Change an index" has it. A read
+# changed to these, as docs/guides/search/rebuilds.md has it. A read
 # connection opens an index only as it is. With a database, the index
 # follows a table of it: its fields and filters are columns.
 SearchOpen = Message(

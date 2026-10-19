@@ -1,6 +1,6 @@
 //! A copy made its file's home, by a person, once the old home is known to be
 //! stopped: no node can tell a dead home from a cut cable, and two homes of a
-//! file would split it for good ([plan/scaling.md], changing a file's home).
+//! file would split it for good ([the nodes guide], changing a file's home).
 //!
 //! It runs while no store holds the directory: it takes the store's lock. Each copy's mark goes, and its position
 //! becomes the point its log goes on from at the next epoch: the next commit
@@ -8,7 +8,7 @@
 //! old home go on from where they stand, and an entry of the old epoch that
 //! the copy never had, which another node may hold, conflicts by its check.
 //!
-//! [plan/scaling.md]: https://github.com/tinyshed/tinystore/blob/rust/plan/scaling.md
+//! [the nodes guide]: https://github.com/tinyshed/tinystore/blob/main/docs/handbook/nodes/copies.md
 
 use std::path::Path;
 
