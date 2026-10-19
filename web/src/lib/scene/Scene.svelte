@@ -375,7 +375,7 @@
 		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 12px 20px;
 		align-items: start;
-		padding: 0 4px;
+		padding: 10px 6px 0;
 	}
 
 	.controls {
@@ -487,7 +487,6 @@
 	@container (max-width: 560px) {
 		.foot {
 			grid-template-columns: minmax(0, 1fr);
-			padding: 0 6px;
 		}
 
 		.controls {
