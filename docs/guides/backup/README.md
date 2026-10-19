@@ -39,10 +39,10 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
 
 ## In these guides
 
-| Page               | Covers                                        |
-|--------------------|-----------------------------------------------|
-| Restore            | the command, Rust's `restore`, what it checks |
-| The encryption key | `includeEncryptionKey`, a key kept apart      |
+| Page                                    | Covers                                        |
+|-----------------------------------------|-----------------------------------------------|
+| [Restore](restore.md)                   | the command, Rust's `restore`, what it checks |
+| [The encryption key](encryption-key.md) | `includeEncryptionKey`, a key kept apart      |
 
 New to backups? [Keeping it](../../handbook/chat/keeping-it.md) in the
 Handbook backs up every night with a schedule and restores on another

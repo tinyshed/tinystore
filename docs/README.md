@@ -184,8 +184,8 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Backup
 
 - [Overview](guides/backup/README.md)
-- Restore
-- The encryption key
+- [Restore](guides/backup/restore.md)
+- [The encryption key](guides/backup/encryption-key.md)
 
 ### Command line
 
