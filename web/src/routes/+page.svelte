@@ -36,6 +36,7 @@
 		{/each}
 	</section>
 
+	{#if data.cards.length > 0}
 	<section class="numbers">
 		<p class="eyebrow">Numbers</p>
 		<h2>{data.numbers.title}</h2>
@@ -74,6 +75,7 @@
 		</dl>
 		<p class="caveat">{@html data.numbers.caveat}</p>
 	</section>
+	{/if}
 </main>
 
 <footer>

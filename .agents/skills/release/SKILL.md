@@ -22,7 +22,7 @@ said to, for that version.
 ## The run
 
 A release is one run of `.github/workflows/release.yml`, dispatched from
-`rust` (or `main`, once it is the Rust branch) with the version and publish.
+`main` with the version and publish.
 
 1. `version` refuses a version npm, PyPI or a tag has already, and one
    published from another branch.

@@ -72,13 +72,23 @@ describe('the landing page', () => {
 
 describe('the benchmark cards', () => {
 	test('read back from every SVG the README shows, in its order', () => {
-		const cards = readCards(checkout())
-
-		expect(cards.length).toBeGreaterThan(0)
-		for (const card of cards) {
+		for (const card of readCards(checkout())) {
 			expect(card.title).not.toBe('')
 			expect(card.rows.filter(row => row.ours)).toHaveLength(1)
 			expect(Math.max(...card.rows.flatMap(row => row.bars.map(bar => bar.fraction)))).toBe(1)
+		}
+	})
+
+	test('are none while the README comments its numbers out', () => {
+		const root = mkdtempSync(join(tmpdir(), 'landing-'))
+		try {
+			writeFileSync(
+				join(root, 'README.md'),
+				'<!-- hidden\n\n## Numbers\n\n<picture><source srcset=".github/assets/bench-kv-dark.svg"></picture>\n\n-->\n',
+			)
+			expect(readCards(root)).toEqual([])
+		} finally {
+			rmSync(root, { recursive: true, force: true })
 		}
 	})
 

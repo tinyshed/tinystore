@@ -67,8 +67,8 @@ jobs:
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "a version is vX.Y.Z, or with -alpha.N, -beta.N or -rc.N: not $VERSION"; exit 1 ;;
           esac
-          if [ "$PUBLISH" = true ] && [ "$GITHUB_REF" != refs/heads/rust ] && [ "$GITHUB_REF" != refs/heads/main ]; then
-            echo "a release is published from rust or main, not $GITHUB_REF"; exit 1
+          if [ "$PUBLISH" = true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "a release is published from main, not $GITHUB_REF"; exit 1
           fi
           plain="${VERSION#v}"
           python="${plain/-alpha./a}"; python="${python/-beta./b}"; python="${python/-rc./rc}"

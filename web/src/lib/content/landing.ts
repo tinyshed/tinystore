@@ -265,14 +265,16 @@ export interface Row {
 /**
  * The README's benchmark cards, in its order, read from the SVGs it shows, so
  * that the landing page and the README cannot disagree on a number. A card
- * whose SVG no longer reads as a card fails the build.
+ * whose SVG no longer reads as a card fails the build; numbers the README
+ * comments out are no cards.
  */
 export function readCards(root: string): Card[] {
-	const readme = readFileSync(join(root, 'README.md'), 'utf8')
-	const numbers = readme.slice(
-		readme.indexOf('## Numbers'),
-		readme.indexOf('<details>', readme.indexOf('## Numbers')),
-	)
+	const readme = readFileSync(join(root, 'README.md'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
+	const start = readme.indexOf('## Numbers')
+	if (start === -1) {
+		return []
+	}
+	const numbers = readme.slice(start, readme.indexOf('<details>', start))
 	const files = [...numbers.matchAll(/srcset="(\.github\/assets\/bench-[\w-]+-dark\.svg)"/g)].map(
 		match => match[1] ?? '',
 	)

@@ -10,7 +10,7 @@ server. It is a library, so the only thing a consumer sees is a handle and the
 promises this file makes about it. `tinyshed/dashbin` is the first caller and
 not the owner.
 
-This branch, `rust`, is the rewrite. [plan/](plan/README.md) says what is
+`main` is the Rust rewrite. [plan/](plan/README.md) says what is
 decided, what it stands on and the order of work; read it before changing
 anything. [CONTRACTS.md](CONTRACTS.md) is what TinyStore promises the program
 that opens it; breaking one is a regression whatever the tests say. The design
@@ -53,7 +53,7 @@ should be a fact a ten-second grep would answer.
 Not built: the Node addon's package a platform.
 [plan/phases.md](plan/phases.md) has their order and what closes each phase.
 The guides in [docs/](docs/README.md) are being rewritten as the book that
-[plan/docs.md](plan/docs.md) plans: every part is written, for this branch.
+[plan/docs.md](plan/docs.md) plans: every part is written.
 
 Nothing is released, so nothing is compatible: formats, schemas, the protocol
 and every name change freely until `v0.1.0`, the first Rust release. An
@@ -352,8 +352,7 @@ bytes a sample in a real file.
 
 How recurring work is done is a skill in `.agents/skills/`, which
 `.claude/skills/` points to: `api-change`, `sdk`, `wire-change`, `verify`,
-`release`, `platform-traps` and `docs`, rewritten for this branch on
-19 October; fix one where it is wrong before relying on it, as you would this
+`release`, `platform-traps` and `docs`, rewritten for Rust on 19 October; fix one where it is wrong before relying on it, as you would this
 file.
 
 ## Rules that are gates
@@ -444,8 +443,8 @@ Do not commit or push unless you were asked to.
 
 ## Branches and releases
 
-The rewrite works on `rust` while `main` builds the docs site; `rust` replaces
-`main` when phase 4 ends. Versions are `v0.x.y` until the API stops moving. A
+The Rust rewrite replaced the Go engine on `main` on 19 October, and `main`
+builds the docs site. Versions are `v0.x.y` until the API stops moving. A
 release is one run of the Release workflow, which tags and publishes and never
 writes the branch it builds; nothing is tagged by hand.
 [plan/release.md](plan/release.md) has its seven targets, what each package

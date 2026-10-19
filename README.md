@@ -214,6 +214,8 @@ claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for 
 at work. The image `ghcr.io/tinyshed/tinystore` serves a store to
 remote clients, as [One directory, many engines](docs/handbook/start/directory.md#four-ways-to-open-a-store) shows.
 
+<!-- The Go engine's numbers, hidden until the Rust engine is measured.
+
 ## Numbers
 
 **TinyStore does not beat every specialized database at its own workload.
@@ -300,6 +302,8 @@ records the small consumers, paired memory bars, raw representation and SDK mode
 
 The rounds, prototypes and open questions behind the design are in
 [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
+
+-->
 
 ## Origin
 

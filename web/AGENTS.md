@@ -12,7 +12,7 @@ Built: the landing page, a page for every file `docs/README.md` links, search, s
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
-are the book of `plan/docs.md`, written for this branch: the Handbook's
+are the book of `plan/docs.md`, written for Rust: the Handbook's
 five parts in `docs/handbook/`, and the Guides in `docs/guides/`, every engine page by page, the command line by its overview.
 
 Not built: a page of the site's own statistics.
