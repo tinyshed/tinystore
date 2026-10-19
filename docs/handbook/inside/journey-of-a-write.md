@@ -101,12 +101,15 @@ once left them all to the next commit.
 
 ## Inside the commit
 
-```text
-begin immediate
-  savepoint grouped   write A   release grouped
-  savepoint grouped   write B   release grouped
-  savepoint grouped   write C   rollback to grouped   ← C broke a constraint
-commit                                              ← one sync of the WAL
+```sql
+begin immediate;
+savepoint grouped; -- write A
+release grouped;
+savepoint grouped; -- write B
+release grouped;
+savepoint grouped; -- write C, which broke a constraint
+rollback to grouped;
+commit;            -- one sync of the WAL for A and B
 ```
 
 Each write runs in a savepoint of its own. A write that fails, a broken

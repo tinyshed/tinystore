@@ -18,9 +18,10 @@ Every file has one home: the node that writes it. Every other node holding the
 file holds a copy, which only readers and the replication engine open. A copy
 receives the home's commits as pages, in order, and applies each one whole.
 
-```text
-America (home of every file) ──pages──▶ Europe (copy)
-America ◀────────── writes ──────────── Europe
+```mermaid
+flowchart LR
+  us[(America<br>home of every file)] -->|pages| eu[(Europe<br>copy)]
+  eu -->|writes| us
 ```
 
 A copy of a file is the home's file page for page after each commit it

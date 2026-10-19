@@ -11,6 +11,7 @@ import { unified } from 'unified'
 import { SKIP, visit } from 'unist-util-visit'
 
 import { type CodeGroup, renderGroup } from './code'
+import { drawDiagrams } from './diagram'
 import type { Highlight } from './highlight'
 import { type Links, resolveLink } from './links'
 import { renderScene } from './scene'
@@ -23,22 +24,24 @@ export function parse(text: string): Root {
 
 /**
  * The tree as HTML elements, the raw HTML a file holds parsed into them. A
- * scene that does not parse adds its reason to `problems`.
+ * scene or a diagram that does not parse adds its reason to `problems`.
  */
 export async function toHast(
 	tree: Root,
 	highlight: Highlight,
 	problems: string[] = [],
 ): Promise<HastRoot> {
+	const diagrams = await drawDiagrams(tree, problems)
 	const processor = unified()
 		.use(remarkRehype, {
 			allowDangerousHtml: true,
 			handlers: {
 				codeGroup: (_, node: CodeGroup) => renderGroup(node, highlight),
-				code: (state, node) =>
-					node.lang === 'scene'
-						? renderScene(node.value, highlight, problems)
-						: defaultHandlers.code(state, node),
+				code: (state, node) => {
+					if (node.lang === 'scene') return renderScene(node.value, highlight, problems)
+					const drawn = node.lang === 'mermaid' ? diagrams.get(node.value) : undefined
+					return drawn ?? defaultHandlers.code(state, node)
+				},
 			},
 		})
 		.use(rehypeRaw)

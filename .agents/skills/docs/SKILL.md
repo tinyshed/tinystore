@@ -292,7 +292,7 @@ sentence cannot. A section gets one when all three hold:
    with `line=` on each step.
 
 Never for options, defaults or limits (a table), for how the parts fit
-together at rest, or to decorate.
+together at rest (a [diagram](#diagrams)), or to decorate.
 
 ### Where it goes
 
@@ -318,6 +318,56 @@ together at rest, or to decorate.
   turns each column into a row.
 - Everything is checked at build time: an unknown actor, verb, icon or line
   fails the build, naming the scene's line.
+
+## Diagrams
+
+How parts fit together at rest, or the states something moves through, is a
+diagram: a ` ```mermaid ` flowchart, which GitHub draws as it is and the site
+lays out with ELK when it is built, into an SVG in the scene's visual language
+(tiles, cables, the accent for what stands out) and both themes. Never ASCII
+boxes and arrows in a `text` fence.
+
+````md
+```mermaid
+flowchart TB
+  sdk[Bun · Node · Python · Go program<br>SDK: one typed API per language]
+  subgraph ways [Frames of the wire protocol]
+    pipe[the pipe<br>in process]
+    server[a server<br>TCP and TLS, tokens]
+  end
+  core[(engines · store · SQLite)]
+  sdk --> pipe & server
+  pipe & server -->|frames| core
+  rust[Rust program] ==>|direct calls| core
+```
+````
+
+| Written                          | Draws                                            |
+|----------------------------------|--------------------------------------------------|
+| `flowchart LR` or `flowchart TB` | the direction; an `LR` one turns `TB` on a phone |
+| `id[box]`, `id(state)`           | a box; a state, rounder                          |
+| `id([start])`, `id[(file)]`      | where a flow begins; a SQLite file, a cylinder   |
+| `a --> b`, `a -->\|label\| b`    | an arrow, and its label                          |
+| `a ==> b`, `a --- b`             | an arrow that stands out; a line without a head  |
+| `a & b --> c`                    | several boxes at once                            |
+| `subgraph id [Title]` … `end`    | a group drawn around its boxes                   |
+| `<br>` in a label                | a line break                                     |
+
+- **Only that much of Mermaid is read**, what the docs' diagrams use: any
+  other line fails the build, naming the page and the line, rather than
+  drawing something other than GitHub. Add a feature to
+  `web/src/lib/diagram/parse.ts` only when a diagram needs it.
+- **Write it in the order it reads.** Boxes keep the source's order within a
+  rank, and a cycle is broken at the arrow that goes back against it, so a
+  flow starts where its first line does.
+- **Keep it within the column**, 800 units wide: `bun test` lays out every
+  diagram of the docs and fails one that is wider, that puts a box or a label
+  over another box, runs an arrow through a box, crosses two arrows or breaks
+  the source's order. Break a long label with `<br>`, or draw it `TB`.
+- **The sentence before or after says what it shows**: an agent and a screen
+  reader get its boxes and arrows as text, not its meaning.
+- A file tree, a byte layout, a terminal's output and an annotated log stay
+  `text` fences: they are not diagrams.
 
 ## The API pages
 

@@ -356,8 +356,10 @@ for job in replies.watch(format!("reply:{message_id}")) {
 when the job ends. A reply that failed once and succeeded on its second
 attempt looks like this:
 
-```text
-waiting → running → running {step: thinking} → scheduled → running → running {step: thinking} → done
+```mermaid
+flowchart TB
+  a(waiting) --> b(running) --> c("running<br>step: thinking") --> d(scheduled)
+  d --> e(running) --> f("running<br>step: thinking") --> g(done)
 ```
 
 `ahead` counts the jobs that run before a waiting one. Stream these to the

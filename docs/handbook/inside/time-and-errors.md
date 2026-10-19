@@ -21,10 +21,11 @@ would make them lie.
 An engine that keeps an observation by its time, an event or a metric's
 sample, takes it only inside a window:
 
-```text
-now − what the stream or name keeps         now + 10 minutes
-            │◀──────────── accepted ─────────────▶│
-  too old ──┘                                     └── too new
+```mermaid
+flowchart LR
+  old(too old) --- from["now − what the stream<br>or name keeps"]
+  from ==>|accepted| to[now + 10 minutes]
+  to --- new(too new)
 ```
 
 An event older than its stream keeps fails `too old`, and one more than ten

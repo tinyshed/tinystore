@@ -8,10 +8,11 @@ the blocks that cannot match.
 
 ## Logs and events: from rows to blocks
 
-```text
-append ──▶ head rows ──(a segment's worth, or an hour old)──▶ segment of blocks
-                                                               │
-                         small segments, four of a size ──▶ merged into one
+```mermaid
+flowchart LR
+  append([append]) --> head[head rows]
+  head -->|"a segment's worth,<br>or an hour old"| segment[segment<br>of blocks]
+  segment -->|"small ones,<br>four of a size"| merged[merged<br>into one]
 ```
 
 An event is written first as a row of the stream's head, so that `append`
@@ -56,10 +57,11 @@ phrase can be anywhere.
 
 ## Metrics: runs of samples
 
-```text
-ingest or flush ──▶ head: runs of up to 240 samples ──▶ blocks on a UTC ladder
-                                                          │
-                                         small groups ──▶ taken into the next
+```mermaid
+flowchart LR
+  ingest([ingest or flush]) --> head[head: runs of<br>up to 240 samples]
+  head --> blocks[blocks on a<br>UTC ladder]
+  blocks -->|small groups| next[taken into<br>the next]
 ```
 
 A series' samples arrive in a head of short runs, up to 240 samples each, and

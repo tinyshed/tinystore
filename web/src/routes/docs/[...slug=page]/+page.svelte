@@ -5,6 +5,7 @@
 	import Outline from '$lib/components/Outline.svelte'
 	import Pager from '$lib/components/Pager.svelte'
 	import Seo from '$lib/components/Seo.svelte'
+	import { diagrams } from '$lib/diagrams'
 	import { href, rebase } from '$lib/href'
 	import { setLanguage } from '$lib/prefs'
 	import { scenes } from '$lib/scenes'
@@ -111,6 +112,7 @@
 			class:api={page.api !== undefined}
 			{@attach codeBlocks}
 			{@attach scenes(page.html)}
+			{@attach diagrams(page.html)}
 		>
 			{@html rebase(page.html)}
 		</div>

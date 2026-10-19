@@ -9,16 +9,21 @@ trusts its sidecar.
 
 ## The shape
 
-```text
-Rust program                   Bun · Node · Python · Go program
-    │                          SDK: one typed API per language
-    │                               │  frames of the wire protocol
-    │                ┌──────────────┼──────────────────┐
-    │            the pipe        a sidecar           a server
-    │            (in process)    (socket, named pipe) (TCP and TLS, tokens)
-    │                └──────────────┼──────────────────┘
-    │                    session: decodes frames, answers them
-    └──────────────▶ engines · store · SQLite
+```mermaid
+flowchart TB
+  sdk[Bun · Node · Python · Go program<br>SDK: one typed API per language]
+  subgraph ways [Frames of the wire protocol]
+    pipe[the pipe<br>in process]
+    sidecar[a sidecar<br>socket or named pipe]
+    server[a server<br>TCP and TLS, tokens]
+  end
+  session[session<br>decodes frames, answers them]
+  rust[Rust program]
+  core[(engines · store · SQLite)]
+  sdk --> pipe & sidecar & server
+  pipe & sidecar & server --> session
+  session --> core
+  rust ==>|direct calls| core
 ```
 
 The engines know nothing of the protocol, and the protocol knows nothing of

@@ -8,17 +8,15 @@ background](../chat/replies.md).
 
 ## The states
 
-```text
-            add (delay or at)                  due
-   ─────────────────────────▶ scheduled ──────────────▶ waiting
-   add (now) ───────────────────────────────────────────▶   │
-                                                            │ a worker claims it
-                                                            ▼
-          retry, snooze, lease ended                     running
-   scheduled ◀──────────────────────────────────────────  │  │
-                                                  returns │  │ throws past its attempts, or fail()
-                                                          ▼  ▼
-                                                        done  failed
+```mermaid
+flowchart TB
+  add([add]) -->|delay or at| scheduled(scheduled)
+  add -->|now| waiting(waiting)
+  scheduled -->|due| waiting
+  waiting -->|a worker claims it| running(running)
+  running -->|"retry, snooze, lease ended"| scheduled
+  running -->|returns| done(done)
+  running -->|"throws past its attempts, or fail()"| failed(failed)
 ```
 
 | State       | The job                                                                   |

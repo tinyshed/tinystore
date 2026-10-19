@@ -8,7 +8,7 @@ particular to the site. How a page is written is the `docs` skill.
 
 ## Status
 
-Built: the landing page, a page for every file `docs/README.md` links, search, scenes,
+Built: the landing page, a page for every file `docs/README.md` links, search, scenes, diagrams,
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
@@ -47,6 +47,7 @@ show as noise. What the site adds it reads from what GitHub already ignores:
 | `<!-- a note -->`                             | nothing               | nothing, and left out of the markdown copy         |
 | `store.bucket('sessions')` in a fence         | plain code            | a link to `Store.bucket`, its signature on a click |
 | a ` ```scene ` fence                          | its text              | an animation beside its code, from `src/lib/scene` |
+| a ` ```mermaid ` flowchart                    | Mermaid's drawing     | an SVG laid out at build, from `src/lib/diagram`   |
 
 **A link that leads nowhere fails the build.** Every relative link and image
 is resolved at build time against the repository, and a heading against the
@@ -65,6 +66,15 @@ fence at build time, where an error fails the page; `content/scene.ts` writes a
 figure holding its code and its steps as a list, and `scenes.ts` mounts
 `Scene.svelte` on it, whose `Stage` draws and moves the SVG. The format is in
 the docs skill.
+
+**A diagram is drawn once, when the site is built.** `src/lib/diagram/parse.ts`
+reads the part of Mermaid's flowchart the docs use, and `render.ts` lays it
+out with ELK's layered algorithm and writes an SVG whose classes take the
+tokens, so both themes draw it and no Mermaid runs in the browser. An `LR`
+diagram gets a `TB` twin that a phone shows instead, a tap enlarges either
+(`diagrams.ts`), and a diagram that does not parse fails the page.
+`diagram.test.ts` lays out every diagram of the docs and checks its width,
+overlaps, crossings and order.
 
 **Code is highlighted once, when the site is built.** Shiki writes both
 themes' colours into each token, so the page highlights and changes theme with

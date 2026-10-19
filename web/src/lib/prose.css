@@ -560,6 +560,146 @@
 	overflow-x: auto;
 }
 
-.prose figure.scene-broken pre {
+.prose figure.scene-broken pre,
+.prose figure.diagram-broken pre {
 	color: var(--ts-danger);
+	text-align: left;
+}
+
+/* a diagram enlarged: its own size, scrolled and pinched as the reader likes */
+dialog.diagram-zoom {
+	width: 100vw;
+	max-width: 100vw;
+	height: 100dvh;
+	max-height: 100dvh;
+	margin: 0;
+	padding: 24px;
+	border: 0;
+	background: var(--ts-bg);
+	overflow: auto;
+	cursor: zoom-out;
+}
+
+dialog.diagram-zoom::backdrop {
+	background: var(--ts-overlay);
+}
+
+dialog.diagram-zoom svg {
+	display: block;
+	margin: auto;
+	font-family: var(--ts-sans);
+}
+
+/*
+ * A ```mermaid fence, drawn when the site is built. It speaks the scene's
+ * visual language (Scene.svelte): a box is a scene's tile, an arrow its cable,
+ * a label its line of state, an emphasised arrow its accent trail; the frame
+ * is the stage's, ruled above and below. Every colour is a token.
+ */
+.prose figure.diagram {
+	margin: 26px 0 30px;
+	padding: 22px 0;
+	border-top: 1px solid var(--ts-line);
+	border-bottom: 1px solid var(--ts-line);
+	text-align: center;
+	cursor: zoom-in;
+}
+
+.prose figure.diagram:focus-visible {
+	outline: 2px solid var(--ts-accent);
+	outline-offset: 2px;
+}
+
+/* its width is its own style: the column's, and never wider than itself */
+.prose figure.diagram svg {
+	display: inline-block;
+	height: auto;
+	font-family: var(--ts-sans);
+}
+
+/* a diagram drawn left to right has a top-to-bottom twin for a phone, and a hint that a tap enlarges it */
+.prose figure.diagram .diagram-narrow,
+.prose figure.diagram .diagram-hint {
+	display: none;
+}
+
+.prose figure.diagram .diagram-hint {
+	margin-top: 10px;
+	color: var(--ts-muted);
+	font: 11.5px var(--ts-mono);
+}
+
+@media (max-width: 640px) {
+	.prose figure.diagram .diagram-wide {
+		display: none;
+	}
+
+	.prose figure.diagram .diagram-narrow {
+		display: inline-block;
+	}
+
+	.prose figure.diagram .diagram-hint {
+		display: block;
+	}
+}
+
+/* words over the lines wear a halo of the page's colour, as a scene's do */
+.diagram text {
+	paint-order: stroke;
+	stroke: var(--ts-bg);
+	stroke-width: 4px;
+	stroke-linejoin: round;
+}
+
+.diagram-node rect,
+.diagram-node path {
+	fill: var(--ts-surface-2);
+	stroke: var(--ts-border-2);
+	stroke-width: 1;
+}
+
+/* a box's words sit on its tile and need no halo */
+.diagram .diagram-text {
+	fill: var(--ts-text);
+	stroke: none;
+	font-size: 14px;
+	font-weight: 550;
+}
+
+.diagram-group rect {
+	fill: none;
+	stroke: var(--ts-line);
+	stroke-width: 1.5;
+	stroke-dasharray: 5 5;
+}
+
+.diagram-group-label {
+	fill: var(--ts-muted);
+	font: 500 10.5px var(--ts-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.diagram-edge {
+	fill: none;
+	stroke: var(--ts-border-strong);
+	stroke-width: 1.5;
+}
+
+.diagram-thick {
+	stroke: var(--ts-accent);
+	stroke-width: 2;
+}
+
+.diagram-head {
+	fill: var(--ts-border-strong);
+}
+
+.diagram-head-accent {
+	fill: var(--ts-accent);
+}
+
+.diagram-label {
+	fill: var(--ts-muted);
+	font: 11.5px var(--ts-mono);
 }

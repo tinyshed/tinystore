@@ -41,15 +41,15 @@ chat, each is a few lines on top of an engine.
 
 A message travels through the chat like this:
 
-```text
-browser ── POST /chats/7/messages ──► once     the same request twice gets one answer
-                                      quota    100 per 5 hours and 300 per week, or "try later"
-                                      sql      insert the message ┐ one commit
-                                      jobs     add its reply job  ┘
-reply worker ◄─ the job ─────────────  jobs     runs it, retries it, keeps finished steps
-             ── the answer ─────────► sql      insert the reply
-                                      channels tell every open tab
-browser ◄── server-sent events ──────
+```mermaid
+flowchart TB
+  browser([browser]) -->|POST /chats/7/messages| once["once<br>a request sent twice gets one answer"]
+  once --> quota["quota<br>100 per 5 hours, 300 per week"]
+  quota --> commit["sql and jobs, one commit<br>the message and its reply job"]
+  commit -->|the job| worker["reply worker<br>retried, its steps kept"]
+  worker -->|the answer| reply["sql<br>insert the reply"]
+  reply --> channels["channels<br>tell every open tab"]
+  channels -->|server-sent events| browser
 ```
 
 ## The chapters
