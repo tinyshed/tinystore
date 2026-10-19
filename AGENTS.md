@@ -12,10 +12,10 @@ not the owner.
 
 This branch, `rust`, is the rewrite. [plan/](plan/README.md) says what is
 decided, what it stands on and the order of work; read it before changing
-anything. The Go implementation at commit `e81a050` is the reference: its
-tests, [GATES.md](GATES.md) and the design documents in research's
-[tinystore/design][design] say what each engine promises and why. Port the
-promise, not the code.
+anything. [CONTRACTS.md](CONTRACTS.md) is what TinyStore promises the program
+that opens it; breaking one is a regression whatever the tests say. The design
+documents in research's [tinystore/design][design] say why each engine has its
+shape.
 
 This file is the contract for anyone — human or agent — changing the repository.
 Keep it short and factual, and update it when a decision moves. Nothing here
@@ -341,14 +341,14 @@ bytes a sample in a real file.
 
 ## Where things are written down
 
-|                                                                               |                                                                                                                                              |
-|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| [plan/](plan/README.md)                                                       | the rewrite: what is decided and when, the evidence, the architecture, the API books, the phases                                             |
-| [GATES.md](GATES.md)                                                          | every promise and the test that fails when it breaks, by engine; a line names a Rust test once it lands, the Go test at `e81a050` until then |
-| [docs/wire.md](docs/wire.md)                                                  | the wire protocol's bytes: frames, credit, MessagePack, errors                                                                               |
-| [protocol/README.md](protocol/README.md)                                      | the `.wire` language the protocol's schema is written in: its lines, types, methods and layout                                               |
-| research's [tinystore/design][design]                                         | why each engine has its shape, as designed                                                                                                   |
-| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions                                                                              |
+|                                                                               |                                                                                                  |
+|-------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| [plan/](plan/README.md)                                                       | the rewrite: what is decided and when, the evidence, the architecture, the API books, the phases |
+| [CONTRACTS.md](CONTRACTS.md)                                                  | what TinyStore promises a program, by id; a test that keeps one names its id                     |
+| [docs/wire.md](docs/wire.md)                                                  | the wire protocol's bytes: frames, credit, MessagePack, errors                                   |
+| [protocol/README.md](protocol/README.md)                                      | the `.wire` language the protocol's schema is written in: its lines, types, methods and layout   |
+| research's [tinystore/design][design]                                         | why each engine has its shape, as designed                                                       |
+| [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore) | the rounds, every number, the prototypes and the open questions                                  |
 
 How recurring work is done is a skill in `.agents/skills/`, which
 `.claude/skills/` points to: `api-change`, `sdk`, `wire-change`, `verify`,
@@ -359,8 +359,9 @@ file.
 ## Rules that are gates
 
 Every rule worth keeping is worth the twenty lines that make it fail loudly.
-[GATES.md](GATES.md) lists each promise beside the test that keeps it; a
-change that makes a promise adds its line there.
+[CONTRACTS.md](CONTRACTS.md) lists what is promised, never which test keeps it;
+a test that keeps a contract names its id in a comment, `// contract: KV-04`.
+A change that makes or moves a promise changes that file in the same commit.
 
 `just check` runs what CI gates on, so that a failure arrives before a push
 instead of after it.
