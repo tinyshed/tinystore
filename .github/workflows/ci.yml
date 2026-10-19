@@ -1,11 +1,22 @@
 name: CI
 
 # every branch, so that one pushed for review shows its checks before a merge,
-# and every release, which runs it first on the commit it tags
+# and every release, which runs it first on the commit it tags. A change of
+# the guides, the site or the plan alone runs nothing here: no job reads them,
+# and the Site workflow builds and checks the site.
 on:
   push:
     branches: ['**']
+    paths-ignore: &prose
+      - docs/**
+      - web/**
+      - plan/**
+      - .agents/**
+      - .github/assets/**
+      - README.md
+      - AGENTS.md
   pull_request:
+    paths-ignore: *prose
   workflow_dispatch:
   workflow_call:
 
@@ -20,8 +31,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
+  # the workspace's lint and tests, beside the SDKs' job, so that neither waits
+  # for the other on Windows, where each takes a quarter of an hour
+  rust:
+    name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -61,6 +74,31 @@ jobs:
 
       - name: Test nodes linked through TLS
         run: cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked
+
+  # every SDK over the core built for release, a private child, a sidecar and a
+  # remote server
+  sdk:
+    name: sdk (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      # rust-toolchain.toml pins the release and its components
+      - name: Toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      # without it SQLite's Unix VFS calls fsync for fdatasync, which cost a
+      # 64 KiB set 1.5x (research kv-optimization-2026-10-09)
+      - name: SQLite's flags on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
 
       - name: Build the core's library and tinystore
         run: cargo build --release --locked -p tinystore-ffi -p tinystore-cli
