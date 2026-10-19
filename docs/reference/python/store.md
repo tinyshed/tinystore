@@ -662,6 +662,7 @@ InvalidError:
 ```python
 class TinystoreError(Exception):
     code: ClassVar[str] = 'internal'
+    message: str
 ```
 
 ## InvalidError

@@ -124,6 +124,7 @@ A setting's line of explain.
 ```python
 class Explained(list[Line]):
     notes: list[str]
+    notes: list[str]
 ```
 
 Every setting's line, and in notes what was read and not used, each with why.
@@ -132,7 +133,7 @@ Every setting's line, and in notes what was read and not used, each with why.
 
 ```python
 class Config[T]:
-    ...
+    name: str
 ```
 
 A program's settings as one typed value, read from memory: ``await store.config(name, [Settings, …])``.

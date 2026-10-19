@@ -146,7 +146,7 @@ Fails the job for good now, its reason kept as its error: return it.
 
 ```python
 class Queue[T]:
-    ...
+    name: str
 ```
 
 A queue of jobs of one type, run in the order of their time: open it with ``store.queue(name, type)``.
@@ -387,7 +387,7 @@ Takes the job under id, whatever its state, with the commit.
 
 ```python
 class Schedule:
-    ...
+    name: str
 ```
 
 A repeat the code owns: one repeating job under its name, and the worker that runs it.

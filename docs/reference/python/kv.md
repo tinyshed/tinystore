@@ -30,7 +30,7 @@ A page of a branch's keys, and where the next starts when there is one.
 
 ```python
 class Bucket[T]:
-    ...
+    name: str
 ```
 
 A bucket's values under one branch of owners, the bucket's own when there are none.
@@ -176,7 +176,7 @@ A key written during the walk may or may not be met. It renews no idle key.
 
 ```python
 class Counters:
-    ...
+    name: str
 ```
 
 Numbers by key that only add up: 0 for one never added to, or expired. They come from ``store.counters``.
@@ -254,7 +254,7 @@ What a rate limit or a quota answers a request.
 
 ```python
 class RateLimit:
-    ...
+    name: str
 ```
 
 A rate of requests a key: open it with ``store.rate_limit(name, rate=...)``.
@@ -295,7 +295,7 @@ Forgets key, so that its next request starts afresh.
 
 ```python
 class Quota:
-    ...
+    name: str
 ```
 
 Uses by key in named windows: open it with ``store.quota(name, daily="100/1d")``.
@@ -340,7 +340,7 @@ Gives n uses back to every window of key, one unless given.
 
 ```python
 class Once[T]:
-    ...
+    name: str
 ```
 
 Answers kept once a key: open them with ``store.once(name, type)``.

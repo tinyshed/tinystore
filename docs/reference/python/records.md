@@ -139,7 +139,7 @@ What a list finds, and how its page reads.
 
 ```python
 class Events(_Reads):
-    ...
+    stream: str
 ```
 
 A stream of events: written with append, which waits for the file, and read back.

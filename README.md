@@ -160,19 +160,19 @@ cargo add tinystore
 
 <!-- landing:engines -->
 
-|                                           |                   |                                                                         |
-|-------------------------------------------|-------------------|-------------------------------------------------------------------------|
-| [SQL](docs/chat/messages.md)              | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](docs/chat/sessions-and-limits.md)    | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](docs/chat/replies.md)              | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
-| [Blobs](docs/start/why.md#the-engines)    | Files             | Files by path, written whole or not at all, checked when read.          |
-| [Search](docs/start/why.md#the-engines)   | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
-| [Channels](docs/start/why.md#the-engines) | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
-| [Locks](docs/start/why.md#the-engines)    | Coordination      | Locks and semaphores with fences, across processes and connections.     |
-| [Config](docs/start/why.md#the-engines)   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](docs/start/why.md#the-engines)  | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](docs/start/why.md#the-engines)  | Time series       | Samples kept bit for bit, answered exactly.                             |
-| [Backup](docs/start/why.md#the-engines)   | The whole store   | One checked zip of every engine, taken while it runs.                   |
+|                                             |                   |                                                                         |
+|---------------------------------------------|-------------------|-------------------------------------------------------------------------|
+| [SQL](docs/chat/messages.md)                | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
+| [KV](docs/chat/sessions-and-limits.md)      | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [Jobs](docs/chat/replies.md)                | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Blobs](docs/chat/attachments.md)           | Files             | Files by path, written whole or not at all, checked when read.          |
+| [Search](docs/chat/finding-old-messages.md) | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
+| [Channels](docs/start/why.md#the-engines)   | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
+| [Locks](docs/start/why.md#the-engines)      | Coordination      | Locks and semaphores with fences, across processes and connections.     |
+| [Config](docs/start/why.md#the-engines)     | Settings          | Files and the environment in layers; secrets; settings changed live.    |
+| [Records](docs/start/why.md#the-engines)    | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Metrics](docs/start/why.md#the-engines)    | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Backup](docs/start/why.md#the-engines)     | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 <!-- /landing:engines -->
 

@@ -37,7 +37,7 @@ What a write changed: the rows, and SQLite's rowid of the row it inserted, 0 whe
 
 ```python
 class Database:
-    ...
+    name: str
 ```
 
 An application's database: ``await store.database("app", migrations=...)``.

@@ -178,13 +178,15 @@ function member(index: LanguageIndex, owner: string, entry: ApiEntry): void {
  */
 function baseOf(code: string, language: ApiLanguage): string | undefined {
 	const found =
-		language === 'rust'
-			? /^impl Deref<Target = ([\w:]+)/m.exec(code)
-			: language === 'python'
-				? /^class \w+(?:\[[^\]]*\])?\((\w+)/m.exec(code)
-				: language === 'go'
-					? /^type \w+(?:\[[^\]]*\])? struct \{\n\t\*?(\w+)(?:\[[^\]]*\])?\n/m.exec(code)
-					: null
+		language === 'bun'
+			? /^(?:export )?(?:declare )?class \w+(?:<[^>]*>)? extends (\w+)/m.exec(code)
+			: language === 'rust'
+				? /^impl Deref<Target = ([\w:]+)/m.exec(code)
+				: language === 'python'
+					? /^class \w+(?:\[[^\]]*\])?\((\w+)/m.exec(code)
+					: language === 'go'
+						? /^type \w+(?:\[[^\]]*\])? struct \{\n\t\*?(\w+)(?:\[[^\]]*\])?\n/m.exec(code)
+						: null
 	return found?.[1]
 }
 

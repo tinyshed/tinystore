@@ -31,7 +31,8 @@ connection was lost and made again, and how many is unknown.
 
 ```python
 class Channel[T]:
-    ...
+    name: str
+    branch: tuple[str, ...]
 ```
 
 A channel of messages of one type, or one of its branches: ``store.channel(name, Chat)``.

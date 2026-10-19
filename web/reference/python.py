@@ -24,8 +24,10 @@ def main() -> None:
     public = exported(package) | kept_by_store(package)
     whole = exported_whole(package)
     items = []
-    for module in modules:
-        tree = ast.parse((package / f"{module}.py").read_text(encoding="utf-8"))
+    trees = {module: ast.parse((package / f"{module}.py").read_text(encoding="utf-8")) for module in modules}
+    for tree in trees.values():
+        read_fields(tree)
+    for module, tree in trees.items():
         if module in whole:
             items.append(constants(module, tree))
             continue
@@ -122,20 +124,48 @@ def klass(node: ast.ClassDef) -> dict:
 
 
 def set_in_init(init: ast.FunctionDef) -> list[str]:
-    """The public attributes __init__ sets from a class, `self.metrics = Metrics(link)`, as fields."""
+    """The public attributes __init__ sets, as fields, each with the type it can be told by:
+    `self.metrics = Metrics(link)`, `self.size = size` of a parameter's annotation,
+    `self.etag = info.etag` of a field of the parameter's class."""
+    params = {arg.arg: ast.unparse(arg.annotation) for arg in init.args.args + init.args.kwonlyargs if arg.annotation}
     lines = []
     body = init.body
     for at, child in enumerate(body):
-        if not (isinstance(child, ast.Assign) and isinstance(child.value, ast.Call)):
+        if not isinstance(child, ast.Assign):
             continue
         target = child.targets[0]
-        kind = getattr(child.value.func, "id", "")
+        kind = type_of(child.value, params)
         if isinstance(target, ast.Attribute) and getattr(target.value, "id", "") == "self" and public(target.attr) and kind:
             line = f"{target.attr}: {kind}"
             following = body[at + 1] if at + 1 < len(body) else None
             doc = docstring_after(following)
             lines.append(line if doc is None else f"{line}  # {' '.join(doc.split())}")
     return lines
+
+
+def type_of(value: ast.expr, params: dict[str, str]) -> str:
+    if isinstance(value, ast.Call):
+        return getattr(value.func, "id", "")
+    if isinstance(value, ast.Name):
+        return params.get(value.id, "")
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+        return FIELDS.get(params.get(value.value.id, ""), {}).get(value.attr, "")
+    return ""
+
+
+# every class's annotated fields, by its name, across the modules read: what
+# `self.etag = info.etag` is when `info: FileInfo`
+FIELDS: dict[str, dict[str, str]] = {}
+
+
+def read_fields(tree: ast.Module) -> None:
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            FIELDS[node.name] = {
+                child.target.id: ast.unparse(child.annotation)
+                for child in node.body
+                if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name)
+            }
 
 
 def head(node: ast.ClassDef) -> str:

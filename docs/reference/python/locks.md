@@ -39,7 +39,7 @@ last await ends it LostError too, since another holder may have run beside it.
 
 ```python
 class Lock:
-    ...
+    name: str
 ```
 
 Keys held one holder at a time: ``store.lock(name)``.
@@ -67,7 +67,8 @@ Holds key through the block if nobody holds it; the lease is None when somebody 
 
 ```python
 class Semaphore:
-    ...
+    name: str
+    limit: int
 ```
 
 Keys held by up to their limit at a time: ``store.semaphore(name, limit=3)``.

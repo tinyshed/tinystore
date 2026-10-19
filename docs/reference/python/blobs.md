@@ -1,6 +1,6 @@
 # Blobs API for Python
 
-Every public class, function and type of the Blobs engine in `tinystore`, generated from its source. The [Blobs guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Go](../go/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
+Every public class, function and type of the Blobs engine in `tinystore`, generated from its source. The [Blobs guide](../../chat/attachments.md) explains how to use them, and the [Bun and Node](../bun/blobs.md), [Go](../go/blobs.md) and [Rust](../rust/blobs.md) pages list the same API.
 
 ## FileInfo
 
@@ -44,7 +44,7 @@ The files of a folder and their bytes, as it is now.
 
 ```python
 class Files:
-    ...
+    name: str
 ```
 
 A named set of files by path, or a folder of it, whose calls are the folder's.
@@ -249,7 +249,7 @@ Ends the upload, which leaves nothing; after commit it does nothing.
 
 ```python
 class FileBytes:
-    ...
+    size: int
 ```
 
 Bytes of a file, read when they are read: ``async for chunk in file``, or all of them with read().
@@ -278,7 +278,13 @@ async def json() -> Any: ...
 
 ```python
 class StoredFile(FileBytes):
-    ...
+    info: FileInfo
+    path: str
+    etag: str
+    content_type: str
+    last_modified: datetime
+    expires: datetime | None
+    meta: dict[str, str]
 ```
 
 A file as get found it: what it carries, and its bytes.

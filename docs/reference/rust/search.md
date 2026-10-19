@@ -1,6 +1,6 @@
 # Search API for Rust
 
-Every public type, trait and function of the Search engine in `tinystore::search`, generated from its source. The [Search guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/search.md), [Python](../python/search.md) and [Go](../go/search.md) pages list the same API.
+Every public type, trait and function of the Search engine in `tinystore::search`, generated from its source. The [Search guide](../../chat/finding-old-messages.md) explains how to use them, and the [Bun and Node](../bun/search.md), [Python](../python/search.md) and [Go](../go/search.md) pages list the same API.
 
 ## Store
 

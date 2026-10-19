@@ -120,6 +120,21 @@ describe('a block of a guide', () => {
 		])
 	})
 
+	test("finds a file's reads on the class it extends, and Python's fields set in __init__", () => {
+		expect(
+			calls(
+				'bun',
+				"const files = store.files('attachments')\nconst file = await files.get('41/1')\nfile.stream()",
+			),
+		).toEqual(['files → Store.files', 'get → Files.get', 'stream → FileBytes.stream'])
+		expect(
+			calls(
+				'python',
+				'files = store.files("attachments")\nfile = await files.get("41/1")\nfile.etag',
+			),
+		).toEqual(['files → Store.files', 'get → Files.get', 'etag → StoredFile.etag'])
+	})
+
 	test('leaves a call on a variable of unknown type alone', () => {
 		expect(calls('bun', 'await cache.get(key)')).toEqual([])
 	})
