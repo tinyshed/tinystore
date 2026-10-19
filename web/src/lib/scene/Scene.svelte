@@ -3,60 +3,47 @@
 	import { Stage } from './stage'
 
 	/**
-	 * A scene played on the page: its code above, the stage, and a caption a
-	 * step at a time. It starts when it comes into view and pauses when it
-	 * leaves; a tap on the stage pauses or goes on, and a swipe turns the step.
+	 * A scene played on the page, a step at a time and only when the reader
+	 * asks: Next plays the next step and stops on it, Back plays the one before
+	 * again, and a tap on the stage plays the current step again. A swipe and
+	 * the arrow keys do the same.
 	 */
 	let { scene, codeHtml = '' }: { scene: Scene; codeHtml?: string } = $props()
 
 	let root: HTMLElement
 	let svg: SVGSVGElement
 	let code: HTMLElement | undefined = $state()
+	/** the step shown: before it has played, its picture before and its caption */
 	let at = $state(0)
+	let played = $state(false)
 	let playing = $state(false)
-	let finished = $state(false)
 	let progress = $state(0)
 	let stage: Stage | undefined
-	let token = 0
 
 	const steps = $derived(scene.steps.length)
 	const caption = $derived(scene.steps[at]?.caption ?? '')
+	const last = $derived(at === steps - 1 && played)
 	const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
-	// a caption stays long enough to be read before the next step
-	const hold = (step: number) => Math.max(1600, (scene.steps[step]?.caption.length ?? 0) * 40)
-
-	async function run(from: number) {
-		const mine = ++token
+	async function play(step: number) {
+		at = Math.max(0, Math.min(steps - 1, step))
+		played = false
 		playing = true
-		finished = false
-		for (let step = from; step < steps; step++) {
-			at = step
-			const played = await stage?.play(step, done => (progress = done))
-			if (!played || mine !== token) return
-			if (!(await stage?.wait(hold(step))) || mine !== token) return
+		progress = 0
+		const done = await stage?.play(at, part => (progress = part))
+		if (done) {
+			played = true
+			playing = false
 		}
-		playing = false
-		finished = true
 	}
 
-	function pause() {
-		token++
-		playing = false
-		stage?.show(at + 1)
-		progress = 1
+	function next() {
+		if (last) play(0)
+		else play(played ? at + 1 : at)
 	}
 
-	function go(step: number) {
-		token++
-		stage?.stop()
-		run(Math.max(0, Math.min(steps - 1, step)))
-	}
-
-	function toggle() {
-		if (playing) pause()
-		else if (finished) go(0)
-		else go(at)
+	function back() {
+		play(Math.max(0, at - 1))
 	}
 
 	// the code's lines this step runs, marked in the highlighted block
@@ -74,33 +61,17 @@
 			const narrow = root.clientWidth < 560
 			if (narrow === tall) return
 			tall = narrow
-			stage?.fit(root.clientWidth, at)
-			if (playing) go(at)
+			stage?.fit(root.clientWidth, played ? at + 1 : at)
+			playing = false
 		})
 		resize.observe(root)
-
-		let seen = false
-		const view = new IntersectionObserver(
-			([entry]) => {
-				if (entry?.isIntersecting && !seen) {
-					seen = true
-					go(0)
-				} else if (!entry?.isIntersecting && playing) {
-					pause()
-				}
-			},
-			{ threshold: 0.45 },
-		)
-		view.observe(root)
 		return () => {
-			token++
 			stage?.stop()
 			resize.disconnect()
-			view.disconnect()
 		}
 	})
 
-	// a swipe turns the step, a tap pauses or goes on
+	// a swipe turns the step, a tap plays the step again
 	let down: { x: number; y: number } | undefined
 	function pointerdown(event: PointerEvent) {
 		down = { x: event.clientX, y: event.clientY }
@@ -110,16 +81,20 @@
 		const dx = event.clientX - down.x
 		const dy = event.clientY - down.y
 		down = undefined
-		if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) go(at + (dx < 0 ? 1 : -1))
-		else if (Math.abs(dx) < 8 && Math.abs(dy) < 8) toggle()
+		if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+			if (dx < 0) next()
+			else back()
+		} else if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+			play(at)
+		}
 	}
 
 	function keydown(event: KeyboardEvent) {
-		if (event.key === 'ArrowRight') go(at + 1)
-		else if (event.key === 'ArrowLeft') go(at - 1)
-		else if (event.key === ' ') {
+		if (event.key === 'ArrowRight') next()
+		else if (event.key === 'ArrowLeft') back()
+		else if (event.key === ' ' || event.key === 'Enter') {
 			event.preventDefault()
-			toggle()
+			play(at)
 		}
 	}
 </script>
@@ -132,7 +107,7 @@
 		class="stage"
 		role="button"
 		aria-roledescription="animation"
-		aria-label="Step {at + 1} of {steps}: {caption}. Press to {playing ? 'pause' : 'play'}, arrows to turn the step."
+		aria-label="Step {at + 1} of {steps}: {caption}. Press to play this step, arrows to turn the step."
 		tabindex="0"
 		onpointerdown={pointerdown}
 		onpointerup={pointerup}
@@ -142,28 +117,33 @@
 		<svg bind:this={svg} aria-hidden="true"></svg>
 	</div>
 	<div class="foot">
-		<button class="play" onclick={toggle} aria-label={playing ? 'Pause' : finished ? 'Play again' : 'Play'}>
-			{#if playing}
-				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10M11 3v10" /></svg>
-			{:else if finished}
-				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" /></svg>
-			{:else}
-				<svg viewBox="0 0 16 16" aria-hidden="true"><path class="fill" d="M5 3l8 5-8 5z" /></svg>
-			{/if}
-		</button>
 		<div class="caption" aria-live="polite">
 			<span class="count">{at + 1} / {steps}</span>
 			{#key at}<p>{caption}</p>{/key}
 		</div>
-		<div class="dots">
-			{#each scene.steps as step, index (index)}
-				<button
-					class:done={index < at}
-					aria-current={index === at ? 'step' : undefined}
-					aria-label="Step {index + 1}: {step.caption}"
-					onclick={() => go(index)}
-				></button>
-			{/each}
+		<div class="controls">
+			<button class="turn" onclick={back} disabled={at === 0 && !played} aria-label="Back a step">
+				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" /></svg>
+			</button>
+			<button class="turn main" onclick={next} disabled={playing && at === steps - 1} aria-label={last ? 'Play from the start' : played || playing ? 'Next step' : 'Play this step'}>
+				{#if last}
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" /></svg>
+				{:else if played || playing}
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" /></svg>
+				{:else}
+					<svg viewBox="0 0 16 16" aria-hidden="true"><path class="fill" d="M5 3l8 5-8 5z" /></svg>
+				{/if}
+			</button>
+			<div class="dots">
+				{#each scene.steps as step, index (index)}
+					<button
+						class:done={index < at || (index === at && played)}
+						aria-current={index === at ? 'step' : undefined}
+						aria-label="Step {index + 1}: {step.caption}"
+						onclick={() => play(index)}
+					></button>
+				{/each}
+			</div>
 		</div>
 	</div>
 </div>
@@ -171,6 +151,7 @@
 <style>
 	.scene-player {
 		display: grid;
+		container-type: inline-size;
 		grid-template-columns: minmax(0, 1fr);
 		gap: 10px;
 		margin: 26px 0 30px;
@@ -391,12 +372,19 @@
 
 	.foot {
 		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-		gap: 14px;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 12px 20px;
 		align-items: start;
+		padding: 0 4px;
 	}
 
-	.play {
+	.controls {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.turn {
 		display: grid;
 		place-items: center;
 		width: 40px;
@@ -408,11 +396,22 @@
 		cursor: pointer;
 	}
 
-	.play:hover {
+	.turn:hover:not(:disabled) {
 		border-color: var(--ts-text);
 	}
 
-	.play svg {
+	.turn:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.turn.main {
+		border-color: var(--ts-accent);
+		background: var(--ts-accent);
+		color: var(--ts-accent-ink);
+	}
+
+	.turn svg {
 		width: 14px;
 		height: 14px;
 		fill: none;
@@ -422,7 +421,7 @@
 		stroke-linejoin: round;
 	}
 
-	.play .fill {
+	.turn .fill {
 		fill: currentColor;
 	}
 
@@ -484,14 +483,20 @@
 		background: var(--ts-accent);
 	}
 
-	@media (max-width: 560px) {
+	/* a narrow player, a phone's: the caption across the width, the controls on a row of their own */
+	@container (max-width: 560px) {
 		.foot {
-			grid-template-columns: auto minmax(0, 1fr);
+			grid-template-columns: minmax(0, 1fr);
+			padding: 0 6px;
+		}
+
+		.controls {
+			justify-content: space-between;
 		}
 
 		.dots {
-			grid-column: 1 / -1;
-			padding-top: 0;
+			order: -1;
+			margin-right: auto;
 		}
 	}
 
