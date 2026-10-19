@@ -13,13 +13,14 @@ one. Every call, by engine, is in docs/reference/bun.md.
 
 <!-- /landing:headline -->
 
-> **Release candidates first.** Until `v0.1.0`, the API may still change, and
-> a file written by one release may not open in the next.
+> **Not released yet.** Until `v0.1.0`, the API may still change, and a file
+> written by one version may not open in the next.
 
 The SDK starts a small `tinystore` server next to your program, called the
-sidecar, and talks to it over a local connection. The server binary comes with the
-package, so there is nothing else to install. Go programs embed the same
-engines, and every client of one directory sees the same data.
+sidecar, and talks to it over a local connection, so that several processes
+share one store. With `embedded: true` the core runs inside your process
+instead. The server and the core come with the package, so there is nothing
+else to install. It runs on Bun 1.4 and Node 22 or later.
 
 <!-- landing:sample -->
 

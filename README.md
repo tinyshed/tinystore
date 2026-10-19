@@ -27,19 +27,20 @@ the site's tests fail when the two differ. Change them there.
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
-  <img alt="Go" src="https://img.shields.io/badge/go-1.27-00ADD8?style=flat-square">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-1.95-B7410E?style=flat-square">
   <img alt="Status" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
 </p>
 
 ---
 
-> **Release candidates first.** Releases begin with `v0.1.0-rc.N`, before
-> `v0.1.0`. Until `v0.1.0`, the API may still change, and a file written by one
-> release may not open in the next.
+> **Not released yet.** Until `v0.1.0`, the API, the files and the protocol
+> change freely, and a store written by one build may not open in the next.
 
-Go programs embed TinyStore as a library. Bun, Node and Python programs reach
-the same directory through `tinystore serve`, a sidecar that their SDK starts,
-and the same protocol serves remote clients.
+TinyStore is written in Rust. A Rust program compiles the core in, and the
+program is the store. Bun, Node, Python and Go programs reach the same core
+through their SDK: by default in a `tinystore` process the SDK starts beside
+them, or inside their own process, and the same protocol serves remote
+clients.
 
 It is not a new database engine and does not try to beat specialised ones at
 their own job. SQLite is underneath, with formats of its own where a workload
@@ -197,10 +198,10 @@ For reference, see the [API reference](docs/reference/api.md) and the
 ## Looking at a store
 
 The same binary shows a person, and an AI agent, what a store holds while its
-application runs. Both SDK packages install it as the `tinystore` command:
-`bunx @tinyshed/tinystore …` and `uvx --from tinyshed-tinystore tinystore …` run it with
-nothing else installed, and `go install
-github.com/tinyshed/tinystore/cmd/tinystore@latest` builds it.
+application runs. The npm and PyPI packages install it as the `tinystore`
+command: `bunx @tinyshed/tinystore …` and `uvx --from tinyshed-tinystore tinystore …`
+run it with nothing else installed, and each GitHub release carries it for
+Linux, macOS and Windows.
 
 ```sh
 tinystore status ./data                            # each engine's bytes, and who serves the directory
