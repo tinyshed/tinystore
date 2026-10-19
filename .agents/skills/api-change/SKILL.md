@@ -35,8 +35,8 @@ first.
 ## Where a change goes, in one commit
 
 1. The core: the engine's module in `crates/tinystore/src/<engine>/`, its
-   doc comment's example, a test beside it, and a line in GATES.md for each
-   new promise with the test that keeps it.
+   doc comment's example, a test beside it naming the contract it keeps, and
+   CONTRACTS.md changed for a promise the change makes or moves.
 2. The wire, when the call crosses it: the `wire-change` skill.
 3. Every SDK, with a test through each way a store is reached, the core in
    the process, a private child, a sidecar and a remote server: `sdk/js`

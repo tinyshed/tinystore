@@ -79,7 +79,7 @@ Each line cost a debugging session once. The fix named is the one in the code.
   published package, today the Go candidate's, and fails far from the cause.
 - **npm and Bun take an optional dependency from the registry when its
   version is there**, even beside a tarball of the same name: the Go
-  engine's `0.1.0-rc.1` to `rc.4` are, so a release packed under those
+  engine's `0.1.0-rc.1` to `rc.5` are, so a release packed under those
   numbers runs the Go executable. Try packages with a version nobody has
   published.
 - **`bunx <name>` may run another program than the package's own**: call

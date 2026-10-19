@@ -51,7 +51,7 @@ language [protocol/README.md](../../../protocol/README.md) defines;
    frames, values, refusals and proofs, with each rule that refuses
    something new.
 5. The fuzz targets in `fuzz/` when a decoder learns a new shape.
-6. GATES.md, a line for each promise the change makes.
+6. CONTRACTS.md, for each promise the change makes or moves.
 
 `store.Options` reaches the core two ways and both change together: the
 pipe's `open` decodes it (`asked` in `crates/tinystore/src/pipe.rs`), and an

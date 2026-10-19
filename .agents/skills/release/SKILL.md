@@ -12,8 +12,8 @@ its registry. This skill is how to work on it without publishing by mistake.
 One version covers everything: the executable, the core's library, the Node
 addon, Python's module, the npm packages, the wheels, the image and the Go
 SDK's tag. Nothing is released yet, and the Go engine's candidates
-`0.1.0-rc.1` to `rc.4` already sit on npm and PyPI under the same names, so
-the first Rust release comes after them: `v0.1.0-rc.5` or `v0.1.0`.
+`0.1.0-rc.1` to `rc.5` already sit on npm and PyPI under the same names, so
+the first Rust release comes after them: `v0.1.0-rc.6` or `v0.1.0`.
 
 Tagging and publishing are outward-facing and cannot be taken back. Dispatch
 with publish on, or approve the `release` environment, only when the user has

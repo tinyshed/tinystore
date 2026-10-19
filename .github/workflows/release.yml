@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: The release, such as v0.1.0 or v0.1.0-rc.5
+        description: The release, such as v0.1.0 or v0.1.0-rc.6
         required: true
       publish:
         description: Push the tags and publish; otherwise build and try, and keep the artifacts only
@@ -52,7 +52,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   # the version is new everywhere and after what was published, before
-  # anything is built; npm holds the Go engine's candidates up to 0.1.0-rc.4
+  # anything is built; npm holds the Go engine's candidates up to 0.1.0-rc.5
   version:
     name: the version is new
     runs-on: ubuntu-24.04

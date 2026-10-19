@@ -35,7 +35,7 @@ replication-tls = ["replication", "dep:rustls"]
 # a logger's lines printed, which a store's logger keeps too
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
-metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics"]
+metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics", "dep:libc"]
 # the machine a store runs on among its own metrics: its process's memory and
 # processor, the system's memory, swap, processors by core and load
 system = ["metrics", "dep:sysinfo"]

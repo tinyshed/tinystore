@@ -259,7 +259,7 @@ page. The example tests compile and run, so they are the safest to copy from.
 | a Bun or Node call                           | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                            |
 | a Python call                                | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                                      |
 | a Rust call                                  | `crates/tinystore/src/<engine>/`, its doc comments and `*_tests.rs`                                                                          |
-| what a guarantee rests on                    | GATES.md: each promise and the test that checks it                                                                                           |
+| what a guarantee rests on                    | CONTRACTS.md: each promise by its id, and the tests that name it                                                                             |
 | a limit or a default                         | the engine's book, then the constant in the code                                                                                             |
 | why it works this way, and what was measured | research's `tinystore/design/<engine>.md` and `reports/`. They are not updated anymore, so if they disagree with the code, the code is right |
 | a good real-world example                    | the "Five cases" sections of the kv, jobs, blobs and sqldb design documents                                                                  |
