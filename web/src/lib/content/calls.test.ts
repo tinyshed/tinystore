@@ -77,6 +77,49 @@ describe('a block of a guide', () => {
 		])
 	})
 
+	test("finds a table's query calls on the query it derefs to, extends or embeds", () => {
+		expect(
+			calls('rust', 'let page = messages.filter(sql::eq("chat_id", &id)).list(50, None)?;'),
+		).toEqual([])
+		expect(
+			calls(
+				'rust',
+				'let db = store.database("chat").open()?;\nlet messages = db.table::<Message>("messages");\n' +
+					'let newest = messages.filter(x).order_by("id", Direction::Desc);',
+			),
+		).toEqual([
+			'database → Store.database',
+			'open → DatabaseBuilder.open',
+			'table → Database.table',
+			'filter → Query.filter',
+			'order_by → Query.order_by',
+			'Desc → Direction.Desc',
+		])
+		expect(
+			calls(
+				'python',
+				'db = await store.database("chat")\nmessages = db.table("messages", Message)\nnewest = messages.where(chat_id=1)',
+			),
+		).toEqual(['database → Store.database', 'table → Database.table', 'where → Query.where'])
+		expect(
+			calls(
+				'go',
+				'messages := sqldb.OpenTable[Message](db, "messages")\nnewest := messages.Where(x).OrderBy("id", sqldb.Desc)',
+			),
+		).toEqual([
+			'OpenTable → OpenTable',
+			'Where → Query.Where',
+			'OrderBy → Query.OrderBy',
+			'Desc → Asc',
+		])
+	})
+
+	test("knows a Rust enum's variants", () => {
+		expect(calls('rust', 'let kind = ConstraintKind::ForeignKey;')).toEqual([
+			'ForeignKey → ConstraintKind.ForeignKey',
+		])
+	})
+
 	test('leaves a call on a variable of unknown type alone', () => {
 		expect(calls('bun', 'await cache.get(key)')).toEqual([])
 	})

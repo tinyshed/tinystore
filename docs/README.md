@@ -30,7 +30,7 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 
 ## Building the chat
 
-- Messages
+- [Messages](chat/messages.md)
 - Sessions and limits
 - Replies in the background
 - Attachments

@@ -216,6 +216,8 @@ pub fn update(self, change: impl FnMut(&mut T)) -> Result<()>
 
 ```rust
 pub struct Snapshot<T> { /* private fields */ }
+
+impl Deref<Target = T>
 ```
 
 The settings as they were at one version of the config's changes: a
@@ -241,6 +243,8 @@ A watch of a config, which stops when it is dropped.
 
 ```rust
 pub struct Live<T>(_)
+
+impl Deref<Target = T>
 ```
 
 A setting that may change while the program runs: its change is kept in
@@ -263,6 +267,8 @@ pub fn into_inner(self) -> T
 
 ```rust
 pub struct Required<T>(_)
+
+impl Deref<Target = T>
 ```
 
 A setting with no default: a layer must give it, or the config does not

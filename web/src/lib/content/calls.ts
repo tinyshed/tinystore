@@ -44,6 +44,8 @@ interface LanguageIndex {
 	top: Map<string, ApiEntry>
 	/** Go's packages, `kv`, `sqldb`, `tinystore` */
 	packages: Set<string>
+	/** a Rust type that derefs to another, whose methods it has too: `Table` to `Query` */
+	derefs: Map<string, string>
 }
 
 export type ApiIndex = Record<ApiLanguage, LanguageIndex>
@@ -76,7 +78,7 @@ export function readApiIndex(root: string): ApiIndex {
 	const index = Object.fromEntries(
 		apiLanguages.map(language => [
 			language,
-			{ types: new Map(), top: new Map(), packages: new Set<string>() },
+			{ types: new Map(), top: new Map(), packages: new Set<string>(), derefs: new Map() },
 		]),
 	) as ApiIndex
 	for (const language of apiLanguages) {
@@ -140,6 +142,18 @@ function add(
 	if (dot === -1 || (language === 'go' && /^[a-z]/.test(entry.name))) {
 		const name = language === 'go' ? qualified : shortName(entry.name)
 		index.top.set(name, entry)
+		const target = baseOf(entry.code, language)
+		if (target !== undefined) {
+			index.derefs.set(shortName(entry.name), shortName(target))
+		}
+		for (const variant of variantsOf(entry.code, language)) {
+			member(index, shortName(entry.name), { ...entry, name: `${entry.name}.${variant}` })
+		}
+		if (language === 'go' && pkg !== undefined) {
+			for (const constant of groupedConstants(entry.code)) {
+				index.top.set(`${pkg}.${constant}`, entry)
+			}
+		}
 		for (const field of fieldsOf(entry, language)) {
 			member(index, shortName(entry.name), field)
 		}
@@ -156,6 +170,38 @@ function member(index: LanguageIndex, owner: string, entry: ApiEntry): void {
 	if (!members.has(name)) {
 		members.set(name, { ...entry, owner })
 	}
+}
+
+/**
+ * What a type has every method of: Rust's `impl Deref<Target = Query>`,
+ * Python's `class Table(Query[T])`, Go's embedded `*Query[T]`.
+ */
+function baseOf(code: string, language: ApiLanguage): string | undefined {
+	const found =
+		language === 'rust'
+			? /^impl Deref<Target = ([\w:]+)/m.exec(code)
+			: language === 'python'
+				? /^class \w+(?:\[[^\]]*\])?\((\w+)/m.exec(code)
+				: language === 'go'
+					? /^type \w+(?:\[[^\]]*\])? struct \{\n\t\*?(\w+)(?:\[[^\]]*\])?\n/m.exec(code)
+					: null
+	return found?.[1]
+}
+
+// a Rust enum's variants, `ConstraintKind::ForeignKey`, are called as its members
+function variantsOf(code: string, language: ApiLanguage): string[] {
+	if (language !== 'rust' || !code.startsWith('pub enum ')) {
+		return []
+	}
+	return [...code.matchAll(/^ {4}([A-Z]\w*)/gm)].map(match => match[1] ?? '')
+}
+
+// every name of a Go `const ( … )` block, which the reference lists under its first
+function groupedConstants(code: string): string[] {
+	if (!code.startsWith('const (')) {
+		return []
+	}
+	return [...code.matchAll(/^\t([A-Z]\w*)\b/gm)].map(match => match[1] ?? '')
 }
 
 // `memory::Budget` is `Budget` to a program that imported it
@@ -430,6 +476,18 @@ function start(
 	return undefined
 }
 
+// a type's member, or the member of what it derefs to
+function memberOf(api: LanguageIndex, type: string, name: string): ApiEntry | undefined {
+	for (let at: string | undefined = type, hops = 0; at !== undefined && hops < 4; hops++) {
+		const found = api.types.get(at)?.get(name)
+		if (found !== undefined) {
+			return found
+		}
+		at = api.derefs.get(at)
+	}
+	return undefined
+}
+
 // what a Rust type has from a trait it derives, which rustdoc lists apart from its methods
 const derived = new Set(['default', 'clone', 'into', 'from', 'to_owned', 'to_string'])
 
@@ -450,7 +508,7 @@ function follow(
 	const entry =
 		receiver.kind === 'package'
 			? api.top.get(`${receiver.name}.${name}`)
-			: api.types.get(receiver.name)?.get(name)
+			: memberOf(api, receiver.name, name)
 	if (entry === undefined) {
 		const known = receiver.kind === 'package' || api.types.has(receiver.name)
 		if (known && !(language === 'rust' && derived.has(name))) {

@@ -5,7 +5,7 @@ Every public type, function and method of TinyStore in Bun and Node, Python, Go 
 | Engine                                  | Bun and Node                    | Python                             | Go                             | Rust                             |
 |-----------------------------------------|---------------------------------|------------------------------------|--------------------------------|----------------------------------|
 | [Store](../start/directory.md)          | [Store API](bun/store.md)       | [Store API](python/store.md)       | [Store API](go/store.md)       | [Store API](rust/store.md)       |
-| [SQL](../start/why.md#the-engines)      | [SQL API](bun/sql.md)           | [SQL API](python/sql.md)           | [SQL API](go/sql.md)           | [SQL API](rust/sql.md)           |
+| [SQL](../chat/messages.md)              | [SQL API](bun/sql.md)           | [SQL API](python/sql.md)           | [SQL API](go/sql.md)           | [SQL API](rust/sql.md)           |
 | [KV](../start/why.md#the-engines)       | [KV API](bun/kv.md)             | [KV API](python/kv.md)             | [KV API](go/kv.md)             | [KV API](rust/kv.md)             |
 | [Jobs](../start/why.md#the-engines)     | [Jobs API](bun/jobs.md)         | [Jobs API](python/jobs.md)         | [Jobs API](go/jobs.md)         | [Jobs API](rust/jobs.md)         |
 | [Blobs](../start/why.md#the-engines)    | [Blobs API](bun/blobs.md)       | [Blobs API](python/blobs.md)       | [Blobs API](go/blobs.md)       | [Blobs API](rust/blobs.md)       |

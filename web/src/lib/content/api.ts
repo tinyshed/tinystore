@@ -24,7 +24,7 @@ export interface ApiEngine {
 
 export const apiEngines: ApiEngine[] = [
 	{ slug: 'store', title: 'Store', guide: 'start/directory.md' },
-	{ slug: 'sql', title: 'SQL', guide: 'start/why.md#the-engines' },
+	{ slug: 'sql', title: 'SQL', guide: 'chat/messages.md' },
 	{ slug: 'kv', title: 'KV', guide: 'start/why.md#the-engines' },
 	{ slug: 'jobs', title: 'Jobs', guide: 'start/why.md#the-engines' },
 	{ slug: 'blobs', title: 'Blobs', guide: 'start/why.md#the-engines' },

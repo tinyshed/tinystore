@@ -197,7 +197,28 @@ class Reader {
 		}
 		const members =
 			kind === 'struct' || kind === 'enum' || kind === 'trait' ? this.#members(entry, name) : []
-		return { name, code: printed, doc, ...(members.length > 0 ? { members } : {}) }
+		const target = kind === 'struct' ? this.#derefTarget(entry) : undefined
+		const code = target === undefined ? printed : `${printed}\n\nimpl Deref<Target = ${target}>`
+		return { name, code, doc, ...(members.length > 0 ? { members } : {}) }
+	}
+
+	// a type that derefs to another has that one's methods too, as a table its query's
+	#derefTarget(entry: Entry): string | undefined {
+		const [kind] = Object.keys(entry.inner)
+		const impls = (entry.inner[kind ?? '']?.impls ?? []) as number[]
+		for (const id of impls) {
+			const impl = this.#entry(id).inner.impl
+			if (shortPath(impl.trait?.path ?? '') !== 'Deref') {
+				continue
+			}
+			for (const itemId of impl.items as number[]) {
+				const item = this.#entry(itemId)
+				if (item.name === 'Target' && 'assoc_type' in item.inner) {
+					return new Types().type(item.inner.assoc_type.type)
+				}
+			}
+		}
+		return undefined
 	}
 
 	#code(kind: string, inner: Json, name: string): string | undefined {
