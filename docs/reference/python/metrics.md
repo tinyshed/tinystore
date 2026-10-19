@@ -1,6 +1,6 @@
 # Metrics API for Python
 
-Every public class, function and type of the Metrics engine in `tinystore`, generated from its source. The [Metrics guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Go](../go/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
+Every public class, function and type of the Metrics engine in `tinystore`, generated from its source. The [Metrics guide](../../chat/how-fast-it-is.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Go](../go/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
 
 ## Series
 

@@ -69,7 +69,7 @@ contains. With npm, pnpm or Yarn, install it as `npm install @tinyshed/tinystore
 | [Locks](https://github.com/tinyshed/tinystore/blob/main/docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
 | [Config](https://github.com/tinyshed/tinystore/blob/main/docs/chat/settings.md)                                   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
 | [Records](https://github.com/tinyshed/tinystore/blob/main/docs/chat/what-it-is-doing.md)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                          | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/chat/how-fast-it-is.md)                            | Time series       | Samples kept bit for bit, answered exactly.                             |
 | [Backup](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                           | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 <!-- /landing:engines -->

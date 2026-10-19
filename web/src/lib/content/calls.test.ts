@@ -114,6 +114,21 @@ describe('a block of a guide', () => {
 		])
 	})
 
+	test('takes the form of a builder’s open that gives what it builds', () => {
+		expect(
+			calls(
+				'rust',
+				'let stats = store.metrics()?;\nlet t = stats.timer("chat_model_ms").help("x").open()?;\nt.record(d);',
+			),
+		).toEqual([
+			'metrics → Store.metrics',
+			'timer → Metrics.timer',
+			'help → Builder.help',
+			'open → Builder.open',
+			'record → Timer.record',
+		])
+	})
+
 	test("leaves alone what a snapshot of the program's own type holds", () => {
 		expect(
 			calls(

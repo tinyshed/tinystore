@@ -1,6 +1,6 @@
 # Metrics API for Go
 
-Every public type, function and constant of the Metrics engine in `tinyshed.org/tinystore/metrics`, generated from its source. The [Metrics guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
+Every public type, function and constant of the Metrics engine in `tinyshed.org/tinystore/metrics`, generated from its source. The [Metrics guide](../../chat/how-fast-it-is.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
 
 ## Delete
 

@@ -1,6 +1,6 @@
 # Metrics API for Rust
 
-Every public type, trait and function of the Metrics engine in `tinystore::metrics`, generated from its source. The [Metrics guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Go](../go/metrics.md) pages list the same API.
+Every public type, trait and function of the Metrics engine in `tinystore::metrics`, generated from its source. The [Metrics guide](../../chat/how-fast-it-is.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Go](../go/metrics.md) pages list the same API.
 
 ## Store
 

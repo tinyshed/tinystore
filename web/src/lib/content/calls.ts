@@ -46,6 +46,8 @@ interface LanguageIndex {
 	packages: Set<string>
 	/** a Rust type that derefs to another, whose methods it has too: `Table` to `Query` */
 	derefs: Map<string, string>
+	/** every form of a member that one type lists more than once, `Builder.open` of each instrument */
+	overloads: Map<string, ApiEntry[]>
 }
 
 export type ApiIndex = Record<ApiLanguage, LanguageIndex>
@@ -78,7 +80,13 @@ export function readApiIndex(root: string): ApiIndex {
 	const index = Object.fromEntries(
 		apiLanguages.map(language => [
 			language,
-			{ types: new Map(), top: new Map(), packages: new Set<string>(), derefs: new Map() },
+			{
+				types: new Map(),
+				top: new Map(),
+				packages: new Set<string>(),
+				derefs: new Map(),
+				overloads: new Map(),
+			},
 		]),
 	) as ApiIndex
 	for (const language of apiLanguages) {
@@ -170,6 +178,9 @@ function member(index: LanguageIndex, owner: string, entry: ApiEntry): void {
 	if (!members.has(name)) {
 		members.set(name, { ...entry, owner })
 	}
+	const forms = index.overloads.get(`${owner}.${name}`) ?? []
+	forms.push({ ...entry, owner })
+	index.overloads.set(`${owner}.${name}`, forms)
 }
 
 /**
@@ -283,6 +294,14 @@ function fieldsOf(entry: ApiEntry, language: ApiLanguage): ApiEntry[] {
 
 /** The type a call or a field gives back, by its name: `Bucket` for `Promise<Bucket<T>>`. */
 export function returnType(entry: ApiEntry, language: ApiLanguage): string | undefined {
+	return returned(entry, language)?.name
+}
+
+/** What a call gives back: its type's name and its first type argument, `Builder` and `Timer`. */
+function returned(
+	entry: ApiEntry,
+	language: ApiLanguage,
+): { name: string; arg?: string } | undefined {
 	const written = entry.fieldType ?? resultOf(firstLine(entry.code, language), language)
 	if (written === undefined) {
 		return undefined
@@ -302,7 +321,12 @@ export function returnType(entry: ApiEntry, language: ApiLanguage): string | und
 		return undefined
 	}
 	const short = name.split(/\.|::/).at(-1) ?? name
-	return short === 'Self' || short === 'this' ? entry.owner : short
+	const own = short === 'Self' || short === 'this' ? entry.owner : short
+	if (own === undefined) {
+		return undefined
+	}
+	const arg = /^[\w.:]+\s*[<[]\s*(?:'\w+,\s*)?([\w:]+)/.exec(type)?.[1]?.split(/\.|::/).at(-1)
+	return arg === undefined ? { name: own } : { name: own, arg }
 }
 
 // an overloaded method lists every form, and the first is the common one
@@ -386,7 +410,7 @@ function matching(text: string, open: number): number {
 export type Scope = Map<ApiLanguage, Map<string, string>>
 
 type Receiver =
-	| { kind: 'type'; name: string }
+	| { kind: 'type'; name: string; arg?: string }
 	| { kind: 'static'; name: string }
 	| { kind: 'package'; name: string }
 
@@ -510,7 +534,7 @@ function follow(
 	const entry =
 		receiver.kind === 'package'
 			? api.top.get(`${receiver.name}.${name}`)
-			: memberOf(api, receiver.name, name)
+			: formFor(api, receiver, name, language)
 	if (entry === undefined) {
 		// a snapshot that derefs to the program's own type, `T`, has members nobody lists
 		const target = api.derefs.get(receiver.name)
@@ -526,8 +550,28 @@ function follow(
 		return undefined
 	}
 	out.marks.push({ start: at, end: at + name.length, entry })
-	const type = returnType(entry, language)
-	return type === undefined ? undefined : { kind: 'type', name: type }
+	const type = returned(entry, language)
+	if (type === undefined) {
+		return undefined
+	}
+	// a builder's `Self` keeps what it builds: `Builder<Timer>.buckets(…)` still builds a Timer
+	const kept = receiver.kind === 'type' && type.name === receiver.name && type.arg === undefined
+	return kept ? { ...receiver } : { kind: 'type', ...type }
+}
+
+// `Builder<Timer>.open` is the form of `open` that gives a Timer, not the first one listed
+function formFor(
+	api: LanguageIndex,
+	receiver: Receiver,
+	name: string,
+	language: ApiLanguage,
+): ApiEntry | undefined {
+	const first = memberOf(api, receiver.name, name)
+	if (receiver.kind !== 'type' || receiver.arg === undefined) {
+		return first
+	}
+	const forms = api.overloads.get(`${receiver.name}.${name}`) ?? []
+	return forms.find(form => returnType(form, language) === receiver.arg) ?? first
 }
 
 /** Past a call's generics and arguments, Rust's `?` and a TypeScript `!`, from just after a name. */

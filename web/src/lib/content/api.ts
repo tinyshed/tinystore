@@ -33,7 +33,7 @@ export const apiEngines: ApiEngine[] = [
 	{ slug: 'locks', title: 'Locks', guide: 'chat/live-updates.md#one-summary-per-chat-at-a-time' },
 	{ slug: 'config', title: 'Config', guide: 'chat/settings.md' },
 	{ slug: 'records', title: 'Records', guide: 'chat/what-it-is-doing.md' },
-	{ slug: 'metrics', title: 'Metrics', guide: 'start/why.md#the-engines' },
+	{ slug: 'metrics', title: 'Metrics', guide: 'chat/how-fast-it-is.md' },
 	{ slug: 'backup', title: 'Backup', guide: 'start/why.md#the-engines' },
 ]
 
