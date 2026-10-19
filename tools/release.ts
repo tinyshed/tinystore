@@ -81,7 +81,7 @@ function archive(target: Target, native: string, version: string, out: string): 
 	const name = `tinystore-${version}-${target.name}`
 	const staged = join(out, 'stage', name)
 	cpSync(join(native, 'bin'), join(staged, 'bin'), { recursive: true })
-	executable(join(staged, 'bin'))
+	markExecutable(join(staged, 'bin'))
 	cpSync(join(native, 'lib'), join(staged, 'lib'), { recursive: true })
 	cpSync(join(root, 'LICENSE'), join(staged, 'LICENSE'))
 	cpSync(join(root, 'README.md'), join(staged, 'README.md'))
@@ -97,7 +97,7 @@ function archive(target: Target, native: string, version: string, out: string): 
 function npmPlatform(target: Target, native: string, version: string, out: string): void {
 	const staged = join(out, 'stage', 'npm', target.name)
 	cpSync(join(native, 'bin'), join(staged, 'bin'), { recursive: true })
-	executable(join(staged, 'bin'))
+	markExecutable(join(staged, 'bin'))
 	cpSync(join(native, 'lib'), join(staged, 'lib'), { recursive: true })
 	cpSync(join(root, 'LICENSE'), join(staged, 'LICENSE'))
 	const manifest = {
@@ -251,7 +251,7 @@ function pack(dir: string, out: string): void {
  * may have left it otherwise. Packed on Windows, whose files keep no such
  * mark, a Unix package's executable is not one: a release packs on Linux.
  */
-function executable(dir: string): void {
+function markExecutable(dir: string): void {
 	for (const file of walk(dir)) {
 		chmodSync(file, 0o755)
 	}
