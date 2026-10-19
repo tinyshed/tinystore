@@ -1,6 +1,6 @@
 ---
 name: docs
-description: Use when writing or changing a page of the guides in docs/, the landing page's words in web/landing.md, or the site in web/ that reads them - where a page goes, its shape and voice, code in Go, Bun and Python, what makes it read well to an AI agent, where each fact is checked, and how to see it render before pushing.
+description: Use when writing or changing a page of the guides in docs/, the landing page's words in web/landing.md, or the site in web/ that reads them - where a page goes, its shape and voice, code in each language, what makes it read well to an AI agent, where each fact is checked, and how to see it render before pushing.
 ---
 
 # Writing the docs
@@ -14,6 +14,14 @@ TinyStore. Every page has to work in two ways:
 - **As a single page.** Many readers arrive from a search, a link or an
   agent's `llms.txt`, and see nothing but this one page. It must make sense on
   its own.
+
+> **The guides describe the Go release candidates.** On the `rust` branch
+> they are to be rewritten from the API books in `plan/api/`, which hold
+> every call site, in Rust, TypeScript, Python and Go, and what each
+> promises: a page is written from its engine's book and checked against
+> the code, never carried over from the Go guide it replaces. Until then
+> AGENTS.md says the guides promise nothing for this branch. The rules
+> below for shape, voice and checks hold as they are.
 
 A guide only describes what is built. The old design documents in research's
 `tinystore/design/` are a good source of facts and examples, but never copy
@@ -214,9 +222,9 @@ ai, err := kv.OpenQuota(ctx, state, "ai",
 ## The API pages
 
 `docs/reference/api.md` and `docs/reference/<language>/<engine>.md` are
-generated from the source by `task reference`, and the tests fail when they
-are stale. Never edit them: an API page says what the doc comments say, so
-fix a comment in the code and run `task reference`. A new engine, or a new
+generated from the source by `bun run reference` in `web/`, and the tests fail
+when they are stale. Never edit them: an API page says what the doc comments
+say, so fix a comment in the code and run it again. A new engine, or a new
 module of one, is added to `web/src/lib/content/api.ts` and to `sources` in
 `reference.ts`. `web/AGENTS.md` says how each language is read.
 
@@ -247,15 +255,15 @@ page. The example tests compile and run, so they are the safest to copy from.
 
 | To check                                     | Read                                                                                                                                         |
 |----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| a Go call, its options, contracts and errors | the package README (`kv/README.md`…), `go doc`, and its `example_test.go`                                                                    |
+| a call in any language                       | the engine's book, `plan/api/<engine>.md`, then the code and its tests                                                                       |
 | a Bun or Node call                           | `docs/reference/bun.md`, `sdk/js/src/<engine>.ts`, `sdk/js/test/<engine>.test.ts`                                                            |
 | a Python call                                | `docs/reference/python.md`, `sdk/python/src/tinystore/<engine>.py`, `sdk/python/tests/`                                                      |
-| a complete program that uses every engine    | `examples/notes/main.go`, built and tested                                                                                                   |
+| a Rust call                                  | `crates/tinystore/src/<engine>/`, its doc comments and `*_tests.rs`                                                                          |
 | what a guarantee rests on                    | GATES.md: each promise and the test that checks it                                                                                           |
-| a limit or a default                         | the package README's contracts, then the constant in the code                                                                                |
+| a limit or a default                         | the engine's book, then the constant in the code                                                                                             |
 | why it works this way, and what was measured | research's `tinystore/design/<engine>.md` and `reports/`. They are not updated anymore, so if they disagree with the code, the code is right |
 | a good real-world example                    | the "Five cases" sections of the kv, jobs, blobs and sqldb design documents                                                                  |
-| the command line                             | `tinystore` without arguments lists its commands; the code is in `cmd/tinystore/`                                                            |
+| the command line                             | `tinystore` without arguments lists its commands; the book is `plan/api/cli.md`, the code `crates/cli/`                                      |
 | the bytes on the wire                        | `docs/wire.md`                                                                                                                               |
 
 ## Callouts, tables, links
@@ -270,8 +278,8 @@ page. The example tests compile and run, so they are the safest to copy from.
   ```
 
   The kinds are GitHub's: NOTE, TIP, IMPORTANT, WARNING and CAUTION.
-- Align every table, its cells padded so that the pipes line up: `task
-  tables` does it, and `task web` fails on a table that is not aligned.
+- Align every table, its cells padded so that the pipes line up: `just
+  tables` does it, and the site's tests fail on a table that is not aligned.
 - A table with an empty header row, `| | |`, is drawn as rows without a
   header. Text in backticks is drawn in a monospace font.
 - Write links relative to the file, as on GitHub. A link to a page stays on
@@ -297,9 +305,9 @@ each engine's row to its overview page once that page exists, and to its
 package README until then.
 
 The README shows the same headline, pitch, sample and engines. After you
-change them in `web/landing.md`, run `task readme` to write them into the
-README. `task web` fails until the two match, and it also fails when a link
-in the README leads nowhere.
+change them in `web/landing.md`, run `bun run readme` in `web/` to write them
+into the README. The site's tests fail until the two match, and also when a
+link in the README leads nowhere.
 
 ## The packages' pages
 
@@ -310,10 +318,10 @@ how to connect, the command line, and links to the guides. Keep every call and
 option in `docs/reference/bun.md` and `docs/reference/python.md`, not on the
 package page.
 
-- `task readme` writes the headline, the sample and the engines from
+- `bun run readme` in `web/` writes the headline, the sample and the engines from
   `web/landing.md`, in the package's language only.
 - Every link is absolute, to `https://github.com/tinyshed/tinystore/blob/main/…`,
-  because npm and PyPI can't follow a relative link. `task web` fails on a
+  because npm and PyPI can't follow a relative link. The site's tests fail on a
   relative link and on a link to a file that doesn't exist.
 - Use plain markdown. npm drops centring HTML, and neither registry shows
   GitHub's `> [!NOTE]` callouts.
@@ -321,8 +329,8 @@ package page.
 ## Before pushing
 
 ```sh
-task web:dev   # the site on :5173, reloading as docs/ changes
-task web       # what CI runs: the checks, the tests and the build
+just web-dev                                       # the site on :5173, reloading as docs/ changes
+cd web && bun run check && bun test && bun run build   # what the site's workflow runs
 ```
 
 The build also checks every link. Then read the page once as a stranger
@@ -339,5 +347,5 @@ git grep -n -i -E '\b(simply|just|easy|easily|powerful|seamless)\b' -- docs/
 - [ ] nothing that isn't built is described as working
 - [ ] the page's item in `docs/README.md` is a link
 - [ ] every sentence reads well the first time
-- [ ] `task reference` changes nothing, after a change to a public name or its comment
-- [ ] `task web` passes
+- [ ] `bun run reference` in `web/` changes nothing, after a change to a public name or its comment
+- [ ] the site's check, tests and build pass

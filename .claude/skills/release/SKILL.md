@@ -1,6 +1,6 @@
 ---
 name: release
-description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the three Go tags, the binaries, npm, PyPI and the server image - or when changing internal/release, the release tasks or the workflows.
+description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the seven targets, tools/native.sh, tools/release.ts and tools/smoke.sh, npm's packages, PyPI's wheels, the GitHub release, the server image and the tags - or when changing any of them.
 ---
 
 The skill is shared with every agent working here: read `.agents/skills/release/SKILL.md`

@@ -1,125 +1,97 @@
 ---
 name: release
-description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the three Go tags, the binaries, npm, PyPI and the server image - or when changing internal/release, the release tasks or the workflows.
+description: Use when preparing, trying or publishing a TinyStore release - the Release workflow, the seven targets, tools/native.sh, tools/release.ts and tools/smoke.sh, npm's packages, PyPI's wheels, the GitHub release, the server image and the tags - or when changing any of them.
 ---
 
 # Releasing TinyStore
 
-One version for everything, since everything speaks one protocol: the three Go
-modules, the binary, npm, PyPI and the server image. A release is one run of
-the Release workflow (`.github/workflows/release.yml`); nothing is tagged or
-published by hand.
+[plan/release.md](../../../plan/release.md) is the contract: the targets,
+the machines that build them, what each package carries and how it reaches
+its registry. This skill is how to work on it without publishing by mistake.
 
-Tagging and publishing are outward-facing. Dispatch with publish on, or approve
-the run, only when the user has said to, for that version.
+One version covers everything: the executable, the core's library, the Node
+addon, Python's module, the npm packages, the wheels, the image and the Go
+SDK's tag. Nothing is released yet, and the Go engine's candidates
+`0.1.0-rc.1` to `rc.4` already sit on npm and PyPI under the same names, so
+the first Rust release comes after them: `v0.1.0-rc.5` or `v0.1.0`.
 
-## Releasing
+Tagging and publishing are outward-facing and cannot be taken back. Dispatch
+with publish on, or approve the `release` environment, only when the user has
+said to, for that version.
 
-1. CI is green on main, and the documents describe nothing unbuilt as working.
-2. Try it: Actions, Release, run from main with the version and publish off.
-   It runs CI on the commit unless the push already passed it, makes the three
-   tags in its runner, builds everything from them, and keeps `dist` and
-   `tags` as the run's artifacts. Try `dist` as below.
-3. Publish: the same with publish on. Once the build has passed, the run waits
-   for a reviewer of the `release` environment. Approving pushes the three tags
-   at once; npm, PyPI and the image publish; the GitHub release comes last,
-   with `dist/NOTES.md`, once what it announces is there.
+## The run
 
-A version is `vX.Y.Z` or `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, the
-pre-releases every registry spells (PyPI's `0.1.0rc1` is stamped for it).
-On npm a pre-release takes the `next` tag, and `latest` too while no release
-that is not one exists, since a plain `npm install` takes `latest`; the job
-sets the tag with `npm dist-tag`, which needs `NPM_TOKEN`, so a re-run mends
-it too. It
-comes after every release before it and is on neither npm nor PyPI yet; the
-workflow checks both before it tags.
+A release is one run of `.github/workflows/release.yml`, dispatched from
+`rust` (or `main`, once it is the Rust branch) with the version and publish.
 
-## What a release is
+1. `version` refuses a version npm, PyPI or a tag has already, and one
+   published from another branch.
+2. `ci` runs on the commit unless a push passed it already.
+3. `build`, seven jobs: `tools/native.sh` stamps the version into the
+   workspace and builds the target's `tinystore` and its core three times,
+   plain, with `node` and with `python`, into `native/<target>/`. Linux's run
+   in `manylinux_2_28` and `alpine` through `docker run`.
+4. `package`: `tools/release.ts` packs `native/` into `dist/`: the archives,
+   `npm/*.tgz`, `pypi/*.whl`, `SHA256SUMS`, `NOTES.md`.
+5. `smoke` and `smoke-musl`: `tools/smoke.sh` installs `dist/` into empty
+   projects and opens a store embedded and as a private child, from Node, Bun
+   and Python. Intel macOS is not tried: no machine runs it.
+6. With publish: `tags` waits for a reviewer, then pushes `vX.Y.Z` and
+   `sdk/go/vX.Y.Z` atomically; `npm`, `pypi` and `image` publish; `github`
+   makes the release last, with the archives and `SHA256SUMS`.
 
-|                                                                   |                                                                                           |
-|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| `vX.Y.Z`                                                          | the root module, at the commit CI passed                                                  |
-| `server/vX.Y.Z`                                                   | that commit, `server/go.mod` requiring the root at `vX.Y.Z` without its `replace`         |
-| `cmd/tinystore/vX.Y.Z`                                            | then `cmd/tinystore/go.mod` requiring both; the binaries build here and stamp `vX.Y.Z`    |
-| `tinystore_<v>_<os>_<arch>.tar.gz`, `.zip`, `SHA256SUMS`          | the GitHub release's assets                                                               |
-| `@tinyshed/tinystore-<os>-<cpu>` and `@tinyshed/tinystore` on npm | the binary a platform, and the SDK naming those six as optional dependencies              |
-| `tinyshed-tinystore` on PyPI                                      | a wheel a platform with the binary in `tinystore/bin/`, a pure wheel, an sdist            |
-| `ghcr.io/tinyshed/tinystore:<v>`                                  | the linux binaries, amd64 and arm64, on distroless static (`internal/release/Dockerfile`) |
+Without publish the run stops after the smoke tests and keeps `dist` as an
+artifact: that is how a release is tried in CI.
 
-Six platforms: linux, darwin and windows, amd64 and arm64. The binary is
-static, so one Linux wheel serves glibc and musl alike, and Go 1.27 needs
-macOS 12. The SDKs look for the binary exactly there (`packagedBinary`,
-`resources.files("tinystore") / "bin"`).
+## Trying it here
 
-A release never writes main. The `replace` directives that development needs,
-and that a required module ignores and `go install` refuses, are dropped by two
-commits that exist only under their tags. The SDKs' manifests say `0.0.0`:
-`internal/release` stamps the version into what it builds, and each SDK reads
-its own back (`package.json`, `importlib.metadata`), so a package cannot say
-another version than the one it was published as.
+- `just release-native <version> <target> <triple>` builds this machine's
+  target into `native/`. It rewrites `Cargo.toml` and `Cargo.lock`'s
+  version, so run it in a clone or a worktree (`git worktree add`), never in
+  the checkout you work in.
+- Linux from Windows or macOS: in the worktree,
+  `MSYS_NO_PATHCONV=1 docker run --rm -v "<worktree>:/src" -w /src -e VERSION -e TARGET -e TRIPLE quay.io/pypa/manylinux_2_28_x86_64 sh tools/native.sh`;
+  Alpine for musl. A bind mount from Windows is slow: twenty minutes and
+  more for three builds.
+- `just release-pack <version> <target>` packs `native/` into `dist/` and
+  runs the smoke test for `<target>` here.
+- Try with a version nobody published, `v9.9.9-rc.1`: Bun and npm fetch an
+  optional dependency the registry has under the same name and version, and
+  `@tinyshed/tinystore-win32-x64@0.1.0-rc.1` is the Go engine's executable,
+  which answers the Rust SDK `invalid message`.
+- With no `node_modules`, Bun installs an import from the registry on its
+  own: a test that found the old published SDK instead of the one packed
+  failed with `store.bucket is not a function`. Look in `node_modules`
+  before believing a result.
+- `bunx tinystore` may run another `tinystore` than the package's: call
+  `./node_modules/.bin/tinystore`.
+- `uvx twine check dist/pypi/*` before a wheel reaches PyPI, which refuses
+  what pip installs: a RECORD that lists a file after its bytes, a tag it
+  does not know.
+- Before pushing a workflow: `just lint-actions`. A release workflow that
+  does not parse fails only when a release needs it.
 
 ## Why it is safe
 
-- Nothing leaves the runner before CI has passed on the commit and everything
-  has built from the tags. `go mod tidy` reads the root and the server at
-  their new tags from the runner's repository through git, `GOPRIVATE` and a
-  `url.<repo>.insteadOf` in its environment, so `go.sum` holds what the module
-  proxy computes once the tags are pushed. It tidies in a module cache of its
-  own, since a cache that once held another commit under the same version
-  would hand that back.
-- The three tags go in one `git push --atomic`, all or none, from the bundle
-  the build made, and the root tag is checked to be the commit CI tested.
-- Tagging is deterministic: the two commits and three tags take HEAD's date,
-  so tagging the same HEAD again makes the same objects.
-- A tag is never moved or deleted once pushed: the module proxy and the
-  registries keep what they saw. A mistake is the next patch version.
+- Nothing leaves the runners before every target built and the smoke tests
+  passed on what was packed; the reviewers of `release` see that run first.
+- The two tags go in one `git push --atomic`, both or neither, on the commit
+  CI passed. A tag is never moved: a mistake is the next patch.
 - A publish that failed is run again with "Re-run failed jobs", which reuses
-  the build's artifacts: npm skips the packages it has, PyPI skips the files
-  it has, and the GitHub release is made once. Never run the build again once
-  its tags are pushed. A re-run mends what failed around the build, a setting
-  or a token; what the build made wrong, such as a wheel PyPI refuses, is the
-  next version.
-
-## Trying it locally
-
-- `task release:snapshot -- v0.1.0` builds `dist/` from the working tree,
-  whatever version the binaries stamp.
-- `task release:tag -- v0.0.1-rc.1`, in a scratch clone, makes the tags there
-  and prints how to build from them and how to undo it. Give the build a
-  `GOMODCACHE` of its own: a version made to try must never reach a cache a
-  real release would later read.
-- Install from `dist/` into an empty project, with no `TINYSTORE_BIN` and no
-  `tinystore` on `PATH`, and open a store privately and through its sidecar:
-  `bun add dist/npm/tinyshed-tinystore-<v>.tgz dist/npm/tinyshed-tinystore-<os>-<cpu>-<v>.tgz`,
-  the same two with `npm install` under Node, whose program imports the
-  compiled `dist`, a TypeScript project under Node that `tsc` checks against
-  the package's types, and `uv pip install --no-index --find-links dist/pypi
-  tinyshed-tinystore`, which also shows that the platform's wheel is the one
-  chosen. Run `bunx @tinyshed/tinystore version`, `npx @tinyshed/tinystore version` and the
-  wheel's `tinystore version` too. Do it on Windows, in `node:24-slim`,
-  `oven/bun`, `python:3.12-slim` and `python:3.12-alpine`, and run `uvx twine
-  check dist/pypi/*`. Neither twine nor pip refuses a wheel whose files give
-  their sizes after their bytes, and PyPI does, at the upload: that rule is
-  `TestAPlatformWheelRecordsEveryFile`'s.
-- The image: `linux-amd64/tinystore` and an empty `data/` beside
-  `internal/release/Dockerfile`, `docker build`, then run
-  `serve --dir /data --listen tcp://0.0.0.0:7443 --tokens /etc/tinystore/tokens`
-  with a tokens file mounted, and connect an SDK with `connect`.
-- `task lint:actions` before a workflow change is pushed: a release workflow
-  that does not parse fails only when a release needs it.
+  `dist`: npm skips what it has, PyPI skips files it has, the GitHub release
+  is made once. Never build again once the tags are pushed: what the build
+  made wrong is the next version.
+- The repository keeps `0.0.0` everywhere; only a build stamps a version, and
+  each package reads its own back (`package.json`, `importlib.metadata`).
 
 ## Once, before the first release
 
-- Environments: `release` with the maintainers as required reviewers, the
-  approval that pushes the tags, which without them go as soon as the build
-  passes; `npm` and `pypi`, each with `main` as its one deployment branch, or
-  its job fails at once: "Branch main is not allowed to deploy".
-- npm: the organisation `tinyshed` owns the scope. npm can trust a workflow
-  only for a package that exists, so the first release publishes with the
-  `NPM_TOKEN` secret of the `npm` environment; then set each of the seven
-  packages to trust `release.yml` on npmjs.com and delete the secret.
-- PyPI: a pending trusted publisher for `tinyshed-tinystore`: the repository
-  `tinyshed/tinystore`, the workflow `release.yml`, the environment `pypi`.
-- GHCR: after the first push, make the package `tinystore` public if it is not.
-- A tag ruleset for `v*`, `server/v*` and `cmd/tinystore/v*` that forbids
-  moving or deleting them, GitHub Actions allowed to create them.
+plan/release.md lists it: the environments `release`, `npm` and `pypi`;
+npm's first publish through `NPM_TOKEN`, then trusted publishing for each of
+the eight packages; PyPI's pending trusted publisher; GHCR's package made
+public; a tag ruleset for `v*` and `sdk/go/v*`.
+
+## Not built yet
+
+Go's modules a platform with the core's static library ([ffi.md](../../../plan/ffi.md)),
+crates.io, a `tinystore` console script in the wheel, Windows on ARM.

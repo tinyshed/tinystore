@@ -1,170 +1,131 @@
 ---
 name: sdk
-description: Use when building or changing a TinyStore client SDK (sdk/js, sdk/python) or any code that talks to `tinystore serve` as a client - finding or starting the sidecar, the handshake and its proof, streams, credit, errors, value mapping, reconnecting, and packaging the server binary with the SDK.
+description: Use when building or changing a TinyStore SDK (sdk/js for Bun and Node, sdk/python, sdk/go) or any code that talks to the core as a client - the core in the program's own process through bun:ffi, the Node addon, PyO3 or the C library, a private child, the sidecar and its SERVE proof, a remote server, streams, credit, errors, values, reconnecting, and what a platform's package carries.
 ---
 
 # Building a TinyStore SDK
 
-A client is the other half of a contract the server already keeps. Get the
-contract from the documents, not from the Go client in
-`server/internal/client`, which is a test's and a measurement's.
+An SDK is the protocol's client and nothing more: every call is a message the
+core answers, so a behaviour is the core's, and an SDK only says it in its
+language. Read [plan/protocol.md](../../../plan/protocol.md),
+[plan/ffi.md](../../../plan/ffi.md) and [docs/wire.md](../../../docs/wire.md)
+first, and the engine's book in `plan/api/` for its call sites in every
+language.
 
-## Read first
+| SDK    | Where        | Its core in the process                                       |
+|--------|--------------|---------------------------------------------------------------|
+| Bun    | `sdk/js`     | bun:ffi over the C library (`src/runtime/pipe.ts`)            |
+| Node   | `sdk/js`     | the napi-rs addon, `tinystore.node` (`src/runtime/addon.ts`)  |
+| Python | `sdk/python` | PyO3's `tinystore._core`, the core built with `python`        |
+| Go     | `sdk/go`     | the C library: cgo's dlopen on Unix, syscall's DLL on Windows |
 
-- `docs/wire.md`: frames, `HELLO` and `WELCOME`, *Finding a local server*,
-  *Versions*, every engine's methods, the error codes.
-- Research's design/server.md, the design both SDKs were built to: *What a
-  connection may do*, *Across the wire*, *SDKs*. It is kept as it was; where it
-  and the code disagree, the code and its tests decide.
-- `server/wire/testdata/vectors.json`: the bytes every SDK is tested against;
-  `messages.json` beside it, every message by its fields' names, with the
-  methods' numbers and the errors' codes.
+The C library, the addon and Python's module are `crates/ffi` built three
+ways, the same four calls: open, send, recv, close. One package a language;
+Bun and Node share one, its runtime chosen as it loads (`typeof Bun`).
 
-One commit changes the protocol, the server, both SDKs and the vectors. The
-SDKs live in `sdk/js` (Bun and Node), `sdk/python` and `sdk/go`, the Go
-module `tinyshed.org/tinystore`. What they look like to an application,
-beside Go, is the guides in `docs/`, three languages a page; the rules every
-call follows, and any change to what a program writes, are the `api-change`
-skill's, since it reaches all three.
+## Four ways to a store, one session
 
-## Reaching the server, in this order
+Every way carries the same frames to the same session, so a test runs through
+all four (`test/ways.ts`, `tests/ways.py`, `internal/ways`):
 
-1. **A private child** (`open(dir, { private: true })`): spawn
-   `tinystore serve --dir <dir> --stdio`. Frames go on stdin and stdout; read
-   stderr to its end, since a pipe nobody drains stops the server once it
-   fills. Closing stdin is the shutdown; the child also leaves on a signal.
-2. **The directory's sidecar** (the default):
-   - read `<dir>/server/SERVE`: `protocol`, `server`, `pid`, `instance`,
-     `secret` (32 bytes, base64url without padding) and `endpoints`; open,
-     read and close it at once, since Windows refuses to replace a file a
-     reader holds;
-   - connect to `endpoints[0]` and send `HELLO` with a fresh `challenge` of 16
-     random bytes;
-   - before any `REQUEST`, check that `WELCOME.proof` is the HMAC-SHA256 of
-     the challenge keyed with the decoded secret, compared in constant time.
-     A process that took a dead server's endpoint cannot answer it; the
-     `proofs` vector is the test;
-   - on any failure (no file, a refused connection, a proof that does not
-     check), run `tinystore serve --dir <dir> --local --log
-     <dir>/server/serve.log`, detached and with no pipes, since nothing will
-     read them and it outlives this process. Exit code 3 means
-     another process holds the directory: read `SERVE` again until the winner
-     answers, five seconds at most, and start once more when none does, since
-     a sidecar leaving for idleness removes `SERVE` first and holds `LOCK`
-     until its store has closed; any other code, or no answer, is an error
-     quoting the log's last lines;
-   - never trust `pid`: pids are reused, and `LOCK` is the truth.
-3. **A remote server**: `tls://` verifies the server's certificate before the
-   token leaves in `HELLO`; `tcp://` sends the token in the clear.
+1. **The core in the process** (`embedded`): the pipe. Bun's wake is a
+   threadsafe `JSCallback`, Node's a threadsafe function that keeps the loop
+   alive while the store is open, Python's a thread waiting in `recv` with the
+   GIL let go, Go's a goroutine in `recv`. A directory another process holds
+   is `in use`.
+2. **A private child** (`private`): `tinystore serve --dir <dir> --stdio`,
+   frames on stdin and stdout; read stderr to its end, since a pipe nobody
+   drains stops the server once it fills; closing stdin is the shutdown, and
+   `close` waits for the child's exit, since until then it holds the
+   directory.
+3. **The directory's sidecar** (the default): read `<dir>/server/SERVE`
+   (`protocol`, `server`, `pid`, `instance`, `secret`, `endpoints`, and
+   `sidecar`), open, read and close it at once; connect to `endpoints[0]`
+   with a fresh 16-byte challenge in `HELLO`, and before any `REQUEST` check
+   `WELCOME.proof`, the HMAC-SHA256 of the challenge keyed with the secret,
+   in constant time. Any failure starts `tinystore serve --dir <dir> --local
+   --log-file <dir>/server/serve.log`, detached; exit code 3 means another
+   process holds the directory, so read `SERVE` again. A sidecar of an older
+   release is stopped and replaced; any other server of an older release is
+   told of once. Never trust `pid`: `LOCK` is the truth.
+4. **A remote server**: `tls://` checks the certificate before the token
+   leaves in `HELLO`; `tcp://` sends it in the clear.
 
-Endpoints: `pipe:tinystore-<16 hex>` on Windows (`\\.\pipe\...`: Bun through
-`node:net`, Python through asyncio's Proactor `create_pipe_connection`;
-CPython on Windows has no `AF_UNIX`), `unix://<path>` elsewhere, which may lie
-under `$XDG_RUNTIME_DIR` when the store's path is long.
+How a store opens, durability, the encryption key's file, a node, its own
+metrics, is `store.Options` to the core in the process, and the same as
+`serve`'s flags to a child or a sidecar this process starts; one found
+running keeps its own.
+
+## What an SDK finds
+
+In this order: what the program gives, the variable, then this platform's
+package, then `PATH` for the executable alone:
+
+| What           | Given     | Variable            | Packaged                                                          |
+|----------------|-----------|---------------------|-------------------------------------------------------------------|
+| the executable | `binary`  | `TINYSTORE_BIN`     | `@tinyshed/tinystore-<target>/bin/`, the wheel's `tinystore/bin/` |
+| Bun's core     | `library` | `TINYSTORE_LIBRARY` | `@tinyshed/tinystore-<target>/lib/`                               |
+| Node's core    | `library` | `TINYSTORE_ADDON`   | `@tinyshed/tinystore-<target>/lib/tinystore.node`                 |
+| Python's core  |           |                     | `tinystore._core`, in the wheel                                   |
+| Go's core      | `Library` | `TINYSTORE_LIBRARY` | none yet: the GitHub release's archive                            |
+
+`<target>` is `process.platform-process.arch`, and `-musl` after it on a
+Linux whose loader is musl's (`platformPackage` in
+`src/runtime/shared.ts`); the `release` skill has what each package holds.
 
 ## On the wire
 
-- Every call is a stream of its own: a `u32` number, never 0, never one still
-  in use. Answers come in any order; calls return promises.
-- Frames asked for in one microtask (JavaScript) or one loop turn (asyncio)
-  leave in one write.
-- Credit: the connection's (8 MiB from `WELCOME`) bounds `REQUEST` and `DATA`
-  bytes the client sends until the server grants more with `CREDIT` on stream
-  0; a stream's credit bounds its `DATA` both ways, and the client grants a
-  download's with `CREDIT` on the stream. A client past its credit loses the
-  connection.
-- Answer `PING` with `PONG` carrying the same eight bytes.
+- Every call is a stream of its own; answers come in any order. Frames asked
+  for in one microtask or one loop turn leave in one write.
+- Credit bounds what each side sends; a client past it loses the connection.
+  A stream's answer in parts comes within the credit the client grants.
 - After `GOAWAY` open no stream; a `REQUEST` that crossed it is answered
-  `unavailable` without running and may be sent again.
-- Errors are their code's class (`ConflictError`, `LimitError` and the rest)
-  and carry `what`. A lost connection rejects writes in flight with
-  `outcome_unknown`; a read may be sent again. Connect again, open the handles
-  again, and resume a work loop.
+  `unavailable` unrun and may go again.
+- A lost connection fails a write in flight `outcome_unknown`; a read goes
+  again on the next connection, and every handle opens again with its first
+  call there.
+- Errors are their kind's class and carry `what`, as the core named them.
 
 ## Values
 
-- kv values are what `kv.Raw` holds: nothing, an int64, or bytes. Map bytes
-  and strings to bytes, integers and booleans to an integer, floats to their
-  eight bytes big-endian, anything else to JSON, as Go's `codecFor` does, so
-  that Go and every SDK read each other's buckets.
-- A 64-bit integer past 2^53 is a `BigInt` in JavaScript: record times in
-  nanoseconds always are.
-- Text whose bytes are not UTF-8 travels as `bin`.
-- The vocabulary is Go's: a type is given once, where a bucket or queue
-  opens; the daily calls are plain verbs; engine choices go into open's
-  options, never into a call.
+- A bucket's values are the core's serde values, written the same in every
+  language: `testdata/kv/values.json` holds what each type becomes, and
+  every SDK reads and writes it.
+- A 64-bit integer past 2^53 is a `bigint` in JavaScript; an event's time
+  in nanoseconds always is.
+- Text that is not UTF-8 travels as `bin`.
 
-## Tests and packaging
+## Tests
 
-- Every SDK decodes and encodes every vector: `values`, `refused`, `frames`,
-  `refused frames`, `proofs`, and each of `messages.json` through its own
-  message codecs, whose field names are wire.md's (`if absent` is `ifAbsent`
-  in JavaScript and `if_absent` in Python), so the loop needs no table.
-- Every SDK's logger writes the console lines of
-  `testdata/console/console.json` byte for byte, as the Rust console does, and a
-  change to the format changes the vectors, the console and every SDK in one
-  commit.
-- Integration tests run against a real `tinystore serve` built from
-  `cmd/tinystore`, over every transport the platform has.
-- The binary is pure Go (`CGO_ENABLED=0`), so every target builds from one
-  machine: per-platform optional dependencies on npm, per-platform wheels on
-  PyPI.
+- Every message of `testdata/wire/protocol.json` through each SDK's codec,
+  every vector of `testdata/wire/vectors.json`, every line of
+  `testdata/console/console.json` printed byte for byte, and
+  `testdata/config/env.json` read as the core reads it.
+- `just sdk` runs Bun's suites through all four ways; `just sdk-node` runs
+  the same files under Node (`test/node/register.ts` answers `bun:test` with
+  `node:test` and Jest's `expect`) and `test/under-node.ts`; `just
+  sdk-python` and `just sdk-go` the others'. A test file of `sdk/js` writes
+  only what both runtimes run: `node:timers/promises`' `setTimeout` for a
+  sleep, `node:fs` for a file, `import.meta.dirname`, never the global `Bun`.
+- Bun's `expect(p).rejects` does not run the loop's I/O, so a call the core
+  answers never settles in it: take the error with `caught()`.
 
 ## What building them taught
 
-- Each SDK's layers carry the same names: `wire/` (codec, frames, messages),
-  a session without I/O, a runtime file (Bun's and Node's; asyncio's), a connection
-  with its `Link` that dials again, a store, an engine a file. A message's
-  fields are wire.md's names, camelCase or snake_case, so the vector tests
-  are one loop.
-- A handle opens with its first call and again on each connection; `open`,
-  `connect` and `sql`, which migrates, are awaited.
-- Batches record calls and send them as the block ends: a callback in
-  JavaScript, `async with` in Python; each call's promise or future settles
-  with the batch.
-- Python calls the `cancelled` code `CallCancelledError`, apart from
-  asyncio's; a cancelled task cancels its stream.
-- Bun 1.4's `expect(p).rejects` does not run the loop's I/O, so a call
-  answered by the server never settles in it: tests take the error with a
-  `caught()` helper.
-- `records.lines` reach a read after the server's next flush, a second.
-- The JS SDK touches Bun or Node only in `src/runtime/bun.ts` and
-  `src/runtime/node.ts`, which `store.ts` picks as it loads; both load under
-  Node, so `bun.ts` reads `Bun` only inside a call. Bun imports `src`; Node
-  the `dist` that `bun run build` compiles and a release packs, since Node
-  strips no types in `node_modules`. `test/under-node.ts` runs the SDK under
-  Node through its own runtime (`node --test`, Node 22.18 or later); the Bun
-  suite stays Bun's. A package's `exports` conditions are tried in order:
-  `bun`, then `types`, then `default`, last. Node strips types and refuses
-  what it would have to compile, parameter properties, enums and namespaces,
-  so a class assigns its fields in its constructor.
-- Both packages install the binary as the `tinystore` command:
-  `sdk/js/bin/tinystore.js`, plain JavaScript that Bun and Node both run, and
-  `tinystore._cli` as a console script. Neither looks on PATH, where it may
-  find itself.
-- `close` waits for a private child until it exits, in both SDKs: until then
-  it holds the directory, and asyncio warns of its pipes.
-- `task sdk` checks and tests both, building `tinystore` from this
-  repository (`test/binary.ts`, `tests/conftest.py`) unless `TINYSTORE_BIN`
-  names one; it is part of `task check`, and CI runs it on Linux, Windows and
-  macOS.
-- Formatting is the tools', never by hand: `bun run check:write` in `sdk/js`
-  (biome, then `tsc`), and `uv run ruff format .` and `uv run ruff check --fix
-  .` in `sdk/python`. ruff formats the Python blocks of `README.md` too, so
-  run it after editing the README.
-- `tsc` runs with `exactOptionalPropertyTypes`: an option a caller may pass as
-  `undefined`, as spreading another query does, is declared
-  `after?: string | undefined`.
-- A Bun test file opens one private store in `beforeAll`, so each of its tests
-  names a bucket or queue of its own; Python's `store` fixture opens one a
-  test, in `tmp_path`. Both are private children: a test of the sidecar opens
-  one itself, with a short `idle`.
-- Windows hides two things only Linux shows: pyright narrows a platform only
-  by `sys.platform == "win32"` written at the test, not through a constant;
-  and a refused socket is `ECONNREFUSED` at once, where a Windows client
-  waits, so `dial` turns it into `ClosedError`. `task sdk:linux` runs both
-  suites in a Linux container (`sdk/test.Dockerfile`), the repository copied
-  in so `node_modules` and `.venv` stay the host's.
+- The JS SDK touches Bun or Node only in `src/runtime/`; `store.ts` picks one
+  as it loads, and both load under Node, so `bun.ts` reads `Bun` only inside
+  a call. Bun imports `src`; Node the `dist` that `bun run build` compiles,
+  since Node strips no types in `node_modules`, and refuses what it would
+  have to compile: parameter properties, enums, namespaces.
+- `tsc` runs with `exactOptionalPropertyTypes`: an option a caller may pass
+  as `undefined` is declared `after?: string | undefined`.
+- A handle that streams, a config's watch or the instruments, is cancelled
+  and its END waited for before the connection ends, or a private child or a
+  sidecar waits ten seconds to drain it at close.
+- Go runs with `GOWORK=off`: a local `go.work` names modules that are gone.
+- Formatting is the tools': `bun run check:write` in `sdk/js`, `uv run ruff
+  format` and `ruff check --fix` in `sdk/python`, `gofmt -w` in `sdk/go`.
 
-Platform behaviour behind several of these rules is in the `platform-traps`
-skill; a protocol change is the `wire-change` skill.
+Platform behaviour behind several of these is the `platform-traps` skill; a
+protocol change is the `wire-change` skill; a name a program writes is the
+`api-change` skill.

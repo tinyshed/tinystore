@@ -1,84 +1,90 @@
 ---
 name: wire-change
-description: Use when adding or changing anything in TinyStore's wire protocol - a message, a field, a method, an error code, a frame rule, the handshake, SERVE's format - or the vectors every SDK is tested against (server/wire, docs/wire.md, server/wire/testdata/vectors.json).
+description: Use when adding or changing anything in TinyStore's wire protocol - a message, a field, a method, an error code, a frame rule, the handshake, store.Options, SERVE's format - or the vectors every SDK is tested against (protocol/*.wire, crates/protocol, crates/tinystore/src/wire, docs/wire.md, testdata/wire).
 ---
 
 # Changing the wire protocol
 
-The protocol is the one contract three languages share, so a change is only
-done when every side of it changed together.
+The protocol is the one contract Rust, Bun and Node, Python and Go share, and
+the pipe of the core in a program's own process carries the same frames as a
+socket. A change is done when every side of it changed in one commit.
+
+## Declared once, written everywhere
+
+Every message and method is declared in `protocol/<engine>.wire`, in the
+language [protocol/README.md](../../../protocol/README.md) defines;
+`connection.wire` holds what no engine owns, `HELLO`, `WELCOME`, failures and
+`store.Options`, and `server.wire` the server's own calls. From them
+`crates/protocol` writes every codec and vector:
+
+| Written                                      | For                                         |
+|----------------------------------------------|---------------------------------------------|
+| `crates/tinystore/src/wire/protocol.rs`      | the core, its session and the pipe          |
+| `sdk/js/src/wire/protocol.ts`                | Bun and Node                                |
+| `sdk/python/src/tinystore/_wire/protocol.py` | Python                                      |
+| `sdk/go/internal/wire/protocol.go`           | Go                                          |
+| `testdata/wire/protocol.json`                | a vector of every message, every SDK's test |
+
+- `just protocol` writes them all again; `just protocol-check` fails when
+  one differs from what the schema writes, and CI runs it. Never edit a
+  written file: change the schema or `crates/protocol`.
+- A method takes the next number of its engine's range: the server `0x00xx`,
+  kv `0x01xx`, jobs `0x02xx`, sql `0x03xx`, blobs `0x04xx`, records
+  `0x05xx`, metrics `0x06xx`, config `0x07xx`, backup `0x08xx`, locks
+  `0x09xx`, channels `0x0axx`, search `0x0bxx`. An old number never takes a
+  new meaning.
+- A method's line says whether it reads or writes, which decides what a
+  read-only token may call and whether a lost connection may send it again,
+  and its shape: `call` for one answer, or a stream.
 
 ## One commit carries all of it
 
-- `server/wire`: the message's `Append` and `Decode`, and its checks.
-- The server: the handler in `server/<engine>.go`, the method in
-  `(*Server).<engine>Methods`.
-- `server/internal/client`, when the Go client the tests use needs it.
-- `docs/wire.md`: the message's table, the text around it, and an example of
-  its bytes when it is a new kind of message.
-- `server/wire/testdata/vectors.json` and `server/wire/vectors_test.go`; and
-  for a message or a field, the schema and an example in
-  `server/wire/messages_test.go`, then `TINYSTORE_WRITE_VECTORS=1 go -C server
-  test -run TestMessageVectors ./wire` to write `messages.json` anew.
-- The seeds of `FuzzMessages` (`msgpack_test.go`) and `FuzzFrames`
-  (`frame_test.go`) when a new rule refuses something.
-- `sdk/js` and `sdk/python`: their message codecs, which read `messages.json`.
-- GATES.md, a line for each promise the change makes.
+1. The schema in `protocol/`, then `just protocol`.
+2. The core's handler in `crates/tinystore/src/wire/<engine>.rs`, its route
+   in `session.rs` when the method is a stream, and a test in
+   `<engine>_tests.rs` that the session does what the schema promises, a
+   refusal included.
+3. Each SDK's call: `sdk/js/src`, `sdk/python/src/tinystore`, `sdk/go`. The
+   `api-change` skill when a program sees it, the `sdk` skill for how.
+4. `docs/wire.md` when bytes, frames, credit, the handshake or an error code
+   change, and `testdata/wire/vectors.json`, the hand-checked vectors of
+   frames, values, refusals and proofs, with each rule that refuses
+   something new.
+5. The fuzz targets in `fuzz/` when a decoder learns a new shape.
+6. GATES.md, a line for each promise the change makes.
 
-Nothing is released yet, so a field may still be repurposed, as `HELLO`'s field
-6 went from the instance to the challenge; after a release a message never
-changes meaning and a new field is added instead.
-
-What an older side does with a newer one is `docs/wire.md` "Versions", and
-each change keeps it:
-
-- A new request field is left out at its zero value, so a client using
-  nothing new still talks to an older server, which refuses the field as
-  `unimplemented` when it is sent. A field the Go message never reads, in a
-  switch case that can leave it unread, is refused the same way: read it, or
-  give it no number.
-- A new answer field is one an older client may skip and still read the
-  answer right; anything else is answered only to a client that asked for it
-  with a request field.
-- A new method takes a new number; an old number is never given a new meaning.
-- A new protocol number is for what a field cannot carry, frames, the
-  handshake, credit, and the server keeps speaking the old one while
-  `OldestProtocol` says it does.
+`store.Options` reaches the core two ways and both change together: the
+pipe's `open` decodes it (`asked` in `crates/tinystore/src/pipe.rs`), and an
+SDK that starts a server passes the same as `tinystore serve`'s flags
+(`crates/cli/src/args.rs`, `help.rs`, and plan/api/cli.md's table).
 
 ## The profile's rules
 
-- A body is a MessagePack map with small integer keys, written canonically:
-  the shortest integer, keys as the struct declares them; a decoder takes any
-  order and skips keys it does not know.
-- `str` is UTF-8 and anything else is `bin`; a field is refused when its type
-  is not the one the table gives, and `nil` only where a field says so.
-- A field at its zero value is left out, unless the table says otherwise.
-- A new method takes the next number in its engine's range: kv `0x01xx`, jobs
-  `0x02xx`, blobs `0x03xx`, sql `0x04xx`, records `0x05xx`, metrics `0x06xx`.
-- Every answer is checked against the agreed body before it leaves; one that
-  can pass it comes in `DATA` pieces within the stream's credit, as a long
-  metrics series does.
+- A body is a MessagePack map with small integer keys, written canonically,
+  the shortest integer, keys in the schema's order; a decoder takes any
+  order and refuses a key it does not know as `unimplemented`, naming the
+  field: `field 99 of kv.Call: not in tinystore 0.1.0`.
+- `str` is UTF-8 and anything else `bin`; a field of the wrong type is
+  refused, and `nil` only where the schema says `?`.
+- A field at its zero value is left out.
+- An answer is checked against the agreed body before it leaves; one past it
+  comes in `DATA` pieces within the stream's credit.
+
+Nothing is released, so a field may still be renumbered or repurposed
+(AGENTS.md: no versions before `v0.1.0`). After the first release a message
+never changes meaning: a new field is added, its zero what an older client
+meant, and a new method takes a new number.
 
 ## Bytes you can trust
 
-- Write a vector's bytes with Go, `wire.AppendFrame` of the message's
-  `Append`, never by hand; check arithmetic and cryptography with a second,
-  independent implementation, as the proof's vector was checked with Python's
-  `hmac`.
-- Scripts that write hex or backslashes: see `platform-traps`, since the
-  editing tools may turn escapes into characters.
-
-## Tests to add
-
-- A round trip in the message's `_test.go`.
-- An accepted vector for each new frame, checked by
-  `TestTheExamplesAreWhatTheMessagesWrite`, and a refused vector for each new
-  rule.
-- A test over the wire in `server/*_test.go`, through `internal/client` or raw
-  frames, that the server does what the table promises, a refusal included.
+- A vector's bytes come from a codec, never from a hand; arithmetic and
+  cryptography are checked with a second implementation, as the `SERVE`
+  proof was with Python's `hmac`.
+- A script that writes hex or backslashes: the `platform-traps` skill, since
+  the editing tools may turn escapes into characters.
 
 ## Checks
 
-`go -C server test ./...`, which runs the fuzzers' seeds; lint for Windows and
-`GOOS=linux`; the race suite in the container. The `verify` skill has the
-commands.
+`just protocol-check`, `just test`, and every SDK: `just sdk`, `just
+sdk-node`, `just sdk-python`, `just sdk-go`, or `just quick`, which picks
+what the files changed reach. The `verify` skill has the rest.

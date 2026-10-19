@@ -1,6 +1,6 @@
 ---
 name: sdk
-description: Use when building or changing a TinyStore client SDK (sdk/js, sdk/python) or any code that talks to `tinystore serve` as a client - finding or starting the sidecar, the handshake and its proof, streams, credit, errors, value mapping, reconnecting, and packaging the server binary with the SDK.
+description: Use when building or changing a TinyStore SDK (sdk/js for Bun and Node, sdk/python, sdk/go) or any code that talks to the core as a client - the core in the program's own process through bun:ffi, the Node addon, PyO3 or the C library, a private child, the sidecar and its SERVE proof, a remote server, streams, credit, errors, values, reconnecting, and what a platform's package carries.
 ---
 
 The skill is shared with every agent working here: read `.agents/skills/sdk/SKILL.md`
