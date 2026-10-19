@@ -518,3 +518,49 @@
 	font-size: 13.5px;
 	line-height: 1.65;
 }
+
+/* a call the reference knows: its signature opens on a click */
+.code a.api {
+	color: inherit;
+	text-decoration: underline dotted transparent;
+	text-underline-offset: 3px;
+	cursor: pointer;
+}
+
+.code a.api:hover,
+.code a.api:focus-visible {
+	text-decoration-color: var(--ts-muted);
+}
+
+.api-pop {
+	position: absolute;
+	z-index: 50;
+	padding: 12px 14px;
+	color: var(--ts-text-body);
+	background: var(--ts-surface);
+	border: 1px solid var(--ts-border-strong);
+	border-radius: 10px;
+	box-shadow: var(--ts-shadow);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.api-pop pre {
+	margin: 0;
+	overflow-x: auto;
+	font-family: var(--ts-mono);
+	font-size: 13px;
+	white-space: pre;
+	color: var(--ts-text);
+}
+
+.api-pop p {
+	margin: 8px 0 0;
+	color: var(--ts-muted);
+}
+
+.api-pop a {
+	display: inline-block;
+	margin-top: 8px;
+	color: var(--ts-accent-text);
+}

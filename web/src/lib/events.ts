@@ -10,6 +10,7 @@ export const readerEvents = [
 	'language',
 	'theme',
 	'outbound',
+	'signature',
 ] as const
 
 export type ReaderEvent = (typeof readerEvents)[number]

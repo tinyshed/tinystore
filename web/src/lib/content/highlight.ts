@@ -1,7 +1,12 @@
 import githubDark from '@shikijs/themes/github-dark-default'
 import githubLight from '@shikijs/themes/github-light-default'
 import type { Element } from 'hast'
-import { createHighlighter, type LanguageRegistration, type ThemeRegistration } from 'shiki'
+import {
+	createHighlighter,
+	type DecorationItem,
+	type LanguageRegistration,
+	type ThemeRegistration,
+} from 'shiki'
 
 // what a fence may say, and the grammar it means; anything else is shown as plain text
 const grammars: Record<string, string> = {
@@ -85,7 +90,8 @@ const themes = {
 	light: retint(githubLight, 'tinystore-light', { text: '#1f2328', comment: '#6e7781' }),
 }
 
-export type Highlight = (code: string, lang: string) => Element
+/** A fence as HTML; each decoration wraps its range of the code, as a call is wrapped in its link. */
+export type Highlight = (code: string, lang: string, decorations?: DecorationItem[]) => Element
 
 /**
  * A highlighter of the fences the docs use. Each token carries both themes'
@@ -102,11 +108,12 @@ export async function createHighlight(): Promise<Highlight> {
 		],
 	})
 
-	return (code, lang) => {
+	return (code, lang, decorations = []) => {
 		const root = highlighter.codeToHast(code, {
 			lang: grammars[lang] ?? 'text',
 			themes: { light: 'tinystore-light', dark: 'tinystore-dark' },
 			defaultColor: false,
+			decorations,
 		})
 		const pre = root.children[0]
 		if (pre?.type !== 'element') {

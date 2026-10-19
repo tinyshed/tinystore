@@ -63,7 +63,7 @@ table.
    feature does and when to use it, and names the engine. The site shows it
    under the title, in search results, in link previews and in `llms.txt`, so
    it has to make sense on its own.
-3. **The shortest complete code** that does the job, in all three languages,
+3. **The shortest complete code** that does the job, in all four languages,
    near the top of the page. The first code block opens everything the page
    uses. Later blocks reuse those names, and the text says so.
 4. **Sections that answer the reader's next questions**, from the common case
@@ -169,7 +169,7 @@ documents:
 Before you finish a page, read it aloud. If you have to read a sentence twice,
 rewrite it.
 
-## Code in three languages
+## Code in four languages
 
 Code blocks written one after another, with nothing between them, become one
 block with a tab for each language. The site remembers the reader's choice on
@@ -177,21 +177,33 @@ every page.
 
 ````md
 ```ts
-const ai = store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })
+const ai = store.quota('ai', { daily: '100/1d', weekly: '300/7d' })
 ```
 
 ```python
-ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
+ai = store.quota("ai", daily="100/1d", weekly="300/7d")
 ```
 
 ```go
-ai, err := kv.OpenQuota(ctx, state, "ai",
-	kv.Window("session", 100, 5*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+ai, err := kv.OpenQuota(store, "ai", kv.Window("daily", 100, 24*time.Hour), kv.Window("weekly", 300, 7*24*time.Hour))
+```
+
+```rust
+let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()?;
 ```
 ````
 
-- `ts` is the tab for Bun and Node, `python` for Python and `go` for Go. The
-  switch always shows them in the order Bun, Python, Go.
+- `ts` is the tab for Bun and Node, `python` for Python, `go` for Go and
+  `rust` for Rust. The switch always shows them in the order Bun, Python, Go,
+  Rust.
+- **Every call in a block is checked against the API reference.** The site
+  follows each chain from `store`, from a variable an earlier block of the
+  same language assigned, from a Rust type's `Type::new` or a Go package's
+  `kv.OpenQuota`, and links each call it resolves to its reference page,
+  where a click opens its signature. A call on a type the reference knows
+  that it does not list fails the build, so an example cannot use an API that
+  is gone. A call on a variable whose type the page never shows is left plain:
+  open a handle in the page's first block so that its calls are checked.
 - `title="…"` gives a block a file name, and several titled blocks of one
   language become files of one block. Leave the title off a single snippet.
   Two untitled blocks of the same language stay two separate blocks.
@@ -199,25 +211,23 @@ ai, err := kv.OpenQuota(ctx, state, "ai",
 - Lines that a logger prints on a terminal go in a ` ```log ` fence. The site
   colours them as the console does: the time and `key=` dim, the level in its
   colour, the stream cyan. GitHub shows the fence as plain text.
-- **Every block shows all three languages.** If one is missing, the page says
+- **Every block shows all four languages.** If one is missing, the page says
   why, for example because only Go declares a schema from structs. A reader
   who chose Python and only finds Go has learned nothing.
-- **Use the same names for handles on every page**: `store` for the store; in
-  Go, `state` for the KV engine, `queues` for jobs, `objects` for blobs,
-  `logs` for records, `stats` for metrics and `db` for an SQL database. In Bun
-  and Python the engines are properties of `store`, and a database is `db`
-  too.
+- **Use the same names for handles on every page**: `store` for the store and
+  `db` for an SQL database, in every language. Everything else opens from
+  them, as each engine's book in `plan/api/` shows.
 - **In Go, check the errors that the page is about**, and leave the others as
   plain `err` assignments, like the package READMEs do. A short tour may start
   its Go block with `// errors left out`.
 - **In the text, describe the idea instead of one language's spelling**, because
   `with` and `labels` are the same idea. Where the page introduces an option,
-  give its three spellings once: `DefaultTTL`, `defaultTtl`, `default_ttl`.
+  give its spellings once: `defaultTtl`, `default_ttl`, `DefaultTTL`, `default_ttl`.
 - **Write durations the way each language does**: `15*time.Minute` in Go,
-  `'15m'` in Bun and Python. A bare number means milliseconds in Bun and
-  seconds in Python.
+  `Duration::from_mins(15)` in Rust, `'15m'` in Bun and Python. A bare number
+  means milliseconds in Bun and seconds in Python.
 - **Run the code if you can.** A complete program on a page, like the one in
-  Getting started, should be one you have run in all three languages.
+  Getting started, should be one you have run in all four languages.
 
 ## The API pages
 
@@ -341,7 +351,7 @@ git grep -n -i -E '\b(simply|just|easy|easily|powerful|seamless)\b' -- docs/
 ```
 
 - [ ] the lead makes sense on its own and names the engine
-- [ ] the first code block works in all three languages, or the page says why not
+- [ ] the first code block works in all four languages, or the page says why not
 - [ ] every call is checked against its source, and each option's spellings appear once
 - [ ] limits and defaults are in a table
 - [ ] nothing that isn't built is described as working

@@ -10,12 +10,16 @@ describe("a Rust doc comment as the site's markdown", () => {
 	})
 
 	test('marks a fence without a language as Rust and leaves the hidden lines out', () => {
-		const doc = ['```', '# use tinystore::Store;', 'let store = Store::open("data")?;', '```'].join('\n')
+		const doc = ['```', '# use tinystore::Store;', 'let store = Store::open("data")?;', '```'].join(
+			'\n',
+		)
 		expect(docOf(doc)).toBe(['```rust', 'let store = Store::open("data")?;', '```'].join('\n'))
 	})
 
 	test("leaves another language's fence and its lines as they are", () => {
 		const doc = ['```text', '# not hidden', '[`Bucket`]', '```', 'then [`Bucket`]'].join('\n')
-		expect(docOf(doc)).toBe(['```text', '# not hidden', '[`Bucket`]', '```', 'then `Bucket`'].join('\n'))
+		expect(docOf(doc)).toBe(
+			['```text', '# not hidden', '[`Bucket`]', '```', 'then `Bucket`'].join('\n'),
+		)
 	})
 })

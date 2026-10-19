@@ -33,20 +33,27 @@ shown and not linked. GitHub shows the same file as the table of contents.
 front matter, which GitHub would draw as a table, and nothing GitHub would
 show as noise. What the site adds it reads from what GitHub already ignores:
 
-| Written                                       | On GitHub             | Here                                          |
-|-----------------------------------------------|-----------------------|-----------------------------------------------|
-| fences one after another, a language each     | one under another     | one block, the language the reader picked     |
-| ` ```ts title="metrics.ts" `                  | a TypeScript block    | a tab named `metrics.ts`                      |
-| ` ```sh for=bun `                             | a shell block         | the Bun variant of its block                  |
-| `> [!NOTE]` then a **bold** line              | GitHub's note         | a callout labelled by the bold line           |
-| a table whose header row is empty, `\| \| \|` | a table               | a card of rows, no header                     |
-| `[kv](kv.md#expiry)`                          | the file, its heading | `/docs/kv#expiry`, the heading checked        |
-| `[code](../kv/kv.go)`                         | the file              | GitHub, at the commit the site was built from |
-| `<!-- a note -->`                             | nothing               | nothing, and left out of the markdown copy    |
+| Written                                       | On GitHub             | Here                                               |
+|-----------------------------------------------|-----------------------|----------------------------------------------------|
+| fences one after another, a language each     | one under another     | one block, the language the reader picked          |
+| ` ```ts title="metrics.ts" `                  | a TypeScript block    | a tab named `metrics.ts`                           |
+| ` ```sh for=bun `                             | a shell block         | the Bun variant of its block                       |
+| `> [!NOTE]` then a **bold** line              | GitHub's note         | a callout labelled by the bold line                |
+| a table whose header row is empty, `\| \| \|` | a table               | a card of rows, no header                          |
+| `[kv](kv.md#expiry)`                          | the file, its heading | `/docs/kv#expiry`, the heading checked             |
+| `[code](../kv/kv.go)`                         | the file              | GitHub, at the commit the site was built from      |
+| `<!-- a note -->`                             | nothing               | nothing, and left out of the markdown copy         |
+| `store.bucket('sessions')` in a fence         | plain code            | a link to `Store.bucket`, its signature on a click |
 
 **A link that leads nowhere fails the build.** Every relative link and image
 is resolved at build time against the repository, and a heading against the
 id GitHub gives it; the prerender then follows every link it renders.
+
+**A call in a guide's block is the reference's.** `calls.ts` reads the
+generated API pages back, follows each chain from `store` or a variable a
+block assigned, and wraps every call it resolves in a link to its heading,
+which the build checks as it checks any link; `code-blocks.ts` opens its
+signature on a click. A call that a known type does not have fails the build.
 
 **Code is highlighted once, when the site is built.** Shiki writes both
 themes' colours into each token, so the page highlights and changes theme with

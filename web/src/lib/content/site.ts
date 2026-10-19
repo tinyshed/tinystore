@@ -4,6 +4,7 @@ import type { Root } from 'mdast'
 
 import { calloutsFromAlerts } from './alerts'
 import { apiEngines, apiFile, apiLanguages } from './api'
+import { type ApiIndex, pageCalls, readApiIndex } from './calls'
 import { groupFences } from './code'
 import { createHighlight, type Highlight } from './highlight'
 import { landingFile, landingSummary } from './landing'
@@ -97,13 +98,19 @@ async function buildSite(root: string): Promise<Site> {
 	const commit = headCommit(root)
 	const origin = siteOrigin()
 	const highlight = await createHighlight()
+	const api = readApiIndex(root)
 
 	const indexTree = parse(read(root, indexFile))
 	const index = readIndex(indexTree, root, commit)
 
 	const drafts = await Promise.all(
 		entriesOf(index, root).map(entry =>
-			draft(entry, entry.file === indexFile ? indexTree : parse(read(root, entry.file)), highlight),
+			draft(
+				entry,
+				entry.file === indexFile ? indexTree : parse(read(root, entry.file)),
+				highlight,
+				api,
+			),
 		),
 	)
 
@@ -120,7 +127,7 @@ async function buildSite(root: string): Promise<Site> {
 	const problems = finished.flatMap(result => result.problems)
 	if (problems.length > 0) {
 		throw new Error(
-			`the docs link to what does not exist:\n${problems.map(p => `  ${p}`).join('\n')}`,
+			`the docs link to or call what does not exist:\n${problems.map(p => `  ${p}`).join('\n')}`,
 		)
 	}
 
@@ -187,7 +194,7 @@ function apiFiles(): string[] {
 
 type Draft = Awaited<ReturnType<typeof draft>>
 
-async function draft(entry: Entry, tree: Root, highlight: Highlight) {
+async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiIndex) {
 	// the exported markdown is the file as written: its title, its alerts, its fences
 	const exported = structuredClone(tree)
 
@@ -200,6 +207,10 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight) {
 		throw new Error(`${entry.file} has no title: its first line should be a # heading`)
 	}
 
+	// a reference page's blocks are the signatures themselves
+	const calls =
+		entry.kind === 'reference' ? { highlight, problems: [] } : pageCalls(api, entry.file, highlight)
+
 	return {
 		...entry,
 		url: urlOf(entry.slug),
@@ -209,7 +220,8 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight) {
 		ids,
 		sections: found,
 		tree: exported,
-		hast: await toHast(tree, highlight),
+		hast: await toHast(tree, calls.highlight),
+		callProblems: calls.problems,
 	}
 }
 
@@ -223,7 +235,10 @@ function finishPage(
 	const updated = lastChanged(built.root, page.file)
 
 	return {
-		problems: finished.problems.map(problem => describe(page.file, problem)),
+		problems: [
+			...finished.problems.map(problem => describe(page.file, problem)),
+			...page.callProblems.map(problem => `${page.file}: ${problem}`),
+		],
 		page: {
 			slug: page.slug,
 			url: page.url,
