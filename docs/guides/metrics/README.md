@@ -64,15 +64,14 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 
 ## In these guides
 
-| Page                    | Covers                                                     |
-|-------------------------|------------------------------------------------------------|
-| Instruments             | counters, gauges, gauge functions, timers, histograms      |
-| Reading                 | `read`, `latest`, names, labels                            |
-| Aggregates              | `op`, `every`, `by`, percentiles, gaps and partial buckets |
-| Ingesting               | samples from elsewhere, `keep`                             |
-| Prometheus              | Prometheus' text in                                        |
-| The store's own metrics | `selfMetrics` and the `tinystore_` series                  |
-| The metrics crate       | Rust's `metrics` macros recorded into the store            |
+| Page                                       | Covers                                                     |
+|--------------------------------------------|------------------------------------------------------------|
+| [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
+| [Reading](reading.md)                      | `read`, `latest`, names, labels                            |
+| [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
+| [Ingesting](ingesting.md)                  | samples from elsewhere, `keep`                             |
+| [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
+| [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store            |
 
 New to Metrics? [How fast it is](../../handbook/chat/how-fast-it-is.md) in
 the Handbook times a chat's model calls, and [How logs and metrics

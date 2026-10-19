@@ -174,13 +174,12 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Metrics
 
 - [Overview](guides/metrics/README.md)
-- Instruments
-- Reading
-- Aggregates
-- Ingesting
-- Prometheus
-- The store's own metrics
-- The metrics crate
+- [Instruments](guides/metrics/instruments.md)
+- [Reading](guides/metrics/reading.md)
+- [Aggregates](guides/metrics/aggregates.md)
+- [Ingesting](guides/metrics/ingesting.md)
+- [The store's own metrics](guides/metrics/self-metrics.md)
+- [The metrics crate](guides/metrics/metrics-crate.md)
 
 ### Backup
 
