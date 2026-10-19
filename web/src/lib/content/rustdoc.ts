@@ -317,16 +317,22 @@ class Reader {
 			}
 			for (const memberId of impl.items as number[]) {
 				const member = this.#entry(memberId)
-				if (member.visibility !== 'public' || !('function' in member.inner)) {
+				if (member.visibility !== 'public') {
+					continue
+				}
+				// `Level::WARN`: a constant of the type, called as its member is
+				const code =
+					'function' in member.inner
+						? t.function(member.name ?? '', member.inner.function)
+						: 'assoc_const' in member.inner
+							? `pub const ${member.name}: ${t.type(member.inner.assoc_const.type)}`
+							: undefined
+				if (code === undefined) {
 					continue
 				}
 				out.push({
 					entry: member,
-					item: {
-						name: `${name}.${member.name}`,
-						code: t.function(member.name ?? '', member.inner.function),
-						doc: docOf(member.docs),
-					},
+					item: { name: `${name}.${member.name}`, code, doc: docOf(member.docs) },
 				})
 			}
 		}

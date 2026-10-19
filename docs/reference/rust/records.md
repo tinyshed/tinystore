@@ -1,6 +1,6 @@
 # Records API for Rust
 
-Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console`, generated from its source. The [Records guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
+Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console`, generated from its source. The [Records guide](../../chat/what-it-is-doing.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
 
 ## Store
 
@@ -262,6 +262,42 @@ pub struct Level(_)
 
 How grave an event is: one of six names, or a number between two of them
 as Go's `slog` counts, which reads as the name under it.
+
+### Level.TRACE
+
+```rust
+pub const TRACE: Level
+```
+
+### Level.DEBUG
+
+```rust
+pub const DEBUG: Level
+```
+
+### Level.INFO
+
+```rust
+pub const INFO: Level
+```
+
+### Level.WARN
+
+```rust
+pub const WARN: Level
+```
+
+### Level.ERROR
+
+```rust
+pub const ERROR: Level
+```
+
+### Level.FATAL
+
+```rust
+pub const FATAL: Level
+```
 
 ### Level.of
 

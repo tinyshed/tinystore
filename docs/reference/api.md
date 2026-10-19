@@ -13,7 +13,7 @@ Every public type, function and method of TinyStore in Bun and Node, Python, Go 
 | [Channels](../chat/live-updates.md)                             | [Channels API](bun/channels.md) | [Channels API](python/channels.md) | [Channels API](go/channels.md) | [Channels API](rust/channels.md) |
 | [Locks](../chat/live-updates.md#one-summary-per-chat-at-a-time) | [Locks API](bun/locks.md)       | [Locks API](python/locks.md)       | [Locks API](go/locks.md)       | [Locks API](rust/locks.md)       |
 | [Config](../chat/settings.md)                                   | [Config API](bun/config.md)     | [Config API](python/config.md)     | [Config API](go/config.md)     | [Config API](rust/config.md)     |
-| [Records](../start/why.md#the-engines)                          | [Records API](bun/records.md)   | [Records API](python/records.md)   | [Records API](go/records.md)   | [Records API](rust/records.md)   |
+| [Records](../chat/what-it-is-doing.md)                          | [Records API](bun/records.md)   | [Records API](python/records.md)   | [Records API](go/records.md)   | [Records API](rust/records.md)   |
 | [Metrics](../start/why.md#the-engines)                          | [Metrics API](bun/metrics.md)   | [Metrics API](python/metrics.md)   | [Metrics API](go/metrics.md)   | [Metrics API](rust/metrics.md)   |
 | [Backup](../start/why.md#the-engines)                           | [Backup API](bun/backup.md)     | [Backup API](python/backup.md)     | [Backup API](go/backup.md)     | [Backup API](rust/backup.md)     |
 

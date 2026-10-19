@@ -109,7 +109,7 @@ store.metrics()?.counter("signups_total").open()?.inc();
 | [Channels](../docs/chat/live-updates.md)                             | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
 | [Locks](../docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
 | [Config](../docs/chat/settings.md)                                   | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](../docs/start/why.md#the-engines)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Records](../docs/chat/what-it-is-doing.md)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
 | [Metrics](../docs/start/why.md#the-engines)                          | Time series       | Samples kept bit for bit, answered exactly.                             |
 | [Backup](../docs/start/why.md#the-engines)                           | The whole store   | One checked zip of every engine, taken while it runs.                   |
 

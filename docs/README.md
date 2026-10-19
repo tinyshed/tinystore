@@ -37,7 +37,7 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 - [Finding old messages](chat/finding-old-messages.md)
 - [Live updates](chat/live-updates.md)
 - [Settings](chat/settings.md)
-- What it is doing
+- [What it is doing](chat/what-it-is-doing.md)
 - How fast it is
 - Keeping it
 
