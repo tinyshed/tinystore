@@ -1,0 +1,234 @@
+/* the signature a call opens: a card with an arrow, or a sheet on a phone */
+.api-pop {
+	position: absolute;
+	z-index: 60;
+	width: min(520px, calc(100vw - 32px));
+	color: var(--ts-text-body);
+	background: var(--ts-dialog);
+	border: 1px solid var(--ts-border-strong);
+	border-radius: 12px;
+	box-shadow: 0 14px 40px -12px var(--ts-shadow);
+	font: 14px / 1.5 var(--ts-sans);
+	transform-origin: var(--arrow, 24px) top;
+	animation: api-in 0.16s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.api-pop.above {
+	transform-origin: var(--arrow, 24px) bottom;
+}
+
+.api-pop.closing {
+	animation: api-out 0.11s ease-in both;
+}
+
+.api-pop::before {
+	content: "";
+	position: absolute;
+	top: -6px;
+	left: calc(var(--arrow, 24px) - 6px);
+	width: 10px;
+	height: 10px;
+	background: var(--ts-dialog);
+	border-top: 1px solid var(--ts-border-strong);
+	border-left: 1px solid var(--ts-border-strong);
+	transform: rotate(45deg);
+}
+
+.api-pop.above::before {
+	top: auto;
+	bottom: -6px;
+	transform: rotate(225deg);
+}
+
+@keyframes api-in {
+	from {
+		opacity: 0;
+		transform: translateY(-4px) scale(0.97);
+	}
+}
+
+@keyframes api-out {
+	to {
+		opacity: 0;
+		transform: translateY(-3px) scale(0.98);
+	}
+}
+
+.api-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 14px 0;
+}
+
+.api-kind {
+	padding: 2px 7px;
+	border-radius: 99px;
+	background: var(--ts-accent-soft);
+	color: var(--ts-accent-text);
+	font: 500 10.5px var(--ts-mono);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.api-name {
+	color: var(--ts-text);
+	font: 600 14px var(--ts-mono);
+}
+
+.api-close {
+	margin-left: auto;
+	padding: 4px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: var(--ts-muted);
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.api-close:hover {
+	background: var(--ts-hover);
+	color: var(--ts-text);
+}
+
+.api-sig {
+	margin: 10px 14px 0;
+	padding: 10px 12px;
+	overflow-x: auto;
+	border-radius: 8px;
+	background: var(--ts-surface);
+	color: var(--ts-text);
+	font: 12.5px / 1.6 var(--ts-mono);
+	white-space: pre;
+}
+
+.api-forms {
+	margin: 6px 14px 0;
+	color: var(--ts-muted);
+	font: 12px var(--ts-mono);
+}
+
+.api-doc {
+	margin: 10px 14px 0;
+}
+
+.api-doc.none {
+	color: var(--ts-muted);
+	font-style: italic;
+}
+
+.api-doc code {
+	font: 12.5px var(--ts-mono);
+}
+
+.api-foot {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 10px;
+	padding: 10px 14px 12px;
+	border-top: 1px solid var(--ts-line);
+}
+
+.api-foot a {
+	color: var(--ts-accent-text);
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.api-foot a:hover {
+	text-decoration: underline;
+}
+
+.api-where {
+	color: var(--ts-muted);
+	font: 12px var(--ts-mono);
+}
+
+.api-copy {
+	padding: 4px 10px;
+	border: 1px solid var(--ts-border);
+	border-radius: 7px;
+	background: var(--ts-surface);
+	color: var(--ts-text-body);
+	font: 500 12.5px var(--ts-sans);
+	cursor: pointer;
+}
+
+/* on a phone: a sheet from the bottom over a dimmed page */
+.api-scrim {
+	position: fixed;
+	inset: 0;
+	z-index: 59;
+	background: var(--ts-overlay);
+	animation: api-fade 0.2s ease both;
+}
+
+.api-scrim.closing {
+	animation: api-fade-out 0.18s ease both;
+}
+
+@keyframes api-fade-out {
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes api-fade {
+	from {
+		opacity: 0;
+	}
+}
+
+.api-pop.sheet {
+	position: fixed;
+	inset: auto 0 0;
+	width: auto;
+	max-height: 75vh;
+	overflow-y: auto;
+	padding-bottom: env(safe-area-inset-bottom, 0px);
+	border-bottom: 0;
+	border-radius: 16px 16px 0 0;
+	animation: api-sheet-in 0.26s cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+.api-pop.sheet::before {
+	display: none;
+}
+
+.api-pop.sheet.closing {
+	animation: api-sheet-out 0.2s ease-in both;
+}
+
+.api-grip {
+	display: block;
+	width: 40px;
+	height: 4px;
+	margin: 8px auto 0;
+	border-radius: 4px;
+	background: var(--ts-border-strong);
+}
+
+@keyframes api-sheet-in {
+	from {
+		transform: translateY(100%);
+	}
+}
+
+@keyframes api-sheet-out {
+	to {
+		transform: translateY(100%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.api-pop,
+	.api-pop.sheet,
+	.api-scrim {
+		animation-duration: 1ms;
+	}
+}

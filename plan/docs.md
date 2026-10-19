@@ -208,8 +208,9 @@ Before chapters are written, so that none is written twice:
    pyright. A fragment declares the names it uses from the page's first
    block. A type check proves the names, not the behaviour; what a guide
    promises about behaviour is kept by the SDK's tests that name its contract.
-5. **A directive for a simulator**, and the first two: the journey of a write
-   and the home that dies.
+5. **Scenes.** A ` ```scene ` fence: actors, cables and steps as text, which
+   the site plays beside the code it runs. Built; the format is in the docs
+   skill.
 
 6. **A signature on a call whose type is known.** Clicking a call in a block
    opens its signature, its doc and a link to the reference. A name is

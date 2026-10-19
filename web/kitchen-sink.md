@@ -125,3 +125,73 @@ A table without one:
 ---
 
 The end.
+
+## Scenes
+
+A scene plays a short story beside the code it runs: a ```scene fence that
+GitHub shows as its text.
+
+```scene
+code ts
+  const charges = store.once<Receipt>('charges', { keep: '1d' })
+
+  app.post('/pay', async req => {
+    const key = req.headers['idempotency-key']
+    return charges.run(key, () => stripe.charge(req.body.order, key))
+  })
+end
+actor buyer  "Buyer"       at 8,50  icon=user
+actor one    "Request 1"   at 36,22 icon=server
+actor two    "Request 2"   at 36,80 icon=server
+actor kv     "kv.db"       at 64,50 icon=database
+actor stripe "Stripe"      at 92,50 icon=credit-card
+link buyer one
+link buyer two
+link one kv
+link two kv
+link one stripe
+set kv "charges: —"
+set stripe "charged: 0"
+
+step "The buyer double-clicks “Pay”. Two requests with the same idempotency key reach your API at once." line=3-4
+  send buyer -> one "POST /pay"
+  & send buyer -> two "POST /pay"
+
+step "Request 1 asks charges.run for the key. Nobody holds it, so it starts the charge." line=5
+  send one -> kv "run key-7f"
+  set kv "key-7f: running"
+  send one -> stripe "charge $40"
+
+step "Request 2 asks for the same key. It is already running, so Request 2 waits for that answer instead of charging again." line=5
+  send two -> kv "run key-7f"
+  say two "waiting…"
+
+step "Stripe charges the card once. charges.run keeps the receipt under the key for a day." line=5
+  set stripe "charged: 1"
+  send stripe -> one "receipt" color=ok
+  send one -> kv "keep receipt"
+  set kv "key-7f: receipt"
+
+step "Request 2 gets the same receipt. Both clicks are answered, and the card was charged once." line=5
+  send kv -> two "receipt" color=ok
+  send one -> buyer "200 receipt" color=ok
+  & send two -> buyer "200 receipt" color=ok
+  say stripe "1 charge" color=ok
+```
+
+A scene with no code:
+
+```scene
+actor app  "Your app" at 12,50 icon=user
+actor core "Core"     at 50,50 icon=cpu
+actor disk "kv.db"    at 88,50 icon=database
+link app core
+link core disk
+
+step "The app writes."
+  send app -> core "set"
+  send core -> disk "commit"
+
+step "The disk answers."
+  send disk -> app "ok" color=ok
+```

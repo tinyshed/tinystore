@@ -34,6 +34,9 @@
 	--ts-accent-line: #e3c28e;
 	--ts-logo-top: #c97a12;
 	--ts-danger: #b5311f;
+	--ts-ok: #2f7d4f;
+	--ts-accent-soft: #f6e3c4;
+	--ts-danger-soft: #f6dcd7;
 
 	--ts-overlay: rgb(236 233 242 / 0.74);
 	--ts-shadow: rgb(35 33 43 / 0.28);
@@ -79,6 +82,9 @@
 		--ts-accent-line: #5a4320;
 		--ts-logo-top: #e29a36;
 		--ts-danger: #f0857a;
+		--ts-ok: #6fcf97;
+		--ts-accent-soft: #3a2b14;
+		--ts-danger-soft: #3a1c19;
 
 		--ts-overlay: rgb(10 9 13 / 0.72);
 		--ts-shadow: rgb(0 0 0 / 0.7);
@@ -118,6 +124,9 @@
 	--ts-accent-line: #5a4320;
 	--ts-logo-top: #e29a36;
 	--ts-danger: #f0857a;
+	--ts-ok: #6fcf97;
+	--ts-accent-soft: #3a2b14;
+	--ts-danger-soft: #3a1c19;
 
 	--ts-overlay: rgb(10 9 13 / 0.72);
 	--ts-shadow: rgb(0 0 0 / 0.7);

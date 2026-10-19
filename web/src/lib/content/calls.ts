@@ -575,11 +575,41 @@ export function pageCalls(
 				properties: {
 					className: ['api'],
 					href: `${posix.relative(posix.dirname(file), mark.entry.file)}#${mark.entry.anchor}`,
-					dataSig: mark.entry.code,
+					...signature(mark.entry, language),
 					dataDoc: mark.entry.doc,
+					dataName: mark.entry.name,
+					dataPage: mark.entry.file.replace(/^docs\/reference\//, '').replace(/\.md$/, ''),
 				},
 			})),
 		)
 	}
 	return { highlight: wrapped, problems }
+}
+
+/**
+ * The form of a call the popover shows: an overloaded method's first, and how
+ * many more the reference lists. Python's forms lose their `@overload` and
+ * their bodies, TypeScript's are one a line.
+ */
+export function signature(
+	entry: ApiEntry,
+	language: ApiLanguage,
+): { dataSig: string; dataForms?: number } {
+	if (language === 'bun') {
+		const [first = '', ...rest] = entry.code.split('\n')
+		return { dataSig: first, ...(rest.length > 0 ? { dataForms: rest.length } : {}) }
+	}
+	if (language === 'python') {
+		const forms = entry.code
+			.split('\n')
+			.filter(line => line.trim() !== '@overload')
+			.join('\n')
+			.split(/\n(?=(?:async )?def )/)
+			.map(form => form.replace(/:\s*\.\.\.\s*$/, ''))
+		return {
+			dataSig: forms[0] ?? '',
+			...(forms.length > 1 ? { dataForms: forms.length - 1 } : {}),
+		}
+	}
+	return { dataSig: entry.code }
 }

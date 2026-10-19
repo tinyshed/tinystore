@@ -523,44 +523,43 @@
 .code a.api {
 	color: inherit;
 	text-decoration: underline dotted transparent;
-	text-underline-offset: 3px;
+	text-decoration-thickness: 1.5px;
+	text-underline-offset: 4px;
+	border-radius: 3px;
 	cursor: pointer;
+	transition:
+		text-decoration-color 0.15s,
+		background 0.15s;
 }
 
 .code a.api:hover,
 .code a.api:focus-visible {
-	text-decoration-color: var(--ts-muted);
+	text-decoration-color: var(--ts-accent);
+	outline: none;
 }
 
-.api-pop {
-	position: absolute;
-	z-index: 50;
-	padding: 12px 14px;
-	color: var(--ts-text-body);
-	background: var(--ts-surface);
-	border: 1px solid var(--ts-border-strong);
-	border-radius: 10px;
-	box-shadow: var(--ts-shadow);
-	font-size: 14px;
-	line-height: 1.5;
+.code a.api[aria-expanded="true"] {
+	background: var(--ts-accent-soft);
+	text-decoration-color: var(--ts-accent);
 }
 
-.api-pop pre {
+/* a scene before its player mounts: its code, then its steps as a list */
+.prose figure.scene {
+	margin: 26px 0 30px;
+}
+
+.prose figure.scene.playing {
 	margin: 0;
+}
+
+.prose figure.scene .scene-code pre {
+	margin: 0 0 12px;
+	padding: 12px 18px;
+	border-radius: 12px;
+	background: var(--ts-surface);
 	overflow-x: auto;
-	font-family: var(--ts-mono);
-	font-size: 13px;
-	white-space: pre;
-	color: var(--ts-text);
 }
 
-.api-pop p {
-	margin: 8px 0 0;
-	color: var(--ts-muted);
-}
-
-.api-pop a {
-	display: inline-block;
-	margin-top: 8px;
-	color: var(--ts-accent-text);
+.prose figure.scene-broken pre {
+	color: var(--ts-danger);
 }

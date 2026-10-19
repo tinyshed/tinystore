@@ -229,6 +229,58 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
 - **Run the code if you can.** A complete program on a page, like the one in
   Getting started, should be one you have run in all four languages.
 
+## Scenes
+
+A scene is a short animation of a real situation, played beside the code that
+handles it: a buyer double-clicks "Pay", a worker crashes mid-email. Write it
+as text in a ` ```scene ` fence. GitHub and agents read the text; the site
+plays it, marks the code's line each step runs, and turns it on its side on a
+phone.
+
+````md
+```scene
+code ts
+  const charges = store.once<Receipt>('charges', { keep: '1d' })
+  return charges.run(key, () => stripe.charge(order, key))
+end
+actor buyer  "Buyer"  at 8,50  icon=user
+actor kv     "kv.db"  at 50,50 icon=database
+actor stripe "Stripe" at 92,50 icon=credit-card
+link buyer kv
+link kv stripe
+set stripe "charged: 0"
+
+step "The buyer clicks Pay twice." line=2
+  send buyer -> kv "run key-7f"
+  & send buyer -> kv "run key-7f" ghost
+step "Stripe charges the card once." line=2
+  send kv -> stripe "charge"
+  set stripe "charged: 1"
+  send stripe -> buyer "receipt" color=ok
+```
+````
+
+| Line                                     | What it does                                                                 |
+|------------------------------------------|------------------------------------------------------------------------------|
+| `code ts` … `end`                        | the program the scene plays, highlighted, its calls linked to the reference  |
+| `actor <id> "<label>" at x,y icon=…`     | who is on stage, in percent of the stage; icons are `src/lib/scene/icons.ts` |
+| `link a b`, `cut a b`, `unlink a b`      | a cable between two actors, cut, or taken away                               |
+| `set a "…"`, `add a "…"`, `strike a "…"` | an actor's line of state: replaced, appended, crossed out                    |
+| `mark a home`, `copy`, `down`            | a badge: a home with a halo, a copy, a server cut off                        |
+| `step "<caption>" line=3-4`              | a caption, and the code's lines the step runs                                |
+| `send a -> b "<label>"`                  | a packet along an arc; `color=ok`, `color=bad`, `lost`, `ghost`              |
+| `say a "…"`, `pulse a`, `wait 400`       | a word beside an actor, a ring, a pause                                      |
+| `&` before an action                     | runs it with the action before it                                            |
+
+- **Tell one situation a reader recognises**, three to six steps, each caption
+  one or two plain sentences about what happens and why it matters.
+- **Show the code that handles it**, with `line=` on each step, so that the
+  reader sees which line does what.
+- Actors stand in columns, left to right in the order things happen; a phone
+  turns each column into a row.
+- Everything is checked at build time: an unknown actor, verb, icon or line
+  fails the build, naming the scene's line.
+
 ## The API pages
 
 `docs/reference/api.md` and `docs/reference/<language>/<engine>.md` are

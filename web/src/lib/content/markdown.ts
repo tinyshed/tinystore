@@ -5,7 +5,7 @@ import type { Root } from 'mdast'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
-import remarkRehype from 'remark-rehype'
+import remarkRehype, { defaultHandlers } from 'remark-rehype'
 import remarkStringify from 'remark-stringify'
 import { unified } from 'unified'
 import { SKIP, visit } from 'unist-util-visit'
@@ -13,6 +13,7 @@ import { SKIP, visit } from 'unist-util-visit'
 import { type CodeGroup, renderGroup } from './code'
 import type { Highlight } from './highlight'
 import { type Links, resolveLink } from './links'
+import { renderScene } from './scene'
 
 const parser = unified().use(remarkParse).use(remarkGfm)
 
@@ -20,12 +21,25 @@ export function parse(text: string): Root {
 	return parser.parse(text)
 }
 
-/** The tree as HTML elements, the raw HTML a file holds parsed into them. */
-export async function toHast(tree: Root, highlight: Highlight): Promise<HastRoot> {
+/**
+ * The tree as HTML elements, the raw HTML a file holds parsed into them. A
+ * scene that does not parse adds its reason to `problems`.
+ */
+export async function toHast(
+	tree: Root,
+	highlight: Highlight,
+	problems: string[] = [],
+): Promise<HastRoot> {
 	const processor = unified()
 		.use(remarkRehype, {
 			allowDangerousHtml: true,
-			handlers: { codeGroup: (_, node: CodeGroup) => renderGroup(node, highlight) },
+			handlers: {
+				codeGroup: (_, node: CodeGroup) => renderGroup(node, highlight),
+				code: (state, node) =>
+					node.lang === 'scene'
+						? renderScene(node.value, highlight, problems)
+						: defaultHandlers.code(state, node),
+			},
 		})
 		.use(rehypeRaw)
 

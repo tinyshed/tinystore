@@ -3,6 +3,7 @@
 	import '@fontsource-variable/geist-mono'
 	import '../app.css'
 	import '$lib/prose.css'
+	import '$lib/signature.css'
 
 	import { page } from '$app/state'
 	import Header from '$lib/components/Header.svelte'

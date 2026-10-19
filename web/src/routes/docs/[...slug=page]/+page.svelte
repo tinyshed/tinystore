@@ -7,6 +7,7 @@
 	import Seo from '$lib/components/Seo.svelte'
 	import { href, rebase } from '$lib/href'
 	import { setLanguage } from '$lib/prefs'
+	import { scenes } from '$lib/scenes'
 
 	let { data } = $props()
 
@@ -105,7 +106,12 @@
 			</div>
 		{/if}
 
-		<div class="prose" class:api={page.api !== undefined} {@attach codeBlocks}>
+		<div
+			class="prose"
+			class:api={page.api !== undefined}
+			{@attach codeBlocks}
+			{@attach scenes(page.html)}
+		>
 			{@html rebase(page.html)}
 		</div>
 

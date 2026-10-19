@@ -1,6 +1,7 @@
 import type { Attachment } from 'svelte/attachments'
 
 import { setLanguage } from './prefs'
+import { showSignature } from './signature'
 import { track } from './track'
 
 /**
@@ -73,78 +74,4 @@ async function copyShown(button: HTMLElement): Promise<void> {
 // a modified click opens the reference itself, as any link does
 function opensElsewhere(event: MouseEvent): boolean {
 	return event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0
-}
-
-let popover: HTMLElement | undefined
-
-/**
- * The call's signature and doc under it, with a link to its reference; a
- * second click on the same call, a click elsewhere or Escape closes it.
- */
-function showSignature(call: HTMLAnchorElement): void {
-	const open = popover?.dataset.for === call.href && popover.isConnected
-	closeSignature()
-	if (open) {
-		return
-	}
-
-	const box = document.createElement('div')
-	box.className = 'api-pop'
-	box.dataset.for = call.href
-	box.setAttribute('role', 'dialog')
-	box.setAttribute('aria-label', call.textContent ?? 'signature')
-
-	const sig = document.createElement('pre')
-	sig.textContent = call.dataset.sig ?? ''
-	box.append(sig)
-	if (call.dataset.doc) {
-		const doc = document.createElement('p')
-		doc.textContent = call.dataset.doc.replaceAll('`', '')
-		box.append(doc)
-	}
-	const more = document.createElement('a')
-	more.href = call.href
-	more.textContent = 'Open in the API reference'
-	box.append(more)
-
-	document.body.append(box)
-	place(box, call)
-	popover = box
-	track('signature', call.textContent ?? undefined)
-
-	setTimeout(() => {
-		document.addEventListener('click', onOutside)
-		document.addEventListener('keydown', onEscape)
-	})
-}
-
-function place(box: HTMLElement, call: HTMLElement): void {
-	const at = call.getBoundingClientRect()
-	const width = Math.min(560, document.documentElement.clientWidth - 32)
-	box.style.width = `${width}px`
-	const left = Math.min(Math.max(16, at.left), document.documentElement.clientWidth - width - 16)
-	box.style.left = `${left + window.scrollX}px`
-	box.style.top = `${at.bottom + window.scrollY + 6}px`
-}
-
-function closeSignature(): void {
-	popover?.remove()
-	popover = undefined
-	document.removeEventListener('click', onOutside)
-	document.removeEventListener('keydown', onEscape)
-}
-
-function onOutside(event: MouseEvent): void {
-	if (!(event.target instanceof Node) || !popover?.contains(event.target)) {
-		const onCall = event.target instanceof Element && event.target.closest('a.api') !== null
-		if (!onCall) {
-			closeSignature()
-		}
-	}
-}
-
-function onEscape(event: KeyboardEvent): void {
-	if (event.key === 'Escape') {
-		closeSignature()
-	}
 }

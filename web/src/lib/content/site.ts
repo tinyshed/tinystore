@@ -126,9 +126,12 @@ async function buildSite(root: string): Promise<Site> {
 	const finished = drafts.map(page => finishPage(page, links, { root, commit, origin }))
 	const problems = finished.flatMap(result => result.problems)
 	if (problems.length > 0) {
-		throw new Error(
-			`the docs link to or call what does not exist:\n${problems.map(p => `  ${p}`).join('\n')}`,
-		)
+		const report = `the docs link to or call what does not exist:\n${problems.map(p => `  ${p}`).join('\n')}`
+		// the dev server shows the pages anyway, so that docs being rewritten can be read
+		if (import.meta.env?.DEV !== true) {
+			throw new Error(report)
+		}
+		console.warn(`${report}\n(the dev server goes on; a build fails on these)`)
 	}
 
 	const pages = finished.map(result => result.page)
@@ -220,7 +223,7 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiInd
 		ids,
 		sections: found,
 		tree: exported,
-		hast: await toHast(tree, calls.highlight),
+		hast: await toHast(tree, calls.highlight, calls.problems),
 		callProblems: calls.problems,
 	}
 }

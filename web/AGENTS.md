@@ -8,7 +8,7 @@ particular to the site. How a page is written is the `docs` skill.
 
 ## Status
 
-Built: the landing page, a page for every file `docs/README.md` links, search,
+Built: the landing page, a page for every file `docs/README.md` links, search, scenes,
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
 the server with its analytics. The docs
@@ -44,16 +44,25 @@ show as noise. What the site adds it reads from what GitHub already ignores:
 | `[code](../kv/kv.go)`                         | the file              | GitHub, at the commit the site was built from      |
 | `<!-- a note -->`                             | nothing               | nothing, and left out of the markdown copy         |
 | `store.bucket('sessions')` in a fence         | plain code            | a link to `Store.bucket`, its signature on a click |
+| a ` ```scene ` fence                          | its text              | an animation beside its code, from `src/lib/scene` |
 
 **A link that leads nowhere fails the build.** Every relative link and image
 is resolved at build time against the repository, and a heading against the
-id GitHub gives it; the prerender then follows every link it renders.
+id GitHub gives it; the prerender then follows every link it renders. The dev
+server prints the same problems as a warning and serves the pages anyway, so
+that docs being rewritten can be read; a build fails on them.
 
 **A call in a guide's block is the reference's.** `calls.ts` reads the
 generated API pages back, follows each chain from `store` or a variable a
 block assigned, and wraps every call it resolves in a link to its heading,
 which the build checks as it checks any link; `code-blocks.ts` opens its
 signature on a click. A call that a known type does not have fails the build.
+
+**A scene is text that plays.** `src/lib/scene/parse.ts` reads a ```scene
+fence at build time, where an error fails the page; `content/scene.ts` writes a
+figure holding its code and its steps as a list, and `scenes.ts` mounts
+`Scene.svelte` on it, whose `Stage` draws and moves the SVG. The format is in
+the docs skill.
 
 **Code is highlighted once, when the site is built.** Shiki writes both
 themes' colours into each token, so the page highlights and changes theme with

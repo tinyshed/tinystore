@@ -80,7 +80,8 @@ export function groupFences(tree: Root): void {
 		}
 
 		for (const child of parent.children as RootContent[]) {
-			if (child.type === 'code') {
+			// a scene is not code to read but a picture to play, and joins no block
+			if (child.type === 'code' && child.lang !== 'scene') {
 				run.push(toFence(child))
 				continue
 			}
