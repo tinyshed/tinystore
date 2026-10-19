@@ -1,6 +1,6 @@
 # Locks API for Rust
 
-Every public type, trait and function of the Locks engine in `tinystore::locks`, generated from its source. The [Locks guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/locks.md), [Python](../python/locks.md) and [Go](../go/locks.md) pages list the same API.
+Every public type, trait and function of the Locks engine in `tinystore::locks`, generated from its source. The [Locks guide](../../chat/live-updates.md#one-summary-per-chat-at-a-time) explains how to use them, and the [Bun and Node](../bun/locks.md), [Python](../python/locks.md) and [Go](../go/locks.md) pages list the same API.
 
 ## Store
 

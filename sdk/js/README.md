@@ -58,19 +58,19 @@ contains. With npm, pnpm or Yarn, install it as `npm install @tinyshed/tinystore
 
 <!-- landing:engines -->
 
-|                                                                                             |                   |                                                                         |
-|---------------------------------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
-| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/chat/messages.md)                | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/chat/sessions-and-limits.md)      | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
-| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/replies.md)                | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
-| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/attachments.md)           | Files             | Files by path, written whole or not at all, checked when read.          |
-| [Search](https://github.com/tinyshed/tinystore/blob/main/docs/chat/finding-old-messages.md) | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
-| [Channels](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)   | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
-| [Locks](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)      | Coordination      | Locks and semaphores with fences, across processes and connections.     |
-| [Config](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)     | Settings          | Files and the environment in layers; secrets; settings changed live.    |
-| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)    | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
-| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)    | Time series       | Samples kept bit for bit, answered exactly.                             |
-| [Backup](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)     | The whole store   | One checked zip of every engine, taken while it runs.                   |
+|                                                                                                                   |                   |                                                                         |
+|-------------------------------------------------------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------|
+| [SQL](https://github.com/tinyshed/tinystore/blob/main/docs/chat/messages.md)                                      | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
+| [KV](https://github.com/tinyshed/tinystore/blob/main/docs/chat/sessions-and-limits.md)                            | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [Jobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/replies.md)                                      | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
+| [Blobs](https://github.com/tinyshed/tinystore/blob/main/docs/chat/attachments.md)                                 | Files             | Files by path, written whole or not at all, checked when read.          |
+| [Search](https://github.com/tinyshed/tinystore/blob/main/docs/chat/finding-old-messages.md)                       | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |
+| [Channels](https://github.com/tinyshed/tinystore/blob/main/docs/chat/live-updates.md)                             | Messages          | Messages to whoever listens now, sent from a transaction at its commit. |
+| [Locks](https://github.com/tinyshed/tinystore/blob/main/docs/chat/live-updates.md#one-summary-per-chat-at-a-time) | Coordination      | Locks and semaphores with fences, across processes and connections.     |
+| [Config](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                           | Settings          | Files and the environment in layers; secrets; settings changed live.    |
+| [Records](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                          | Logs and events   | Read back by time, level, fields and text; followed as they arrive.     |
+| [Metrics](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                          | Time series       | Samples kept bit for bit, answered exactly.                             |
+| [Backup](https://github.com/tinyshed/tinystore/blob/main/docs/start/why.md#the-engines)                           | The whole store   | One checked zip of every engine, taken while it runs.                   |
 
 <!-- /landing:engines -->
 

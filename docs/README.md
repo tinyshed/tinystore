@@ -35,7 +35,7 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 - [Replies in the background](chat/replies.md)
 - [Attachments](chat/attachments.md)
 - [Finding old messages](chat/finding-old-messages.md)
-- Live updates
+- [Live updates](chat/live-updates.md)
 - Settings
 - What it is doing
 - How fast it is
