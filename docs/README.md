@@ -162,14 +162,14 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Records
 
 - [Overview](guides/records/README.md)
-- Logging
-- Console output
-- Events
-- Reading
-- Traces
-- Tail and poll
-- Other programs' output
-- Repair
+- [Logging](guides/records/logging.md)
+- [Console output](guides/records/console.md)
+- [Events](guides/records/events.md)
+- [Reading](guides/records/reading.md)
+- [Traces](guides/records/traces.md)
+- [Tail and poll](guides/records/tail-and-poll.md)
+- [Other programs' output](guides/records/other-programs.md)
+- [Repair](guides/records/repair.md)
 
 ### Metrics
 
