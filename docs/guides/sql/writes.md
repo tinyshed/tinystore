@@ -196,12 +196,12 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
 
 ## When a write fails
 
-| Error             | When                                                                | Do                                       |
-|-------------------|---------------------------------------------------------------------|------------------------------------------|
-| `conflict`        | a unique or a primary key is taken                                  | read the row that holds it               |
-| `invalid`         | a foreign key, a `check`, a `not null`, a value of the wrong type   | fix the value; `constraint` says which   |
-| `limit`           | a transaction past five seconds; `all` past 64 MiB of rows          | do less; read with `each` or `list`      |
-| `outcome unknown` | the commit's sync failed, or the connection ended before the answer | read what you wrote before writing again |
+| Error             | When                                                                                                           | Do                                                           |
+|-------------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| `conflict`        | a unique or a primary key is taken                                                                             | read the row that holds it                                   |
+| `invalid`         | a foreign key, a `check`, a `not null`, a value of the wrong type; a syntax error, a table or column not there | fix the value or the statement; `constraint` says which rule |
+| `limit`           | a transaction past five seconds; `all` past 64 MiB of rows                                                     | do less; read with `each` or `list`                          |
+| `outcome unknown` | the commit's sync failed, or the connection ended before the answer                                            | read what you wrote before writing again                     |
 
 A broken constraint names itself (contract SQL-08):
 

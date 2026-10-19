@@ -327,9 +327,10 @@ fn past_bound(size: usize, bytes: usize) -> Error {
 }
 
 /// A statement's failure as the error a caller acts on: a unique or primary
-/// key already held is `conflict`, and any other constraint is `invalid`.
+/// key already held is `conflict`, any other constraint and a statement
+/// SQLite cannot run, as written, `invalid`.
 pub(crate) fn failure(what: &str, error: rusqlite::Error) -> Error {
-    crate::sqlite::sql_error(what, error)
+    crate::sqlite::given_sql_error(what, error)
 }
 
 /// Why a value does not read as the program's: said of its column.

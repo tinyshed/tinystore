@@ -44,7 +44,9 @@ create index orders_by_user on orders (user_id, id);
 
 A file is plain SQLite: any number of statements, run in order. The name
 starts with its number, and the number decides the order: `0002_orders.sql`
-runs after `0001_users.sql`, whatever the rest of the name says.
+runs after `0001_users.sql`, whatever the rest of the name says. The numbers
+count from `0001` without a gap, and a name without one, `0001.sql`, is
+refused.
 
 ## What opening does
 
@@ -62,7 +64,7 @@ old schema or the whole new one, never half (contract SQL-03). A statement
 that fails names its file and stops the open:
 
 ```text
-sql shop: …/sql/shop.db: migrations: 0004_refunds.sql: its statements: internal: no such table: refund
+sql shop: …/sql/shop.db: migrations: 0004_refunds.sql: its statements: invalid: no such table: refund
 ```
 
 ## Change a schema

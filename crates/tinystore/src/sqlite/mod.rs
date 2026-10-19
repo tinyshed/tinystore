@@ -50,7 +50,7 @@ pub(crate) use apply::{Applier, checkpoint_away};
 pub(crate) use capture::{Commit, Observe, Position, answering, commits_past, own_work, wal_end, wal_of};
 pub use config::Durability;
 pub(crate) use config::{Config, GroupLimits};
-pub(crate) use connection::{copy, execute_cached, query_cached, quote_ident, read_copy, sql_error};
+pub(crate) use connection::{copy, execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error};
 pub(crate) use constraint::named as name_constraint;
 #[cfg(feature = "replication")]
 pub(crate) use file::Switch;

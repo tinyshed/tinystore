@@ -188,8 +188,22 @@ impl Role {
 
 /// An SQLite failure as the error kind a caller acts on.
 pub(crate) fn sql_error(what: impl Into<String>, error: rusqlite::Error) -> Error {
+    error_of(what, error, ErrorKind::Internal)
+}
+
+/// A failure of a statement the program wrote, its SQLite plain error
+/// `invalid`: a syntax error, a table or a column that is not there, a
+/// full-text query FTS5 cannot read are the statement's own, not the store's.
+pub(crate) fn given_sql_error(what: impl Into<String>, error: rusqlite::Error) -> Error {
+    error_of(what, error, ErrorKind::Invalid)
+}
+
+/// `plain` is what SQLite's plain `SQLITE_ERROR` means to the caller.
+fn error_of(what: impl Into<String>, error: rusqlite::Error, plain: ErrorKind) -> Error {
     let kind = match &error {
-        rusqlite::Error::SqliteFailure(failure, _) => kind_of(failure),
+        rusqlite::Error::SqliteFailure(failure, _) | rusqlite::Error::SqlInputError { error: failure, .. } => {
+            kind_of(failure, plain)
+        }
         rusqlite::Error::QueryReturnedNoRows => ErrorKind::NotFound,
         // What the file holds is not what the schema says it holds.
         rusqlite::Error::FromSqlConversionFailure(..)
@@ -202,7 +216,7 @@ pub(crate) fn sql_error(what: impl Into<String>, error: rusqlite::Error) -> Erro
 
 /// A unique or a primary key already held is `conflict`; any other
 /// constraint, a check, a not null or a foreign key, is `invalid`.
-fn kind_of(failure: &rusqlite::ffi::Error) -> ErrorKind {
+fn kind_of(failure: &rusqlite::ffi::Error, plain: ErrorKind) -> ErrorKind {
     use rusqlite::ffi;
     let held = [ffi::SQLITE_CONSTRAINT_UNIQUE, ffi::SQLITE_CONSTRAINT_PRIMARYKEY, ffi::SQLITE_CONSTRAINT_ROWID];
     match failure.code {
@@ -214,6 +228,7 @@ fn kind_of(failure: &rusqlite::ffi::Error) -> ErrorKind {
         ErrorCode::SystemIoFailure | ErrorCode::CannotOpen | ErrorCode::PermissionDenied => ErrorKind::Io,
         ErrorCode::ReadOnly => ErrorKind::Invalid,
         ErrorCode::OperationInterrupted => ErrorKind::Cancelled,
+        ErrorCode::Unknown => plain,
         _ => ErrorKind::Internal,
     }
 }

@@ -84,8 +84,7 @@ impl Prepared {
             (None, _) | (Some(_), Some(None)) => None,
             (Some(_), None) => {
                 return Err(Error::invalid(
-                    "the index keeps vectors: a set gives one, id(…).vector(…).set(…), or says it has none, \
-                     id(…).without_vector().set(…)",
+                    "the index keeps vectors: a set gives the document's vector, or says it has none",
                 ));
             }
             (Some(vectors), Some(Some(values))) => Some(Vector::new(values, vectors.dimensions)?),

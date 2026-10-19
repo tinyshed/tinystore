@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use rusqlite::{Connection, params};
 
 use super::Tx;
-use super::connection::sql_error;
+use super::connection::{given_sql_error, sql_error};
 use super::given::given;
 use crate::{Error, ErrorKind, Result};
 
@@ -47,8 +47,10 @@ pub(crate) fn apply(tx: &Tx<'_>, history: &str, migrations: &[Migration]) -> Res
     check_applied(history, migrations, &applied)?;
     for migration in &migrations[applied.len()..] {
         let what = || format!("{history}: {}", migration.name);
-        given(&migration.sql, || tx.execute_batch(&migration.sql).map_err(|error| sql_error("its statements", error)))
-            .map_err(|error| error.within(what()))?;
+        given(&migration.sql, || {
+            tx.execute_batch(&migration.sql).map_err(|error| given_sql_error("its statements", error))
+        })
+        .map_err(|error| error.within(what()))?;
         tx.prepare_cached(INSERT_APPLIED)
             .and_then(|mut insert| insert.execute(params![history, migration.version, migration.name, migration.sql]))
             .map_err(|error| sql_error(what(), error))?;

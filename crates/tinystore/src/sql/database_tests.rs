@@ -117,6 +117,24 @@ fn a_database_opens_without_migrations_as_it_is() {
     assert_eq!(scratch.scalar::<i64>("select x from t").unwrap(), 7, "both handles are one database");
 }
 
+#[test]
+fn a_statement_sqlite_cannot_run_as_written_is_invalid() {
+    let f = fixture();
+    let db = f.app();
+    db.exec("create virtual table notes_fts using fts5 (title)").unwrap();
+    let wrong = [
+        db.all::<IgnoredAny>("selec 1").unwrap_err(),
+        db.all::<IgnoredAny>("select * from nope").unwrap_err(),
+        db.exec("insert into notes (nope) values (1)").unwrap_err(),
+        db.all::<IgnoredAny>(sql!("select * from notes_fts where notes_fts match ?", "wine AND (")).unwrap_err(),
+    ];
+    for error in wrong {
+        assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    }
+    let broken = f.store.database("broken").migrations([("0001_x.sql", "create table x (")]).open().unwrap_err();
+    assert_eq!(broken.kind(), ErrorKind::Invalid, "{broken}");
+}
+
 // contract: SQL-03
 #[test]
 fn a_migration_changed_renamed_missing_or_out_of_order_refuses_to_open() {
