@@ -122,6 +122,17 @@ sdk-node: build node-core
     node --test --test-timeout=60000 --import ./test/node/register.ts test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts test/channels.test.ts test/search.test.ts test/node.test.ts test/values.test.ts
     node --test test/under-node.ts
 
+# build this machine's target of a release into native/<target>/, as the release workflow does on each:
+# just release-native v0.1.0 win32-x64 x86_64-pc-windows-msvc; it stamps the version into Cargo.toml
+# and Cargo.lock, so run it in a clone
+release-native version target triple:
+    sh -c "VERSION={{version}} TARGET={{target}} TRIPLE={{triple}} sh tools/native.sh"
+
+# pack what native/ holds into dist/, as the release workflow does, and try it here from Node, Bun and Python
+release-pack version target:
+    bun tools/release.ts --version {{version}} --native native --out dist
+    sh -c "VERSION={{version}} TARGET={{target}} sh tools/smoke.sh dist"
+
 # lint and typecheck the Bun SDK
 [working-directory: 'sdk/js']
 sdk-check:

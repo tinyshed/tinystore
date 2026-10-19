@@ -1,6 +1,9 @@
+# a release built here: tools/native.sh and tools/release.ts
+/native/
+/dist/
+
 # Go
 /bin/
-/dist/
 .task/
 *.exe
 *.test
@@ -10,7 +13,7 @@ coverage.out
 # IDE
 .idea/
 .vscode/
-# a local workspace so an editor resolves every module; task sets GOWORK=off
+# a local workspace so an editor resolves every module; run Go with GOWORK=off
 go.work
 go.work.sum
 

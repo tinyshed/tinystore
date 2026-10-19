@@ -1,20 +1,20 @@
 name: Release
 
-# A release is one run of this workflow, dispatched from main with its version.
-# CI runs on the commit unless a push has passed it already; the three tags are
-# made in the runner and everything is built from them; nothing leaves before
-# that has passed. Asked to publish,
-# and approved in the release environment, it pushes the tags all at once,
-# publishes npm, PyPI and the server image, and makes the GitHub release last,
-# when everything it announces is there. The release skill has the why.
+# A release is one run of this workflow, dispatched with its version, as
+# plan/release.md says. CI runs on the commit unless a push passed it already;
+# seven builds make each target's executable and core, one job packs them, and
+# a smoke test on each platform installs what was packed. Nothing leaves before
+# that has passed. Asked to publish, and approved in the release environment,
+# it pushes the tags, publishes npm, PyPI and the server image, and makes the
+# GitHub release last, once everything it announces is there.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: The release, such as v0.1.0 or v0.1.0-rc.1
+        description: The release, such as v0.1.0 or v0.1.0-rc.5
         required: true
       publish:
-        description: Push the tags and publish; otherwise build, and keep the artifacts only
+        description: Push the tags and publish; otherwise build and try, and keep the artifacts only
         type: boolean
         default: false
 
@@ -26,11 +26,14 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  VERSION: ${{ inputs.version }}
+
 jobs:
   # a commit whose push CI passed needs no second run of it
   passed:
     name: CI passed already
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
     outputs:
@@ -48,49 +51,24 @@ jobs:
     if: needs.passed.outputs.ci != 'passed'
     uses: ./.github/workflows/ci.yml
 
-  build:
-    name: build
-    needs: [passed, ci]
-    if: >-
-      !cancelled() && (needs.ci.result == 'success'
-      || needs.ci.result == 'skipped' && needs.passed.outputs.ci == 'passed')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    env:
-      VERSION: ${{ inputs.version }}
-      PUBLISH: ${{ inputs.publish }}
-      GOWORK: 'off'
+  # the version is new everywhere and after what was published, before
+  # anything is built; npm holds the Go engine's candidates up to 0.1.0-rc.4
+  version:
+    name: the version is new
+    runs-on: ubuntu-24.04
     outputs:
-      prerelease: ${{ steps.version.outputs.prerelease }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      # every tag, so that the release tool sees what is released already
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      # a module cache restored from another run could hold another commit
-      # under this version
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: cmd/tinystore/go.mod
-          cache: false
-
-      - uses: astral-sh/setup-uv@v10.2.0
-
-      # compiles the Bun and Node SDK's JavaScript for Node
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-
-      - name: The version is new everywhere
-        id: version
+      - id: check
+        env:
+          PUBLISH: ${{ inputs.publish }}
         run: |
-          if [ "$PUBLISH" = true ] && [ "$GITHUB_REF" != refs/heads/main ]; then
-            echo "a release is published from main, not $GITHUB_REF"; exit 1
+          case "$VERSION" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "a version is vX.Y.Z, or with -alpha.N, -beta.N or -rc.N: not $VERSION"; exit 1 ;;
+          esac
+          if [ "$PUBLISH" = true ] && [ "$GITHUB_REF" != refs/heads/rust ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "a release is published from rust or main, not $GITHUB_REF"; exit 1
           fi
           plain="${VERSION#v}"
           python="${plain/-alpha./a}"; python="${python/-beta./b}"; python="${python/-rc./rc}"
@@ -100,24 +78,88 @@ jobs:
           if curl -fsS -o /dev/null "https://pypi.org/pypi/tinyshed-tinystore/$python/json"; then
             echo "PyPI has tinyshed-tinystore $python already"; exit 1
           fi
+          if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$VERSION" >/dev/null; then
+            echo "the tag $VERSION exists already"; exit 1
+          fi
           case "$VERSION" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
 
-      # the tool refuses a version already tagged or not after the newest
-      - name: Tag, in this runner only
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          go run ./internal/release -version "$VERSION" -tag -worktree "$RUNNER_TEMP/release"
+  # Each target on its own machine: Linux's inside the image whose C library it
+  # links, through docker run, since a job container of Alpine on arm64 runs no
+  # JavaScript action; macOS's Intel build on Apple silicon, cross.
+  build:
+    name: build ${{ matrix.target }}
+    needs: [passed, ci, version]
+    if: >-
+      !cancelled() && needs.version.result == 'success' && (needs.ci.result == 'success'
+      || needs.ci.result == 'skipped' && needs.passed.outputs.ci == 'passed')
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-24.04, triple: x86_64-unknown-linux-gnu, image: quay.io/pypa/manylinux_2_28_x86_64 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu, image: quay.io/pypa/manylinux_2_28_aarch64 }
+          - { target: linux-x64-musl, runner: ubuntu-24.04, triple: x86_64-unknown-linux-musl, image: 'alpine:3.22' }
+          - { target: linux-arm64-musl, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-musl, image: 'alpine:3.22' }
+          - { target: darwin-arm64, runner: macos-15, triple: aarch64-apple-darwin }
+          - { target: darwin-x64, runner: macos-15, triple: x86_64-apple-darwin }
+          - { target: win32-x64, runner: windows-2025, triple: x86_64-pc-windows-msvc }
+    env:
+      TARGET: ${{ matrix.target }}
+      TRIPLE: ${{ matrix.triple }}
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: Build from the tags
-        run: go -C "$RUNNER_TEMP/release" run ./internal/release -version "$VERSION" -out "$GITHUB_WORKSPACE/dist"
-
-      # the commit the run tested is origin's already, so the bundle holds the
-      # three tags and the two commits only their tags reach
-      - name: Keep the tags for the push
+      - name: Build in ${{ matrix.image }}
+        if: matrix.image != ''
+        env:
+          IMAGE: ${{ matrix.image }}
         run: |
-          git bundle create "$RUNNER_TEMP/tags.bundle" "refs/tags/$VERSION" "refs/tags/server/$VERSION" \
-            "refs/tags/cmd/tinystore/$VERSION" --not "$GITHUB_SHA"
+          docker run --rm -v "$PWD:/src" -w /src -e VERSION -e TARGET -e TRIPLE "$IMAGE" sh tools/native.sh
+          sudo chown -R "$(id -u):$(id -g)" native
+
+      - name: Build
+        if: matrix.image == ''
+        shell: bash
+        run: sh tools/native.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.target }}
+          path: native/${{ matrix.target }}
+          if-no-files-found: error
+
+  package:
+    name: pack
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Each target under its name
+        run: for dir in native/native-*; do mv "$dir" "native/${dir#native/native-}"; done
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Pack
+        run: |
+          (cd sdk/js && bun install --frozen-lockfile)
+          bun tools/release.ts --version "$VERSION" --native native --out dist
 
       - uses: actions/attest-build-provenance@v4
         if: inputs.publish
@@ -131,55 +173,98 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: dist
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/SHA256SUMS
-            dist/NOTES.md
-            dist/npm/
-            dist/pypi/
+          path: dist
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: tags
-          path: ${{ runner.temp }}/tags.bundle
-          if-no-files-found: error
-
-  # the first step that cannot be taken back: the environment's reviewers
-  # approve it, having seen what the build made
-  # a CI skipped above would skip every job under it, so each says what it waits for
-  tags:
-    name: push the tags
-    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
-    needs: build
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      contents: write
+  # what a program meets first, from Node, Bun and Python, where each is installed
+  smoke:
+    name: try ${{ matrix.target }}
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, runner: ubuntu-24.04 }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm }
+          - { target: darwin-arm64, runner: macos-15 }
+          - { target: win32-x64, runner: windows-2025 }
     env:
-      VERSION: ${{ inputs.version }}
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:
-          name: tags
-          path: ${{ runner.temp }}
+          name: dist
+          path: dist
 
-      - name: Push the three tags, all or none
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Install and open a store
+        shell: bash
+        run: sh tools/smoke.sh dist
+
+  # musl's packages from Node on Alpine, where a JavaScript action runs no step
+  smoke-musl:
+    name: try ${{ matrix.target }}
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64-musl, runner: ubuntu-24.04 }
+          - { target: linux-arm64-musl, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Install and open a store on Alpine
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          git fetch "$RUNNER_TEMP/tags.bundle" 'refs/tags/*:refs/tags/*'
-          test "$(git rev-parse "$VERSION^{commit}")" = "$GITHUB_SHA"
-          git push --atomic origin "refs/tags/$VERSION" "refs/tags/server/$VERSION" "refs/tags/cmd/tinystore/$VERSION"
+          docker run --rm -v "$PWD:/src" -w /src -e VERSION -e TARGET node:24-alpine \
+            sh -c 'apk add --no-cache uv >/dev/null && sh tools/smoke.sh dist'
+
+  # the first step that cannot be taken back: the environment's reviewers
+  # approve it, having seen what the build made and the smoke test tried
+  tags:
+    name: push the tags
+    if: ${{ !cancelled() && inputs.publish && needs.smoke.result == 'success' && needs.smoke-musl.result == 'success' }}
+    needs: [smoke, smoke-musl]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Push the release's tag and the Go SDK's, both or neither
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "TinyStore $VERSION" "$GITHUB_SHA"
+          git tag -a "sdk/go/$VERSION" -m "TinyStore's Go SDK $VERSION" "$GITHUB_SHA"
+          git push --atomic origin "refs/tags/$VERSION" "refs/tags/sdk/go/$VERSION"
 
   npm:
     name: npm
-    needs: [build, tags]
+    needs: [version, tags]
     if: ${{ !cancelled() && needs.tags.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: npm
     permissions:
       contents: read
@@ -195,18 +280,15 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # the platforms first, so that the SDK never names a package not there
+      # The platforms first, so that the SDK never names a package not there
       # yet; one published by an earlier attempt is left as it is, since npm
       # refuses a version twice. A token only until trusted publishing is set
-      # up for each package. The SDK's tarball shares the platforms' prefix,
-      # tinyshed-tinystore-, so it is picked out by its version.
+      # up for each package.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DIST_TAG: ${{ needs.build.outputs.prerelease == 'true' && 'next' || 'latest' }}
-          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ needs.version.outputs.prerelease == 'true' && 'next' || 'latest' }}
         run: |
-          npm install -g npm@12
           sdk="dist/npm/tinyshed-tinystore-${VERSION#v}.tgz"
           test -f "$sdk"
           platforms=()
@@ -230,9 +312,9 @@ jobs:
 
   pypi:
     name: PyPI
-    needs: [build, tags]
+    needs: tags
     if: ${{ !cancelled() && needs.tags.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: pypi
     permissions:
       id-token: write
@@ -249,9 +331,9 @@ jobs:
 
   image:
     name: server image
-    needs: [build, tags]
+    needs: [version, tags]
     if: ${{ !cancelled() && needs.tags.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -259,8 +341,6 @@ jobs:
       attestations: write
       # the attestation's record of where the image is kept
       artifact-metadata: write
-    env:
-      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -269,15 +349,18 @@ jobs:
           name: dist
           path: dist
 
-      # the image carries the archives' own binaries, the ones attested
+      # the image carries the archives' own executables, the ones attested
       - name: The image's files
         run: |
+          plain="${VERSION#v}"
           mkdir -p image/data
           for arch in amd64 arm64; do
-            mkdir -p "image/linux-$arch"
-            tar -xzf "dist/tinystore_${VERSION#v}_linux_$arch.tar.gz" -C "image/linux-$arch" tinystore
+            target=linux-x64; if [ "$arch" = arm64 ]; then target=linux-arm64; fi
+            mkdir -p "image/$arch"
+            tar -xzf "dist/tinystore-$plain-$target.tar.gz" -C "image/$arch" --strip-components 2 \
+              "tinystore-$plain-$target/bin/tinystore"
           done
-          cp internal/release/Dockerfile image/
+          cp tools/Dockerfile image/
 
       - uses: docker/setup-buildx-action@v4
 
@@ -295,7 +378,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
-            type=raw,value=latest,enable=${{ needs.build.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
 
       - uses: docker/build-push-action@v7
         id: push
@@ -312,15 +395,14 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-  # last, so that what it announces is all there; it hangs on the root's tag,
-  # the one go get names
+  # last, so that what it announces is all there
   github:
     name: GitHub release
-    needs: [build, npm, pypi, image]
+    needs: [version, npm, pypi, image]
     if: >-
       ${{ !cancelled() && needs.npm.result == 'success' && needs.pypi.result == 'success'
       && needs.image.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -332,8 +414,7 @@ jobs:
       - name: Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ inputs.version }}
-          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "the release $VERSION exists already"; exit 0

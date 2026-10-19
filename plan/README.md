@@ -19,6 +19,7 @@ says.
 | [tests.md](tests.md)                   | how the Go suite becomes the Rust suite                                                                                                      |
 | [metrics-engine.md](metrics-engine.md) | how the metrics engine keeps its book's promises: its file, packing, reads, and what measurements decide                                     |
 | [self-metrics.md](self-metrics.md)     | what a store measures of itself into its own `metrics.db`, under `tinystore_` names, when opened with `self_metrics`                         |
+| [release.md](release.md)               | what a release builds for seven targets, what each package carries, and how it reaches npm, PyPI, GHCR and GitHub                            |
 | [scaling.md](scaling.md)               | how an application grows past one machine and leaves: nodes, a home a file, writes, failures, a home that moves, one stream a file, the exit |
 
 The plan was written on 9 October 2026 from the research rounds of 7–9

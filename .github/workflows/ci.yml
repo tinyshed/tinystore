@@ -69,7 +69,7 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      # kv and jobs through the core in Bun's process, a private child, a sidecar and a remote server
+      # every engine through the core in Bun's process, a private child, a sidecar and a remote server
       - name: Bun over the core and tinystore serve
         shell: bash
         working-directory: sdk/js
@@ -82,7 +82,7 @@ jobs:
           bun install --frozen-lockfile
           export TINYSTORE_LIBRARY="$GITHUB_WORKSPACE/target/release/$library"
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
-          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts
+          bun test test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts test/channels.test.ts test/search.test.ts test/node.test.ts test/values.test.ts
 
       - uses: actions/setup-go@v7
         with:
@@ -124,6 +124,28 @@ jobs:
           export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
           cd sdk/python
           uv run --frozen pytest -q
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # the Bun SDK's suites under Node, through its core as Node's addon, a private child, a sidecar
+      # and a remote server; last, since the addon is the core's library built again
+      - name: Node over its addon and tinystore serve
+        shell: bash
+        working-directory: sdk/js
+        run: |
+          case "$RUNNER_OS" in
+            Windows) library=tinystore_ffi.dll binary=tinystore.exe ;;
+            macOS) library=libtinystore_ffi.dylib binary=tinystore ;;
+            *) library=libtinystore_ffi.so binary=tinystore ;;
+          esac
+          cargo build --release --locked -p tinystore-ffi --features node
+          cp "$GITHUB_WORKSPACE/target/release/$library" "$GITHUB_WORKSPACE/target/release/tinystore.node"
+          export TINYSTORE_ADDON="$GITHUB_WORKSPACE/target/release/tinystore.node"
+          export TINYSTORE_BIN="$GITHUB_WORKSPACE/target/release/$binary"
+          node --test --test-timeout=60000 --import ./test/node/register.ts test/pipe.test.ts test/kv.test.ts test/jobs.test.ts test/sql.test.ts test/blobs.test.ts test/queries.test.ts test/clock.test.ts test/direct.test.ts test/durability.test.ts test/encrypted.test.ts test/protocol.test.ts test/console.test.ts test/events.test.ts test/logger.test.ts test/background.test.ts test/metrics.test.ts test/config.test.ts test/backup.test.ts test/locks.test.ts test/channels.test.ts test/search.test.ts test/node.test.ts test/values.test.ts
+          node --test test/under-node.ts
 
   quality:
     name: quality

@@ -258,6 +258,10 @@ that ran clean.
 - [x] The thin Go SDK on cgo and a sidecar, in `sdk/go` as `tinyshed.org/tinystore`: closed by the owner on 18 October,
   every engine of the books built in it.
 - [ ] Actions builds the libraries, executables, npm packages, wheels and Go modules for seven targets.
+  Written on 19 October to [release.md](release.md): `release.yml` builds seven targets, packs the archives,
+  npm's eight packages and seven abi3 wheels with `tools/release.ts`, and tries them on five platforms from
+  Node, Bun and Python before it tags; Windows' target was built, packed and tried by hand, Linux's in
+  `manylinux_2_28`. Not run in Actions yet; Go's modules a platform are left.
 - [ ] The guides in docs/ rewritten from the API books; `v0.1.0`.
 
 **Gate:** the release workflow builds and smoke-tests every artifact on every
