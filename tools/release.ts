@@ -158,6 +158,8 @@ function wheel(target: Target, native: string, version: string, out: string): vo
 		name: `${distInfo}/WHEEL`,
 		text: `Wheel-Version: 1.0\nGenerator: tinystore tools/release.ts\nRoot-Is-Purelib: false\nTag: cp312-abi3-${target.wheel}\n`,
 	})
+	// pip writes the `tinystore` command from this, so that `uvx --from tinyshed-tinystore tinystore` runs
+	entries.push({ name: `${distInfo}/entry_points.txt`, text: '[console_scripts]\ntinystore = tinystore._command:main\n' })
 	entries.push({ name: `${distInfo}/licenses/LICENSE`, from: join(root, 'LICENSE') })
 	const file = `tinyshed_tinystore-${python}-cp312-abi3-${target.wheel}.whl`
 	zip(join(out, 'pypi', file), entries, `${distInfo}/RECORD`)

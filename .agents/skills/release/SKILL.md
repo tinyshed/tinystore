@@ -175,4 +175,4 @@ promise to every released Go SDK: changing one breaks the versions before.
 ## Not built yet
 
 Go's modules a platform with the core's static library (the SDK fetches the archive instead),
-a `tinystore` console script in the wheel, Windows on ARM.
+Windows on ARM.

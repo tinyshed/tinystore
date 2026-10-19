@@ -15,6 +15,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+tinystore = "tinystore._command:main"
+
 [project.urls]
 Repository = "https://github.com/tinyshed/tinystore"
 
