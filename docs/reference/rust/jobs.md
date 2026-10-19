@@ -1,6 +1,6 @@
 # Jobs API for Rust
 
-Every public type, trait and function of the Jobs engine in `tinystore::jobs`, generated from its source. The [Jobs guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
+Every public type, trait and function of the Jobs engine in `tinystore::jobs`, generated from its source. The [Jobs guide](../../chat/replies.md) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
 
 ## Store
 

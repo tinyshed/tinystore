@@ -26,7 +26,7 @@ export const apiEngines: ApiEngine[] = [
 	{ slug: 'store', title: 'Store', guide: 'start/directory.md' },
 	{ slug: 'sql', title: 'SQL', guide: 'chat/messages.md' },
 	{ slug: 'kv', title: 'KV', guide: 'chat/sessions-and-limits.md' },
-	{ slug: 'jobs', title: 'Jobs', guide: 'start/why.md#the-engines' },
+	{ slug: 'jobs', title: 'Jobs', guide: 'chat/replies.md' },
 	{ slug: 'blobs', title: 'Blobs', guide: 'start/why.md#the-engines' },
 	{ slug: 'search', title: 'Search', guide: 'start/why.md#the-engines' },
 	{ slug: 'channels', title: 'Channels', guide: 'start/why.md#the-engines' },

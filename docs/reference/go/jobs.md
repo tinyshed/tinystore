@@ -1,6 +1,6 @@
 # Jobs API for Go
 
-Every public type, function and constant of the Jobs engine in `tinyshed.org/tinystore/jobs`, generated from its source. The [Jobs guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Rust](../rust/jobs.md) pages list the same API.
+Every public type, function and constant of the Jobs engine in `tinyshed.org/tinystore/jobs`, generated from its source. The [Jobs guide](../../chat/replies.md) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Rust](../rust/jobs.md) pages list the same API.
 
 ## Scheduled
 
