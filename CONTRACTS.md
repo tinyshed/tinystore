@@ -14,8 +14,8 @@ removed leaves its id unused. A test that keeps a contract names its id in a
 comment, `// contract: KV-04`, and `just contracts` fails when a contract that
 says MUST is named by no test, or a comment names an id this file lacks.
 
-Nothing is released, so formats, schemas, the protocol and names change freely
-until `v0.1.0`. These contracts are what does not.
+Only candidates are released, so formats, schemas, the protocol and names
+change freely until `v0.1.0`. These contracts are what does not.
 
 ## 1. The store
 

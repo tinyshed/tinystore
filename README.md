@@ -28,13 +28,14 @@ the site's tests fail when the two differ. Change them there.
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.95-B7410E?style=flat-square">
-  <img alt="Status" src="https://img.shields.io/badge/status-pre--release-orange?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/status-release%20candidate-orange?style=flat-square">
 </p>
 
 ---
 
-> **Not released yet.** Until `v0.1.0`, the API, the files and the protocol
-> change freely, and a store written by one build may not open in the next.
+> **A release candidate.** Candidates of `v0.1.0` are published to npm, PyPI,
+> crates.io and GHCR. Until `v0.1.0`, the API, the files and the protocol may
+> still change, and a store written by one candidate may not open in the next.
 
 TinyStore is written in Rust. A Rust program compiles the core in, and the
 program is the store. Bun, Node, Python and Go programs reach the same core

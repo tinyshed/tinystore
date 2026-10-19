@@ -5,11 +5,11 @@ adds a background job, runs it and logs a line. Then it looks inside the
 store with the `tinystore` command. It takes about ten minutes, in
 TypeScript, Python, Go or Rust.
 
-> [!IMPORTANT]
-> **Not released yet**
-> `v0.1.0` is the first release, and it is not published yet. Until it is,
-> the packages below do not exist in their registries, and you build
-> TinyStore from the repository.
+> [!NOTE]
+> **A release candidate**
+> The commands below install the latest candidate of `v0.1.0`, the first
+> release. Until `v0.1.0`, the API and the files may still change, and a
+> store written by one candidate may not open in the next.
 
 ## Install
 

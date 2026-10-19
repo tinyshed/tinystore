@@ -5,8 +5,9 @@ jobs, files, search, logs and metrics in one directory, with one lifecycle,
 one memory budget and one backup. SQLite is underneath, and a Rust program
 compiles all of it in: the program is the store.
 
-> **Not released yet.** Until `v0.1.0`, the API, the files and the protocol
-> change freely, and a store written by one build may not open in the next.
+> **A release candidate.** Until `v0.1.0`, the API, the files and the protocol
+> may still change, and a store written by one candidate may not open in the
+> next.
 
 ```sh
 cargo add tinystore

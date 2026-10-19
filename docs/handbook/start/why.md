@@ -116,8 +116,9 @@ language: `not found`, `conflict`, `limit`, `invalid` and a few more.
   single key faster than a write that waits for the disk. TinyStore makes the
   whole workload of one application cheap, and it removes the network hops
   between the services.
-- **It is not released yet.** The first release is `v0.1.0`. Until then, the
-  API and the file formats change without notice.
+- **It is a release candidate.** The candidates of `v0.1.0`, the first
+  release, are published; until `v0.1.0` itself, the API and the file formats
+  may still change.
 
 ## Why this design?
 
