@@ -1,20 +1,10 @@
-# The image takes what it builds from and nothing else: the Go of the store
-# and the tool, the SDK, the server and the site already built.
+# The image takes what it builds from and nothing else: the Rust of the store
+# and its command, the SDK, the server and the site already built.
 *
-!go.mod
-!go.sum
-!*.go
-!backup
-!blobs
-!codec
-!internal
-!jobs
-!kv
-!metrics
-!records
-!sqldb
-!server
-!cmd
+!rust-toolchain.toml
+!Cargo.toml
+!Cargo.lock
+!crates
 !sdk/js/package.json
 !sdk/js/src
 !web/package.json
@@ -22,8 +12,7 @@
 !web/server
 !web/src/lib/events.ts
 !web/build
-**/*_test.go
-**/testdata
+**/*_tests.rs
 **/node_modules
 web/server/*.test.ts
 web/server/testing.ts

@@ -13,11 +13,10 @@ on:
       - sdk/js/**
       - README.md
       - .github/assets/**
-      - cmd/**
-      - server/**
-      - '*.go'
-      - go.mod
-      - go.sum
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
       - .github/workflows/site.yml
   workflow_dispatch:
 
@@ -87,4 +86,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # the Rust build's layers kept between runs, which a change to docs/ alone reuses
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 

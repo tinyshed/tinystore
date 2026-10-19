@@ -7,14 +7,16 @@
 # The site is built outside, where git can date each page; the image only
 # packs it. The store lives in /data, a volume, so a new image keeps it.
 
-FROM golang:1.27-alpine AS tinystore
+FROM alpine:3.22 AS tinystore
+RUN apk add --no-cache curl gcc g++ make musl-dev perl
+# rust-toolchain.toml names the release; rustup installs it at the first cargo
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /src
-COPY go.mod go.sum ./
-COPY server/go.mod server/go.sum ./server/
-COPY cmd/tinystore/go.mod cmd/tinystore/go.sum ./cmd/tinystore/
-RUN cd cmd/tinystore && go mod download
-COPY . .
-RUN cd cmd/tinystore && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/tinystore .
+COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
+COPY crates ./crates
+# musl linked statically, so the executable runs on Bun's Alpine as it is
+RUN --mount=type=cache,target=/root/.cargo/registry     --mount=type=cache,target=/src/target     cargo build --release --locked -p tinystore-cli &&     mkdir -p /out && cp target/release/tinystore /out/tinystore
 
 # the server's dependencies alone: zod, and the SDK from this checkout, unpublished
 FROM oven/bun:1.4.2-alpine AS dependencies
