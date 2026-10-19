@@ -291,10 +291,14 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # trusted publishing, which each package trusts this workflow for, takes npm 11.5.1 or later
+      - name: npm with trusted publishing
+        run: npm install --global npm@11
+
       # The platforms first, so that the SDK never names a package not there
       # yet; one published by an earlier attempt is left as it is, since npm
-      # refuses a version twice. A token only until trusted publishing is set
-      # up for each package.
+      # refuses a version twice. NPM_TOKEN wins while it is set; without it
+      # npm signs in through the workflow's OIDC token.
       - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

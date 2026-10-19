@@ -155,11 +155,13 @@ reviewer, `npm` with `NPM_TOKEN`, `pypi` with PyPI's trusted publisher,
 `crates` with `CARGO_REGISTRY_TOKEN`; GHCR's package public; the ruleset
 `release tags`, which refuses moving or deleting `v*` and `sdk/go/v*`.
 
-Left until the first release has published: trusted publishing on npm for
-each of the eight packages and on crates.io for `tinystore` and
-`tinystore-cli`, each trusting `release.yml` in its environment, and then
-the two tokens deleted. A job uses its token while one is set, and OIDC
-once it is gone.
+Done on 20 October, once `v0.1.0-rc.6` had published: trusted publishing for
+each of the eight npm packages (`release.yml`, environment `npm`, publish and
+dist-tag allowed) and for `tinystore` and `tinystore-cli` on crates.io
+(`release.yml`, environment `crates`). A job uses its token while one is set,
+and OIDC once it is gone: with `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN`
+deleted, every publish goes through OIDC. npm marks a new trusted publisher
+pending until a publish through it, and drops it unused after two days.
 
 ## Where a Go program finds its core
 
