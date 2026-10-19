@@ -163,7 +163,7 @@ cargo add tinystore
 |                                           |                   |                                                                         |
 |-------------------------------------------|-------------------|-------------------------------------------------------------------------|
 | [SQL](docs/chat/messages.md)              | Relational state  | Your own SQLite databases: checked migrations, a query builder.         |
-| [KV](docs/start/why.md#the-engines)       | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
+| [KV](docs/chat/sessions-and-limits.md)    | Application state | Values with expiry and versions; counters, rate limits, quotas, `once`. |
 | [Jobs](docs/start/why.md#the-engines)     | Background work   | Work that runs at its time: retries, steps, schedules, limits.          |
 | [Blobs](docs/start/why.md#the-engines)    | Files             | Files by path, written whole or not at all, checked when read.          |
 | [Search](docs/start/why.md#the-engines)   | Words and vectors | Indexes of documents or of your tables, by words, by meaning, or both.  |

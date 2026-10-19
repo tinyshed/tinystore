@@ -1,6 +1,6 @@
 # KV API for Rust
 
-Every public type, trait and function of the KV engine in `tinystore::kv`, generated from its source. The [KV guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/kv.md), [Python](../python/kv.md) and [Go](../go/kv.md) pages list the same API.
+Every public type, trait and function of the KV engine in `tinystore::kv`, generated from its source. The [KV guide](../../chat/sessions-and-limits.md) explains how to use them, and the [Bun and Node](../bun/kv.md), [Python](../python/kv.md) and [Go](../go/kv.md) pages list the same API.
 
 ## Store
 

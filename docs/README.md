@@ -31,7 +31,7 @@ has the shape and the voice: .agents/skills/docs/SKILL.md.
 ## Building the chat
 
 - [Messages](chat/messages.md)
-- Sessions and limits
+- [Sessions and limits](chat/sessions-and-limits.md)
 - Replies in the background
 - Attachments
 - Finding old messages

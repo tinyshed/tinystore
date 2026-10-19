@@ -1,6 +1,6 @@
 # KV API for Python
 
-Every public class, function and type of the KV engine in `tinystore`, generated from its source. The [KV guide](../../start/why.md#the-engines) explains how to use them, and the [Bun and Node](../bun/kv.md), [Go](../go/kv.md) and [Rust](../rust/kv.md) pages list the same API.
+Every public class, function and type of the KV engine in `tinystore`, generated from its source. The [KV guide](../../chat/sessions-and-limits.md) explains how to use them, and the [Bun and Node](../bun/kv.md), [Go](../go/kv.md) and [Rust](../rust/kv.md) pages list the same API.
 
 ## Entry
 
