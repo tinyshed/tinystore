@@ -1,6 +1,9 @@
 //! A statement run on a connection: a read's rows, a write's rows, a write's
 //! counts.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rusqlite::{Connection, Statement, params_from_iter};
 
 use super::database::Done;
@@ -136,13 +139,41 @@ fn exec_given(connection: &Connection, statement: &Sql) -> Result<Done> {
     // SQLite counts `changes` only for an insert, update or delete: a schema
     // change or a pragma would report another write's count otherwise.
     let total = connection.total_changes();
-    let mut rows = prepared.query(params_from_iter(statement.values())).map_err(|error| failure("its run", error))?;
-    while rows.next().map_err(|error| failure("its run", error))?.is_some() {}
-    drop(rows);
-    if !writes {
-        return Ok(Done::default());
+    let same_rowid = writes.then(|| inserted_again(connection, before)).transpose()?;
+    let ran = run_to_end(&mut prepared, statement);
+    if same_rowid.is_some() {
+        connection
+            .update_hook(None::<fn(rusqlite::hooks::Action, &str, &str, i64)>)
+            .map_err(|error| failure("its run", error))?;
     }
+    ran?;
+    let Some(same_rowid) = same_rowid else {
+        return Ok(Done::default());
+    };
     let after = connection.last_insert_rowid();
     let changes = if connection.total_changes() == total { 0 } else { connection.changes() };
-    Ok(Done { changes, last_insert_rowid: if after == before { 0 } else { after } })
+    let inserted = after != before || same_rowid.load(Ordering::Relaxed);
+    Ok(Done { changes, last_insert_rowid: if inserted { after } else { 0 } })
+}
+
+fn run_to_end(prepared: &mut Statement<'_>, statement: &Sql) -> Result<()> {
+    let mut rows = prepared.query(params_from_iter(statement.values())).map_err(|error| failure("its run", error))?;
+    while rows.next().map_err(|error| failure("its run", error))?.is_some() {}
+    Ok(())
+}
+
+/// Watches the run for an insert whose rowid is the one the connection's last
+/// insert left: a chat's first message is row 1 of its table right after its
+/// chat was row 1 of another, and comparing rowids alone would answer 0.
+fn inserted_again(connection: &Connection, before: i64) -> Result<Arc<AtomicBool>> {
+    let seen = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&seen);
+    connection
+        .update_hook(Some(move |action, _: &str, _: &str, rowid| {
+            if action == rusqlite::hooks::Action::SQLITE_INSERT && rowid == before {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }))
+        .map_err(|error| failure("its run", error))?;
+    Ok(seen)
 }

@@ -245,6 +245,8 @@ fn exec_says_what_it_changed_and_the_rowid_of_its_insert() {
     assert_eq!(db.exec("select * from events").unwrap(), Done::default(), "a read changes nothing");
     let made = db.exec("create table seen (id integer primary key)").unwrap();
     assert_eq!(made, Done::default(), "a schema change counts no rows, whatever wrote before it");
+    let seen = db.exec("insert into seen (id) values (2)").unwrap();
+    assert_eq!(seen, Done { changes: 1, last_insert_rowid: 2 }, "row 2 of another table, as the last insert left");
 }
 
 // contract: SQL-01
