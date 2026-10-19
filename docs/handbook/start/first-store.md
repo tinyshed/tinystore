@@ -41,7 +41,7 @@ LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE
 |--------------|---------------------------|-----------------------------------------------------------|
 | Bun and Node | Bun 1.4 or Node 22        | the `tinystore` program and libraries, in the npm package |
 | Python       | Python 3.12               | the `tinystore` program and a module, in the wheel        |
-| Go           | Go 1.25                   | the `tinystore` program, found on `PATH`                  |
+| Go           | Go 1.25                   | the release's program and library, fetched at first open  |
 | Rust         | the Rust toolchain itself | the crate, compiled into your program                     |
 
 Rust programs compile the core in, so a Rust program is the store. It builds

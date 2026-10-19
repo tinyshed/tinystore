@@ -212,8 +212,8 @@ function notes(built: Target[], version: string, out: string): void {
 		'```',
 		'',
 		`Built for ${built.map((target) => `\`${target.name}\``).join(', ')}. Each archive holds the`,
-		'`tinystore` executable in `bin/`, and in `lib/` the core\'s library and the Node addon; a Go',
-		'program names them through `TINYSTORE_BIN` and `TINYSTORE_LIBRARY`. `SHA256SUMS` checks them all.',
+		'`tinystore` executable in `bin/`, and in `lib/` the core\'s library and the Node addon; the Go',
+		'SDK fetches its platform\'s at the first open. `SHA256SUMS` checks them all.',
 	]
 	writeFileSync(join(out, 'NOTES.md'), `${lines.join('\n')}\n`)
 }

@@ -31,7 +31,7 @@ const (
 // client then waits for. A sidecar of an older release than this SDK's is
 // stopped and replaced; another server of an older release, a person's or a
 // program's own, is told of once.
-func Sidecar(directory string, binary func() (string, error), started Started) func(context.Context) (*Connection, error) {
+func Sidecar(directory string, binary func(context.Context) (string, error), started Started) func(context.Context) (*Connection, error) {
 	absolute, _ := filepath.Abs(directory)
 	serve := filepath.Join(absolute, "server", "SERVE")
 	log := filepath.Join(absolute, "server", "serve.log")
@@ -55,7 +55,7 @@ func Sidecar(directory string, binary func() (string, error), started Started) f
 				return found.connection, nil
 			}
 		}
-		path, err := binary()
+		path, err := binary(ctx)
 		if err != nil {
 			return nil, err
 		}

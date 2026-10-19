@@ -81,10 +81,12 @@ feature set, each copied out before the next writes over it:
 - The manifests say `0.0.0`; the release stamps its version into the
   workspace before it builds and into every package it writes. PyPI spells a
   pre-release its own way, `0.1.0rc1` for `v0.1.0-rc.1`.
-- Not yet: Go's modules a platform with the core's static library, which
-  [ffi.md](ffi.md) promises. Until then a Go program takes the library and
-  the executable from the GitHub release, through `TINYSTORE_LIBRARY` and
-  `TINYSTORE_BIN`, or `tinystore.Library` and `tinystore.Binary`.
+- The Go SDK fetches its release's archive for its platform at the first
+  open that finds no executable or library given, in `TINYSTORE_BIN` and
+  `TINYSTORE_LIBRARY` or on `PATH`, checks it against `SHA256SUMS` and keeps
+  `bin/` and `lib/` in the user's cache; `TINYSTORE_RELEASES` names a mirror
+  or `off`, `TINYSTORE_CACHE` another cache. A module a platform with the
+  core's static library, which [ffi.md](ffi.md) once promised, is not built.
 
 ## Tags
 

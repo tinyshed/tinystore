@@ -43,7 +43,8 @@ type options struct {
 func Private() Option { return func(o *options) { o.private = true } }
 
 // Embedded runs the core inside this process, through the library Library
-// names or TINYSTORE_LIBRARY. On Linux and macOS it needs cgo.
+// names, TINYSTORE_LIBRARY, or the release's own, fetched into the user's
+// cache at the first open. On Linux and macOS it needs cgo.
 func Embedded() Option { return func(o *options) { o.embedded = true } }
 
 // Library is the core's library the store in this process loads:
@@ -56,7 +57,8 @@ func Library(path string) Option {
 }
 
 // Binary is the tinystore binary a sidecar or a private child runs;
-// TINYSTORE_BIN or PATH's unless given.
+// TINYSTORE_BIN, PATH's, or the release's own, fetched into the user's cache
+// at the first open, unless given.
 func Binary(path string) Option { return func(o *options) { o.binary = path } }
 
 // Idle is how long a sidecar this process starts stays once its last
@@ -130,7 +132,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 		}
 		started.Idle = core.Spelled(ms)
 	}
-	binary := func() (string, error) { return core.FindBinary(o.binary) }
+	binary := func(ctx context.Context) (string, error) { return core.FindBinary(ctx, o.binary) }
 	var dial func(context.Context) (*core.Connection, error)
 	switch {
 	case o.embedded:

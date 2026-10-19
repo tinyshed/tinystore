@@ -32,15 +32,20 @@ var (
 	libraries   = map[string]coreLibrary{}
 )
 
-// FindLibrary is the core's library: the one given, or TINYSTORE_LIBRARY.
-func FindLibrary(given string) (string, error) {
+// FindLibrary is the core's library: the one given, TINYSTORE_LIBRARY, or the
+// release's own, fetched once.
+func FindLibrary(ctx context.Context, given string) (string, error) {
 	if given != "" {
 		return given, nil
 	}
 	if found := os.Getenv("TINYSTORE_LIBRARY"); found != "" {
 		return found, nil
 	}
-	return "", Errorf(Closed, "no core library for the store in this process: pass tinystore.Library, or set TINYSTORE_LIBRARY")
+	found, err := fetchedLibrary(ctx)
+	if err != nil {
+		return "", Wrap(Closed, err, "no core library for the store in this process: pass tinystore.Library, or set TINYSTORE_LIBRARY")
+	}
+	return found, nil
 }
 
 func libraryAt(path string) (coreLibrary, error) {
@@ -70,7 +75,7 @@ func InProcess(directory, library string, started Started) func(context.Context)
 	}
 	encoded := wire.Encode(&options)
 	return func(ctx context.Context) (*Connection, error) {
-		path, err := FindLibrary(library)
+		path, err := FindLibrary(ctx, library)
 		if err != nil {
 			return nil, err
 		}

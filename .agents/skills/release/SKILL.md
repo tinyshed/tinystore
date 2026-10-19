@@ -96,5 +96,5 @@ public; the environment `crates` and crates.io's first publish through
 
 ## Not built yet
 
-Go's modules a platform with the core's static library ([ffi.md](../../../plan/ffi.md)),
+Go's modules a platform with the core's static library (the SDK fetches the archive instead),
 a `tinystore` console script in the wheel, Windows on ARM.

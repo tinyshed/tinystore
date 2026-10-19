@@ -46,8 +46,9 @@ func (s Started) storeFlags() []string {
 	return flags
 }
 
-// FindBinary is the tinystore binary: the one given, TINYSTORE_BIN, or PATH's.
-func FindBinary(given string) (string, error) {
+// FindBinary is the tinystore binary: the one given, TINYSTORE_BIN, PATH's,
+// or the release's own, fetched once.
+func FindBinary(ctx context.Context, given string) (string, error) {
 	if given != "" {
 		return given, nil
 	}
@@ -57,16 +58,20 @@ func FindBinary(given string) (string, error) {
 	if found, err := exec.LookPath("tinystore"); err == nil {
 		return found, nil
 	}
-	return "", Errorf(Closed, "no tinystore binary: put tinystore on PATH, or set TINYSTORE_BIN")
+	found, err := fetchedBinary(ctx)
+	if err != nil {
+		return "", Wrap(Closed, err, "no tinystore binary: put tinystore on PATH, or set TINYSTORE_BIN")
+	}
+	return found, nil
 }
 
 // PrivateChild dials a private child: tinystore serve --stdio, living and
 // dying with this process. A test's clock starts where the first child's did,
 // and a child started again starts it there.
-func PrivateChild(directory string, binary func() (string, error), clock string, started Started) func(context.Context) (*Connection, error) {
+func PrivateChild(directory string, binary func(context.Context) (string, error), clock string, started Started) func(context.Context) (*Connection, error) {
 	absolute, _ := filepath.Abs(directory)
 	return func(ctx context.Context) (*Connection, error) {
-		path, err := binary()
+		path, err := binary(ctx)
 		if err != nil {
 			return nil, err
 		}

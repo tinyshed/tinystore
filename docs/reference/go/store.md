@@ -133,7 +133,7 @@ Option is how a store opens.
 func Binary(path string) Option
 ```
 
-Binary is the tinystore binary a sidecar or a private child runs; TINYSTORE\_BIN or PATH's unless given.
+Binary is the tinystore binary a sidecar or a private child runs; TINYSTORE\_BIN, PATH's, or the release's own, fetched into the user's cache at the first open, unless given.
 
 ### Clock
 
@@ -157,7 +157,7 @@ Durability is how far a commit of the store's files goes before it returns: "ful
 func Embedded() Option
 ```
 
-Embedded runs the core inside this process, through the library Library names or TINYSTORE\_LIBRARY. On Linux and macOS it needs cgo.
+Embedded runs the core inside this process, through the library Library names, TINYSTORE\_LIBRARY, or the release's own, fetched into the user's cache at the first open. On Linux and macOS it needs cgo.
 
 ### EncryptionKeyFile
 
