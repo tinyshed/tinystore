@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { toHtml } from 'hast-util-to-html'
 
-import { byLanguage, type Fence, parseMeta, renderGroup, splitRun } from './code'
+import { byLanguage, type Fence, parseMeta, renderGroup, splitRun, toFence } from './code'
 import type { Highlight } from './highlight'
 
 const fence = (lang: string, title?: string, language?: Fence['language']): Fence => ({
@@ -14,6 +14,7 @@ const fence = (lang: string, title?: string, language?: Fence['language']): Fenc
 const go = fence('go', undefined, 'go')
 const ts = fence('ts', undefined, 'bun')
 const python = fence('python', undefined, 'python')
+const rust = fence('rust', undefined, 'rust')
 
 // a stand-in that keeps the code readable in the output
 const plain: Highlight = (code, lang) => ({
@@ -57,6 +58,11 @@ describe('fences', () => {
 		expect(splitRun([fence('text'), fence('text')])).toHaveLength(2)
 	})
 
+	test('a rust or rs fence is the Rust tab', () => {
+		expect(toFence({ type: 'code', lang: 'rs', value: '' }).language).toBe('rust')
+		expect(toFence({ type: 'code', lang: 'rust', value: '' }).language).toBe('rust')
+	})
+
 	test('an info string names a file, a language and an install command', () => {
 		expect(parseMeta(`title="metrics.ts" for=bun install='bun add @tinyshed/tinystore'`)).toEqual({
 			title: 'metrics.ts',
@@ -66,10 +72,11 @@ describe('fences', () => {
 	})
 
 	test('languages come in the switch order, whatever order they were written in', () => {
-		expect(byLanguage([go, python, ts]).map(variant => variant.label)).toEqual([
+		expect(byLanguage([rust, go, python, ts]).map(variant => variant.label)).toEqual([
 			'Bun',
 			'Python',
 			'Go',
+			'Rust',
 		])
 	})
 })

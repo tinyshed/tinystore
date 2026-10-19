@@ -8,7 +8,15 @@ Every public class, function and type of the Records engine in `@tinyshed/tinyst
 type Level = 'debug' | 'info' | 'warn' | 'error' | number
 ```
 
-slog's levels: -4 debug, 0 info, 4 warn, 8 error, or any other it may name.
+A level a logger logs at: one of its four names, or slog's number between them.
+
+## EventLevel
+
+```ts
+type EventLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+```
+
+An event's level: what loggers and the programs whose lines are kept write.
 
 ## Fields
 
@@ -16,270 +24,365 @@ slog's levels: -4 debug, 0 info, 4 warn, 8 error, or any other it may name.
 type Fields = Record<string, unknown> | readonly (readonly [string, unknown])[]
 ```
 
-Fields: keys and values, each value written as JSON. An object's keys keep
-their order; an array of pairs may repeat a key.
+What happened, or what it happened in: an object, or its pairs in their order.
 
-## RecordInput
+## Event
 
 ```ts
-interface RecordInput {
-    /** its time: a Date, or unix nanoseconds as a bigint; now when absent */
-    at?: Date | bigint
-    /** the namespace the application names: 'web', 'billing' */
+interface Event {
+    /** its time, which the file keeps to the nanosecond */
+    at: Date
     stream: string
-    /** the event: 'log' for a log line */
+    /** what happened; `log` for a logger's line */
     name: string
-    level?: Level
-    /** absent is none, which an empty body is not */
-    body?: string | Uint8Array
-    /** sixteen bytes, or their 32 hex digits */
-    traceId?: Uint8Array | string | undefined
-    /** eight bytes, or their 16 hex digits */
-    spanId?: Uint8Array | string | undefined
-    /** who produced it */
+    level?: EventLevel
+    message?: string
+    /** each value as JSON.parse reads it, an integer past 2^53 a bigint */
+    fields: Record<string, unknown>
+    context: Record<string, unknown>
+    /** 32 hex digits */
+    traceId?: string
+    /** 16 hex digits */
+    spanId?: string
+}
+```
+
+An event as a read gives it.
+
+## NewEvent
+
+```ts
+interface NewEvent {
+    name: string
+    fields?: Fields
+    /** its time: now unless given, from what the stream keeps to ten minutes ahead */
+    at?: Date
     context?: Fields
-    /** what happened */
-    attrs?: Fields
+    level?: EventLevel | number
+    message?: string
+    /** a trace's 32 hex digits, with its span's 16: the current trace's unless given */
+    traceId?: string
+    spanId?: string
 }
 ```
 
-A record to append: when, where, what, and its fields.
+An event to append: its name, what happened, and what it carries beside.
 
-## LogRecord
+## AppendOptions
 
 ```ts
-interface LogRecord {
-    /** unix nanoseconds */
-    at: bigint
-    stream: string
-    name: string
-    level: number | undefined
-    body: string | Uint8Array | undefined
-    traceId: Uint8Array | undefined
-    spanId: Uint8Array | undefined
-    context: [key: string, json: string | Uint8Array][]
-    attrs: [key: string, json: string | Uint8Array][]
+type AppendOptions = Omit<NewEvent, 'name' | 'fields'>
+```
+
+## EventsOptions
+
+```ts
+interface EventsOptions {
+    /** how long the stream keeps its events: its own, kept in the file; 14 days until one says */
+    keep?: Duration
 }
 ```
 
-A record as it was kept: a field's value is the JSON it was written as, spelled as it was given.
-
-## fields
+## Query
 
 ```ts
-function fields(pairs: LogRecord['attrs']): Record<string, unknown>
-```
-
-A record's fields, its attrs or its context, as an object, each value read
-as JSON.parse reads the JSON it was kept as; the last of a repeated key is
-kept. The pairs keep what JSON.parse may not: 1.2300 as written, an integer
-past 2^53 whole.
-
-```ts
-for await (const record of store.records.all({ since: '1h', streams: ['readers'] })) {
-  const { page, from } = fields(record.attrs)
-}
-```
-
-## RecordsQuery
-
-```ts
-interface RecordsQuery {
-    /** the span before now the range covers: '1h', '15m', or milliseconds; or from and to */
+interface Query {
+    /** the span before now, '1h'; or from and to */
     since?: Duration
-    /** the range's start, included; open when absent */
-    from?: Date | bigint
-    /** the range's end, excluded; open when absent */
-    to?: Date | bigint
-    /** none or empty is every stream */
-    streams?: string[]
-    names?: string[]
-    /** a record without a level does not match */
-    minLevel?: Level
-    traceId?: Uint8Array | string
-    /** each a record must hold, by key and exact JSON spelling */
-    attrs?: Fields
-    context?: Fields
-    /**
-     * text a record's body or name holds, its case ignored: every record the
-     * rest of the query leaves is read for it, so a search over much text ends
-     * pages early at the budget, and next goes on
-     */
+    /** the range's start, included */
+    from?: Date
+    /** the range's end, excluded */
+    to?: Date
+    /** any of these streams, for every stream's read */
+    streams?: readonly string[]
+    /** any of these names: ['log'] is the lines */
+    names?: readonly string[]
+    /** this level and worse; an event without a level is not found */
+    minLevel?: EventLevel
+    traceId?: string
+    /** each key with this value, by the JSON it was written as, in fields or in context */
+    where?: Record<string, unknown>
+    /** this text in the message, the name or a value, its case ignored */
     search?: string
-    /** newest first; oldest first when absent */
+    /** newest first; oldest first without it */
     newest?: boolean
-    /** the records a page holds: 1000, and 10000 at most */
+    /** the events of a page: 1000, and 10,000 at most */
     limit?: number
-    /** what one read may open, fetch and decode; each narrows the server's */
-    budget?: {
-        blocks?: number
-        bytes?: number
-        records?: number
-    }
-    /** a page's next, which this page continues from; the rest of the query as it was */
-    after?: string | undefined
+    /** a page's next, with the rest of the query as it was */
+    after?: string
 }
 ```
 
-The records in a range that meet every condition given.
+What a read finds: every condition given holds; one given as undefined is InvalidError.
+
+## Counted
 
 ```ts
-{ since: '1h', minLevel: 'warn' }                 // the last hour's warnings
-{ since: '1h', search: 'connection reset' }       // whose text holds it, case ignored
-{ from: start, to: end, streams: ['api'] }
+type Counted = Omit<Query, 'newest' | 'limit' | 'after'>
 ```
 
-## Cursor
+A query of every event it finds, for what counts them.
+
+## Page
 
 ```ts
-interface Cursor {
-    segment: number
-    row: number
+interface Page {
+    events: Event[]
+    /** the page after it; the last page has none */
+    next?: string
 }
 ```
 
-Where a follower stands in the sealed segments: kept by the caller between follows.
+## Top
+
+```ts
+interface Top {
+    value: unknown
+    count: number
+}
+```
+
+## Stats
+
+```ts
+interface Stats {
+    samples: number
+    sum: number | bigint
+    min: number | bigint
+    max: number | bigint
+    avg: number
+}
+```
+
+A field's numbers in a row: a sum of integers exact, a bigint past 2^53.
+
+## Row
+
+```ts
+interface Row {
+    /** where the row's span begins, counted from 1970 in UTC */
+    at: Date
+    count: number
+    by: Record<string, unknown>
+    stats: Record<string, Stats>
+    distinct: Record<string, number>
+}
+```
+
+## Aggregate
+
+```ts
+interface Aggregate extends Counted {
+    /** the span of a row: the range is one without it */
+    every?: Duration
+    /** keys whose every value has rows of its own */
+    by?: readonly string[]
+    /** fields whose numbers a row sums */
+    stats?: readonly string[]
+    /** fields whose different values a row counts */
+    distinct?: readonly string[]
+}
+```
+
+## StreamInfo
+
+```ts
+interface StreamInfo {
+    name: string
+    keep: DurationText
+    /** its oldest event, or where its keep begins while it holds older */
+    retainedFrom: Date
+    newest: Date
+}
+```
+
+## PollBatch
+
+```ts
+interface PollBatch {
+    events: Event[]
+    /** where the next poll begins, kept once these events are safe */
+    cursor: string
+    /** the events keep removed before the cursor reached them */
+    expired: number
+}
+```
+
+## TailQuery
+
+```ts
+type TailQuery = Pick<Query, 'streams' | 'names' | 'minLevel' | 'traceId' | 'where' | 'search'>
+```
+
+What a tail finds: a query's conditions, and no range, order or limit.
+
+## TailBatch
+
+```ts
+interface TailBatch {
+    events: Event[]
+    /** the events that left the store's hold before the tail read them */
+    missed: number
+}
+```
+
+A tail's batch: the events written since the last, and how many it missed.
 
 ## Damage
 
 ```ts
 interface Damage {
+    /** a head row holds events not packed yet, a segment packed ones */
+    part: 'head row' | 'segment'
+    id: number
     stream: string
-    /** a sealed segment, dropped whole; or a head row */
-    segment: number | undefined
-    headRow: number | undefined
-    /** the times it held, unix nanoseconds */
-    from: bigint
-    to: bigint
-    /** the invariant its bytes broke */
-    reason: string
+    /** its events' oldest and newest times */
+    first: Date
+    last: Date
+    /** what broke */
+    error: string
 }
 ```
 
-A row that no longer reads, which a drop removes.
+A head row or a segment that no longer reads, as `damaged` lists it and `drop` takes it.
 
-## Records
-
-```ts
-class Records {}
-```
-
-### Records.logger
+## Events
 
 ```ts
-logger(stream: string, options?: LoggerOptions): Logger
+class Events extends Reads {
+    readonly stream: string
+}
 ```
 
-A logger of a stream: its calls return at once, and its lines reach the
-server every second, as Go's slog handler's and Python's logging.Handler's do.
+A stream of events: written with `append`, which waits for the file, and read back.
 
-### Records.stop
+### Events.append
 
 ```ts
-stop(): Promise<void>
+append(name: string, fields?: Fields, options?: AppendOptions): Promise<void>
+append(events: readonly NewEvent[]): Promise<void>
 ```
 
-Hands over what every logger holds, as the store does when it closes.
+Writes an event, or a list of them whole or not at all: it returns once
+they are written, and a read finds them at once. A refused event names
+its place in the list and its name.
 
-### Records.append
+### Events.appendLines
 
 ```ts
-append(records: RecordInput | readonly RecordInput[]): Promise<void>
+appendLines(lines: readonly ConsoleLine[]): Promise<void>
 ```
 
-Appends records in one transaction, all or none; a refused one names
-itself as `call`, with its stream and name. A read sees them at once. A
-record of no trace of its own takes the one withTrace runs the call in.
+A logger's lines, each an event of this stream.
 
-### Records.scan
+### Events.lines
 
 ```ts
-scan(query?: RecordsQuery): Promise<Page<LogRecord, string>>
+lines(): Lines
 ```
 
-One page of the records a query matches, from one snapshot, in event-time
-order; next, while a limit or a budget ended the page early, is passed back
-as `after` with the same query. A page never splits a timestamp.
+A writer of another program's output into this stream: each line it is
+given becomes an event at the time it arrived, a stack trace's or a JSON
+value's lines one, and a write never waits.
 
-### Records.all
+    const out = store.events('worker').lines()
+    child.stdout.on('data', chunk => out.write(chunk))
+    child.on('close', () => out.end())
+
+## AllEvents
 
 ```ts
-all(query?: Omit<RecordsQuery, 'after'>): AsyncGenerator<LogRecord>
+class AllEvents extends Reads {}
 ```
 
-Every record a query matches, a page at a time.
+Every stream's events, to read: `store.events()`.
 
-### Records.follow
+### AllEvents.streams
 
 ```ts
-follow(cursor?: Cursor, limit?: number): Promise<{
-        records: LogRecord[]
-        cursor: Cursor
-        expired: number
-    }>
+streams(): Promise<StreamInfo[]>
 ```
 
-The sealed records after a cursor, in the order they were sealed; the
-cursor to follow from next, and the segments retention removed before
-the cursor reached them. A record reaches a follower once it is sealed.
+Every stream with events, by name, with what it keeps, where that begins and its newest event's time.
 
-### Records.lines
+### AllEvents.poll
 
 ```ts
-lines(stream: string, options?: {
-        buffer?: number
-    }): LinesWriter
+poll(cursor?: string, options?: {
+        limit?: number
+    }): Promise<PollBatch>
 ```
 
-A writer of another program's output, pino's lines or a child's stdout,
-that never waits: each line becomes a record of the stream as the server's
-Lines makes it, a stack trace's lines joined and a JSON or logfmt line's
-fields kept. What does not fit its buffer is dropped and counted.
+Every event once, a batch a call, from a cursor the program keeps, the
+oldest event kept without one: `{ events, cursor, expired }`. With no
+event past the cursor, the batch is empty and its cursor the one given.
 
-### Records.damaged
+### AllEvents.damaged
 
 ```ts
 damaged(): Promise<Damage[]>
 ```
 
-The rows the server's records have met that no longer read.
+What reads met that no longer reads, which `drop` removes: each head
+row and segment with its stream and its events' times. What the store
+has not met since it opened is not listed.
 
-### Records.drop
+### AllEvents.drop
 
 ```ts
 drop(damage: Damage): Promise<void>
 ```
 
-Removes a damaged row, a repair an admin connection alone may make.
+Removes a head row or a segment that `damaged` listed, so that the
+reads over it work again; what still reads is refused.
 
-## LinesWriter
+    for (const damage of await store.events().damaged()) await store.events().drop(damage)
 
-```ts
-class LinesWriter {
-    dropped: number
-}
-```
-
-An upload of lines that stays open while it is written: write never waits,
-holding what the stream's credit does not let go yet up to its buffer and
-dropping past it. A connection lost drops what it held and the next write
-uploads on the next connection.
-
-### LinesWriter.write
+## Lines
 
 ```ts
-write(chunk: string | Uint8Array): boolean
+class Lines {}
 ```
 
-Takes a piece of output, cut anywhere. It returns at once.
+A writer of another program's output into a stream, as `events.lines()`
+begins it: each line becomes an event, and a write never waits. It sends
+whole lines, so that what it has no room for, `dropped` counts as lines.
 
-### LinesWriter.end
+### Lines.dropped
+
+```ts
+get dropped(): number
+```
+
+The lines dropped: past what the writer holds, and, once it ended, by the store.
+
+### Lines.write
+
+```ts
+write(chunk: Uint8Array | string): void
+```
+
+Takes a piece of output, cut anywhere; it never waits.
+
+### Lines.end
 
 ```ts
 end(): Promise<void>
 ```
 
-Hands over what the writer holds, a line cut short included, and ends the upload.
+Ends the writer: what it holds goes, a last line without its newline
+too, and it returns once the store wrote them.
+
+## StoreLoggerOptions
+
+```ts
+interface StoreLoggerOptions extends LoggerOptions {
+    /** how long the stream keeps its events, as store.events takes it */
+    keep?: Duration
+}
+```
+
+What a store's logger is told: a logger's options, and how long its stream keeps.
 
 ## LoggerOptions
 
@@ -310,10 +413,10 @@ interface LoggerOptions {
     replace?: (key: string, value: unknown) => unknown
     /**
      * where LOG_LEVEL, LOG_FORMAT and LOG_TIME are read, which win over the
-     * options: `fromEnv('APP')` reads APP_LOG_LEVEL and the rest, and false
+     * options: `env('APP')` reads APP_LOG_LEVEL and the rest, and false
      * reads nothing; the bare names when absent
      */
-    env?: FromEnv | false
+    env?: EnvLayer | false
     /** adds where each line was logged: source={"function":…,"file":…,"line":…} */
     source?: boolean
 }
@@ -338,7 +441,7 @@ function logger(stream: string, options?: LoggerOptions): Logger
 
 A logger of the console alone, for a program that wants the logger and not
 the records: its lines are written as a store's logger writes them, and
-`store.records.logger(stream)` in its place keeps them too.
+`store.logger(stream)` in its place keeps them too.
 
 ```ts
 const log = logger('app', { redact: ['password'] })
@@ -357,7 +460,7 @@ message the body, the call's fields its attributes and the fields of `with`
 its context, who is speaking.
 
 ```ts
-const log = store.records.logger('api')
+const log = store.logger('api')
 log.info('server started', { port: 3000 })
 log.with({ requestId }).warn('slow request', { ms: 1200 })
 log.event('user.created', { userId: 42 })   // a record named for the event
@@ -443,6 +546,14 @@ type ConsoleTime = 'clock' | 'full' | 'off'
 ```
 
 How a pretty line shows its time: `11:02:11.123`, `2026-10-02 11:02:11.123 +03:00` or none.
+
+## secrets
+
+```ts
+const secrets: readonly string[]
+```
+
+The names `redact` takes to hide the usual secrets, as Go's console.Secrets and Python's SECRETS.
 
 ## Trace
 

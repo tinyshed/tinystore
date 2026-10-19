@@ -2,7 +2,10 @@
 // site's API pages: each declaration's code without bodies, and its doc
 // comment as markdown.
 //
-//	go run ./reference/go <package dir> <import path>
+//	go run ./reference/go <package dir> <import path> [file.go...]
+//
+// Files named after the import path limit the package to them, as the
+// root package's config.go is the Config page's and not the Store's.
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -36,11 +40,11 @@ type Package struct {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: reference <package dir> <import path>")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: reference <package dir> <import path> [file.go...]")
 		os.Exit(2)
 	}
-	pkg, err := extract(os.Args[1], os.Args[2])
+	pkg, err := extract(os.Args[1], os.Args[2], os.Args[3:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -53,9 +57,9 @@ func main() {
 	}
 }
 
-func extract(dir, importPath string) (Package, error) {
+func extract(dir, importPath string, only []string) (Package, error) {
 	fset := token.NewFileSet()
-	files, err := parseDir(fset, dir)
+	files, err := parseDir(fset, dir, only)
 	if err != nil {
 		return Package{}, err
 	}
@@ -81,14 +85,14 @@ func extract(dir, importPath string) (Package, error) {
 	return Package{Doc: w.markdown(p.Doc), Items: items}, nil
 }
 
-func parseDir(fset *token.FileSet, dir string) ([]*ast.File, error) {
+func parseDir(fset *token.FileSet, dir string, only []string) ([]*ast.File, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	var files []*ast.File
 	for _, e := range entries {
-		if !isSource(e) {
+		if !isSource(e) || (len(only) > 0 && !slices.Contains(only, e.Name())) {
 			continue
 		}
 		f, err := parser.ParseFile(fset, dir+"/"+e.Name(), nil, parser.ParseComments)

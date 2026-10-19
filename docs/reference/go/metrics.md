@@ -1,132 +1,82 @@
 # Metrics API for Go
 
-Every public type, function and constant of the Metrics engine in `github.com/tinyshed/tinystore/metrics`, generated from its source. The [Metrics guide](../../metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md) and [Python](../python/metrics.md) pages list the same API.
+Every public type, function and constant of the Metrics engine in `tinyshed.org/tinystore/metrics`, generated from its source. The [Metrics guide](../../metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md) and [Python](../python/metrics.md) pages list the same API.
 
-## LimitSeries
+## Delete
 
 ```go
-const (
-	LimitSeries         = "matched series"
-	LimitBlocks         = "decoded blocks"
-	LimitPayloadBytes   = "fetched bytes"
-	LimitDecodedSamples = "decoded samples"
-	LimitOutputSamples  = "output samples"
-	LimitOutputBuckets  = "output buckets"
-)
+func Delete(ctx context.Context, store *tinystore.Store, name string, labels Labels) (bool, error)
 ```
 
-The names of a query's budgets, which a LimitError's Name holds when one is spent.
+Delete removes the one series of exactly this name and these labels, whether its samples still read or not, and says whether the store held it; nil labels are the series without any.
 
-## ErrInvalid
+## Describe
 
 ```go
-var (
-	ErrInvalid      = kindOf("invalid metrics request", tinystore.ErrInvalid)
-	ErrLimit        = kindOf("metrics resource limit", tinystore.ErrLimit)
-	ErrClosed       = kindOf("metrics store is closed", tinystore.ErrClosed)
-	ErrTooOld       = kindOf("sample is expired or sealed", tinystore.ErrTooOld)
-	ErrTooNew       = kindOf("sample is ahead of the store's clock", tinystore.ErrTooNew)
-	ErrConflict     = kindOf("metrics state changed", tinystore.ErrConflict)
-	ErrCorrupt      = kindOf("corrupt metrics data", tinystore.ErrCorrupt)
-	ErrSuspended    = kindOf("metrics maintenance is suspended for this series", tinystore.ErrSuspended)
-	ErrNonFinite    = kindOf("nonfinite metrics aggregate input", tinystore.ErrInvalid)
-	ErrCounterValue = kindOf("invalid counter aggregate input", tinystore.ErrInvalid)
-)
+func Describe(ctx context.Context, store *tinystore.Store, name string, description Description) error
 ```
 
-Each wraps the store's sentinel of the same kind, so errors.Is(err, tinystore.ErrLimit) holds for a metrics limit as it does in every engine.
+Describe sets a name's unit and help in place of what it had: what is not given is removed. They belong to the name, so a Delete of its series leaves them.
 
-## AggregateBucket
+## ExponentialBuckets
 
 ```go
-type AggregateBucket struct {
-	From, To      int64
-	Count, Resets int
-	Value         float64
-	Overflow      bool
+func ExponentialBuckets(start, factor float64, count int) []float64
+```
 
-	// Partial reports that retention cut the bucket: only its samples from the
-	// cutoff on were counted, or the step into its first one was not.
+ExponentialBuckets is upper bounds from start, each factor times the one before, as Prometheus' ExponentialBuckets: ExponentialBuckets(1, 2, 14) is 1, 2, 4 … 8192.
+
+## Flush
+
+```go
+func Flush(ctx context.Context, store *tinystore.Store) error
+```
+
+Flush sends what every instrument changed and has the store write its totals now, as it does every 15 seconds. One the store cannot be reached for fails as a call does, and what it carried goes once it can be; what the store refused since the flush before, and what a store that started again may have counted, fail it, Invalid and OutcomeUnknown, each once.
+
+## Ingest
+
+```go
+func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
+```
+
+Ingest writes series and their samples, every one or none: a refused series names itself by its labels. It returns once they are written.
+
+## OpenGaugeFunc
+
+```go
+func OpenGaugeFunc(store *tinystore.Store, name string, read func(ctx context.Context) (float64, error), opts ...Option) error
+```
+
+OpenGaugeFunc is a gauge whose value read gives every 15 seconds and at Flush, of the set of labels Labels gives, none unless given. Another set of the name takes a function of its own. It is never called again while a call of it runs, and an error or a value that is no finite number writes nothing that time, said once while it repeats.
+
+	err = metrics.OpenGaugeFunc(store, "queue_depth", emails.Depth, metrics.Labels{"queue": "emails"})
+
+## Bucket
+
+```go
+type Bucket struct {
+	// At is where it begins.
+	At time.Time
+	// Value is none for a timer's percentile.
+	Value *float64
+	Lower *float64
+	// Upper is +Inf past the last bound.
+	Upper    *float64
+	Estimate *float64
+	// Samples is how many samples it comes from; a timer's, how many durations.
+	Samples int
+	Resets  int
+	// Partial says its value comes from less than its span: the range, the
+	// clock or retention cut it.
 	Partial bool
-
-	// Lookback reports that the bucket's first step started from a sample
-	// before the range, inside the request's Lookback.
-	Lookback bool
+	// Gap says its first step began before the bucket before it: a whole
+	// bucket between had no samples.
+	Gap bool
 }
 ```
 
-AggregateBucket keeps the edges it was asked for.
-
-## AggregateOp
-
-```go
-type AggregateOp string
-```
-
-### AggregateCount
-
-```go
-const (
-	AggregateCount    AggregateOp = "count"
-	AggregateSum      AggregateOp = "sum"
-	AggregateMin      AggregateOp = "min"
-	AggregateMax      AggregateOp = "max"
-	AggregateAvg      AggregateOp = "avg"
-	AggregateIncrease AggregateOp = "increase"
-	AggregateRate     AggregateOp = "rate"
-	AggregateDelta    AggregateOp = "delta"
-	AggregateFirst    AggregateOp = "first"
-	AggregateLast     AggregateOp = "last"
-)
-```
-
-Each operation is computed exactly and rounded once, a group's too:
-
-	avg       the mean of the bucket's samples, every series of a group weighed by them
-	increase  a counter's rise, its resets counted
-	rate      a counter's increase a second of the bucket
-	delta     a gauge's last sample less the one before the bucket
-	first     the bucket's first sample, bit for bit; a group adds its series' up
-	last      the bucket's last sample, bit for bit; a group adds its series' up
-
-Increase, rate and delta count each step between samples in the bucket it ends in, so adjacent buckets add up to the range.
-
-## AggregateRequest
-
-```go
-type AggregateRequest struct {
-	Range       Range
-	Width       time.Duration
-	Op          AggregateOp
-	By, Without []string
-
-	// Lookback is how far before the range an increase, a rate or a delta
-	// looks for the sample its first step starts from; Width when zero.
-	Lookback time.Duration
-}
-```
-
-AggregateRequest asks for a Range's buckets Width long. By groups the matched series by the values of these labels, Without by every label but these, each group one result; neither keeps every series apart. A group never joins two names or two kinds:
-
-	Op: AggregateIncrease, By: []string{"route"}   http_requests_total{route="/a"}, …{route="/b"}
-
-## AggregateResult
-
-```go
-type AggregateResult struct {
-	Series  Series
-	Buckets []AggregateBucket
-}
-```
-
-## Batch
-
-```go
-type Batch struct {
-	Series  Series
-	Samples []Sample
-}
-```
+Bucket is a bucket of an aggregate. One of count … last has its Value; a percentile's is a gauge's sample at the rank, or a timer's bucket of its spread that holds it, from Lower to Upper, and with Estimate asked a point between them.
 
 ## Condition
 
@@ -136,136 +86,232 @@ type Condition struct {
 }
 ```
 
-Condition is what a label's value must be for a range to take a series, beyond the equality of Match:
+Condition is what a label's value must be beside a value of its own: one of a list, none of one, or a prefix.
 
-	Where{"status": OneOf("500", "502")}   status is 500 or 502
-	Where{"env": NoneOf("dev", "test")}    env is neither, or the series has none
-	Where{"host": Prefix("api-")}          host begins with api-
-
-A range keeps something that finds its series, a Name, a Match, a OneOf or a Prefix: NoneOf only leaves series out, since alone it would scan them all.
-
-### NoneOf
+### Not
 
 ```go
-func NoneOf(values ...string) Condition
+func Not(values ...any) Condition
 ```
+
+Not is a label equal to none of these, or absent.
 
 ### OneOf
 
 ```go
-func OneOf(values ...string) Condition
+func OneOf(values ...any) Condition
 ```
+
+OneOf is a label equal to one of these.
 
 ### Prefix
 
 ```go
-func Prefix(prefix string) Condition
+func Prefix(text string) Condition
 ```
 
-## CounterInstrument
+Prefix is a label that starts with this text, in a query; in a listing, the names, labels or values that do.
+
+## Counter
 
 ```go
-type CounterInstrument struct {
+type Counter struct {
 	// contains filtered or unexported fields
 }
 ```
 
-CounterInstrument only grows. Its total since the process started is ingested as a counter sample at each flush, so a restart is a reset Aggregate counts.
+Counter is a total that only goes up.
 
-### CounterInstrument.Add
-
-```go
-func (c CounterInstrument) Add(n float64)
-```
-
-Add grows the counter by n; a negative or non-finite n is dropped and logged once, since a counter that shrinks would read as a reset.
-
-### CounterInstrument.Inc
+### OpenCounter
 
 ```go
-func (c CounterInstrument) Inc()
+func OpenCounter(store *tinystore.Store, name string, opts ...Option) (*Counter, error)
 ```
 
-### CounterInstrument.With
+OpenCounter is a total that only goes up, which the store keeps: processes counting into one series count into one total. Another form or other options than the name has while the store is open is Invalid.
+
+### Counter.Add
 
 ```go
-func (c CounterInstrument) With(labels ...string) CounterInstrument
+func (c *Counter) Add(n float64)
 ```
 
-With is the counter of the same name with more labels, given as name, value pairs; the same labels in any order are the same series.
+Add adds n, a finite number of 0 or more; Add(0) makes the set of labels known with a total of zero.
 
-## DescribeOption
+### Counter.Inc
 
 ```go
-type DescribeOption func(*Description)
+func (c *Counter) Inc()
 ```
 
-DescribeOption is a part of a Description, given to Describe or to an instrument.
+Inc adds one.
 
-### Help
+### Counter.With
 
 ```go
-func Help(help string) DescribeOption
+func (c *Counter) With(pairs ...any) *Counter
 ```
 
-### Unit
+With is the same counter with more labels, given in pairs, a series of its own; the same labels in any order are one.
+
+## Damage
 
 ```go
-func Unit(unit string) DescribeOption
+type Damage struct {
+	Name   string
+	Labels Labels
+	Error  string
+}
 ```
+
+Damage is a series whose bytes no longer read, which Delete removes.
+
+### Damaged
+
+```go
+func Damaged(ctx context.Context, store *tinystore.Store) ([]Damage, error)
+```
+
+Damaged is the series whose bytes no longer read, 1000 at most, each with what broke; deleting them shows the next.
 
 ## Description
 
 ```go
 type Description struct {
-	Unit string
-	Help string
+	Unit, Help string
 }
 ```
 
-Description is what the values of a metric's name mean: their unit, such as "ms", "bytes" or "%", and a line of help. It belongs to the name, so every series of the name shares it, and it outlives them.
+Description is a name's unit and help; both empty when nothing described it.
 
-## DroppedSeries
+### DescriptionOf
 
 ```go
-type DroppedSeries struct {
-	Found bool
+func DescriptionOf(ctx context.Context, store *tinystore.Store, name string) (Description, error)
+```
 
-	// UnreadableGroups counts the groups removed without the payload rows their
-	// directory named.
-	UnreadableGroups int
+DescriptionOf is a name's unit and help.
+
+## Exceeds
+
+```go
+type Exceeds struct {
+	// Limit is series, bytes read or samples decoded.
+	Limit         string
+	Wanted, Bound int64
 }
 ```
 
-DroppedSeries is what DropSeries removed.
+Exceeds is the bound a call would stop at, as its Limit error names it.
 
-## GaugeInstrument
+## Gauge
 
 ```go
-type GaugeInstrument struct {
+type Gauge struct {
 	// contains filtered or unexported fields
 }
 ```
 
-GaugeInstrument is a value set or moved by the application, ingested at each flush.
+Gauge is a value that goes up and down.
 
-### GaugeInstrument.Add
-
-```go
-func (g GaugeInstrument) Add(delta float64)
-```
-
-### GaugeInstrument.Set
+### OpenGauge
 
 ```go
-func (g GaugeInstrument) Set(value float64)
+func OpenGauge(store *tinystore.Store, name string, opts ...Option) (*Gauge, error)
 ```
 
-### GaugeInstrument.With
+OpenGauge is a value that goes up and down, written while this program is connected: a queue's length, a temperature.
+
+### Gauge.Add
 
 ```go
-func (g GaugeInstrument) With(labels ...string) GaugeInstrument
+func (g *Gauge) Add(n float64)
 ```
+
+Add moves it by n, from zero when it was never set.
+
+### Gauge.Dec
+
+```go
+func (g *Gauge) Dec()
+```
+
+### Gauge.Inc
+
+```go
+func (g *Gauge) Inc()
+```
+
+### Gauge.Set
+
+```go
+func (g *Gauge) Set(value float64)
+```
+
+Set sets its value, a finite number.
+
+### Gauge.With
+
+```go
+func (g *Gauge) With(pairs ...any) *Gauge
+```
+
+With is the same gauge with more labels, given in pairs, a series of its own.
+
+## Group
+
+```go
+type Group struct {
+	Name string
+	// Labels is the labels By kept or Without left.
+	Labels  Labels
+	Buckets []Bucket
+}
+```
+
+Group is the buckets of a group of series: a bucket without samples is left out.
+
+### Aggregate
+
+```go
+func Aggregate(ctx context.Context, store *tinystore.Store, q Query) ([]Group, error)
+```
+
+Aggregate is the buckets of each group of the series the query finds, each one exact value of its Op, rounded once.
+
+## Histogram
+
+```go
+type Histogram struct {
+	// contains filtered or unexported fields
+}
+```
+
+Histogram is how many numbers of what size: their count, sum and largest, and their spread.
+
+### OpenHistogram
+
+```go
+func OpenHistogram(store *tinystore.Store, name string, opts ...Option) (*Histogram, error)
+```
+
+OpenHistogram is a timer of numbers that are not durations: a response's size in bytes.
+
+### Histogram.Record
+
+```go
+func (h *Histogram) Record(value float64)
+```
+
+Record records a value of 0 or more.
+
+### Histogram.With
+
+```go
+func (h *Histogram) With(pairs ...any) *Histogram
+```
+
+With is the same histogram with more labels, given in pairs, a series of its own.
 
 ## Kind
 
@@ -273,12 +319,16 @@ func (g GaugeInstrument) With(labels ...string) GaugeInstrument
 type Kind string
 ```
 
-### Gauge
+Kind is what a series' samples are.
+
+### KindGauge
 
 ```go
 const (
-	Gauge   Kind = "gauge"
-	Counter Kind = "counter"
+	KindGauge   Kind = "gauge"
+	KindCounter Kind = "counter"
+	// KindHistogram is the _bucket series of a histogram written elsewhere, each with its le.
+	KindHistogram Kind = "histogram"
 )
 ```
 
@@ -288,418 +338,353 @@ const (
 type Labels map[string]string
 ```
 
-Labels tell the series of one name apart: a host, a route, a status. A label whose name begins with \_\_ is the store's own, and refused.
+Labels are a series' labels, by name.
 
-## Limits
+## Name
 
 ```go
-type Limits struct {
-	Series         int
-	Blocks         int
-	PayloadBytes   int
-	DecodedSamples int
-	OutputSamples  int
+type Name struct {
+	Name        string
+	Kind        Kind
+	SeriesCount int
+	Unit, Help  string
+	Keep        time.Duration
+	// RetainedFrom is its oldest sample, or where its keep begins while it
+	// holds samples from before, which no read finds.
+	RetainedFrom time.Time
+	Newest       time.Time
 }
 ```
 
-## Maintenance
+Name is a name the store holds samples of.
+
+## NamePage
 
 ```go
-type Maintenance struct{ SealedBlocks, ExpiredSamples, Conflicts, QuarantinedSeries, ReclaimedSeries int }
-```
-
-## MaintenanceFailure
-
-```go
-type MaintenanceFailure struct {
-	// SeriesID is a file-local cursor, not a series handle.
-	SeriesID int64
-
-	FailedAt int64
-	Reason   string
+type NamePage struct {
+	Names []Name
+	Next  string
 }
 ```
 
-MaintenanceFailure is a persisted diagnostic.
+NamePage is a page of names and where the next starts: "" on the last.
 
-## Options
+### Names
 
 ```go
-type Options struct {
-	Retention time.Duration
+func Names(ctx context.Context, store *tinystore.Store, opts ...PageOption) (NamePage, error)
+```
 
-	// RetentionOf keeps the series of names that start with a prefix as long
-	// as its duration, the longest prefix a name starts with winning; every
-	// other series is kept for Retention.
-	RetentionOf map[string]time.Duration
+Names is a page of the names the store holds samples of, in the byte order of their text; none of it reads a sample.
 
-	Lateness            time.Duration
-	ClockSkew           time.Duration
-	MaxBlockSpan        time.Duration
-	MaxSeries           int
-	MaxHeadSamples      int
-	MaxHeadBytes        int
-	MaxBatchSamples     int
-	MaxBatchBytes       int
-	MaintenanceSeries   int
-	MaxReaders          int
-	MaxConcurrentReads  int
-	MaxConcurrentIngest int
-	SnapshotTimeout     time.Duration
-	MaintenanceInterval time.Duration
-	Flush               time.Duration
-	Limits              Limits
+## Op
+
+```go
+type Op string
+```
+
+Op is what an aggregate's bucket answers.
+
+### Count
+
+```go
+const (
+	Count    Op = "count"
+	Sum      Op = "sum"
+	Avg      Op = "avg"
+	Min      Op = "min"
+	Max      Op = "max"
+	Increase Op = "increase"
+	// Rate is a second's increase; a timer's durations a second.
+	Rate  Op = "rate"
+	Delta Op = "delta"
+	First Op = "first"
+	Last  Op = "last"
+)
+```
+
+### Percentile
+
+```go
+func Percentile(rank float64) Op
+```
+
+Percentile is a gauge's sample at this rank, or a timer's bucket of its spread that holds it: Percentile(95), Percentile(99.9).
+
+## Option
+
+```go
+type Option interface {
+	// contains filtered or unexported methods
 }
 ```
+
+Option is what an instrument is told.
+
+### Buckets
+
+```go
+func Buckets(bounds ...float64) Option
+```
+
+Buckets are a timer's or a histogram's upper bounds, ascending; the store adds +Inf, and a percentile of it becomes possible.
+
+### Exponential
+
+```go
+func Exponential() Option
+```
+
+Exponential lets the store keep a timer's spread on Prometheus' native grid, eight intervals a doubling, an experiment: a percentile then lies within one interval, with no bound to choose.
+
+### Help
+
+```go
+func Help(text string) Option
+```
+
+Help is a line on what the name means, 1024 bytes at most.
+
+### Keep
+
+```go
+func Keep(d time.Duration) Option
+```
+
+Keep is how long the name's samples stay, kept in the file with it: 30 days unless a name was given one.
+
+### Unit
+
+```go
+func Unit(text string) Option
+```
+
+Unit is the unit of its values, 32 bytes at most: "bytes", "%"; a timer's is ms.
+
+## PageOption
+
+```go
+type PageOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+PageOption is how a page of names, labels or values reads: Prefix, After, PageLimit.
+
+### After
+
+```go
+func After(next string) PageOption
+```
+
+After starts a page after the page before's Next.
+
+### PageLimit
+
+```go
+func PageLimit(n int) PageOption
+```
+
+PageLimit is how many a page holds: 1000 unless given, 10,000 at most.
 
 ## Plan
 
 ```go
 type Plan struct {
-	Series, Blocks, Summarized, PayloadBytes, DecodedSamples int
-	Limits                                                   Limits
-	Stops                                                    *tinystore.LimitError
+	Series, Bytes, Decoded int64
+	// Exceeds is nil when the call fits every bound.
+	Exceeds *Exceeds
 }
 ```
 
-Plan is what a Read or an Aggregate would spend of its limits, found in one snapshot from the series, their block directories and their heads, with no block's payload fetched and no sample decoded. Each use stands beside the limit it is held to, and Stops is the limit the call would reach, nil when it fits; the plan stops counting there, as the call would stop working.
+Plan is what a read or an aggregate would spend of each bound.
 
-	Series 3, Blocks 40, Summarized 36, PayloadBytes 12288, DecodedSamples 960
-	  → an hourly aggregate answers 36 blocks from their summaries, decodes 4
-
-The samples a Read answers are not known before its blocks are decoded, so a plan does not count them.
-
-## Range
+### Explain
 
 ```go
-type Range struct {
-	Name     string
-	Match    Labels
-	Where    Where
-	Since    time.Duration
-	From, To int64 // unix milliseconds
-	Limits   Limits
-}
+func Explain(ctx context.Context, store *tinystore.Store, q Query) (Plan, error)
 ```
 
-Range selects the series of a name, of labels matched exactly, of labels under conditions, or of any of them together, and their samples in \[From, To) or over the last Since; a To of zero is the open end. Limits may only narrow the store's.
+Explain is what Read, or Aggregate when given an Op, would spend of each bound; it decodes no sample.
 
-	Range{Name: "cpu", Since: time.Hour}                   the last hour of every cpu series
-	Range{Match: Labels{"host": "web-1"}, From: f, To: t}  every series of web-1, f to t
-	Range{Name: "http_requests_total", Where: Where{"status": OneOf("500", "502")}, Since: time.Hour}
-
-## Result
+## Point
 
 ```go
-type Result struct {
-	Series  Series
-	Samples []Sample
+type Point struct {
+	Name   string
+	Labels Labels
+	At     time.Time
+	Value  float64
 }
 ```
+
+Point is a series' newest sample in the range.
+
+### Latest
+
+```go
+func Latest(ctx context.Context, store *tinystore.Store, q Query) ([]Point, error)
+```
+
+Latest is the newest sample of each series the query finds, when it has one in the range: a series without one is left out.
+
+## Query
+
+```go
+type Query struct {
+	// Name is the series of this name; a timer's name, the series it writes.
+	Name  string
+	Where Where
+	// Since is the span before now the range covers; or From and To.
+	Since time.Duration
+	// From is the range's start, included, and To its end, excluded: now,
+	// a sample taken now in the range, when zero.
+	From, To time.Time
+
+	// Every is the buckets' span, counted from 1970 in UTC; the range is one bucket without it.
+	Every time.Duration
+	Op    Op
+	// By is the labels a group keeps; without By and Without, every series of a name is one group.
+	By []string
+	// Without is the labels a group leaves out, keeping every other.
+	Without []string
+	// Estimate gives a timer's percentile a point between its bounds, interpolated.
+	Estimate bool
+}
+```
+
+Query is the series a call finds and its range, and for an aggregate how it cuts and groups them. A query needs a Name, or a label's value, a list or a prefix in Where.
 
 ## Sample
 
 ```go
-type Sample = codec.Sample
+type Sample struct {
+	At    time.Time
+	Value float64
+}
 ```
+
+Sample is a time, kept to the millisecond, and a number, kept bit for bit.
 
 ## Series
 
 ```go
 type Series struct {
-	Name   string
-	Kind   Kind
-	Labels Labels
+	Name    string
+	Kind    Kind
+	Labels  Labels
+	Samples []Sample
+	Times   []time.Time
+	Values  []float64
+	// Keep is how long the name's samples stay, its own, kept in the file;
+	// what it keeps already unless given.
+	Keep time.Duration
 }
 ```
 
-Series is what a metric's samples are, by its name and its labels:
+Series is a series: what Ingest writes, and what a read gives back. Ingest takes its samples as Samples, or as Times and Values, two columns of one length; a read gives Samples.
 
-	http_requests_total{route="/users", status="200"}, a counter
-
-### Series.String
+### Read
 
 ```go
-func (s Series) String() string
+func Read(ctx context.Context, store *tinystore.Store, q Query) ([]Series, error)
 ```
 
-String prints the series as Prometheus does: cpu{host="web-1"}.
+Read is the samples of each series the query finds, in its range: whole, or a Limit error naming its bound, never fewer.
 
-## SeriesError
+## TextPage
 
 ```go
-type SeriesError struct {
-	Name   string
-	Labels Labels
-	Err    error
+type TextPage struct {
+	Texts []string
+	Next  string
 }
 ```
 
-SeriesError is a refusal that belongs to one series: its data, state or limits, never a cancelled call or a failing file. errors.Is still finds the cause and errors.As gives the series' name and labels; Ingest is atomic, so a caller can send the call again without that series.
+TextPage is a page of a name's labels or a label's values, and where the next starts.
 
-### SeriesError.Error
+### LabelNames
 
 ```go
-func (e *SeriesError) Error() string
+func LabelNames(ctx context.Context, store *tinystore.Store, name string, opts ...PageOption) (TextPage, error)
 ```
 
-### SeriesError.Unwrap
+LabelNames is a page of a name's label names, but the store's own.
+
+### LabelValues
 
 ```go
-func (e *SeriesError) Unwrap() error
+func LabelValues(ctx context.Context, store *tinystore.Store, name, label string, opts ...PageOption) (TextPage, error)
 ```
 
-## Stats
+LabelValues is a page of the values a label of a name's series holds.
+
+## Timer
 
 ```go
-type Stats struct {
-	IngestedSamples uint64
-	RejectedBatches uint64
-	Queries         uint64
-	SealedBlocks    uint64
-	ExpiredSamples  uint64
-
-	// QuarantinedSeries is the current persisted count, not this handle's work.
-	QuarantinedSeries uint64
-
-	ReclaimedSeries uint64
-}
-```
-
-Stats counts this handle's work.
-
-## Store
-
-```go
-type Store struct {
+type Timer struct {
 	// contains filtered or unexported fields
 }
 ```
 
-### Open
+Timer is how many things took how long.
+
+### OpenTimer
 
 ```go
-func Open(ctx context.Context, runtime *tinystore.Store, options Options) (*Store, error)
+func OpenTimer(store *tinystore.Store, name string, opts ...Option) (*Timer, error)
 ```
 
-Open opens metrics.db inside the store. The store closes it, and unless it is Manual runs Maintain every Options.MaintenanceInterval, a minute by default.
+OpenTimer is how many things took how long: their count, sum and longest in milliseconds, and their spread with Buckets. A timer named http\_request\_ms writes http\_request\_ms\_count, \_sum, \_max and, with buckets, \_bucket.
 
-### Store.Aggregate
+### Timer.Record
 
 ```go
-func (s *Store) Aggregate(ctx context.Context, request AggregateRequest) ([]AggregateResult, error)
+func (t *Timer) Record(d time.Duration)
 ```
 
-Aggregate rounds exact finite arithmetic once and never uses legacy float64 block sums.
+Record records a duration measured elsewhere.
 
-### Store.Close
+### Timer.Start
 
 ```go
-func (s *Store) Close(ctx context.Context) error
+func (t *Timer) Start() *Timing
 ```
 
-Close ingests the instruments' last values, stops admission and drains in-flight work; cancellation stops waiting, not cleanup. The store calls it: an application closes the store instead.
+Start is a timing that records when it stops, for a span that is no one call: defer latency.Start().Stop().
 
-### Store.Counter
+### Timer.With
 
 ```go
-func (s *Store) Counter(name string, options ...DescribeOption) CounterInstrument
+func (t *Timer) With(pairs ...any) *Timer
 ```
 
-Counter is the counter of a name; a description given to it is written at the next flush, as Describe would.
+With is the same timer with more labels, given in pairs, a series of its own; le is its \_bucket series'.
 
-### Store.Describe
-
-```go
-func (s *Store) Describe(ctx context.Context, name string, options ...DescribeOption) error
-```
-
-Describe keeps a name's description in place of the one it had; without a unit or help it removes it.
-
-### Store.Description
+## Timing
 
 ```go
-func (s *Store) Description(ctx context.Context, name string) (Description, error)
-```
-
-Description is what Describe kept for the name, or none.
-
-### Store.DropSeries
-
-```go
-func (s *Store) DropSeries(ctx context.Context, name string, labels Labels) (DroppedSeries, error)
-```
-
-DropSeries removes one series and everything it holds in one transaction, whether its data still reads or not, including a suspended series. A group whose directory or clock no longer reads is removed without the payload rows it named: they stay in the file, and UnreadableGroups counts such groups.
-
-### Store.ExplainAggregate
-
-```go
-func (s *Store) ExplainAggregate(ctx context.Context, request AggregateRequest) (Plan, error)
-```
-
-ExplainAggregate is the Plan of Aggregate(ctx, request), whose whole blocks inside one bucket are answered from their summaries.
-
-### Store.ExplainRead
-
-```go
-func (s *Store) ExplainRead(ctx context.Context, request Range) (Plan, error)
-```
-
-ExplainRead is the Plan of Read(ctx, request).
-
-### Store.Flush
-
-```go
-func (s *Store) Flush(ctx context.Context) error
-```
-
-Flush ingests every instrument's value now. A series Ingest refuses, an invalid label say, is dropped and logged once rather than keeping the rest out: Ingest is atomic, so the flush is retried without it. A flush that fails keeps the longest durations it took for the next.
-
-### Store.Gauge
-
-```go
-func (s *Store) Gauge(name string, options ...DescribeOption) GaugeInstrument
-```
-
-### Store.GaugeFunc
-
-```go
-func (s *Store) GaugeFunc(name string, read func(context.Context) (float64, error), options ...DescribeOption)
-```
-
-GaugeFunc asks read for the gauge's value at each flush; an error skips that sample and is logged, once while it stays the same.
-
-### Store.Ingest
-
-```go
-func (s *Store) Ingest(ctx context.Context, batches []Batch) (err error)
-```
-
-Ingest stores every batch or none of them. A timestamp repeated within the call, or already waiting in the head, keeps the value supplied last.
-
-### Store.Latest
-
-```go
-func (s *Store) Latest(ctx context.Context, request Range) ([]Result, error)
-```
-
-Latest returns the newest sample of each series inside the range, which bounds how old the sample may be: a series without one is left out. It decodes one head chunk or one block a series at most, and no block when its directory holds the last sample.
-
-### Store.ListMaintenanceFailures
-
-```go
-func (s *Store) ListMaintenanceFailures(ctx context.Context, afterID int64) ([]MaintenanceFailure, error)
-```
-
-ListMaintenanceFailures returns one bounded page ordered by file-local series id.
-
-### Store.Maintain
-
-```go
-func (s *Store) Maintain(ctx context.Context) (Maintenance, error)
-```
-
-Maintain performs a bounded retention pass, then seals eligible full microblocks.
-
-### Store.Read
-
-```go
-func (s *Store) Read(ctx context.Context, request Range) ([]Result, error)
-```
-
-Read returns owned samples, or an error with no partial result; the caller holds no SQLite snapshot.
-
-### Store.Report
-
-```go
-func (s *Store) Report() []tinystore.Measure
-```
-
-### Store.RetryFailedMaintenance
-
-```go
-func (s *Store) RetryFailedMaintenance(ctx context.Context) (int, error)
-```
-
-RetryFailedMaintenance re-enables at most MaintenanceSeries suspended series per call.
-
-### Store.Snapshot
-
-```go
-func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
-```
-
-Snapshot copies metrics.db into dir while the engine keeps working.
-
-### Store.Stats
-
-```go
-func (s *Store) Stats() Stats
-```
-
-### Store.Stream
-
-```go
-func (s *Store) Stream(ctx context.Context, request Range, yield func(Result) error) error
-```
-
-Stream passes one owned series at a time after the snapshot closes; an error may follow earlier results.
-
-### Store.Timer
-
-```go
-func (s *Store) Timer(name string, options ...DescribeOption) TimerInstrument
-```
-
-### Store.WriteSelf
-
-```go
-func (s *Store) WriteSelf(ctx context.Context, measures []tinystore.Measure) error
-```
-
-WriteSelf keeps diagnostics in ordinary series without recursively counting their own ingest. Caller counters above 2^53 are refused, never rounded.
-
-## TimerInstrument
-
-```go
-type TimerInstrument struct {
+type Timing struct {
 	// contains filtered or unexported fields
 }
 ```
 
-TimerInstrument measures how long something takes. Each flush ingests how many durations it measured and their sum in milliseconds, since the process started, as the counters \&lt;name>\_count and \&lt;name>\_sum, and the longest since the flush before as the gauge \&lt;name>\_max, left out when it measured none. A range's mean is the increase of its sum over the increase of its count. Given a description, its sum and longest are in milliseconds, whatever Unit it is given.
+Timing is a span a timer measures from its start.
 
-### TimerInstrument.Record
-
-```go
-func (t TimerInstrument) Record(d time.Duration)
-```
-
-Record adds one duration; a negative one is dropped and logged once.
-
-### TimerInstrument.Since
+### Timing.Stop
 
 ```go
-func (t TimerInstrument) Since(start time.Time)
+func (t *Timing) Stop() time.Duration
 ```
 
-Since records the time from start to now, so that a deferred call times the function it is deferred in: defer latency.Since(time.Now()).
-
-### TimerInstrument.With
-
-```go
-func (t TimerInstrument) With(labels ...string) TimerInstrument
-```
-
-With is the timer of the same name with more labels, given as name, value pairs; the same labels in any order are the same series.
+Stop records how long since the timing started, the first time it is called, and gives it.
 
 ## Where
 
 ```go
-type Where map[string]Condition
+type Where map[string]any
 ```
 
-Where is the conditions of a range, a label's name to its condition.
+Where is what a query finds of each label: a value, a number or a bool as its text, or a Condition.
 
-<!-- Generated by task reference from metrics/. Edit the doc comments there, not this file. -->
+<!-- Generated by task reference from sdk/go/metrics/. Edit the doc comments there, not this file. -->

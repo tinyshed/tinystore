@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, posix, relative } from 'node:path'
 import ts from 'typescript'
 
 import {
@@ -37,8 +37,10 @@ export interface Item {
 
 /** Where each language keeps an engine. */
 interface Sources {
-	/** the Go package's directory, '' for the root's tinystore */
+	/** the Go package's directory under sdk/go, '' for the root's tinystore */
 	go: string
+	/** the files of the Go package that are this engine's, when it shares the package */
+	goFiles?: string[]
 	/** the engine's other Go packages, whose names the page writes with theirs */
 	goAlso?: string[]
 	/** sdk/js/src modules, in the order the page lists them */
@@ -50,24 +52,35 @@ interface Sources {
 const sources: Record<string, Sources> = {
 	store: {
 		go: '',
-		bun: ['store', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
-		python: ['store', 'clock', 'errors', 'limits', '_page'],
+		goFiles: ['store.go', 'tinystore.go'],
+		bun: ['store', 'connection', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
+		python: ['store', 'clock', 'errors'],
 	},
-	sql: { go: 'sqldb', bun: ['sql'], python: ['sql'] },
+	sql: { go: 'sqldb', bun: ['sql', 'query'], python: ['sql', 'query'] },
 	kv: {
 		go: 'kv',
-		bun: ['kv', 'limiter', 'quota', 'once', 'config'],
-		python: ['kv', 'limiter', 'quota', 'config'],
+		bun: ['kv', 'limits', 'once', 'tx'],
+		python: ['kv', 'limits', 'once', 'tx'],
 	},
 	jobs: { go: 'jobs', bun: ['jobs'], python: ['jobs'] },
 	blobs: { go: 'blobs', bun: ['blobs'], python: ['blobs'] },
+	search: { go: 'search', bun: ['search'], python: ['search'] },
+	channels: { go: 'channels', bun: ['channels'], python: ['channels'] },
+	locks: { go: 'locks', bun: ['locks'], python: ['locks'] },
+	config: {
+		go: '',
+		goFiles: ['config.go', 'config_declare.go', 'config_layers.go'],
+		bun: ['config'],
+		python: ['config'],
+	},
 	records: {
 		go: 'records',
-		goAlso: ['records/console'],
+		goAlso: ['console'],
 		bun: ['records', 'logger', 'console', 'trace'],
-		python: ['records', '_console'],
+		python: ['records', 'logger', 'trace', '_console'],
 	},
-	metrics: { go: 'metrics', bun: ['metrics'], python: ['metrics'] },
+	metrics: { go: 'metrics', bun: ['metrics', 'instruments'], python: ['metrics', 'instruments'] },
+	backup: { go: '', goFiles: ['backup.go'], bun: ['backup'], python: ['backup'] },
 }
 
 const fences: Record<ApiLanguage, string> = { bun: 'ts', python: 'python', go: 'go' }
@@ -86,7 +99,7 @@ export function apiPages(root = checkout()): ApiPage[] {
 			const items =
 				language === 'go'
 					? [
-							...goItems(root, source.go),
+							...goItems(root, source.go, source.goFiles),
 							...(source.goAlso ?? []).flatMap(pkg => named(goItems(root, pkg), pkg)),
 						]
 					: language === 'python'
@@ -187,7 +200,7 @@ function noun(language: ApiLanguage): string {
 function packageOf(language: ApiLanguage, source: Sources): string {
 	if (language === 'go') {
 		const paths = [source.go, ...(source.goAlso ?? [])].map(
-			pkg => `\`github.com/tinyshed/tinystore${pkg === '' ? '' : `/${pkg}`}\``,
+			pkg => `\`${goModule}${pkg === '' ? '' : `/${pkg}`}\``,
 		)
 		return paths.join(' and ')
 	}
@@ -197,7 +210,9 @@ function packageOf(language: ApiLanguage, source: Sources): string {
 function sourceOf(language: ApiLanguage, source: Sources): string {
 	if (language === 'go') {
 		const dirs = [source.go, ...(source.goAlso ?? [])].map(pkg =>
-			pkg === '' ? 'the root package' : `${pkg}/`,
+			pkg === ''
+				? (source.goFiles ?? []).map(file => `sdk/go/${file}`).join(', ')
+				: `sdk/go/${pkg}/`,
 		)
 		return dirs.join(' and ')
 	}
@@ -246,9 +261,12 @@ function named(items: Item[], pkg: string): Item[] {
 	}))
 }
 
-function goItems(root: string, pkg: string): Item[] {
-	const importPath = `github.com/tinyshed/tinystore${pkg === '' ? '' : `/${pkg}`}`
-	const out = execFileSync('go', ['run', './reference/go', join(root, pkg), importPath], {
+const goModule = 'tinyshed.org/tinystore'
+
+function goItems(root: string, pkg: string, files: string[] = []): Item[] {
+	const importPath = `${goModule}${pkg === '' ? '' : `/${pkg}`}`
+	const dir = join(root, 'sdk/go', pkg)
+	const out = execFileSync('go', ['run', './reference/go', dir, importPath, ...files], {
 		cwd: join(root, 'web'),
 		env: { ...process.env, GOWORK: 'off' },
 		encoding: 'utf8',
@@ -279,7 +297,7 @@ function python(): string {
 function bunReader(root: string): (modules: string[]) => Item[] {
 	const source = join(root, 'sdk/js/src')
 	const declarations = emitDeclarations(source)
-	const exported = exportedNames(readFileSync(join(source, 'index.ts'), 'utf8'))
+	const exported = reexported(source, exportedNames(readFileSync(join(source, 'index.ts'), 'utf8')))
 	const kept = keptByStore(readFileSync(join(source, 'store.ts'), 'utf8'))
 
 	return modules => {
@@ -350,6 +368,27 @@ function exportedNames(index: string): Set<string> {
 	return names
 }
 
+/**
+ * What index.ts exports, with what a module exports on behalf of another:
+ * metrics.ts exports instruments.ts's Counter, which index.ts takes from
+ * metrics.ts, so `./instruments.ts:Counter` is public too.
+ */
+function reexported(source: string, exported: Set<string>): Set<string> {
+	const all = new Set(exported)
+	const modules = new Set([...exported].map(name => name.slice(0, name.lastIndexOf(':'))))
+	for (const module of modules) {
+		const text = readFileSync(join(source, module), 'utf8')
+		for (const name of exportedNames(text)) {
+			const at = name.lastIndexOf(':')
+			const [from, original] = [name.slice(0, at), name.slice(at + 1)]
+			if (exported.has(`${module}:${original}`) || exported.has(`${module}:*`)) {
+				all.add(`./${posix.join(posix.dirname(module), from)}:${original}`)
+			}
+		}
+	}
+	return all
+}
+
 /** The classes of Store's own readonly fields: `readonly kv: Kv`. */
 function keptByStore(store: string): Set<string> {
 	const file = ts.createSourceFile('store.ts', store, ts.ScriptTarget.ESNext)
@@ -392,6 +431,10 @@ function declarationItems(text: string, isPublic: (name: string) => boolean): It
 }
 
 function declaredName(statement: ts.Statement): string | undefined {
+	if (ts.isVariableStatement(statement)) {
+		const name = statement.declarationList.declarations[0]?.name
+		return name !== undefined && ts.isIdentifier(name) ? name.text : undefined
+	}
 	if (
 		ts.isClassDeclaration(statement) ||
 		ts.isInterfaceDeclaration(statement) ||

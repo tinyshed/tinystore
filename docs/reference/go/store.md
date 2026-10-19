@@ -1,236 +1,236 @@
 # Store API for Go
 
-Every public type, function and constant of the store in `github.com/tinyshed/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md) and [Python](../python/store.md) pages list the same API.
+Every public type, function and constant of the store in `tinyshed.org/tinystore`, generated from its source. The [Store guide](../../languages.md) explains how to use them, and the [Bun and Node](../bun/store.md) and [Python](../python/store.md) pages list the same API.
 
-## LimitMemory
+## Invalid
 
 ```go
 const (
-	LimitMemory    = "store memory"      // what one call would hold at once
-	LimitMemoryNow = "store memory, now" // what the calls running hold together
+	Invalid          = core.Invalid
+	NotFound         = core.NotFound
+	Limit            = core.Limit
+	Closed           = core.Closed
+	InUse            = core.InUse
+	Conflict         = core.Conflict
+	Corrupt          = core.Corrupt
+	TooOld           = core.TooOld
+	TooNew           = core.TooNew
+	Suspended        = core.Suspended
+	OutcomeUnknown   = core.OutcomeUnknown
+	CommittedLocally = core.CommittedLocally
+	Lost             = core.Lost
+	PermissionDenied = core.PermissionDenied
+	Unimplemented    = core.Unimplemented
+	Cancelled        = core.Cancelled
+	Unavailable      = core.Unavailable
+	Internal         = core.Internal
+	Protocol         = core.Protocol
+	Unauthenticated  = core.Unauthenticated
 )
 ```
 
-LimitError is a limit a call reached, named: the bound, what the call would have taken of it, what it held included, and the bound's size, so that a caller can say which limit to raise or how much less to ask for:
-
-	resource limit: decoded samples: 120000 past 100000
-
-errors.Is finds ErrLimit through it, and Kind, an engine's own limit, when it has one. The names of the store's own limits, which a LimitError's Name holds.
+The kinds an error has.
 
 ## ErrInvalid
 
 ```go
 var (
-	ErrInvalid   = errors.New("invalid request")
-	ErrLimit     = errors.New("resource limit")
-	ErrClosed    = errors.New("store is closed")
-	ErrInUse     = errors.New("already in use")
-	ErrConflict  = errors.New("state changed")
-	ErrCorrupt   = errors.New("corrupt data")
-	ErrTooOld    = errors.New("too old")
-	ErrTooNew    = errors.New("too new")
-	ErrSuspended = errors.New("suspended")
+	ErrInvalid          = core.ErrInvalid
+	ErrNotFound         = core.ErrNotFound
+	ErrLimit            = core.ErrLimit
+	ErrClosed           = core.ErrClosed
+	ErrInUse            = core.ErrInUse
+	ErrConflict         = core.ErrConflict
+	ErrCorrupt          = core.ErrCorrupt
+	ErrTooOld           = core.ErrTooOld
+	ErrTooNew           = core.ErrTooNew
+	ErrSuspended        = core.ErrSuspended
+	ErrOutcomeUnknown   = core.ErrOutcomeUnknown
+	ErrCommittedLocally = core.ErrCommittedLocally
+	ErrLost             = core.ErrLost
+	ErrPermissionDenied = core.ErrPermissionDenied
+	ErrUnimplemented    = core.ErrUnimplemented
+	ErrCancelled        = core.ErrCancelled
+	ErrUnavailable      = core.ErrUnavailable
+	ErrInternal         = core.ErrInternal
+	ErrProtocol         = core.ErrProtocol
+	ErrUnauthenticated  = core.ErrUnauthenticated
 )
 ```
 
-Every engine wraps these, so errors.Is means the same in all of them.
+The sentinels errors.Is compares an error's kind with: errors.Is(err, tinystore.ErrConflict).
 
-## FromCgroup
+## ConnectOption
 
 ```go
-func FromCgroup(fraction float64) int64
+type ConnectOption func(*connectOptions)
 ```
 
-FromCgroup is fraction of the memory the process's container may use, for Options.Memory: cgroup v2's memory.max, or v1's memory.limit\_in\_bytes, including the limits of its ancestors. It is 0, no budget, outside Linux and when the container sets no limit.
+ConnectOption is how a remote server is reached.
 
-	tinystore.Options{Memory: tinystore.FromCgroup(0.5)}  // half of a 32 MiB container: 16 MiB
-
-## SnapshotPath
+### TLS
 
 ```go
-func SnapshotPath(dir, name string) string
+func TLS(config *tls.Config) ConnectOption
 ```
 
-SnapshotPath is where an engine writes its copy of name inside dir.
+TLS is the configuration a tls:// server's certificate is checked with: the system's roots unless given.
 
-## Engine
+## Constraint
 
 ```go
-type Engine interface {
-	Close(ctx context.Context) error
+type Constraint = core.Constraint
+```
+
+Constraint is a constraint a database's write broke, as SQLite names it.
+
+## Error
+
+```go
+type Error = core.Error
+```
+
+Error is a failure of the store or of the SDK: its kind, its message, the item it is about, and the cause it wraps.
+
+	var e *tinystore.Error
+	if errors.As(err, &e) && e.Kind == tinystore.Conflict && e.Constraint != nil { … }
+
+## ErrorKind
+
+```go
+type ErrorKind = core.ErrorKind
+```
+
+ErrorKind is what failed, the same in every engine, on the wire and in every SDK.
+
+## Home
+
+```go
+type Home = core.Home
+```
+
+Home is where a handle opens: the store, or a database of it whose file keeps the handle. \*Store and \*sqldb.DB are homes.
+
+## InTx
+
+```go
+type InTx = core.InTx
+```
+
+InTx is a transaction a handle is taken into with its In: the store's, \*tinystore.Tx, or a database's, \*sqldb.Tx.
+
+## Option
+
+```go
+type Option func(*options)
+```
+
+Option is how a store opens.
+
+### Binary
+
+```go
+func Binary(path string) Option
+```
+
+Binary is the tinystore binary a sidecar or a private child runs; TINYSTORE\_BIN or PATH's unless given.
+
+### Clock
+
+```go
+func Clock(start time.Time) Option
+```
+
+Clock runs a private server on a test's clock, starting at this time, which store.Clock() moves forward instead of a test waiting.
+
+### Durability
+
+```go
+func Durability(level string) Option
+```
+
+Durability is how far a commit of the store's files goes before it returns: "full", the default, is synced to the disk; "os" survives the program's crash, and a power loss may take the last commits. It is the store's, set by whoever opens it first: one found open with another is refused.
+
+### Embedded
+
+```go
+func Embedded() Option
+```
+
+Embedded runs the core inside this process, through the library Library names or TINYSTORE\_LIBRARY. On Linux and macOS it needs cgo.
+
+### EncryptionKeyFile
+
+```go
+func EncryptionKeyFile(path string) Option
+```
+
+EncryptionKeyFile is the file of the store's encryption key, 64 hex digits, kept apart from the data; the store reads it and never makes it.
+
+### Idle
+
+```go
+func Idle(d time.Duration) Option
+```
+
+Idle is how long a sidecar this process starts stays once its last connection has gone: 30 s unless given, 0 for ever. One found running keeps its own.
+
+### Library
+
+```go
+func Library(path string) Option
+```
+
+Library is the core's library the store in this process loads: tinystore\_ffi.dll, libtinystore\_ffi.so or .dylib.
+
+### Private
+
+```go
+func Private() Option
+```
+
+Private starts a server of this process's own, a child that lives and dies with it, for tests and scripts.
+
+### SelfMetrics
+
+```go
+func SelfMetrics(opts ...SelfMetricsOption) Option
+```
+
+SelfMetrics measures the store into its own metrics, under names that start with tinystore\_: its commits and their waits, its files, its memory and the machine it runs on, which WithoutSystem leaves out. Off unless asked for; a sidecar found running keeps its own.
+
+## SelfMetricsOption
+
+```go
+type SelfMetricsOption func(*options)
+```
+
+SelfMetricsOption is what a store's own metrics leave out.
+
+### WithoutSystem
+
+```go
+func WithoutSystem() SelfMetricsOption
+```
+
+WithoutSystem leaves the machine out of the store's own metrics: its process's memory and processor, and the system's.
+
+## Status
+
+```go
+type Status struct {
+	// Server is its version: v0.1.0, or (devel) for one built from a checkout.
+	Server   string
+	Protocol uint64
+	// Engines are the engines it serves.
+	Engines []string
+	// Capability is admin, data or read: admin may change a schema, data
+	// reads and writes, read only reads.
+	Capability string
 }
 ```
 
-## LimitError
-
-```go
-type LimitError struct {
-	Name   string
-	Wanted int64
-	Bound  int64
-	Kind   error // ErrLimit when nil
-}
-```
-
-### LimitError.Error
-
-```go
-func (e *LimitError) Error() string
-```
-
-### LimitError.Unwrap
-
-```go
-func (e *LimitError) Unwrap() error
-```
-
-## Measure
-
-```go
-type Measure struct {
-	Engine, Name string
-	Value        uint64
-	Counter      bool
-}
-```
-
-Measure is an integer counter or gauge reported by an engine. Names have bounded, fixed cardinality: do not put a bucket, queue, key or path in them.
-
-## MemoryUsage
-
-```go
-type MemoryUsage struct {
-	Used, Peak, Capacity int64
-}
-```
-
-MemoryUsage is the store's budget: Capacity is Options.Memory, zero when every engine keeps only its own per-call limits.
-
-## Options
-
-```go
-type Options struct {
-	// Logger receives TinyStore's own logs; nil discards them.
-	Logger *slog.Logger
-
-	// Manual runs no background work: the application calls each engine's
-	// maintenance itself. Tests usually want this.
-	Manual bool
-
-	// Clock replaces time.Now for the store and every engine opened against it.
-	Clock func() time.Time
-
-	// Memory bounds the bytes that all engines' in-flight work holds at once;
-	// zero leaves each engine to its own per-call limits.
-	Memory int64
-
-	// Guest opens a directory another store holds, without its LOCK, as a
-	// second process beside a running program opens it to reset a password:
-	// nothing runs in the background, and only SQL databases open in it,
-	// applying no migration and changing no schema, nor the store's own tables.
-	// SQLite's locks share each file's writer between the two processes, and a
-	// guest's write waits up to five seconds for the owner's.
-	Guest bool
-
-	// Readers bounds the reader connections each engine's file opens under
-	// load, half a MiB each; zero leaves each engine its own count. A reader
-	// beyond one closes after a minute unused, whatever the bound.
-	Readers int
-
-	// SelfMetrics periodically writes available engine reports into an opened
-	// metrics engine. Manual stores call FlushSelfMetrics themselves.
-	SelfMetrics bool
-}
-```
-
-## Reporter
-
-```go
-type Reporter interface {
-	Report() []Measure
-}
-```
-
-## Reservation
-
-```go
-type Reservation struct {
-	// contains filtered or unexported fields
-}
-```
-
-Reservation is bytes of the store's memory that one piece of work holds. The zero Reservation holds nothing, for work that needs no memory.
-
-### Reservation.Release
-
-```go
-func (r *Reservation) Release()
-```
-
-Release gives back what the reservation holds; a second call gives nothing.
-
-### Reservation.Shrink
-
-```go
-func (r *Reservation) Shrink(n int64)
-```
-
-Shrink gives back all but n of the bytes, for work that reserved its worst case and has learnt what it holds.
-
-## SelfWriter
-
-```go
-type SelfWriter interface {
-	WriteSelf(context.Context, []Measure) error
-}
-```
-
-SelfWriter writes one report without counting that write as user ingest. The root uses this interface without importing the metrics engine.
-
-## Snapshot
-
-```go
-type Snapshot struct {
-	Dir   string
-	Files []SnapshotFile
-}
-```
-
-Snapshot is a copy of every engine's file, in Dir inside the store's directory, so that it takes the space of the disk the data is on.
-
-### Snapshot.Remove
-
-```go
-func (s Snapshot) Remove() error
-```
-
-## SnapshotFile
-
-```go
-type SnapshotFile struct {
-	// Name is the file's path inside the store, such as "metrics.db",
-	// "sql/app.db" or "blobs/objects/1a3/1a3f07".
-	Name   string `json:"name"`
-	Engine string `json:"engine"`
-	// Schema is how many migrations the engine's database has.
-	Schema int `json:"schema"`
-	// Stored asks a backup to keep the bytes as they are rather than deflate
-	// them: an application's files are mostly media, which does not compress.
-	Stored bool `json:"-"`
-}
-```
-
-SnapshotFile is one file of an engine's copy.
-
-## Snapshotter
-
-```go
-type Snapshotter interface {
-	Snapshot(ctx context.Context, dir string) ([]SnapshotFile, error)
-}
-```
-
-Snapshotter is an engine that can copy its files while it keeps working.
+Status is what a server is, as its WELCOME said it to this store's connection.
 
 ## Store
 
@@ -240,96 +240,47 @@ type Store struct {
 }
 ```
 
+Store is the store in a directory, as this process reaches it. Close it once: its close stops every worker, sends what instruments changed, hands over the loggers' lines, and lets the directory go.
+
+### Connect
+
+```go
+func Connect(ctx context.Context, url, token string, opts ...ConnectOption) (*Store, error)
+```
+
+Connect connects to a remote server with a token. tls:// checks the server's certificate before the token leaves; tcp:// sends the token in the clear, for a network its operator trusts.
+
 ### Open
 
 ```go
-func Open(ctx context.Context, dir string, options Options) (*Store, error)
+func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 ```
 
-Open creates dir if needed and holds it until Close; a second store on the same directory, in this process or another, is refused with ErrInUse. ctx bounds the opening only: background work lives until Close.
+Open opens the store in a directory, and returns once it answers: through the directory's sidecar, found through its SERVE file or started, unless Private or Embedded says otherwise. A directory that cannot be served fails here.
 
-### Store.Attach
+### Store.Clock
 
 ```go
-func (s *Store) Attach(engine Engine) error
+func (s *Store) Clock() *TestClock
 ```
 
-Attach hands an opened engine to the store, which closes it on Close.
-
-### Store.Claim
-
-```go
-func (s *Store) Claim(name string) (filePath string, release func(), err error)
-```
-
-Claim reserves a file or directory inside the store for one engine and returns its path, creating the directory it lies in, or the directory itself for a name that ends in /. release gives the name back to an engine that failed to open; an attached engine keeps it until the store closes.
-
-	metrics.db  records.db  blobs/    engines
-	sql/<name>.db                     databases the application names
+Clock is the test's clock of a private store opened with tinystore.Clock; on any other store its calls are Invalid.
 
 ### Store.Close
 
 ```go
-func (s *Store) Close(ctx context.Context) error
+func (s *Store) Close() error
 ```
 
-Close stops background work, closes every engine, the last opened first, and releases the directory. When ctx ends first Close returns its error, and the cleanup still finishes; a later Close waits for it.
+Close stops every worker, each once its handlers under way have answered, sends what instruments changed, then closes the connection. A private child or the core in this process lets the directory go before it returns; the directory's sidecar goes once it has been idle.
 
-### Store.Dir
+### Store.CoreHome
 
 ```go
-func (s *Store) Dir() string
+func (s *Store) CoreHome() core.HomeOf
 ```
 
-Dir is the directory the store holds. A tool that backs the store up looks there for the files of engines no one has opened.
-
-### Store.Every
-
-```go
-func (s *Store) Every(name string, interval time.Duration, work func(context.Context) error) (soon func())
-```
-
-Every runs work at each interval until the store closes, and soon asks for its next run now rather than at the next interval: asks that come while it runs or waits to run make one run more. A Manual store runs nothing, and its soon does nothing; a failure is logged, and the next run still happens.
-
-### Store.EveryEngine
-
-```go
-func (s *Store) EveryEngine(engine, name string, interval time.Duration, work func(context.Context) error) (
-	soon func(),
-)
-```
-
-EveryEngine runs engine work with the same engine attribute as Store.Logger.
-
-### Store.FlushSelfMetrics
-
-```go
-func (s *Store) FlushSelfMetrics(ctx context.Context) error
-```
-
-FlushSelfMetrics captures available reports and the store's memory budget once, then commits their samples together. It is a no-op when disabled or when no metrics engine is open. It reports reserved bytes, not process RSS.
-
-### Store.Guest
-
-```go
-func (s *Store) Guest() bool
-```
-
-Guest says whether the store was opened with Options.Guest.
-
-### Store.Logger
-
-```go
-func (s *Store) Logger(engine string) *slog.Logger
-```
-
-Logger is the application's logger, labelled with the engine that logs.
-
-### Store.Memory
-
-```go
-func (s *Store) Memory() MemoryUsage
-```
+CoreHome is how this module's packages reach the store; a program has no use for it.
 
 ### Store.Now
 
@@ -337,36 +288,74 @@ func (s *Store) Memory() MemoryUsage
 func (s *Store) Now() time.Time
 ```
 
-### Store.Readers
+Now is the time on this machine, which a row written now is stamped with.
+
+### Store.Status
 
 ```go
-func (s *Store) Readers(want int) int
+func (s *Store) Status(ctx context.Context) (Status, error)
 ```
 
-Readers is how many reader connections an engine that wants want opens: want, or Options.Readers when that is fewer.
+Status is what the server this store reaches is: its version, protocol, engines and capability.
 
-### Store.Reserve
+### Store.Tx
 
 ```go
-func (s *Store) Reserve(ctx context.Context, bytes int64) (*Reservation, error)
+func (s *Store) Tx(ctx context.Context, fn func(tx *Tx) error) error
 ```
 
-Reserve waits, in arrival order, until bytes fit the store's memory. A reservation larger than the whole budget is refused at once with ErrLimit, and a store without Options.Memory grants every reservation.
+Tx runs fn as one transaction over the handles it takes in with In: reads go at once; writes commit together when fn returns, after a check that nothing it read has changed, and fn runs again when something did, five times at most, so it does nothing else that must happen once. An error fn returns rolls it back and is Tx's.
 
-### Store.ReserveNow
+## TestClock
 
 ```go
-func (s *Store) ReserveNow(bytes int64) (*Reservation, error)
+type TestClock struct {
+	// contains filtered or unexported fields
+}
 ```
 
-ReserveNow takes bytes only if they fit at once, ahead of any reservation waiting, and is ErrLimit otherwise. Work holding what a waiting reservation may need, such as a file's writer, reserves this way: waiting, it could wait for itself.
+TestClock is the clock a private server opened with tinystore.Clock runs on: moving it forward expires keys, makes jobs due and ages records at once.
 
-### Store.Snapshot
+### TestClock.Advance
 
 ```go
-func (s *Store) Snapshot(ctx context.Context) (Snapshot, error)
+func (c *TestClock) Advance(ctx context.Context, d time.Duration) error
 ```
 
-Snapshot copies every attached engine's file. Each copy is one moment of its engine; two engines are two moments, as no write spans two engines anyway. The engines keep working, and Close waits for the copying to finish.
+Advance moves the clock forward by d.
 
-<!-- Generated by task reference from the root package. Edit the doc comments there, not this file. -->
+### TestClock.Now
+
+```go
+func (c *TestClock) Now(ctx context.Context) (time.Time, error)
+```
+
+Now is the time the server's clock reads.
+
+### TestClock.Set
+
+```go
+func (c *TestClock) Set(ctx context.Context, to time.Time) error
+```
+
+Set sets the clock to a time, which may not be before its own.
+
+## Tx
+
+```go
+type Tx struct {
+	// contains filtered or unexported fields
+}
+```
+
+Tx is the store's transaction while its function runs: a handle takes it in with In, stock.In(tx), and its calls then go through it.
+
+### Tx.CoreTx
+
+```go
+func (tx *Tx) CoreTx() core.TxOf
+```
+
+CoreTx is how this module's packages reach the transaction; a program has no use for it.
+
+<!-- Generated by task reference from sdk/go/store.go, sdk/go/tinystore.go. Edit the doc comments there, not this file. -->

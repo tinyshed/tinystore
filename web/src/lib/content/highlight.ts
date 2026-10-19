@@ -6,6 +6,8 @@ import { createHighlighter, type LanguageRegistration, type ThemeRegistration } 
 // what a fence may say, and the grammar it means; anything else is shown as plain text
 const grammars: Record<string, string> = {
 	go: 'go',
+	rust: 'rust',
+	rs: 'rust',
 	ts: 'typescript',
 	typescript: 'typescript',
 	js: 'javascript',

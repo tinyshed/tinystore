@@ -1,200 +1,270 @@
 # KV API for Go
 
-Every public type, function and constant of the KV engine in `github.com/tinyshed/tinystore/kv`, generated from its source. The [KV guide](../../kv/README.md) explains how to use them, and the [Bun and Node](../bun/kv.md) and [Python](../python/kv.md) pages list the same API.
+Every public type, function and constant of the KV engine in `tinyshed.org/tinystore/kv`, generated from its source. The [KV guide](../../kv/README.md) explains how to use them, and the [Bun and Node](../bun/kv.md) and [Python](../python/kv.md) pages list the same API.
 
-## ErrOutcomeUnknown
+## After
 
 ```go
-var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
+func After(key string) after
 ```
 
-ErrOutcomeUnknown is returned for a write whose group's commit failed. The write may or may not be in the file, so its caller reads it back before writing again.
+After starts a page after a key: the page before's Next.
+
+## Burst
+
+```go
+func Burst(n int) burst
+```
+
+Burst is how many requests a rate limit lets through at once.
+
+## Encrypted
+
+```go
+func Encrypted() encrypted
+```
+
+Encrypted keeps every value of the bucket sealed with the store's encryption key.
+
+## ExpiresAt
+
+```go
+func ExpiresAt(t time.Time) expiresAt
+```
+
+ExpiresAt is when a key a write gives expires, as a time.
+
+## FlushEvery
+
+```go
+func FlushEvery(d time.Duration) flushEvery
+```
+
+FlushEvery keeps counts in memory and writes them that often, so that an add costs no commit and a crash loses at most that span.
+
+## Idle
+
+```go
+func Idle(d time.Duration) idle
+```
+
+Idle is how long a key lives from its last read or write: a session gone unused. A bucket has a TTL or an Idle, not both.
+
+## IfVersion
+
+```go
+func IfVersion(v Version) ifVersion
+```
+
+IfVersion writes only while the key is at this version, an entry's Version: tinystore.ErrConflict otherwise.
+
+## Keep
+
+```go
+func Keep(d time.Duration) keep
+```
+
+Keep is how long an answer is kept: a day unless given.
+
+## Limit
+
+```go
+func Limit(n int) limit
+```
+
+Limit is how many keys a page holds: 1000, and 10,000 at most.
+
+## Rate
+
+```go
+func Rate(n int, per time.Duration) rate
+```
+
+Rate is a rate limit's smooth rate: n requests a per, kv.Rate(100, time.Second).
+
+## TTL
+
+```go
+func TTL(d time.Duration) ttl
+```
+
+TTL is how long a key lives from its last write: a bucket's or counters' for every key, or one write's own.
+
+## Window
+
+```go
+func Window(name string, n int, per time.Duration) windowOption
+```
+
+Window is a quota's window: n uses a per, counted from a key's first use, kv.Window("daily", 100, 24\*time.Hour).
 
 ## Allowance
 
 ```go
 type Allowance struct {
 	OK bool
-	// Left is how many more requests would pass now.
-	Left int64
-	// RetryAfter is how long until the request would pass; zero when OK.
-	RetryAfter time.Duration
+	// Left is how many more would pass now.
+	Left uint64
+	// RetryAt is when a refused request may try again; the zero time when it passed.
+	RetryAt time.Time
+	// Windows are a quota's windows by name; none for a rate limit.
+	Windows map[string]WindowUse
 }
 ```
 
-Allowance is what a limiter answers a request.
+Allowance is what a rate limit or a quota answers a request.
 
 ## Bucket
 
 ```go
-type Bucket[V any] struct {
+type Bucket[T any] struct {
 	// contains filtered or unexported fields
 }
 ```
 
-Bucket holds values of type V by key. Of and WithTx give handles on the same bucket, and a handle may be used from any number of goroutines.
+Bucket is a bucket's values under one branch of owners, the bucket's own when there are none. Inside a transaction, from In, its calls go through it.
 
 ### OpenBucket
 
 ```go
-func OpenBucket[V any](ctx context.Context, state *Store, name string, options ...BucketOption) (*Bucket[V], error)
+func OpenBucket[T any](home tinystore.Home, name string, opts ...BucketOption) (*Bucket[T], error)
 ```
 
-OpenBucket opens the bucket name of kv.db for values of type V, creating it the first time. A name that holds counters is ErrInvalid.
+OpenBucket opens a bucket of values of type T by key, on a store or on a database whose file then keeps it. It opens at its first call; its error is a name or an option it refuses.
+
+	sessions, err := kv.OpenBucket[Session](store, "sessions", kv.Idle(30*24*time.Hour))
+	codes, err := kv.OpenBucket[int64](store, "login-codes", kv.TTL(15*time.Minute))
+	seen, err := kv.OpenBucket[struct{}](store, "stripe-events", kv.TTL(7*24*time.Hour))
+
+A string, \[]byte, integer, float or bool is kept as itself, struct{} as keys alone, and any other type as JSON.
+
+### Bucket.Add
+
+```go
+func (b *Bucket[T]) Add(ctx context.Context, key string, opts ...CreateOption) (bool, error)
+```
+
+Add puts the key in a bucket used as a set, a bucket of struct{}; false when it was there.
 
 ### Bucket.All
 
 ```go
-func (b *Bucket[V]) All(ctx context.Context) iter.Seq2[Entry[V], error]
+func (b *Bucket[T]) All(ctx context.Context, opts ...ListOption) iter.Seq2[Entry[T], error]
 ```
 
-All is every one of this branch's own keys, in Scan's order, a page of Scan at a time. Each page is its own snapshot and none is held between pages, so a slow loop keeps no reader open, and a key written or deleted during the walk may or may not be met; inside View or Tx the pages share its snapshot. An error ends the walk as its last element.
+All walks this branch's own keys a page at a time, holding nothing between pages. A key written during the walk may or may not be met; it renews no idle key.
 
 ### Bucket.Clear
 
 ```go
-func (b *Bucket[V]) Clear(ctx context.Context) error
+func (b *Bucket[T]) Clear(ctx context.Context) error
 ```
 
-Clear removes every key of this branch and of the branches under it. A branch of up to 10,000 keys is deleted in one transaction; a larger one is marked cleared at the file's revision, which hides its keys from every call at once, and Maintain deletes them 10,000 a transaction. A key written after the Clear is a new key. Inside Tx a branch over 10,000 keys is ErrLimit, since deleting it would hold the writer for seconds.
+Clear removes this branch's keys and every branch under it, at once however many.
 
-### Bucket.Cleared
+### Bucket.Create
 
 ```go
-func (b *Bucket[V]) Cleared(ctx context.Context) Change
+func (b *Bucket[T]) Create(ctx context.Context, key string, value T, opts ...CreateOption) (bool, error)
 ```
 
-Cleared is Clear as a change of a batch of the database the store lives in.
+Create writes the value only where no live key is, and says whether it did.
 
 ### Bucket.Delete
 
 ```go
-func (b *Bucket[V]) Delete(ctx context.Context, key any, options ...Option) error
+func (b *Bucket[T]) Delete(ctx context.Context, key string, opts ...CheckOption) (bool, error)
 ```
 
-Delete removes key; an absent key is not an error, except to IfVersion.
+Delete removes the key, and says whether it was there.
 
-### Bucket.Deleted
+### Bucket.Entry
 
 ```go
-func (b *Bucket[V]) Deleted(ctx context.Context, key any, options ...Option) Change
+func (b *Bucket[T]) Entry(ctx context.Context, key string) (Entry[T], bool, error)
 ```
 
-Deleted is Delete as a change of a batch of the database the store lives in.
+Entry is the key's value with its version and expiry, and whether it holds one.
+
+### Bucket.Expire
+
+```go
+func (b *Bucket[T]) Expire(ctx context.Context, key string, d time.Duration, opts ...CheckOption) error
+```
+
+Expire gives a live key a new expiry, d from now, keeping its value.
+
+### Bucket.ExpireAt
+
+```go
+func (b *Bucket[T]) ExpireAt(ctx context.Context, key string, at time.Time, opts ...CheckOption) error
+```
+
+ExpireAt gives a live key a new expiry at a time, keeping its value.
 
 ### Bucket.Get
 
 ```go
-func (b *Bucket[V]) Get(ctx context.Context, key any) (V, bool, error)
+func (b *Bucket[T]) Get(ctx context.Context, key string) (T, bool, error)
 ```
 
-Get is the value under key, and whether a live key holds one.
-
-### Bucket.GetEntry
-
-```go
-func (b *Bucket[V]) GetEntry(ctx context.Context, key any) (Entry[V], bool, error)
-```
-
-GetEntry is Get with the key's version and expiry, the expiry as the file has it: a Sliding renewal waiting for its flush is not in it yet.
+Get is the key's value, and whether it holds one.
 
 ### Bucket.Has
 
 ```go
-func (b *Bucket[V]) Has(ctx context.Context, key any) (bool, error)
+func (b *Bucket[T]) Has(ctx context.Context, key string) (bool, error)
 ```
 
-Has says whether a live key is there, without reading its value.
+Has says whether the key holds a value.
 
-### Bucket.Of
+### Bucket.In
 
 ```go
-func (b *Bucket[V]) Of(owners ...any) *Bucket[V]
+func (b *Bucket[T]) In(tx tinystore.InTx) *Bucket[T]
 ```
 
-Of is the branch of this bucket that owners name, one after another: a string, a \[]byte or an integer each, an integer by its decimal text. A branch exists while it holds keys; there is nothing to create or drop.
+In is the bucket inside a transaction: the store's, whose writes commit together when its function returns, or a database's, whose writes commit with its rows.
 
-### Bucket.Scan
+### Bucket.List
 
 ```go
-func (b *Bucket[V]) Scan(ctx context.Context, query Query) (Page[V], error)
+func (b *Bucket[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error)
 ```
 
-Scan is a page of this branch's own keys, not those of the branches under it, from one snapshot, in the byte order of their text: "10" before "9".
+List is one page of this branch's own keys, in the byte order of their text: "10" before "9".
+
+### Bucket.Name
+
+```go
+func (b *Bucket[T]) Name() string
+```
+
+Name is the bucket's name.
 
 ### Bucket.Set
 
 ```go
-func (b *Bucket[V]) Set(ctx context.Context, key any, value V, options ...Option) error
+func (b *Bucket[T]) Set(ctx context.Context, key string, value T, opts ...SetOption) error
 ```
 
-Set writes value under key. A key it creates, or one that had expired, takes the bucket's DefaultTTL unless kv.TTL or kv.ExpireAt says otherwise; a live key keeps the expiry it has unless one of them does.
-
-### Bucket.SetEntry
-
-```go
-func (b *Bucket[V]) SetEntry(ctx context.Context, key any, value V, options ...Option) (Entry[V], error)
-```
-
-SetEntry is Set, returning what it wrote with its new version.
-
-### Bucket.SetEntryIfAbsent
-
-```go
-func (b *Bucket[V]) SetEntryIfAbsent(ctx context.Context, key any, value V, options ...Option) (
-	Entry[V], bool, error,
-)
-```
-
-SetEntryIfAbsent is SetIfAbsent, returning the entry it wrote or the one that was there, each with its version.
-
-### Bucket.SetIfAbsent
-
-```go
-func (b *Bucket[V]) SetIfAbsent(ctx context.Context, key any, value V, options ...Option) (bool, error)
-```
-
-SetIfAbsent writes value under key only if no live key is there, and says whether it did; an expired key is absent.
+Set writes the value; a key that exists keeps its expiry unless the call gives one.
 
 ### Bucket.Take
 
 ```go
-func (b *Bucket[V]) Take(ctx context.Context, key any, options ...Option) (V, bool, error)
+func (b *Bucket[T]) Take(ctx context.Context, key string, opts ...CheckOption) (T, bool, error)
 ```
 
-Take reads the value under key and deletes it in one step, so that of the callers taking one key only one gets it. A value that no longer decodes is ErrCorrupt and stays where it was, inside Tx as well.
+Take reads the value and removes the key in one commit: of two callers taking a code at once, one gets it.
 
-### Bucket.Touch
+### Bucket.Under
 
 ```go
-func (b *Bucket[V]) Touch(ctx context.Context, key any, options ...Option) (bool, error)
+func (b *Bucket[T]) Under(owners ...any) *Bucket[T]
 ```
 
-Touch gives a live key a new expiry, kv.TTL's, kv.ExpireAt's or else the bucket's DefaultTTL, and keeps its value and version, so that a renewal fails no IfVersion. It says whether the key was there.
-
-### Bucket.WithTx
-
-```go
-func (b *Bucket[V]) WithTx(tx *Tx) *Bucket[V]
-```
-
-WithTx is this bucket inside tx: its calls run in tx's transaction and see its writes, and after the function tx was given returns they are ErrClosed.
-
-### Bucket.Written
-
-```go
-func (b *Bucket[V]) Written(ctx context.Context, key any, value V, options ...Option) Change
-```
-
-Written is Set as a change of a batch of the database the store lives in, so that the key commits with the batch's rows or not at all:
-
-	err := db.Batch(ctx, func(b *sqldb.Batch) error {
-		b.Exec(`insert into users (id, email) values (?, ?)`, id, email)
-		b.Add(sessions.Written(ctx, token, Session{User: id}))
-		return nil
-	})
-
-The bucket's store must be opened In that database. The change takes free memory for its value and holds it until the batch ends. Memory that is not free is ErrLimit when the batch weighs the change.
+Under is the branch the owners name below this one: whose keys these are.
 
 ## BucketOption
 
@@ -204,178 +274,17 @@ type BucketOption interface {
 }
 ```
 
-BucketOption changes how a bucket serves its values; none changes what its bytes mean, so a program may change them between runs.
+BucketOption is how a bucket opens.
 
-### Sliding
-
-```go
-func Sliding(term time.Duration) BucketOption
-```
-
-Sliding gives a key term from the last time it was read: a key created without kv.TTL or kv.ExpireAt gets term, and a Get, GetEntry or Has renews a live key to term from now once a thirtieth of the term has passed since it last did. With DefaultTTL it is ErrInvalid.
-
-A read does not write: the renewal waits a second for the next flush, and a crash forgets the renewals since the last. So a key read at t lives at least until t + term − term/30 unless it is renewed.
-
-A key with less than a minute left is renewed before its read returns.
-
-### WithCodec
+## CheckOption
 
 ```go
-func WithCodec[V any](codec Codec[V]) BucketOption
-```
-
-WithCodec writes a bucket's values through codec instead of the bytes their type would get; a codec of another value type is ErrInvalid at OpenBucket.
-
-## Change
-
-```go
-type Change interface {
-	Bytes() (int, error)
-	Apply(ctx context.Context, file *sqlite.File, w sqlite.Writer) error
-	Done(err error)
-}
-```
-
-Change is a key a batch of the database the store lives in writes with its rows, which Written, Deleted and Cleared give out: see Options.In and sqldb's Batch.Add. A program does not call its methods.
-
-## Codec
-
-```go
-type Codec[V any] interface {
-	Encode(V) ([]byte, error)
-	Decode([]byte) (V, error)
-}
-```
-
-Codec writes a bucket's values when the bytes their type would get are not the ones wanted; see WithCodec.
-
-## Config
-
-```go
-type Config[T any] struct {
-	// contains filtered or unexported fields
-}
-```
-
-Config is an application's settings, a value of T made of layers in the order given, each over the one before it, and what Update kept over them all:
-
-	kv.Defaults(Config{Port: 8080}), kv.Defaults(fromYAML)
-	kv.FromEnv("APP", ".env")       APP_PORT=3000
-	config.Update(ctx, func(c *Config) { c.Port = 4000 })
-
-Get reads it from memory. Update checks a change and keeps it field by field in kv.db, so that it outlives a restart, and every handle on the config sees it at once, in this process and through the server; Reset gives a field back to the layers under it.
-
-T is a struct. A field's path is its JSON name, a nested struct's below its own: limits.rps. A field tagged \`env:"NAME"\` reads that variable; another reads the prefix and its path in upper snake case, APP\_LIMITS\_RPS, or the file that APP\_LIMITS\_RPS\_FILE names. A field tagged \`fixed:"true"\` comes from the layers alone: Update refuses it, and Sources shows where it came from. A field tagged \`secret:"true"\` is fixed, and Sources hides it. A field tagged \`required:"true"\` is ErrInvalid at OpenConfig while the layers leave it its zero value.
-
-### OpenConfig
-
-```go
-func OpenConfig[T any](ctx context.Context, state *Store, name string, options ...ConfigOption) (*Config[T], error)
-```
-
-OpenConfig opens the config name of kv.db, creating it the first time, and makes it from its layers. Defaults and an environment that do not fit T, or that fail Validate, are ErrInvalid; a kept value that no longer fits its field is left out, logged, and named by Sources.
-
-### Config.Get
-
-```go
-func (c *Config[T]) Get() T
-```
-
-Get is the config now, built once a change and shared: it is not to be changed, which Update does.
-
-### Config.Reset
-
-```go
-func (c *Config[T]) Reset(ctx context.Context, paths ...string) error
-```
-
-Reset forgets what Update kept for paths, each a field or a struct of fields, so that they take their values from the layers under it again; without paths it forgets everything kept.
-
-### Config.Sources
-
-```go
-func (c *Config[T]) Sources() []Source
-```
-
-Sources says where each field's value came from, in the order of T's fields, and why a kept value is left out.
-
-### Config.Update
-
-```go
-func (c *Config[T]) Update(ctx context.Context, change func(*T)) error
-```
-
-Update changes the config: change gets a copy of it, and each field it changes is checked, kept, and seen by every handle at once. A change that fails Validate, sets a fixed field or a secret, or empties a required field is ErrInvalid and keeps nothing.
-
-### Config.Watch
-
-```go
-func (c *Config[T]) Watch(ctx context.Context) iter.Seq[T]
-```
-
-Watch yields the config now and each time it changes, from this handle or any other, until ctx ends. A watcher that falls behind skips to the latest.
-
-## ConfigOption
-
-```go
-type ConfigOption func(*configSettings)
-```
-
-ConfigOption is where a config's values come from, and what checks them.
-
-### Defaults
-
-```go
-func Defaults(values any) ConfigOption
-```
-
-Defaults is a layer of values: a T, which sets every field, or a map, as a JSON or YAML library reads a file into one, which sets the fields it names. A duration may be text, "30s".
-
-### FromEnv
-
-```go
-func FromEnv(prefix string, files ...string) ConfigOption
-```
-
-FromEnv is a layer of the environment: each field from its variable, files first, as a dotenv library reads them, and the process's own over them. A file that is not there is skipped.
-
-	PORT=3000  ORIGINS=a.com,b.com  TIMEOUT=1h30m  LIMITS={"rps":5}
-
-### FromLookup
-
-```go
-func FromLookup(prefix string, lookup func(name string) (string, bool)) ConfigOption
-```
-
-FromLookup is a layer of the environment read through lookup alone, the process's own variables left as they are, which suits a host that passes its environment in and a test that sets its own.
-
-### Validate
-
-```go
-func Validate[T any](check func(T) error) ConfigOption
-```
-
-Validate checks the config each time it is made, at open and before Update keeps a change: a change that fails is refused, and a kept value that fails is left out.
-
-## CounterOption
-
-```go
-type CounterOption interface {
+type CheckOption interface {
 	// contains filtered or unexported methods
 }
 ```
 
-### LoseAtMost
-
-```go
-func LoseAtMost(d time.Duration) CounterOption
-```
-
-LoseAtMost keeps the counters in memory and writes what changed every d, on Close and on Maintain, so that an Add takes no write.
-
-A crash loses the changes since the last flush that committed, a Delete's as an Add's. A flush waits for the writer as any write does, so on a busy file the loss can reach d plus the flush's own wait and time.
-
-Handles on counters of one name share the memory and join no transaction. Opening them again with another d, or without LoseAtMost, is ErrInvalid.
+CheckOption is the version a Take, a Delete or an Expire needs the key at.
 
 ## Counters
 
@@ -385,23 +294,25 @@ type Counters struct {
 }
 ```
 
-Counters holds an int64 by key. Of and WithTx give handles on the same counters, and a handle may be used from any number of goroutines.
+Counters are numbers by key that only add up: 0 for one never added to, or expired.
 
 ### OpenCounters
 
 ```go
-func OpenCounters(ctx context.Context, state *Store, name string, options ...CounterOption) (*Counters, error)
+func OpenCounters(home tinystore.Home, name string, opts ...CountersOption) (*Counters, error)
 ```
 
-OpenCounters opens the counters name of kv.db, creating them the first time. A name that holds values is ErrInvalid.
+OpenCounters opens counters by key on the store.
+
+	attempts, err := kv.OpenCounters(store, "login-attempts", kv.TTL(15*time.Minute))
 
 ### Counters.Add
 
 ```go
-func (c *Counters) Add(ctx context.Context, key any, n int64) (int64, error)
+func (c *Counters) Add(ctx context.Context, key string, n int64) (int64, error)
 ```
 
-Add adds n to the counter under key and returns what it holds now. An absent or expired counter starts from zero with the DefaultTTL of the counters, and a live one keeps its expiry, so a window does not slide. A sum past the int64 range is ErrLimit and changes nothing.
+Add adds n and gives the new count; inside a transaction the count is known once it committed, and Add gives 0.
 
 ### Counters.Clear
 
@@ -409,323 +320,156 @@ Add adds n to the counter under key and returns what it holds now. An absent or 
 func (c *Counters) Clear(ctx context.Context) error
 ```
 
-Clear removes every counter of this branch and of the branches under it, as Bucket.Clear does. LoseAtMost counters it also removes from memory once it commits, so that no flush writes them again; a Clear that fails leaves them.
+Clear removes this branch's counters and every branch's under it.
 
 ### Counters.Delete
 
 ```go
-func (c *Counters) Delete(ctx context.Context, key any) error
+func (c *Counters) Delete(ctx context.Context, key string) (bool, error)
 ```
 
-Delete removes the counter under key; an absent one is not an error.
+Delete removes the counter, and says whether it was there.
 
 ### Counters.Get
 
 ```go
-func (c *Counters) Get(ctx context.Context, key any) (int64, error)
+func (c *Counters) Get(ctx context.Context, key string) (int64, error)
 ```
 
-Get is what the counter under key holds; an absent or expired one holds 0.
+Get is the key's count.
 
-### Counters.Max
+### Counters.In
 
 ```go
-func (c *Counters) Max(ctx context.Context, key any, n int64) (int64, error)
+func (c *Counters) In(tx tinystore.InTx) *Counters
 ```
 
-Max keeps the larger of the counter under key and n, an absent counter counting as zero, and returns what it holds now.
+In is the counters inside the store's transaction: an add commits with its writes.
 
-### Counters.Of
+### Counters.Under
 
 ```go
-func (c *Counters) Of(owners ...any) *Counters
+func (c *Counters) Under(owners ...any) *Counters
 ```
 
-Of is the branch of these counters that owners name, as Bucket.Of names one.
+Under is the counters of a branch, each key apart from the same key elsewhere.
 
-### Counters.WithTx
-
-```go
-func (c *Counters) WithTx(tx *Tx) *Counters
-```
-
-WithTx binds these counters to tx; LoseAtMost counters refuse calls through it.
-
-## Database
+## CountersOption
 
 ```go
-type Database interface {
-	SQLiteFile() *sqlite.File
+type CountersOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-Database is a file whose owner lets a kv store live in it, as sqldb's DB does.
+CountersOption is how counters open.
+
+## CreateOption
+
+```go
+type CreateOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+CreateOption is what a Create or an Add gives besides its value: an expiry.
 
 ## Entry
 
 ```go
-type Entry[V any] struct {
-	// Key is the key's text, without the branch's owners.
+type Entry[T any] struct {
 	Key     string
-	Value   V
+	Value   T
 	Version Version
-	// ExpiresAt is zero for a key that never expires.
+	// ExpiresAt is the zero time for a key that never expires.
 	ExpiresAt time.Time
 }
 ```
 
-Entry is a value with what the file knows of it.
+Entry is a key's value with its version and expiry.
 
-## KeyError
+## ListOption
 
 ```go
-type KeyError struct {
-	Bucket, Path string
-	Err          error
+type ListOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-KeyError is a call refused because of one key: its bucket and the path of owners and key it named. errors.Is finds the store's sentinel in it.
-
-### KeyError.Error
-
-```go
-func (e *KeyError) Error() string
-```
-
-### KeyError.Unwrap
-
-```go
-func (e *KeyError) Unwrap() error
-```
-
-## Limiter
-
-```go
-type Limiter struct {
-	// contains filtered or unexported fields
-}
-```
-
-Limiter lets each key's requests through at a steady rate with room for a burst. It is the generic cell rate algorithm: a key holds one time, when its next request is due, so there is no window whose edge lets twice the rate through, and a key costs one int64.
-
-	Rate(3, time.Second), Burst(3): three pass at once, the fourth waits 333ms
-
-Its times live in memory and reach the file every second and on Close, as LoseAtMost counters do: a crash forgets at most the last second, and so lets at most one burst more through. A key whose time has come is as one never seen, and maintenance deletes it.
-
-### OpenLimiter
-
-```go
-func OpenLimiter(ctx context.Context, state *Store, name string, options ...LimiterOption) (*Limiter, error)
-```
-
-OpenLimiter opens the limiter name of kv.db, creating it the first time. A name that holds values or counters is ErrInvalid; the rate is the caller's, and may change between runs.
-
-### Limiter.Allow
-
-```go
-func (l *Limiter) Allow(ctx context.Context, key any) (Allowance, error)
-```
-
-Allow asks for one request of key.
-
-### Limiter.AllowN
-
-```go
-func (l *Limiter) AllowN(ctx context.Context, key any, n int64) (Allowance, error)
-```
-
-AllowN asks for n requests of key at once: all of them pass or none does. More than the burst never passes, and is ErrInvalid.
-
-### Limiter.Of
-
-```go
-func (l *Limiter) Of(owners ...any) *Limiter
-```
-
-Of is the branch of this limiter that owners name, as Bucket.Of names one.
-
-## LimiterOption
-
-```go
-type LimiterOption func(*limiterSettings)
-```
-
-LimiterOption says how fast a limiter lets requests through.
-
-### Burst
-
-```go
-func Burst(n int64) LimiterOption
-```
-
-Burst is how many requests may pass at once before the rate holds the next; count of the Rate when it is not given.
-
-### Rate
-
-```go
-func Rate(count int64, per time.Duration) LimiterOption
-```
-
-Rate lets count requests through every per, each key alone: Rate(100, time.Second). A limiter needs one.
-
-## Maintenance
-
-```go
-type Maintenance struct {
-	Flushed int // LoseAtMost counters written
-	Renewed int // Sliding keys renewed
-	Cleared int // rows a marked Clear hid, deleted
-	Expired int
-}
-```
-
-Maintenance is what one Maintain call did.
+ListOption is how a page of keys reads.
 
 ## Once
 
 ```go
-type Once[V any] struct {
+type Once[T any] struct {
 	// contains filtered or unexported fields
 }
 ```
 
-Once runs a function at most once a key and keeps what it returns, so that a request sent again is answered as the first was rather than done twice: a charge, an import, a webhook's effect.
-
-	charges.Run(ctx, "req-7", charge) → runs charge, keeps its receipt a day
-	charges.Run(ctx, "req-7", charge) → that receipt; charge does not run
-
-One Run of a key runs its function at a time in the store's process, the clients of its server included: a Run of a key another Run is running waits for it and returns its answer. A function's error keeps nothing, so the next Run runs it again; an answer a program wants kept, a card declined, is a value rather than an error.
-
-A claim on a key lives in memory as long as its Run. A process that dies after a function's effect outside the store and before its answer was kept runs it again on the next Run, so such an effect carries the key too: a payment provider's own idempotency key.
+Once runs a function once a key and keeps its answer: a request sent twice is answered as the first was rather than done twice. The core lets one run of a key go at a time, every client of the store included: it answers the kept answer, or hands the run to this client and keeps what it sends back.
 
 ### OpenOnce
 
 ```go
-func OpenOnce[V any](ctx context.Context, state *Store, name string, options ...BucketOption) (*Once[V], error)
+func OpenOnce[T any](home tinystore.Home, name string, opts ...OnceOption) (*Once[T], error)
 ```
 
-OpenOnce opens the answers name of kv.db, creating them the first time. An answer lives a day unless DefaultTTL says. A name that holds anything else is ErrInvalid, and so is Sliding: an answer lives from when it was kept.
+OpenOnce opens answers of type T kept once a key, a day unless Keep says.
+
+	charges, err := kv.OpenOnce[Receipt](store, "charges", kv.Keep(24*time.Hour))
 
 ### Once.Delete
 
 ```go
-func (o *Once[V]) Delete(ctx context.Context, key any) error
+func (o *Once[T]) Delete(ctx context.Context, key string) (bool, error)
 ```
 
-Delete forgets the answer kept under key, so that the next Run runs again.
+Delete forgets the answer kept for key, so that its next run runs fn again.
 
 ### Once.Get
 
 ```go
-func (o *Once[V]) Get(ctx context.Context, key any) (V, bool, error)
+func (o *Once[T]) Get(ctx context.Context, key string) (T, bool, error)
 ```
 
-Get is the answer kept under key, and whether one is.
-
-### Once.Of
-
-```go
-func (o *Once[V]) Of(owners ...any) *Once[V]
-```
-
-Of is the branch of these answers that owners name, as Bucket.Of names one.
+Get is the answer kept for key, and whether one is.
 
 ### Once.Run
 
 ```go
-func (o *Once[V]) Run(ctx context.Context, key any, fn func(context.Context) (V, error)) (V, error)
+func (o *Once[T]) Run(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (T, error)
 ```
 
-Run returns the answer kept under key, or runs fn and keeps what it returns.
+Run is the answer kept for key, or fn's, which is kept. A run of a key that another runs, here or in another process, waits for it and gets its answer; an error of fn keeps nothing and is Run's, so the next run runs fn again. A connection lost after fn returned and before its answer was kept is OutcomeUnknown.
 
-While another Run of the key runs its function this one waits, until ctx ends, and then returns the answer it kept, or, when it failed, runs fn itself. fn's error is returned and keeps nothing. An answer is kept even when ctx ends after fn returned, since its work is done; an error keeping it is returned beside it.
-
-## OpenOption
+### Once.Under
 
 ```go
-type OpenOption interface {
-	BucketOption
-	CounterOption
+func (o *Once[T]) Under(owners ...any) *Once[T]
+```
+
+Under is the answers of a branch, each key apart from the same key elsewhere.
+
+## OnceOption
+
+```go
+type OnceOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-### DefaultTTL
-
-```go
-func DefaultTTL(d time.Duration) OpenOption
-```
-
-DefaultTTL is the expiry a key gets when it is created without kv.TTL or kv.ExpireAt; a later Set or Add keeps the expiry a key has.
-
-## Option
-
-```go
-type Option func(*callOptions)
-```
-
-### ExpireAt
-
-```go
-func ExpireAt(t time.Time) Option
-```
-
-ExpireAt gives the key until t by the store's clock.
-
-### IfVersion
-
-```go
-func IfVersion(v Version) Option
-```
-
-IfVersion lets a call write only to a live key whose version is v; any other is tinystore.ErrConflict, an absent or expired key included.
-
-### TTL
-
-```go
-func TTL(d time.Duration) Option
-```
-
-TTL gives the key d from now; see the rules of DefaultTTL.
-
-## Options
-
-```go
-type Options struct {
-	// In keeps the store's buckets in a database's own file, an sqldb DB's,
-	// instead of kv.db, so that a batch of the database writes keys with its
-	// rows: see Bucket.Written. The database opens before the store and closes
-	// after it, and holds one kv store.
-	In Database
-}
-```
+OnceOption is how answers kept once a key open.
 
 ## Page
 
 ```go
-type Page[V any] struct {
-	Entries []Entry[V]
-	// More says the limit, or the page's 4 MiB of values, ended the page before
-	// the branch did.
-	More bool
-	// Next is the query that reads on.
-	Next Query
+type Page[T any] struct {
+	Entries []Entry[T]
+	Next    string
 }
 ```
 
-Page is one page of a Scan, from one snapshot.
-
-## Query
-
-```go
-type Query struct {
-	// After, when it is not empty, starts the page after that key.
-	After string
-	Limit int // keys a page returns: 100 when zero, at most 1000
-}
-```
-
-Query asks Scan for a page of a branch's own keys, in the byte order of their text.
+Page is a page of a branch's keys, and where the next starts: "" on the last.
 
 ## Quota
 
@@ -735,309 +479,154 @@ type Quota struct {
 }
 ```
 
-Quota lets each key use up to a limit in every one of its windows, such as 100 messages every five hours and 300 a week, counted by one Allow.
-
-A window starts at a key's first use after the last one ended and lasts its span, as a counter with DefaultTTL does, so that each key resets on its own:
-
-	Window("session", 100, 5*time.Hour): first use 13:42 → resets at 18:42;
-	a use at 19:07 starts the next window, which resets at 00:07
-
-An Allow checks every window and counts in each, or in none, in one durable write: two quotas asked one after the other would leave the first counted when the second refused.
+Quota counts uses by key in named windows that reset, all of them or none in one durable write.
 
 ### OpenQuota
 
 ```go
-func OpenQuota(ctx context.Context, state *Store, name string, windows ...QuotaOption) (*Quota, error)
+func OpenQuota(home tinystore.Home, name string, opts ...QuotaOption) (*Quota, error)
 ```
 
-OpenQuota opens the quota name of kv.db, creating it the first time. A name that holds anything else is ErrInvalid. Its windows are the caller's and may change between runs: a window kept under a name no longer given is forgotten, and a limit changed counts what its window used before.
+OpenQuota opens a quota of windows, each counted from a key's first use: kv.OpenQuota(store, "ai", kv.Window("daily", 100, 24\*time.Hour)).
 
 ### Quota.Allow
 
 ```go
-func (q *Quota) Allow(ctx context.Context, key any) (QuotaUsage, error)
+func (q *Quota) Allow(ctx context.Context, key string, n ...int64) (Allowance, error)
 ```
 
-Allow uses one of key's every window, or none when one has no room left.
+Allow uses one of key's every window, or n, or none when one has no room; more than a window's limit is Invalid.
 
-### Quota.AllowN
+### Quota.Peek
 
 ```go
-func (q *Quota) AllowN(ctx context.Context, key any, n int64) (QuotaUsage, error)
+func (q *Quota) Peek(ctx context.Context, key string) (Allowance, error)
 ```
 
-AllowN uses n of key's every window at once, or none when one has no room for n. More than a window's limit never passes, and is ErrInvalid.
-
-### Quota.Delete
-
-```go
-func (q *Quota) Delete(ctx context.Context, key any) error
-```
-
-Delete forgets key's windows, so that its next use starts each anew.
-
-### Quota.Get
-
-```go
-func (q *Quota) Get(ctx context.Context, key any) (QuotaUsage, error)
-```
-
-Get is key's windows without using them: OK says whether one more use would pass now.
-
-### Quota.Of
-
-```go
-func (q *Quota) Of(owners ...any) *Quota
-```
-
-Of is the branch of this quota that owners name, as Bucket.Of names one.
+Peek is how key stands in every window, using nothing.
 
 ### Quota.Refund
 
 ```go
-func (q *Quota) Refund(ctx context.Context, key any) error
+func (q *Quota) Refund(ctx context.Context, key string, n ...int64) error
 ```
 
-Refund gives one use back to each of key's windows that has not reset since; a window never goes below nothing.
+Refund gives one use back to every window of key, or n.
 
-### Quota.RefundN
+### Quota.Reset
 
 ```go
-func (q *Quota) RefundN(ctx context.Context, key any, n int64) error
+func (q *Quota) Reset(ctx context.Context, key string) error
 ```
 
-RefundN gives n uses back, as Refund gives one.
+Reset forgets key's uses in every window.
+
+### Quota.Under
+
+```go
+func (q *Quota) Under(owners ...any) *Quota
+```
+
+Under is the quota of a branch, each key apart from the same key elsewhere.
 
 ## QuotaOption
 
 ```go
-type QuotaOption func(*quotaSettings)
-```
-
-QuotaOption is one of a quota's windows.
-
-### Window
-
-```go
-func Window(name string, limit int64, span time.Duration) QuotaOption
-```
-
-Window lets a key use up to limit every span, from its first use: Window("weekly", 300, 7\*24\*time.Hour). A name is \[a-z]\[a-z0-9\_]{0,31}, and a quota has one to eight windows.
-
-## QuotaUsage
-
-```go
-type QuotaUsage struct {
-	Allowance
-	Windows map[string]WindowUsage
+type QuotaOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-QuotaUsage is what a quota answers a key: whether its use passed, how many more would pass now and, when it did not, how long until it would, as a limiter's Allowance says; and each window by its name.
+QuotaOption is how a quota opens.
 
-## Raw
-
-```go
-type Raw struct {
-	Kind  RawKind
-	Int   int64
-	Bytes []byte
-}
-```
-
-Raw is a value as its row keeps it: nothing, an integer or bytes.
-
-A bucket of Raw reads what a bucket of any type wrote, and what it writes is read by a bucket of the type that kept it the same way. So a program without the types, such as the server for its clients, reads and writes every bucket:
-
-	Raw{}                                    nothing, as a struct{} of a set
-	Raw{Kind: RawInt, Int: 42}               an integer, as a bool or an int64
-	Raw{Kind: RawBytes, Bytes: []byte("x")}  bytes, as a string, a []byte, a float's bits or JSON
-
-## RawConfig
+## RateLimit
 
 ```go
-type RawConfig struct {
+type RateLimit struct {
 	// contains filtered or unexported fields
 }
 ```
 
-RawConfig is what a config keeps, its changed fields as JSON by path, for a program that types them itself, as the server does for its clients. It checks that a value is JSON and the config within its bounds, and nothing a type would.
+RateLimit is a smooth rate of requests a key, the generic cell rate algorithm with its times in the core's memory.
 
-### OpenRawConfig
+### OpenRateLimit
 
 ```go
-func OpenRawConfig(ctx context.Context, state *Store, name string) (*RawConfig, error)
+func OpenRateLimit(home tinystore.Home, name string, opts ...RateLimitOption) (*RateLimit, error)
 ```
 
-OpenRawConfig opens the config name of kv.db, creating it the first time. A name that holds values, counters or a limiter is ErrInvalid.
+OpenRateLimit opens a rate limit: kv.OpenRateLimit(store, "api", kv.Rate(100, time.Second), kv.Burst(20)).
 
-### RawConfig.Change
+### RateLimit.Allow
 
 ```go
-func (r *RawConfig) Change(ctx context.Context, set map[string]json.RawMessage, reset []string) error
+func (r *RateLimit) Allow(ctx context.Context, key string, n ...int64) (Allowance, error)
 ```
 
-Change keeps set and forgets reset in one transaction; every watcher of the config sees the change once it commits.
+Allow asks for one request of key, or n: all pass or none; more than the burst is Invalid.
 
-### RawConfig.Kept
+### RateLimit.Peek
 
 ```go
-func (r *RawConfig) Kept() (map[string]json.RawMessage, int64)
+func (r *RateLimit) Peek(ctx context.Context, key string) (Allowance, error)
 ```
 
-Kept is the changed fields and how many changes the config has had since this process opened it.
+Peek is the answer one request would get, using nothing.
 
-### RawConfig.Watch
+### RateLimit.Reset
 
 ```go
-func (r *RawConfig) Watch(ctx context.Context) iter.Seq2[map[string]json.RawMessage, int64]
+func (r *RateLimit) Reset(ctx context.Context, key string) error
 ```
 
-Watch yields the changed fields now and after each change, until ctx ends. A watcher that falls behind skips to the latest: it never sees a state the config did not have.
+Reset forgets key, so that its next request starts afresh.
 
-## RawKind
+### RateLimit.Under
 
 ```go
-type RawKind uint8
+func (r *RateLimit) Under(owners ...any) *RateLimit
 ```
 
-RawKind is which of the three a Raw holds.
+Under is the rate limit of a branch, each key apart from the same key elsewhere.
 
-### RawNothing
-
-```go
-const (
-	RawNothing RawKind = iota
-	RawInt
-	RawBytes
-)
-```
-
-## Source
+## RateLimitOption
 
 ```go
-type Source struct {
-	Path string
-	// Value is its JSON, or *** for a secret.
-	Value string
-	// From is "default", "env NAME", "kept", or "" for T's zero value.
-	From string
-	// Ignored says why a kept value is left out, when it is.
-	Ignored string
+type RateLimitOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-Source is where one field's value came from.
+RateLimitOption is how a rate limit opens.
 
-## Store
+## SetOption
 
 ```go
-type Store struct {
-	// contains filtered or unexported fields
+type SetOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-### Open
-
-```go
-func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error)
-```
-
-Open opens kv.db inside the store, or with Options.In a database's file. The store closes it and, unless it is Manual, deletes expired keys every minute, and every ten seconds while the last pass stopped at its bound with expired or cleared rows left.
-
-### Store.Close
-
-```go
-func (s *Store) Close(ctx context.Context) error
-```
-
-Close lets the work in flight finish, writes what LoseAtMost counters hold and the renewals reads asked for, and closes kv.db, or leaves a database's file to it; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
-
-### Store.Maintain
-
-```go
-func (s *Store) Maintain(ctx context.Context) (Maintenance, error)
-```
-
-Maintain writes what LoseAtMost counters hold and the renewals Sliding reads asked for, deletes the rows a marked Clear hid, then deletes expired keys and the values they spilled. It deletes expired keys 10,000 a transaction and at most ten transactions a call.
-
-The store calls it every minute unless it is Manual, and every ten seconds while the last call stopped at one of those bounds with rows left. It flushes counters and renewals on their own intervals.
-
-No read returns an expired or cleared key, whether Maintain has deleted it or not.
-
-### Store.Snapshot
-
-```go
-func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
-```
-
-Snapshot copies kv.db into dir while the engine keeps working; buckets kept In a database are in that database's copy.
-
-### Store.Tx
-
-```go
-func (s *Store) Tx(ctx context.Context, work func(*Tx) error) error
-```
-
-Tx runs work in one writer transaction over any buckets of kv.db: nil commits, an error or a panic rolls back. It never spans two engines.
-
-### Store.View
-
-```go
-func (s *Store) View(ctx context.Context, read func(*Tx) error) error
-```
-
-View runs read against one snapshot of kv.db, held at most five seconds, as a records read is; a write inside it is ErrInvalid.
-
-## Tx
-
-```go
-type Tx struct {
-	// contains filtered or unexported fields
-}
-```
-
-Tx is one transaction of kv.db, given to the function passed to Store.Tx or Store.View and used by the goroutine that runs it. A bucket works in it through WithTx.
+SetOption is what a Set gives besides its value: an expiry, or the version the key must still be at.
 
 ## Version
 
 ```go
-type Version struct {
-	// contains filtered or unexported fields
+type Version []byte
+```
+
+Version is what a key was when it was read: compared only for equality, given back to IfVersion.
+
+## WindowUse
+
+```go
+type WindowUse struct {
+	Used, Limit, Left uint64
+	// ResetsAt is when the window resets; the zero time for one not started.
+	ResetsAt time.Time
 }
 ```
 
-Version is the revision of kv.db that wrote a value. It never repeats in a file, not after a delete, an expiry or a reopen, so an old IfVersion cannot pass against a key deleted and written again. Two versions are equal or not; a version marshals to text, so that it can travel to a page and back.
+WindowUse is one window of a quota as a key stands in it.
 
-### Version.MarshalText
-
-```go
-func (v Version) MarshalText() ([]byte, error)
-```
-
-### Version.String
-
-```go
-func (v Version) String() string
-```
-
-### Version.UnmarshalText
-
-```go
-func (v *Version) UnmarshalText(text []byte) error
-```
-
-## WindowUsage
-
-```go
-type WindowUsage struct {
-	Used, Limit, Left int64
-	// ResetAt is when the window ends, after which the next use starts
-	// another; zero for a window not started.
-	ResetAt time.Time
-}
-```
-
-WindowUsage is one window of a key.
-
-<!-- Generated by task reference from kv/. Edit the doc comments there, not this file. -->
+<!-- Generated by task reference from sdk/go/kv/. Edit the doc comments there, not this file. -->

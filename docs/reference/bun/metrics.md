@@ -5,8 +5,10 @@ Every public class, function and type of the Metrics engine in `@tinyshed/tinyst
 ## SeriesKind
 
 ```ts
-type SeriesKind = 'gauge' | 'counter'
+type SeriesKind = 'gauge' | 'counter' | 'histogram'
 ```
+
+What a series' samples are.
 
 ## Labels
 
@@ -14,24 +16,57 @@ type SeriesKind = 'gauge' | 'counter'
 type Labels = Record<string, string>
 ```
 
-What tells the series of one name apart: a host, a route, a status. A label
-whose name begins with __ is the store's own, and refused.
+What tells the series of one name apart: a host, a route, a status.
+
+## Condition
+
+```ts
+type Condition = LabelValue | readonly LabelValue[] | {
+    not: LabelValue | readonly LabelValue[]
+} | {
+    prefix: string
+}
+```
+
+What a label's value must be: a value, one of a list, none of them with
+`not` (or the label absent), or a prefix. A number or a boolean is its
+text, as in an instrument's `with`.
+
+## Query
+
+```ts
+interface Query {
+    /** the series of this name; a timer's name, the series it writes */
+    name?: string | undefined
+    where?: Record<string, Condition> | undefined
+    /** the span before now the range covers; or from and to */
+    since?: Duration | undefined
+    /** the range's start, included */
+    from?: Time | undefined
+    /** the range's end, excluded; now, a sample taken now in the range, unless given */
+    to?: Time | undefined
+}
+```
+
+The series a call finds and its range: `{ name: 'cpu', where: { host:
+'web-1' }, since: '1h' }`. A query is data, the same in every language.
 
 ## SeriesInput
 
 ```ts
 interface SeriesInput {
-    /** the metric: 'http_requests_total' */
     name: string
     kind: SeriesKind
-    labels?: Labels
-    /** samples as [time, value] pairs, or as columns: unix milliseconds and their values */
-    samples: readonly (readonly [time: Time, value: number])[] | {
-        times: readonly number[] | BigInt64Array
-        values: readonly number[] | Float64Array
-    }
+    labels?: Record<string, LabelValue>
+    samples?: readonly (readonly [time: Time, value: number])[]
+    times?: readonly Time[] | Float64Array
+    values?: readonly number[] | Float64Array
+    /** how long the name's samples stay: its own, kept in the file; unless given, what it keeps already */
+    keep?: Duration | undefined
 }
 ```
+
+A series to write: its samples as [time, value] pairs, or as times and values columns.
 
 ## Series
 
@@ -40,150 +75,182 @@ interface Series {
     name: string
     kind: SeriesKind
     labels: Labels
-    /** unix milliseconds, in time order */
-    times: number[]
-    /** the values, their bits as they were ingested: -0 and a NaN's payload survive */
+    /** unix milliseconds, in the order of their times */
+    times: Float64Array
+    /** the values, whose bytes keep each one's bits: -0 and a NaN's payload survive */
     values: Float64Array
 }
 ```
 
-## Condition
+A series as a read gives it: its samples as two columns.
+
+## Percentile
 
 ```ts
-class Condition {
-    readonly kind: 'one_of' | 'none_of' | 'prefix'
-    readonly values: readonly string[]
+type Percentile = 'p50' | 'p75' | 'p90' | 'p95' | 'p99' | 'p99.9' | (`p${number}` & Record<never, never>)
+```
+
+p and a rank: 'p95', 'p99.9'. The ranks offered are those asked most; any other is written the same way.
+
+## Op
+
+```ts
+type Op = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'increase' | 'rate' | 'delta' | 'first' | 'last' | Percentile
+```
+
+What a bucket answers: count … last, or a percentile; rate is a second's increase.
+
+## AggregateQuery
+
+```ts
+interface AggregateQuery<O extends Op = Op> extends Query {
+    /** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
+    every?: Duration | undefined
+    op: O
+    /** the labels a group keeps; without by and without, every series of a name is one group */
+    by?: readonly string[] | undefined
+    /** the labels a group leaves out, keeping every other; [] keeps every series apart */
+    without?: readonly string[] | undefined
+    /** a timer's percentile also gives a point between its bounds, interpolated: an estimate */
+    estimate?: boolean | undefined
 }
 ```
 
-What a label's value must be beyond equality, made by oneOf, noneOf or
-prefix: an object of the SDK's own, so that a stored value is never read as
-a query.
+An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
 
-## oneOf
+## ValueBucket
 
 ```ts
-function oneOf(...values: string[]): Condition
+interface ValueBucket extends Spanned {
+    value: number
+}
 ```
 
-The label is one of the values.
+A bucket of count … last: its one exact value.
 
-## noneOf
+## PercentileBucket
 
 ```ts
-function noneOf(...values: string[]): Condition
+interface PercentileBucket extends Spanned {
+    value?: number
+    lower?: number
+    /** Infinity past the last bound */
+    upper?: number
+    estimate?: number
+}
 ```
 
-The label is none of the values, or the series has none.
+A bucket of a percentile: a gauge's sample at the rank, as value, or a
+timer's bucket of its spread that holds it, from lower to upper, and with
+estimate asked a point between them.
 
-## prefix
+## Bucket
 
 ```ts
-function prefix(start: string): Condition
+type Bucket<O extends Op = Op> = O extends Percentile ? PercentileBucket : ValueBucket
 ```
 
-The label's value begins with the prefix.
+A bucket of an aggregate of op: a value, or what a percentile gives.
+
+## Aggregate
+
+```ts
+interface Aggregate<O extends Op = Op> {
+    name: string
+    /** the labels by kept or without left */
+    labels: Labels
+    /** a bucket without samples is left out */
+    buckets: Bucket<O>[]
+}
+```
+
+## Newest
+
+```ts
+interface Newest {
+    name: string
+    labels: Labels
+    at: Date
+    value: number
+}
+```
+
+A series' newest sample in the range.
 
 ## Plan
 
 ```ts
 interface Plan {
     series: number
-    blocks: number
-    /** the blocks an aggregate answers from their summaries, decoding none of their samples */
-    summarized: number
     bytes: number
     decoded: number
-    limits: {
-        series: number
-        blocks: number
-        bytes: number
-        decoded: number
-        answered: number
-    }
-    /** the limit the call would reach, which it would end with; undefined when it fits */
-    stops: LimitError | undefined
+    exceeds: {
+        limit: string
+        wanted: number
+        bound: number
+    } | undefined
 }
 ```
 
-What a read or an aggregate would spend, each use beside its limit.
+What a read or an aggregate would spend of each bound, and the bound it would stop at.
 
-## Range
+## PageOptions
 
 ```ts
-interface Range {
-    name?: string
-    /** labels a series holds, each exactly */
-    match?: Labels
-    /**
-     * labels under a condition: `{ status: oneOf('500', '502'), env: noneOf('dev'), host: prefix('api-') }`
-     * a plain value is equality. A range of noneOf alone is refused, since it would scan every series.
-     */
-    where?: Record<string, Condition | string>
-    /** the span before now the range covers: '1h', '15m', or milliseconds */
-    since?: Duration
-    /** the range's start, included; the oldest sample kept when absent */
-    from?: Time
-    /** excluded; the open end when absent */
-    to?: Time
-    /** each narrows the server's: series matched, blocks decoded, bytes fetched, samples decoded, answered */
-    limits?: {
-        series?: number
-        blocks?: number
-        bytes?: number
-        decoded?: number
-        answered?: number
-    }
+interface PageOptions {
+    prefix?: string | undefined
+    /** 1000 unless given, 10,000 at most */
+    limit?: number | undefined
+    /** a page's next, so that a page's options can be the one before's */
+    after?: string | undefined
 }
 ```
 
-## AggregateOp
+A page's options: a prefix, how many, and where the page before ended.
+
+## NameInfo
 
 ```ts
-type AggregateOp = 'count' | 'sum' | 'min' | 'max' | 'avg' | 'increase' | 'rate' | 'delta' | 'first' | 'last'
-```
-
-Each computed exactly and rounded once, a group's too: avg is the mean of
-every sample, rate a counter's increase a second, delta how far a gauge
-moved, first and last the bucket's first and last samples, which a group
-adds up. An increase, a rate or a delta counts each step between samples in
-the bucket it ends in, so buckets add up to the whole range.
-
-## AggregateRange
-
-```ts
-interface AggregateRange extends Range {
-    width: Duration
-    op: AggregateOp
-    by?: string[]
-    without?: string[]
-    /** how far before the range an increase, a rate or a delta looks for its first step: one width when absent */
-    lookback?: Duration
+interface NameInfo {
+    name: string
+    kind: SeriesKind
+    seriesCount: number
+    unit: string
+    help: string
+    keep: DurationText
+    /** its oldest sample, or where its keep begins while it holds samples from before */
+    retainedFrom: Date
+    newest: Date
 }
 ```
 
-An aggregate's buckets and, to join series, what groups them: by these
-labels, or without them, each group one result. `by: []` joins every series
-of a name. A group never joins two names or two kinds.
+A name the store holds samples of.
 
-## Bucket
+## NamePage
 
 ```ts
-interface Bucket {
-    from: Date
-    to: Date
-    /** the samples it counted */
-    count: number
-    /** the resets among them, a counter's */
-    resets: number
-    /** computed exactly and rounded once */
-    value: number
-    /** the value overflowed to an infinity */
-    overflow: boolean
-    /** retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first */
-    partial: boolean
-    /** its first step started from a sample before the range */
-    lookback: boolean
+interface NamePage {
+    names: NameInfo[]
+    /** where the next page starts; none on the last */
+    next?: string
+}
+```
+
+## LabelPage
+
+```ts
+interface LabelPage {
+    labels: string[]
+    next?: string
+}
+```
+
+## ValuePage
+
+```ts
+interface ValuePage {
+    values: string[]
+    next?: string
 }
 ```
 
@@ -191,35 +258,33 @@ interface Bucket {
 
 ```ts
 interface Description {
-    /** 32 bytes of UTF-8 at most */
     unit?: string
-    /** 1024 bytes of UTF-8 at most */
     help?: string
 }
 ```
 
-What the values of a metric's name mean: their unit, such as 'ms', 'bytes' or '%', and a line of help.
+A name's unit and help; empty ones remove them.
 
-## Aggregate
+## Damage
 
 ```ts
-interface Aggregate {
+interface Damage {
     name: string
-    kind: SeriesKind
     labels: Labels
-    /** only buckets holding samples */
-    buckets: Bucket[]
+    error: string
 }
 ```
+
+A series whose bytes no longer read, which delete removes.
 
 ## Metrics
 
 ```ts
-class Metrics {
-    failures: number
-    lastFailure: Error | undefined
-}
+class Metrics {}
 ```
+
+A store's metrics: series by name and labels, their reads and aggregates,
+what the store holds of them, and the program's instruments.
 
 ### Metrics.ingest
 
@@ -227,61 +292,64 @@ class Metrics {
 ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void>
 ```
 
-Stores series and their samples, all or none; a refused series is named by its labels.
+Writes series and their samples, every one or none: a refused series names itself.
 
 ### Metrics.read
 
 ```ts
-read(range: Range): Promise<Series[]>
+read(query: Query): Promise<Series[]>
 ```
 
-Every sample of the series a range matches, exactly, read whole before the first leaves the server.
+The samples of each series the query finds, in its range: whole, or a limit error naming its bound.
 
 ### Metrics.latest
 
 ```ts
-latest(range: Range): Promise<Series[]>
+latest(query: Query): Promise<Newest[]>
 ```
 
-The newest sample of each series a range matches, one sample a series.
-The range bounds how old it may be: a series without one in it is left
-out, so a series that stopped reads as absent rather than as its last value.
+The newest sample of each series the query finds, when it has one in the range.
 
 ### Metrics.aggregate
 
 ```ts
-aggregate(range: AggregateRange): Promise<Aggregate[]>
+aggregate<O extends Op>(query: AggregateQuery<O>): Promise<Aggregate<O>[]>
 ```
 
-Buckets of a width from the range's start, each computed exactly: a
-counter's increase counts its resets, and the first bucket the step from
-the last sample a lookback before the range.
+The buckets of each group of the series the query finds, each one exact
+value of op, rounded once; a bucket of count … last has its value.
 
 ### Metrics.explain
 
 ```ts
-explain(range: Range & Partial<Pick<AggregateRange, 'width' | 'op' | 'by' | 'without' | 'lookback'>>): Promise<Plan>
+explain(query: Query & Partial<Omit<AggregateQuery, keyof Query>>): Promise<Plan>
 ```
 
-What read(range), or aggregate(range) when it names an op, would spend
-of its limits, found without a payload fetched or a sample decoded: the
-series, the blocks, those an aggregate answers from their summaries, the
-bytes and the samples, beside the limits; stops is the LimitError the
-call would end with, undefined when it fits.
+What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample.
 
-### Metrics.drop
+### Metrics.names
 
 ```ts
-drop(series: {
-        name: string
-        labels?: Labels
-    }): Promise<{
-        found: boolean
-        unreadableGroups: number
-    }>
+names(options?: PageOptions): Promise<NamePage>
 ```
 
-Removes one series and everything it holds, whether it still reads or not.
+A page of the names the store holds samples of, in the byte order of their text.
+
+### Metrics.labelNames
+
+```ts
+labelNames(name: string, options?: PageOptions): Promise<LabelPage>
+```
+
+A page of a name's label names, but the store's own.
+
+### Metrics.labelValues
+
+```ts
+labelValues(name: string, label: string, options?: PageOptions): Promise<ValuePage>
+```
+
+A page of the values a label of a name's series holds.
 
 ### Metrics.describe
 
@@ -289,8 +357,9 @@ Removes one series and everything it holds, whether it still reads or not.
 describe(name: string, description: Description): Promise<void>
 ```
 
-Keeps what a name's values mean in place of what they meant; with
-neither a unit nor help it removes it. Every series of the name shares it.
+Sets a name's unit and help in place of what it had, as the Rust metrics
+crate's describe_counter! does: what is not given is removed, and `{}`
+removes both. They belong to the name, so a delete of its series leaves them.
 
 ### Metrics.description
 
@@ -301,45 +370,33 @@ description(name: string): Promise<{
     }>
 ```
 
-What describe kept for a name, empty strings when it has none.
+A name's unit and help; both empty when nothing described it.
 
-### Metrics.counter
-
-```ts
-counter(name: string, description?: Description): Counter
-```
-
-A counter: its total since this process started, ingested every flush;
-a restart is a reset. A description is written at the next flush.
-
-### Metrics.gauge
+### Metrics.delete
 
 ```ts
-gauge(name: string, description?: Description): Gauge
+delete(series: {
+        name: string
+        labels: Record<string, LabelValue>
+    }): Promise<boolean>
 ```
 
-A gauge: its value at each flush.
+Removes the one series of exactly this name and these labels, no more
+and no fewer, with every sample it holds, whether they still read or
+not; true when the store held it. `labels: {}` is the series without labels.
 
-### Metrics.gaugeFunc
+### Metrics.damaged
 
 ```ts
-gaugeFunc(name: string, read: () => number | Promise<number>, description?: Description): void
+damaged(): Promise<Damage[]>
 ```
 
-A gauge read by a function at each flush; a function that throws skips that sample.
+The series whose bytes no longer read, 1000 at most, each with what
+broke; deleting them shows the next.
 
-### Metrics.timer
-
-```ts
-timer(name: string, description?: Description): Timer
-```
-
-A timer: how many durations it measured and their sum in milliseconds,
-ingested every flush as the counters name_count and name_sum, and the
-longest since the flush before as the gauge name_max, left out when it
-measured none. A range's mean is its sum's increase over its count's.
-Given a description, its sum and longest are in milliseconds, whatever
-unit it names.
+    for (let damaged = await store.metrics.damaged(); damaged.length > 0; damaged = await store.metrics.damaged()) {
+        for (const series of damaged) await store.metrics.delete(series)
+    }
 
 ### Metrics.flush
 
@@ -347,37 +404,213 @@ unit it names.
 flush(): Promise<void>
 ```
 
-Ingests every instrument's value now, as the timer does every 15 s. A
-series the store refuses is left out from then on, said once, so that one
-bad instrument keeps no other out.
+Sends what every instrument changed and has the store write its totals now, as it does every 15 seconds.
 
-### Metrics.stop
+### Metrics.counter
+
+```ts
+counter<L extends string = string>(name: string, options?: InstrumentOptions): Counter<L>
+```
+
+A total that only goes up, which the store keeps: processes counting
+into one series count into one total. Its label names, when given,
+`counter<'route' | 'status'>(…)`, are the only ones `with` compiles with.
+
+### Metrics.gauge
+
+```ts
+gauge<L extends string = string>(name: string, options?: InstrumentOptions): Gauge<L>
+```
+
+A value that goes up and down: a queue's length, a temperature.
+
+### Metrics.gaugeFunc
+
+```ts
+gaugeFunc(name: string, read: () => number | Promise<number>, options?: GaugeFuncOptions): void
+```
+
+A gauge whose value read gives every 15 seconds, of the set of labels
+given; another set of the name takes a function of its own, and a set
+is read by one. It may be async, is never called again while a call of
+it runs, and an error or an answer that is not a number writes nothing
+that time, said once while it repeats.
+
+    store.metrics.gaugeFunc('queue_depth', () => emails.depth(), { labels: { queue: 'emails' } })
+
+### Metrics.timer
+
+```ts
+timer<L extends string = string>(name: string, options?: TimerOptions): Timer<L>
+```
+
+How many things took how long: their count, sum and longest in milliseconds, and with buckets their spread.
+
+### Metrics.histogram
+
+```ts
+histogram<L extends string = string>(name: string, options?: HistogramOptions): Histogram<L>
+```
+
+A timer of numbers that are not durations: a response's size in bytes.
+
+## LabelValue
+
+```ts
+type LabelValue = string | number | boolean
+```
+
+A label's value as an instrument takes it: a number or a boolean is kept as its text.
+
+## InstrumentOptions
+
+```ts
+interface InstrumentOptions {
+    /** the unit of its values, 32 bytes at most: 'bytes', '%' */
+    unit?: string | undefined
+    /** a line on what it means, 1024 bytes at most */
+    help?: string | undefined
+    /** how long its name's samples stay, as ingest takes it */
+    keep?: Duration | undefined
+}
+```
+
+What an instrument is told when it is made.
+
+## Buckets
+
+```ts
+type Buckets = readonly number[] | 'exponential'
+```
+
+A timer's or a histogram's upper bounds, ascending, or the store's grid.
+
+## TimerOptions
+
+```ts
+interface TimerOptions {
+    help?: string | undefined
+    keep?: Duration | undefined
+    /** the upper bounds of its spread, to which the store adds +Inf, or 'exponential' */
+    buckets?: Buckets | undefined
+}
+```
+
+## HistogramOptions
+
+```ts
+interface HistogramOptions extends InstrumentOptions {
+    buckets?: Buckets | undefined
+}
+```
+
+## GaugeFuncOptions
+
+```ts
+interface GaugeFuncOptions extends InstrumentOptions {
+    /** the set of labels its function reads; another set of the name takes a function of its own */
+    labels?: InstrumentLabels | undefined
+}
+```
+
+## InstrumentLabels
+
+```ts
+type InstrumentLabels<L extends string = string> = {
+    readonly [K in L]?: LabelValue
+}
+```
+
+The labels `with` takes: any, or, when the instrument was made with their
+names, `counter<'route' | 'status'>(…)`, those alone, checked as they are written.
+
+## Instruments
+
+```ts
+class Instruments {}
+```
+
+The instruments of a store's handle, and what sends their changes. A store
+has one; `store.metrics` makes its instruments through it.
+
+### Instruments.declare
+
+```ts
+declare(name: string, form: Form, options: HistogramOptions, read?: boolean): Declared
+```
+
+An instrument of name, made the first time, read by functions when
+`read` says so; another form or other options than it has are refused.
+
+### Instruments.reader
+
+```ts
+reader(name: string, labels: Record<string, string>, options: InstrumentOptions, read: () => unknown): void
+```
+
+A gauge of name whose set of labels `read` gives every 15 seconds; each
+set has a function of its own, made once while the store is open.
+
+### Instruments.setOf
+
+```ts
+setOf(instrument: Declared, labels: Record<string, string>): LabelSet
+```
+
+The set of labels of an instrument, made the first time; past the sets it holds, its __overflow.
+
+### Instruments.pending
+
+```ts
+pending(set: LabelSet): Change | undefined
+```
+
+What calls changed of a set since the last batch, if any.
+
+### Instruments.change
+
+```ts
+change(set: LabelSet): Change
+```
+
+What a call changes of a set, kept for the next batch.
+
+### Instruments.flush
+
+```ts
+flush(): Promise<boolean>
+```
+
+Sends what changed now and has the store write its totals; resolves
+once it has, and says whether there was anything to send it with. One
+the store cannot be reached for fails as a call does, and what it
+carried goes once the store can be. What the store refused since the
+flush before, and what a store that started again may have lost, fail
+it, each once.
+
+### Instruments.stop
 
 ```ts
 stop(): Promise<void>
 ```
 
-Stops flushing every 15 s and ingests the instruments' last values; the store's close calls it.
-
-### Metrics.instruments
-
-```ts
-get instruments(): number
-```
+Stops the timers, sends what is left, and ends the stream; the store's close calls it.
 
 ## Counter
 
 ```ts
-class Counter {}
+class Counter<L extends string = string> {}
 ```
+
+A total that only goes up, which the store keeps: processes counting into one series count into one total.
 
 ### Counter.with
 
 ```ts
-with(labels: Labels): Counter
+with(labels: InstrumentLabels<L>): Counter<L>
 ```
 
-The counter of these labels besides its own: the same labels in any order are one series.
+The same counter with more labels, a series of its own; the same labels in any order are one.
 
 ### Counter.inc
 
@@ -391,16 +624,20 @@ inc(): void
 add(n: number): void
 ```
 
+Adds n, a finite number of 0 or more; add(0) makes the set of labels known with a total of zero.
+
 ## Gauge
 
 ```ts
-class Gauge {}
+class Gauge<L extends string = string> {}
 ```
+
+A value that goes up and down, written while this program is connected.
 
 ### Gauge.with
 
 ```ts
-with(labels: Labels): Gauge
+with(labels: InstrumentLabels<L>): Gauge<L>
 ```
 
 ### Gauge.set
@@ -414,6 +651,8 @@ set(value: number): void
 ```ts
 add(n: number): void
 ```
+
+Moves it by n, from zero when it was never set.
 
 ### Gauge.inc
 
@@ -430,26 +669,24 @@ dec(): void
 ## Timer
 
 ```ts
-class Timer {}
+class Timer<L extends string = string> {}
 ```
 
-A timer of labels; record and measure add a duration to the next flush.
+How many things took how long: their count, sum and longest in milliseconds, and their spread over its buckets.
 
 ### Timer.with
 
 ```ts
-with(labels: Labels): Timer
+with(labels: InstrumentLabels<L>): Timer<L>
 ```
-
-The timer of these labels besides its own: the same labels in any order are one series.
 
 ### Timer.record
 
 ```ts
-record(d: Duration): void
+record(duration: Duration): void
 ```
 
-Adds one duration: milliseconds, their fractions kept, or text such as '250ms'.
+Records a duration measured elsewhere: milliseconds, as performance.now() counts them, or text such as '250ms'.
 
 ### Timer.measure
 
@@ -457,9 +694,63 @@ Adds one duration: milliseconds, their fractions kept, or text such as '250ms'.
 measure<R>(fn: () => R | Promise<R>): Promise<R>
 ```
 
-Runs fn and records how long it took, whether it returned or threw: its
-result comes back, and what it threw is thrown again.
+Runs fn, awaits what it returns, returns or throws what it does, and
+records how long it took either way.
 
     const user = await latency.with({ route: '/users' }).measure(() => users.get(id))
 
-<!-- Generated by task reference from sdk/js/src/metrics.ts. Edit the doc comments there, not this file. -->
+### Timer.start
+
+```ts
+start(): Timing
+```
+
+A timing that records when it stops, for a span that is no one function.
+
+## Timing
+
+```ts
+class Timing {}
+```
+
+A span a timer measures from its start; stop records it, once.
+
+### Timing.stop
+
+```ts
+stop(): number
+```
+
+Records how long since the timing started, the first time it is called; its milliseconds.
+
+## Histogram
+
+```ts
+class Histogram<L extends string = string> {}
+```
+
+A timer of numbers that are not durations: a response's size in bytes.
+
+### Histogram.with
+
+```ts
+with(labels: InstrumentLabels<L>): Histogram<L>
+```
+
+### Histogram.record
+
+```ts
+record(value: number): void
+```
+
+Records a value of 0 or more.
+
+## exponentialBuckets
+
+```ts
+function exponentialBuckets(start: number, factor: number, count: number): number[]
+```
+
+Upper bounds from start, each factor times the one before: exponentialBuckets(1, 2, 14) is 1, 2, 4 … 8192.
+
+<!-- Generated by task reference from sdk/js/src/metrics.ts, sdk/js/src/instruments.ts. Edit the doc comments there, not this file. -->

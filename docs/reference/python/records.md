@@ -2,266 +2,398 @@
 
 Every public class, function and type of the Records engine in `tinystore`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Go](../go/records.md) pages list the same API.
 
-## Record
+## Event
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Record:
-    at: int  # unix nanoseconds
-    stream: str
+class Event:
+    name: str  # what happened; log for a logger's line
+    fields: Mapping[str, Any] = field(default_factory=dict[str, Any])  # what happened, any object JSON writes
+    at: datetime | None = None
+    context: Mapping[str, Any] = field(default_factory=dict[str, Any])  # what it happened in: who asked, which request
+    level: EventLevel | None = None
+    message: str | None = None
+    trace_id: str | None = None  # 32 hex digits: the current trace's unless given
+    span_id: str | None = None  # 16 hex digits
+    stream: str | None = None  # the stream a read found it in
+```
+
+An event: what an append writes, and what a read gives back.
+
+A read fills every field; an append gives a name and what it knows, its
+time now unless given, from what the stream keeps to ten minutes ahead.
+
+## EventPage
+
+```python
+@dataclass(frozen=True, slots=True)
+class EventPage:
+    events: list[Event]
+    next: str | None
+```
+
+A page of events, and the page after it; the last page has none.
+
+## Top
+
+```python
+@dataclass(frozen=True, slots=True)
+class Top:
+    value: Any
+    count: int
+```
+
+One of a key's most frequent values, and how many events hold it.
+
+## Stats
+
+```python
+@dataclass(frozen=True, slots=True)
+class Stats:
+    samples: int
+    sum: int | float
+    min: int | float
+    max: int | float
+    avg: float
+```
+
+A field's numbers in a row: samples are the numbers, which avg divides sum by.
+
+## Row
+
+```python
+@dataclass(frozen=True, slots=True)
+class Row:
+    at: datetime  # where the row's span begins, counted from 1970 in UTC
+    count: int
+    by: dict[str, Any]
+    stats: dict[str, Stats]
+    distinct: dict[str, int]
+```
+
+A row of an aggregate: a span of every and a value of each key of by, with its count.
+
+## StreamInfo
+
+```python
+@dataclass(frozen=True, slots=True)
+class StreamInfo:
     name: str
-    level: int | None
-    body: str | bytes | None
-    trace_id: bytes | None
-    span_id: bytes | None
-    context: list[tuple[str, str | bytes]]
-    attrs: list[tuple[str, str | bytes]]
+    keep: str
+    retained_from: datetime  # its oldest event, or where its keep begins while it holds older
+    newest: datetime
 ```
 
-A record as it was kept; a field's value is the JSON it was written as, spelled as given.
+A stream with events: what it keeps, where that begins, and its newest event's time.
 
-## fields
-
-```python
-def fields(pairs: Iterable[tuple[str, str | bytes]]) -> dict[str, Any]: ...
-```
-
-A record's fields, its attrs or its context, as a dict, each value as json.loads reads it.
-
-The last of a repeated key is kept, and bytes that are not UTF-8 read
-with U+FFFD in their place. The pairs keep what json.loads may not:
-1.2300 as written.
-
-    async for record in store.records.all(since="1h", streams=["readers"]):
-        page = tinystore.fields(record.attrs)["page"]
-
-## trace
-
-```python
-@contextmanager
-def trace(
-    trace_id: bytes | str,
-    span_id: bytes | str | None = None,
-) -> Generator[None]: ...
-```
-
-Runs a block in a trace, as Go's records.WithTrace carries one in a context.
-
-A handler's lines, and records appended without a trace_id of their own,
-inside the block and in the tasks it starts, take its trace and span:
-
-    with tinystore.trace(trace_id, span_id):
-        log.info("charged")  # a record of that trace and span
-
-## context
-
-```python
-@contextmanager
-def context(**fields: object) -> Generator[None]: ...
-```
-
-Runs a block whose log lines carry fields in their context, as Bun's log.with and Go's Logger.With do.
-
-A handler's lines inside the block, and in the tasks it starts, take the
-fields after their logger's name; an inner block adds its own, a field
-named again taking its newer value:
-
-    with tinystore.context(request_id=request_id):
-        log.info("charged", extra={"amount": 10})  # request_id in the line's context
-
-## Cursor
+## PollBatch
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Cursor:
-    segment: int = 0
-    row: int = 0
+class PollBatch:
+    events: list[Event]
+    cursor: str  # where the next poll begins, kept once these events are safe
+    expired: int  # the events keep removed before the cursor reached them
 ```
 
-Where a follower stands in the sealed segments, kept by the caller between follows.
+Every event once, a batch a call: its events, where the next poll begins, and what expired before it.
 
-## Records
+## TailBatch
 
 ```python
-class Records:
+@dataclass(frozen=True, slots=True)
+class TailBatch:
+    events: list[Event]
+    missed: int
+```
+
+A tail's batch: the events written since the last, and how many it missed.
+
+## Damage
+
+```python
+@dataclass(frozen=True, slots=True)
+class Damage:
+    part: Literal['head row', 'segment']
+    id: int
+    stream: str
+    first: datetime
+    last: datetime
+    error: str
+```
+
+A head row or a segment that no longer reads, as damaged lists it and drop takes it.
+
+## Query
+
+```python
+class Query(Counted, total=False):
+    newest: bool  # newest first; oldest first without it
+    limit: int  # the events of a page: 1000, and 10,000 at most
+    after: str  # a page's next, with the rest of the query as it was
+```
+
+What a list finds, and how its page reads.
+
+## Events
+
+```python
+class Events(_Reads):
     ...
 ```
 
-### Records.append
+A stream of events: written with append, which waits for the file, and read back.
+
+### Events.append
 
 ```python
-async def append(*records: Mapping[str, Any]) -> None: ...
-```
-
-Appends records in one transaction, all or none; a refused one names itself as call.
-
-A record is a mapping of at (a datetime or unix nanoseconds, now when
-absent), stream, name, level, body, trace_id, span_id, context, attrs.
-A record of no trace_id takes the trace the call runs in, from trace().
-
-### Records.scan
-
-```python
-async def scan(
+async def append(
+    name_or_events: str | Sequence[Event],
+    fields: Mapping[str, Any] | None = None,
+    /,
     *,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    streams: Iterable[str] | None = None,
-    names: Iterable[str] | None = None,
-    min_level: str | int | None = None,
-    trace_id: bytes | str | None = None,
-    attrs: Fields | None = None,
-    context: Fields | None = None,
-    search: str | None = None,
-    newest: bool = False,
-    limit: int | None = None,
-    after: str | None = None,
-) -> Page[Record, str]: ...
+    at: datetime | None = None,
+    context: Mapping[str, Any] | None = None,
+    level: EventLevel | None = None,
+    message: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+) -> None: ...
 ```
 
-One page of the records a query matches, from one snapshot, in event-time order.
+Writes an event, or a list of them whole or not at all.
 
-Over the last ``since``, or from ``from_`` to ``to``, in datetimes or
-unix nanoseconds. The page's next, while a limit or a budget ended it
-early, is passed back as ``after`` with the same query:
+It returns once they are written, and a read finds them at once. A
+refused event names its place in the list and its name.
 
-    page = await store.records.scan(since="1h", min_level="warn")
-    more = await store.records.scan(since="1h", min_level="warn", after=page.next)
-
-### Records.all
+### Events.append_lines
 
 ```python
-async def all(
-    *,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    streams: Iterable[str] | None = None,
-    names: Iterable[str] | None = None,
-    min_level: str | int | None = None,
-    trace_id: bytes | str | None = None,
-    attrs: Fields | None = None,
-    context: Fields | None = None,
-    search: str | None = None,
-    newest: bool = False,
-    limit: int | None = None,
-) -> AsyncIterator[Record]: ...
+async def append_lines(lines: list[Line]) -> None: ...
 ```
 
-Every record a query matches, a page at a time.
+A logger's lines, each an event of this stream.
 
-### Records.follow
+### Events.lines
 
 ```python
-async def follow(
-    cursor: Cursor | None = None,
-    limit: int | None = None,
-) -> tuple[list[Record], Cursor, int]: ...
+def lines() -> Lines: ...
 ```
 
-The sealed records after a cursor, the cursor to follow from next, and the segments expired first.
+A writer of another program's output into this stream, each line an event at the time it arrived.
 
-### Records.lines
+A stack trace's or a JSON value's lines make one, and a write never waits:
+
+    async with store.events("worker").lines() as out:
+        async for chunk in child.stdout:
+            await out.write(chunk)
+
+## AllEvents
 
 ```python
-def lines(stream: str, *, buffer: int = 1 << 20) -> Lines: ...
+class AllEvents(_Reads):
+    ...
 ```
 
-A writer of another program's output that never waits, dropping and counting what does not fit.
+Every stream's events, to read: ``store.events()``.
 
-### Records.handler
+### AllEvents.streams
 
 ```python
-def handler(
-    stream: str,
-    level: int = logging.NOTSET,
-    *,
-    buffer: int = 1024,
-    console: Console | None = None,
-    time: ConsoleTime | None = None,
-    hide_stream: bool = False,
-    to: TextIO | None = None,
-    redact: Iterable[str] = (),
-    keep_url_passwords: bool = False,
-    replace: Callable[[str, Any], Any] | None = None,
-    env: FromEnv | bool = True,
-    source: bool = False,
-) -> Handler: ...
+async def streams() -> list[StreamInfo]: ...
 ```
 
-A logging.Handler whose lines reach the console as they are logged and the stream once a second.
+Every stream with events, by name, with what it keeps, where that begins and its newest event's time.
 
-It never makes the logger wait. console is pretty on a terminal and
-JSON otherwise when None, "off" for none. redact hides, in the store
-and on the console, the fields whose keys name a secret, "api key"
-hiding api_key and apiKey, and tinystore.SECRETS the usual ones; a
-URL's password is hidden unless keep_url_passwords. LOG_LEVEL,
-LOG_FORMAT and LOG_TIME win over the arguments, or those after env's
-prefix, and env=False reads none; source adds where a line was logged.
-
-### Records.damaged
+### AllEvents.poll
 
 ```python
-async def damaged() -> list[dict[str, Any]]: ...
+async def poll(cursor: str | None = None, *, limit: int | None = None) -> PollBatch: ...
 ```
 
-The rows the server's records have met that no longer read.
+Every event once, a batch a call, from a cursor the program keeps, the oldest event kept without one.
 
-### Records.drop
+With no event past the cursor, the batch is empty and its cursor the
+one given.
+
+### AllEvents.damaged
 
 ```python
-async def drop(damage: Mapping[str, Any]) -> None: ...
+async def damaged() -> list[Damage]: ...
 ```
 
-Removes a damaged row, a repair an admin connection alone may make.
+What reads met that no longer reads, which drop removes: each head row and segment with its times.
 
-### Records.stop
+### AllEvents.drop
+
+```python
+async def drop(damage: Damage) -> None: ...
+```
+
+Removes a head row or a segment that damaged listed, so that the reads over it work again.
+
+## Lines
+
+```python
+class Lines:
+    ...
+```
+
+A writer of another program's output into a stream, as ``events.lines()`` begins it.
+
+Each line becomes an event, and a write never waits. It sends whole
+lines, so that what it has no room for, dropped counts as lines.
+
+### Lines.dropped
+
+```python
+@property
+def dropped() -> int: ...
+```
+
+The lines dropped: past what the writer holds, and, once it ended, by the store.
+
+### Lines.write
+
+```python
+async def write(chunk: bytes | str) -> None: ...
+```
+
+Takes a piece of output, cut anywhere; it never waits.
+
+### Lines.end
+
+```python
+async def end() -> None: ...
+```
+
+Ends the writer: what it holds goes, a last line without its newline too, once the store wrote them.
+
+## secrets
+
+```python
+secrets = SECRETS
+```
+
+The names redact takes to hide the usual secrets: password, token, api key, connection string and the rest.
+
+## Logger
+
+```python
+class Logger:
+    ...
+```
+
+A logger of one stream, as ``store.logger`` and ``tinystore.logger`` make it.
+
+``info``, ``warning`` and the rest return at once; a line goes to the
+console as it is logged, and when the logger is a store's becomes an
+event named log, its message the line's text, the call's fields its
+fields and bind's its context.
+
+### Logger.stream
+
+```python
+@property
+def stream() -> str: ...
+```
+
+### Logger.dropped
+
+```python
+@property
+def dropped() -> int: ...
+```
+
+The lines dropped since the logger began: a full buffer, or a write that failed.
+
+### Logger.debug
+
+```python
+def debug(message: str, /, **fields: Any) -> None: ...
+```
+
+### Logger.info
+
+```python
+def info(message: str, /, **fields: Any) -> None: ...
+```
+
+### Logger.warning
+
+```python
+def warning(message: str, /, **fields: Any) -> None: ...
+```
+
+### Logger.error
+
+```python
+def error(message: str, /, **fields: Any) -> None: ...
+```
+
+### Logger.exception
+
+```python
+def exception(message: str, /, **fields: Any) -> None: ...
+```
+
+An error, the exception being handled kept as its traceback under error.
+
+### Logger.event
+
+```python
+def event(name: str, /, **fields: Any) -> None: ...
+```
+
+An event of the stream: named for itself, with no level and no message, written as a line is.
+
+### Logger.bind
+
+```python
+def bind(**context: Any) -> Logger: ...
+```
+
+The logger of the same stream, buffer and console, its context these fields besides its own.
+
+### Logger.flush
+
+```python
+async def flush() -> None: ...
+```
+
+Hands what the buffer holds to the store now, as the timer does every second.
+
+### Logger.stop
 
 ```python
 async def stop() -> None: ...
 ```
 
-## SECRETS
+Hands over what the logger holds and stops its timer, as the store's close does.
+
+### Logger.take_record
 
 ```python
-SECRETS = ('password', 'passwd', 'passphrase', 'secret', 'token', 'credential', 'credentials', 'authorization', 'cookie', 'api key', 'private key', 'secret key', 'access key', 'signing key', 'encryption key', 'connection string', 'dsn')
+def take_record(record: logging.LogRecord, formatter: logging.Formatter) -> None: ...
 ```
 
-The names redact takes to hide the usual secrets, as Go's console.Secrets and Bun's secrets.
+Prints and keeps a logging record: its extra its fields, its logger's name in its context.
 
-## ConsoleHandler
+### Logger.take
 
 ```python
-class ConsoleHandler(logging.Handler):
-    ...
+def take(line: Line) -> None: ...
 ```
 
-A logging.Handler of the console alone: each record is written as it is logged, never kept.
+Prints and keeps a line made elsewhere, a logging record's: from any thread, never waiting.
 
-It writes the lines store.records.handler writes, which keeps them too:
-pretty on a terminal and one JSON object a line otherwise, on stderr
-unless to says where. LOG_LEVEL, LOG_FORMAT and LOG_TIME win over the
-arguments, or the variables of env's prefix, and env=False reads none. A
-record's logger name is its context, its extra fields its attributes, an
-exception its traceback under error. redact hides the fields whose keys
-name a secret, SECRETS the usual ones, and a URL's password is hidden
-unless keep_url_passwords; replace changes each value first; source adds
-where the line was logged.
-
-### ConsoleHandler.emit
+## logger
 
 ```python
-def emit(record: logging.LogRecord) -> None: ...
-```
-
-## handler
-
-```python
-def handler(
+def logger(
     stream: str,
-    level: int = logging.NOTSET,
     *,
+    level: Level | None = None,
     console: Console | None = None,
     time: ConsoleTime | None = None,
     hide_stream: bool = False,
@@ -269,15 +401,42 @@ def handler(
     redact: Iterable[str] = (),
     keep_url_passwords: bool = False,
     replace: Callable[[str, Any], Any] | None = None,
-    env: FromEnv | bool = True,
     source: bool = False,
-) -> ConsoleHandler: ...
+    env: str | bool = True,
+) -> Logger: ...
 ```
 
-A logging.Handler of the console alone, for a program that wants the logger and not the records.
+A logger of the console alone, for a program that wants the logger and no store:
 
-    logging.basicConfig(handlers=[tinystore.handler("app", redact=tinystore.SECRETS)], level=logging.INFO)
+    log = tinystore.logger("app", redact=tinystore.secrets)
 
-store.records.handler(stream) in its place keeps every line too.
+``store.logger("app")`` in its place keeps every line too.
 
-<!-- Generated by task reference from sdk/python/src/tinystore/records.py, sdk/python/src/tinystore/_console.py. Edit the doc comments there, not this file. -->
+## trace
+
+```python
+@contextmanager
+def trace(*, trace_id: str, span_id: str | None = None) -> Generator[None]: ...
+```
+
+Runs the block in a trace: 32 hex digits, and a span's 16.
+
+## Line
+
+```python
+@dataclass(slots=True)
+class Line:
+    at: int  # unix nanoseconds
+    stream: str
+    level: int | None = None  # absent for an event
+    event: str | None = None
+    msg: str | None = None
+    context: list[tuple[str, str]] = field(default_factory=_no_fields)
+    attrs: list[tuple[str, str]] = field(default_factory=_no_fields)
+    trace_id: str | None = None  # 32 hex digits
+    span_id: str | None = None  # 16 hex digits
+```
+
+A line as a console writes it and the store keeps it: its fields already JSON.
+
+<!-- Generated by task reference from sdk/python/src/tinystore/records.py, sdk/python/src/tinystore/logger.py, sdk/python/src/tinystore/trace.py, sdk/python/src/tinystore/_console.py. Edit the doc comments there, not this file. -->

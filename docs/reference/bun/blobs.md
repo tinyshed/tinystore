@@ -2,180 +2,345 @@
 
 Every public class, function and type of the Blobs engine in `@tinyshed/tinystore`, generated from its source. The [Blobs guide](../../blobs/README.md) explains how to use them, and the [Python](../python/blobs.md) and [Go](../go/blobs.md) pages list the same API.
 
-## BlobObject
+## Size
 
 ```ts
-interface BlobObject {
-    /** its path under the folder that returned it */
-    key: string
+type Size = number | `${number}${'KiB' | 'MiB' | 'GiB' | 'TiB'}`
+```
+
+A size in bytes: a number, or text in binary units, 64KiB or 2GiB; '2GB' does not compile.
+
+## FilesOptions
+
+```ts
+interface FilesOptions {
+    /** the term of every file written without its own; not a ceiling */
+    ttl?: Duration | undefined
+    /** the largest file a write may leave: past it, a write is refused and leaves nothing */
+    maxFileSize?: Size | undefined
+}
+```
+
+## FileInfo
+
+```ts
+interface FileInfo {
+    /** its path within the folder it was asked from */
+    path: string
     size: number
-    /** quoted, as an HTTP header carries it: equal bytes, one ETag */
+    /** the SHA-256 of its bytes in hex, quoted, as an HTTP ETag is */
     etag: string
-    contentType: string | undefined
-    modified: Date
-    /** undefined for an object that does not expire */
+    contentType: string
+    lastModified: Date
+    /** undefined for a file that does not expire */
     expires: Date | undefined
     meta: Record<string, string>
 }
 ```
 
-## PutOptions
+What a file carries: what serving it needs.
+
+## FileOptions
 
 ```ts
-interface PutOptions extends WriteOptions {
-    /** the body's length, when it cannot say itself: one that disagrees leaves nothing */
-    size?: number
-    signal?: AbortSignal
+interface FileOptions {
+    contentType?: string | undefined
+    meta?: Record<string, string> | undefined
+    /** the file's own term, from this write */
+    ttl?: Duration | undefined
+    /** the ETag of the one file this write may replace: another is ConflictError */
+    ifMatch?: string | undefined
+    /** the body's length: one longer or shorter is refused and leaves nothing */
+    size?: number | undefined
+    signal?: AbortSignal | undefined
 }
 ```
 
 ## Body
 
 ```ts
-type Body = Uint8Array | ArrayBuffer | string | Blob | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>
+type Body = string | Uint8Array | ArrayBuffer | Blob | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>
 ```
 
-What a put takes: bytes, text, a Blob or a file, or a stream of bytes.
+What a write takes: text, bytes, a Blob or a file, or a stream of bytes.
 
-## Download
+## FileListOptions
 
 ```ts
-interface Download extends BlobObject {
-    /** its bytes; a whole read whose bytes changed ends with CorruptError before its last */
-    readonly body: ReadableStream<Uint8Array>
-    bytes(): Promise<Uint8Array>
-    text(): Promise<string>
-    json(): Promise<unknown>
+interface FileListOptions {
+    /** text within the folder: 'photos/1' finds photos/10.jpg too */
+    prefix?: string | undefined
+    /** a page's next */
+    after?: string | undefined
+    /** 1000 at most, and when absent */
+    limit?: number | undefined
 }
 ```
 
-An object being read: what it is, and its bytes as a stream to consume or cancel.
-
-## Blobs
+## FilePage
 
 ```ts
-class Blobs {}
+interface FilePage {
+    files: FileInfo[]
+    /** undefined on the last page */
+    next: string | undefined
+}
 ```
 
-### Blobs.bucket
+A page of a folder's files in the byte order of their paths, and where the next starts.
+
+## Files
 
 ```ts
-bucket(name: string, options?: {
-        defaultTtl?: Duration
-        maxSize?: number
-    }): BlobBucket
-```
-
-## BlobBucket
-
-```ts
-class BlobBucket {
+class Files {
     readonly name: string
 }
 ```
 
-A bucket's objects under one folder of owners, the root when there are none.
+A named set of files by path, or a folder of it, whose calls are the
+folder's: a path in it is the folder's segments and then its own.
 
-### BlobBucket.of
-
-```ts
-of(...owners: Key[]): BlobBucket
-```
-
-The folder below this one that the owners name, each a segment: `of('users', 7)`.
-
-### BlobBucket.stat
+### Files.folder
 
 ```ts
-stat(key: string): Promise<BlobObject | undefined>
+folder(...segments: (string | number | bigint)[]): Files
 ```
 
-The object at a key, undefined when it holds none.
+The folder of these segments, one each: `folder('users', 42)` is users/42, never users/420.
 
-### BlobBucket.delete
+### Files.put
 
 ```ts
-delete(key: string, options?: Pick<WriteOptions, 'ifMatch'>): Promise<void>
+put(path: string, body: Body, options?: FileOptions): Promise<FileInfo>
 ```
 
-### BlobBucket.copy
+Writes the file whole and replaces whatever the path held, returning
+once it is on disk as the store's durability says. Nobody sees half of
+it, while it is written or after a crash.
+
+### Files.create
 
 ```ts
-copy(from: string, to: string, options?: WriteOptions): Promise<BlobObject>
+create(path: string, body: Body, options?: Omit<FileOptions, 'ifMatch'>): Promise<boolean>
 ```
 
-Writes to a key an object naming the source's bytes, which are neither read nor written.
+Writes the file only where the path holds none, and says whether it did.
 
-### BlobBucket.move
+### Files.get
 
 ```ts
-move(from: string, to: string, options?: WriteOptions): Promise<BlobObject>
+get(path: string): Promise<StoredFile | undefined>
 ```
 
-Copy and the source's removal in one write.
+What the file carries, and its bytes: a file up to about a megabyte comes
+with them, and a larger one's are read when they are read, on its ETag,
+as S3's GET with If-Match reads them. Undefined when the path holds none.
 
-### BlobBucket.usage
+### Files.head
+
+```ts
+head(path: string): Promise<FileInfo | undefined>
+```
+
+What the file carries and none of its bytes; undefined when the path holds none.
+
+### Files.delete
+
+```ts
+delete(path: string, options?: {
+        ifMatch?: string | undefined
+    }): Promise<void>
+```
+
+Deletes the file, or with ifMatch only that version of it; no file there is not an error.
+
+### Files.copy
+
+```ts
+copy(from: string, to: string, options?: {
+        ifMatch?: string | undefined
+    }): Promise<FileInfo>
+```
+
+A copy at `to` that shares the bytes, which are not copied. A file at
+`to` is ConflictError unless ifMatch names the version to replace.
+
+### Files.rename
+
+```ts
+rename(from: string, to: string, options?: {
+        ifMatch?: string | undefined
+    }): Promise<FileInfo>
+```
+
+The file moved to `to` in one write: a file there is ConflictError
+unless ifMatch names the version to replace, and none at `from` NotFoundError.
+
+### Files.expire
+
+```ts
+expire(path: string, after: Duration | Date): Promise<boolean>
+```
+
+Sets when the file expires, a span from now or a moment; says whether there was a file.
+
+### Files.list
+
+```ts
+list(options?: FileListOptions): Promise<FilePage>
+```
+
+A page of the files in the folder and in the folders in it, in the byte order of their paths.
+
+### Files.all
+
+```ts
+all(options?: {
+        prefix?: string | undefined
+    }): AsyncGenerator<FileInfo>
+```
+
+Every file of the folder, a page at a time, holding nothing between pages.
+
+### Files.usage
 
 ```ts
 usage(): Promise<{
-        objects: number
-        bytes: number
+        count: number
+        size: number
     }>
 ```
 
-The objects under this folder and their bytes, counted from their rows.
+The files in the folder and their bytes, as it is now: it counts, it does not limit.
 
-### BlobBucket.clear
+### Files.clear
 
 ```ts
 clear(): Promise<void>
 ```
 
-Removes this folder's objects and every folder's under it, at once however many.
+Removes the folder's every file and every folder in it, at once for every reader.
 
-### BlobBucket.scan
-
-```ts
-scan(options?: {
-        prefix?: string
-        after?: string
-        limit?: number
-    }): Promise<Page<BlobObject, string>>
-```
-
-A page of the objects under this folder, its folders included, in the byte order of their paths.
-
-### BlobBucket.all
+### Files.upload
 
 ```ts
-all(options?: {
-        prefix?: string
-        limit?: number
-    }): AsyncGenerator<BlobObject>
+upload(path: string, options?: FileOptions): Promise<Upload>
 ```
 
-### BlobBucket.put
+Begins a file written a piece at a time, which appears at `commit` and
+never before: `await using upload = await files.upload(path)`, and
+leaving the block without commit aborts it.
+
+## Upload
 
 ```ts
-put(key: string, body: Body, options?: PutOptions): Promise<BlobObject>
+class Upload implements AsyncDisposable {}
 ```
 
-Writes an object, returning once it is durable: whatever the key held is
-replaced at the commit, whole, and an upload that does not commit leaves
-nothing. A Blob, a file among them, gives its size and its type.
+A file written a piece at a time, as `files.upload` begins it: bytes go in
+with `write`, the file appears at `commit` and never before, and an upload
+that ends otherwise leaves nothing.
 
-### BlobBucket.get
+### Upload.write
 
 ```ts
-get(key: string, options?: {
-        offset?: number
-        length?: number
-        signal?: AbortSignal
-    }): Promise<Download | undefined>
+write(bytes: Uint8Array | string): Promise<void>
 ```
 
-Reads an object, undefined when the key holds none: what it is at once,
-and its bytes as its body is read. A range, from offset and length bytes
-long, is not checked against the object's hash.
+Takes bytes, text as UTF-8, waiting while the server catches up.
+
+### Upload.commit
+
+```ts
+commit(): Promise<FileInfo>
+```
+
+Publishes the file whole, replacing what the path held as `put` does,
+once it is on disk as the store's durability says.
+
+### Upload.abort
+
+```ts
+abort(): Promise<void>
+```
+
+Ends the upload, which leaves nothing; after `commit` it does nothing.
+
+### Upload.[Symbol.asyncDispose]
+
+```ts
+[Symbol.asyncDispose](): Promise<void>
+```
+
+## FileBytes
+
+```ts
+class FileBytes {
+    readonly size: number
+}
+```
+
+Bytes of a file, read when they are read, as a Blob's are: `stream()`, or
+all of them with `bytes()`, `text()`, `json()` or `arrayBuffer()`, which
+hold them in memory. Each read is a read of its own.
+
+### FileBytes.stream
+
+```ts
+stream(): ReadableStream<Uint8Array>
+```
+
+Its bytes as they come, the credit of each given back once it is taken.
+
+### FileBytes.bytes
+
+```ts
+bytes(): Promise<Uint8Array<ArrayBuffer>>
+```
+
+### FileBytes.arrayBuffer
+
+```ts
+arrayBuffer(): Promise<ArrayBuffer>
+```
+
+### FileBytes.text
+
+```ts
+text(): Promise<string>
+```
+
+### FileBytes.json
+
+```ts
+json(): Promise<unknown>
+```
+
+## StoredFile
+
+```ts
+class StoredFile extends FileBytes implements FileInfo {
+    readonly path: string
+    readonly etag: string
+    readonly contentType: string
+    readonly lastModified: Date
+    readonly expires: Date | undefined
+    readonly meta: Record<string, string>
+}
+```
+
+A file as `get` found it: what it carries, and its bytes. A whole read is
+checked against its SHA-256 and fails CorruptError before its last bytes
+when they changed; `slice` reads a range, which is not checked.
+
+### StoredFile.slice
+
+```ts
+slice(start?: number, end?: number): FileBytes
+```
+
+A range of its bytes, as Blob.slice takes one: an end left out is the
+file's, and a negative place counts back from it, so `slice(-500)` is the
+last 500 bytes.
 
 <!-- Generated by task reference from sdk/js/src/blobs.ts. Edit the doc comments there, not this file. -->

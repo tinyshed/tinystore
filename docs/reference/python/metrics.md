@@ -5,29 +5,46 @@ Every public class, function and type of the Metrics engine in `tinystore`, gene
 ## Series
 
 ```python
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Series:
     name: str
-    kind: str
-    labels: dict[str, str]
-    times: list[int]  # unix milliseconds, in time order
-    values: array[float]  # their bits as they were ingested: -0 and a NaN's payload survive
+    kind: SeriesKind
+    labels: Mapping[str, LabelValue] = field(default_factory=dict[str, LabelValue])
+    samples: Sequence[tuple[Time, float]] | None = None
+    times: Sequence[Time] | None = None
+    values: Sequence[float] | None = None
+    keep: Duration | None = None  # how long the name's samples stay: its own, kept in the file; unless given, what it keeps already
 ```
 
-## Bucket
+A series: what ingest writes, and what a read gives back.
+
+Ingest takes its samples as (time, value) pairs, or as times and values
+columns, a time an aware datetime or unix milliseconds. A read gives
+``times``, unix milliseconds in an ``array('q')``, and ``values``, an
+``array('d')`` whose bytes keep every value's bits: -0 and a NaN's
+payload survive.
+
+## AggregateBucket
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Bucket:
-    from_: datetime | None
-    to: datetime | None
-    count: int
+class AggregateBucket:
+    at: datetime  # where it begins
+    samples: int  # how many samples it comes from; a timer's, how many durations
     resets: int
-    value: float
-    overflow: bool
-    partial: bool  # retention cut the bucket, which counted only its samples from the cutoff on, or the step into its first
-    lookback: bool  # its first step started from a sample before the range
+    partial: bool  # its value comes from less than its span: the range, the clock or retention cut it
+    gap: bool  # its first step began before the bucket before it: a whole bucket between had no samples
+    value: float | None = None
+    lower: float | None = None
+    upper: float | None = None  # infinity past the last bound
+    estimate: float | None = None
 ```
+
+A bucket of an aggregate.
+
+A bucket of count … last has its value; a percentile's is a gauge's sample
+at the rank, or a timer's bucket of its spread that holds it, from lower
+to upper, and with estimate asked a point between them.
 
 ## Aggregate
 
@@ -35,10 +52,22 @@ class Bucket:
 @dataclass(frozen=True, slots=True)
 class Aggregate:
     name: str
-    kind: str
-    labels: dict[str, str]
-    buckets: list[Bucket]
+    labels: dict[str, str]  # the labels by kept or without left
+    buckets: list[AggregateBucket]  # a bucket without samples is left out
 ```
+
+## Point
+
+```python
+@dataclass(frozen=True, slots=True)
+class Point:
+    name: str
+    labels: dict[str, str]
+    at: datetime
+    value: float
+```
+
+A series' newest sample in the range.
 
 ## Plan
 
@@ -46,52 +75,50 @@ class Aggregate:
 @dataclass(frozen=True, slots=True)
 class Plan:
     series: int
-    blocks: int
-    summarized: int
     bytes: int
     decoded: int
-    limits: dict[str, int]
-    stops: LimitError | None
+    exceeds: Exceeds | None
 ```
 
-What a read or an aggregate would spend, each use beside its limit; stops is the limit it would reach.
+What a read or an aggregate would spend of each bound, and the bound it would stop at.
 
-## Condition
+## NameInfo
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Condition:
-    kind: Literal['one_of', 'none_of', 'prefix']
-    values: tuple[str, ...]
+class NameInfo:
+    name: str
+    kind: SeriesKind
+    series_count: int
+    unit: str
+    help: str
+    keep: str
+    retained_from: datetime  # its oldest sample, or where its keep begins while it holds samples from before
+    newest: datetime
 ```
 
-What a label's value must be beyond equality, made by one_of, none_of or prefix.
+A name the store holds samples of.
 
-An object of the SDK's own, so that a stored value is never read as a query.
-
-## one_of
+## NamePage
 
 ```python
-def one_of(*values: str) -> Condition: ...
+@dataclass(frozen=True, slots=True)
+class NamePage:
+    names: list[NameInfo]
+    next: str | None  # where the next page starts; none on the last
 ```
 
-The label is one of the values.
-
-## none_of
+## MetricsDamage
 
 ```python
-def none_of(*values: str) -> Condition: ...
+@dataclass(frozen=True, slots=True)
+class MetricsDamage:
+    name: str
+    labels: dict[str, str]
+    error: str
 ```
 
-The label is none of the values, or the series has none.
-
-## prefix
-
-```python
-def prefix(start: str) -> Condition: ...
-```
-
-The label's value begins with start.
+A series whose bytes no longer read, which delete removes.
 
 ## Metrics
 
@@ -100,153 +127,99 @@ class Metrics:
     ...
 ```
 
+A store's metrics: series by name and labels, their reads and aggregates, and the program's instruments.
+
 ### Metrics.ingest
 
 ```python
-async def ingest(*series: Mapping[str, Any]) -> None: ...
+async def ingest(series: Series | Sequence[Series]) -> None: ...
 ```
 
-Stores series and their samples, all or none; a refused series is named by its labels.
-
-A series is a name, a kind, labels when it has any, and samples as
-(time, value) pairs, or times in unix milliseconds and values:
-
-    await store.metrics.ingest({"name": "cpu", "kind": "gauge", "labels": {"host": "web-1"},
-                                "samples": [(datetime.now(UTC), 0.42)]})
+Writes series and their samples, every one or none: a refused series names itself.
 
 ### Metrics.read
 
 ```python
-async def read(
-    *,
-    name: str | None = None,
-    match: Mapping[str, str] | None = None,
-    where: Mapping[str, Condition | str] | None = None,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    limits: Mapping[str, int] | None = None,
-) -> list[Series]: ...
+async def read(**query: Unpack[SeriesQuery]) -> list[Series]: ...
 ```
 
-Every sample of the series a range matches, exactly.
-
-The series of a name, of labels, or of both, each matched exactly; over
-the last ``since``, or from ``from_`` to ``to``, in datetimes or unix
-milliseconds, ``to`` open when absent:
-
-    await store.metrics.read(name="cpu", since="1h")
-    await store.metrics.read(match={"host": "web-1"}, from_=start, to=end)
+The samples of each series the query finds, in its range: whole, or a LimitError naming its bound.
 
 ### Metrics.latest
 
 ```python
-async def latest(
-    *,
-    name: str | None = None,
-    match: Mapping[str, str] | None = None,
-    where: Mapping[str, Condition | str] | None = None,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    limits: Mapping[str, int] | None = None,
-) -> list[Series]: ...
+async def latest(**query: Unpack[SeriesQuery]) -> list[Point]: ...
 ```
 
-The newest sample of each series a range matches, one sample a series.
-
-The range bounds how old the sample may be: a series without one in
-it is left out, so a series that stopped reads as absent rather than
-as its last value:
-
-    await store.metrics.latest(name="cpu", since="5m")
+The newest sample of each series the query finds, when it has one in the range.
 
 ### Metrics.aggregate
 
 ```python
-async def aggregate(
-    *,
-    width: Duration,
-    op: Op,
-    name: str | None = None,
-    match: Mapping[str, str] | None = None,
-    where: Mapping[str, Condition | str] | None = None,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    limits: Mapping[str, int] | None = None,
-    by: Iterable[str] | None = None,
-    without: Iterable[str] | None = None,
-    lookback: Duration | None = None,
-) -> list[Aggregate]: ...
+async def aggregate(**query: Unpack[AggregateQuery]) -> list[Aggregate]: ...
 ```
 
-Buckets of a width from the range's start, each computed exactly and rounded once.
-
-avg is the mean of every sample, rate a counter's increase a second,
-delta how far a gauge moved, first and last the bucket's first and
-last samples, which a group adds up. An increase, a rate or a delta counts
-each step in the bucket it ends in, the first bucket's from the last
-sample up to lookback before the range, one width when None, so
-buckets add up to the whole range. by groups the series by those
-labels, without by every label but those, each group one result;
-``by=[]`` joins every series of a name:
-
-    await store.metrics.aggregate(name="http_requests_total", since="1d", width="1h", op="rate", by=["route"])
-
-### Metrics.drop
-
-```python
-async def drop(
-    name: str,
-    labels: Mapping[str, str] | None = None,
-) -> tuple[bool, int]: ...
-```
-
-Removes one series and everything it holds: whether it was there, and the unreadable groups removed.
+The buckets of each group of the series the query finds, each one exact value of op, rounded once.
 
 ### Metrics.explain
 
 ```python
-async def explain(
-    *,
-    name: str | None = None,
-    match: Mapping[str, str] | None = None,
-    where: Mapping[str, Condition | str] | None = None,
-    since: Duration | None = None,
-    from_: datetime | int | None = None,
-    to: datetime | int | None = None,
-    limits: Mapping[str, int] | None = None,
-    width: Duration | None = None,
-    op: Op | None = None,
-    by: Iterable[str] | None = None,
-    without: Iterable[str] | None = None,
-    lookback: Duration | None = None,
-) -> Plan: ...
+async def explain(**query: Unpack[AggregateQuery]) -> Plan: ...
 ```
 
-What read, or aggregate when op is given, would spend of its limits, without reading a sample.
+What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample.
 
-The series, the blocks, those an aggregate answers from their
-summaries, the bytes and the samples, beside the limits; stops is the
-LimitError the call would end with, None when it fits.
+### Metrics.names
+
+```python
+async def names(
+    *,
+    prefix: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
+) -> NamePage: ...
+```
+
+A page of the names the store holds samples of, in the byte order of their text.
+
+### Metrics.label_names
+
+```python
+async def label_names(
+    name: str,
+    *,
+    prefix: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
+) -> LabelPage: ...
+```
+
+A page of a name's label names, but the store's own.
+
+### Metrics.label_values
+
+```python
+async def label_values(
+    name: str,
+    label: str,
+    *,
+    prefix: str | None = None,
+    limit: int | None = None,
+    after: str | None = None,
+) -> ValuePage: ...
+```
+
+A page of the values a label of a name's series holds.
 
 ### Metrics.describe
 
 ```python
-async def describe(
-    name: str,
-    *,
-    unit: str | None = None,
-    help: str | None = None,
-) -> None: ...
+async def describe(name: str, *, unit: str = '', help: str = '') -> None: ...
 ```
 
-Keeps what a name's values mean in place of what they meant; with neither it removes it.
+Sets a name's unit and help in place of what it had: what is not given is removed.
 
-Every series of the name shares it:
-
-    await store.metrics.describe("query_ms", unit="ms", help="How long a query took.")
+They belong to the name, so a delete of its series leaves them.
 
 ### Metrics.description
 
@@ -254,7 +227,33 @@ Every series of the name shares it:
 async def description(name: str) -> Description: ...
 ```
 
-What describe kept for a name, empty strings when it has none.
+A name's unit and help; both empty when nothing described it.
+
+### Metrics.delete
+
+```python
+async def delete(*, name: str, labels: Mapping[str, LabelValue]) -> bool: ...
+```
+
+Removes the one series of exactly this name and these labels, whether its samples still read or not.
+
+True when the store held it; ``labels={}`` is the series without labels.
+
+### Metrics.damaged
+
+```python
+async def damaged() -> list[MetricsDamage]: ...
+```
+
+The series whose bytes no longer read, 1000 at most, each with what broke; deleting them shows the next.
+
+### Metrics.flush
+
+```python
+async def flush() -> None: ...
+```
+
+Sends what every instrument changed and has the store write its totals now, as it does every 15 seconds.
 
 ### Metrics.counter
 
@@ -264,18 +263,25 @@ def counter(
     *,
     unit: str | None = None,
     help: str | None = None,
+    keep: Duration | None = None,
 ) -> Counter: ...
 ```
 
-A counter: its total since this process started, ingested every flush; a restart is a reset.
-
-A unit or help is written at the next flush, as describe would.
+A total that only goes up, which the store keeps: processes counting into one series count into one total.
 
 ### Metrics.gauge
 
 ```python
-def gauge(name: str, *, unit: str | None = None, help: str | None = None) -> Gauge: ...
+def gauge(
+    name: str,
+    *,
+    unit: str | None = None,
+    help: str | None = None,
+    keep: Duration | None = None,
+) -> Gauge: ...
 ```
+
+A value that goes up and down: a queue's length, a temperature.
 
 ### Metrics.gauge_func
 
@@ -284,44 +290,290 @@ def gauge_func(
     name: str,
     read: Callable[[], float | Awaitable[float]],
     *,
+    labels: Mapping[str, LabelValue] | None = None,
     unit: str | None = None,
     help: str | None = None,
+    keep: Duration | None = None,
 ) -> None: ...
 ```
 
-A gauge read by a function at each flush; one that raises skips that sample.
+A gauge whose value read gives every 15 seconds, of the set of labels given.
+
+Another set of the name takes a function of its own. It may be async,
+is never called again while a call of it runs, and an error or an
+answer that is not a number writes nothing that time, said once while
+it repeats:
+
+    store.metrics.gauge_func("queue_depth", emails.depth, labels={"queue": "emails"})
 
 ### Metrics.timer
 
 ```python
-def timer(name: str, *, unit: str | None = None, help: str | None = None) -> Timer: ...
+def timer(
+    name: str,
+    *,
+    buckets: Sequence[float] | Literal['exponential'] | None = None,
+    help: str | None = None,
+    keep: Duration | None = None,
+) -> Timer: ...
 ```
 
-A timer: how many durations it measured and their sum in milliseconds, and the longest.
+How many things took how long: their count, sum and longest in milliseconds, and their spread.
 
-Every flush ingests the first two as the counters name_count and
-name_sum, and the longest since the flush before as the gauge
-name_max, left out when it measured none. A range's mean is its sum's
-increase over its count's. Given a unit or help, its sum and longest
-are in milliseconds, whatever unit it names.
-
-### Metrics.flush
+### Metrics.histogram
 
 ```python
-async def flush() -> None: ...
+def histogram(
+    name: str,
+    *,
+    buckets: Sequence[float] | Literal['exponential'] | None = None,
+    unit: str | None = None,
+    help: str | None = None,
+    keep: Duration | None = None,
+) -> Histogram: ...
 ```
 
-Ingests every instrument's value now, as the timer does every 15 s.
+A timer of numbers that are not durations: a response's size in bytes.
 
-A series the store refuses is left out from then on, said once, so that
-one bad instrument keeps no other out.
+## exponential_buckets
 
-### Metrics.stop
+```python
+def exponential_buckets(start: float, factor: float, count: int) -> list[float]: ...
+```
+
+Upper bounds from start, each factor times the one before: exponential_buckets(1, 2, 14) is 1, 2, 4 … 8192.
+
+## Instruments
+
+```python
+class Instruments:
+    ...
+```
+
+The instruments of a store's handle, and what sends their changes; ``store.metrics`` makes them.
+
+### Instruments.declare
+
+```python
+def declare(
+    name: str,
+    form: Form,
+    *,
+    unit: str | None = None,
+    help_: str | None = None,
+    keep: Duration | None = None,
+    buckets: Sequence[float] | Literal['exponential'] | None = None,
+    read: bool = False,
+) -> _Declared: ...
+```
+
+An instrument of name, made the first time; another form or other options than it has are refused.
+
+### Instruments.reader
+
+```python
+def reader(
+    name: str,
+    labels: dict[str, str],
+    read: Callable[[], float | Awaitable[float]],
+    **told: Any,
+) -> None: ...
+```
+
+A gauge of name whose set of labels read gives every 15 seconds; each set has a function of its own.
+
+### Instruments.set_of
+
+```python
+def set_of(instrument: _Declared, labels: dict[str, str]) -> _Set: ...
+```
+
+The set of labels of an instrument, made the first time; past the sets it holds, its __overflow.
+
+### Instruments.pending
+
+```python
+def pending(set_: _Set) -> _Change | None: ...
+```
+
+### Instruments.change
+
+```python
+def change(set_: _Set) -> _Change: ...
+```
+
+What a call changes of a set, kept for the next batch.
+
+### Instruments.flush
+
+```python
+async def flush() -> bool: ...
+```
+
+Sends what changed now and has the store write its totals; says whether there was anything to send.
+
+One the store cannot be reached for fails as a call does, and what it
+carried goes once the store can be. What the store refused since the
+flush before, and what a store that started again may have lost, fail
+it, each once.
+
+### Instruments.stop
 
 ```python
 async def stop() -> None: ...
 ```
 
-Stops flushing every 15 s and ingests the instruments' last values, as the store does as it closes.
+Stops the timers, sends what is left, and ends the stream; the store's close calls it.
 
-<!-- Generated by task reference from sdk/python/src/tinystore/metrics.py. Edit the doc comments there, not this file. -->
+## Counter
+
+```python
+class Counter:
+    ...
+```
+
+A total that only goes up, which the store keeps: processes counting into one series count into one total.
+
+### Counter.labels
+
+```python
+def labels(**labels: LabelValue) -> Counter: ...
+```
+
+The same counter with more labels, a series of its own; the same labels in any order are one.
+
+### Counter.inc
+
+```python
+def inc() -> None: ...
+```
+
+### Counter.add
+
+```python
+def add(n: float) -> None: ...
+```
+
+Adds n, a finite number of 0 or more; add(0) makes the set of labels known with a total of zero.
+
+## Gauge
+
+```python
+class Gauge:
+    ...
+```
+
+A value that goes up and down, written while this program is connected.
+
+### Gauge.labels
+
+```python
+def labels(**labels: LabelValue) -> Gauge: ...
+```
+
+### Gauge.set
+
+```python
+def set(value: float) -> None: ...
+```
+
+### Gauge.add
+
+```python
+def add(n: float) -> None: ...
+```
+
+Moves it by n, from zero when it was never set.
+
+### Gauge.inc
+
+```python
+def inc() -> None: ...
+```
+
+### Gauge.dec
+
+```python
+def dec() -> None: ...
+```
+
+## Timer
+
+```python
+class Timer:
+    ...
+```
+
+How many things took how long: their count, sum and longest in milliseconds, and their spread.
+
+### Timer.labels
+
+```python
+def labels(**labels: LabelValue) -> Timer: ...
+```
+
+### Timer.record
+
+```python
+def record(duration: timedelta | Duration) -> None: ...
+```
+
+Records a duration measured elsewhere: a timedelta, or text such as "250ms".
+
+### Timer.measure
+
+```python
+def measure() -> Timing: ...
+```
+
+Measures the block it runs: ``async with latency.measure():``, recorded whether it returns or raises.
+
+### Timer.start
+
+```python
+def start() -> Timing: ...
+```
+
+A timing that records when it stops, for a span that is no one block.
+
+## Timing
+
+```python
+class Timing:
+    ...
+```
+
+A span a timer measures from its start; stop records it, once.
+
+### Timing.stop
+
+```python
+def stop() -> timedelta: ...
+```
+
+Records how long since the timing started, the first time it is called, and gives it.
+
+## Histogram
+
+```python
+class Histogram:
+    ...
+```
+
+A timer of numbers that are not durations: a response's size in bytes.
+
+### Histogram.labels
+
+```python
+def labels(**labels: LabelValue) -> Histogram: ...
+```
+
+### Histogram.record
+
+```python
+def record(value: float) -> None: ...
+```
+
+Records a value of 0 or more.
+
+<!-- Generated by task reference from sdk/python/src/tinystore/metrics.py, sdk/python/src/tinystore/instruments.py. Edit the doc comments there, not this file. -->

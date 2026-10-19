@@ -2,50 +2,40 @@
 
 Every public class, function and type of the KV engine in `@tinyshed/tinystore`, generated from its source. The [KV guide](../../kv/README.md) explains how to use them, and the [Python](../python/kv.md) and [Go](../go/kv.md) pages list the same API.
 
-## Kind
+## ValueType
 
 ```ts
-type Kind = 'json' | 'string' | 'bytes' | 'int' | 'bigint' | 'float' | 'bool' | 'none'
+type ValueType = 'string' | 'bytes' | 'int' | 'bigint' | 'float' | 'bool'
 ```
 
-How a bucket keeps its values in a row, as Go's codecFor keeps a type's,
-so that Go, Python and this SDK read each other's buckets:
+How a bucket keeps a value that is not JSON, as the core keeps a Rust type,
+so that every language reads the others' rows:
 
-    'json'     JSON text, the default         a Go struct, a Python dataclass
-    'string'   its UTF-8 bytes                string, str
-    'bytes'    the bytes                       []byte, bytes
-    'int'      an integer, a number exactly    int64, int
-    'bigint'   an integer                      int64, int
-    'float'    its eight bytes, big-endian     float64, float
-    'bool'     1 or 0                          bool, bool
-    'none'     nothing: a bucket of them is a set    struct{}, None
+    'string'   its UTF-8 bytes
+    'bytes'    the bytes
+    'int'      an integer a number holds exactly
+    'bigint'   an integer past what a number holds
+    'float'    its eight bytes, big-endian, every bit kept
+    'bool'     1 or 0
 
 ## BucketOptions
 
 ```ts
 interface BucketOptions {
+    /** a key expires this long after it was written, unless its write gives its own */
+    ttl?: Duration | undefined
+    /** a key expires this long after it was last read or written; not beside ttl */
+    idle?: Duration | undefined
+    /** how values are kept when they are not JSON */
+    type?: ValueType | undefined
     /**
-     * keeps the bucket in a SQL database's file instead of kv.db, so that a
-     * batch of the database writes its keys with its rows: `bucket.withTx(tx)`
+     * Keeps every value sealed with the store's encryption key, as a password or a
+     * token is kept: the file holds what nobody reads without the key. The
+     * store seals and opens, so this program never holds the key. A key is not
+     * sealed, so a secret is a value and never a key, and a name keeps whether
+     * it is encrypted.
      */
-    in?: Database
-    /** the expiry a key gets when it is written without its own */
-    defaultTtl?: Duration
-    /** keeps a key this long from its last read; beside defaultTtl it is refused */
-    sliding?: Duration
-}
-```
-
-## CounterOptions
-
-```ts
-interface CounterOptions {
-    defaultTtl?: Duration
-    /**
-     * keeps changes in the server's memory between flushes this far apart, so
-     * a crash may lose them: attempts and rates, not money
-     */
-    loseAtMost?: Duration
+    encrypted?: boolean | undefined
 }
 ```
 
@@ -53,9 +43,11 @@ interface CounterOptions {
 
 ```ts
 interface WriteOptions {
-    ttl?: Duration
-    expireAt?: Time
-    /** writes only while the key is live at this version: ConflictError otherwise */
+    /** the key expires this long from now */
+    ttl?: Duration | undefined
+    /** the key expires at this time */
+    expiresAt?: Time | undefined
+    /** writes only while the key is at this version: ConflictError otherwise */
     ifVersion?: string
 }
 ```
@@ -63,265 +55,71 @@ interface WriteOptions {
 ## Entry
 
 ```ts
-interface Entry<V> {
-    value: V
+interface Entry<T> {
+    key: string
+    value: T
     /** compared only for equality: give it back to ifVersion */
     version: string
-    /** when the key expires; undefined for one that never does */
-    expires: Date | undefined
+    /** undefined for a key that never expires */
+    expiresAt: Date | undefined
 }
 ```
 
-## Scanned
+## Page
 
 ```ts
-interface Scanned<V> extends Entry<V> {
-    /** the key's text; bytes when it is not UTF-8 */
-    key: string | Uint8Array
+interface Page<T> {
+    entries: Entry<T>[]
+    next: string | undefined
 }
 ```
 
-## Kv
+A page of a branch's keys, and where the next starts when there is one.
+
+## CountersOptions
 
 ```ts
-class Kv {}
-```
-
-### Kv.config
-
-```ts
-config<D extends object>(name: string, defaults: D, ...layers: ConfigLayer<ConfigValue<D>>[]): Promise<Config<ConfigValue<D>>>
-```
-
-The config name, shaped and typed as its defaults, then each layer over
-the one before: a file's values, `fromEnv`, and what update kept over
-them all. It resolves once the server's state is read, and follows every
-change from then on, whoever makes it, until the store closes.
-
-```ts
-const cfg = await store.kv.config('app', {
-  port: 8080,
-  db: { url: secret('DATABASE_URL'), pool: 10 },
-}, file, fromEnv('APP'))
-cfg.value.port                    // APP_PORT=3000 makes it 3000
-await cfg.update({ port: 4000 })  // kept: 4000 after a restart too
-```
-
-### Kv.limiter
-
-```ts
-limiter(name: string, options: LimiterOptions): Limiter
-```
-
-A limiter of requests by key: `store.kv.limiter('api', { rate: '100/s', burst: 20 })`.
-
-### Kv.quota
-
-```ts
-quota<W extends string>(name: string, windows: Record<W, Rate>): Quota<W>
-```
-
-A quota of uses by key, its windows by name, each counted from a key's
-first use and all of them together or none:
-`store.kv.quota('ai', { session: '100/5h', weekly: '300/7d' })`.
-
-### Kv.once
-
-```ts
-once<T = unknown>(name: string, options?: OnceOptions): Once<T>
-once<S extends StandardSchemaV1>(name: string, schema: S, options?: OnceOptions): Once<StandardSchemaV1.InferOutput<S>>
-```
-
-The answers a function gives once a key, JSON values of type T kept a
-day unless defaultTtl says: `store.kv.once<Receipt>('charges')`.
-
-### Kv.stop
-
-```ts
-stop(): void
-```
-
-Stops following configs, as the store does when it closes.
-
-### Kv.bucket
-
-```ts
-bucket<T = unknown>(name: string, options?: BucketOptions): Bucket<T>
-bucket<K extends Kind>(name: string, kind: K, options?: BucketOptions): Bucket<KindValue[K]>
-bucket<S extends StandardSchemaV1>(name: string, schema: S, options?: BucketOptions): Bucket<StandardSchemaV1.InferOutput<S>>
-```
-
-A bucket of JSON values of type T.
-
-### Kv.counters
-
-```ts
-counters(name: string, options?: CounterOptions): Counters<number>
-counters(name: string, kind: 'bigint', options?: CounterOptions): Counters<bigint>
-```
-
-Counters, an int64 a key read as a number, 0 when absent.
-
-### Kv.batch
-
-```ts
-batch<const T = void>(fn: (tx: Batch) => T): Promise<Settled<T>>
-```
-
-Runs the calls fn asks for in one transaction, all or none: the calls of
-buckets it takes through withTx, whose promises settle once the batch
-has. fn returns before anything is sent, since no transaction is held
-across the network: a call cannot wait for another's answer inside it.
-What fn returns comes back answered, an array's promises each:
-
-    const [code] = await store.kv.batch(tx => [codes.withTx(tx).take(k), used.withTx(tx).set(k, 1)])
-
-### Kv.view
-
-```ts
-view<const T = void>(fn: (tx: Batch) => T): Promise<Settled<T>>
-```
-
-Reads the gets and hases fn asks for from one snapshot, and gives back
-what fn returns, answered as batch answers it:
-
-    const [profile, prefs] = await store.kv.view(tx => [a.withTx(tx).get(id), b.withTx(tx).get(id)])
-
-### Kv.tx
-
-```ts
-tx<T>(fn: (tx: Tx) => T | Promise<T>): Promise<T>
-```
-
-Runs fn as one transaction that reads before it decides what to write,
-as Go's Tx does, without holding the writer across the network: a read
-goes to the server at once, a write waits, and when fn returns the writes
-commit in one batch that first checks every key fn read is still as it
-read it. When another write changed one meanwhile, fn runs again, five
-times at most before ConflictError, so it does nothing else that must
-happen once. It gives back what fn returns.
-
-    const userId = await store.kv.tx(async tx => {
-      const userId = await codes.withTx(tx).take(digest(code))
-      if (userId === undefined) throw new InvalidCode()
-      sessions.withTx(tx).of(userId).set(digest(token), { device })
-      return userId
-    })
-
-## Batch
-
-```ts
-class Batch {
-    readonly kind: 'batch' | 'view'
-    readonly calls: Recorded[]
+interface CountersOptions {
+    /** a counter lasts this long from its first add */
+    ttl?: Duration | undefined
+    /**
+     * keeps counts in memory and writes them this often, so that an add costs
+     * no commit and a crash loses at most this span: attempts and hits, not money
+     */
+    flushEvery?: Duration | undefined
 }
 ```
-
-The calls a batch or a view gathered, in their order.
-
-### Batch.made
-
-```ts
-made(promise: Promise<unknown>): boolean
-```
-
-Whether the promise is one of this batch's calls', rather than an async function's.
-
-### Batch.record
-
-```ts
-record<T>(call: Omit<Recorded, 'settle'>, settle: (entry: Entry<Raw> & {
-        found: boolean
-    }) => Promise<T>): Promise<T>
-```
-
-### Batch.close
-
-```ts
-close(): void
-```
-
-## Tx
-
-```ts
-class Tx implements Recorder {}
-```
-
-A transaction of store.kv.tx: a read goes to the server at once and is
-remembered with its version, so that a key read again answers the same; a
-write waits for the commit, and a key read after it answers what it wrote.
-
-### Tx.record
-
-```ts
-record<T>(call: Omit<Recorded, 'settle'>, settle: (entry: Found) => Promise<T>): Promise<T>
-```
-
-### Tx.commit
-
-```ts
-commit(): Promise<void>
-```
-
-Sends what fn wrote in one batch, after a check of each key it read: a
-key it found at the version it found, a key it found absent still
-absent. A tx that only read checks its reads from one snapshot.
-
-### Tx.stale
-
-```ts
-stale(err: unknown): boolean
-```
-
-Whether the commit failed for a key fn read that changed since, which another run reads anew.
 
 ## Bucket
 
 ```ts
-class Bucket<V> {
+class Bucket<T> {
     readonly name: string
 }
 ```
 
-A bucket's values under one branch of owners, the root when there are
-none: `sessions.of(user.id).get(token)`.
+A bucket's values under one branch of owners, the bucket's own when there are none.
 
-### Bucket.of
-
-```ts
-of(...owners: Key[]): Bucket<V>
-```
-
-The branch below this one that the owners name.
-
-### Bucket.withTx
+### Bucket.under
 
 ```ts
-withTx(tx: Batch | Tx | SqlBatch): BucketTx<V>
+under(...owners: Key[]): Bucket<T>
 ```
 
-The bucket's calls inside a batch or a view, whose promises settle with
-it, or inside a tx, whose reads answer at once and writes wait for it.
-Inside a batch of the SQL database the bucket was opened `in`, its
-set, delete and clear commit with the batch's rows or not at all:
-
-    await db.batch(tx => {
-      tx.exec`insert into users (id, email) values (${id}, ${email})`
-      sessions.withTx(tx).set(token, { user: id })
-    })
+The branch the owners name below this one: whose keys these are.
 
 ### Bucket.get
 
 ```ts
-get(key: Key): Promise<V | undefined>
+get(key: Key): Promise<T | undefined>
 ```
 
 The key's value, undefined when it holds none.
 
-### Bucket.getEntry
+### Bucket.entry
 
 ```ts
-getEntry(key: Key): Promise<Entry<V> | undefined>
+entry(key: Key): Promise<Entry<T> | undefined>
 ```
 
 The key's value with its version and expiry, undefined when it holds none.
@@ -335,61 +133,52 @@ has(key: Key): Promise<boolean>
 ### Bucket.set
 
 ```ts
-set(key: Key, value: V, options?: WriteOptions): Promise<void>
+set(key: Key, value: T, options?: WriteOptions): Promise<void>
 ```
 
-Writes the value; a live key keeps its expiry unless the options give one.
+Writes the value; a key that exists keeps its expiry unless the options give one.
 
-### Bucket.setEntry
-
-```ts
-setEntry(key: Key, value: V, options?: WriteOptions): Promise<Entry<V>>
-```
-
-Writes the value and gives its new version and expiry.
-
-### Bucket.setIfAbsent
+### Bucket.create
 
 ```ts
-setIfAbsent(key: Key, value: V, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean>
+create(key: Key, value: T, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
 Writes the value only where no live key is, and says whether it did.
 
-### Bucket.setEntryIfAbsent
+### Bucket.add
 
 ```ts
-setEntryIfAbsent(key: Key, value: V, options?: Omit<WriteOptions, 'ifVersion'>): Promise<{
-        created: boolean
-        entry: Entry<V>
-    }>
+add(key: Key, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-Writes the value only where no live key is: created says whether it did,
-and entry is the new key's, or the live one's that was there.
-
-### Bucket.delete
-
-```ts
-delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<void>
-```
+Puts the key in a bucket used as a set; false when it was there.
 
 ### Bucket.take
 
 ```ts
-take(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<V | undefined>
+take(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<T | undefined>
 ```
 
-Reads the value and deletes the key in one write: a one-time code read
-and burned. A value that no longer decodes has been taken all the same.
+Reads the value and removes the key in one commit: of two callers taking
+a one-time code at once, one gets it.
 
-### Bucket.touch
+### Bucket.delete
 
 ```ts
-touch(key: Key, options: WriteOptions): Promise<boolean>
+delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-Gives a live key a new expiry, keeping its value and version; false when it holds none.
+Removes the key, and says whether it was there.
+
+### Bucket.expire
+
+```ts
+expire(key: Key, when: Duration | Date, options?: Pick<WriteOptions, 'ifVersion'>): Promise<boolean>
+```
+
+Gives a live key a new expiry, a span from now or a time, keeping its
+value; false when it holds none.
 
 ### Bucket.clear
 
@@ -399,130 +188,74 @@ clear(): Promise<void>
 
 Removes this branch's keys and every branch under it, at once however many.
 
-### Bucket.scan
+### Bucket.list
 
 ```ts
-scan(options?: {
-        after?: Key
-        limit?: number
-    }): Promise<Page<Scanned<V>, string | Uint8Array>>
+list(options?: {
+        limit?: number | undefined
+        after?: Key | undefined
+    }): Promise<Page<T>>
 ```
 
-One page of this branch's own keys, in the byte order of their text.
+One page of this branch's own keys, in the byte order of their text: `"10"` before `"9"`.
 
 ### Bucket.all
 
 ```ts
 all(options?: {
-        limit?: number
-    }): AsyncGenerator<Scanned<V>>
+        limit?: number | undefined
+    }): AsyncGenerator<Entry<T>>
 ```
 
-Walks this branch's own keys a page at a time, holding no snapshot
-between pages: a key written during the walk may or may not be met.
-
-## BucketTx
-
-```ts
-class BucketTx<V> {}
-```
-
-A bucket's calls inside a batch or a view.
-
-### BucketTx.of
-
-```ts
-of(...owners: Key[]): BucketTx<V>
-```
-
-### BucketTx.get
-
-```ts
-get(key: Key): Promise<V | undefined>
-```
-
-### BucketTx.has
-
-```ts
-has(key: Key): Promise<boolean>
-```
-
-### BucketTx.set
-
-```ts
-set(key: Key, value: V, options?: WriteOptions): Promise<void>
-```
-
-### BucketTx.delete
-
-```ts
-delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<void>
-```
-
-### BucketTx.clear
-
-```ts
-clear(): Promise<void>
-```
-
-Removes every key of this branch and of the branches under it.
-
-### BucketTx.take
-
-```ts
-take(key: Key): Promise<V | undefined>
-```
+Walks this branch's own keys a page at a time, holding nothing between
+pages: a key written during the walk may or may not be met. It renews no
+idle key.
 
 ## Counters
 
 ```ts
-class Counters<N extends number | bigint> {
+class Counters {
     readonly name: string
 }
 ```
 
-Counters under one branch: an int64 a key, 0 when absent, which add and
-max change in one write; a sum past the int64 range is refused.
+Numbers by key that only add up: 0 for one never added to or expired.
 
-### Counters.of
-
-```ts
-of(...owners: Key[]): Counters<N>
-```
-
-### Counters.get
+### Counters.under
 
 ```ts
-get(key: Key): Promise<N>
+under(...owners: Key[]): Counters
 ```
 
 ### Counters.add
 
 ```ts
-add(key: Key, n?: number | bigint): Promise<N>
+add(key: Key, n?: number | bigint): Promise<number>
 ```
 
-Adds n, 1 unless given, and gives the new value.
+Adds n, 1 unless given, and gives the new count.
 
-### Counters.max
+### Counters.get
 
 ```ts
-max(key: Key, n: number | bigint): Promise<N>
+get(key: Key): Promise<number>
 ```
-
-Keeps the larger of the counter and n, and gives it.
 
 ### Counters.delete
 
 ```ts
-delete(key: Key): Promise<void>
+delete(key: Key): Promise<boolean>
 ```
+
+Removes the counter, and says whether it was there.
 
 ### Counters.clear
 
 ```ts
 clear(): Promise<void>
 ```
+
+Removes this branch's counters and every branch's under it.
 
 ## Rate
 
@@ -533,85 +266,88 @@ type Rate = `${number}/${Unit}` | `${number}/${number}${Unit}`
 How many pass a span: '100/s', '5/10s', '1000/h', '300/7d', a span of one
 unit leaving out its 1. The type checks it as it is written.
 
-## LimiterOptions
+## RateLimitOptions
 
 ```ts
-interface LimiterOptions {
-    /** how many requests pass a span, each key on its own */
+interface RateLimitOptions {
+    /** how many requests a key passes a span */
     rate: Rate
     /** how many may pass at once before the rate holds the next; the rate's count when absent */
-    burst?: number
+    burst?: number | undefined
 }
 ```
+
+## WindowUse
+
+```ts
+interface WindowUse {
+    used: number
+    limit: number
+    left: number
+    /** when the window resets; undefined for one not started */
+    resetsAt: Date | undefined
+}
+```
+
+One window of a quota as a key stands in it.
 
 ## Allowance
 
 ```ts
-interface Allowance {
+interface Allowance<W extends string = never> {
     ok: boolean
-    /** how many more requests would pass now */
+    /** how many more would pass now */
     left: number
-    /** milliseconds until the request would pass; 0 when ok */
-    retryAfter: number
+    /** when a refused request may try again; undefined when it passed */
+    retryAt: Date | undefined
+    /** a quota's windows by name; none for a rate limit */
+    windows: Record<W, WindowUse>
 }
 ```
 
-What a limiter answers a request.
+What a rate limit or a quota answers a request.
 
-## Limiter
+## RateLimit
 
 ```ts
-class Limiter {
+class RateLimit {
     readonly name: string
 }
 ```
 
-A limiter: open it with `store.kv.limiter(name, { rate })`.
+A rate of requests a key: open it with `store.rateLimit(name, { rate })`.
 
-### Limiter.of
+### RateLimit.under
 
 ```ts
-of(...owners: Key[]): Limiter
+under(...owners: Key[]): RateLimit
 ```
 
-The limiter of a branch, each key apart from the same key elsewhere.
+The rate limit of a branch, each key apart from the same key elsewhere.
 
-### Limiter.allow
+### RateLimit.allow
 
 ```ts
 allow(key: Key, n?: number): Promise<Allowance>
 ```
 
-Asks for n requests of key, one unless given: all pass or none does; past the burst is InvalidError.
+Asks for n requests of key, one unless given: all pass or none; more than the burst is InvalidError.
 
-## WindowUsage
-
-```ts
-interface WindowUsage {
-    used: number
-    limit: number
-    left: number
-    /** when the window ends and the next use starts another; undefined before it starts */
-    resetAt: Date | undefined
-}
-```
-
-One window of a key: what it used of its limit, and when it resets.
-
-## QuotaUsage
+### RateLimit.peek
 
 ```ts
-interface QuotaUsage<W extends string = string> {
-    ok: boolean
-    /** how many more uses would pass now */
-    left: number
-    /** milliseconds until a refused use would pass; 0 when ok */
-    retryAfter: number
-    windows: Record<W, WindowUsage>
-}
+peek(key: Key): Promise<Allowance>
 ```
 
-What a quota answers a key: what a limiter answers, and each window by its name.
+The answer one request would get, using nothing.
+
+### RateLimit.reset
+
+```ts
+reset(key: Key): Promise<void>
+```
+
+Forgets key, so that its next request starts afresh.
 
 ## Quota
 
@@ -621,34 +357,36 @@ class Quota<W extends string = string> {
 }
 ```
 
-A quota: open it with `store.kv.quota(name, { session: '100/5h', weekly: '300/7d' })`.
+Uses by key in named windows: open it with `store.quota(name, { daily: '100/1d' })`.
 
-### Quota.of
+### Quota.under
 
 ```ts
-of(...owners: Key[]): Quota<W>
+under(...owners: Key[]): Quota<W>
 ```
-
-The quota of a branch, each key apart from the same key elsewhere.
 
 ### Quota.allow
 
 ```ts
-allow(key: Key, n?: number): Promise<QuotaUsage<W>>
+allow(key: Key, n?: number): Promise<Allowance<W>>
 ```
 
 Uses n of key's every window, one unless given, or none when one has no
-room for them; more than a window's limit is InvalidError.
+room; more than a window's limit is InvalidError.
 
-    const { ok, retryAfter, windows } = await ai.allow(user.id)
+    const { ok, retryAt, windows } = await ai.allow(user.id)
 
-### Quota.get
+### Quota.peek
 
 ```ts
-get(key: Key): Promise<QuotaUsage<W>>
+peek(key: Key): Promise<Allowance<W>>
 ```
 
-Key's windows without using them: ok says whether one more use would pass now.
+### Quota.reset
+
+```ts
+reset(key: Key): Promise<void>
+```
 
 ### Quota.refund
 
@@ -656,39 +394,31 @@ Key's windows without using them: ok says whether one more use would pass now.
 refund(key: Key, n?: number): Promise<void>
 ```
 
-Gives n uses back, one unless given, to each of key's windows that has not reset since.
-
-### Quota.delete
-
-```ts
-delete(key: Key): Promise<void>
-```
-
-Forgets key's windows, so that its next use starts each anew.
+Gives n uses back to every window of key, one unless given.
 
 ## OnceOptions
 
 ```ts
 interface OnceOptions {
     /** how long an answer is kept: a day when absent */
-    defaultTtl?: Duration
+    keep?: Duration | undefined
 }
 ```
 
 ## Once
 
 ```ts
-class Once<V> {
+class Once<T> {
     readonly name: string
 }
 ```
 
-Answers kept once a key: open them with `store.kv.once(name)`.
+Answers kept once a key: open them with `store.once(name)`.
 
-### Once.of
+### Once.under
 
 ```ts
-of(...owners: Key[]): Once<V>
+under(...owners: Key[]): Once<T>
 ```
 
 The answers of a branch, each key apart from the same key elsewhere.
@@ -696,243 +426,178 @@ The answers of a branch, each key apart from the same key elsewhere.
 ### Once.run
 
 ```ts
-run(key: Key, fn: () => V | Promise<V>): Promise<V>
+run(key: Key, fn: () => T | Promise<T>): Promise<T>
 ```
 
-The answer kept under key, or fn's, which is kept. A call of a key
-another call is running waits for it and gets its answer; a throw of fn
-keeps nothing and is thrown, so the next call runs fn again. A
-connection lost after fn returned and before its answer was kept is
-OutcomeUnknownError.
+The answer kept for key, or fn's, which is kept. A run of a key that
+another runs, here or in another process, waits for it and gets its
+answer; a throw of fn keeps nothing and is thrown, so the next run runs
+fn again. A connection lost after fn returned and before its answer was
+kept is OutcomeUnknownError.
 
     const receipt = await charges.run(requestId, () => pay.charge(order, requestId))
 
 ### Once.get
 
 ```ts
-get(key: Key): Promise<V | undefined>
+get(key: Key): Promise<T | undefined>
 ```
 
-The answer kept under key, undefined when none is.
+The answer kept for key, undefined when none is.
 
 ### Once.delete
 
 ```ts
-delete(key: Key): Promise<void>
+delete(key: Key): Promise<boolean>
 ```
 
-Forgets the answer kept under key, so that the next run runs again.
+Forgets the answer kept for key, so that its next run runs fn again.
 
-## DeepPartial
+## Tx
 
 ```ts
-type DeepPartial<T> = {
-    [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K]
-}
+class Tx {}
 ```
 
-A value of T with any of its fields, at any depth, left out.
+The calls of a transaction, each through `tx.with(handle)`.
 
-## Setting
+### Tx.with
 
 ```ts
-class Setting<V> {
-    readonly kind: Kind
-    readonly fallback: V | undefined
-    readonly secret: boolean
-    readonly variable: string | undefined
-    readonly fixed: boolean
-}
+with<T>(bucket: Bucket<T>): TxBucket<T>
+with(counters: Counters): TxCounters
+with<T>(queue: Queue<T>): StoreTxQueue<T>
+with<T>(channel: Channel<T>): TxChannel<T>
 ```
 
-A field of a config's defaults made by `secret` or `required`, in place of its value.
-
-## fixed
+### Tx.read
 
 ```ts
-function fixed<V>(value: V | Setting<V>): Setting<V>
+read(parts: Parts, key: Key): Promise<Found>
 ```
 
-A field the defaults, a file or the environment set alone: update refuses
-it, and sources() shows where its value came from. It takes a default or
-another marker.
+What the key holds as this transaction sees it: its own writes over what the store held.
+
+### Tx.write
 
 ```ts
-addr: fixed(':8080'), workers: fixed(required(Number))
+write(method: Method, parts: Parts, fields: CallFields, found?: Found): void
 ```
 
-## secret
+Keeps a write for the commit; found is what a read of its key answers after it.
+
+### Tx.clear
 
 ```ts
-function secret(variable?: string, fallback?: string): Setting<string>
+clear(parts: Parts): void
 ```
 
-A secret: never kept by update, and shown as *** by sources(). It reads
-its own variable when given one, and is required without a default.
+### Tx.commit
 
 ```ts
-db: { url: secret('DATABASE_URL'), pool: 10 }
+commit(): Promise<void>
 ```
 
-## required
+Commits the writes, then hands over the messages published inside.
+
+## TxBucket
 
 ```ts
-function required(): Setting<string>
-function required(kind: StringConstructor): Setting<string>
-function required(kind: NumberConstructor): Setting<number>
-function required(kind: BooleanConstructor): Setting<boolean>
+class TxBucket<T> {}
 ```
 
-A field a layer has to give, or the config does not open: a string unless kind says.
+A bucket's calls inside a transaction: reads answer at once, writes wait for its commit.
 
-## FromEnv
+### TxBucket.under
 
 ```ts
-class FromEnv {
-    readonly prefix: string
-    readonly files: readonly string[]
-}
+under(...owners: Key[]): TxBucket<T>
 ```
 
-The environment as a layer of a config, which `fromEnv` makes.
-
-## fromEnv
+### TxBucket.get
 
 ```ts
-function fromEnv(prefix?: string, ...files: string[]): FromEnv
+get(key: Key): Promise<T | undefined>
 ```
 
-The environment as a config's layer: `fromEnv('APP')` reads db.pool from
-APP_DB_POOL, and `fromEnv()` from DB_POOL. The .env files given are read
-first, the process's own variables over them, a missing file skipped.
-
-## Validate
+### TxBucket.entry
 
 ```ts
-class Validate {
-    readonly schema: StandardSchemaV1
-}
+entry(key: Key): Promise<Entry<T> | undefined>
 ```
 
-A config's check, which `validate` makes.
-
-## validate
+### TxBucket.has
 
 ```ts
-function validate(schema: StandardSchemaV1): Validate
+has(key: Key): Promise<boolean>
 ```
 
-Checks a config each time it is made, with zod's, valibot's or another Standard Schema.
-
-## ConfigValue
+### TxBucket.set
 
 ```ts
-type ConfigValue<D extends object> = {
-    [K in keyof D]: FieldValue<D[K]>
-}
+set(key: Key, value: T, options?: WriteOptions): Promise<void>
 ```
 
-A config's value, as its defaults make it: each Setting its value's type.
-
-## ConfigLayer
+### TxBucket.create
 
 ```ts
-type ConfigLayer<V> = DeepPartial<V> | FromEnv | Validate
+create(key: Key, value: T, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-What a config takes after its defaults, each over the one before.
+Writes the value only where no live key is, and says whether it will.
 
-## Source
+### TxBucket.add
 
 ```ts
-interface Source {
-    path: string
-    /** its JSON, or *** for a secret */
-    value: string
-    /** 'default', 'file', 'env NAME' or 'kept' */
-    from: string
-    /** why a kept value is left out, when it is */
-    ignored?: string
-}
+add(key: Key, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-Where a field's value came from.
-
-## Config
+### TxBucket.take
 
 ```ts
-class Config<T extends object> {
-    readonly name: string
-}
+take(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<T | undefined>
 ```
 
-A config: open it with `store.kv.config(name, defaults, ...layers)`.
-
-### Config.value
+### TxBucket.delete
 
 ```ts
-get value(): T
+delete(key: Key, options?: Pick<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-The config now, frozen: update changes it.
-
-### Config.lay
+### TxBucket.expire
 
 ```ts
-lay(layers: readonly unknown[]): Promise<void>
+expire(key: Key, when: Duration | Date, options?: Pick<WriteOptions, 'ifVersion'>): Promise<boolean>
 ```
 
-Lays each layer over the defaults, the one before it under it, and checks what is required.
-
-### Config.update
+### TxBucket.clear
 
 ```ts
-update(change: DeepPartial<T>): Promise<void>
+clear(): Promise<void>
 ```
 
-Changes the fields change names, at any depth; each one that changed is
-checked, kept, and seen by every store watching the config. A change the
-schema refuses, one of a fixed field or a secret, or one leaving a required
-field empty, is InvalidError and keeps nothing.
+Removes this branch's keys and every branch's under it, with the commit.
 
-### Config.reset
+## TxCounters
 
 ```ts
-reset(...paths: string[]): Promise<void>
+class TxCounters {}
 ```
 
-Forgets what update kept for paths, each a field or a group of them; all of it without paths.
+Counters inside a transaction: an add commits with its writes.
 
-### Config.watch
+### TxCounters.under
 
 ```ts
-watch(fn: (value: T) => void): () => void
+under(...owners: Key[]): TxCounters
 ```
 
-Calls fn with the config now and after each change, whoever made it; the function it returns stops that.
-
-### Config.sources
+### TxCounters.add
 
 ```ts
-sources(): Source[]
+add(key: Key, n?: number | bigint): Promise<void>
 ```
 
-Where each field's value came from, and why a kept value is left out.
+Adds n, 1 unless given, with the commit; the count is known once it has.
 
-### Config.start
-
-```ts
-start(): Promise<void>
-```
-
-Follows the config's changes until the store closes; resolves once the first state is read.
-
-### Config.stop
-
-```ts
-stop(): void
-```
-
-Stops following the config, as the store does when it closes.
-
-<!-- Generated by task reference from sdk/js/src/kv.ts, sdk/js/src/limiter.ts, sdk/js/src/quota.ts, sdk/js/src/once.ts, sdk/js/src/config.ts. Edit the doc comments there, not this file. -->
+<!-- Generated by task reference from sdk/js/src/kv.ts, sdk/js/src/limits.ts, sdk/js/src/once.ts, sdk/js/src/tx.ts. Edit the doc comments there, not this file. -->

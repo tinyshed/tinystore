@@ -6,301 +6,69 @@ Every public class, function and type of the KV engine in `tinystore`, generated
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Entry[V]:
-    value: V
-    version: str  # compared only for equality: give it back as if_version
-    expires: datetime | None
-    key: str | bytes = ''  # a scan's entry alone
+class Entry[T]:
+    key: str
+    value: T
+    version: Version  # compared only for equality: give it back to if_version
+    expires_at: datetime | None  # None for a key that never expires
 ```
 
-## Kv
+A key's value with its version and expiry.
+
+## Page
 
 ```python
-class Kv:
-    ...
+@dataclass(frozen=True, slots=True)
+class Page[T]:
+    entries: list[Entry[T]]
+    next: str | None
 ```
 
-### Kv.config
-
-```python
-async def config[T](
-    name: str,
-    of: type[T],
-    /,
-    *layers: Mapping[str, Any] | FromEnv,
-    validate: Callable[[T], object] | None = None,
-) -> Config[T]: ...
-```
-
-The config name, of a type whose defaults are its own: a dataclass, or a model.
-
-Each layer goes over the one before, a file's values or from_env, and what update kept over
-them all. It returns once the server's state is read, and follows every change from then on,
-whoever makes it, until the store closes:
-
-    cfg = await store.kv.config("app", Settings, toml, from_env("APP", ".env"))
-    cfg.value.port                     # APP_PORT=3000 in .env makes it 3000
-    await cfg.update({"port": 4000})   # kept: 4000 after a restart too
-
-### Kv.limiter
-
-```python
-def limiter(name: str, /, *, rate: str, burst: int | None = None) -> Limiter: ...
-```
-
-A limiter of requests by key: `store.kv.limiter("api", rate="100/s", burst=20)`.
-
-### Kv.quota
-
-```python
-def quota(name: str, /, **windows: str) -> Quota: ...
-```
-
-A quota of uses by key, its windows by name, all of them counted together or none.
-
-Each window starts at a key's first use after the last ended:
-
-    ai = store.kv.quota("ai", session="100/5h", weekly="300/7d")
-
-### Kv.once
-
-```python
-def once[V](
-    name: str,
-    of: type[V],
-    /,
-    *,
-    default_ttl: Duration | None = None,
-) -> Once[V]: ...
-```
-
-The answers a function gives once a key, of one type, kept a day unless default_ttl says.
-
-### Kv.stop
-
-```python
-def stop() -> None: ...
-```
-
-Stops following configs, as the store does when it closes.
-
-### Kv.bucket
-
-```python
-@overload
-def bucket(
-    name: str,
-    /,
-    *,
-    default_ttl: Duration | None = None,
-    sliding: Duration | None = None,
-    in_: Database | None = None,
-) -> Bucket[Any]: ...
-@overload
-def bucket[V](
-    name: str,
-    of: type[V],
-    /,
-    *,
-    default_ttl: Duration | None = None,
-    sliding: Duration | None = None,
-    in_: Database | None = None,
-) -> Bucket[V]: ...
-@overload
-def bucket(
-    name: str,
-    of: None,
-    /,
-    *,
-    default_ttl: Duration | None = None,
-    sliding: Duration | None = None,
-    in_: Database | None = None,
-) -> Bucket[None]: ...
-def bucket(
-    name: str,
-    of: Any = _MISSING,
-    /,
-    *,
-    default_ttl: Duration | None = None,
-    sliding: Duration | None = None,
-    in_: Database | None = None,
-) -> Bucket[Any]: ...
-```
-
-A bucket of values of one type: a type of the table above, or any JSON can hold.
-
-in_ keeps the bucket in a SQL database's file instead of kv.db, so that
-a batch of the database writes its keys with its rows:
-
-    sessions = store.kv.bucket("sessions", Session, in_=db)
-
-### Kv.counters
-
-```python
-def counters(
-    name: str,
-    /,
-    *,
-    default_ttl: Duration | None = None,
-    lose_at_most: Duration | None = None,
-) -> Counters: ...
-```
-
-Counters: an int64 a key, 0 when absent; lose_at_most keeps changes in memory between flushes.
-
-### Kv.batch
-
-```python
-def batch() -> Batch: ...
-```
-
-Calls in one transaction, all or none, sent as the async with block ends:
-
-async with store.kv.batch() as tx:
-    sessions.with_tx(tx).set(token, session)
-    codes.with_tx(tx).delete(code)
-
-### Kv.view
-
-```python
-def view() -> Batch: ...
-```
-
-Gets and hases from one snapshot, their futures settled as the block ends.
-
-### Kv.tx
-
-```python
-async def tx[T](fn: Callable[[Tx], Awaitable[T]]) -> T: ...
-```
-
-Runs fn as one transaction that reads before it decides what to write, as Go's Tx does.
-
-No writer is held across the network: a read goes to the server at
-once, a write waits, and when fn returns the writes commit in one batch
-that first checks every key fn read is still as it read it. When another
-write changed one meanwhile, fn runs again, five times at most before
-ConflictError, so it does nothing else that must happen once. It gives
-back what fn returns:
-
-    async def sign_in(tx: tinystore.Tx) -> int:
-        user_id = await codes.with_tx(tx).take(digest(code))
-        if user_id is None:
-            raise InvalidCode
-        sessions.of(user_id).with_tx(tx).set(digest(token), Session(device))
-        return user_id
-
-    user_id = await store.kv.tx(sign_in)
-
-## Batch
-
-```python
-class Batch:
-    ...
-```
-
-The calls of a batch or a view: each returns a future that settles once the batch has.
-
-### Batch.record
-
-```python
-def record(
-    method: str,
-    open_body: bytes,
-    fields: dict[str, Any],
-    decode: Callable[[dict[str, Any]], Any],
-) -> asyncio.Future[Any]: ...
-```
-
-## Tx
-
-```python
-class Tx:
-    ...
-```
-
-A transaction of store.kv.tx.
-
-A read goes to the server at once and is remembered with its version, so
-that a key read again answers the same; a write waits for the commit, and a
-key read after it answers what it wrote.
-
-### Tx.record
-
-```python
-def record(
-    method: str,
-    open_body: bytes,
-    fields: dict[str, Any],
-    decode: Callable[[dict[str, Any]], Any],
-) -> asyncio.Future[Any]: ...
-```
-
-### Tx.commit
-
-```python
-async def commit() -> None: ...
-```
-
-Sends what fn wrote in one batch, after a check of each key it read.
-
-A key it found must still be at the version it found, and a key it
-found absent still absent. A tx that only read checks its reads from
-one snapshot.
-
-### Tx.stale
-
-```python
-def stale(err: ConflictError) -> bool: ...
-```
-
-Whether the commit failed for a key fn read that changed since, which another run reads anew.
+A page of a branch's keys, and where the next starts when there is one.
 
 ## Bucket
 
 ```python
-class Bucket[V]:
+class Bucket[T]:
     ...
 ```
 
-A bucket's values under one branch of owners: sessions.of(user.id).get(token).
+A bucket's values under one branch of owners, the bucket's own when there are none.
 
-### Bucket.of
+Buckets come from ``store.bucket``, ``db.bucket`` and their ``under``;
+inside a transaction, from ``tx.with_(bucket)``, whose calls go through
+the transaction.
 
-```python
-def of(*owners: Key) -> Bucket[V]: ...
-```
-
-The branch below this one that the owners name.
-
-### Bucket.with_tx
+### Bucket.parts
 
 ```python
-def with_tx(tx: Batch | Tx | SqlBatch) -> BucketTx[V]: ...
+@property
+def parts() -> Parts: ...
 ```
 
-This bucket's calls inside a batch or a view, or inside a tx, whose reads answer at once.
+### Bucket.under
 
-Inside a batch of the SQL database the bucket was opened in_, its set,
-delete and clear commit with the batch's rows or not at all:
+```python
+def under(*owners: Key) -> Bucket[T]: ...
+```
 
-    async with db.batch() as tx:
-        tx.exec("insert into users (id, email) values (?, ?)", user_id, email)
-        sessions.with_tx(tx).set(token, Session(user=user_id))
+The branch the owners name below this one: whose keys these are.
 
 ### Bucket.get
 
 ```python
-async def get(key: Key) -> V | None: ...
+async def get(key: Key) -> T | None: ...
 ```
 
 The key's value, None when it holds none.
 
-### Bucket.get_entry
+### Bucket.entry
 
 ```python
-async def get_entry(key: Key) -> Entry[V] | None: ...
+async def entry(key: Key) -> Entry[T] | None: ...
 ```
+
+The key's value with its version and expiry, None when it holds none.
 
 ### Bucket.has
 
@@ -313,84 +81,70 @@ async def has(key: Key) -> bool: ...
 ```python
 async def set(
     key: Key,
-    value: V,
+    value: T,
     *,
     ttl: Duration | None = None,
-    expire_at: datetime | None = None,
-    if_version: str | None = None,
+    expires_at: datetime | None = None,
+    **check: Unpack[IfVersion],
 ) -> None: ...
 ```
 
-Writes the value; a live key keeps its expiry unless one is given.
+Writes the value; a key that exists keeps its expiry unless the call gives one.
 
-### Bucket.set_entry
-
-```python
-async def set_entry(
-    key: Key,
-    value: V,
-    *,
-    ttl: Duration | None = None,
-    expire_at: datetime | None = None,
-    if_version: str | None = None,
-) -> Entry[V]: ...
-```
-
-### Bucket.set_if_absent
+### Bucket.create
 
 ```python
-async def set_if_absent(
+async def create(
     key: Key,
-    value: V,
+    value: T,
     *,
     ttl: Duration | None = None,
-    expire_at: datetime | None = None,
+    expires_at: datetime | None = None,
 ) -> bool: ...
 ```
 
 Writes the value only where no live key is, and says whether it did.
 
-### Bucket.set_entry_if_absent
+### Bucket.add
 
 ```python
-async def set_entry_if_absent(
+async def add(
     key: Key,
-    value: V,
     *,
     ttl: Duration | None = None,
-    expire_at: datetime | None = None,
-) -> tuple[bool, Entry[V]]: ...
+    expires_at: datetime | None = None,
+) -> bool: ...
 ```
 
-Writes only where no live key is: whether it did, and the new key's entry or the live one's.
-
-### Bucket.delete
-
-```python
-async def delete(key: Key, *, if_version: str | None = None) -> None: ...
-```
+Puts the key in a bucket used as a set; False when it was there.
 
 ### Bucket.take
 
 ```python
-async def take(key: Key, *, if_version: str | None = None) -> V | None: ...
+async def take(key: Key, **check: Unpack[IfVersion]) -> T | None: ...
 ```
 
-Reads the value and deletes the key in one write: a one-time code read and burned.
+Reads the value and removes the key in one commit: of two callers taking a code at once, one gets it.
 
-### Bucket.touch
+### Bucket.delete
 
 ```python
-async def touch(
+async def delete(key: Key, **check: Unpack[IfVersion]) -> bool: ...
+```
+
+Removes the key, and says whether it was there.
+
+### Bucket.expire
+
+```python
+async def expire(
     key: Key,
-    *,
-    ttl: Duration | None = None,
-    expire_at: datetime | None = None,
-    if_version: str | None = None,
+    when: Duration | datetime,
+    **check: Unpack[IfVersion],
 ) -> bool: ...
 ```
 
-Gives a live key a new expiry, keeping its value and version; False when it holds none.
+Gives a live key a new expiry, a span from now or a time, keeping its value; False when it holds none.
 
 ### Bucket.clear
 
@@ -400,25 +154,23 @@ async def clear() -> None: ...
 
 Removes this branch's keys and every branch under it, at once however many.
 
-### Bucket.scan
+### Bucket.list
 
 ```python
-async def scan(
-    *,
-    after: Key | None = None,
-    limit: int | None = None,
-) -> Page[Entry[V], str | bytes]: ...
+async def list(*, limit: int | None = None, after: Key | None = None) -> Page[T]: ...
 ```
 
-One page of this branch's own keys in the byte order of their text, and the key the next begins after.
+One page of this branch's own keys, in the byte order of their text: "10" before "9".
 
 ### Bucket.all
 
 ```python
-async def all(*, limit: int | None = None) -> AsyncIterator[Entry[V]]: ...
+async def all(*, limit: int | None = None) -> AsyncIterator[Entry[T]]: ...
 ```
 
-Walks this branch's own keys a page at a time, holding no snapshot between pages.
+Walks this branch's own keys a page at a time, holding nothing between pages.
+
+A key written during the walk may or may not be met. It renews no idle key.
 
 ## Counters
 
@@ -427,18 +179,19 @@ class Counters:
     ...
 ```
 
-Counters under one branch: an int64 a key, 0 when absent; a sum past int64 is refused.
+Numbers by key that only add up: 0 for one never added to, or expired. They come from ``store.counters``.
 
-### Counters.of
+### Counters.parts
 
 ```python
-def of(*owners: Key) -> Counters: ...
+@property
+def parts() -> Parts: ...
 ```
 
-### Counters.get
+### Counters.under
 
 ```python
-async def get(key: Key) -> int: ...
+def under(*owners: Key) -> Counters: ...
 ```
 
 ### Counters.add
@@ -447,21 +200,21 @@ async def get(key: Key) -> int: ...
 async def add(key: Key, n: int = 1) -> int: ...
 ```
 
-Adds n and gives the new value.
+Adds n, 1 unless given, and gives the new count.
 
-### Counters.max
+### Counters.get
 
 ```python
-async def max(key: Key, n: int) -> int: ...
+async def get(key: Key) -> int: ...
 ```
-
-Keeps the larger of the counter and n, and gives it.
 
 ### Counters.delete
 
 ```python
-async def delete(key: Key) -> None: ...
+async def delete(key: Key) -> bool: ...
 ```
+
+Removes the counter, and says whether it was there.
 
 ### Counters.clear
 
@@ -469,115 +222,74 @@ async def delete(key: Key) -> None: ...
 async def clear() -> None: ...
 ```
 
-## Once
+Removes this branch's counters and every branch's under it.
+
+## WindowUse
 
 ```python
-class Once[V]:
-    ...
+@dataclass(frozen=True, slots=True)
+class WindowUse:
+    used: int
+    limit: int
+    left: int
+    resets_at: datetime | None  # when the window resets; None for one not started
 ```
 
-Answers kept once a key, as Go's kv.Once keeps them: open them with `store.kv.once(name, Receipt)`.
-
-The server lets one call of a key run its function at a time, every client of the store included,
-and keeps what it returned, so that a request sent again is answered as the first was.
-
-### Once.of
-
-```python
-def of(*owners: Key) -> Once[V]: ...
-```
-
-The answers of a branch, each key apart from the same key elsewhere.
-
-### Once.run
-
-```python
-async def run(key: Key, fn: Callable[[], Awaitable[V]]) -> V: ...
-```
-
-The answer kept under key, or fn's, which is kept.
-
-A call of a key another call is running waits for it and gets its answer; an exception of
-fn keeps nothing and is raised, so the next call runs fn again. A connection lost after fn
-returned and before its answer was kept is OutcomeUnknownError:
-
-    receipt = await charges.run(request_id, lambda: pay.charge(order, request_id))
-
-### Once.get
-
-```python
-async def get(key: Key) -> V | None: ...
-```
-
-The answer kept under key, None when none is.
-
-### Once.delete
-
-```python
-async def delete(key: Key) -> None: ...
-```
-
-Forgets the answer kept under key, so that the next run runs again.
+One window of a quota as a key stands in it.
 
 ## Allowance
 
 ```python
-class Allowance(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class Allowance:
     ok: bool
-    left: int  # how many more requests would pass now
-    retry_after: float  # seconds until the request would pass; 0 when ok
+    left: int  # how many more would pass now
+    retry_at: datetime | None  # when a refused request may try again; None when it passed
+    windows: dict[str, WindowUse] = field(default_factory=dict[str, WindowUse])  # a quota's windows by name; none for a rate limit
 ```
 
-What a limiter answers a request.
+What a rate limit or a quota answers a request.
 
-## Limiter
+## RateLimit
 
 ```python
-class Limiter:
+class RateLimit:
     ...
 ```
 
-A limiter: open it with `store.kv.limiter(name, rate="100/s")`.
+A rate of requests a key: open it with ``store.rate_limit(name, rate=...)``.
 
-### Limiter.of
+### RateLimit.under
 
 ```python
-def of(*owners: Key) -> Limiter: ...
+def under(*owners: Key) -> RateLimit: ...
 ```
 
-The limiter of a branch, each key apart from the same key elsewhere.
+The rate limit of a branch, each key apart from the same key elsewhere.
 
-### Limiter.allow
+### RateLimit.allow
 
 ```python
 async def allow(key: Key, n: int = 1) -> Allowance: ...
 ```
 
-Asks for n requests of key: all pass or none does; past the burst is InvalidError.
+Asks for n requests of key, one unless given: all pass or none; more than the burst is InvalidError.
 
-## WindowUsage
-
-```python
-class WindowUsage(NamedTuple):
-    used: int
-    limit: int
-    left: int
-    reset_at: datetime | None  # when the window ends and the next use starts another; None before it starts
-```
-
-One window of a key: what it used of its limit, and when it resets.
-
-## QuotaUsage
+### RateLimit.peek
 
 ```python
-class QuotaUsage(NamedTuple):
-    ok: bool
-    left: int  # how many more uses would pass now
-    retry_after: float  # seconds until a refused use would pass; 0 when ok
-    windows: dict[str, WindowUsage]
+async def peek(key: Key) -> Allowance: ...
 ```
 
-What a quota answers a key: what a limiter answers, and each window by its name.
+The answer one request would get, using nothing.
+
+### RateLimit.reset
+
+```python
+async def reset(key: Key) -> None: ...
+```
+
+Forgets key, so that its next request starts afresh.
 
 ## Quota
 
@@ -586,31 +298,35 @@ class Quota:
     ...
 ```
 
-A quota: open it with `store.kv.quota(name, session="100/5h", weekly="300/7d")`.
+Uses by key in named windows: open it with ``store.quota(name, daily="100/1d")``.
 
-### Quota.of
+### Quota.under
 
 ```python
-def of(*owners: Key) -> Quota: ...
+def under(*owners: Key) -> Quota: ...
 ```
-
-The quota of a branch, each key apart from the same key elsewhere.
 
 ### Quota.allow
 
 ```python
-async def allow(key: Key, n: int = 1) -> QuotaUsage: ...
+async def allow(key: Key, n: int = 1) -> Allowance: ...
 ```
 
-Uses n of key's every window, or none when one has no room; past a window's limit is InvalidError.
+Uses n of key's every window, one unless given, or none when one has no room.
 
-### Quota.get
+More than a window's limit is InvalidError.
+
+### Quota.peek
 
 ```python
-async def get(key: Key) -> QuotaUsage: ...
+async def peek(key: Key) -> Allowance: ...
 ```
 
-Key's windows without using them: ok says whether one more use would pass now.
+### Quota.reset
+
+```python
+async def reset(key: Key) -> None: ...
+```
 
 ### Quota.refund
 
@@ -618,145 +334,252 @@ Key's windows without using them: ok says whether one more use would pass now.
 async def refund(key: Key, n: int = 1) -> None: ...
 ```
 
-Gives n uses back to each of key's windows that has not reset since.
+Gives n uses back to every window of key, one unless given.
 
-### Quota.delete
-
-```python
-async def delete(key: Key) -> None: ...
-```
-
-Forgets key's windows, so that its next use starts each anew.
-
-## secret
+## Once
 
 ```python
-def secret(variable: str | None = None, *, default: str | None = None) -> Any: ...
-```
-
-A secret field of a config's dataclass, never kept by update and shown as *** by sources().
-
-It reads its own variable when given one, and is required without a default:
-
-    url: str = secret("DATABASE_URL")
-
-## fixed
-
-```python
-def fixed(
-    default: Any = dataclasses.MISSING,
-    *,
-    variable: str | None = None,
-) -> Any: ...
-```
-
-A field the defaults, a file or the environment set alone: update refuses it, sources() says where it came from.
-
-It is required without a default:
-
-    addr: str = fixed(":8080")
-
-## FromEnv
-
-```python
-@dataclass(frozen=True, slots=True)
-class FromEnv:
-    prefix: str
-    files: tuple[str | os.PathLike[str], ...]
-```
-
-The environment as a layer of a config, which from_env makes.
-
-## from_env
-
-```python
-def from_env(prefix: str = '', *files: str | os.PathLike[str]) -> FromEnv: ...
-```
-
-The environment as a config's layer: from_env("APP") reads db.pool from APP_DB_POOL, from_env() from DB_POOL.
-
-The .env files given are read first, the process's own variables over them, a missing file skipped.
-
-## Source
-
-```python
-@dataclass(frozen=True, slots=True)
-class Source:
-    path: str
-    value: str  # its JSON, or *** for a secret
-    from_: str  # 'default', 'file', 'env NAME' or 'kept'
-    ignored: str | None = None  # why a kept value is left out, when it is
-```
-
-Where a field's value came from.
-
-## Config
-
-```python
-class Config[T]:
+class Once[T]:
     ...
 ```
 
-A config: open it with `await store.kv.config(name, Type, *layers)`, whose defaults are its own.
+Answers kept once a key: open them with ``store.once(name, type)``.
 
-### Config.value
-
-```python
-@property
-def value() -> T: ...
-```
-
-The config now, made anew after each change; update changes it.
-
-### Config.update
+### Once.under
 
 ```python
-async def update(change: Mapping[str, Any]) -> None: ...
+def under(*owners: Key) -> Once[T]: ...
 ```
 
-Changes the fields change names, at any depth: each one that changed is checked, kept, and seen at once.
+The answers of a branch, each key apart from the same key elsewhere.
 
-A change validate refuses, one of a fixed field or a secret, or one leaving a required field empty, is
-InvalidError and keeps nothing.
-
-### Config.reset
+### Once.run
 
 ```python
-async def reset(*paths: str) -> None: ...
+async def run(key: Key, fn: Callable[[], Awaitable[T] | T]) -> T: ...
 ```
 
-Forgets what update kept for paths, each a field or a group of them; all of it without paths.
+The answer kept for key, or fn's, which is kept.
 
-### Config.watch
+A run of a key that another runs, here or in another process, waits for
+it and gets its answer; an exception of fn keeps nothing and is raised,
+so the next run runs fn again. A connection lost after fn returned and
+before its answer was kept is OutcomeUnknownError.
+
+### Once.get
 
 ```python
-def watch(fn: Callable[[T], object]) -> Callable[[], None]: ...
+async def get(key: Key) -> T | None: ...
 ```
 
-Calls fn with the config now and after each change, whoever made it; what it returns stops that.
+The answer kept for key, None when none is.
 
-### Config.sources
+### Once.delete
 
 ```python
-def sources() -> list[Source]: ...
+async def delete(key: Key) -> bool: ...
 ```
 
-Where each field's value came from, and why a kept value is left out.
+Forgets the answer kept for key, so that its next run runs fn again.
 
-### Config.start
+## Tx
 
 ```python
-async def start() -> None: ...
+class Tx:
+    ...
 ```
 
-Follows the config's changes until the store closes; returns once the first state is read.
+The calls of a transaction, each through ``tx.with_(handle)``.
 
-### Config.stop
+### Tx.with_
 
 ```python
-def stop() -> None: ...
+@overload
+def with_[T](handle: Bucket[T]) -> TxBucket[T]: ...
+@overload
+def with_(handle: Counters) -> TxCounters: ...
+@overload
+def with_[T](handle: Queue[T]) -> StoreTxQueue[T]: ...
+@overload
+def with_[T](handle: Channel[T]) -> TxChannel[T]: ...
+def with_(
+    handle: Bucket[Any] | Counters | Queue[Any] | Channel[Any],
+) -> TxBucket[Any] | TxCounters | StoreTxQueue[Any] | TxChannel[Any]: ...
 ```
 
-Stops following the config, as the store does when it closes.
+Takes a handle into the transaction: its calls then go through it.
 
-<!-- Generated by task reference from sdk/python/src/tinystore/kv.py, sdk/python/src/tinystore/limiter.py, sdk/python/src/tinystore/quota.py, sdk/python/src/tinystore/config.py. Edit the doc comments there, not this file. -->
+### Tx.takes
+
+```python
+def takes(parts: Parts, file: Literal['kv.db', 'jobs.db'], what: str) -> None: ...
+```
+
+### Tx.read
+
+```python
+async def read(parts: Parts, key: Key) -> dict[str, Any]: ...
+```
+
+What the key holds as this transaction sees it: its own writes over what the store held.
+
+### Tx.write
+
+```python
+def write(
+    method: str,
+    parts: Parts,
+    fields: dict[str, Any],
+    found: dict[str, Any] | None = None,
+) -> None: ...
+```
+
+Keeps a write for the commit; found is what a read of its key answers after it.
+
+### Tx.clear
+
+```python
+def clear(parts: Parts) -> None: ...
+```
+
+### Tx.after
+
+```python
+def after(fn: Callable[[], Awaitable[None]]) -> None: ...
+```
+
+What the commit does once it answered: a message published inside is handed over then.
+
+### Tx.commit
+
+```python
+async def commit() -> None: ...
+```
+
+Commits the writes, then does what waited for the commit.
+
+## TxBucket
+
+```python
+class TxBucket[T]:
+    ...
+```
+
+A bucket's calls inside a transaction: reads answer at once, writes wait for its commit.
+
+### TxBucket.under
+
+```python
+def under(*owners: Key) -> TxBucket[T]: ...
+```
+
+### TxBucket.get
+
+```python
+async def get(key: Key) -> T | None: ...
+```
+
+### TxBucket.entry
+
+```python
+async def entry(key: Key) -> Entry[T] | None: ...
+```
+
+### TxBucket.has
+
+```python
+async def has(key: Key) -> bool: ...
+```
+
+### TxBucket.set
+
+```python
+async def set(
+    key: Key,
+    value: T,
+    *,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
+    **check: Unpack[IfVersion],
+) -> None: ...
+```
+
+### TxBucket.create
+
+```python
+async def create(
+    key: Key,
+    value: T,
+    *,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
+) -> bool: ...
+```
+
+Writes the value only where no live key is, and says whether it will.
+
+### TxBucket.add
+
+```python
+async def add(
+    key: Key,
+    *,
+    ttl: Duration | None = None,
+    expires_at: datetime | None = None,
+) -> bool: ...
+```
+
+### TxBucket.take
+
+```python
+async def take(key: Key, **check: Unpack[IfVersion]) -> T | None: ...
+```
+
+### TxBucket.delete
+
+```python
+async def delete(key: Key, **check: Unpack[IfVersion]) -> bool: ...
+```
+
+### TxBucket.expire
+
+```python
+async def expire(
+    key: Key,
+    when: Duration | datetime,
+    **check: Unpack[IfVersion],
+) -> bool: ...
+```
+
+### TxBucket.clear
+
+```python
+async def clear() -> None: ...
+```
+
+Removes this branch's keys and every branch's under it, with the commit.
+
+## TxCounters
+
+```python
+class TxCounters:
+    ...
+```
+
+Counters inside a transaction: an add commits with its writes.
+
+### TxCounters.under
+
+```python
+def under(*owners: Key) -> TxCounters: ...
+```
+
+### TxCounters.add
+
+```python
+async def add(key: Key, n: int = 1) -> None: ...
+```
+
+Adds n, 1 unless given, with the commit; the count is known once it has.
+
+<!-- Generated by task reference from sdk/python/src/tinystore/kv.py, sdk/python/src/tinystore/limits.py, sdk/python/src/tinystore/once.py, sdk/python/src/tinystore/tx.py. Edit the doc comments there, not this file. -->

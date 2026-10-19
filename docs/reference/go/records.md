@@ -1,505 +1,591 @@
 # Records API for Go
 
-Every public type, function and constant of the Records engine in `github.com/tinyshed/tinystore/records` and `github.com/tinyshed/tinystore/records/console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Python](../python/records.md) pages list the same API.
+Every public type, function and constant of the Records engine in `tinyshed.org/tinystore/records` and `tinyshed.org/tinystore/console`, generated from its source. The [Records guide](../../records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md) and [Python](../python/records.md) pages list the same API.
 
-## LimitRecordBytes
-
-```go
-const (
-	LimitRecordBytes = "bytes of a record, a block's"
-	LimitAppendBytes = "bytes of records in one Append, a segment's; split it"
-)
-```
-
-The names of a record's limits, which a LimitError's Name holds.
-
-## TraceOf
+## Buffer
 
 ```go
-func TraceOf(ctx context.Context) (TraceID, SpanID)
+func Buffer(lines int) console.Option
 ```
 
-TraceOf is the trace and span ctx carries, both zero when it carries none.
+Buffer is the lines a store's handler holds for the store, 1024 unless given: past it a line is dropped and counted, never waited for.
+
+## Keep
+
+```go
+func Keep(d time.Duration) keep
+```
+
+Keep is how long the stream keeps its events, kept in its file with it: an events handle and a store's handler of one name share it. An open that gives none changes nothing; a stream nobody gave one keeps 14 days.
 
 ## WithTrace
 
 ```go
-func WithTrace(ctx context.Context, trace TraceID, span SpanID) context.Context
+func WithTrace(ctx context.Context, traceID, spanID string) context.Context
 ```
 
-WithTrace is ctx carrying a trace and the span inside it. A line logged with it through the Handler, and a record appended with it that names no trace of its own, take both:
+WithTrace is ctx carrying a trace and the span inside it, as a traceparent header's 32 and 16 hex digits: a line logged and an event appended with it, however deep, take them. Ids that are not hex of that length are no trace, as W3C's traceparent ignores them; a span may be "".
 
-	ctx = records.WithTrace(ctx, trace, span)
-	logger.InfoContext(ctx, "charged")   →  a record of that trace and span
+## AllEvents
 
-It takes no dependency on a tracing library: OpenTelemetry's ids are the same bytes, records.TraceID(span.SpanContext().TraceID()).
+```go
+type AllEvents struct {
+	// contains filtered or unexported fields
+}
+```
+
+AllEvents is every stream's events, to read, and what a store holds of them.
+
+### OpenAllEvents
+
+```go
+func OpenAllEvents(store *tinystore.Store) (*AllEvents, error)
+```
+
+OpenAllEvents is every stream's events of the store, to read.
+
+### AllEvents.Aggregate
+
+```go
+func (a *AllEvents) Aggregate(ctx context.Context, q Query) ([]Row, error)
+```
+
+Aggregate is a row for each span of Every and each value of the keys of By, with its count, the Stats of its fields and their Distinct values.
+
+### AllEvents.All
+
+```go
+func (a *AllEvents) All(ctx context.Context, q Query) iter.Seq2[Event, error]
+```
+
+All is every event the query finds, a page after another, holding nothing between pages.
+
+### AllEvents.Count
+
+```go
+func (a *AllEvents) Count(ctx context.Context, q Query) (int, error)
+```
+
+Count is how many events the query finds.
+
+### AllEvents.Damaged
+
+```go
+func (a *AllEvents) Damaged(ctx context.Context) ([]Damage, error)
+```
+
+Damaged is what reads met that no longer reads, which Drop removes: each head row and segment with its times.
+
+### AllEvents.Drop
+
+```go
+func (a *AllEvents) Drop(ctx context.Context, damage Damage) error
+```
+
+Drop removes a head row or a segment that Damaged listed, so that the reads over it work again; one that still reads is never dropped.
+
+### AllEvents.FieldNames
+
+```go
+func (a *AllEvents) FieldNames(ctx context.Context, q Query) ([]string, error)
+```
+
+FieldNames is the keys the events hold, in fields and in context, sorted; Prefix narrows them.
+
+### AllEvents.List
+
+```go
+func (a *AllEvents) List(ctx context.Context, q Query) (Page, error)
+```
+
+List is one page of every stream's events, from one moment of the file; Streams narrows them.
+
+### AllEvents.Poll
+
+```go
+func (a *AllEvents) Poll(ctx context.Context, cursor string) (Batch, error)
+```
+
+Poll is every event once, a batch a call, from a cursor the program keeps, the oldest event kept from "". With no event past the cursor, the batch is empty and its cursor the one given. It reads what the store has packed, which a stream's waiting events are once a segment's worth or an hour old.
+
+### AllEvents.Streams
+
+```go
+func (a *AllEvents) Streams(ctx context.Context) ([]Stream, error)
+```
+
+Streams is every stream with events, by name, with what it keeps, where that begins and its newest event's time.
+
+### AllEvents.Tail
+
+```go
+func (a *AllEvents) Tail(ctx context.Context, q Query) iter.Seq2[TailBatch, error]
+```
+
+Tail is the events written from now on that the query finds, a batch as they are written. A reader slower than the writers skips what left the store's hold, and the batch after says how many. It ends when the loop is left, ctx is done or the store closes.
+
+### AllEvents.Top
+
+```go
+func (a *AllEvents) Top(ctx context.Context, key string, q Query) ([]Top, error)
+```
+
+Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name or level.
+
+## AppendOption
+
+```go
+type AppendOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+AppendOption is what an append gives besides a name and fields.
+
+### At
+
+```go
+func At(t time.Time) AppendOption
+```
+
+At is the event's time: from what its stream keeps to ten minutes ahead.
+
+### Context
+
+```go
+func Context(value any) AppendOption
+```
+
+Context is what the event happened in: who asked, which request.
 
 ## Batch
 
 ```go
 type Batch struct {
-	Records []Record
-	Next    Cursor
+	Events []Event
+	// Cursor is where the next poll begins, kept once these events are safe.
+	Cursor string
+	// Expired is the events keep removed before the cursor reached them.
 	Expired int
 }
 ```
 
-Batch is what Follow read. Expired counts the segments retention removed before the cursor reached them.
-
-## Budget
-
-```go
-type Budget struct {
-	Blocks, Bytes, Decoded int
-}
-```
-
-Budget bounds one Scan before it starts: the blocks it may open, the bytes it may fetch and the records it may decode. Reaching it ends a page early rather than failing the read.
-
-## Cursor
-
-```go
-type Cursor struct {
-	Segment int64
-	Row     int
-}
-```
-
-Cursor is a place in the sealed segments, in the order they were sealed: the record at Row of the segment Segment. The zero Cursor is the oldest segment still kept.
+Batch is every event once, a batch a poll: its events, where the next poll begins, and what expired before it.
 
 ## Damage
 
 ```go
 type Damage struct {
-	Stream   string
-	Segment  int64     // a sealed segment, dropped whole; zero for a head row
-	HeadRow  int64     // zero for a segment
-	From, To time.Time // the times it held
-	Reason   string    // the invariant its bytes broke
+	// Part is "head row" or "segment".
+	Part        string
+	ID          int64
+	Stream      string
+	First, Last time.Time
+	Error       string
 }
 ```
 
-Damage is a row that no longer reads: a head row, or a sealed segment with its blocks. Its records are lost; Drop removes it, so that the reads over it work again.
+Damage is a head row or a segment that no longer reads, as Damaged lists it and Drop takes it.
 
-## DamageError
+## Event
 
 ```go
-type DamageError struct {
-	Damage Damage
-	Err    error
+type Event struct {
+	// At is the zero time for now on a write.
+	At time.Time
+	// Stream is the stream a read found it in.
+	Stream string
+	// Name is what happened; "log" for a logger's line.
+	Name string
+	// Level is nil for an event without one, and slog's number on a read.
+	Level   slog.Leveler
+	Message string
+	// Fields is what happened: on a write any value JSON writes as an object,
+	// a Fields or a struct; on a read the object's JSON as the file keeps it, a
+	// json.RawMessage, its spelling, its keys' order and a key written twice
+	// as they were. Nil when it has none.
+	Fields any
+	// Context is what it happened in, as Fields is: a logger's With, an Append's Context.
+	Context any
+	// TraceID is 32 hex digits, as a traceparent header writes it: the
+	// context's trace on a write unless given.
+	TraceID string
+	// SpanID is 16 hex digits.
+	SpanID string
 }
 ```
 
-DamageError is a read, a follow or a seal that met a damaged row. errors.Is finds tinystore.ErrCorrupt in it, and its Damage is what to Drop.
+Event is an event: what AppendMany writes and what a read gives back. A read fills every field it has; a write gives a name and what it knows, its time now unless given, from what the stream keeps to ten minutes ahead.
 
-### DamageError.Error
-
-```go
-func (e *DamageError) Error() string
-```
-
-### DamageError.Unwrap
+## Events
 
 ```go
-func (e *DamageError) Unwrap() error
-```
-
-## Field
-
-```go
-type Field struct {
-	Key   string
-	Value string
+type Events struct {
+	// contains filtered or unexported fields
 }
 ```
 
-Field is one key and its value as JSON, spelled as it was given: 1.2300, -0, a big integer and a nested object come back byte for byte.
+Events is a stream of events: written with Append, which returns once the file holds them, and read back.
 
-### Bool
+### OpenEvents
 
 ```go
-func Bool(key string, value bool) Field
+func OpenEvents(store *tinystore.Store, stream string, opts ...Option) (*Events, error)
 ```
 
-### Float
+OpenEvents opens a stream of events. It opens at its first call; its error is a name or an option it refuses.
+
+### Events.Aggregate
 
 ```go
-func Float(key string, value float64) Field
+func (e *Events) Aggregate(ctx context.Context, q Query) ([]Row, error)
 ```
 
-Float writes the shortest spelling that reads back as the same float. NaN and the infinities, which JSON has no number for, become the strings "NaN", "+Inf" and "-Inf".
+Aggregate is a row for each span of Every and each value of the keys of By, with its count, the Stats of its fields and their Distinct values.
 
-### Int
+### Events.All
 
 ```go
-func Int(key string, value int64) Field
+func (e *Events) All(ctx context.Context, q Query) iter.Seq2[Event, error]
 ```
 
-### JSON
+All is every event the query finds, a page after another, holding nothing between pages.
+
+### Events.Append
 
 ```go
-func JSON(key string, value []byte) Field
+func (e *Events) Append(ctx context.Context, name string, fields any, opts ...AppendOption) error
 ```
 
-JSON keeps value as it is; Append refuses it unless it is valid JSON.
+Append writes an event: fields any value JSON writes as an object, a Fields or a struct. It returns once the event is written, and a read finds it at once.
 
-### String
+### Events.AppendMany
 
 ```go
-func String(key, value string) Field
+func (e *Events) AppendMany(ctx context.Context, events []Event) error
 ```
 
-## Maintenance
+AppendMany writes a list of events whole or not at all; a refused event names its place in the list and its name.
+
+### Events.Count
 
 ```go
-type Maintenance struct {
-	SealedSegments, SealedRecords int
-	ExpiredSegments, ExpiredHeads int
-	// MergedSegments counts the segments a merge moved into another segment of
-	// their stream, each keeping its place for Follow. MergedRecords counts
-	// the records the merges wrote again.
-	MergedSegments, MergedRecords int
-	// Damaged counts the head rows that no longer read, which the rest of
-	// their heads sealed around.
-	Damaged int
+func (e *Events) Count(ctx context.Context, q Query) (int, error)
+```
+
+Count is how many events the query finds.
+
+### Events.FieldNames
+
+```go
+func (e *Events) FieldNames(ctx context.Context, q Query) ([]string, error)
+```
+
+FieldNames is the keys the events hold, in fields and in context, sorted; Prefix narrows them.
+
+### Events.Lines
+
+```go
+func (e *Events) Lines(ctx context.Context) (*Lines, error)
+```
+
+Lines is a writer of another program's output into this stream, each line an event at the time it arrived; a stack trace's or a JSON value's lines make one, and a write never waits. Close hands over what it holds.
+
+	out, err := worker.Lines(ctx)
+	cmd.Stdout = out
+	err = cmd.Run()
+	err = out.Close()
+
+### Events.List
+
+```go
+func (e *Events) List(ctx context.Context, q Query) (Page, error)
+```
+
+List is one page of the stream's events, from one moment of its file.
+
+### Events.Name
+
+```go
+func (e *Events) Name() string
+```
+
+Name is the stream's name.
+
+### Events.Tail
+
+```go
+func (e *Events) Tail(ctx context.Context, q Query) iter.Seq2[TailBatch, error]
+```
+
+Tail is the events written from now on that the query finds, a batch as they are written. A reader slower than the writers skips what left the store's hold, and the batch after says how many. It ends when the loop is left, ctx is done or the store closes.
+
+### Events.Top
+
+```go
+func (e *Events) Top(ctx context.Context, key string, q Query) ([]Top, error)
+```
+
+Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name or level.
+
+## Fields
+
+```go
+type Fields map[string]any
+```
+
+Fields is what an event holds: any value JSON writes, by key.
+
+## Handler
+
+```go
+type Handler struct {
+	// contains filtered or unexported fields
 }
 ```
 
-Maintenance is what one Maintain call did.
+Handler is a slog.Handler of a store's: each line printed as console.NewHandler prints it, and kept in its stream as an event named log, its message the line's, the call's attributes its fields and those of logger.With its context. A call never waits for the store: lines wait in a bounded buffer and go every second, or once half of it waits, and what does not fit, or a write that fails, is dropped and counted, and said in TinyStore's own lines, since no call waits to be told. The store's close hands over what it holds. It is a slog.Handler as any other: slog.SetDefault takes it, and with console.Off it sits beside a program's own handler.
 
-## Options
+	handler := records.NewHandler(store, "api", console.Redact(console.Secrets...))
+	log := slog.New(handler)
+	log.Info("signed in", "user", 42)
+	handler.Event("signup", "plan", "pro")
+
+### NewHandler
 
 ```go
-type Options struct {
-	// Retention is how long a record is kept: a segment goes once its newest
-	// record is older, and Append refuses an older one. Fourteen days when
-	// zero.
-	Retention time.Duration
+func NewHandler(store *tinystore.Store, stream string, options ...console.Option) *Handler
+```
 
-	// RetentionOf keeps the records of a stream, named exactly, as long as its
-	// duration instead of Retention.
-	RetentionOf map[string]time.Duration
+NewHandler is a store's handler of a stream, with console's options and Keep and Buffer. Its level follows the config log, which it opens in the background: a change of it reaches every handler of the store, in every process, until it is reset. A stream's name the store refuses panics, as a pattern regexp.MustCompile refuses does: it is the program's, not its input's.
 
-	// ClockSkew is how far ahead of the store's clock a record's time may be;
-	// Append refuses a later one, which would hold its segment past retention.
-	// Ten minutes when zero.
-	ClockSkew time.Duration
+### Handler.Dropped
 
-	// SealAge is how long a quiet stream's records wait in the head before
-	// they are sealed however few they are, and so how far Follow may lag
-	// behind them: longer means fewer, larger segments. An hour when zero.
-	SealAge time.Duration
+```go
+func (h *Handler) Dropped() int
+```
 
-	// Buffer is how many records the handler holds in memory; beyond it a
-	// record is dropped and counted, never waited for. 1024 when zero.
-	Buffer int
+Dropped is the lines dropped since the handler began: a full buffer, or a write that failed.
 
-	// Flush is how often the handler writes what it holds, and sooner once
-	// half its Buffer waits. A second when zero.
-	Flush time.Duration
+### Handler.Enabled
 
-	// Budget is the most one Read may spend; a query may only narrow it.
-	Budget Budget
+```go
+func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool
+```
+
+### Handler.Event
+
+```go
+func (h *Handler) Event(name string, args ...any)
+```
+
+Event writes an event of the stream: named for itself, with no level and no message, its fields slog's key and value pairs, at once and dropped under load as a line is. An event that must not be lost is Append's.
+
+### Handler.EventContext
+
+```go
+func (h *Handler) EventContext(ctx context.Context, name string, args ...any)
+```
+
+EventContext is Event in ctx, whose trace it takes.
+
+### Handler.Flush
+
+```go
+func (h *Handler) Flush(ctx context.Context) error
+```
+
+Flush hands what the buffer holds to the store now, as the timer does every second; what a write that failed held is dropped and counted.
+
+### Handler.Handle
+
+```go
+func (h *Handler) Handle(ctx context.Context, record slog.Record) error
+```
+
+### Handler.WithAttrs
+
+```go
+func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler
+```
+
+### Handler.WithGroup
+
+```go
+func (h *Handler) WithGroup(name string) slog.Handler
+```
+
+## Lines
+
+```go
+type Lines struct {
+	// contains filtered or unexported fields
 }
 ```
+
+Lines is a writer of another program's output into a stream, as Events.Lines begins it: each line becomes an event, and a write never waits. It sends whole lines, so that what it has no room for, Dropped counts as lines. The store's close hands over what it holds.
+
+### Lines.Close
+
+```go
+func (l *Lines) Close() error
+```
+
+Close ends the writer: what it holds goes, a last line without its newline too, and it returns once the store wrote them.
+
+### Lines.Dropped
+
+```go
+func (l *Lines) Dropped() int
+```
+
+Dropped is the lines dropped: past what the writer holds, and, once it closed, by the store.
+
+### Lines.Write
+
+```go
+func (l *Lines) Write(p []byte) (int, error)
+```
+
+Write takes a piece of output, cut anywhere; it never waits.
+
+## Option
+
+```go
+type Option interface {
+	// contains filtered or unexported methods
+}
+```
+
+Option is how a stream opens.
 
 ## Page
 
 ```go
 type Page struct {
-	Records []Record
-	// More says the limit or the budget ended the page before the range did.
-	More bool
-	// Next is the same query with its range moved past this page.
-	Next Query
+	Events []Event
+	Next   string
 }
 ```
 
-Page is one bounded part of an answer, in event-time order. It never splits a timestamp.
-
-## Printer
-
-```go
-type Printer struct {
-	// contains filtered or unexported fields
-}
-```
-
-Printer writes records as a logger's console writes its lines: pretty for a person at a terminal, its levels in colour where the terminal shows them, and one JSON object a line otherwise, unless format says which. The tinystore command prints a store's records with one.
-
-### NewPrinter
-
-```go
-func NewPrinter(w io.Writer, format console.Format) *Printer
-```
-
-NewPrinter prints to w, which is a terminal only when it is a file that is one. console.Off prints nothing.
-
-### Printer.Print
-
-```go
-func (p *Printer) Print(r Record)
-```
-
-Print writes a record, a whole line a write.
+Page is a page of events, and where the next begins: "" on the last.
 
 ## Query
 
 ```go
 type Query struct {
-	From, To time.Time
-	// Since, when it is not zero, starts the range that long before the
-	// store's clock; From then stays zero.
+	// Since is the span before now; or From and To.
 	Since time.Duration
-	// Streams matches a record of any one of them.
+	// From is the range's start, included, and To its end, excluded; open when zero.
+	From, To time.Time
+	// Streams is any of these streams, for every stream's read; a stream reads its own.
 	Streams []string
-	// Names matches a record of any one of them.
+	// Names is any of these names: {"log"} is the lines.
 	Names []string
-	// MinLevel matches a level of MinLevel or above. A record without a level
-	// does not match.
-	MinLevel *slog.Level
-	TraceID  TraceID
-	// Attrs matches a record holding each field, by key and exact JSON
-	// spelling.
-	Attrs []Field
-	// Context matches a record holding each field, by key and exact JSON
-	// spelling.
-	Context []Field
-	// Search matches a record whose body, or name, holds the text, its case
-	// ignored. Each record the rest of the query leaves is read for it, so a
-	// search over much text ends pages early at its Budget, never fails.
+	// MinLevel is this level and worse; an event without a level is not found.
+	MinLevel slog.Leveler
+	TraceID  string
+	Where    Where
+	// Search is this text in the message, the name or a value, as a phrase, its case ignored.
 	Search string
-	Newest bool   // newest first; oldest first otherwise
-	Limit  int    // records a page returns: 1000 when zero, at most 10000
-	Budget Budget // may only narrow Options.Budget
+	// Newest reads newest first; oldest first without it.
+	Newest bool
+	// Limit is a page's events, 1000 and 10,000 at most; a top's values, ten
+	// and 1000 at most; field names' keys.
+	Limit int
+	// After is a page's Next, with the rest of the query as it was.
+	After string
+
+	// Every is the span of an aggregate's row: the range is one without it.
+	Every time.Duration
+	// By is keys whose every value has rows of its own.
+	By []string
+	// Stats is fields whose numbers a row sums.
+	Stats []string
+	// Distinct is fields whose different values a row counts.
+	Distinct []string
+	// Prefix narrows the keys FieldNames gives.
+	Prefix string
 }
 ```
 
-Query selects the records in \[From, To), or over the last Since, that meet every condition given.
+Query is what a read finds: every condition given holds, and a condition left at its zero value is not given. A program that may lack a trace id checks it before it asks, since "" reads every trace.
 
-	Query{Since: time.Hour, MinLevel: &warn}            the last hour's warnings
-	Query{From: start, To: end, Streams: []string{"api"}}
+	records.Query{Since: time.Hour, MinLevel: slog.LevelWarn}
+	records.Query{From: start, To: end, Streams: []string{"api"}, Where: records.Where{"user": 42}}
 
-## Record
+## Row
 
 ```go
-type Record struct {
-	At     time.Time // unix nanoseconds in the file, read back in UTC
-	Stream string    // a namespace the application names: a service, a container
-	Name   string    // the event: "click", "checkout"; the slog handler writes "log"
-	// Level is absent when nil.
-	Level *slog.Level
-	// Body is absent when nil, which is not the same as an empty body.
-	Body *string
-	// TraceID is none when zero.
-	TraceID TraceID
-	// SpanID is none when zero.
-	SpanID SpanID
-	// Context says who produced the record. It keeps its order and repeated
-	// keys.
-	Context []Field
-	// Attrs says what happened. It keeps its order and repeated keys.
-	Attrs []Field
+type Row struct {
+	// At is where the row's span begins, counted from 1970 in UTC.
+	At    time.Time
+	Count int
+	// By is each key's value, its numbers a json.Number; nil for events without it.
+	By       map[string]any
+	Stats    map[string]Stats
+	Distinct map[string]int
 }
 ```
 
-Record is one log line or event.
-
-## RecordError
-
-```go
-type RecordError struct {
-	Index        int
-	Stream, Name string
-	Err          error
-}
-```
-
-RecordError is an Append refused because of one record. Nothing was written, so the others may be sent again without it.
-
-### RecordError.Error
-
-```go
-func (e *RecordError) Error() string
-```
-
-### RecordError.Unwrap
-
-```go
-func (e *RecordError) Unwrap() error
-```
-
-## SpanID
-
-```go
-type SpanID [8]byte
-```
+Row is a row of an aggregate: a span of Every and a value of each key of By, with its count.
 
 ## Stats
 
 ```go
 type Stats struct {
-	// Dropped is the sum of the three reasons that follow.
-	Appended, Dropped uint64
-	// DroppedFull is a full buffer, DroppedInvalid an invalid or
-	// out-of-window record, and DroppedWrite a failed flush.
-	DroppedFull, DroppedInvalid, DroppedWrite uint64
-	SealedSegments, ExpiredSegments           uint64
-	MergedSegments                            uint64
-	Queries                                   uint64
-	// ReadBlocks and ReadBytes are what reads and follows fetched. They count
-	// blocks and head rows, and their bytes with the segment rows beside them:
-	// the figures a Budget bounds.
-	ReadBlocks, ReadBytes uint64
-	// Damaged is how many rows this handle has met that no longer read and
-	// are not dropped.
-	Damaged uint64
+	Samples       int
+	Sum, Min, Max json.Number
+	Avg           float64
 }
 ```
 
-Stats counts this handle's work.
+Stats is a field's numbers in a row: an integer's sum exact however large it grows, or a float's, as json.Number spells them; Samples are the numbers, which Avg divides Sum by.
 
-## Store
+## Stream
 
 ```go
-type Store struct {
-	// contains filtered or unexported fields
+type Stream struct {
+	Name string
+	Keep time.Duration
+	// RetainedFrom is its oldest event, or where its keep begins while it holds older.
+	RetainedFrom time.Time
+	Newest       time.Time
 }
 ```
 
-### Open
+Stream is a stream with events: what it keeps, where that begins, and its newest event's time.
+
+## TailBatch
 
 ```go
-func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error)
+type TailBatch struct {
+	Events []Event
+	Missed int
+}
 ```
 
-Open opens records.db inside the store. The store closes it and, unless it is Manual, writes what the handler holds every Options.Flush, and seals and expires every minute.
+TailBatch is a tail's batch: the events written since the last, and how many it missed.
 
-### Store.All
+## Top
 
 ```go
-func (s *Store) All(ctx context.Context, query Query) iter.Seq2[Record, error]
+type Top struct {
+	// Value is the JSON value, its numbers a json.Number.
+	Value any
+	Count int
+}
 ```
 
-All walks every record a query selects, a page at a time, holding no snapshot between pages; an error ends the walk after it is yielded.
+Top is one of a key's most frequent values, and how many events hold it.
 
-### Store.Append
+## Where
 
 ```go
-func (s *Store) Append(ctx context.Context, batch ...Record) error
+type Where map[string]any
 ```
 
-Append writes every record or none, in one transaction, and a Scan sees them as soon as it returns. A record the format cannot keep, or whose time is past retention or more than ClockSkew ahead of the store's clock, is a \*RecordError naming it. A record of no trace takes ctx's, from WithTrace.
-
-### Store.Close
-
-```go
-func (s *Store) Close(ctx context.Context) error
-```
-
-Close writes what the handler still holds, lets the work in flight finish and closes records.db; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
-
-### Store.Damaged
-
-```go
-func (s *Store) Damaged() []Damage
-```
-
-Damaged lists the rows this handle has met that no longer read, in the order it met them: what Drop removes.
-
-### Store.Drop
-
-```go
-func (s *Store) Drop(ctx context.Context, damage Damage) error
-```
-
-Drop removes a damaged head row, or a damaged segment with all its blocks, in one transaction, and forgets it. It refuses a row that still reads with tinystore.ErrConflict, so that it removes only what is lost already. Follow counts a dropped segment in Batch.Expired, as it counts retention's.
-
-### Store.Flush
-
-```go
-func (s *Store) Flush(ctx context.Context) error
-```
-
-Flush writes what the handler has queued, and the records that writers of Lines held through a whole flush without a line joining them. It appends one segment's worth of input at a time.
-
-A write that fails is dropped and counted with what was to follow it, as a full buffer's lines are.
-
-### Store.Follow
-
-```go
-func (s *Store) Follow(ctx context.Context, after Cursor, limit int) (Batch, error)
-```
-
-Follow returns up to limit records of the sealed segments from after on: segments in the order they were sealed, each one's records in event-time order, and the cursor to continue from. A record reaches Follow once its head is sealed, a segment's worth or SealAge after it arrived; Read sees it at once. A late record is in a later segment than its neighbours in time.
-
-### Store.Handler
-
-```go
-func (s *Store) Handler(stream string, options ...console.Option) slog.Handler
-```
-
-Handler queues the application's log lines for stream and never blocks its caller: when the buffer is full a line is dropped and counted in Stats. Lines of the records engine itself are kept out of the store, or writing a log would log again.
-
-A line becomes a record named "log" whose body is the message. The attributes of logger.With are its context, who is speaking, and the call's are its attributes; a group's keys are written group.key, and a value is spelled as slog.JSONHandler spells it, an error as its message. A line logged with a context of WithTrace takes its trace and span.
-
-Each line is also written to standard error as it is logged, as console.Handler writes it, and the options are console's: the format, the level, the fields to redact, the environment's names. The engine's own lines reach the console from Info up, and never the store.
-
-	slog.New(logs.Handler("api", console.JSON, console.Redact(console.Secrets...)))
-
-### Store.Lines
-
-```go
-func (s *Store) Lines(stream string) io.WriteCloser
-```
-
-Lines is a writer for another program's output, a child process's stdout or a file being followed: each line it is given becomes a record in stream, queued as the handler queues its lines. A Write never waits, and a record the buffer has no room for is dropped and counted in Stats. A line larger than one record's bound is dropped and counted too.
-
-The lines of one record are joined first: a stack trace's frames, a traceback, a JSON value printed over several lines. A record still growing waits a flush or two for a line that joins it; Close hands it over.
-
-A record named "log" keeps its text byte for byte as its body; one named "json" or "logfmt" keeps a JSON object's fields or logfmt pairs, which spell its line again. A record's level is taken from where pino, logfmt, glog, Redis, log4j and their kin write it, in colour or not, and its time is when its first line arrived.
-
-### Store.Maintain
-
-```go
-func (s *Store) Maintain(ctx context.Context) (Maintenance, error)
-```
-
-Maintain removes the segments and head rows retention has passed, seals every head that holds a segment's worth or has waited Options.SealAge, and merges the small segments of the streams it sealed, four of a size at a time. A head row that no longer reads is logged once, counted in Maintenance.Damaged and left for Drop; the rest of its head seals.
-
-### Store.Report
-
-```go
-func (s *Store) Report() []tinystore.Measure
-```
-
-### Store.Scan
-
-```go
-func (s *Store) Scan(ctx context.Context, query Query) (Page, error)
-```
-
-Scan returns one page of the records a query selects, in event-time order: oldest first, or newest first when it asks. A page ends where its limit or its budget ran out, never inside one timestamp; Page.More says so, and Page.Next asks for what follows. Nothing is decoded while the snapshot the page was read from is held.
-
-### Store.Snapshot
-
-```go
-func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
-```
-
-Snapshot copies records.db into dir while the engine keeps working; what the handler holds in memory is not in the copy, and the head is.
-
-### Store.Stats
-
-```go
-func (s *Store) Stats() Stats
-```
-
-## TraceID
-
-```go
-type TraceID [16]byte
-```
+Where is what a query finds in an event's fields or context: each key with this value, by the JSON it was written as.
 
 ## console.AddSource
 
@@ -536,22 +622,18 @@ NoEnv reads no variable: what the code says is what the handler does.
 ## console.Secrets
 
 ```go
-var Secrets = []string{
-	"password", "passwd", "passphrase", "secret", "token", "credential", "credentials", "authorization", "cookie",
-	"api key", "private key", "secret key", "access key", "signing key", "encryption key",
-	"connection string", "dsn",
-}
+var Secrets = logline.Secrets
 ```
 
 Secrets is what Redact takes to hide the usual secrets. It hides a counter named like one too, token\_count among them.
 
-## console.Handler
+## console.NewHandler
 
 ```go
-func Handler(stream string, options ...Option) slog.Handler
+func NewHandler(stream string, options ...Option) slog.Handler
 ```
 
-Handler writes a logger's lines to standard error, and keeps none.
+NewHandler writes a logger's lines to standard error, and keeps none.
 
 ## console.Format
 
@@ -571,15 +653,19 @@ const (
 )
 ```
 
+### console.Format.Apply
+
+```go
+func (f Format) Apply(s *logline.Settings)
+```
+
 ## console.Option
 
 ```go
-type Option interface {
-	// contains filtered or unexported methods
-}
+type Option = logline.Option
 ```
 
-Option changes a logger's lines: on the console, and in the store when the handler is a records store's.
+Option changes a logger's lines: on the console, and in the store when the handler is a store's.
 
 ### console.FromEnv
 
@@ -650,4 +736,10 @@ const (
 )
 ```
 
-<!-- Generated by task reference from records/ and records/console/. Edit the doc comments there, not this file. -->
+### console.Time.Apply
+
+```go
+func (t Time) Apply(s *logline.Settings)
+```
+
+<!-- Generated by task reference from sdk/go/records/ and sdk/go/console/. Edit the doc comments there, not this file. -->

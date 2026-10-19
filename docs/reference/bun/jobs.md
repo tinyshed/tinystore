@@ -2,305 +2,265 @@
 
 Every public class, function and type of the Jobs engine in `@tinyshed/tinystore`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
 
+## Concurrency
+
+```ts
+interface Concurrency {
+    total?: number | undefined
+    /** at most this many jobs of one group at once: one customer's backlog holds back no other */
+    group?: number | undefined
+}
+```
+
+How many jobs of a queue run at once: in all, across every worker of the store, and in each group.
+
+## Backoff
+
+```ts
+interface Backoff {
+    initial: Duration
+    max: Duration
+}
+```
+
+The wait before a retry: initial, doubling each time up to max, a tenth longer or shorter at random.
+
 ## QueueOptions
 
 ```ts
 interface QueueOptions {
-    /** how long a claim holds a job before it is given back: 30 s */
-    lease?: Duration
-    /** the attempts after which a job fails for good: 10 */
-    maxAttempts?: number
-    /** a retry's wait, doubling from first to most: a second to an hour */
-    backoff?: {
-        first?: Duration
-        most?: Duration
-    }
-    /** the jobs a queue holds before it refuses the next with LimitError: ten million */
-    maxWaiting?: number
-    /** how long a failed job is kept for Get and Scan: seven days */
-    keepFailed?: Duration
-    /** remembers a done job's key this long, so that enqueuing it again adds nothing */
-    keepDone?: Duration
-    /** the jobs that may run at once, across every worker of the store: no bound */
-    maxRunning?: number
-    /** the jobs of one group, its enqueue's `group`, that may run at once: no bound */
-    maxRunningInGroup?: number
-    /** how many jobs may start in any span, across every worker of the store: `'30/s'` */
-    rate?: Rate
-    /**
-     * keeps the queue in this database's file instead of jobs.db, so that a
-     * batch of the database commits a job with its rows: `queue.withTx(tx)`
-     */
-    in?: Database
+    /** runs a job gets before it fails for good, the first counted: 10 */
+    attempts?: number | undefined
+    /** 1s doubling up to 1h */
+    backoff?: Backoff | undefined
+    /** how long one run may take before its signal aborts: a minute */
+    timeout?: Duration | undefined
+    /** jobs running at once across every worker of the store: 8, or { total: 8, group: 2 }; one a worker unless given */
+    concurrency?: number | Concurrency | undefined
+    /** jobs started in any span: '30/s' */
+    rate?: Rate | undefined
+    /** how long a done job's id stays taken, so that an add of it adds nothing */
+    dedupe?: Duration | undefined
+    /** how long a failed job stays, to be found and started again: a week */
+    keep?: Duration | undefined
+    /** jobs that may wait; an add past it is LimitError: ten million */
+    maxWaiting?: number | undefined
 }
 ```
 
-## Repeat
+## JobOptions
 
 ```ts
-type Repeat = {
-    cron: string
-    zone: string
-} | {
-    daily: string
-    zone: string
-} | {
-    every: Duration
-    spread?: boolean
+interface JobOptions {
+    /** runs at this time, one past now; not beside delay */
+    at?: Time | undefined
+    /** runs this long from now */
+    delay?: Duration | undefined
+    /** the group whose running jobs the queue's concurrency.group bounds */
+    group?: string | undefined
+    /** repeats every span, each id at a phase of its own within it; needs an id */
+    every?: Duration | undefined
+    /** repeats by five cron fields, or @daily and its kind, on timeZone's wall clock; needs an id */
+    cron?: string | undefined
+    /** an IANA name, 'UTC' among them, which a cron needs: one given as undefined is InvalidError, never UTC */
+    timeZone?: string | undefined
 }
 ```
 
-When a job runs again: cron text in a zone by its name, a daily time, or
-every so often, which `spread` runs at a phase of each key's own.
+A job's time, group and repeat, as an add, a set and an update take them.
 
-## EnqueueOptions
+## AddOptions
 
 ```ts
-interface EnqueueOptions {
-    /** the job's time; one past runs now */
-    at?: Time
-    after?: Duration
-    /** names one job: enqueuing it again adds nothing and can bring it forward, never back */
-    key?: string
-    /** needs a key, since only a key stops it */
-    repeat?: Repeat
-    /** sets the time of the key's job either way, later too: a running one runs again then; needs a key */
-    move?: boolean
-    /** the group whose running jobs the queue's `maxRunningInGroup` bounds */
-    group?: string
+interface AddOptions extends JobOptions {
+    /** the job's id, 1 to 1024 bytes: what finds it again, and adds it once */
+    id?: string | undefined
 }
 ```
 
 ## JobState
 
 ```ts
-type JobState = 'waiting' | 'running' | 'failed' | 'done' | 'cancelled'
+type JobState = 'scheduled' | 'waiting' | 'running' | 'done' | 'failed' | 'cancelled'
 ```
 
-done while keepDone keeps its key; cancelled only a watcher sees
+done while dedupe keeps its id; cancelled only a watcher sees
 
-## JobEntry
+## Job
 
 ```ts
-interface JobEntry<T> {
-    key: string
+interface Job<T> {
+    id: string | undefined
     value: T
-    /** the time it runs for */
+    state: JobState
+    /** when it runs next; for one done or failed, when its last run was for */
     at: Date
     /** its attempts, a running one included */
     attempt: number
-    state: JobState
-    /** the jobs that run before a waiting one, up to 10,000; get and watch count it, scan leaves it 0 */
+    /** the jobs that run before a waiting one, up to 10,000 */
     ahead: number
-    /** what a running job's handler last reported with job.progress */
+    /** what its handler last reported of a running job */
     progress: unknown
-    /** when the last run a handler finished began: acknowledged, retried, failed or snoozed */
-    ran: Date | undefined
-    /** how many milliseconds that run took */
-    took: number | undefined
-    /** its last failure */
+    /** why its last run failed */
     error: string | undefined
-    /** a repeating job's cron text and zone */
+    group: string | undefined
+    /** a repeating job's repeat as it keeps it: '@every 30s +6178ms', '10 3 * * * Europe/Berlin' */
     repeat: string | undefined
+    /** when the last run a handler finished started and ended */
+    lastRun: {
+        startedAt: Date
+        endedAt: Date
+    } | undefined
 }
 ```
+
+A job as its queue holds it.
+
+## ListOptions
+
+```ts
+interface ListOptions {
+    /** ids that start with it, in their byte order: end it with a separator, 'chat:4:' */
+    prefix?: string | undefined
+    /** the jobs in this state alone; 'failed' with no prefix lists the last failed first */
+    state?: 'scheduled' | 'waiting' | 'running' | 'failed' | undefined
+    /** where the page before ended: its next */
+    after?: string | undefined
+    /** jobs a page holds at most: 100, 1000 at most */
+    limit?: number | undefined
+}
+```
+
+## JobPage
+
+```ts
+interface JobPage<T> {
+    jobs: Job<T>[]
+    next: string | undefined
+}
+```
+
+A page of a queue's jobs, and where the next starts when there is one.
 
 ## WorkOptions
 
 ```ts
 interface WorkOptions {
-    /** the jobs in this process's hands at once: 1, the one order a queue promises */
-    workers?: number
-    /** how long a job may be in the handler's hands, after which its attempt fails: a minute */
-    timeout?: Duration
-    /** stops taking jobs: the ones in hand finish first, and work returns */
-    signal?: AbortSignal
-    /** returns once no job is due and none runs, as a test wants it */
-    untilIdle?: boolean
+    /** the handlers this worker runs at once, under the queue's bound: its total, or one */
+    concurrency?: number | undefined
 }
 ```
 
-## Job
+## Handler
 
 ```ts
-class Job<T> {
-    readonly key: string
-    readonly value: T
+type Handler<T> = (value: T, run: Run) => unknown
+```
+
+What runs a job: it gets the job's value and its run. Returning ends the
+job done, throwing runs it again after its backoff, and returning what
+run.retry, run.snooze or run.fail made ends it so.
+
+## ScheduleWhen
+
+```ts
+type ScheduleWhen = {
+    every: Duration
+} | {
+    cron: string
+    timeZone: string
+}
+```
+
+When a schedule runs: every span, or by a cron on a time zone's wall clock.
+
+## ScheduleOptions
+
+```ts
+interface ScheduleOptions {
+    /** runs a time gets before it fails, the first counted: 10; the schedule goes on */
+    attempts?: number | undefined
+    backoff?: Backoff | undefined
+    /** how long one run may take before its signal aborts: a minute */
+    timeout?: Duration | undefined
+}
+```
+
+## Answer
+
+```ts
+class Answer {}
+```
+
+How a run ends otherwise than done, made by run.retry, run.snooze or run.fail: its handler returns it.
+
+### Answer.toString
+
+```ts
+toString(): string
+```
+
+## Run
+
+```ts
+class Run {
+    readonly id: string | undefined
     readonly at: Date
     readonly attempt: number
+    readonly group: string | undefined
     readonly signal: AbortSignal
-    settlement: Settlement | undefined
 }
 ```
 
-A job in a work loop's handler. Returning acknowledges it and throwing
-retries it, unless the handler said otherwise with retry, fail or snooze;
-the last of those it calls is how the job settles.
+This call on a job: what it is, its signal, its steps and progress, and the answers its handler returns.
 
-### Job.step
+### Run.step
 
 ```ts
 step<R>(name: string, fn: () => R | Promise<R>): Promise<R>
 ```
 
-Runs fn once in the job's run and keeps what it answers, as JSON: an
-attempt after a retry, a lost lease or a restart gets the kept answer
-back without running fn again. A step whose attempt ends before its
-answer is kept runs again, so what fn does outside the store should bear
-doing twice. A name is the step's within the run, which a loop numbers:
-'model:1', 'tool:1', 'model:2'. An answer is at most 1 MiB of JSON.
+Runs fn once in the job's run and keeps its answer, as JSON, across the
+job's attempts: the attempt after a retry, a lost worker or a restart
+gets the answer back without running fn again. A step whose attempt
+ends before its answer is kept runs again, so what fn does outside the
+store should bear doing twice. A name is the step's within its job,
+numbered in a loop: 'model:1', 'tool:1'.
 
-    const hits = await job.step('search', () => search(job.value.query))
+    const found = await run.step('search', () => search(question.text))
 
-### Job.progress
-
-```ts
-progress(progress: unknown): void
-```
-
-Reports how far the job got, any JSON within 4 KiB: get and watch show
-the latest until the job is settled. It does not wait for the server.
-
-    await transcode({ signal: job.signal, onProgress: p => job.progress(p) })
-
-### Job.retry
+### Run.setProgress
 
 ```ts
-retry(error?: unknown, when?: {
-        at?: Time
-        after?: Duration
-    }): void
+setProgress(progress: unknown): void
 ```
 
-Fails this attempt: the job runs again after its backoff, or at the time given.
+Shows how far the job got, any JSON within 4 KiB, to get: the latest
+goes, ten a second at most, and nothing waits for the server.
 
-### Job.fail
+### Run.retry
 
 ```ts
-fail(error?: unknown): void
+retry(when?: Duration | Date): Answer
 ```
 
-Fails the job for good, keeping it for keepFailed with its reason.
+Runs the job again after its backoff, or at the time given, the run counted as an attempt: return it.
 
-### Job.snooze
+### Run.snooze
 
 ```ts
-snooze(when: {
-        at?: Time
-        after?: Duration
-    }): void
+snooze(when: Duration | Date): Answer
 ```
 
-Moves the job to another time without counting the attempt.
+Runs the job again at the time given, the run not counted: return it.
 
-## ClaimedJob
+### Run.fail
 
 ```ts
-class ClaimedJob<T> {
-    readonly key: string
-    readonly value: T
-    readonly at: Date
-    readonly attempt: number
-}
+fail(reason: string | Error): Answer
 ```
 
-A job a claim leased, which its caller settles itself before the lease ends.
-
-### ClaimedJob.step
-
-```ts
-step<R>(name: string, fn: () => R | Promise<R>): Promise<R>
-```
-
-Runs fn once in the job's run and keeps its answer, as a work loop's job.step does.
-
-### ClaimedJob.ack
-
-```ts
-ack(): Promise<void>
-```
-
-The job is done.
-
-### ClaimedJob.retry
-
-```ts
-retry(error?: unknown, when?: {
-        at?: Time
-        after?: Duration
-    }): Promise<void>
-```
-
-### ClaimedJob.fail
-
-```ts
-fail(error?: unknown): Promise<void>
-```
-
-### ClaimedJob.snooze
-
-```ts
-snooze(when: {
-        at?: Time
-        after?: Duration
-    }): Promise<void>
-```
-
-### ClaimedJob.extend
-
-```ts
-extend(d: Duration): Promise<void>
-```
-
-Holds the job this much longer from now.
-
-### ClaimedJob.progress
-
-```ts
-progress(progress: unknown): Promise<void>
-```
-
-Reports how far the job got, any JSON within 4 KiB, which get and watch show until it is settled.
-
-## Jobs
-
-```ts
-class Jobs {}
-```
-
-### Jobs.queue
-
-```ts
-queue<T = unknown>(name: string, options?: QueueOptions): Queue<T>
-queue<S extends StandardSchemaV1>(name: string, schema: S, options?: QueueOptions): Queue<StandardSchemaV1.InferOutput<S>>
-```
-
-A queue of JSON values of type T.
-
-### Jobs.schedule
-
-```ts
-schedule(name: string, repeat: Repeat, options?: QueueOptions): Queue<null>
-```
-
-A schedule: a queue of one job under the schedule's name, which repeats
-as it says. work runs it; cancel stops it.
-
-## QueueTx
-
-```ts
-class QueueTx<T> {}
-```
-
-A queue's enqueue inside a batch of the database it lives in.
-
-### QueueTx.enqueue
-
-```ts
-enqueue(value: T, options?: EnqueueOptions): Promise<void>
-```
-
-Adds a job to the batch; it settles once the batch has committed.
+Fails the job for good now, its reason kept as its error: return it.
 
 ## Queue
 
@@ -310,131 +270,275 @@ class Queue<T> {
 }
 ```
 
-### Queue.withTx
+A queue of jobs of one type, run in the order of their time: open it with `store.queue(name)`.
+
+### Queue.add
 
 ```ts
-withTx(tx: SqlBatch): QueueTx<T>
+add(value: T, options?: AddOptions): Promise<boolean>
 ```
 
-The queue's enqueue inside a batch of the database it lives in, which
-it was opened `in`: the job commits with the batch's rows or not at all.
+Adds a job unless its id is taken: by a job scheduled, waiting, running
+or failed, or done while the queue's dedupe keeps it. It returns once
+the job is on disk, and says whether it added one; a job without an id
+is always added.
 
-    await db.batch(tx => {
-      tx.exec`update notes set body = ${body} where id = ${id}`
-      index.withTx(tx).enqueue({ id })
-    })
+    await reminders.add({ userId: 42, text: 'Call mom' }, { delay: '1h' })
 
-### Queue.enqueue
+### Queue.set
 
 ```ts
-enqueue(value: T, options?: EnqueueOptions): Promise<void>
+set(id: string, value: T, options?: JobOptions): Promise<void>
 ```
 
-Adds a job; it returns once the job is in the file.
+Makes the id's job this value at this time, whatever it was: one waiting
+is made new, a failed one starts again, and a running one runs once more
+after this run, with this value.
 
-### Queue.enqueueAll
-
-```ts
-enqueueAll(jobs: readonly ({
-        value: T
-    } & EnqueueOptions)[]): Promise<void>
-```
-
-Adds jobs in one transaction, all or none: a refused one names itself as `call`.
+    await checks.set(`check:${check.id}`, check, { delay: '25h' })
 
 ### Queue.update
 
 ```ts
-update(key: string, value: T, options?: Omit<EnqueueOptions, 'key' | 'move'>): Promise<void>
+update(id: string, value: T, options?: JobOptions): Promise<boolean>
 ```
 
-Changes a job that waits or failed: its value and, when the options
-say, its time, repeat or group. A job a worker holds, done or absent is
-ConflictError.
+Changes the id's job when it has not started: its value, and its time,
+group or repeat when the options give them. It says whether it did: a
+job that runs, ran or never was answers false.
 
 ### Queue.cancel
 
 ```ts
-cancel(key: string): Promise<boolean>
+cancel(id: string): Promise<boolean>
 ```
 
-Removes the job under key, whether it waits, runs or failed, and says
-whether there was one. A running job's handler sees job.signal abort,
-and what it returns settles nothing.
+Takes the job under id, whatever its state, and says whether there was
+one. A running one's handler sees its signal abort, and what it returns
+then settles nothing; a repeating one stops.
 
 ### Queue.get
 
 ```ts
-get(key: string): Promise<JobEntry<T> | undefined>
+get(id: string): Promise<Job<T> | undefined>
 ```
 
-The job a key names, waiting, running or failed, or done while keepDone
-keeps its key; undefined when none is.
+Where the job under id is: scheduled, waiting and how many jobs are
+ahead of it, running and its progress, failed and why, or done while
+the queue's dedupe keeps its id; undefined for an id with no job.
 
 ### Queue.watch
 
 ```ts
-watch(key: string): AsyncGenerator<JobEntry<T>>
+watch(id: string): AsyncGenerator<Job<T>>
 ```
 
-Yields the job under key as it is, then again each time its state,
-place, attempt, time, progress or error changes, until it ends: done,
-failed or cancelled, the last entry it yields. A key that names no job
-yields nothing. Leaving the loop ends the watch; a connection lost is
-connected again, and the watch goes on from the job as it is then.
+The job under id as it is, then again each time its state, place,
+attempt, time, progress or error changes; it ends with the job: done,
+failed, or cancelled, a state only a watcher sees. An id with no job
+yields nothing. A watch whose connection is lost watches again on the
+next; a job that ended meanwhile ends it without its last state.
 
-    for await (const s of videos.watch(id)) send(s.state, s.ahead, s.progress)
+    for await (const job of videos.watch(id)) send(job.state, job.ahead, job.progress)
 
-### Queue.scan
+### Queue.list
 
 ```ts
-scan(query?: {
-        prefix?: string
-        state?: 'failed'
-        after?: string
-        limit?: number
-    }): Promise<{
-        items: JobEntry<T>[]
-        next: string | undefined
-    }>
+list(options?: ListOptions): Promise<JobPage<T>>
 ```
 
-A page of the jobs under a prefix, in the byte order of their keys; with
-state 'failed' and no prefix, the failed jobs, the last failed first.
+A page of the queue's jobs whose ids start with a prefix, or of its failed ones.
 
 ### Queue.all
 
 ```ts
-all(query?: {
-        prefix?: string
-        state?: 'failed'
-        limit?: number
-    }): AsyncGenerator<JobEntry<T>>
+all(options?: Omit<ListOptions, 'after'>): AsyncGenerator<Job<T>>
 ```
 
-Walks scan's pages, holding no snapshot between them.
-
-### Queue.claim
-
-```ts
-claim(options?: {
-        lease?: Duration
-    }): Promise<ClaimedJob<T> | undefined>
-```
-
-Leases the next due job, or says there is none, without waiting. The
-claim lives on this connection: settle it before its lease ends.
+Every job the options name, a page at a time, holding nothing between pages.
 
 ### Queue.work
 
 ```ts
-work(handler: (job: Job<T>) => void | Promise<void>, options?: WorkOptions): Promise<void>
+work(handler: Handler<T>, options?: WorkOptions): Worker
 ```
 
-Runs the queue's jobs as they come due, workers at once, until the
-signal aborts: the server's own Work loop claims ahead and extends
-leases, and nothing polls. A handler's return acknowledges its job and a
-throw retries it. A connection lost takes the jobs in hand with it, as a
-process that died would, and the loop connects again.
+Runs handler on each job as it falls due, as many at once as the
+queue's concurrency lets, one when it sets none, and returns the running
+worker at once: stop it at shutdown, as store.close() does. A worker
+whose connection is lost reaches the store again, the jobs it held
+running again as a dead worker's would.
+
+    const worker = reminders.work(async ({ userId, text }) => push(userId, text))
+
+### Queue.runDue
+
+```ts
+runDue(handler: Handler<T>, options?: WorkOptions): Promise<number>
+```
+
+Runs what is due when it starts and what falls due meanwhile, then says
+how many jobs ran; it never waits for a later job. Tests, scripts and
+commands use it.
+
+## TxQueue
+
+```ts
+class TxQueue<T> {
+    readonly name: string
+}
+```
+
+A queue's calls inside a database's transaction, from `tx.with(queue)`: a
+job it adds is there only if the transaction commits, and the queue's
+workers find it once it has. A worker, a watch and a page work outside.
+
+### TxQueue.add
+
+```ts
+add(value: T, options?: AddOptions): Promise<boolean>
+```
+
+Adds a job unless its id is taken, as `queue.add` does, with the transaction.
+
+### TxQueue.set
+
+```ts
+set(id: string, value: T, options?: JobOptions): Promise<void>
+```
+
+### TxQueue.update
+
+```ts
+update(id: string, value: T, options?: JobOptions): Promise<boolean>
+```
+
+### TxQueue.cancel
+
+```ts
+cancel(id: string): Promise<boolean>
+```
+
+### TxQueue.get
+
+```ts
+get(id: string): Promise<Job<T> | undefined>
+```
+
+The job under id as the transaction sees it, its own writes among it.
+
+## StoreTxQueue
+
+```ts
+class StoreTxQueue<T> {
+    readonly name: string
+}
+```
+
+A queue's writes inside the store's transaction, from `tx.with(queue)` in
+`store.tx`: each is kept for the commit, which makes them all or none, so
+what one did is known once the transaction has committed.
+
+    await store.tx(async tx => {
+      for (const member of members) await tx.with(pushes).add({ member, message }, { id: `${message}:${member}` })
+    })
+
+### StoreTxQueue.add
+
+```ts
+add(value: T, options?: AddOptions): Promise<void>
+```
+
+Adds a job unless its id is taken, with the commit.
+
+### StoreTxQueue.set
+
+```ts
+set(id: string, value: T, options?: JobOptions): Promise<void>
+```
+
+Makes the id's job this value at this time, whatever it was, with the commit.
+
+### StoreTxQueue.update
+
+```ts
+update(id: string, value: T, options?: JobOptions): Promise<void>
+```
+
+Changes the id's job when it has not started, with the commit.
+
+### StoreTxQueue.cancel
+
+```ts
+cancel(id: string): Promise<void>
+```
+
+Takes the job under id, whatever its state, with the commit.
+
+## Schedule
+
+```ts
+class Schedule {
+    readonly name: string
+}
+```
+
+A repeat the code owns: one repeating job under its name, and the worker that runs it.
+
+### Schedule.get
+
+```ts
+get(): Promise<Job<null> | undefined>
+```
+
+When it runs next and how its last run went: what a page of cron jobs shows.
+
+### Schedule.runDue
+
+```ts
+runDue(): Promise<number>
+```
+
+Runs the schedule's job when it is due, as a queue's runDue does.
+
+### Schedule.stop
+
+```ts
+stop(): Promise<void>
+```
+
+Stops the schedule's worker, as a worker's stop does.
+
+### Schedule.cancel
+
+```ts
+cancel(): Promise<boolean>
+```
+
+Removes the schedule's job, until the program opens it again.
+
+## Worker
+
+```ts
+class Worker implements AsyncDisposable {}
+```
+
+A worker running a queue's handlers here while the server's loop claims their jobs.
+
+### Worker.stop
+
+```ts
+stop(): Promise<void>
+```
+
+Takes no job more and waits for the handlers under way, each bounded by
+its timeout: the server gives back the jobs it held for them, and ends
+the worker once their answers are written.
+
+### Worker.[Symbol.asyncDispose]
+
+```ts
+[Symbol.asyncDispose](): Promise<void>
+```
 
 <!-- Generated by task reference from sdk/js/src/jobs.ts. Edit the doc comments there, not this file. -->

@@ -1,471 +1,352 @@
 # Jobs API for Go
 
-Every public type, function and constant of the Jobs engine in `github.com/tinyshed/tinystore/jobs`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md) and [Python](../python/jobs.md) pages list the same API.
+Every public type, function and constant of the Jobs engine in `tinyshed.org/tinystore/jobs`, generated from its source. The [Jobs guide](../../jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md) and [Python](../python/jobs.md) pages list the same API.
 
-## LimitValueBytes
+## Scheduled
 
 ```go
 const (
-	LimitValueBytes = "bytes of a job's value"
-	LimitStepBytes  = "bytes of a step's answer"
+	Scheduled state = "scheduled"
+	Waiting   state = "waiting"
+	Running   state = "running"
+	Failed    state = "failed"
 )
 ```
 
-The names of a job's limits, which a LimitError's Name holds.
+The states a list may keep to.
 
-## ErrCancelled
-
-```go
-var ErrCancelled = errors.New("jobs: the job was cancelled while it ran")
-```
-
-ErrCancelled is the cause a handler's context ends with when Cancel takes its job while it runs; what the handler returns then settles nothing.
-
-## ErrOutcomeUnknown
+## After
 
 ```go
-var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
+func After(next string) after
 ```
 
-ErrOutcomeUnknown is returned for a write whose group's commit failed. The write may or may not be in the file, so its caller reads it back before writing again.
+After starts a page after the page before's Next.
+
+## At
+
+```go
+func At(t time.Time) at
+```
+
+At is when a job runs.
+
+## Attempts
+
+```go
+func Attempts(n int) attempts
+```
+
+Attempts is how many times a job runs before it fails for good, the first run counted: 10 unless given.
+
+## Cron
+
+```go
+func Cron(expr, timeZone string) cron
+```
+
+Cron repeats a job by a cron of five fields in a time zone, an IANA name, "UTC" among them: jobs.Cron("0 20 \* \* \*", "Europe/Berlin").
+
+## Dedupe
+
+```go
+func Dedupe(d time.Duration) dedupe
+```
+
+Dedupe is how long a done job's id stays taken, so that the same id added again meanwhile adds nothing.
+
+## Delay
+
+```go
+func Delay(d time.Duration) delay
+```
+
+Delay is how long from now a job runs, on the store's clock.
+
+## Every
+
+```go
+func Every(d time.Duration) every
+```
+
+Every repeats a job every span, which needs an id; a schedule's repeat too.
+
+## Group
+
+```go
+func Group(g string) group
+```
+
+Group is the group a job runs in, which Concurrency's Group bounds.
+
+## ID
+
+```go
+func ID(s string) id
+```
+
+ID is a job's id, which finds it again and which an add of a taken one adds nothing under.
+
+## Keep
+
+```go
+func Keep(d time.Duration) keep
+```
+
+Keep is how long a failed job stays: a week unless given.
+
+## Limit
+
+```go
+func Limit(n int) limit
+```
+
+Limit is how many jobs a page holds: 100, and 1000 at most.
+
+## MaxWaiting
+
+```go
+func MaxWaiting(n int) maxWaiting
+```
+
+MaxWaiting is how many jobs a queue holds waiting before an add is a Limit error.
+
+## Prefix
+
+```go
+func Prefix(p string) prefix
+```
+
+Prefix lists the jobs whose ids start with it.
+
+## Rate
+
+```go
+func Rate(n int, per time.Duration) rate
+```
+
+Rate bounds how many runs of a queue start a span: jobs.Rate(30, time.Second).
 
 ## Step
 
 ```go
-func Step[T, V any](ctx context.Context, job Job[V], name string, fn func(context.Context) (T, error)) (T, error)
+func Step[R any](ctx context.Context, run *Run, name string, fn func(ctx context.Context) (R, error)) (R, error)
 ```
 
-Step runs fn once for the job under name and keeps what it answered, as JSON: an attempt after a retry, a lost lease or a restart gets the kept answer back without running fn again.
+Step runs fn once in the job's run and keeps its answer, as JSON, across the job's attempts: the attempt after a retry, a lost worker or a restart gets the answer back without running fn again. A step whose attempt ends before its answer is kept runs again, so what fn does outside the store should bear doing twice. A name is the step's within its job, numbered in a loop: "model:1", "tool:1".
 
-	hits, err := jobs.Step(ctx, job, "search", func(ctx context.Context) ([]Hit, error) {
-		return search(ctx, job.Value.Query)
-	})
-
-A step whose attempt ends before its answer is kept runs again, so what fn does outside the store should bear doing twice. A name is the step's within one run of the job, which a loop numbers: "model:1", "tool:1", "model:2". A run that ends, done, failed for good or cancelled, takes its steps along, and a repeating job's next run starts without them. An answer is at most 1 MiB of JSON.
-
-## Change
+## Timeout
 
 ```go
-type Change interface {
-	Bytes() (int, error)
-	Apply(ctx context.Context, file *sqlite.File, w sqlite.Writer) error
-	Done(err error)
-}
+func Timeout(d time.Duration) timeout
 ```
 
-Change is a job a batch of the database the queues live in writes with its rows, which Enqueued gives out: see Options.In and sqldb's Batch.Add. A program does not call its methods.
+Timeout is how long one run may take: a minute unless given. Past it the run's ctx ends, and what the handler then returns settles the job.
 
-## ClaimOption
+## AddOption
 
 ```go
-type ClaimOption interface {
+type AddOption interface {
 	// contains filtered or unexported methods
 }
 ```
 
-## Database
+AddOption is what an Add gives besides its value: an id, a time, a group, a repeat.
+
+## Backoff
 
 ```go
-type Database interface {
-	SQLiteFile() *sqlite.File
+type Backoff struct {
+	Initial, Max time.Duration
 }
 ```
 
-Database is a file whose owner lets the queues live in it, as sqldb's DB does. A program does not implement it: its method names the store's own type.
+Backoff is the wait before a retry: Initial, doubling each time up to Max, a tenth longer or shorter at random; 1 s doubling to 1 h unless given.
 
-## EnqueueOption
+## Concurrency
 
 ```go
-type EnqueueOption interface {
-	// contains filtered or unexported methods
+type Concurrency struct {
+	Total, Group int
 }
 ```
 
-### Group
-
-```go
-func Group(name string) EnqueueOption
-```
-
-Group puts the job in a group of its queue, such as the customer database it works on, so that the queue's MaxRunningInGroup bounds the group's jobs that run at once. A group is 1 to 1024 bytes of text. A job keeps its group until an Update, or an Enqueue that starts it again after it failed, names another.
-
-### Key
-
-```go
-func Key(key string) EnqueueOption
-```
-
-Key names the job, so that Get, Update and Cancel find it and an Enqueue under a key whose job waits adds nothing; see the queue's rules for keys.
-
-### Move
-
-```go
-func Move() EnqueueOption
-```
-
-Move sets the time of the job under the Enqueue's key whatever it was: a waiting job moves later as well as earlier, a running one runs again at that time after this run, and a key without a job gets one. A deadline that each ping pushes back is then one call a ping:
-
-	checks.Enqueue(ctx, check, jobs.Key(id), jobs.At(now.Add(grace)), jobs.Move())
-
-In a queue with KeepDone a key still runs once.
-
-## Entry
-
-```go
-type Entry[V any] struct {
-	Key   string
-	Value V
-	// At is the time the job runs for.
-	At time.Time
-	// Attempt counts the job's attempts, a running one included.
-	Attempt int
-	State   State
-	// Ahead counts the jobs that run before a waiting one, up to 10,000, so
-	// that 10,000 reads as that many or more. Get and Watch count it; Scan
-	// leaves it zero.
-	Ahead int
-	// Progress is what the handler of a running job last reported of it, as
-	// JSON, until the attempt is settled.
-	Progress json.RawMessage
-	// Err is the job's last failure.
-	Err string
-	// Ran is when the last run a handler finished began, and Took how long it
-	// took: acknowledged, retried, failed or snoozed. Both are zero before a
-	// handler finished one, and a run given back records none.
-	Ran  time.Time
-	Took time.Duration
-	// Repeat is a repeating job's repeat as jobs.db keeps it: cron text and
-	// zone, or an interval.
-	Repeat string
-}
-```
-
-Entry is a job as the queue holds it.
-
-## EveryOption
-
-```go
-type EveryOption func(*everySettings)
-```
-
-EveryOption says where in its interval an Every runs.
-
-### Spread
-
-```go
-func Spread() EveryOption
-```
-
-Spread runs each key's job at a phase of its own within the interval, the key's FNV-1a hash modulo d, so that the jobs of many keys repeating Every(d) do not all run in the same instant. The phase is kept with the job, so a restart does not shift it either:
-
-	Every(30*time.Second, Spread()), key probe:7   @every 30s +6178ms   at :06.178 and :36.178
+Concurrency is how many jobs of a queue run at once: Total across every worker of the store, Group in each group, so that one customer's backlog holds back no other. Given to Work, Total is how many handlers that worker runs.
 
 ## Job
 
 ```go
-type Job[V any] struct {
-	Key   string
-	Value V
-	At    time.Time
-	// Attempt is this attempt's number, one for the first.
+type Job[T any] struct {
+	// ID is "" for a job added without one.
+	ID    string
+	Value T
+	State State
+	// At is when it runs next; for one done or failed, when its last run was for.
+	At time.Time
+	// Attempt counts its attempts, a running one included.
 	Attempt int
-	// contains filtered or unexported fields
+	// Ahead counts the jobs that run before a waiting one, up to 10,000.
+	Ahead int
+	// Progress is what its handler last reported of a running job, as JSON.
+	Progress json.RawMessage
+	// Error is why its last run failed.
+	Error string
+	Group string
+	// Repeat is a repeating job's repeat as it keeps it: "@every 30s +6178ms", "10 3 * * * Europe/Berlin".
+	Repeat string
+	// LastRun is when the last run a handler finished started and ended; nil before one.
+	LastRun *LastRun
 }
 ```
 
-Job is a job in a worker's hands. Its lease is held until the worker settles it with Ack, Retry, Fail or Snooze, or the lease ends and another claim may take it. Copies of a Job share its lease.
+Job is a job as its queue holds it.
 
-### Job.Ack
-
-```go
-func (j Job[V]) Ack(ctx context.Context) error
-```
-
-Ack settles the job as done and it leaves the queue. A repeating job, or one an Enqueue asked to run again while it ran, waits for its next time instead.
-
-### Job.Extend
+## LastRun
 
 ```go
-func (j Job[V]) Extend(ctx context.Context, d time.Duration) error
-```
-
-Extend makes the lease run d from now; Work extends its handlers' leases itself.
-
-### Job.Fail
-
-```go
-func (j Job[V]) Fail(ctx context.Context, cause error) error
-```
-
-Fail settles the job as failed for good: no more attempts. A repeating job waits for its next time instead, its last error kept.
-
-### Job.Keep
-
-```go
-func (j Job[V]) Keep(ctx context.Context, name string, answer json.RawMessage) error
-```
-
-Keep keeps answer, JSON, as what the job's run answered under a step's name, which Step does once its step has run: a later attempt of the run reads it with Kept. It returns once the answer is written, and refuses one whose lease another claim has taken.
-
-### Job.Kept
-
-```go
-func (j Job[V]) Kept(ctx context.Context, name string) (answer json.RawMessage, found bool, err error)
-```
-
-Kept is the answer the job's run kept under a step's name, which Step reads before it runs the step; found is false for a step not yet kept.
-
-### Job.Progress
-
-```go
-func (j Job[V]) Progress(v any)
-```
-
-Progress keeps v, as JSON, as what the handler reports of this attempt: Get and Watch show it until the attempt is settled. It lives in the store's memory and is not written to the file, since an attempt a restart ends runs again from its start. A value JSON cannot write, or one past 4 KiB, is dropped and logged once a quiet period.
-
-### Job.Retry
-
-```go
-func (j Job[V]) Retry(ctx context.Context, cause error, options ...SettleOption) error
-```
-
-Retry settles a failed attempt: the job runs again after the queue's backoff, or at jobs.At or jobs.After, and past MaxAttempts it fails for good.
-
-### Job.Snooze
-
-```go
-func (j Job[V]) Snooze(ctx context.Context, options ...SettleOption) error
-```
-
-Snooze puts the job back until jobs.At or jobs.After without counting the attempt: a provider that asks for a minute, a row that says later.
-
-## JobError
-
-```go
-type JobError struct {
-	Queue, Key string
-	Err        error
+type LastRun struct {
+	StartedAt, EndedAt time.Time
 }
 ```
 
-JobError is a call refused because of one job: its queue and key, empty for a job without one. errors.Is finds the store's sentinel in it.
+LastRun is when a run started and ended.
 
-### JobError.Error
-
-```go
-func (e *JobError) Error() string
-```
-
-### JobError.Unwrap
+## ListOption
 
 ```go
-func (e *JobError) Unwrap() error
-```
-
-## LeaseOption
-
-```go
-type LeaseOption interface {
-	QueueOption
-	ClaimOption
+type ListOption interface {
+	// contains filtered or unexported methods
 }
 ```
 
-### Lease
-
-```go
-func Lease(d time.Duration) LeaseOption
-```
-
-Lease is how long a claimed job stays its worker's before another claim may take it: 30 seconds unless it says, for a queue or for one Claim. Work extends it while its handler runs.
-
-## Maintenance
-
-```go
-type Maintenance struct {
-	Failed int // failed jobs past their queue's KeepFailed
-	Done   int // keys past their queue's KeepDone
-	Keys   int // keys that jobs gone from the queue left behind
-}
-```
-
-Maintenance is what one Maintain call removed.
-
-## Options
-
-```go
-type Options struct {
-	// In keeps the queues in a database's own file, an sqldb DB's, instead of
-	// jobs.db, so that a batch of the database commits a job with the rows it
-	// is about: see Queue.Enqueued. Its tables are named _tinystore_jobs, and
-	// the database's schema leaves them out. Nil keeps jobs.db.
-	In Database
-}
-```
-
-Options says where the store keeps its queues.
+ListOption is how a page of jobs reads.
 
 ## Page
 
 ```go
-type Page[V any] struct {
-	Entries []Entry[V]
-	// More says the limit, or the page's 4 MiB of values, ended the page before
-	// the jobs did.
-	More bool
-	// Next is the query that reads on.
-	Next Query
+type Page[T any] struct {
+	Jobs []Job[T]
+	Next string
 }
 ```
 
-Page is one page of a Scan, from one snapshot.
-
-## Query
-
-```go
-type Query struct {
-	Prefix string
-	// State narrows either listing to Waiting, Running or Failed jobs.
-	State State
-	// After is where the page before ended. Page.Next carries it.
-	After string
-	Limit int // jobs a page returns: 100 when zero, at most 1000
-}
-```
-
-Query asks Scan for a page of the queue's jobs.
-
-With a Prefix it lists the keys under it in the byte order of their text. With State Failed and no Prefix it lists the failed jobs instead, the last failed first, keyed or not.
+Page is a page of a queue's jobs, and where the next starts: "" on the last.
 
 ## Queue
 
 ```go
-type Queue[V any] struct {
+type Queue[T any] struct {
 	// contains filtered or unexported fields
 }
 ```
 
-Queue is a handle on the jobs of one type in one queue; Work and Claim hand its due jobs to whoever works them.
+Queue is a queue of jobs of one type, run in the order of their time.
 
 ### OpenQueue
 
 ```go
-func OpenQueue[V any](ctx context.Context, store *Store, name string, options ...QueueOption) (*Queue[V], error)
+func OpenQueue[T any](home tinystore.Home, name string, opts ...QueueOption) (*Queue[T], error)
 ```
 
-OpenQueue opens the queue name of jobs.db, creating it on first use. Its name and kind are kept in the file; its options are the program's, and a second handle on it in one process takes the same ones or is ErrInvalid.
+OpenQueue opens a queue of jobs of type T, kept as JSON, on a store or on a database whose file then keeps it. It opens at its first call; its error is a name or an option it refuses.
 
-### OpenSchedule
+	emails, err := jobs.OpenQueue[Email](store, "emails", jobs.Attempts(20), jobs.Backoff{Initial: 5 * time.Second, Max: 30 * time.Minute})
+
+### Queue.Add
 
 ```go
-func OpenSchedule(ctx context.Context, store *Store, name string, repeat Repeat, options ...QueueOption) (
-	*Queue[struct{}], error,
-)
+func (q *Queue[T]) Add(ctx context.Context, value T, opts ...AddOption) (bool, error)
 ```
 
-OpenSchedule opens a queue whose one job, under the queue's name, repeats: the repeat in the program is the one kept, so a changed Daily takes effect on the next open. Work it as any queue; a job's At is the time it runs for.
+Add adds a job unless its id is taken, and says whether it added one. An id is taken by a job scheduled, waiting, running or failed, or done while the queue's dedupe keeps it. It returns once the job is on disk; a job without an id is always added. Inside the store's transaction it is kept for the commit, and says true.
 
 ### Queue.All
 
 ```go
-func (q *Queue[V]) All(ctx context.Context, query Query) iter.Seq2[Entry[V], error]
+func (q *Queue[T]) All(ctx context.Context, opts ...ListOption) iter.Seq2[Job[T], error]
 ```
 
-All walks what query names a page at a time, holding no snapshot between pages, so a slow loop keeps no reader open. A job written during the walk may or may not be met.
+All is every job the options name, a page at a time, holding nothing between pages.
 
 ### Queue.Cancel
 
 ```go
-func (q *Queue[V]) Cancel(ctx context.Context, key string) (bool, error)
+func (q *Queue[T]) Cancel(ctx context.Context, id string) (bool, error)
 ```
 
-Cancel removes the job under key, whether it waits, runs or failed, and says whether there was one. A running job's handler sees its context end with ErrCancelled and what it returns settles nothing; one a Work loop keeps for a busy worker never starts. A repeating job stops repeating.
-
-### Queue.Claim
-
-```go
-func (q *Queue[V]) Claim(ctx context.Context, options ...ClaimOption) (Job[V], bool, error)
-```
-
-Claim leases the next due job to the caller for the queue's Lease, or jobs.Lease's, and says whether one was due; it does not wait. The caller settles it, or the lease ends and another claim may take it. A job whose value no longer reads into V fails for good, and the claim takes the next.
-
-### Queue.Enqueue
-
-```go
-func (q *Queue[V]) Enqueue(ctx context.Context, value V, options ...EnqueueOption) error
-```
-
-Enqueue adds a job that runs at jobs.At or jobs.After, or now, and returns once the job is in the file. A repeat needs a key.
-
-Under a key whose job waits it adds nothing, and can bring that job forward but never back, or with jobs.Move set its time either way. Under a key whose job runs it asks for one run more after it. Under a failed one it starts the job again.
-
-### Queue.Enqueued
-
-```go
-func (q *Queue[V]) Enqueued(ctx context.Context, value V, options ...EnqueueOption) Change
-```
-
-Enqueued is Enqueue as a change of a batch of the database the queues live in, so that the job commits with the batch's rows or not at all:
-
-	err := db.Batch(ctx, func(b *sqldb.Batch) error {
-		b.Exec(`update notes set body = ? where id = ?`, body, id)
-		b.Add(index.Enqueued(ctx, IndexJob{Note: id}))
-		return nil
-	})
-
-The queue's store must be opened In that database. The change takes free memory for its value and holds it until the batch ends. Memory that is not free is ErrLimit when the batch weighs the change.
+Cancel takes the job under id, whatever its state, and says whether there was one: a running one's ctx ends, and what its handler returns then settles nothing; a repeating one stops.
 
 ### Queue.Get
 
 ```go
-func (q *Queue[V]) Get(ctx context.Context, key string) (Entry[V], bool, error)
+func (q *Queue[T]) Get(ctx context.Context, id string) (Job[T], bool, error)
 ```
 
-Get reads the job under key from one snapshot: waiting, running or failed, or done while KeepDone keeps its key.
+Get is where the job under id is, and whether there is one.
 
-### Queue.Scan
+### Queue.In
 
 ```go
-func (q *Queue[V]) Scan(ctx context.Context, query Query) (Page[V], error)
+func (q *Queue[T]) In(tx tinystore.InTx) *Queue[T]
 ```
 
-Scan reads a page of the queue's jobs from one snapshot; see Query.
+In is the queue inside a transaction: the store's, whose commit makes its writes with the others, all or none, or a database's, whose writes commit with its rows.
+
+### Queue.List
+
+```go
+func (q *Queue[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error)
+```
+
+List is a page of the queue's jobs whose ids start with a prefix, or of its failed ones, the last first.
+
+### Queue.Name
+
+```go
+func (q *Queue[T]) Name() string
+```
+
+Name is the queue's name.
+
+### Queue.RunDue
+
+```go
+func (q *Queue[T]) RunDue(ctx context.Context, handler func(ctx context.Context, value T, run *Run) error, opts ...WorkOption) error
+```
+
+RunDue runs what is due when it starts and what falls due meanwhile, then returns; it never waits for a later job. Tests, scripts and commands use it.
+
+### Queue.Set
+
+```go
+func (q *Queue[T]) Set(ctx context.Context, id string, value T, opts ...SetOption) error
+```
+
+Set makes the id's job this value at this time, whatever it was: one waiting is made new, a failed one starts again, and a running one runs once more after this run, with this value.
 
 ### Queue.Update
 
 ```go
-func (q *Queue[V]) Update(ctx context.Context, key string, value V, options ...EnqueueOption) error
+func (q *Queue[T]) Update(ctx context.Context, id string, value T, opts ...SetOption) (bool, error)
 ```
 
-Update gives a job that still waits, or failed, a new value, and a new time or repeat when options name one. A failed job waits again with its attempts from zero, now unless they name a time. A job a worker holds, running or claimed ahead for a busy one, a job that ran or was cancelled, or a key that names none, is tinystore.ErrConflict.
+Update changes the id's job when it has not started, and says whether it did.
 
 ### Queue.Watch
 
 ```go
-func (q *Queue[V]) Watch(ctx context.Context, key string) iter.Seq2[Entry[V], error]
+func (q *Queue[T]) Watch(ctx context.Context, id string) iter.Seq2[Job[T], error]
 ```
 
-Watch yields the job under key as it is, then again each time its state, place, attempt, time, progress or error changes, until it ends: done, failed or cancelled, the last entry it yields. A key that names no job yields nothing. It reads the job at most five times a second, so that a watcher that falls behind sees the latest, and it ends when ctx ends or the store closes.
-
-### Queue.WithTx
-
-```go
-func (q *Queue[V]) WithTx(tx *Tx) *Queue[V]
-```
-
-WithTx is the queue inside tx: its calls join the transaction. It works in tx's callback only, and is ErrClosed after it.
+Watch is the job under id as it is, then again each time it changes; it ends with the job, done, failed or cancelled, a state only a watcher sees. An id with no job yields nothing. A watch whose connection is lost watches again on the next; a job that ended meanwhile ends it without its last state.
 
 ### Queue.Work
 
 ```go
-func (q *Queue[V]) Work(ctx context.Context, handle func(context.Context, Job[V]) error, options ...WorkOption) error
+func (q *Queue[T]) Work(ctx context.Context, handler func(ctx context.Context, value T, run *Run) error, opts ...WorkOption) error
 ```
 
-Work claims the queue's jobs as they fall due and runs handle on each, until ctx ends or the store closes, or, with UntilIdle, until nothing is due and nothing runs. It runs up to Workers goroutines, which it starts itself and waits for before it returns.
-
-A handler's nil acknowledges its job and an error retries it by the queue's policy. A handler that settles its job itself is left as it settled it, and a panic is an error. While a handler runs its lease is extended. A handler stopped by ctx or by Close gives its job back, the attempt not counted.
-
-Each worker's next job is claimed while it runs the one before, and a job claimed is settled in the same write that claims the next ones, so that a queue under load commits once for many jobs.
+Work runs handler on each job as it falls due, until ctx ends or the store closes; then it takes no job more and returns once the handlers under way, each bounded by its timeout, have answered. As many run at once as the queue's concurrency lets, one when it sets none, or Concurrency's Total under it. A worker whose connection is lost reaches the store again, the jobs it held running again as a dead worker's would.
 
 ## QueueOption
 
@@ -475,241 +356,175 @@ type QueueOption interface {
 }
 ```
 
-QueueOption changes how a queue treats its jobs; none changes what its bytes mean, so a program may change them between runs.
+QueueOption is how a queue opens.
 
-### Backoff
-
-```go
-func Backoff(first, longest time.Duration) QueueOption
-```
-
-Backoff is a retry's wait: first after the first failure, doubling after each, never past longest, each a tenth longer or shorter at random. It is one second to an hour unless it says.
-
-### KeepDone
+## Run
 
 ```go
-func KeepDone(d time.Duration) QueueOption
-```
-
-KeepDone remembers the key of an acknowledged job for d, and an Enqueue under a key that waits, runs or ran within d adds nothing: a key runs once.
-
-### KeepFailed
-
-```go
-func KeepFailed(d time.Duration) QueueOption
-```
-
-KeepFailed keeps a job that failed for good for d, seven days unless it says.
-
-### MaxAttempts
-
-```go
-func MaxAttempts(n int) QueueOption
-```
-
-MaxAttempts is how many attempts a job has before it fails for good, 10 unless it says.
-
-### MaxRunning
-
-```go
-func MaxRunning(n int) QueueOption
-```
-
-MaxRunning is how many of the queue's jobs may run at once, across every Work loop and Claim of the store; past it a claim takes nothing until a job is settled. A Work loop of such a queue claims no job ahead for a busy worker, so that its held jobs are the ones running.
-
-### MaxRunningInGroup
-
-```go
-func MaxRunningInGroup(n int) QueueOption
-```
-
-MaxRunningInGroup is how many jobs of one Group may run at once, across every Work loop and Claim of the store, while MaxRunning bounds the whole queue: no more than two refreshes of one customer's database at once. A claim passes over the jobs of a group whose places are taken, and they wait, in the order of their times, until the group has room. A job without a group is not bound.
-
-### MaxWaiting
-
-```go
-func MaxWaiting(n int64) QueueOption
-```
-
-MaxWaiting refuses a job past n in the queue with tinystore.ErrLimit, ten million unless it says. A loop that enqueues without end then stops at a limit and not at a full disk.
-
-### Rate
-
-```go
-func Rate(n int, per time.Duration) QueueOption
-```
-
-Rate lets at most n of the queue's jobs start in any span of per, across every Work loop and Claim of the store: Rate(30, time.Second) for an API that takes 30 messages a second. Past it a claim takes nothing until the oldest start of the span is per old. The starts are counted in memory, so a restart forgets those before it; per is at least a millisecond.
-
-## Repeat
-
-```go
-type Repeat struct {
+type Run struct {
+	// ID is the job's id, "" for one added without.
+	ID string
+	// At is when the run was due, which "thirty days ago" counts from even when it starts late.
+	At time.Time
+	// Attempt is this run's number among the job's attempts, the first being 1.
+	Attempt int
+	Group   string
 	// contains filtered or unexported fields
 }
 ```
 
-Repeat is when a job runs again: a cron expression in a named zone, or an interval. It is kept as text, so that another language reads the same schedule:
+Run is this call on a job: what it is, its steps and progress, and the answers its handler returns. Its handler's ctx ends past its timeout, and when a cancel takes the job.
 
-	jobs.Daily("03:10", moscow)                          10 3 * * * Europe/Moscow
-	jobs.Cron("*/15 9-18 * * 1-5", tz)                   */15 9-18 * * 1-5 America/New_York
-	jobs.Every(15 * time.Minute)                         @every 15m
-	jobs.Every(30*time.Second, jobs.Spread()), probe:7   @every 30s +6178ms
-
-### Cron
+### Run.Fail
 
 ```go
-func Cron(expr string, zone *time.Location) Repeat
+func (r *Run) Fail(reason any) error
 ```
 
-Cron repeats a job by a five-field cron expression in zone: minute, hour, day of the month, month and day of the week. A field takes \*, ranges, steps, lists and the names of months and days, or the whole expression is @hourly, @daily, @weekly, @monthly or @yearly. A day of the month and a day of the week both given run on either.
+Fail fails the job for good now, its reason kept as its error: return it.
 
-A zone without a name, time.Local, is ErrInvalid, since a schedule kept by it would change meaning on a host in another zone.
-
-### Daily
+### Run.Retry
 
 ```go
-func Daily(clock string, zone *time.Location) Repeat
+func (r *Run) Retry() error
 ```
 
-Daily repeats a job every day at clock, "15:04", in zone.
+Retry runs the job again after its backoff, the run counted as an attempt: return it.
 
-### Every
+### Run.RetryAfter
 
 ```go
-func Every(d time.Duration, options ...EveryOption) Repeat
+func (r *Run) RetryAfter(d time.Duration) error
 ```
 
-Every repeats a job every d, at the multiples of d since the Unix epoch, so that a restart does not shift it: Every(15\*time.Minute) runs at :00, :15, :30 and :45. d is at least a second.
+RetryAfter runs the job again d from now, the run counted as an attempt: return it.
 
-### Repeat.String
+### Run.RetryAt
 
 ```go
-func (r Repeat) String() string
+func (r *Run) RetryAt(t time.Time) error
 ```
 
-String is the repeat as jobs.db keeps it; a Spread interval's phase comes with its job's key.
+RetryAt runs the job again at a time, the run counted as an attempt: return it.
 
-## SettleOption
+### Run.SetProgress
 
 ```go
-type SettleOption interface {
+func (r *Run) SetProgress(progress any)
+```
+
+SetProgress shows how far the job got, anything JSON writes within 4 KiB: the latest goes, ten a second at most.
+
+### Run.Snooze
+
+```go
+func (r *Run) Snooze(d time.Duration) error
+```
+
+Snooze runs the job again d from now, the run not counted: return it.
+
+### Run.SnoozeUntil
+
+```go
+func (r *Run) SnoozeUntil(t time.Time) error
+```
+
+SnoozeUntil runs the job again at a time, the run not counted: return it.
+
+## Schedule
+
+```go
+type Schedule struct {
+	// contains filtered or unexported fields
+}
+```
+
+Schedule is a repeat the code owns: one repeating job under its name, and the worker that runs it. The code's repeat replaces the one kept each time the program opens it.
+
+### OpenSchedule
+
+```go
+func OpenSchedule(home tinystore.Home, name string, opts ...ScheduleOption) (*Schedule, error)
+```
+
+OpenSchedule opens a schedule of the store: jobs.Every(d) or jobs.Cron(expr, zone), one of them, and its attempts, backoff and timeout.
+
+	cleanup, err := jobs.OpenSchedule(store, "cleanup", jobs.Cron("10 3 * * *", "Europe/Berlin"))
+
+### Schedule.Cancel
+
+```go
+func (s *Schedule) Cancel(ctx context.Context) (bool, error)
+```
+
+Cancel removes the schedule's job, until the program opens it again; it says whether there was one.
+
+### Schedule.Get
+
+```go
+func (s *Schedule) Get(ctx context.Context) (Job[struct{}], error)
+```
+
+Get is when the schedule runs next and how its last run went, what a page of cron jobs shows: its At, LastRun and Error.
+
+### Schedule.RunDue
+
+```go
+func (s *Schedule) RunDue(ctx context.Context, handler func(ctx context.Context, run *Run) error) error
+```
+
+RunDue runs the schedule's job when it is due, as a queue's RunDue does.
+
+### Schedule.Work
+
+```go
+func (s *Schedule) Work(ctx context.Context, handler func(ctx context.Context, run *Run) error) error
+```
+
+Work runs handler at each of the schedule's times until ctx ends or the store closes, as a queue's Work does.
+
+## ScheduleOption
+
+```go
+type ScheduleOption interface {
 	// contains filtered or unexported methods
 }
 ```
 
-SettleOption names when a retried or snoozed job runs again.
+ScheduleOption is how a schedule opens: its repeat, attempts, backoff and timeout.
+
+## SetOption
+
+```go
+type SetOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+SetOption is what a Set or an Update gives besides its id and value: a time, a group, a repeat.
 
 ## State
 
 ```go
-type State int
+type State string
 ```
 
-State is where a job is in its life.
+State is where a job stands: done while its queue's dedupe keeps its id, cancelled only a watcher sees.
 
-### Waiting
+### StateScheduled
 
 ```go
 const (
-	Waiting   State = iota + 1 // until its time, or due and no handler has it yet
-	Running                    // a handler, or the caller of Claim, has it
-	Failed                     // failed for good, kept KeepFailed
-	Done                       // acknowledged; Get finds it while KeepDone keeps its key
-	Cancelled                  // taken by Cancel; only a watcher sees it
+	StateScheduled State = "scheduled"
+	StateWaiting   State = "waiting"
+	StateRunning   State = "running"
+	StateDone      State = "done"
+	StateFailed    State = "failed"
+	StateCancelled State = "cancelled"
 )
 ```
 
-### State.String
-
-```go
-func (s State) String() string
-```
-
-## Store
-
-```go
-type Store struct {
-	// contains filtered or unexported fields
-}
-```
-
-### Open
-
-```go
-func Open(ctx context.Context, store *tinystore.Store, options Options) (*Store, error)
-```
-
-Open opens jobs.db inside the store, or with Options.In a database's file, and gives back the leases a process that died held, counting their attempts. The store closes it and, unless it is Manual, removes every minute what the queues keep no longer.
-
-### Store.Close
-
-```go
-func (s *Store) Close(ctx context.Context) error
-```
-
-Close stops every Work, which gives back the jobs its handlers had without counting their attempts, waits for the work in flight and closes jobs.db, or leaves a database's file to the database; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
-
-### Store.Maintain
-
-```go
-func (s *Store) Maintain(ctx context.Context) (Maintenance, error)
-```
-
-Maintain removes the failed jobs each queue this process opened keeps no longer, the keys its jobs left behind and the done keys past their KeepDone. It removes 10,000 a transaction and runs at most ten transactions of each a call.
-
-The store calls it every minute unless it is Manual. A queue this process has not opened keeps its failed jobs and its keys.
-
-### Store.Snapshot
-
-```go
-func (s *Store) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
-```
-
-Snapshot copies jobs.db into dir while the engine keeps working; queues kept In a database are in that database's copy.
-
-### Store.Tx
-
-```go
-func (s *Store) Tx(ctx context.Context, work func(*Tx) error) error
-```
-
-Tx runs work in one writer transaction over any queues of jobs.db: nil commits, an error or a panic rolls back. It never spans two engines. A program enqueuing many jobs at once, a push to each member of a group, pays one commit for all of them.
-
-## TimeOption
-
-```go
-type TimeOption interface {
-	EnqueueOption
-	SettleOption
-}
-```
-
-### After
-
-```go
-func After(d time.Duration) TimeOption
-```
-
-After runs the job d from now.
-
-### At
-
-```go
-func At(t time.Time) TimeOption
-```
-
-At runs the job at t by the store's clock; a time in the past runs it now. The year of t is 1 to 9999.
-
-## Tx
-
-```go
-type Tx struct {
-	// contains filtered or unexported fields
-}
-```
-
-Tx is one transaction of jobs.db, given to the function passed to Store.Tx and used by the goroutine that runs it; a queue works in it through WithTx.
+A job's states.
 
 ## WorkOption
 
@@ -719,28 +534,6 @@ type WorkOption interface {
 }
 ```
 
-### Timeout
+WorkOption is how a worker runs its handlers.
 
-```go
-func Timeout(d time.Duration) WorkOption
-```
-
-Timeout is the deadline of a handler's context, a minute unless it says; past it the attempt failed.
-
-### UntilIdle
-
-```go
-func UntilIdle() WorkOption
-```
-
-UntilIdle makes Work return once no job is due and none runs, for tests and Manual stores.
-
-### Workers
-
-```go
-func Workers(n int) WorkOption
-```
-
-Workers is how many handlers Work runs at once, one unless it says; with one a queue runs its jobs in the order of their times.
-
-<!-- Generated by task reference from jobs/. Edit the doc comments there, not this file. -->
+<!-- Generated by task reference from sdk/go/jobs/. Edit the doc comments there, not this file. -->

@@ -27,8 +27,13 @@ export const apiEngines: ApiEngine[] = [
 	{ slug: 'kv', title: 'KV', guide: 'kv/README.md' },
 	{ slug: 'jobs', title: 'Jobs', guide: 'jobs/README.md' },
 	{ slug: 'blobs', title: 'Blobs', guide: 'blobs/README.md' },
+	{ slug: 'search', title: 'Search', guide: 'sql/search.md' },
+	{ slug: 'channels', title: 'Channels', guide: 'languages.md' },
+	{ slug: 'locks', title: 'Locks', guide: 'languages.md' },
+	{ slug: 'config', title: 'Config', guide: 'kv/configs.md' },
 	{ slug: 'records', title: 'Records', guide: 'records/README.md' },
 	{ slug: 'metrics', title: 'Metrics', guide: 'metrics/README.md' },
+	{ slug: 'backup', title: 'Backup', guide: 'running/backups.md' },
 ]
 
 export const apiIndexFile = 'docs/reference/api.md'

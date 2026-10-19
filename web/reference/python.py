@@ -22,10 +22,11 @@ from pathlib import Path
 def main() -> None:
     package, modules = Path(sys.argv[1]), sys.argv[2:]
     public = exported(package) | kept_by_store(package)
+    whole = exported_whole(package)
     items = []
     for module in modules:
         tree = ast.parse((package / f"{module}.py").read_text(encoding="utf-8"))
-        if module in public:
+        if module in whole:
             items.append(constants(module, tree))
             continue
         for at, node in enumerate(tree.body):
@@ -42,6 +43,18 @@ def exported(package: Path) -> set[str]:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "__all__" for t in node.targets):
             return {elt.value for elt in node.value.elts}  # type: ignore[attr-defined]
     return set()
+
+
+def exported_whole(package: Path) -> set[str]:
+    """The modules __init__ imports as modules, `from . import limits`, rather than names from them:
+    tinystore.sql is the function sql, not the module."""
+    tree = ast.parse((package / "__init__.py").read_text(encoding="utf-8"))
+    return {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module is None and node.level == 1
+        for alias in node.names
+    }
 
 
 def kept_by_store(package: Path) -> set[str]:

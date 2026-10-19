@@ -5,11 +5,16 @@ import type { Code, Data, Parent, Root, RootContent } from 'mdast'
 import type { Highlight } from './highlight'
 
 /** The languages a reader picks once for the whole site, in the design's order. */
-export const languages = ['bun', 'python', 'go'] as const
+export const languages = ['bun', 'python', 'go', 'rust'] as const
 
 export type Language = (typeof languages)[number]
 
-export const languageLabels: Record<Language, string> = { bun: 'Bun', python: 'Python', go: 'Go' }
+export const languageLabels: Record<Language, string> = {
+	bun: 'Bun',
+	python: 'Python',
+	go: 'Go',
+	rust: 'Rust',
+}
 
 // a fence's language, as the language switch knows it
 const fenceLanguages: Record<string, Language> = {
@@ -20,6 +25,8 @@ const fenceLanguages: Record<string, Language> = {
 	python: 'python',
 	py: 'python',
 	go: 'go',
+	rust: 'rust',
+	rs: 'rust',
 }
 
 /** One fence: its code, its language and what its info string says after the language. */

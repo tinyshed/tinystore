@@ -245,13 +245,15 @@
 /* the language the reader picked, which the root names before the first paint */
 :root[data-lang="bun"] .code:has(> [data-variant="bun"]) > .code-variant,
 :root[data-lang="python"] .code:has(> [data-variant="python"]) > .code-variant,
-:root[data-lang="go"] .code:has(> [data-variant="go"]) > .code-variant {
+:root[data-lang="go"] .code:has(> [data-variant="go"]) > .code-variant,
+:root[data-lang="rust"] .code:has(> [data-variant="rust"]) > .code-variant {
 	display: none;
 }
 
 :root[data-lang="bun"] .code:has(> [data-variant="bun"]) > [data-variant="bun"],
 :root[data-lang="python"] .code:has(> [data-variant="python"]) > [data-variant="python"],
-:root[data-lang="go"] .code:has(> [data-variant="go"]) > [data-variant="go"] {
+:root[data-lang="go"] .code:has(> [data-variant="go"]) > [data-variant="go"],
+:root[data-lang="rust"] .code:has(> [data-variant="rust"]) > [data-variant="rust"] {
 	display: block;
 }
 

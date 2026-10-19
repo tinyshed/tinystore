@@ -1,237 +1,64 @@
 # SQL API for Go
 
-Every public type, function and constant of the SQL engine in `github.com/tinyshed/tinystore/sqldb`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md) and [Python](../python/sql.md) pages list the same API.
-
-## ErrOutcomeUnknown
-
-```go
-var ErrOutcomeUnknown = sqlite.ErrOutcomeUnknown
-```
-
-ErrOutcomeUnknown is a write whose group's commit failed: it may or may not be in the file, and its caller reads it back before writing again.
-
-## ErrPending
-
-```go
-var ErrPending = sqlite.ErrPending
-```
-
-ErrPending is a migration the file has not applied, which ApplyNone and Migrated find and apply none of; it comes with tinystore.ErrInvalid.
+Every public type, function and constant of the SQL engine in `tinyshed.org/tinystore/sqldb`, generated from its source. The [SQL guide](../../sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md) and [Python](../python/sql.md) pages list the same API.
 
 ## All
 
 ```go
-func All[T any](ctx context.Context, h Handle, query string, args ...any) ([]T, error)
+func All[T any](ctx context.Context, r Runner, text string, args ...any) ([]T, error)
 ```
 
-All reads every row query returns, holding them in the store's memory as it decodes them. Past 64 MiB of them it is tinystore.ErrLimit, and Each reads them instead.
+All is every row a statement gives, read into T: a struct, a map, or one column's value.
 
-## Copy
+## Columns
 
 ```go
-func Copy(ctx context.Context, store *tinystore.Store, name, dir string) (tinystore.SnapshotFile, error)
+func Columns[T any](ctx context.Context, db *DB, text string, args ...any) (T, error)
 ```
 
-Copy writes a consistent copy of the database name into dir, as the store's Snapshot copies a database that is open, while no one in this store has it open: a backup of a whole directory takes the databases no program opened too. Opening one instead would make it open for good, and a migration that waits for its program would then wait for the store to open again.
-
-It holds the name while it copies, so an Open meanwhile is tinystore.ErrInUse, as is a copy of a database that is open.
+Columns is what All gives, by its columns: T is a struct whose fields are slices, one a column, by the column's name; a nil pointer where a row holds NULL. For rows by the thousand, a chart's points: they come faster, and nobody turns rows into columns after.
 
 ## Each
 
 ```go
-func Each[T any](ctx context.Context, h Handle, query string, args ...any) iter.Seq2[T, error]
+func Each[T any](ctx context.Context, r Runner, text string, args ...any) iter.Seq2[T, error]
 ```
 
-Each decodes the rows query returns a row at a time, from one snapshot held at most five seconds, which a break lets go; an export longer than that pages by key. An error ends the rows as their last element.
-
-## ExecAll
-
-```go
-func ExecAll[T any](ctx context.Context, h Handle, query string, args ...any) ([]T, error)
-```
-
-ExecAll runs a write on the writer and reads every row its returning clause gives, as All reads a query's.
-
-## ExecOne
-
-```go
-func ExecOne[T any](ctx context.Context, h Handle, query string, args ...any) (T, bool, error)
-```
-
-ExecOne runs a write on the writer and reads the one row its returning clause gives, as One reads a query's.
-
-## ExecScalar
-
-```go
-func ExecScalar[T any](ctx context.Context, h Handle, query string, args ...any) (T, error)
-```
-
-ExecScalar runs a write on the writer and reads the one column of the one row its returning clause gives, such as the id of insert … returning id.
-
-## Insert
-
-```go
-func Insert[T any](ctx context.Context, h Handle, table *TableDef[T], row T) (T, error)
-```
-
-Insert writes row into table in one statement, grouped like any Exec: every column but the generated ones as its field holds it, false as 0 and nil as NULL. It returns the row as the file keeps it, a time to the millisecond in UTC, with what the database generated: the rowid its result carries, and the generated columns the insert returns.
-
-	INSERT INTO notes (id, title, done) VALUES (?, ?, ?)
+Each is the rows a statement gives, one at a time as their parts arrive, from one snapshot; inside a transaction, all of them at once.
 
 ## One
 
 ```go
-func One[T any](ctx context.Context, h Handle, query string, args ...any) (T, bool, error)
+func One[T any](ctx context.Context, r Runner, text string, args ...any) (T, bool, error)
 ```
 
-One reads the one row query returns into T: a struct takes each column into the field of its name, and any other T takes the only column. found is false for no row; two are tinystore.ErrInvalid.
+One is the one row a statement gives, and whether it gave one; two are Invalid, and a write that gave them rolls back.
+
+## ReadRow
+
+```go
+func ReadRow[T any](columns []string, cells []any) (T, error)
+```
+
+ReadRow is a row of these columns and cells as a query reads it into T: a struct by its fields' columns, a map, or a single column's value. A table's search index reads its hits' rows with it.
 
 ## Scalar
 
 ```go
-func Scalar[T any](ctx context.Context, h Handle, query string, args ...any) (T, error)
+func Scalar[T any](ctx context.Context, r Runner, text string, args ...any) (T, error)
 ```
 
-Scalar reads one column of one row, for a query that always answers, as count(\*) does; a query that may find nothing asks One.
+Scalar is the one value of the one row a statement gives, as count(\*) does; T's zero for NULL.
 
-## Action
-
-```go
-type Action int
-```
-
-Action is what a reference does when the row it refers to is deleted.
-
-### Cascade
+## Condition
 
 ```go
-const (
-	Cascade Action = iota + 1
-	SetNull
-)
-```
-
-### Action.String
-
-```go
-func (a Action) String() string
-```
-
-## AnyTable
-
-```go
-type AnyTable interface {
+type Condition interface {
 	// contains filtered or unexported methods
 }
 ```
 
-AnyTable is a table of any row type, as Schema and References take it.
-
-## Batch
-
-```go
-type Batch struct {
-	// contains filtered or unexported fields
-}
-```
-
-Batch is writes gathered before any of them runs, which then commit together or not at all: statements, and what another engine keeps in this database, such as a job that a jobs store opened with Options.In enqueues.
-
-Nothing runs while the batch is built, so building it may take as long as it likes; what it cannot do is read what an earlier write of it wrote. A statement that depends on an earlier one says so in SQL, with last\_insert\_rowid() or a key the program chose; one that needs to read first and decide belongs in a Tx.
-
-### Batch.Add
-
-```go
-func (b *Batch) Add(change Change)
-```
-
-Add adds another engine's write to the batch; it runs after the statements.
-
-### Batch.Exec
-
-```go
-func (b *Batch) Exec(query string, args ...any)
-```
-
-Exec adds a statement to the batch; it runs when the batch does.
-
-## Change
-
-```go
-type Change interface {
-	// Bytes is memory already held by the change, counted against the group's
-	// bound. An error prevents the entire batch from running.
-	Bytes() (int, error)
-	// Apply writes the change with the batch's writer. file is the database's,
-	// which the change refuses when its tables are in another.
-	Apply(ctx context.Context, file *sqlite.File, w sqlite.Writer) error
-	// Done is told the batch's outcome once, nil when it is durable, whatever
-	// became of it, so that the change lets go of what it holds.
-	Done(err error)
-}
-```
-
-Change is a write another engine keeps in this database, which a Batch runs beside its statements, in their savepoint. A program does not implement it: its methods name the store's own types. An engine gives one out, as a jobs queue's Enqueued does.
-
-## ConstraintError
-
-```go
-type ConstraintError struct {
-	// Kind comes from SQLite's extended code.
-	Kind ConstraintKind
-	// Table and Constraint are empty when SQLite's message does not name them.
-	Table        string
-	Constraint   string
-	ExtendedCode int
-	Err          error
-	// contains filtered or unexported fields
-}
-```
-
-ConstraintError is a write that broke a constraint. A unique or primary key is tinystore.ErrConflict, the others tinystore.ErrInvalid.
-
-SQLite's message becomes Table and Constraint when it names them:
-
-	UNIQUE constraint failed: users.email      Table users, Constraint email
-	CHECK constraint failed: length(title) > 0 Constraint length(title) > 0
-
-### ConstraintError.Error
-
-```go
-func (e *ConstraintError) Error() string
-```
-
-### ConstraintError.Unwrap
-
-```go
-func (e *ConstraintError) Unwrap() []error
-```
-
-## ConstraintKind
-
-```go
-type ConstraintKind int
-```
-
-ConstraintKind is the constraint a write broke.
-
-### UniqueViolation
-
-```go
-const (
-	UniqueViolation ConstraintKind = iota + 1
-	PrimaryKeyViolation
-	ForeignKeyViolation
-	CheckViolation
-	NotNullViolation
-)
-```
-
-### ConstraintKind.String
-
-```go
-func (k ConstraintKind) String() string
-```
+Condition is a condition a query keeps to: equal values by column, Eq, or a piece of SQL.
 
 ## DB
 
@@ -241,381 +68,528 @@ type DB struct {
 }
 ```
 
+DB is an application's database. The verb says what comes back: all the rows, one or none, one value, or what a write changed. A write with returning goes through a read's verb and runs on the writer, its rows given once it is durable.
+
 ### Open
 
 ```go
-func Open(ctx context.Context, store *tinystore.Store, name string, migrations fs.FS, schema *SchemaDef,
-	options ...OpenOption,
-) (*DB, error)
+func Open(ctx context.Context, store *tinystore.Store, name string, opts ...Option) (*DB, error)
 ```
 
-Open opens or creates sql/\&lt;name>.db inside the store, applies in one transaction every migration the file has not applied, then checks the file against schema, which may be nil:
-
-	001_users.sql   applied on the first run
-	002_posts.sql   applied the first time a binary carrying it opens the file
-
-The migrations are the .sql files at the root of migrations or, when it has none, in its one directory, as an embed.FS of migrations/\*.sql holds them. A migration changed after it was applied, a file that has applied more of them than the binary knows, another engine's file, or a file that does not match the schema refuses to open.
-
-Nil migrations open the file as it is, making an empty one when there is none: nothing is applied and no history is checked, as a script or a first try wants. A later Open that carries migrations applies them from the first.
+Open opens the application's database name, sql/\&lt;name>.db, once its migrations are applied and checked: a migration that fails, or one changed after it was applied, is told here, at the start. Without migrations the file opens as it is, an empty one when there is none.
 
 ### DB.Batch
 
 ```go
-func (d *DB) Batch(ctx context.Context, build func(*Batch) error) (err error)
+func (db *DB) Batch(ctx context.Context, statements ...Statement) error
 ```
 
-Batch runs what build adds in one savepoint of a grouped commit, as an Exec runs its one statement: they share an fsync with the writes beside them, and a batch whose statement or change fails rolls back alone. An error from build, an argument no column can hold or a change that cannot be written writes nothing.
+Batch runs statements known before they run as one: all of them or none, in a shared commit.
 
-A Tx holds the writer for itself and pays a commit of its own; a batch, whose writes are known before it runs, need not.
-
-### DB.Close
+### DB.CoreHome
 
 ```go
-func (d *DB) Close(ctx context.Context) error
+func (db *DB) CoreHome() core.HomeOf
 ```
 
-Close lets the calls in flight finish and closes the file; cancellation stops waiting, not the cleanup. The store calls it: an application closes the store instead.
+CoreHome is how this module's packages reach the database as a handle's home; a program has no use for it.
+
+### DB.Describe
+
+```go
+func (db *DB) Describe() string
+```
+
+Describe is the database as an error names it: sql app.
 
 ### DB.Exec
 
 ```go
-func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+func (db *DB) Exec(ctx context.Context, text string, args ...any) (Result, error)
 ```
 
-Exec runs one statement that may write on the file's one writer, and returns once it is durable.
+Exec runs a write once it is durable; writes from many callers share a commit, each failing alone.
 
-Statements from many goroutines commit together, each in its savepoint of one transaction, with one fsync.
-
-A statement that fails rolls back alone. One whose caller's context ends before its turn writes nothing. A group whose commit fails answers ErrOutcomeUnknown.
-
-### DB.Migrated
+### DB.Handle
 
 ```go
-func (d *DB) Migrated(ctx context.Context, migrations fs.FS) error
+func (db *DB) Handle(ctx context.Context, c *core.Connection) (uint64, error)
 ```
 
-Migrated checks migrations against those the file applied, applying none: one it has not applied is ErrPending, and one changed after it was applied, or missing, is refused as Open refuses it. A database opens once in a store, so a program that opens it again checks with Migrated instead. Nil migrations check nothing, as Open opens with none.
+Handle is the database's handle on a connection, opened there first.
 
-### DB.SQLiteFile
+### DB.Keep
 
 ```go
-func (d *DB) SQLiteFile() *sqlite.File
+func (db *DB) Keep(method uint16, body []byte, make func(ctx context.Context, c *core.Connection) ([]byte, error)) *core.Opener
 ```
 
-SQLiteFile is the database's file, for an engine that keeps its tables in it, as a jobs store opened with Options.In does. A program has no use for it.
+Keep is the opener of a handle kept in the database's file: the one made first for the same open, so that its transaction opens each once, before it holds the writer.
 
-### DB.Snapshot
+### DB.Name
 
 ```go
-func (d *DB) Snapshot(ctx context.Context, dir string) ([]tinystore.SnapshotFile, error)
+func (db *DB) Name() string
 ```
 
-Snapshot copies the database into dir while it keeps working.
+Name is the database's name.
 
 ### DB.Tx
 
 ```go
-func (d *DB) Tx(ctx context.Context, work func(tx *Tx) error) (err error)
+func (db *DB) Tx(ctx context.Context, fn func(tx *Tx) error) error
 ```
 
-Tx runs work in one writer transaction of its own, on the caller's goroutine: nil commits, an error rolls back, and a panic rolls back and goes on.
+Tx runs fn in a transaction that holds the writer, for writes that depend on what its reads found: an error fn returns rolls it back, and is Tx's. It runs once, five seconds at most, past which the store rolls it back; inside it, call nothing that waits on the world.
 
-A call on the DB inside its own Tx waits for the Tx, which waits for it, until the call's context ends. sqldb logs a write that has waited ten seconds, naming the transaction.
-
-### DB.View
+### DB.Via
 
 ```go
-func (d *DB) View(ctx context.Context, read func(tx *Tx) error) error
+func (db *DB) Via(string) core.Via
 ```
 
-View runs read against one snapshot of the database, held at most five seconds, since the write-ahead log grows with the oldest reader. A write inside it is tinystore.ErrInvalid.
+Via is how a handle kept in the database's file reaches the store outside a transaction.
 
-## Date
+## Direction
 
 ```go
-type Date struct {
-	Year  int
-	Month time.Month
-	Day   int
-}
+type Direction string
 ```
 
-Date is a day of the calendar without a time or a zone, kept as its YYYY-MM-DD text, which SQLite's date functions read and write.
+Direction is an order's direction.
 
-### DateOf
+### Asc
 
 ```go
-func DateOf(t time.Time) Date
+const (
+	Asc  Direction = "asc"
+	Desc Direction = "desc"
+)
 ```
 
-DateOf is the day t falls on in its own location.
+The directions an order takes.
 
-### Date.In
+## Eq
 
 ```go
-func (d Date) In(loc *time.Location) time.Time
+type Eq map[string]any
 ```
 
-In is the day's first moment in loc.
+Eq is equal values by column, written in the order of the columns' names: nil is is null, and a slice in (...).
 
-### Date.String
-
-```go
-func (d Date) String() string
-```
-
-## Handle
+## ListOption
 
 ```go
-type Handle interface {
+type ListOption interface {
 	// contains filtered or unexported methods
 }
 ```
 
-Handle is where a call runs: a \*DB, or the \*Tx that DB.Tx or DB.View gives.
+ListOption is how a page of rows reads.
 
-## JSON
+### After
 
 ```go
-type JSON[T any] struct{ V T }
+func After(next string) ListOption
 ```
 
-JSON holds V, which its column keeps as JSON text through encoding/json. A JSON holding a nil slice or map writes null, a valid JSON text; the column is NULL only through a pointer to the JSON.
+After reads the page after the one whose Next it is.
 
-### JSONOf
+### Limit
 
 ```go
-func JSONOf[T any](v T) JSON[T]
+func Limit(n int) ListOption
 ```
 
-JSONOf wraps v, as a query's argument or a field's value.
+Limit is how many rows a page holds: 100 unless given.
 
-## OpenOption
-
-```go
-type OpenOption func(*tuning)
-```
-
-### ApplyNone
+## Option
 
 ```go
-func ApplyNone() OpenOption
-```
-
-ApplyNone opens a file only if it has applied every migration given, and applies none, as a program that may change rows and not the schema opens one.
-
-A migration the file has not applied is ErrPending, and a file that is not there is not made.
-
-### Readers
-
-```go
-func Readers(n int) OpenOption
-```
-
-Readers is how many reader connections the database opens under load, eight unless it says, and fewer when the store's Options.Readers says; half a MiB each, and those beyond one close after a minute unused.
-
-## Rows
-
-```go
-type Rows struct {
-	Columns []string
-	Values  [][]any
+type Option interface {
+	// contains filtered or unexported methods
 }
 ```
 
-Rows is what a query returns without a struct to take it: the columns' names, and each row's values as SQLite returned them, a column each.
+Option is how a database opens.
 
-A value is nil, an int64, a float64, a string or a \[]byte, what the row keeps whatever its column declares.
-
-### ExecQuery
+### Durability
 
 ```go
-func ExecQuery(ctx context.Context, h Handle, query string, args ...any) (Rows, error)
+func Durability(level string) Option
 ```
 
-ExecQuery runs a write on the writer and reads the rows its returning clause gives, as Query reads a query's. A write that returns none answers its columns alone, or none.
+Durability is how far a commit of the database goes before it returns: "full" or "os"; the store's own unless given.
 
-### Query
+### MigrationFiles
 
 ```go
-func Query(ctx context.Context, h Handle, query string, args ...any) (Rows, error)
+func MigrationFiles(byName map[string]string) Option
 ```
 
-Query reads every row query returns as SQLite returns it, for a program that has no struct for them, as the server has none for its clients. The rows are held in the store's memory as All holds them.
+MigrationFiles are a database's migrations as their text by their names.
 
-## SchemaDef
+### Migrations
 
 ```go
-type SchemaDef struct {
+func Migrations(fsys fs.FS) Option
+```
+
+Migrations are a database's migrations: the .sql files at the root of fsys, named 0001\_notes.sql, applied in the order of their names and checked at every open. An embed.FS of migrations/\*.sql is fs.Sub(migrations, "migrations").
+
+## Order
+
+```go
+type Order struct {
+	Column    string
+	Direction Direction
+}
+```
+
+Order is an order a request chooses by name: sqldb.Order{"created\_at", sqldb.Desc}.
+
+## Page
+
+```go
+type Page[T any] struct {
+	Rows []T
+	Next string
+}
+```
+
+Page is a page of a query's rows, and the cursor that reads the next: "" after the last.
+
+## Piece
+
+```go
+type Piece struct {
 	// contains filtered or unexported fields
 }
 ```
 
-SchemaDef is a database's tables, in the order Schema was given them.
+Piece is a piece of SQL and the values of its ?s, which are always values and never SQL: SQL makes one, and a call, a batch and a table's query take it.
 
-### Schema
+### And
 
 ```go
-func Schema(tables ...AnyTable) *SchemaDef
+func And(conditions ...Condition) Piece
 ```
 
-Schema is what the migrations of one database make, and what Open checks the file against. It panics, as Table does, on two tables of one name and on a reference to a table it does not hold.
+And is conditions joined with and, in parentheses; an empty and finds everything.
 
-### SchemaDef.SQL
+### Has
 
 ```go
-func (s *SchemaDef) SQL() string
+func Has(name string, value any) Piece
 ```
 
-SQL is every statement the schema stands for, as its migrations have to make it.
+Has is a JSON list in column name holding value.
 
-## StorageClass
+### Ident
 
 ```go
-type StorageClass int
+func Ident(name string) Piece
 ```
 
-StorageClass is the STRICT column a custom type, or a uuid, is kept in.
+Ident is a name, quoted, never SQL: a column a request chooses.
 
-### Text
+### JSON
 
 ```go
-const (
-	Text StorageClass = iota + 1
-	Integer
-	Real
-	Blob
-)
+func JSON(value any) Piece
 ```
 
-### StorageClass.String
+JSON is a value kept as its JSON.
+
+### List
 
 ```go
-func (s StorageClass) String() string
+func List[T any](values []T) Piece
 ```
 
-## TableDef
+List is a list for in (...), as one value SQLite reads with json\_each: any length, the same statement.
+
+### Or
 
 ```go
-type TableDef[T any] struct {
+func Or(conditions ...Condition) Piece
+```
+
+Or is conditions joined with or, in parentheses; an empty or finds nothing.
+
+### SQL
+
+```go
+func SQL(text string, values ...any) Piece
+```
+
+SQL is a piece of SQL from text and the values of its ?s; a piece or a query in a ?'s place is written in: sqldb.SQL("exists ?", paid).
+
+### Piece.Text
+
+```go
+func (p Piece) Text() string
+```
+
+Text is the piece's SQL, and Values the values of its ?s.
+
+### Piece.Values
+
+```go
+func (p Piece) Values() []any
+```
+
+Values are the values of the piece's ?s, as they leave.
+
+## Query
+
+```go
+type Query[T any] struct {
 	// contains filtered or unexported fields
 }
 ```
 
-TableDef is a table declared for the rows of T: what Schema prints, what Open checks the file against and what Insert writes. Table makes it.
+Query is a query on a table: a value, each call giving a new one, so that the first stays as it was. All, One, Count, Each and List read; Update and Delete write.
 
-### Table
-
-```go
-func Table[T any](name string, options ...TableOption) *TableDef[T]
-```
-
-Table declares the table name for the rows of T, and panics, as regexp.MustCompile does, on a declaration that cannot be a table:
-
-	an option naming a column T lacks
-	a default of another type
-	a generated column nothing fills
-	a field sqldb cannot store
-	a custom type without Storage
-	a reference to a table keyed by several columns
-
-## TableOption
+### Select
 
 ```go
-type TableOption func(*table) error
+func Select[R any](q queried, columns string) *Query[R]
 ```
 
-TableOption says what a struct cannot: keys, indexes, references, defaults, checks and storage.
+Select is a query's columns, as SQL text, and the type of the row they make.
 
-### Check
+### Query.All
 
 ```go
-func Check(expression string) TableOption
+func (q *Query[T]) All(ctx context.Context) ([]T, error)
 ```
 
-Check is a condition every row keeps, as SQL spells it.
+All is every row the query reads.
 
-### Default
+### Query.Count
 
 ```go
-func Default(column string, value any) TableOption
+func (q *Query[T]) Count(ctx context.Context) (int64, error)
 ```
 
-Default is the value SQL gives column when an insert leaves it out, and what lets a later migration add a NOT NULL column to a table holding rows. Insert writes every field, so it never uses one. value is of the field's type, or of the type a pointer, a sql.Null or a sqldb.JSON holds.
+Count counts every row the conditions match, without the order and the limit.
 
-### DefaultSQL
+### Query.Delete
 
 ```go
-func DefaultSQL(column, expression string) TableOption
+func (q *Query[T]) Delete(ctx context.Context) (Result, error)
 ```
 
-DefaultSQL is an expression SQL computes for column when an insert leaves it out, such as lower(hex(randomblob(4))).
+Delete deletes the rows the conditions match, and says how many it deleted.
 
-### Index
+### Query.Each
 
 ```go
-func Index(columns ...string) TableOption
+func (q *Query[T]) Each(ctx context.Context) iter.Seq2[T, error]
 ```
 
-Index is an index named \&lt;table>\_\&lt;columns>.
+Each is the rows one at a time, as their parts arrive.
 
-### IndexWhere
+### Query.GroupBy
 
 ```go
-func IndexWhere(where string, columns ...string) TableOption
+func (q *Query[T]) GroupBy(columns ...string) *Query[T]
 ```
 
-IndexWhere is an index of the rows where holds, named \&lt;table>\_\&lt;columns>.
+GroupBy groups the rows by columns, quoted as names.
 
-### NamedIndex
+### Query.Having
 
 ```go
-func NamedIndex(name string, columns ...string) TableOption
+func (q *Query[T]) Having(conditions ...Condition) *Query[T]
 ```
 
-NamedIndex is an index a migration made under a name of its own.
+Having is a condition on the groups, as Where takes one.
 
-### PrimaryKey
+### Query.Include
 
 ```go
-func PrimaryKey(columns ...string) TableOption
+func (q *Query[T]) Include(name string, query queried) *Query[T]
 ```
 
-PrimaryKey is the table's key; a single INTEGER column is the rowid SQLite numbers new rows by.
+Include gives each row the rows of another query as a list under name, from the same statement: a field of that name holds them. The query names the row it belongs to in its where, by this table's alias, names its columns with Select, and has a limit, which counts for each row. Every value comes back as it is kept.
 
-### References
+### Query.Join
 
 ```go
-func References(column string, parent AnyTable, action ...Action) TableOption
+func (q *Query[T]) Join(table string, on any) *Query[T]
 ```
 
-References points column at the primary key of parent, which must be one column of the same storage; the action, when given, is ON DELETE's.
+Join joins a table, "users as u", on a condition as SQL text or a piece of SQL.
 
-### Storage
+### Query.LeftJoin
 
 ```go
-func Storage(column string, class StorageClass) TableOption
+func (q *Query[T]) LeftJoin(table string, on any) *Query[T]
 ```
 
-Storage says how column keeps a type sqldb does not know, whose own Scan and Value convert it. It can also keep a uuid as its 16 bytes, which a raw query then passes as id\[:].
+LeftJoin joins a table whose columns may be NULL where no row of it meets the condition.
 
-### Unique
+### Query.Limit
 
 ```go
-func Unique(columns ...string) TableOption
+func (q *Query[T]) Limit(rows int) *Query[T]
 ```
 
-Unique is a unique index named \&lt;table>\_\&lt;columns>, not a table constraint. A later migration can then drop it without rebuilding the table.
+Limit is how many rows the query reads at most.
 
-### UniqueWhere
+### Query.List
 
 ```go
-func UniqueWhere(where string, columns ...string) TableOption
+func (q *Query[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error)
 ```
 
-UniqueWhere is a unique index of the rows where holds, named \&lt;table>\_\&lt;columns>: a promise about part of a table, such as one owner.
+List is a page after the last row of the one before, by the query's order, which ends in a unique column so that no row is read twice or skipped; Next reads the next page, and only of this query.
 
-	UniqueWhere("role = 'owner'", "role")  →  CREATE UNIQUE INDEX users_role ON users (role) WHERE role = 'owner';
+### Query.Offset
+
+```go
+func (q *Query[T]) Offset(rows int) *Query[T]
+```
+
+Offset is how many rows the query skips.
+
+### Query.One
+
+```go
+func (q *Query[T]) One(ctx context.Context) (T, bool, error)
+```
+
+One is the one row the query reads, and whether it read one; two are Invalid.
+
+### Query.OrderBy
+
+```go
+func (q *Query[T]) OrderBy(column any, direction Direction) *Query[T]
+```
+
+OrderBy orders the rows by a column, quoted as a name, or by a piece of SQL: OrderBy(sqldb.SQL("lower(title)"), sqldb.Asc).
+
+### Query.SQL
+
+```go
+func (q *Query[T]) SQL() (string, []any, error)
+```
+
+SQL is the text and the values the query sends, to read or to log.
+
+### Query.Update
+
+```go
+func (q *Query[T]) Update(ctx context.Context, set Set) (Result, error)
+```
+
+Update sets columns of the rows the conditions match, and says how many changed.
+
+### Query.Where
+
+```go
+func (q *Query[T]) Where(conditions ...Condition) *Query[T]
+```
+
+Where adds conditions with and: equal values, sqldb.Eq{"status": "paid"}, nil as is null and a slice as in (...); or a piece of SQL from sqldb.SQL.
+
+## Result
+
+```go
+type Result struct {
+	Changes         int64
+	LastInsertRowid int64
+}
+```
+
+Result is what a write changed: the rows, and SQLite's rowid of the row it inserted, 0 when none.
+
+## Row
+
+```go
+type Row = map[string]any
+```
+
+Row is a row as SQLite gave it, by its columns' names.
+
+## Runner
+
+```go
+type Runner interface {
+	// contains filtered or unexported methods
+}
+```
+
+Runner reads and writes a database: the database itself, or a transaction of it.
+
+## Set
+
+```go
+type Set map[string]any
+```
+
+Set is the columns an update sets: values, or pieces of SQL.
+
+## Statement
+
+```go
+type Statement = Piece
+```
+
+Statement is a statement of a batch: a piece of SQL.
+
+## Table
+
+```go
+type Table[T any] struct {
+	*Query[T]
+	// contains filtered or unexported fields
+}
+```
+
+Table is a table: its queries, and its rows' inserts and upserts. Its rows are T, a struct whose fields are the table's columns.
+
+### OpenTable
+
+```go
+func OpenTable[T any](r Runner, name string) *Table[T]
+```
+
+OpenTable is a table of a database, or of a transaction of it, "orders" or "orders as o", typed where it opens. It costs nothing until its first call.
+
+### Table.Insert
+
+```go
+func (t *Table[T]) Insert(ctx context.Context, row T) (T, error)
+```
+
+Insert inserts a row and gives it back as the file keeps it: the defaults and the generated columns the database filled.
+
+### Table.InsertMany
+
+```go
+func (t *Table[T]) InsertMany(ctx context.Context, rows []T) ([]T, error)
+```
+
+InsertMany inserts rows of one shape as one write, all of them or none, and gives them back as the file keeps them.
+
+### Table.Name
+
+```go
+func (t *Table[T]) Name() string
+```
+
+Name is the table's name.
+
+### Table.Upsert
+
+```go
+func (t *Table[T]) Upsert(ctx context.Context, row T, opts ...UpsertOption) (Result, error)
+```
+
+Upsert inserts a row, or, when the columns Conflict names are taken, sets the columns Update names on the row that holds them, when that row meets Where: its Changes is 0 when Where kept it.
 
 ## Tx
 
@@ -625,24 +599,80 @@ type Tx struct {
 }
 ```
 
-Tx is one transaction of the database, given to the function DB.Tx or DB.View runs and used by the goroutine that runs it. Every typed call takes it where it takes a DB.
+Tx is a database's transaction, from db.Tx. Its reads see its writes, a call that fails leaves it as it was before the call, and its calls go one at a time, in order. A bucket, a queue or a channel takes it in with In: bucket.In(tx), and what they write commits with the rows.
 
-### Tx.Add
+### Tx.CoreTx
 
 ```go
-func (t *Tx) Add(ctx context.Context, change Change) error
+func (tx *Tx) CoreTx() core.TxOf
 ```
 
-Add writes another engine's change in the transaction, as a Batch's Add does after its statements: a job that a jobs store opened with Options.In enqueues, which then commits with the transaction's rows or not at all. The change is told the transaction's outcome once it ends, nil when it committed.
+CoreTx is how this module's packages take a handle into the transaction; a program has no use for it.
 
-Make the change before the transaction begins. A change holds the memory its value needs, and a transaction holding the writer must not wait for memory that a write queued behind it holds.
+### Tx.Database
+
+```go
+func (tx *Tx) Database() core.Database
+```
+
+Database is the database the transaction is of.
 
 ### Tx.Exec
 
 ```go
-func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
+func (tx *Tx) Exec(ctx context.Context, text string, args ...any) (Result, error)
 ```
 
-Exec runs one statement of the transaction.
+Exec runs a write in the transaction.
 
-<!-- Generated by task reference from sqldb/. Edit the doc comments there, not this file. -->
+### Tx.Nested
+
+```go
+func (tx *Tx) Nested(ctx context.Context, method uint16, body []byte) ([]byte, error)
+```
+
+Nested is a call of kv, jobs or channels in the transaction: its method, its request, and the method's answer.
+
+### Tx.Via
+
+```go
+func (tx *Tx) Via() core.Via
+```
+
+Via is how a handle's calls go inside the transaction, on its stream.
+
+## UpsertOption
+
+```go
+type UpsertOption interface {
+	// contains filtered or unexported methods
+}
+```
+
+UpsertOption is what an upsert says: the columns whose taken values make it an update, the columns that update sets, and the condition the row that holds them must meet.
+
+### Conflict
+
+```go
+func Conflict(columns ...string) UpsertOption
+```
+
+Conflict names the columns whose values, when taken, make an upsert an update.
+
+### Update
+
+```go
+func Update(columns ...string) UpsertOption
+```
+
+Update names the columns an upsert's update sets from the row.
+
+### Where
+
+```go
+func Where(c Condition) UpsertOption
+```
+
+Where is the condition the row that holds an upsert's key must meet, its owner's, so that an id from a request changes nothing of another's row.
+
+<!-- Generated by task reference from sdk/go/sqldb/. Edit the doc comments there, not this file. -->
