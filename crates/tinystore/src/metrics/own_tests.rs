@@ -1,11 +1,12 @@
 use std::time::{Duration, SystemTime};
 
-use crate::metrics::{Metrics, Series};
+use crate::metrics::{Metrics, SelfMetrics, Series};
 use crate::{ErrorKind, Options, Store};
 
 const HOUR: Duration = Duration::from_secs(3600);
 
 fn store(dir: &std::path::Path, self_metrics: bool) -> Store {
+    let self_metrics = self_metrics.then(SelfMetrics::default);
     Store::open(dir, Options { self_metrics, background: false, ..Options::default() }).unwrap()
 }
 
@@ -131,6 +132,7 @@ fn sets_measured_and_not() {
     const SETS: usize = 20_000;
     let rate = |self_metrics: bool, threads: usize| {
         let dir = tempfile::tempdir().unwrap();
+        let self_metrics = self_metrics.then(SelfMetrics::default);
         let options = Options { self_metrics, durability: Some(crate::Durability::Os), ..Options::default() };
         let store = Store::open(dir.path(), options).unwrap();
         let bucket = store.bucket::<u64>("counts").open().unwrap();
@@ -160,4 +162,38 @@ fn sets_measured_and_not() {
         let (off, on) = (off[2], on[2]);
         println!("{threads:>2} threads: off {off:>9.0}/s, on {on:>9.0}/s, {:+.1} %", (on / off - 1.0) * 100.0);
     }
+}
+
+#[cfg(feature = "system")]
+#[test]
+fn the_machine_is_measured_unless_left_out() {
+    let latest = |metrics: &Metrics, name: &str| {
+        metrics.query().name(name).since(HOUR).latest().unwrap().first().map(|latest| latest.value)
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path(), true);
+    let metrics = store.metrics().unwrap();
+    metrics.flush().unwrap();
+    assert!(latest(&metrics, "tinystore_system_memory_bytes").is_some_and(|bytes| bytes > 0.0));
+    assert!(latest(&metrics, "tinystore_process_memory_bytes").is_some_and(|bytes| bytes > 0.0));
+    assert!(latest(&metrics, "tinystore_system_cpus").is_some_and(|cores| cores >= 1.0));
+    // a processor's use is counted from the read before
+    assert_eq!(latest(&metrics, "tinystore_system_cpu_percent"), None);
+    metrics.flush().unwrap();
+    assert!(latest(&metrics, "tinystore_system_cpu_percent").is_some());
+    let cores = metrics.query().name("tinystore_system_core_cpu_percent").since(HOUR).latest().unwrap();
+    assert_eq!(cores.len() as f64, latest(&metrics, "tinystore_system_cpus").unwrap());
+    store.close().unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let options =
+        Options { self_metrics: Some(SelfMetrics { system: false }), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let metrics = store.metrics().unwrap();
+    metrics.flush().unwrap();
+    metrics.flush().unwrap();
+    assert_eq!(latest(&metrics, "tinystore_system_memory_bytes"), None);
+    assert_eq!(latest(&metrics, "tinystore_process_cpu_percent"), None);
+    assert!(latest(&metrics, "tinystore_memory_used_bytes").is_some(), "the store's own still are");
+    store.close().unwrap();
 }

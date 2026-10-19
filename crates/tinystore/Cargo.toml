@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records", "metrics", "search", "backup", "replication", "wire"]
+default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records", "metrics", "system", "search", "backup", "replication", "wire"]
 # Each engine is a feature: a program links the engines it opens. Every engine
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
@@ -36,6 +36,9 @@ replication-tls = ["replication", "dep:rustls"]
 console = ["dep:jiff", "dep:tracing-subscriber"]
 records = ["store", "dep:zstd", "console"]
 metrics = ["store", "dep:zstd", "dep:sha2", "dep:metrics"]
+# the machine a store runs on among its own metrics: its process's memory and
+# processor, the system's memory, swap, processors by core and load
+system = ["metrics", "dep:sysinfo"]
 # documents found again by their words in search.db, a misspelt word read as
 # the index's nearest; a table's row known by its digest
 search = ["store", "typos", "dep:unicode-normalization", "dep:unicode-segmentation", "dep:rust-stemmers", "dep:sha2"]
@@ -94,6 +97,7 @@ rust-stemmers = { version = "=1.2.0", optional = true }
 # the facade whose macros a Rust program counts with: the metrics engine is a
 # recorder of it, as the logger is a layer of tracing
 metrics = { version = "0.24.6", optional = true, default-features = false }
+sysinfo = { version = "0.39.6", optional = true, default-features = false, features = ["system"] }
 
 # the disk's free space, which blobs keep some of: statvfs, and statfs on
 # Apple's systems; Windows asks kernel32, which every program links

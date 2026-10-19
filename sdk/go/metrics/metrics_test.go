@@ -394,3 +394,25 @@ func TestAStoreOpenedWithSelfMetricsMeasuresItsCommits(t *testing.T) {
 		})
 	}
 }
+
+func TestSelfMetricsMeasureTheMachineUnlessWithoutSystem(t *testing.T) {
+	ctx := context.Background()
+	library := os.Getenv("TINYSTORE_LIBRARY")
+	if library == "" {
+		t.Skip("the core in this process: not built here")
+	}
+	defer ways.Recover(t)
+	for _, way := range []struct {
+		opt      tinystore.Option
+		measured bool
+	}{{tinystore.SelfMetrics(), true}, {tinystore.SelfMetrics(tinystore.WithoutSystem()), false}} {
+		store := ways.Must(tinystore.Open(ctx, t.TempDir(), tinystore.Library(library), way.opt))
+		ways.Must(struct{}{}, metrics.Flush(ctx, store))
+		query := metrics.Query{Name: "tinystore_system_memory_bytes", Since: time.Hour}
+		memory := ways.Must(metrics.Latest(ctx, store, query))
+		if (len(memory) == 1) != way.measured {
+			t.Fatalf("tinystore_system_memory_bytes with the machine %v: %+v", way.measured, memory)
+		}
+		_ = store.Close()
+	}
+}

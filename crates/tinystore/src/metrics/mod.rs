@@ -69,6 +69,8 @@ mod series;
 mod snapshot;
 mod spread;
 mod summary;
+#[cfg(feature = "system")]
+mod system;
 mod timer;
 mod timestamp;
 mod totals;
@@ -86,6 +88,7 @@ pub use instruments::{Builder, Counter, Gauge, GaugeFunc, Histogram, Reading, Ti
 pub use latest::Latest;
 pub use listing::{LabelPage, List, NameInfo, NamePage, ValuePage};
 pub use maintain::{Maintenance, maintain};
+pub use own::SelfMetrics;
 pub(crate) use own::measure_the_store;
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use recorder::Recorder;

@@ -426,3 +426,15 @@ async def test_a_store_opened_without_self_metrics_holds_none_of_its_own_names(s
     await store.bucket("sessions").set("a", "x")
     await store.metrics.flush()
     assert await store.metrics.latest(name="tinystore_commits_total", since="1h") == []
+
+
+@pytest.mark.skipif(not CORE, reason="the core in this process: not built here")
+@pytest.mark.parametrize(("asked", "measured"), [(True, True), ({"system": False}, False)])
+async def test_self_metrics_measures_the_machine_unless_system_is_false(
+    asked: bool | tinystore.SelfMetrics, measured: bool, directory: Path
+) -> None:
+    store = await tinystore.open(directory, embedded=True, self_metrics=asked)
+    await store.metrics.flush()
+    memory = await store.metrics.latest(name="tinystore_system_memory_bytes", since="1h")
+    assert len(memory) == (1 if measured else 0)
+    await store.close()

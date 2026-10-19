@@ -76,7 +76,7 @@ from .records import (
 )
 from .search import Hit, Hybrid, IndexInfo, IndexStatus, Result, SearchIndex, TableIndex, Vectors
 from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
-from .store import Status, Store, connect, open
+from .store import SelfMetrics, Status, Store, connect, open
 from .trace import trace
 from .tx import Tx, TxBucket, TxCounters
 
@@ -162,6 +162,7 @@ __all__ = [
     "Schedule",
     "SearchIndex",
     "Secret",
+    "SelfMetrics",
     "Semaphore",
     "Series",
     "Sql",

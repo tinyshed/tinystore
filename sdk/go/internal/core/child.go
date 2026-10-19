@@ -21,8 +21,10 @@ type Started struct {
 	// Idle is how long a sidecar stays once its last connection has gone, as
 	// tinystore serve --idle takes it.
 	Idle string
-	// SelfMetrics measures the store into its own metrics.
-	SelfMetrics bool
+	// SelfMetrics measures the store into its own metrics, and the machine
+	// too unless WithoutSystem.
+	SelfMetrics   bool
+	WithoutSystem bool
 }
 
 // storeFlags are the flags of tinystore serve that say how the store opens.
@@ -37,6 +39,9 @@ func (s Started) storeFlags() []string {
 	}
 	if s.SelfMetrics {
 		flags = append(flags, "--self-metrics")
+	}
+	if s.SelfMetrics && s.WithoutSystem {
+		flags = append(flags, "--no-system-metrics")
 	}
 	return flags
 }

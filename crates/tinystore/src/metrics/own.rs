@@ -23,10 +23,25 @@ pub(crate) const PREFIX: &str = "tinystore_";
 const NAMED_DATABASES: usize = 32;
 const OVERFLOW: &str = "sql/__overflow";
 
+/// What a store measures of itself, when it is opened with its own metrics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelfMetrics {
+    /// The machine it runs on as well: its process's memory and processor,
+    /// the system's memory, swap, processors by core and load. A library
+    /// built without the feature `system` measures none of it.
+    pub system: bool,
+}
+
+impl Default for SelfMetrics {
+    fn default() -> Self {
+        Self { system: true }
+    }
+}
+
 /// Opens the store's metrics engine and makes it the probe's listener.
-pub(crate) fn measure_the_store(store: &Store) -> Result<()> {
+pub(crate) fn measure_the_store(store: &Store, asked: SelfMetrics) -> Result<()> {
     let metrics = store.metrics()?;
-    let own = Arc::new(Own::open(&metrics, store)?);
+    let own = Arc::new(Own::open(&metrics, store, asked)?);
     let gauges = Arc::downgrade(&own);
     metrics.engine.before_each_write(Box::new(move || {
         if let Some(own) = gauges.upgrade() {
@@ -52,6 +67,8 @@ struct Own {
     disk_free: Gauge,
     /// Each file's instruments of its commits, by the label it is named by.
     files: Mutex<Files>,
+    #[cfg(feature = "system")]
+    machine: Option<super::system::Machine>,
 }
 
 #[derive(Default)]
@@ -70,7 +87,8 @@ struct Commits {
 }
 
 impl Own {
-    fn open(metrics: &Metrics, store: &Store) -> Result<Self> {
+    #[cfg_attr(not(feature = "system"), expect(unused_variables, reason = "the machine is the feature system's"))]
+    fn open(metrics: &Metrics, store: &Store, asked: SelfMetrics) -> Result<Self> {
         let counter = |name: &str, help: &str| metrics.counter(name).own().help(help).open();
         let gauge = |name: &str, unit: &str, help: &str| metrics.gauge(name).own().unit(unit).help(help).open();
         let timer = |name: &str, help: &str| metrics.timer(name).own().help(help).open();
@@ -88,6 +106,8 @@ impl Own {
             memory_limit: gauge("tinystore_memory_limit_bytes", "bytes", "The store's memory budget.")?,
             disk_free: gauge("tinystore_disk_free_bytes", "bytes", "Free space under the store's directory.")?,
             files: Mutex::default(),
+            #[cfg(feature = "system")]
+            machine: asked.system.then(|| super::system::Machine::open(metrics)).transpose()?,
         })
     }
 
@@ -134,6 +154,10 @@ impl Own {
         }
         if let Ok(free) = crate::space::available(store.dir()) {
             self.disk_free.set(free as f64);
+        }
+        #[cfg(feature = "system")]
+        if let Some(machine) = &self.machine {
+            machine.read();
         }
     }
 }

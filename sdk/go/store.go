@@ -35,6 +35,7 @@ type options struct {
 	durability        string
 	encryptionKeyFile string
 	selfMetrics       bool
+	withoutSystem     bool
 }
 
 // Private starts a server of this process's own, a child that lives and dies
@@ -82,9 +83,24 @@ func Durability(level string) Option { return func(o *options) { o.durability = 
 func EncryptionKeyFile(path string) Option { return func(o *options) { o.encryptionKeyFile = path } }
 
 // SelfMetrics measures the store into its own metrics, under names that start
-// with tinystore_: its commits and their waits, its files, its memory. Off
-// unless asked for; a sidecar found running keeps its own.
-func SelfMetrics() Option { return func(o *options) { o.selfMetrics = true } }
+// with tinystore_: its commits and their waits, its files, its memory and the
+// machine it runs on, which WithoutSystem leaves out. Off unless asked for; a
+// sidecar found running keeps its own.
+func SelfMetrics(opts ...SelfMetricsOption) Option {
+	return func(o *options) {
+		o.selfMetrics = true
+		for _, opt := range opts {
+			opt(o)
+		}
+	}
+}
+
+// SelfMetricsOption is what a store's own metrics leave out.
+type SelfMetricsOption func(*options)
+
+// WithoutSystem leaves the machine out of the store's own metrics: its
+// process's memory and processor, and the system's.
+func WithoutSystem() SelfMetricsOption { return func(o *options) { o.withoutSystem = true } }
 
 // Open opens the store in a directory, and returns once it answers: through
 // the directory's sidecar, found through its SERVE file or started, unless
@@ -106,7 +122,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.private && o.embedded {
 		return nil, core.Errorf(core.Invalid, "a store is private or embedded, not both")
 	}
-	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics}
+	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem}
 	if o.idleSet {
 		ms, err := core.Millis(o.idle, "a sidecar's idle")
 		if err != nil {

@@ -13,7 +13,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Self, overload
+from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, overload
 
 from . import _runtime
 from ._background import message_of, say_own
@@ -59,6 +59,13 @@ if TYPE_CHECKING:
 
     from ._console import Console, ConsoleTime
     from .config import Layer
+
+
+class SelfMetrics(TypedDict, total=False):
+    """What a store opened with ``self_metrics`` measures beside its own."""
+
+    system: bool
+    """the machine it runs on: its process's memory and processor, the system's; True unless said"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,7 +614,7 @@ async def open(
     clock: datetime | None = None,
     durability: Durability | None = None,
     encryption_key_file: str | os.PathLike[str] | None = None,
-    self_metrics: bool = False,
+    self_metrics: bool | SelfMetrics = False,
 ) -> Store:
     """Opens the store in a directory, and returns once it answers.
 
@@ -633,7 +640,8 @@ async def open(
       digits, kept apart from the data; the store reads it and never makes it.
     - ``self_metrics``: measures the store into its own metrics, under names
       that start with ``tinystore_``: its commits and their waits, its files,
-      its memory. Off unless asked for; a sidecar found running keeps its own.
+      its memory and the machine it runs on, which ``{"system": False}``
+      leaves out. Off unless asked for; a sidecar found running keeps its own.
     """
     where = _directory(directory)
     check_durability(durability, "open")
@@ -646,7 +654,8 @@ async def open(
         durability=durability,
         encryption_key_file=key,
         idle=None if idle is None else spelled(ms(idle, "a sidecar's idle")),
-        self_metrics=self_metrics,
+        self_metrics=self_metrics is not False,
+        system_metrics=isinstance(self_metrics, bool) or self_metrics.get("system", True),
     )
 
     def find() -> str:

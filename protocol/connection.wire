@@ -43,6 +43,7 @@ message store.Options {
   11 synchronousWith: [str]  # the nodes, by address or id, a synchronous commit waits for one of; any when empty
   12 insecure: bool          # plain TCP on links beyond this machine, which anyone on the way reads
   13 selfMetrics: bool       # measures the store into its own metrics.db, under names that start with tinystore_
+  14 withoutSystem: bool     # with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
 }
 
 # The last frame of a connection.

@@ -11,6 +11,7 @@ import {
 	Link,
 	privateChild,
 	remote,
+	type SelfMetrics,
 	sidecar,
 } from './connection.ts'
 import { ClosedError, InvalidError } from './errors.ts'
@@ -92,10 +93,11 @@ export interface OpenOptions {
 	library?: string | undefined
 	/**
 	 * Measures the store into its own metrics, under names that start with
-	 * `tinystore_`: its commits and their waits, its files, its memory. Off
+	 * `tinystore_`: its commits and their waits, its files, its memory and
+	 * the machine it runs on, which `{ system: false }` leaves out. Off
 	 * unless asked for; a sidecar found running keeps its own.
 	 */
-	selfMetrics?: boolean
+	selfMetrics?: SelfMetrics
 	/** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
 	binary?: string
 	/**

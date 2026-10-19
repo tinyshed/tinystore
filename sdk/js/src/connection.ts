@@ -240,8 +240,22 @@ export interface Started {
 	encryptionKeyFile?: string | undefined
 	/** the node the store is, when it is one */
 	node?: NodeOptions | undefined
-	/** measures the store into its own metrics */
-	selfMetrics?: boolean | undefined
+	/** measures the store into its own metrics, the machine too unless it says system: false */
+	selfMetrics?: SelfMetrics | undefined
+}
+
+/**
+ * What a store measures of itself: `true` its commits, files and memory and
+ * the machine it runs on, `{ system: false }` the same without the machine.
+ */
+export type SelfMetrics = boolean | { system?: boolean }
+
+/** What selfMetrics asks for, none when it asks for nothing. */
+function selfMetricsOf(given: SelfMetrics | undefined): { system: boolean } | undefined {
+	if (given === undefined || given === false) {
+		return undefined
+	}
+	return { system: given === true || given.system !== false }
 }
 
 /** The flags of `tinystore serve` that say how the store in `dir` opens. */
@@ -250,7 +264,11 @@ function storeFlags(started: Started, dir: string): string[] {
 	const key = started.encryptionKeyFile
 	const keyed =
 		key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
-	const measured = started.selfMetrics === true ? [...keyed, '--self-metrics'] : keyed
+	const asked = selfMetricsOf(started.selfMetrics)
+	const measured =
+		asked === undefined
+			? keyed
+			: [...keyed, '--self-metrics', ...(asked.system ? [] : ['--no-system-metrics'])]
 	return [...measured, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
 }
 
@@ -553,7 +571,8 @@ export function embedded(
 		insecure: node?.insecure === true,
 		advertise: node?.advertise,
 		synchronousWith: node?.synchronousWith ?? [],
-		selfMetrics: started.selfMetrics === true,
+		selfMetrics: selfMetricsOf(started.selfMetrics) !== undefined,
+		withoutSystem: selfMetricsOf(started.selfMetrics)?.system === false,
 	})
 	return async () => {
 		let session: Session | undefined

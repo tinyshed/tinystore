@@ -2759,6 +2759,8 @@ type StoreOptions struct {
 	Insecure bool `wire:"12,insecure"`
 	// measures the store into its own metrics.db, under names that start with tinystore_
 	SelfMetrics bool `wire:"13,selfMetrics"`
+	// with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
+	WithoutSystem bool `wire:"14,withoutSystem"`
 }
 
 func (m StoreOptions) Write(w *Writer) {
@@ -2838,6 +2840,11 @@ func (m StoreOptions) Write(w *Writer) {
 		w.Bool(m.SelfMetrics)
 		n++
 	}
+	if m.WithoutSystem {
+		w.Uint(14)
+		w.Bool(m.WithoutSystem)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -2895,6 +2902,8 @@ func (m *StoreOptions) Read(r *Reader) {
 			m.Insecure = r.Bool()
 		case 13:
 			m.SelfMetrics = r.Bool()
+		case 14:
+			m.WithoutSystem = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -2916,7 +2925,8 @@ func (m StoreOptions) IsZero() bool {
 		m.Advertise == nil &&
 		len(m.SynchronousWith) == 0 &&
 		!m.Insecure &&
-		!m.SelfMetrics
+		!m.SelfMetrics &&
+		!m.WithoutSystem
 }
 
 // GoAway is the schema's GoAway.

@@ -8,29 +8,34 @@ with no Prometheus beside it. Dashbin's A10; asked for on 19 October.
 ## The call site
 
 ```rust
-let store = Store::open("./data", Options { self_metrics: true, ..Options::default() })?;
+let store = Store::open("./data", Options { self_metrics: Some(SelfMetrics::default()), ..Options::default() })?;
+let alone = SelfMetrics { system: false };   // the store's own, the machine left out
 let slow = store.metrics()?.query().name("tinystore_commit_ms").since(HOUR).every(MINUTE).aggregate(Op::Max)?;
 ```
 
 ```ts
 const store = await open('./data', { selfMetrics: true })
+const alone = await open('./data', { selfMetrics: { system: false } })
 ```
 
 ```python
 store = await tinystore.open("./data", self_metrics=True)
+alone = await tinystore.open("./data", self_metrics={"system": False})
 ```
 
 ```go
 store, err := tinystore.Open(ctx, "./data", tinystore.SelfMetrics())
+alone, err := tinystore.Open(ctx, "./data", tinystore.SelfMetrics(tinystore.WithoutSystem()))
 ```
 
 The option goes in the protocol's `store.Options` to a core in the SDK's own
 process, and as `tinystore serve --self-metrics` to a private child or a
-sidecar the SDK starts; a sidecar found running keeps its own, and a core
+sidecar the SDK starts, `--no-system-metrics` with `{ system: false }`; a sidecar found running keeps its own, and a core
 this process holds already, opened without them, refuses to be asked.
 
-- One option of the store, off unless asked for. No engine has a switch of
-  its own: an embedded library is not a control panel.
+- One option of the store, off unless asked for, and the machine it runs on
+  measured with it unless `system: false` leaves it out. No engine has a
+  switch of its own: an embedded library is not a control panel.
 - Nothing else is new: the series are read, aggregated, listed and kept as
   any other, through the calls of [api/metrics.md](api/metrics.md).
 - Not on a node's copy: a copy's `metrics.db` is its home's, which it cannot
@@ -85,6 +90,30 @@ ends in `_ms`, as `http_request_ms`, a size ends in `_bytes`.
 | `tinystore_background_failures_total` | counter | `task` | failures of the store's periodic work, by its task's name                                |
 
 A gauge is read when the instruments write, every 15 seconds.
+
+### The machine
+
+With `system`, unless it says `false`, and the library's feature `system`,
+on by default, which reads the machine through sysinfo 0.39:
+
+| Name                                      | Kind  | Labels | What it is                                              |
+|-------------------------------------------|-------|--------|---------------------------------------------------------|
+| `tinystore_process_memory_bytes`          | gauge |        | the process's resident memory                           |
+| `tinystore_process_virtual_memory_bytes`  | gauge |        | its virtual memory                                      |
+| `tinystore_process_cpu_percent`           | gauge |        | its processor use since the read before, 100 a core     |
+| `tinystore_system_memory_bytes`           | gauge |        | the system's memory                                     |
+| `tinystore_system_memory_available_bytes` | gauge |        | what of it is available                                 |
+| `tinystore_system_swap_bytes`             | gauge |        | the system's swap                                       |
+| `tinystore_system_swap_used_bytes`        | gauge |        | what of it is in use                                    |
+| `tinystore_system_cpus`                   | gauge |        | its logical processors                                  |
+| `tinystore_system_cpu_percent`            | gauge |        | their use since the read before, 100 every one busy     |
+| `tinystore_system_core_cpu_percent`       | gauge | `core` | each one's use, `core` its number from 0                |
+| `tinystore_system_load`                   | gauge | `span` | the load average over `1m`, `5m` and `15m`; not Windows |
+
+A processor's use is counted between two reads, so its gauges begin at the
+second write, 15 seconds after the store opens. The machine is the one the
+process runs on: a store beside another process's in a container reads that
+container's.
 
 ### Then, engine by engine
 

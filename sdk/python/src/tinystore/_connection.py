@@ -86,6 +86,8 @@ class Started:
     """how long a sidecar stays once its last connection has gone, as tinystore serve --idle takes it"""
     self_metrics: bool = False
     """measures the store into its own metrics"""
+    system_metrics: bool = True
+    """with self_metrics, the machine it runs on too"""
 
 
 def check_durability(durability: str | None, of: str) -> None:
@@ -126,6 +128,8 @@ def _store_flags(started: Started) -> list[str]:
         flags += ["--encryption-key-file", str(Path(started.encryption_key_file).resolve())]
     if started.self_metrics:
         flags.append("--self-metrics")
+        if not started.system_metrics:
+            flags.append("--no-system-metrics")
     return flags
 
 
@@ -170,6 +174,7 @@ def in_process(
         durability=started.durability,
         encryption_key_file=None if key is None else str(Path(key).resolve()),
         self_metrics=started.self_metrics,
+        without_system=started.self_metrics and not started.system_metrics,
     )
 
     async def start() -> Connection:

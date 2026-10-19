@@ -208,7 +208,7 @@ impl fmt::Debug for Pipe {
 struct Asked {
     durability: Option<Durability>,
     #[cfg(feature = "metrics")]
-    self_metrics: bool,
+    self_metrics: Option<crate::metrics::SelfMetrics>,
     encryption_key_file: Option<PathBuf>,
     #[cfg(feature = "replication")]
     node: Option<crate::replication::Node>,
@@ -254,7 +254,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
     Ok(Asked {
         durability: durability.transpose()?,
         #[cfg(feature = "metrics")]
-        self_metrics: asked.self_metrics,
+        self_metrics: asked.self_metrics.then_some(crate::metrics::SelfMetrics { system: !asked.without_system }),
         encryption_key_file: asked.encryption_key_file.map(PathBuf::from),
         #[cfg(feature = "replication")]
         node,
@@ -283,7 +283,7 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
             )));
         }
         #[cfg(feature = "metrics")]
-        if asked.self_metrics && !store.probe().listening() {
+        if asked.self_metrics.is_some() && !store.probe().listening() {
             return Err(Error::invalid("pipe: the store is open without its own metrics, and asked for them"));
         }
         #[cfg(feature = "replication")]

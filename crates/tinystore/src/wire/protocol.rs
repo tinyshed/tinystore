@@ -2036,6 +2036,8 @@ pub(crate) struct StoreOptions {
     pub(crate) insecure: bool,
     /// Measures the store into its own metrics.db, under names that start with tinystore_.
     pub(crate) self_metrics: bool,
+    /// With selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's.
+    pub(crate) without_system: bool,
 }
 
 impl Message for StoreOptions {
@@ -2059,6 +2061,7 @@ impl Message for StoreOptions {
                 11 => message.synchronous_with = codec::list(r, "synchronousWith", codec::str)?,
                 12 => message.insecure = codec::bool(r, "insecure")?,
                 13 => message.self_metrics = codec::bool(r, "selfMetrics")?,
+                14 => message.without_system = codec::bool(r, "withoutSystem")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2119,6 +2122,10 @@ impl Message for StoreOptions {
             map.field(out, 13);
             codec::write_bool(out, &self.self_metrics);
         }
+        if self.without_system {
+            map.field(out, 14);
+            codec::write_bool(out, &self.without_system);
+        }
         map.close(out);
     }
 
@@ -2137,6 +2144,7 @@ impl Message for StoreOptions {
             + 1 + codec::list_size(&self.synchronous_with, |item| 5 + item.len())
             + 2
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -2153,6 +2161,7 @@ impl Message for StoreOptions {
             && self.synchronous_with.is_empty()
             && !self.insecure
             && !self.self_metrics
+            && !self.without_system
     }
 }
 

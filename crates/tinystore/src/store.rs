@@ -54,10 +54,11 @@ pub struct Options {
     #[cfg(feature = "replication")]
     pub node: Option<crate::replication::Node>,
     /// Measures the store into its own `metrics.db`, under names that start
-    /// with `tinystore_`: its commits, their waits, its files and its memory,
-    /// as plan/self-metrics.md lists them. Off unless asked for.
+    /// with `tinystore_`: its commits, their waits, its files, its memory and
+    /// the machine it runs on, as plan/self-metrics.md lists them. `None`
+    /// unless asked for.
     #[cfg(feature = "metrics")]
-    pub self_metrics: bool,
+    pub self_metrics: Option<crate::metrics::SelfMetrics>,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
@@ -75,7 +76,7 @@ impl Default for Options {
             #[cfg(feature = "replication")]
             node: None,
             #[cfg(feature = "metrics")]
-            self_metrics: false,
+            self_metrics: None,
         }
     }
 }
@@ -235,7 +236,7 @@ impl Store {
     fn open_with(dir: PathBuf, options: Options, lock: Option<File>) -> Result<Store> {
         let beside = lock.is_none();
         #[cfg(feature = "metrics")]
-        let self_metrics = options.self_metrics && !beside;
+        let self_metrics = options.self_metrics.filter(|_| !beside);
         let probe = Arc::new(Probe::default());
         let inner = Inner {
             lock: Mutex::new(lock),
@@ -270,8 +271,8 @@ impl Store {
         }
         // before any engine, so that every file is measured from its first commit
         #[cfg(feature = "metrics")]
-        if self_metrics {
-            crate::metrics::measure_the_store(&store)?;
+        if let Some(asked) = self_metrics {
+            crate::metrics::measure_the_store(&store, asked)?;
         }
         Ok(store)
     }

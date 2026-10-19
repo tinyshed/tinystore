@@ -60,7 +60,7 @@ func libraryAt(path string) (coreLibrary, error) {
 // InProcess dials the core in this process: no server and no socket.
 func InProcess(directory, library string, started Started) func(context.Context) (*Connection, error) {
 	absolute, _ := filepath.Abs(directory)
-	options := wire.StoreOptions{SelfMetrics: started.SelfMetrics}
+	options := wire.StoreOptions{SelfMetrics: started.SelfMetrics, WithoutSystem: started.SelfMetrics && started.WithoutSystem}
 	if started.Durability != "" {
 		options.Durability = &started.Durability
 	}

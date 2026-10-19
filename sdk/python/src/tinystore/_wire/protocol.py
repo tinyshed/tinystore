@@ -1842,6 +1842,10 @@ def _write_store_options(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(13)
         w.bool(x)
         n += 1
+    if (x := v.get("without_system")) is not None:
+        w.uint(14)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1882,6 +1886,8 @@ def _read_store_options(r: Reader) -> dict[str, Any]:
                 read["insecure"] = r.bool()
             case 13:
                 read["self_metrics"] = r.bool()
+            case 14:
+                read["without_system"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -1920,6 +1926,8 @@ StoreOptions = Message(
         "insecure": (12, bool_),
         # measures the store into its own metrics.db, under names that start with tinystore_
         "self_metrics": (13, bool_),
+        # with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
+        "without_system": (14, bool_),
     },
     _write_store_options,
     _read_store_options,

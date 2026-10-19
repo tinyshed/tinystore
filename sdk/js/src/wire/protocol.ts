@@ -2207,6 +2207,8 @@ export const StoreOptions = message(
 		insecure: [12, bool],
 		/** measures the store into its own metrics.db, under names that start with tinystore_ */
 		selfMetrics: [13, bool],
+		/** with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's */
+		withoutSystem: [14, bool],
 	},
 	{
 		write(w, v) {
@@ -2286,6 +2288,11 @@ export const StoreOptions = message(
 				w.bool(v.selfMetrics)
 				n++
 			}
+			if (v.withoutSystem !== undefined) {
+				w.field(14)
+				w.bool(v.withoutSystem)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2302,6 +2309,7 @@ export const StoreOptions = message(
 			let $synchronousWith: string[] | undefined
 			let $insecure: boolean | undefined
 			let $selfMetrics: boolean | undefined
+			let $withoutSystem: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2361,6 +2369,9 @@ export const StoreOptions = message(
 					case 13:
 						$selfMetrics = r.bool()
 						break
+					case 14:
+						$withoutSystem = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -2380,6 +2391,7 @@ export const StoreOptions = message(
 				synchronousWith: $synchronousWith,
 				insecure: $insecure,
 				selfMetrics: $selfMetrics,
+				withoutSystem: $withoutSystem,
 			}
 		},
 	},
