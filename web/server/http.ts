@@ -41,6 +41,19 @@ const eventSchema = z.object({
 const largestEvent = 2048
 
 /**
+ * What `go get tinyshed.org/tinystore/...` reads at the site's own address:
+ * the module lives in `sdk/go` of the repository, a subdirectory Go has
+ * understood since 1.25, and its tags are `sdk/go/vX.Y.Z`. Every path below
+ * the site answers the same, since Go asks for the package it was given.
+ */
+const goImport = [
+	'<!doctype html>',
+	'<meta name="go-import" content="tinyshed.org/tinystore git https://github.com/tinyshed/tinystore sdk/go">',
+	'<meta name="go-source" content="tinyshed.org/tinystore https://github.com/tinyshed/tinystore https://github.com/tinyshed/tinystore/tree/main/sdk/go{/dir} https://github.com/tinyshed/tinystore/blob/main/sdk/go{/dir}/{file}#L{line}">',
+	'',
+].join('\n')
+
+/**
  * The site's requests, without a port: the API's three routes, and every
  * other GET a file of the build, counted when it is a page, its data or its
  * markdown. Tests call it directly.
@@ -87,6 +100,11 @@ export function createRouter(
 		}
 		if (request.method !== 'GET' && request.method !== 'HEAD') {
 			return secured(new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } }))
+		}
+		if (url.searchParams.get('go-get') === '1') {
+			return secured(
+				new Response(goImport, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
+			)
 		}
 		return secured(serveFile(site, analytics, request, url, address))
 	}

@@ -106,6 +106,24 @@ describe('a page', () => {
 	})
 })
 
+describe('go get', () => {
+	test('reads the Go module in sdk/go of the repository, at the root and below it', async () => {
+		for (const path of ['/?go-get=1', '/kv?go-get=1', '/records/console?go-get=1']) {
+			const response = await call(path)
+			expect(response.status).toBe(200)
+			expect(await response.text()).toContain(
+				'<meta name="go-import" content="tinyshed.org/tinystore git https://github.com/tinyshed/tinystore sdk/go">',
+			)
+		}
+	})
+
+	test('counts no view', async () => {
+		const before = views.length
+		await call('/docs/kv?go-get=1')
+		expect(views).toHaveLength(before)
+	})
+})
+
 describe('an event', () => {
 	const send = (body: string) => call('/api/events', { method: 'POST', body })
 
