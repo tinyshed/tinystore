@@ -60,12 +60,12 @@ let tried = summaries.try_hold(chat_id, |lease| write_summary(chat_id, lease.fen
 
 ## In these guides
 
-| Page                     | Covers                                         |
-|--------------------------|------------------------------------------------|
-| Holding and waiting      | `hold`, `tryHold`, `wait`, `maxHold`           |
-| Leases over a connection | `ttl`, renewal, a lost lease                   |
-| Fences                   | refusing a late write in SQL or another system |
-| Semaphores               | up to N holders of a key                       |
+| Page                                  | Covers                                         |
+|---------------------------------------|------------------------------------------------|
+| [Holding and waiting](holding.md)     | `hold`, `tryHold`, `wait`, `maxHold`           |
+| [Leases over a connection](leases.md) | `ttl`, renewal, a lost lease                   |
+| [Fences](fences.md)                   | refusing a late write in SQL or another system |
+| [Semaphores](semaphores.md)           | up to N holders of a key                       |
 
 New to Locks? [Live updates](../../handbook/chat/live-updates.md#one-summary-per-chat-at-a-time)
 in the Handbook writes one summary per chat at a time, with a fence in SQL.

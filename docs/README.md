@@ -139,16 +139,16 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### Channels
 
 - [Overview](guides/channels/README.md)
-- Subscriptions and missed messages
-- Publishing from a transaction
+- [Subscriptions and missed messages](guides/channels/subscriptions.md)
+- [Publishing from a transaction](guides/channels/transactions.md)
 
 ### Locks
 
 - [Overview](guides/locks/README.md)
-- Holding and waiting
-- Leases over a connection
-- Fences
-- Semaphores
+- [Holding and waiting](guides/locks/holding.md)
+- [Leases over a connection](guides/locks/leases.md)
+- [Fences](guides/locks/fences.md)
+- [Semaphores](guides/locks/semaphores.md)
 
 ### Config
 

@@ -58,10 +58,10 @@ sub.stop();
 
 ## In these guides
 
-| Page                              | Covers                                                   |
-|-----------------------------------|----------------------------------------------------------|
-| Subscriptions and missed messages | `subscribe`, `each`, `recursive`, `onMissed`, reconnects |
-| Publishing from a transaction     | `tx.with(channel)` in `db.tx` and `store.tx`             |
+| Page                                                  | Covers                                                   |
+|-------------------------------------------------------|----------------------------------------------------------|
+| [Subscriptions and missed messages](subscriptions.md) | `subscribe`, `each`, `recursive`, `onMissed`, reconnects |
+| [Publishing from a transaction](transactions.md)      | `tx.with(channel)` in `db.tx` and `store.tx`             |
 
 New to Channels? [Live updates](../../handbook/chat/live-updates.md) in the
 Handbook tells every open tab about a new reply.
