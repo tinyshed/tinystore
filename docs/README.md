@@ -96,26 +96,26 @@ and the voice: .agents/skills/docs/SKILL.md.
 ### KV
 
 - [Overview](guides/kv/README.md)
-- Expiry
-- Versions
-- Branches
-- Encrypted buckets
-- Counters
-- Rate limits
-- Quotas
-- Once
-- Transactions
+- [Expiry](guides/kv/expiry.md)
+- [Versions](guides/kv/versions.md)
+- [Branches](guides/kv/branches.md)
+- [Encrypted buckets](guides/kv/encrypted.md)
+- [Counters](guides/kv/counters.md)
+- [Rate limits](guides/kv/rate-limits.md)
+- [Quotas](guides/kv/quotas.md)
+- [Once](guides/kv/once.md)
+- [Transactions](guides/kv/transactions.md)
 
 ### Jobs
 
 - [Overview](guides/jobs/README.md)
-- Ids
-- Schedules and cron
-- Concurrency and rate
-- Watching a job
-- Steps
-- Jobs in your database
-- Testing
+- [Ids](guides/jobs/ids.md)
+- [Schedules and cron](guides/jobs/schedules.md)
+- [Concurrency and rate](guides/jobs/concurrency.md)
+- [Watching a job](guides/jobs/watching.md)
+- [Steps](guides/jobs/steps.md)
+- [Jobs in your database](guides/jobs/your-database.md)
+- [Testing](guides/jobs/testing.md)
 
 ### Blobs
 

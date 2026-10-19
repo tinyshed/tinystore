@@ -209,9 +209,9 @@ function variantsOf(code: string, language: ApiLanguage): string[] {
 	return [...code.matchAll(/^ {4}([A-Z]\w*)/gm)].map(match => match[1] ?? '')
 }
 
-// every name of a Go `const ( … )` block, which the reference lists under its first
+// every name of a Go `const ( … )` or `var ( … )` block, which the reference lists under its first
 function groupedConstants(code: string): string[] {
-	if (!code.startsWith('const (')) {
+	if (!code.startsWith('const (') && !code.startsWith('var (')) {
 		return []
 	}
 	return [...code.matchAll(/^\t([A-Z]\w*)\b/gm)].map(match => match[1] ?? '')
@@ -515,7 +515,26 @@ function memberOf(api: LanguageIndex, type: string, name: string): ApiEntry | un
 }
 
 // what a Rust type has from a trait it derives, which rustdoc lists apart from its methods
-const derived = new Set(['default', 'clone', 'into', 'from', 'to_owned', 'to_string'])
+const derived = new Set([
+	'default',
+	'clone',
+	'into',
+	'from',
+	'to_owned',
+	'to_string',
+	// an Option's or a Result's own, which the reference's types are read through
+	'unwrap',
+	'expect',
+	'unwrap_or',
+	'unwrap_or_default',
+	'unwrap_or_else',
+	'is_some',
+	'is_none',
+	'map',
+	'ok_or',
+	'as_deref',
+	'as_ref',
+])
 
 // a function a program calls by its name alone, `open('./data')`, and not a type
 function isFunction(code: string): boolean {

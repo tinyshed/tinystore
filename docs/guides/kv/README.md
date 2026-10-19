@@ -65,17 +65,17 @@ let used = messages.allow(user_id)?;
 
 ## In these guides
 
-| Page              | Covers                                                   |
-|-------------------|----------------------------------------------------------|
-| Expiry            | `ttl`, `idle`, `expiresAt`, `expire`                     |
-| Versions          | `entry`, `ifVersion`, safe read-modify-write             |
-| Branches          | `under`: one user's keys, listed and cleared in one call |
-| Encrypted buckets | values sealed with the store's key                       |
-| Counters          | totals by key, in memory or written every add            |
-| Rate limits       | a smooth rate with a burst, `allow`, `peek`, `reset`     |
-| Quotas            | uses in windows that reset, `refund`                     |
-| Once              | requests sent twice, and memos                           |
-| Transactions      | `store.tx`: reads that decide what to write              |
+| Page                              | Covers                                                   |
+|-----------------------------------|----------------------------------------------------------|
+| [Expiry](expiry.md)               | `ttl`, `idle`, `expiresAt`, `expire`                     |
+| [Versions](versions.md)           | `entry`, `ifVersion`, safe read-modify-write             |
+| [Branches](branches.md)           | `under`: one user's keys, listed and cleared in one call |
+| [Encrypted buckets](encrypted.md) | values sealed with the store's key                       |
+| [Counters](counters.md)           | totals by key, in memory or written every add            |
+| [Rate limits](rate-limits.md)     | a smooth rate with a burst, `allow`, `peek`, `reset`     |
+| [Quotas](quotas.md)               | uses in windows that reset, `refund`                     |
+| [Once](once.md)                   | requests sent twice, and memos                           |
+| [Transactions](transactions.md)   | `store.tx`: reads that decide what to write              |
 
 New to KV? [Sessions and limits](../../handbook/chat/sessions-and-limits.md)
 in the Handbook signs users in with codes, sessions, a rate limit, a quota and
