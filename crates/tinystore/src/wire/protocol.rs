@@ -2034,6 +2034,8 @@ pub(crate) struct StoreOptions {
     pub(crate) synchronous_with: Vec<String>,
     /// Plain TCP on links beyond this machine, which anyone on the way reads.
     pub(crate) insecure: bool,
+    /// Measures the store into its own metrics.db, under names that start with tinystore_.
+    pub(crate) self_metrics: bool,
 }
 
 impl Message for StoreOptions {
@@ -2056,6 +2058,7 @@ impl Message for StoreOptions {
                 10 => message.advertise = Some(codec::str(r, "advertise")?),
                 11 => message.synchronous_with = codec::list(r, "synchronousWith", codec::str)?,
                 12 => message.insecure = codec::bool(r, "insecure")?,
+                13 => message.self_metrics = codec::bool(r, "selfMetrics")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2112,6 +2115,10 @@ impl Message for StoreOptions {
             map.field(out, 12);
             codec::write_bool(out, &self.insecure);
         }
+        if self.self_metrics {
+            map.field(out, 13);
+            codec::write_bool(out, &self.self_metrics);
+        }
         map.close(out);
     }
 
@@ -2129,6 +2136,7 @@ impl Message for StoreOptions {
             + self.advertise.as_ref().map_or(0, |advertise| 1 + 5 + advertise.len())
             + 1 + codec::list_size(&self.synchronous_with, |item| 5 + item.len())
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -2144,6 +2152,7 @@ impl Message for StoreOptions {
             && self.advertise.is_none()
             && self.synchronous_with.is_empty()
             && !self.insecure
+            && !self.self_metrics
     }
 }
 

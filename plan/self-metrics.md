@@ -16,17 +16,25 @@ let slow = store.metrics()?.query().name("tinystore_commit_ms").since(HOUR).ever
 const store = await open('./data', { selfMetrics: true })
 ```
 
-In Bun, Python and Go the option comes with the protocol's `store.Options`,
-a slice after the core's: `selfMetrics`, `self_metrics=True`,
-`tinystore.SelfMetrics()`.
+```python
+store = await tinystore.open("./data", self_metrics=True)
+```
+
+```go
+store, err := tinystore.Open(ctx, "./data", tinystore.SelfMetrics())
+```
+
+The option goes in the protocol's `store.Options` to a core in the SDK's own
+process, and as `tinystore serve --self-metrics` to a private child or a
+sidecar the SDK starts; a sidecar found running keeps its own, and a core
+this process holds already, opened without them, refuses to be asked.
 
 - One option of the store, off unless asked for. No engine has a switch of
   its own: an embedded library is not a control panel.
 - Nothing else is new: the series are read, aggregated, listed and kept as
   any other, through the calls of [api/metrics.md](api/metrics.md).
-- Built so far: the Rust core, the store, SQLite and the writer below. Not
-  yet: the option over the wire and in the SDKs, each engine's own names,
-  and a node: a copy's `metrics.db` is its home's, which it cannot write.
+- Not on a node's copy: a copy's `metrics.db` is its home's, which it cannot
+  write.
 
 ## How it is measured
 

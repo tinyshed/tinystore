@@ -2205,6 +2205,8 @@ export const StoreOptions = message(
 		synchronousWith: [11, list(str)],
 		/** plain TCP on links beyond this machine, which anyone on the way reads */
 		insecure: [12, bool],
+		/** measures the store into its own metrics.db, under names that start with tinystore_ */
+		selfMetrics: [13, bool],
 	},
 	{
 		write(w, v) {
@@ -2279,6 +2281,11 @@ export const StoreOptions = message(
 				w.bool(v.insecure)
 				n++
 			}
+			if (v.selfMetrics !== undefined) {
+				w.field(13)
+				w.bool(v.selfMetrics)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2294,6 +2301,7 @@ export const StoreOptions = message(
 			let $advertise: string | undefined
 			let $synchronousWith: string[] | undefined
 			let $insecure: boolean | undefined
+			let $selfMetrics: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2350,6 +2358,9 @@ export const StoreOptions = message(
 					case 12:
 						$insecure = r.bool()
 						break
+					case 13:
+						$selfMetrics = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -2368,6 +2379,7 @@ export const StoreOptions = message(
 				advertise: $advertise,
 				synchronousWith: $synchronousWith,
 				insecure: $insecure,
+				selfMetrics: $selfMetrics,
 			}
 		},
 	},

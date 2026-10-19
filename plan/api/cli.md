@@ -136,6 +136,7 @@ that holds it. `serve --help` groups its flags:
 | store  | `--durability full\|os`        | how far a commit goes before it returns; each engine's own by default           |
 |        | `--keep-free <size>`           | the disk the store keeps free; 1 GiB by default                                 |
 |        | `--encryption-key-file <file>` | the store's key, kept apart from its data                                       |
+|        | `--self-metrics`               | measure the store into its own metrics, as `tinystore_` names                   |
 | output | `--log-file <file>`            | JSON lines to a file as well                                                    |
 |        | `--quiet`                      | the banner, warnings and errors only                                            |
 

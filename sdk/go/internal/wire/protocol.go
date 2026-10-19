@@ -2757,6 +2757,8 @@ type StoreOptions struct {
 	SynchronousWith []string `wire:"11,synchronousWith"`
 	// plain TCP on links beyond this machine, which anyone on the way reads
 	Insecure bool `wire:"12,insecure"`
+	// measures the store into its own metrics.db, under names that start with tinystore_
+	SelfMetrics bool `wire:"13,selfMetrics"`
 }
 
 func (m StoreOptions) Write(w *Writer) {
@@ -2831,6 +2833,11 @@ func (m StoreOptions) Write(w *Writer) {
 		w.Bool(m.Insecure)
 		n++
 	}
+	if m.SelfMetrics {
+		w.Uint(13)
+		w.Bool(m.SelfMetrics)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -2886,6 +2893,8 @@ func (m *StoreOptions) Read(r *Reader) {
 			m.SynchronousWith = v
 		case 12:
 			m.Insecure = r.Bool()
+		case 13:
+			m.SelfMetrics = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -2906,7 +2915,8 @@ func (m StoreOptions) IsZero() bool {
 		!m.Catalog &&
 		m.Advertise == nil &&
 		len(m.SynchronousWith) == 0 &&
-		!m.Insecure
+		!m.Insecure &&
+		!m.SelfMetrics
 }
 
 // GoAway is the schema's GoAway.

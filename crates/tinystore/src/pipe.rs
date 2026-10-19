@@ -207,6 +207,8 @@ impl fmt::Debug for Pipe {
 #[derive(Default)]
 struct Asked {
     durability: Option<Durability>,
+    #[cfg(feature = "metrics")]
+    self_metrics: bool,
     encryption_key_file: Option<PathBuf>,
     #[cfg(feature = "replication")]
     node: Option<crate::replication::Node>,
@@ -245,8 +247,14 @@ fn asked(options: &[u8]) -> Result<Asked> {
         witness: false,
         insecure: asked.insecure,
     });
+    #[cfg(not(feature = "metrics"))]
+    if asked.self_metrics {
+        return Err(Error::invalid("pipe: the store's own metrics, and the library was built without metrics"));
+    }
     Ok(Asked {
         durability: durability.transpose()?,
+        #[cfg(feature = "metrics")]
+        self_metrics: asked.self_metrics,
         encryption_key_file: asked.encryption_key_file.map(PathBuf::from),
         #[cfg(feature = "replication")]
         node,
@@ -274,6 +282,10 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
                 key_file.display()
             )));
         }
+        #[cfg(feature = "metrics")]
+        if asked.self_metrics && !store.probe().listening() {
+            return Err(Error::invalid("pipe: the store is open without its own metrics, and asked for them"));
+        }
         #[cfg(feature = "replication")]
         if asked.node.is_some() && store.node().is_none() {
             return Err(Error::invalid("pipe: the store is open as no node, and asked to be one"));
@@ -286,6 +298,8 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         encryption_key_file: asked.encryption_key_file,
         #[cfg(feature = "replication")]
         node: asked.node,
+        #[cfg(feature = "metrics")]
+        self_metrics: asked.self_metrics,
         ..Options::default()
     };
     let store = Store::open(dir, options)?;

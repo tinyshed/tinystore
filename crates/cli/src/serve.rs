@@ -125,6 +125,7 @@ fn options_of(
         keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
         encryption_key_file: serve.encryption_key_file.clone(),
         node,
+        self_metrics: serve.self_metrics,
         ..Options::default()
     }
 }

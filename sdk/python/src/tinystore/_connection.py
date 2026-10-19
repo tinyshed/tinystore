@@ -84,6 +84,8 @@ class Started:
     encryption_key_file: str | None = None
     idle: str | None = None
     """how long a sidecar stays once its last connection has gone, as tinystore serve --idle takes it"""
+    self_metrics: bool = False
+    """measures the store into its own metrics"""
 
 
 def check_durability(durability: str | None, of: str) -> None:
@@ -122,6 +124,8 @@ def _store_flags(started: Started) -> list[str]:
         flags += ["--durability", started.durability]
     if started.encryption_key_file is not None:
         flags += ["--encryption-key-file", str(Path(started.encryption_key_file).resolve())]
+    if started.self_metrics:
+        flags.append("--self-metrics")
     return flags
 
 
@@ -165,6 +169,7 @@ def in_process(
     options = StoreOptions.encode(
         durability=started.durability,
         encryption_key_file=None if key is None else str(Path(key).resolve()),
+        self_metrics=started.self_metrics,
     )
 
     async def start() -> Connection:

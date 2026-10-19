@@ -240,6 +240,8 @@ export interface Started {
 	encryptionKeyFile?: string | undefined
 	/** the node the store is, when it is one */
 	node?: NodeOptions | undefined
+	/** measures the store into its own metrics */
+	selfMetrics?: boolean | undefined
 }
 
 /** The flags of `tinystore serve` that say how the store in `dir` opens. */
@@ -248,7 +250,8 @@ function storeFlags(started: Started, dir: string): string[] {
 	const key = started.encryptionKeyFile
 	const keyed =
 		key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
-	return [...keyed, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
+	const measured = started.selfMetrics === true ? [...keyed, '--self-metrics'] : keyed
+	return [...measured, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
 }
 
 /**
@@ -550,6 +553,7 @@ export function embedded(
 		insecure: node?.insecure === true,
 		advertise: node?.advertise,
 		synchronousWith: node?.synchronousWith ?? [],
+		selfMetrics: started.selfMetrics === true,
 	})
 	return async () => {
 		let session: Session | undefined

@@ -90,6 +90,12 @@ export interface OpenOptions {
 	 * TINYSTORE_ADDON when absent.
 	 */
 	library?: string | undefined
+	/**
+	 * Measures the store into its own metrics, under names that start with
+	 * `tinystore_`: its commits and their waits, its files, its memory. Off
+	 * unless asked for; a sidecar found running keeps its own.
+	 */
+	selfMetrics?: boolean
 	/** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
 	binary?: string
 	/**
@@ -542,7 +548,12 @@ export async function openWith(
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const durability = options.durability
 	checkDurability(durability, 'open')
-	const started = { durability, encryptionKeyFile: options.encryptionKeyFile, node: options.node }
+	const started = {
+		durability,
+		encryptionKeyFile: options.encryptionKeyFile,
+		node: options.node,
+		selfMetrics: options.selfMetrics,
+	}
 	const dial =
 		options.embedded === true
 			? embedded(runtime, dir, () => findLibrary(options.library), started)

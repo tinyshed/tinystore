@@ -607,6 +607,7 @@ async def open(
     clock: datetime | None = None,
     durability: Durability | None = None,
     encryption_key_file: str | os.PathLike[str] | None = None,
+    self_metrics: bool = False,
 ) -> Store:
     """Opens the store in a directory, and returns once it answers.
 
@@ -630,6 +631,9 @@ async def open(
       another is refused.
     - ``encryption_key_file``: the file of the store's encryption key, 64 hex
       digits, kept apart from the data; the store reads it and never makes it.
+    - ``self_metrics``: measures the store into its own metrics, under names
+      that start with ``tinystore_``: its commits and their waits, its files,
+      its memory. Off unless asked for; a sidecar found running keeps its own.
     """
     where = _directory(directory)
     check_durability(durability, "open")
@@ -642,6 +646,7 @@ async def open(
         durability=durability,
         encryption_key_file=key,
         idle=None if idle is None else spelled(ms(idle, "a sidecar's idle")),
+        self_metrics=self_metrics,
     )
 
     def find() -> str:

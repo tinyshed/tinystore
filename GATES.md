@@ -178,6 +178,7 @@ module defines.
 - a store opened without holds none of its own names — `a_store_not_measured_holds_none_of_its_own_names` in `metrics::own`
 - a name that starts with `tinystore_` is refused from the program's instruments and its ingest — `a_name_of_the_stores_own_is_refused_from_the_program` in `metrics::own`
 - what the store measured is kept through its close, the next run starting from a zero — `what_the_store_measured_is_kept_through_its_close_and_counted_on_after` in `metrics::own`
+- an SDK's store opened with its own metrics, through its core and a private child, measures its commits, and one opened without holds none — `a store opened with selfMetrics through …` and `a store opened without selfMetrics holds none of its own names` in `sdk/js/test/metrics.test.ts`, `test_a_store_opened_with_self_metrics_measures_its_commits` in Python's, `TestAStoreOpenedWithSelfMetricsMeasuresItsCommits` in Go's `metrics`; `serve --self-metrics` — `serve`'s argument tests in `crates/cli`
 - a failure of periodic work counts by its task, and a database past the 32 named counts into `sql/__overflow` — `a_failure_of_periodic_work_is_counted_by_its_task`, `a_database_past_those_named_counts_into_the_overflow` in `metrics::own`
 
 ## Records

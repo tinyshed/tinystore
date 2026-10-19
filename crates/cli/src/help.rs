@@ -122,6 +122,7 @@ pub(crate) const SERVE: Command = Command {
         under("store", "--durability", "full|os", "how far a commit goes before it returns; each engine's own"),
         under("store", "--keep-free", "<size>", "the disk the store keeps free; 1GiB by default"),
         under("store", "--encryption-key-file", "<file>", "the store's key, kept apart from its data"),
+        under("store", "--self-metrics", "", "measure the store into its own metrics, as tinystore_ names"),
         under("output", "--log-file", "<file>", "JSON lines to a file as well"),
         under("output", "--quiet", "", "the banner, warnings and errors only"),
         under(HIDDEN, "--local", "", "a sidecar an SDK started"),

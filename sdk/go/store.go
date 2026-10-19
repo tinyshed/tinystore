@@ -34,6 +34,7 @@ type options struct {
 	clock             time.Time
 	durability        string
 	encryptionKeyFile string
+	selfMetrics       bool
 }
 
 // Private starts a server of this process's own, a child that lives and dies
@@ -80,6 +81,11 @@ func Durability(level string) Option { return func(o *options) { o.durability = 
 // kept apart from the data; the store reads it and never makes it.
 func EncryptionKeyFile(path string) Option { return func(o *options) { o.encryptionKeyFile = path } }
 
+// SelfMetrics measures the store into its own metrics, under names that start
+// with tinystore_: its commits and their waits, its files, its memory. Off
+// unless asked for; a sidecar found running keeps its own.
+func SelfMetrics() Option { return func(o *options) { o.selfMetrics = true } }
+
 // Open opens the store in a directory, and returns once it answers: through
 // the directory's sidecar, found through its SERVE file or started, unless
 // Private or Embedded says otherwise. A directory that cannot be served fails here.
@@ -100,7 +106,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.private && o.embedded {
 		return nil, core.Errorf(core.Invalid, "a store is private or embedded, not both")
 	}
-	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile}
+	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics}
 	if o.idleSet {
 		ms, err := core.Millis(o.idle, "a sidecar's idle")
 		if err != nil {

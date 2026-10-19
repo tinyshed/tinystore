@@ -3,7 +3,7 @@
 //! ```text
 //! tinystore serve --dir <dir> --local --log-file <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]                 a private child
-//! tinystore serve <dir> [--durability os] [--keep-free 10GiB]                           a person's server
+//! tinystore serve <dir> [--durability os] [--keep-free 10GiB] [--self-metrics]           a person's server
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key                   its key kept apart
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-config node.toml]               a node other nodes copy
@@ -49,6 +49,8 @@ pub(crate) struct Serve {
     /// The file of the store's encryption key; `encryption.key` of its directory,
     /// which the store makes, unless said.
     pub(crate) encryption_key_file: Option<PathBuf>,
+    /// Measures the store into its own metrics.db, `--self-metrics`.
+    pub(crate) self_metrics: bool,
     /// The node the store is, when a node's flag says so.
     pub(crate) node: Option<Node>,
 }
@@ -123,7 +125,8 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         refuse_an_unreachable_catalog(node)?;
     }
     let (log, quiet, clock, durability) = (given.log, given.quiet, given.clock, given.durability);
-    let (keep_free, encryption_key_file) = (given.keep_free, given.encryption_key_file);
+    let (keep_free, encryption_key_file, self_metrics) =
+        (given.keep_free, given.encryption_key_file, given.self_metrics);
     Ok(Serve {
         dir,
         transport,
@@ -136,6 +139,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         durability,
         keep_free,
         encryption_key_file,
+        self_metrics,
         node,
     })
 }
@@ -158,6 +162,7 @@ struct Given {
     durability: Option<Durability>,
     keep_free: Option<u64>,
     encryption_key_file: Option<PathBuf>,
+    self_metrics: bool,
     node: Node,
     node_config: Option<PathBuf>,
 }
@@ -185,6 +190,7 @@ impl Given {
                 "--encryption-key-file" => {
                     given.encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?));
                 }
+                "--self-metrics" => given.self_metrics = true,
                 "--node-listen" => given.node.listen = Some(value("--node-listen")?),
                 "--from" => given.node.from.push(value("--from")?),
                 "--node-config" => given.node_config = Some(PathBuf::from(value("--node-config")?)),
@@ -372,6 +378,8 @@ mod tests {
     #[test]
     fn the_disk_a_store_keeps_free_is_the_stores_own_unless_said() {
         assert_eq!(serve(&args("d")).unwrap().keep_free, None);
+        assert!(!serve(&args("d")).unwrap().self_metrics, "a store measures itself only when asked");
+        assert!(serve(&args("d --self-metrics")).unwrap().self_metrics);
         assert_eq!(serve(&args("d --keep-free 10GiB")).unwrap().keep_free, Some(10 << 30));
         assert_eq!(serve(&args("d --keep-free 0")).unwrap().keep_free, Some(0), "0 keeps none");
     }

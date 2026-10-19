@@ -428,3 +428,50 @@ test('a value falls in the interval of the grid where the store puts it', () => 
 	expect(binOf(Number.MAX_VALUE)).toBe('3:8192')
 	expect(exponentialBuckets(1, 2, 4)).toEqual([1, 2, 4, 8])
 })
+
+const binary = process.env.TINYSTORE_BIN
+const measuredWays = [
+	{
+		name: 'the core in this process',
+		ready: library !== undefined,
+		open: (dir: string) => open(dir, { embedded: true, library, selfMetrics: true }),
+	},
+	{
+		name: 'a private child',
+		ready: binary !== undefined && binary !== 'unused',
+		open: (dir: string) => open(dir, { private: true, selfMetrics: true }),
+	},
+]
+
+for (const way of measuredWays) {
+	test.skipIf(!way.ready)(
+		`a store opened with selfMetrics through ${way.name} measures its commits`,
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), 'tinystore-self-'))
+			const store = await way.open(dir)
+			await store.bucket<string>('sessions').set('a', 'x')
+			await store.metrics.flush()
+			const [commits] = await store.metrics.latest({
+				name: 'tinystore_commits_total',
+				where: { file: 'kv' },
+				since: '1h',
+			})
+			expect(commits?.value).toBeGreaterThan(0)
+			await store.close()
+			await removed(dir)
+		},
+	)
+}
+
+test.skipIf(library === undefined)(
+	'a store opened without selfMetrics holds none of its own names',
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-self-'))
+		const store = await open(dir, { embedded: true, library })
+		await store.bucket<string>('sessions').set('a', 'x')
+		await store.metrics.flush()
+		expect(await store.metrics.latest({ name: 'tinystore_commits_total', since: '1h' })).toEqual([])
+		await store.close()
+		await removed(dir)
+	},
+)

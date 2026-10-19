@@ -21,7 +21,7 @@ import tinystore
 from tinystore._connection import Link, Started, in_process
 from tinystore.instruments import Instruments, bin_of
 from tinystore.metrics import Metrics, Series, exponential_buckets
-from ways import CORE
+from ways import CORE, SERVED
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -402,3 +402,27 @@ def test_a_label_is_written_as_every_language_writes_it() -> None:
         "true",
         "x",
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "ready", "embedded"),
+    [("the core in this process", CORE, True), ("a private child", SERVED, False)],
+)
+async def test_a_store_opened_with_self_metrics_measures_its_commits(
+    name: str, ready: bool, embedded: bool, directory: Path
+) -> None:
+    if not ready:
+        pytest.skip(f"{name}: not built here")
+    store = await tinystore.open(directory, self_metrics=True, embedded=embedded, private=not embedded)
+    await store.bucket("sessions").set("a", "x")
+    await store.metrics.flush()
+    newest = await store.metrics.latest(name="tinystore_commits_total", where={"file": "kv"}, since="1h")
+    assert newest
+    assert newest[0].value > 0
+    await store.close()
+
+
+async def test_a_store_opened_without_self_metrics_holds_none_of_its_own_names(store: tinystore.Store) -> None:
+    await store.bucket("sessions").set("a", "x")
+    await store.metrics.flush()
+    assert await store.metrics.latest(name="tinystore_commits_total", since="1h") == []

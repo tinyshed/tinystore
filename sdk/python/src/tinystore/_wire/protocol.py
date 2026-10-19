@@ -1838,6 +1838,10 @@ def _write_store_options(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(12)
         w.bool(x)
         n += 1
+    if (x := v.get("self_metrics")) is not None:
+        w.uint(13)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1876,6 +1880,8 @@ def _read_store_options(r: Reader) -> dict[str, Any]:
                 read["synchronous_with"] = items0
             case 12:
                 read["insecure"] = r.bool()
+            case 13:
+                read["self_metrics"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -1912,6 +1918,8 @@ StoreOptions = Message(
         "synchronous_with": (11, list_(str_)),
         # plain TCP on links beyond this machine, which anyone on the way reads
         "insecure": (12, bool_),
+        # measures the store into its own metrics.db, under names that start with tinystore_
+        "self_metrics": (13, bool_),
     },
     _write_store_options,
     _read_store_options,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/ways"
+	"tinyshed.org/tinystore/kv"
 	"tinyshed.org/tinystore/metrics"
 )
 
@@ -360,4 +362,35 @@ func TestAStoreClosedWithItsInstrumentsHandsOverWhatTheyHoldAndLetsGoAtOnce(t *t
 			t.Fatalf("the close kept %v", got)
 		}
 	})
+}
+
+func TestAStoreOpenedWithSelfMetricsMeasuresItsCommits(t *testing.T) {
+	ctx := context.Background()
+	library, binary := os.Getenv("TINYSTORE_LIBRARY"), os.Getenv("TINYSTORE_BIN")
+	measured := []struct {
+		name  string
+		ready bool
+		opts  []tinystore.Option
+	}{
+		{"the core in this process", library != "", []tinystore.Option{tinystore.Library(library)}},
+		{"a private child", binary != "" && binary != "unused", []tinystore.Option{tinystore.Private(), tinystore.Binary(binary)}},
+	}
+	for _, way := range measured {
+		t.Run(way.name, func(t *testing.T) {
+			if !way.ready {
+				t.Skip("not built here")
+			}
+			defer ways.Recover(t)
+			store := ways.Must(tinystore.Open(ctx, t.TempDir(), append(way.opts, tinystore.SelfMetrics())...))
+			defer store.Close()
+			sessions := ways.Must(kv.OpenBucket[string](store, "sessions"))
+			ways.Must(struct{}{}, sessions.Set(ctx, "a", "x"))
+			ways.Must(struct{}{}, metrics.Flush(ctx, store))
+			query := metrics.Query{Name: "tinystore_commits_total", Where: metrics.Where{"file": "kv"}, Since: time.Hour}
+			newest := ways.Must(metrics.Latest(ctx, store, query))
+			if len(newest) != 1 || newest[0].Value <= 0 {
+				t.Fatalf("tinystore_commits_total{file=kv}: %+v", newest)
+			}
+		})
+	}
 }
