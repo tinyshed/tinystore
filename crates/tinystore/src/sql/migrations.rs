@@ -98,9 +98,13 @@ fn read_dir(dir: &Path) -> Result<Vec<(String, String)>> {
 /// The number a migration's name starts with: `0002_tags.sql` is 2.
 fn number(name: &str) -> Result<u32> {
     let digits: &str = &name[..name.find(|c: char| !c.is_ascii_digit()).unwrap_or(name.len())];
-    let numbered = !digits.is_empty() && name[digits.len()..].starts_with('_') && name.ends_with(".sql");
+    let numbered = !digits.is_empty() && name[digits.len()..].starts_with('_');
     match digits.parse() {
-        Ok(number) if numbered => Ok(number),
+        // a name given in code, `{ name: '0001_plants' }`, is a file's name and keeps its extension
+        Ok(_) if numbered && !name.ends_with(".sql") && !name.contains('.') => {
+            Err(Error::invalid(format!("migration {name}: a migration's name ends with .sql, as {name}.sql")))
+        }
+        Ok(number) if numbered && name.ends_with(".sql") => Ok(number),
         _ => Err(Error::invalid(format!(
             "migration {name}: a migration is named by its number and what it does, as 0001_notes.sql"
         ))),
@@ -118,6 +122,10 @@ mod tests {
         for name in ["tags.sql", "0002tags.sql", "_tags.sql", "0002_tags.txt"] {
             assert!(number(name).is_err(), "{name}");
         }
+        let why = number("0001_plants").unwrap_err().to_string();
+        assert!(why.contains("ends with .sql, as 0001_plants.sql"), "{why}");
+        let why = number("0001_init.txt").unwrap_err().to_string();
+        assert!(why.contains("named by its number and what it does"), "{why}");
     }
 
     // contract: SQL-03
