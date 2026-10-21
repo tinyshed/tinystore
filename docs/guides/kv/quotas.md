@@ -78,6 +78,7 @@ Each window's `used`, `limit`, `left` and `resetsAt` (`resets_at`,
 ## See also
 
 - [KV](README.md): the engine's overview.
-- [Rate limits](rate-limits.md): smoothing traffic instead of counting a plan.
+- [Rate limits](rate-limits.md): smoothing traffic instead of counting a plan,
+  and [which to choose](rate-limits.md#rate-limit-or-quota).
 - [Limits per plan](../../handbook/chat/sessions-and-limits.md#limits-per-plan)
   in the Handbook.

@@ -60,6 +60,22 @@ refused request may try again as `retryAt` (`retry_at`, `RetryAt`).
   can let at most one burst more through, which is the trade for a check that
   costs no disk write.
 
+## Rate limit or quota
+
+| You want                                     | Use                                        |
+|----------------------------------------------|--------------------------------------------|
+| traffic smoothed: 100 a second, 20 at once   | a rate limit, `rate: '100/s'`, `burst: 20` |
+| a count a plan sells: 100 messages in 5 h    | a quota, `session: '100/5h'`               |
+| at most 5 in any 60 s, counted back from now | neither: no sliding window is built        |
+
+- A rate limit has no window: a key earns back one use every `1/rate`, up to
+  `burst`. After a crash it may let one burst more through.
+- A quota's window starts at a key's first use and resets a span later, and
+  it is written on every `allow`, so a crash hands out no use.
+- A quota of `'5/1m'` is the nearest to "5 a minute": 5 pass in each window,
+  but a window's last uses and the next one's first pass within seconds. One
+  use at 0 s, four at 58 s and five at 61 s all pass: nine in three seconds.
+
 ## See also
 
 - [KV](README.md): the engine's overview.
