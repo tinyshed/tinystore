@@ -45,6 +45,19 @@ sessions.under(user_id).set(digest(&token), &session)?;
 sessions.under(user_id).clear()?; // signed out everywhere
 ```
 
+A page holds entries, not bare values: each value comes with its key, its
+version and when it expires. Two keys of a bucket of targets, one set with a
+`ttl`, list as one page with no `next`:
+
+```json
+{
+  "entries": [
+    { "key": "api", "value": { "url": "https://api.example.com/health" }, "version": "2", "expiresAt": "2026-10-21T21:23:48.122Z" },
+    { "key": "home", "value": { "url": "https://example.com" }, "version": "1" }
+  ]
+}
+```
+
 ## How branches work
 
 - A branch exists while it holds keys; there is nothing to create or delete.
@@ -54,7 +67,11 @@ sessions.under(user_id).clear()?; // signed out everywhere
   reader. On the bucket itself, it empties the bucket.
 - `list()` reads one page, at most 1,000 keys, in the byte order of the keys
   (`"10"` before `"9"`). Pass the page's `next` as `after` for the page after
-  it. `all()` walks every page, holding nothing between pages.
+  it. A full page has a `next` even when no key follows, and the page after
+  it is then empty; a page with no `next` is the last. `all()` walks every
+  page, holding nothing between pages.
+- On the bucket itself, without `under`, `list()` and `all()` read the keys
+  of its root: a bucket of targets or settings is listed the same way.
 - Every call works on a branch: `get`, `set`, `take`, `create`, `expire`,
   `delete`, `entry`.
 
