@@ -22,6 +22,7 @@ pip install tinyshed-tinystore
 
 ```sh for=go
 go get tinyshed.org/tinystore
+go install tinyshed.org/tinystore/cmd/tinystore   # the tinystore command, of the same release
 ```
 
 ```sh for=rust

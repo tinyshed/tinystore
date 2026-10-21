@@ -3,8 +3,10 @@
 `tinystore` is the one command a person types. It serves a store to other
 processes and machines, shows what a store holds and logs while its program
 runs, backs it up, and steers the nodes of a network. The npm package and the
-Python wheel install it; for Go and Rust it comes from the release's archive
-or the `ghcr.io/tinyshed/tinystore` image.
+Python wheel install it. A Go program's author installs it with
+`go install tinyshed.org/tinystore/cmd/tinystore`, which fetches the
+release's binary at its first run, as a store's first open does. For Rust it
+comes from the release's archive or the `ghcr.io/tinyshed/tinystore` image.
 
 ```sh
 tinystore status ./data                        # what the store holds, who serves it

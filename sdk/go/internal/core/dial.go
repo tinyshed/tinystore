@@ -20,6 +20,10 @@ var Version = func() string {
 	if !ok {
 		return "0.0.0"
 	}
+	// go run tinyshed.org/tinystore/cmd/tinystore@v0.1.0 builds this module as the main one
+	if info.Main.Path == "tinyshed.org/tinystore" && strings.HasPrefix(info.Main.Version, "v") {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
 	for _, dep := range info.Deps {
 		if dep.Path == "tinyshed.org/tinystore" && strings.HasPrefix(dep.Version, "v") {
 			return strings.TrimPrefix(dep.Version, "v")

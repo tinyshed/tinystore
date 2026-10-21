@@ -65,6 +65,15 @@ func FindBinary(ctx context.Context, given string) (string, error) {
 	return found, nil
 }
 
+// ReleaseBinary is TINYSTORE_BIN, or this release's own binary, fetched
+// once; never PATH's, which may be the command that asks for it.
+func ReleaseBinary(ctx context.Context) (string, error) {
+	if found := os.Getenv("TINYSTORE_BIN"); found != "" {
+		return found, nil
+	}
+	return fetchedBinary(ctx)
+}
+
 // PrivateChild dials a private child: tinystore serve --stdio, living and
 // dying with this process. A test's clock starts where the first child's did,
 // and a child started again starts it there.
