@@ -69,6 +69,42 @@ for job in videos.watch(&id) {
 `get` returns nothing for an id with no job. A done job without `dedupe` is
 gone, so `get` returns nothing for it too.
 
+## After it ran
+
+A page that shows "sent" once a reminder ran needs the done job to stay. Open
+the queue with `dedupe`: a done job is kept that long, with its value and its
+last run, and `get` returns it as `done`.
+
+```ts
+const reminders = store.queue<Reminder>('reminders', { dedupe: '7d' })
+
+const job = await reminders.get(id) // { state: 'done', lastRun: { startedAt, endedAt }, … } for a week
+const shown = job?.state ?? 'gone' // no job: never added, cancelled, or done more than a week ago
+```
+
+```python
+reminders = store.queue("reminders", Reminder, dedupe="7d")
+
+job = await reminders.get(id)  # Job(state="done", last_run=…) for a week
+shown = job.state if job else "gone"
+```
+
+```go
+reminders, err := jobs.OpenQueue[Reminder](store, "reminders", jobs.Dedupe(7*24*time.Hour))
+
+job, found, err := reminders.Get(ctx, id) // job.State is jobs.StateDone for a week
+```
+
+```rust
+let reminders = store.queue::<Reminder>("reminders").dedupe(Duration::from_hours(7 * 24)).open()?;
+
+let job = reminders.get(&id)?; // Some(job) with job.state == State::Done for a week
+```
+
+A job keeps its last run, not each attempt: `error` is why the last run
+failed. A history of every delivery, its attempt and its answer, is the
+application's own: an event the handler records, or a row it writes.
+
 ## How a watch behaves
 
 - `watch` yields the job as it is, then again each time it changes, and ends
