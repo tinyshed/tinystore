@@ -8,6 +8,7 @@ import { dlopen, FFIType, JSCallback, type Pointer, ptr } from 'bun:ffi'
 
 import { ClosedError } from '../errors.ts'
 import type { Transport } from '../runtime.ts'
+import { openFailure } from './shared.ts'
 
 const symbols = {
 	tinystore_open: {
@@ -159,7 +160,7 @@ export function openPipe(
 		const message = new TextDecoder().decode(failure.subarray(0, failed))
 		wake.close()
 		lib.close()
-		throw new ClosedError(`cannot open ${dir}: ${message}`)
+		throw openFailure(dir, message)
 	}
 	connection = Number(opened[0]) as Pointer
 	return {

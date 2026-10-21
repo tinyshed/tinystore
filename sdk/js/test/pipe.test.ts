@@ -3,13 +3,15 @@
 // TINYSTORE_LIBRARY names the library `cargo build -p tinystore-ffi` made.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { open, type Store } from '../src/index.ts'
+import { InUseError, open, type Store } from '../src/index.ts'
+import { caught, removed, until } from './ways.ts'
 
 const library = process.env.TINYSTORE_LIBRARY
+const binary = process.env.TINYSTORE_BIN
 const opened: Store[] = []
 const dirs: string[] = []
 
@@ -68,3 +70,20 @@ test.skipIf(!library)('take reads a key once', async () => {
 	expect(await codes.take('481-205')).toBe(7)
 	expect(await codes.take('481-205')).toBeUndefined()
 })
+
+test.skipIf(!library || !binary || binary === 'unused')(
+	'a directory a sidecar holds refuses the core in this process as in use, and says how to stop it',
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'tinystore-pipe-held-'))
+		const sidecar = await open(dir, { idle: 1 })
+		try {
+			const refused = await caught(open(dir, { embedded: true, library }))
+			expect(refused).toBeInstanceOf(InUseError)
+			expect((refused as Error).message).toContain('tinystore stop')
+		} finally {
+			await sidecar.close()
+			await until(() => !existsSync(join(dir, 'server', 'SERVE')))
+			await removed(dir)
+		}
+	},
+)

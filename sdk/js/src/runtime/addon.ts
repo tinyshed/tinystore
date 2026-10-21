@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 
 import { ClosedError } from '../errors.ts'
 import type { Transport } from '../runtime.ts'
+import { openFailure } from './shared.ts'
 
 /** What tinystore.node exports: crates/ffi built with `node`. */
 interface Addon {
@@ -82,7 +83,7 @@ export function openAddon(
 			}
 		})
 	} catch (err) {
-		throw new ClosedError(`cannot open ${dir}: ${(err as Error).message}`)
+		throw openFailure(dir, (err as Error).message)
 	}
 	return {
 		write: send,

@@ -5,8 +5,18 @@
 import { spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 
-import { ClosedError } from '../errors.ts'
+import { ClosedError, InUseError, type TinystoreError } from '../errors.ts'
 import type { Child } from '../runtime.ts'
+
+/**
+ * The error of an open in this process that failed, which the core gives as a
+ * message alone: in use when another process holds the directory, as a
+ * sidecar does after its last client closed, closed otherwise.
+ */
+export function openFailure(dir: string, message: string): TinystoreError {
+	const failure = message.includes('in use') ? InUseError : ClosedError
+	return new failure(`cannot open ${dir}: ${message}`)
+}
 
 /** Where an endpoint named in SERVE, or given to connect, is. */
 export type Address =
