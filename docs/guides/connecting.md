@@ -44,7 +44,9 @@ let store = Store::open("./data", Options::default())?; // always the core in th
   `<dir>/server/SERVE`. A second `embedded` or `private` open of a directory
   another process holds fails `in use`.
 - **The sidecar stays** 30 seconds after its last connection goes, unless `idle`
-  says otherwise, so a quick restart finds it running.
+  says otherwise, so a quick restart finds it running. To open its directory
+  `embedded` sooner, stop it first with `tinystore stop <dir>`; the `in use`
+  error says so too.
 - **Embedded** loads the core's library: under Bun the C library, under Node
   its addon, in Python the extension module, in Go the core's library. The
   host's event loop never blocks: every call answers through a completion.

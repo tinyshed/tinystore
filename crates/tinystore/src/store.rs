@@ -671,10 +671,21 @@ pub(crate) fn take_lock(dir: &Path) -> Result<File> {
         .map_err(|error| Error::io(what(), error))?;
     match file.try_lock() {
         Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => {
-            Err(Error::new(ErrorKind::InUse, format!("{}: another store holds it", what())))
-        }
+        Err(TryLockError::WouldBlock) => Err(Error::new(ErrorKind::InUse, held_by(dir, what()))),
         Err(TryLockError::Error(error)) => Err(Error::io(what(), error)),
+    }
+}
+
+/// Who holds the `LOCK`, as far as the directory says: a server publishes
+/// `server/SERVE` while it serves, and a sidecar serves on after its last
+/// client closed, so a program that opens the directory embedded next is
+/// told how to let it go.
+fn held_by(dir: &Path, what: String) -> String {
+    if dir.join("server").join("SERVE").is_file() {
+        let dir = dir.display();
+        format!("{what}: a tinystore server holds it; connect to it, or stop it first with `tinystore stop {dir}`")
+    } else {
+        format!("{what}: another store holds it")
     }
 }
 
@@ -731,6 +742,19 @@ mod tests {
         first.close().unwrap();
         let second = Store::open(dir.path(), Options::default()).unwrap();
         second.close().unwrap();
+    }
+
+    #[test]
+    fn a_directory_a_server_holds_says_how_to_let_it_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Store::open(dir.path(), Options::default()).unwrap();
+        std::fs::create_dir(dir.path().join("server")).unwrap();
+        std::fs::write(dir.path().join("server").join("SERVE"), "{}").unwrap();
+        let error = Store::open(dir.path(), Options::default()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InUse, "{error}");
+        assert!(error.to_string().contains("a tinystore server holds it"), "{error}");
+        assert!(error.to_string().contains(&format!("tinystore stop {}", dir.path().display())), "{error}");
+        server.close().unwrap();
     }
 
     #[test]
