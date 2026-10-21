@@ -105,6 +105,25 @@ it grew is not known. A bucket without samples is left out of the answer.
 - `p50` through `p99.9` and any rank between; `p99.9` ranks at 999 in 1,000
   exactly.
 
+Five durations, 0.8, 41, 42, 43 and 44 ms, give these `p95`s, kept as a
+gauge's samples or by a timer with the buckets `[1, 5, 10, 25, 50]`:
+
+| Kept as                     | `p95`                                         |
+|-----------------------------|-----------------------------------------------|
+| a gauge                     | `value: 44`                                   |
+| a timer                     | `lower: 25`, `upper: 50`                      |
+| a timer, `estimate: true`   | `lower: 25`, `upper: 50`, `estimate: 48.4375` |
+| one 0.4 ms, in such a timer | `lower: 0`, `upper: 1`, `estimate: 0.95`      |
+
+The gauge's is the sample at rank 5 of 5. The timer's rank 5 falls in the
+bucket from 25 to 50, and its estimate is 3.75 of that bucket's 4 samples into
+it; one duration below the first bound is somewhere from 0 to 1.
+
+An estimate is only as close as the bounds around it: put bounds where the
+answer matters, around the 50 ms a page must load in. A program that shows
+one number shows `value` when there is one and the estimate, marked as one,
+when there is not; in Go `Value` is `nil` for a timer's percentile, never 0.
+
 ## Groups
 
 Without `by`, every series of the name is one group and one answer. `by` keeps
