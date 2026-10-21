@@ -98,6 +98,20 @@ A write is atomic within one file, and never across two. So if a request
 inserts a message into `sql/chat.db` and adds a job to `jobs.db`, a crash
 between the two can leave the message without its job.
 
+| What                                                                       | Commits together                                     |
+|----------------------------------------------------------------------------|------------------------------------------------------|
+| buckets of `kv.db`                                                         | yes, in `store.tx`                                   |
+| queues of `jobs.db`                                                        | yes, in `store.tx`                                   |
+| a database's rows and the buckets, queues and table indexes opened from it | yes, in `db.tx`                                      |
+| a bucket of `kv.db` and a queue of `jobs.db`                               | no: `store.tx` refuses the second file's handle      |
+| a file in `blobs/`, its metadata in a bucket, its document in an index     | no: three files, each written whole on its own       |
+| a backup                                                                   | one moment of each file, not one moment of the store |
+
+Where no commit covers them, write in an order a crash can be repaired from:
+the file first, then the metadata that names it, then the index. A crash
+leaves at worst a file nothing names, or metadata the index misses, and a
+check that compares them repairs both.
+
 When two things must commit together, open one inside the other's file. A
 bucket or a queue opened from a database lives in that database's file, and
 commits with its rows:
