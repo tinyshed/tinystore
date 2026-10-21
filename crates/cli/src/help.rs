@@ -73,11 +73,15 @@ pub(crate) const KV: Command = Command {
     name: "kv",
     takes: "[dir] get <bucket> <key>",
     does: "one value; list <bucket> [branch] for a bucket's keys",
-    flags: &[flag("--json", "", "each value with its key and expiry, as JSON")],
+    flags: &[
+        flag("--database", "<db>", "a bucket the program opened from this database, kept in sql/<db>.db"),
+        flag("--json", "", "each value with its key and expiry, as JSON"),
+    ],
     examples: &[
         "tinystore kv ./data get sessions 42",
         "tinystore kv ./data list sessions",
         "tinystore kv ./data list sessions 42",
+        "tinystore kv ./data list drafts --database app",
     ],
     more: "It reads beside the program or server that holds the directory, and an encrypted bucket's values with the \
            key the directory holds.",

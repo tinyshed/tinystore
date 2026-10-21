@@ -14,15 +14,15 @@ arguments `mcp` and the store's directory.
 
 ## Tools
 
-| Tool          | Takes                                       | Gives                                                     |
-|---------------|---------------------------------------------|-----------------------------------------------------------|
-| `status`      | nothing                                     | the store's files and sizes, its server, its node         |
-| `logs`        | `since`, `level`, `grep`, `stream`, `limit` | the latest lines and events, newest last; 50, 200 at most |
-| `kv_get`      | `bucket`, `key`                             | one value                                                 |
-| `kv_list`     | `bucket`, `branch`, `limit`                 | a bucket's keys and values, in key order                  |
-| `jobs_list`   | `queue`, `prefix`, `state`, `limit`         | jobs with their state, attempts and last error            |
-| `sql_query`   | `database`, `query`                         | the rows of one statement that reads                      |
-| `search_list` | nothing                                     | the store's search indexes, with their documents          |
+| Tool          | Takes                                           | Gives                                                     |
+|---------------|-------------------------------------------------|-----------------------------------------------------------|
+| `status`      | nothing                                         | the store's files and sizes, its server, its node         |
+| `logs`        | `since`, `level`, `grep`, `stream`, `limit`     | the latest lines and events, newest last; 50, 200 at most |
+| `kv_get`      | `bucket`, `key`, `database`                     | one value                                                 |
+| `kv_list`     | `bucket`, `branch`, `database`, `limit`         | a bucket's keys and values, in key order                  |
+| `jobs_list`   | `queue`, `prefix`, `state`, `database`, `limit` | jobs with their state, attempts and last error            |
+| `sql_query`   | `database`, `query`                             | the rows of one statement that reads                      |
+| `search_list` | nothing                                         | the store's search indexes, with their documents          |
 
 - Every tool reads beside the program or server that holds the directory,
   without its lock and without writing a byte.
@@ -31,6 +31,10 @@ arguments `mcp` and the store's directory.
 - `jobs_list` with `state: 'failed'` and no prefix gives a queue's failed
   jobs, the last failed first: where a question about an error usually
   starts.
+- A bucket or a queue the program opened from a database, `db.bucket(…)` or
+  `db.queue(…)`, lives in that database's file rather than in `kv.db` or
+  `jobs.db`: `kv_get`, `kv_list` and `jobs_list` read it with `database`, as
+  `{ "queue": "reminders", "database": "app" }`.
 
 ## What an agent can answer
 

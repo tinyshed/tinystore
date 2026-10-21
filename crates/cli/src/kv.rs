@@ -5,6 +5,7 @@
 //! tinystore kv ./data get sessions 42          {"user": 42, "seen": "2026-10-18"}
 //! tinystore kv ./data list sessions            every key of the bucket's root, with its value
 //! tinystore kv ./data list sessions 42         the keys under the branch 42
+//! tinystore kv ./data list drafts --database app   a bucket kept in sql/app.db
 //! ```
 //!
 //! A bucket keeps a value of any type its program chose: an integer as one,
@@ -18,7 +19,8 @@ use std::time::SystemTime;
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use tinystore::Store;
-use tinystore::kv::Bucket;
+use tinystore::kv::{Bucket, BucketBuilder};
+use tinystore::sql::Database;
 
 use crate::asked::{self, Asked, Done, failed, wrong};
 use crate::help;
@@ -41,17 +43,18 @@ fn kv(asked: Asked) -> Done {
         _ => return Err(wrong("get <bucket> <key> or list <bucket> [branch]")),
     };
     let store = Store::open_beside(&dir).map_err(failed)?;
+    let at = Kept::at(&store, asked.value("--database"))?;
     let json = asked.has("--json");
     match (verb, rest) {
-        ("get", [bucket, key]) => get(&store, bucket, key, json),
+        ("get", [bucket, key]) => get(&at, bucket, key, json),
         ("get", _) => Err(wrong("get takes a bucket and a key: get sessions 42")),
-        ("list", [bucket, branch @ ..]) if branch.len() <= 1 => list(&store, bucket, branch.first(), json),
+        ("list", [bucket, branch @ ..]) if branch.len() <= 1 => list(&at, bucket, branch.first(), json),
         _ => Err(wrong("list takes a bucket and a branch at most: list sessions 42")),
     }
 }
 
-fn get(store: &Store, bucket: &str, key: &str, json: bool) -> Done {
-    let found = read(store, bucket, |bucket| {
+fn get(at: &Kept, bucket: &str, key: &str, json: bool) -> Done {
+    let found = read(at, bucket, |bucket| {
         let Some(entry) = bucket.entry(key)? else { return Ok(Vec::new()) };
         Ok(vec![(entry.key, entry.value, entry.expires_at)])
     })?;
@@ -66,8 +69,8 @@ fn get(store: &Store, bucket: &str, key: &str, json: bool) -> Done {
     Ok(())
 }
 
-fn list(store: &Store, bucket: &str, branch: Option<&String>, json: bool) -> Done {
-    let entries = read(store, bucket, |opened| {
+fn list(at: &Kept, bucket: &str, branch: Option<&String>, json: bool) -> Done {
+    let entries = read(at, bucket, |opened| {
         let opened = under(opened, branch.map(String::as_str));
         let mut entries = Vec::new();
         for entry in opened.all().take(MOST + 1) {
@@ -95,16 +98,20 @@ fn list(store: &Store, bucket: &str, branch: Option<&String>, json: bool) -> Don
     Ok(())
 }
 
+/// The bucket and the key or branch an MCP tool reads.
+pub(crate) struct Reading<'a> {
+    pub(crate) bucket: &'a str,
+    pub(crate) database: Option<&'a str>,
+    pub(crate) key: Option<&'a str>,
+    pub(crate) branch: Option<&'a str>,
+}
+
 /// A bucket's entries as JSON, for the MCP's tools: the one of `key`, or
 /// those of `branch`, `most` at most.
-pub(crate) fn entries(
-    store: &Store,
-    bucket: &str,
-    key: Option<&str>,
-    branch: Option<&str>,
-    most: usize,
-) -> Result<Vec<serde_json::Value>, String> {
-    let found = read(store, bucket, |opened| match key {
+pub(crate) fn entries(store: &Store, reading: &Reading, most: usize) -> Result<Vec<serde_json::Value>, String> {
+    let Reading { bucket, database, key, branch } = *reading;
+    let at = Kept::at(store, database).map_err(|refused| refused.to_string())?;
+    let found = read(&at, bucket, |opened| match key {
         Some(key) => {
             Ok(opened.entry(key)?.map(|entry| (entry.key, entry.value, entry.expires_at)).into_iter().collect())
         }
@@ -122,36 +129,53 @@ fn shown(key: &str, value: &Stored, expires: Option<SystemTime>) -> serde_json::
 }
 
 /// A key, its value and when it expires.
-type Kept = (String, Stored, Option<SystemTime>);
+type Entry = (String, Stored, Option<SystemTime>);
 
-/// Reads the bucket's entries as `Stored` values; an encrypted bucket with
-/// the store's key.
+/// Where a bucket is kept: kv.db, or the database a program opened it from.
+enum Kept<'a> {
+    Store(&'a Store),
+    Database(Database),
+}
+
+impl<'a> Kept<'a> {
+    fn at(store: &'a Store, database: Option<&str>) -> Result<Kept<'a>, asked::Refused> {
+        match database {
+            Some(database) => Ok(Kept::Database(crate::sql::opened(store, database)?)),
+            None if !store.dir().join("kv.db").exists() => {
+                Err(failed(crate::files::none_kept(store.dir(), "kv.db", "bucket")))
+            }
+            None => Ok(Kept::Store(store)),
+        }
+    }
+
+    fn bucket(&self, name: &str) -> BucketBuilder<Stored> {
+        match self {
+            Kept::Store(store) => store.bucket(name),
+            Kept::Database(database) => database.bucket(name),
+        }
+    }
+}
+
 /// The bucket under `branch`, its owners written as `42/devices`.
 fn under(opened: &Bucket<Stored>, branch: Option<&str>) -> Bucket<Stored> {
     branch.map_or_else(|| opened.clone(), |branch| branch.split('/').fold(opened.clone(), |at, owner| at.under(owner)))
 }
 
+/// Reads the bucket's entries as `Stored` values; an encrypted bucket with
+/// the store's key.
 fn read(
-    store: &Store,
+    at: &Kept,
     name: &str,
-    read: impl Fn(&Bucket<Stored>) -> tinystore::Result<Vec<Kept>>,
-) -> Result<Vec<Kept>, asked::Refused> {
-    if !store.dir().join("kv.db").exists() {
-        return Err(failed(format!("{} holds no kv.db: no program has kept a value yet", store.dir().display())));
-    }
-    let encrypted = match store.bucket::<Stored>(name).open() {
+    read: impl Fn(&Bucket<Stored>) -> tinystore::Result<Vec<Entry>>,
+) -> Result<Vec<Entry>, asked::Refused> {
+    let encrypted = match at.bucket(name).open() {
         Err(error) if error.to_string().contains("encrypted") => true,
         Err(error) => return Err(failed(error)),
         Ok(_) => false,
     };
-    let stored = opened::<Stored>(store, name, encrypted)?;
-    Ok(read(&stored)?)
-}
-
-fn opened<V: tinystore::kv::Value>(store: &Store, name: &str, encrypted: bool) -> Result<Bucket<V>, asked::Refused> {
-    let builder = store.bucket::<V>(name);
-    let opened = if encrypted { builder.encrypted().open() } else { builder.open() };
-    opened.map_err(failed)
+    let builder = at.bucket(name);
+    let stored = if encrypted { builder.encrypted().open() } else { builder.open() };
+    Ok(read(&stored.map_err(failed)?)?)
 }
 
 fn millis(at: Option<SystemTime>) -> Option<u64> {
@@ -295,7 +319,7 @@ mod tests {
         store.bucket::<f64>("floats").open().unwrap().set("a", &1.5).unwrap();
         store.bucket::<i64>("counts").open().unwrap().set("a", &7).unwrap();
         let one = |name: &str| {
-            let read = read(&store, name, |bucket| {
+            let read = read(&Kept::Store(&store), name, |bucket| {
                 let entry = bucket.entry("a")?.unwrap();
                 Ok(vec![(entry.key, entry.value, entry.expires_at)])
             });
@@ -307,5 +331,26 @@ mod tests {
         assert_eq!(one("floats"), Stored::Float(1.5));
         assert_eq!(one("counts"), Stored::Integer(7));
         assert_eq!(one("raw").to_string(), "2 bytes: ff00");
+    }
+
+    #[test]
+    fn a_bucket_kept_in_a_database_is_read_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), tinystore::Options { background: false, ..Default::default() }).unwrap();
+        let db = store.database("app").open().unwrap();
+        db.bucket::<String>("drafts").open().unwrap().set("a", &"kept in app.db".to_owned()).unwrap();
+        let beside = Store::open_beside(dir.path()).unwrap();
+        let why = Kept::at(&beside, None).err().unwrap().to_string();
+        assert!(why.contains("holds no kv.db") && why.ends_with("one of app"), "{why}");
+        let at = Kept::at(&beside, Some("app")).unwrap();
+        let found = read(&at, "drafts", |bucket| {
+            Ok(bucket
+                .all()
+                .collect::<tinystore::Result<Vec<_>>>()?
+                .into_iter()
+                .map(|entry| (entry.key, entry.value, entry.expires_at))
+                .collect())
+        });
+        assert_eq!(found.unwrap()[0].1, Stored::Text("kept in app.db".to_owned()));
     }
 }

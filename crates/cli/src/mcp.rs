@@ -17,6 +17,7 @@ use tinystore::jobs::{Filter, State};
 
 use crate::asked::{self, Asked, Done, wrong};
 use crate::help;
+use crate::kv::Reading;
 
 /// The protocol's version this server speaks when a client names none.
 const PROTOCOL: &str = "2025-06-18";
@@ -98,6 +99,12 @@ fn text(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+/// A bucket's or a queue's database: a program that opened one from a
+/// database keeps it in that database's file, not in kv.db or jobs.db.
+fn database() -> Value {
+    text("the database the program opened it from, as app, when it is kept there rather than in kv.db or jobs.db")
+}
+
 fn count(description: &str) -> Value {
     json!({ "type": "integer", "description": description })
 }
@@ -132,7 +139,7 @@ fn data_tools() -> Vec<Value> {
         described(
             "kv_get",
             "One value of a kv bucket by its key.",
-            json!({ "bucket": text("the bucket"), "key": text("the key") }),
+            json!({ "bucket": text("the bucket"), "key": text("the key"), "database": database() }),
             &["bucket", "key"],
         ),
         described(
@@ -141,6 +148,7 @@ fn data_tools() -> Vec<Value> {
             json!({
                 "bucket": text("the bucket"),
                 "branch": text("the keys under this branch, as 42 or 42/devices"),
+                "database": database(),
                 "limit": count("200 at most"),
             }),
             &["bucket"],
@@ -153,6 +161,7 @@ fn data_tools() -> Vec<Value> {
                 "queue": text("the queue"),
                 "prefix": text("the jobs whose ids start with it"),
                 "state": text("scheduled, waiting, running, done or failed"),
+                "database": database(),
                 "limit": count("200 at most"),
             }),
             &["queue"],
@@ -194,13 +203,19 @@ fn tool(dir: &Path, name: &str, arguments: &Value) -> Result<Value, String> {
         "logs" => logs(&store, text("since"), text("level"), text("grep"), text("stream"), limit(50)),
         "kv_get" => {
             let (bucket, key) = (needed("bucket")?, needed("key")?);
-            let found = crate::kv::entries(&store, bucket, Some(key), None, 1)?;
+            let reading = Reading { bucket, database: text("database"), key: Some(key), branch: None };
+            let found = crate::kv::entries(&store, &reading, 1)?;
             found.into_iter().next().ok_or_else(|| format!("kv bucket {bucket}: no key {key}"))
         }
         "kv_list" => {
-            Ok(Value::Array(crate::kv::entries(&store, needed("bucket")?, None, text("branch"), limit(MOST))?))
+            let reading =
+                Reading { bucket: needed("bucket")?, database: text("database"), key: None, branch: text("branch") };
+            Ok(Value::Array(crate::kv::entries(&store, &reading, limit(MOST))?))
         }
-        "jobs_list" => jobs(&store, needed("queue")?, text("prefix"), text("state"), limit(MOST)),
+        "jobs_list" => {
+            let listing = Listing { queue: needed("queue")?, database: text("database"), prefix: text("prefix") };
+            jobs(&store, &listing, text("state"), limit(MOST))
+        }
         "sql_query" => crate::sql::rows_json(&store, needed("database")?, needed("query")?, MOST),
         "search_list" => {
             let listed = tinystore::search::list(&store).map_err(|error| error.to_string())?;
@@ -245,9 +260,25 @@ fn logs(
     Ok(Value::Array(lines))
 }
 
-fn jobs(store: &Store, queue: &str, prefix: Option<&str>, state: Option<&str>, limit: usize) -> Result<Value, String> {
-    let opened = store.queue::<Value>(queue).open().map_err(|error| error.to_string())?;
-    let mut filter = Filter::prefix(prefix.unwrap_or_default()).limit(limit);
+/// The queue `jobs_list` reads, and the jobs of it by their ids.
+struct Listing<'a> {
+    queue: &'a str,
+    database: Option<&'a str>,
+    prefix: Option<&'a str>,
+}
+
+fn jobs(store: &Store, listing: &Listing, state: Option<&str>, limit: usize) -> Result<Value, String> {
+    let opened = match listing.database {
+        Some(database) => {
+            crate::sql::opened(store, database).map_err(|refused| refused.to_string())?.queue(listing.queue)
+        }
+        None if !store.dir().join("jobs.db").exists() => {
+            return Err(crate::files::none_kept(store.dir(), "jobs.db", "queue"));
+        }
+        None => store.queue::<Value>(listing.queue),
+    };
+    let opened = opened.open().map_err(|error| error.to_string())?;
+    let mut filter = Filter::prefix(listing.prefix.unwrap_or_default()).limit(limit);
     if let Some(state) = state {
         filter = filter.state(match state {
             "scheduled" => State::Scheduled,
@@ -308,5 +339,34 @@ mod tests {
         let missing = json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "kv_get", "arguments": { "bucket": "sessions", "key": "7" } } });
         assert_eq!(asked(dir.path(), missing)["result"]["isError"], true);
+    }
+
+    #[test]
+    fn a_bucket_and_a_queue_a_program_opened_from_its_database_are_read_with_that_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let db = store.database("plants").open().unwrap();
+        db.bucket::<String>("drafts").open().unwrap().set("fern", &"water weekly".to_owned()).unwrap();
+        let queue = db.queue::<Value>("reminders").open().unwrap();
+        queue.id("fern-1").delay(std::time::Duration::from_secs(3600)).add(&json!({ "plant": "fern" })).unwrap();
+        let called = |id: i64, name: &str, arguments: Value| {
+            let message = json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": name, "arguments": arguments } });
+            asked(dir.path(), message)["result"].clone()
+        };
+
+        let without = called(1, "kv_get", json!({ "bucket": "drafts", "key": "fern" }));
+        let why = without["content"][0]["text"].as_str().unwrap();
+        assert!(without["isError"] == true && why.contains("read with its database, one of plants"), "{why}");
+        let without = called(2, "jobs_list", json!({ "queue": "reminders" }));
+        let why = without["content"][0]["text"].as_str().unwrap();
+        assert!(why.contains("holds no jobs.db") && why.contains("one of plants"), "{why}");
+
+        let got = called(3, "kv_get", json!({ "bucket": "drafts", "key": "fern", "database": "plants" }));
+        let value: Value = serde_json::from_str(got["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(value["value"], "water weekly");
+        let listed = called(4, "jobs_list", json!({ "queue": "reminders", "database": "plants" }));
+        let jobs: Value = serde_json::from_str(listed["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!((jobs[0]["id"].as_str(), jobs[0]["state"].as_str()), (Some("fern-1"), Some("scheduled")));
     }
 }

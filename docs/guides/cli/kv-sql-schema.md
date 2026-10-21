@@ -13,6 +13,7 @@ tinystore kv ./data list sessions        # a bucket's keys and values
 tinystore kv ./data list sessions 42     # one branch's
 tinystore kv ./data get sessions 42      # one value
 tinystore kv ./data get sessions 42 --json
+tinystore kv ./data list drafts --database app   # a bucket kept in sql/app.db
 ```
 
 ```text
@@ -24,7 +25,9 @@ tinystore kv ./data get sessions 42 --json
 ```
 
 `--json` gives each value with its key and expiry. An encrypted bucket's
-values are read with the key the directory holds.
+values are read with the key the directory holds. A bucket the program opened
+from a database, `db.bucket("drafts")`, lives in that database's file, and
+`--database` names it.
 
 ## sql
 

@@ -53,6 +53,21 @@ pub(crate) fn databases(store: &Path) -> Vec<String> {
     names
 }
 
+/// Why the store holds no `file` to read a bucket or a queue from: none was
+/// kept yet, or one was opened from a database, whose file keeps it.
+pub(crate) fn none_kept(store: &Path, file: &str, kept: &str) -> String {
+    let databases = databases(store);
+    if databases.is_empty() {
+        return format!("{} holds no {file}: no program has kept a {kept} yet", store.display());
+    }
+    format!(
+        "{} holds no {file}: a {kept} a program opened from a database is kept in it, read with its database, \
+         one of {}",
+        store.display(),
+        databases.join(", ")
+    )
+}
+
 /// A SQLite file's bytes with its WAL's; none when there is no file.
 fn size_of(file: &Path) -> Option<u64> {
     let size = std::fs::metadata(file).ok()?.len();

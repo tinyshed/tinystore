@@ -104,7 +104,7 @@ fn held(dir: &Path) -> Result<Store, asked::Refused> {
 
 /// A database as it is, without migrations: one the store does not hold is
 /// named, rather than made.
-fn opened(store: &Store, database: &str) -> Result<Database, asked::Refused> {
+pub(crate) fn opened(store: &Store, database: &str) -> Result<Database, asked::Refused> {
     if !store.dir().join("sql").join(format!("{database}.db")).exists() {
         let known = files::databases(store.dir());
         let names: Vec<&str> = known.iter().map(String::as_str).collect();
