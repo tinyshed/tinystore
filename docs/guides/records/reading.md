@@ -41,6 +41,56 @@ for event in store.all_events()?.list().since(Duration::from_hours(24)).search("
 let mine = audit.list().filter("user", &42).newest().limit(50).page()?;
 ```
 
+There is no `read`: `list` reads a page, `all` walks every page.
+
+## One event, every way to find it
+
+A webhook that arrived from GitHub for the target `home`:
+
+```ts
+await store.events('webhooks').append('github', { requestId: 'r-81', status: 200 }, { context: { target: 'home' } })
+```
+
+```python
+await store.events("webhooks").append("github", {"requestId": "r-81", "status": 200}, context={"target": "home"})
+```
+
+```go
+webhooks, err := records.OpenEvents(store, "webhooks")
+err = webhooks.Append(ctx, "github", records.Fields{"requestId": "r-81", "status": 200},
+	records.Context(records.Fields{"target": "home"}))
+```
+
+```rust
+let webhooks = store.events("webhooks").open()?;
+webhooks.event("github").context(&json!({ "target": "home" })).append(&json!({ "requestId": "r-81", "status": 200 }))?;
+```
+
+is read back as:
+
+```json
+{
+  "at": "2026-10-21T20:24:49.322Z",
+  "stream": "webhooks",
+  "name": "github",
+  "fields": { "requestId": "r-81", "status": 200 },
+  "context": { "target": "home" }
+}
+```
+
+| Finds it                       | Finds nothing              |
+|--------------------------------|----------------------------|
+| `streams: ['webhooks']`        | `streams: ['github']`      |
+| `names: ['github']`            |                            |
+| `where: { requestId: 'r-81' }` |                            |
+| `where: { target: 'home' }`    |                            |
+| `where: { status: 200 }`       | `where: { status: '200' }` |
+| `search: 'r-81'`               |                            |
+
+`github` is the event's name, not its stream. `where` finds a key of
+`context` as it finds one of `fields`, and a value by the JSON it was written
+as, a number as a number.
+
 ## A query
 
 | In a query   | Finds                                                             |
