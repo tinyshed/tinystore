@@ -172,11 +172,22 @@ export function handleOn(connection: Connection, method: number, open: Open): Pr
 	return opening
 }
 
-/** A bucket's or a queue's name, as every engine takes it: [a-z0-9][a-z0-9_-]{0,63}. */
+const named = /^[a-z0-9][a-z0-9_-]{0,63}$/
+
+/**
+ * A bucket's or a queue's name, as every engine takes it: [a-z0-9][a-z0-9_-]{0,63},
+ * with the nearest name that is when there is one: `focusroom.rooms` as `focusroom_rooms`.
+ */
 export function checkName(name: string, of: string): void {
-	if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+	if (!named.test(name)) {
+		const nearest = name
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]/g, '_')
+			.replace(/^[_-]+/, '')
+			.slice(0, 64)
+		const offered = named.test(nearest) ? `, as ${JSON.stringify(nearest)}` : ''
 		throw new InvalidError(
-			`the ${of} name ${JSON.stringify(name)}: a name is [a-z0-9][a-z0-9_-]{0,63}`,
+			`the ${of} name ${JSON.stringify(name)}: a name is [a-z0-9][a-z0-9_-]{0,63}${offered}`,
 		)
 	}
 }

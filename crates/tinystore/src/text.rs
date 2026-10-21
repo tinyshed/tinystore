@@ -25,6 +25,45 @@ pub(crate) fn is_name(name: &str) -> bool {
     first && rest && bytes.len() <= 64
 }
 
+/// Refuses a name that is not one of the store's, `what` saying whose it is,
+/// as `a stream's`, with the nearest name that is when there is one:
+/// `focusroom.rooms` is offered as `focusroom_rooms`.
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "sql",
+    feature = "blobs",
+    feature = "records",
+    feature = "search",
+    feature = "channels"
+))]
+pub(crate) fn check_name(what: &str, name: &str) -> crate::Result<()> {
+    if is_name(name) {
+        return Ok(());
+    }
+    let nearest = nearest_name(name).map_or_else(String::new, |nearest| format!(", as {nearest:?}"));
+    Err(crate::Error::invalid(format!("{what} name {name:?}: a name is [a-z0-9][a-z0-9_-]{{0,63}}{nearest}")))
+}
+
+/// `name` in lower case, each other character an `_`, its leading `_` and `-`
+/// dropped: a name, unless nothing of it is left.
+#[cfg(any(
+    feature = "kv",
+    feature = "jobs",
+    feature = "sql",
+    feature = "blobs",
+    feature = "records",
+    feature = "search",
+    feature = "channels"
+))]
+fn nearest_name(name: &str) -> Option<String> {
+    let plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-';
+    let lowered: String =
+        name.chars().map(|c| c.to_ascii_lowercase()).map(|c| if plain(c) { c } else { '_' }).collect();
+    let nearest: String = lowered.trim_start_matches(['_', '-']).chars().take(64).collect();
+    is_name(&nearest).then_some(nearest)
+}
+
 /// FNV-1a 64 of `bytes`: a hash every build and every language computes the
 /// same, for a phase kept in text, a jitter that must come out the same and a
 /// filter's bits.
@@ -70,5 +109,17 @@ mod tests {
             assert_eq!(super::span(Duration::from_secs(seconds)), text);
         }
         assert_eq!(super::span(Duration::from_millis(1500)), "1500ms");
+    }
+
+    #[test]
+    #[cfg(feature = "kv")]
+    fn a_refused_name_is_offered_its_nearest() {
+        let offered = |name: &str| super::check_name("a bucket's", name).unwrap_err().to_string();
+        assert!(offered("focusroom.rooms").contains(r#"a bucket's name "focusroom.rooms""#));
+        assert!(offered("focusroom.rooms").ends_with(r#", as "focusroom_rooms": invalid"#), "{}", offered("x"));
+        assert!(offered("Plant Care").contains(r#"as "plant_care""#));
+        assert!(offered("_drafts").contains(r#"as "drafts""#));
+        assert!(!offered("...").contains(" as "), "nothing of it is left to offer");
+        super::check_name("a bucket's", "focusroom_rooms").unwrap();
     }
 }

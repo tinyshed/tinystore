@@ -567,10 +567,7 @@ pub(crate) fn count(connection: &Connection, sql: &str, index: i64) -> Result<u6
 }
 
 pub(crate) fn check_name(name: &str) -> Result<()> {
-    if crate::text::is_name(name) {
-        return Ok(());
-    }
-    Err(Error::invalid(format!("an index's name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))
+    crate::text::check_name("an index's", name)
 }
 
 impl crate::probe::Sample for Search {

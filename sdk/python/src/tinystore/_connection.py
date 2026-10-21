@@ -558,6 +558,10 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
 def check_name(name: str, of: str) -> None:
-    """Refuses a name the store would, before anything leaves."""
-    if not isinstance(name, str) or not _NAME.fullmatch(name):  # pyright: ignore[reportUnnecessaryIsInstance]
+    """Refuses a name the store would, before anything leaves, with the nearest name that is when there is one."""
+    if not isinstance(name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidError(f"the {of} name {name!r}: a name is [a-z0-9][a-z0-9_-]{{0,63}}")
+    if not _NAME.fullmatch(name):
+        nearest = re.sub(r"[^a-z0-9_-]", "_", name.lower()).lstrip("_-")[:64]
+        offered = f", as {nearest!r}" if _NAME.fullmatch(nearest) else ""
+        raise InvalidError(f"the {of} name {name!r}: a name is [a-z0-9][a-z0-9_-]{{0,63}}{offered}")

@@ -408,11 +408,7 @@ pub(crate) fn remote_branch(name: &str, under: Vec<String>) -> Result<(Arc<str>,
 }
 
 fn check_name(name: &str) -> Result<()> {
-    if crate::text::is_name(name) {
-        return Ok(());
-    }
-    let refused = "a name is a lowercase letter or digit, then up to 63 of them, '_' and '-'";
-    Err(Error::invalid(refused).within(format!("channel {name}")))
+    crate::text::check_name("a channel's", name)
 }
 
 fn check_branch(branch: &[String]) -> Result<()> {

@@ -160,14 +160,25 @@ type DatabaseTx interface {
 	Nested(ctx context.Context, method uint16, body []byte) ([]byte, error)
 }
 
-var name = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var (
+	name    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	unnamed = regexp.MustCompile(`[^a-z0-9_-]`)
+)
 
-// CheckName refuses a name the store would, before anything leaves.
+// CheckName refuses a name the store would, before anything leaves, with
+// the nearest name that is when there is one: focusroom.rooms as focusroom_rooms.
 func CheckName(n, of string) error {
-	if !name.MatchString(n) {
-		return Errorf(Invalid, "the %s name %q: a name is [a-z0-9][a-z0-9_-]{0,63}", of, n)
+	if name.MatchString(n) {
+		return nil
 	}
-	return nil
+	nearest := strings.TrimLeft(unnamed.ReplaceAllString(strings.ToLower(n), "_"), "_-")
+	if len(nearest) > 64 {
+		nearest = nearest[:64]
+	}
+	if name.MatchString(nearest) {
+		return Errorf(Invalid, "the %s name %q: a name is [a-z0-9][a-z0-9_-]{0,63}, as %q", of, n, nearest)
+	}
+	return Errorf(Invalid, "the %s name %q: a name is [a-z0-9][a-z0-9_-]{0,63}", of, n)
 }
 
 // KeyText is a key or an owner as the store spells it: text as it is, an

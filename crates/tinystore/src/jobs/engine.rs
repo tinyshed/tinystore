@@ -236,10 +236,7 @@ impl Jobs {
 
 /// A queue's name, as a file's is: short and plain.
 fn check_name(name: &str) -> Result<()> {
-    if crate::text::is_name(name) {
-        return Ok(());
-    }
-    Err(Error::invalid(format!("a name is [a-z0-9][a-z0-9_-]{{0,63}}, not {name:?}")))
+    crate::text::check_name("a queue's", name)
 }
 
 impl Engine for Jobs {

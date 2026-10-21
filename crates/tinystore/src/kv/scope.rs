@@ -207,8 +207,5 @@ fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {
 }
 
 pub(super) fn check_name(name: &str) -> Result<()> {
-    if crate::text::is_name(name) {
-        return Ok(());
-    }
-    Err(Error::invalid("a name is a lowercase letter or digit, then up to 63 of them, '_' and '-'"))
+    crate::text::check_name("the", name)
 }
