@@ -50,6 +50,52 @@ let result = articles.search("хлеба").filter(eq("author_id", &42)).run()?;
 - A misspelt word is read as its nearest, and `corrected` says so; a word
   that matches is never changed (contract SRCH-09).
 
+## Listing what it holds
+
+An index finds; it does not list. A search with no words and no vector finds
+nothing, an empty page rather than every document, and no call walks an
+index's documents. An album that shows its photos newest first and finds them
+by their words keeps them in a table, and the table's index follows it:
+
+```ts
+const photos = db.table<Photo>('photos')
+const found = db.searchIndex<Photo>('photos_search', { table: 'photos', fields: { title: 2, caption: 1 } })
+
+const page = await photos.orderBy('taken_at', 'desc').limit(50).all() // the album, listed
+const { hits } = await found.search({ text: 'море' }) // the same rows, found by their words
+```
+
+```python
+photos = db.table("photos", Photo)
+found = db.search_index("photos_search", Photo, table="photos", fields={"title": 2, "caption": 1})
+
+page = await photos.order_by("taken_at", "desc").limit(50).all()
+result = await found.search("море")
+```
+
+```go
+photos := sqldb.OpenTable[Photo](db, "photos")
+found, err := search.OpenIndex[Photo](db, "photos_search", search.Table("photos"), search.Fields{"title": 2, "caption": 1})
+
+page, err := photos.OrderBy("taken_at", sqldb.Desc).Limit(50).All(ctx)
+result, err := found.Search(ctx, "море")
+```
+
+```rust
+let photos = db.table::<Photo>("photos");
+let found = db.search_index::<Photo>("photos_search").table("photos").field("title", 2.0).field("caption", 1.0).open()?;
+
+let page = photos.order_by("taken_at", Direction::Desc).limit(50).all()?;
+let result = found.search("море").run()?;
+```
+
+A row and its words change in one commit, so the list and the search never
+disagree. An index of its own, `store.index`, suits a program that lists its
+documents from somewhere else, a bucket by the same ids, or never lists them;
+a bucket and an index commit apart, as [two
+files](../../handbook/start/directory.md#two-engines-in-one-file) do. See [A
+table's index](table-index.md).
+
 ## In these guides
 
 | Page                                    | Covers                                              |
