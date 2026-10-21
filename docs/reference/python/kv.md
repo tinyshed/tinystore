@@ -2,6 +2,18 @@
 
 Every public class, function and type of the KV engine in `tinystore`, generated from its source. The [KV guide](../../guides/kv/README.md) explains how to use them, and the [Bun and Node](../bun/kv.md), [Go](../go/kv.md) and [Rust](../rust/kv.md) pages list the same API.
 
+## IfVersion
+
+```python
+class IfVersion(TypedDict):
+    if_version: NotRequired[Version]
+```
+
+Writes only while the key is at this version: ConflictError otherwise.
+
+It takes a version and never None, so that an absent key never writes
+without its check.
+
 ## Entry
 
 ```python

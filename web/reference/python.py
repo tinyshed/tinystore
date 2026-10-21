@@ -25,6 +25,7 @@ def main() -> None:
     whole = exported_whole(package)
     items = []
     trees = {module: ast.parse((package / f"{module}.py").read_text(encoding="utf-8")) for module in modules}
+    public |= unpacked(trees, public)
     for tree in trees.values():
         read_fields(tree)
     for module, tree in trees.items():
@@ -37,6 +38,20 @@ def main() -> None:
                 items.append(item(node, following))
     json.dump({"doc": "", "items": items}, sys.stdout, indent="\t", ensure_ascii=False)
     sys.stdout.write("\n")
+
+
+def unpacked(trees: dict[str, ast.Module], public: set[str]) -> set[str]:
+    """The TypedDicts a public call takes its keywords from, as **query: Unpack[SeriesQuery]: a
+    reader of the call needs their fields, though the package need not export them."""
+    names = set()
+    for tree in trees.values():
+        for node in tree.body:
+            if named(node) not in public:
+                continue
+            for part in ast.walk(node):
+                if isinstance(part, ast.Subscript) and getattr(part.value, "id", "") == "Unpack":
+                    names.add(ast.unparse(part.slice))
+    return names
 
 
 def exported(package: Path) -> set[str]:

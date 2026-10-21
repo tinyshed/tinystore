@@ -2,6 +2,32 @@
 
 Every public class, function and type of the Metrics engine in `tinystore`, generated from its source. The [Metrics guide](../../guides/metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Go](../go/metrics.md) and [Rust](../rust/metrics.md) pages list the same API.
 
+## SeriesQuery
+
+```python
+class SeriesQuery(TypedDict, total=False):
+    name: str  # the series of this name; a timer's name, the series it writes
+    where: Mapping[str, Condition]
+    since: Duration  # the span before now the range covers; or from_ and to
+    from_: datetime  # the range's start, included
+    to: datetime  # the range's end, excluded; now, a sample taken now in the range, unless given
+```
+
+The series a call finds and its range; a condition given as None is InvalidError, never left out.
+
+## AggregateQuery
+
+```python
+class AggregateQuery(SeriesQuery, total=False):
+    every: Duration  # the buckets' span, counted from 1970 in UTC; the range is one bucket without it
+    op: Op | str
+    by: Sequence[str]  # the labels a group keeps; without by and without, every series of a name is one group
+    without: Sequence[str]  # the labels a group leaves out, keeping every other; [] keeps every series apart
+    estimate: bool  # a timer's percentile also gives a point between its bounds, interpolated: an estimate
+```
+
+An aggregate: a query cut into buckets of every, each one exact value of op, by groups.
+
 ## Series
 
 ```python
