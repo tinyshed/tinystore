@@ -43,6 +43,7 @@ const library = (target: Target) =>
 	({ linux: 'libtinystore_ffi.so', darwin: 'libtinystore_ffi.dylib', win32: 'tinystore_ffi.dll' })[target.os]
 const pythonModule = (target: Target) => (target.os === 'win32' ? '_core.pyd' : '_core.abi3.so')
 
+const homepage = 'https://tinyshed.org/tinystore'
 const repository = { type: 'git', url: 'git+https://github.com/tinyshed/tinystore.git' }
 
 function main(): void {
@@ -105,6 +106,7 @@ function npmPlatform(target: Target, native: string, version: string, out: strin
 		version,
 		description: `TinyStore's executable, core library and Node addon for ${target.name}`,
 		license: 'Apache-2.0',
+		homepage,
 		repository,
 		os: [target.os],
 		cpu: [target.cpu],
@@ -179,6 +181,7 @@ function metadata(version: string): string {
 		'License-Expression: Apache-2.0',
 		'License-File: LICENSE',
 		`Requires-Python: ${field('requires-python')}`,
+		`Project-URL: Homepage, ${homepage}`,
 		'Project-URL: Repository, https://github.com/tinyshed/tinystore',
 		...classifiers.map((classifier) => `Classifier: ${classifier}`),
 		'Description-Content-Type: text/markdown',
