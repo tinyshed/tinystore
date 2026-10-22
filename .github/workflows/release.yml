@@ -147,7 +147,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # Full history and tags: the notes list the commits since the last release.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:

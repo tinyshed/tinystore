@@ -220,6 +220,64 @@ function notes(built: Target[], version: string, out: string): void {
 	writeFileSync(join(out, 'NOTES.md'), `${lines.join('\n')}\n`)
 }
 
+const sections: [type: string, heading: string][] = [
+	['feat', 'Features'],
+	['fix', 'Fixes'],
+	['perf', 'Performance'],
+]
+
+/** The commits since the release before, a section a type, from their Conventional Commits subjects. */
+function changes(version: string): string[] {
+	const previous = previousTag(version)
+	if (!previous) {
+		return []
+	}
+	const subjects = git(['log', '--no-merges', '--format=%s', `${previous}..HEAD`]).split('\n').filter(Boolean)
+	const lines: string[] = []
+	for (const [type, heading] of sections) {
+		const own = subjects.flatMap((subject) => {
+			const [, scope, breaking, text] = subject.match(new RegExp(`^${type}(?:\\(([^)]+)\\))?(!)?: (.+)$`)) ?? []
+			return text ? [`- ${breaking ? '**breaking** ' : ''}${scope ? `${scope}: ` : ''}${text}`] : []
+		})
+		if (own.length > 0) {
+			lines.push('', `### ${heading}`, '', ...own)
+		}
+	}
+	if (lines.length === 0) {
+		return []
+	}
+	return ['', `## Changes since ${previous}`, ...lines, '', `Full history: \`${previous}...v${version}\`.`]
+}
+
+/** The newest tag below `version`; a stable release skips the candidates, a candidate follows the last of any. */
+function previousTag(version: string): string | undefined {
+	const order = (tag: string): number[] => {
+		const [, major, minor, patch, candidate] = tag.match(/^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/) ?? []
+		return [Number(major), Number(minor), Number(patch), candidate === undefined ? Infinity : Number(candidate)]
+	}
+	const stable = !version.includes('-')
+	const here = order(`v${version}`)
+	return git(['tag', '--list', 'v*'])
+		.split('\n')
+		.filter((tag) => /^v\d+\.\d+\.\d+(-rc\.\d+)?$/.test(tag) && !(stable && tag.includes('-')))
+		.filter((tag) => compare(order(tag), here) < 0)
+		.sort((a, b) => compare(order(b), order(a)))[0]
+}
+
+function compare(a: number[], b: number[]): number {
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) {
+			return a[i] < b[i] ? -1 : 1
+		}
+	}
+	return 0
+}
+
+function git(args: string[]): string {
+	const ran = spawnSync('git', args, { cwd: root, encoding: 'utf8' })
+	return ran.status === 0 ? ran.stdout.trim() : ''
+}
+
 interface Entry {
 	name: string
 	from?: string
