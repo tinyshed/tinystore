@@ -5,8 +5,9 @@ use super::{CROWD, Route, route};
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
 use crate::wire::codec::Message;
+use crate::wire::codec::Row;
 use crate::wire::frame::{Frame, Kind};
-use crate::wire::protocol::{KvCall, KvEntry, METHODS, method};
+use crate::wire::protocol::{KvCall, KvEntry, KvWritten, METHODS, method};
 use crate::{Options, Store};
 
 /// Writes gets of one key on `streams` in one write, and returns what the
@@ -66,6 +67,51 @@ fn a_read_goes_to_the_workers_while_they_have_reads_of_its_connection() {
     assert!(!get_at_once(&mut client, handle, 4000..4001).is_empty(), "with none away, a read is answered here again");
     drop(client);
     store.close().unwrap();
+}
+
+/// A call's stream ends, and gives its credit back, once its answer is
+/// queued rather than taken: a client that asks for a large value again
+/// and again and reads nothing is held at the connection's bound, and
+/// answered the rest once it reads.
+// contract: WIRE-03
+#[test]
+fn a_connection_whose_client_reads_nothing_reads_no_frame_more_past_its_bound_and_goes_on_once_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = client.bucket("files");
+    let value = KvCall { handle, key: "k".to_owned(), value: Some(Row::Bin(vec![7; 1 << 20])), ..KvCall::default() };
+    client.call::<KvWritten>(method::KV_SET, &value).unwrap();
+    let gets = 64;
+    for stream in 0..gets {
+        // one at a time, each answered where it is read
+        let mut bytes = Vec::new();
+        let get = KvCall { handle, key: "k".to_owned(), ..KvCall::default() };
+        Frame { method: method::KV_GET, ..Frame::new(Kind::Request, 1000 + stream, get.encode()) }
+            .ending()
+            .encode_into(&mut bytes);
+        client.pipe.push(&bytes);
+    }
+    assert!(client.pipe.full(), "the connection reads no frame more");
+    let first = client.pipe.recv(std::time::Duration::ZERO);
+    assert!(first.len() <= super::OUTPUT_MOST + (1 << 20) + 64, "it owed {} bytes", first.len());
+
+    let mut reader = crate::wire::frame::Reader::default();
+    reader.push(&first);
+    // the gets that waited are a crowd, which the workers answer in any order
+    let mut answered = std::collections::BTreeSet::new();
+    while answered.len() < gets as usize {
+        while let Some(frame) = reader.next(1 << 22).unwrap() {
+            assert_eq!(frame.kind, Kind::Response);
+            answered.insert(frame.stream);
+        }
+        if answered.len() < gets as usize {
+            let more = client.pipe.recv(std::time::Duration::from_secs(10));
+            assert!(!more.is_empty(), "{} of {gets} answers, and then nothing", answered.len());
+            reader.push(&more);
+        }
+    }
+    assert_eq!(answered, (1000..1000 + gets).collect());
+    assert!(!client.pipe.full());
 }
 
 /// A method's line in the schema and its engine's `route` are written apart;

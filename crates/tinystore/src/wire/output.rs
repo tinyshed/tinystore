@@ -11,7 +11,7 @@
 
 use std::collections::VecDeque;
 
-use super::frame::Frame;
+use super::frame::{Frame, HEADER};
 
 /// A body this long goes out as a part of its own; a shorter one costs less
 /// to copy than to keep apart.
@@ -30,6 +30,8 @@ pub(super) struct Output {
     read: usize,
     /// A part read to its end, kept for the next frames.
     spare: Vec<u8>,
+    /// The bytes owed and not yet taken, counted as they come and go.
+    owed: usize,
     pub(super) woken: bool,
     pub(super) ended: bool,
     /// Whether a thread waits in `take` for bytes: queueing them wakes it,
@@ -43,13 +45,13 @@ impl Output {
     }
 
     /// The bytes owed and not yet taken.
-    #[cfg(feature = "channels")]
     pub(super) fn owed(&self) -> usize {
-        self.parts.iter().map(Vec::len).sum::<usize>() - self.read
+        self.owed
     }
 
     /// Writes a copy of `frame` behind what is owed.
     pub(super) fn copy(&mut self, frame: &Frame) {
+        self.owed += HEADER + frame.body.len();
         frame.encode_into(self.open_part());
     }
 
@@ -58,6 +60,7 @@ impl Output {
         if frame.body.len() < MOVED {
             return self.copy(&frame);
         }
+        self.owed += HEADER + frame.body.len();
         frame.encode_header_into(self.open_part());
         self.parts.push_back(frame.body);
         self.open = false;
@@ -68,6 +71,7 @@ impl Output {
     pub(super) fn take_all(&mut self) -> Vec<u8> {
         let read = std::mem::take(&mut self.read);
         self.open = false;
+        self.owed = 0;
         if self.parts.len() == 1 {
             let mut bytes = self.parts.pop_front().unwrap_or_default();
             bytes.drain(..read);
@@ -101,6 +105,7 @@ impl Output {
             self.open &= !self.parts.is_empty();
             self.keep(part);
         }
+        self.owed -= taken;
         taken
     }
 
@@ -109,6 +114,7 @@ impl Output {
         self.parts.clear();
         self.open = false;
         self.read = 0;
+        self.owed = 0;
     }
 
     /// The part the next frame is written into: the last, or a new one.
@@ -156,10 +162,12 @@ mod tests {
             let mut taken = Vec::new();
             let mut into = vec![0; room];
             while !output.owes_nothing() {
+                assert_eq!(output.owed() + taken.len(), written(&frames()).len(), "what is owed, counted");
                 let read = output.take_into(&mut into);
                 assert!(read == room || output.owes_nothing(), "a read fills its room unless nothing is left");
                 taken.extend_from_slice(&into[..read]);
             }
+            assert_eq!(output.owed(), 0);
             assert_eq!(taken, written(&frames()), "room {room}");
         }
     }

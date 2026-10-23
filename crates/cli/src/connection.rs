@@ -64,6 +64,9 @@ const HANDING_WOKEN: u8 = 2;
 struct Output<W> {
     writing: Mutex<Writing<W>>,
     ready: Notify,
+    /// The writer task took what the pipe owed: a reader that stopped while
+    /// the pipe was full looks again.
+    drained: Notify,
     handing: AtomicU8,
 }
 
@@ -79,7 +82,7 @@ struct Writing<W> {
 impl<W: AsyncWrite + Unpin> Output<W> {
     fn new(writer: W) -> Self {
         let writing = Mutex::new(Writing { writer, left: Vec::new(), unflushed: false });
-        Output { writing, ready: Notify::new(), handing: AtomicU8::new(IDLE) }
+        Output { writing, ready: Notify::new(), drained: Notify::new(), handing: AtomicU8::new(IDLE) }
     }
 
     /// The pipe's wake, from whichever thread made the frames: one that
@@ -133,6 +136,9 @@ impl<W: AsyncWrite + Unpin> Output<W> {
 
 /// Hands the client's bytes to the pipe until it leaves or breaks a rule; a
 /// server closing tells it `GOAWAY` and reads on while its streams finish.
+/// While the pipe is full it reads nothing, until the writer task took what
+/// the pipe owed: a client that sends and never reads holds the server's
+/// memory at the pipe's bound, its sends waiting in its own socket.
 async fn read_frames<R, W>(mut reader: R, pipe: &Pipe, output: &Output<W>, mut closing: watch::Receiver<bool>)
 where
     R: AsyncRead + Unpin,
@@ -148,11 +154,13 @@ where
         if pipe.finished() || (going_away && pipe.streams() == 0) {
             return;
         }
+        let full = pipe.full();
         tokio::select! {
-            read = reader.read(&mut buffer) => match read {
+            read = reader.read(&mut buffer), if !full => match read {
                 Ok(0) | Err(_) => return,
                 Ok(read) => output.hand(pipe, &buffer[..read]),
             },
+            () = output.drained.notified(), if full => {}
             changed = closing.changed(), if !going_away => {
                 going_away = true;
                 if changed.is_ok() {
@@ -194,6 +202,7 @@ async fn write_frames<W: AsyncWrite + Unpin>(pipe: Arc<Pipe>, output: Arc<Output
         loop {
             // a room filled may have left more, which no wake announces
             let taken = pipe.recv_into(Duration::ZERO, &mut room);
+            output.drained.notify_one();
             if taken > 0 && writing.writer.write_all(&room[..taken]).await.is_err() {
                 break 'woken;
             }
@@ -214,4 +223,94 @@ async fn write_frames<W: AsyncWrite + Unpin>(pipe: Arc<Pipe>, output: Arc<Output
     let mut writing = output.writing.lock().await;
     let _ = writing.writer.flush().await;
     let _ = writing.writer.shutdown().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use tinystore::pipe::Connect;
+    use tinystore::{Options, Store};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::watch;
+
+    /// A frame as docs/wire.md spells it, on stream 0: its header, then its body.
+    fn frame(kind: u8, body: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[kind, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    /// A PING's PONG counts against no credit: a client that sends them and
+    /// reads nothing finds its sends wait once the pipe is full, and every
+    /// PONG comes once it reads.
+    // contract: WIRE-03
+    #[test]
+    fn a_client_that_sends_and_never_reads_is_read_no_further_than_the_pipes_bound() {
+        const HELLO: u8 = 1;
+        const WELCOME: u8 = 2;
+        const PING: u8 = 8;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        runtime.block_on(async {
+            let (client, server) = tokio::io::duplex(64 << 10);
+            let (server_reads, server_writes) = tokio::io::split(server);
+            let (_closing, closed) = watch::channel(false);
+            let serving = {
+                let store = store.clone();
+                tokio::spawn(async move {
+                    super::serve(server_reads, server_writes, &store, Connect::default(), closed).await
+                })
+            };
+            let (mut from_server, mut to_server) = tokio::io::split(client);
+            to_server.write_all(&frame(HELLO, &[0x81, 0x01, 0x01])).await.unwrap();
+            let mut head = [0u8; 12];
+            from_server.read_exact(&mut head).await.unwrap();
+            assert_eq!(head[4], WELCOME);
+            let mut welcome = vec![0; usize::try_from(u32::from_le_bytes(head[..4].try_into().unwrap())).unwrap()];
+            from_server.read_exact(&mut welcome).await.unwrap();
+
+            let pings: Vec<u8> = (0..800_000).flat_map(|_| frame(PING, &[7; 8])).collect();
+            let total = pings.len();
+            let sent = Arc::new(AtomicUsize::new(0));
+            let sending = {
+                let sent = Arc::clone(&sent);
+                tokio::spawn(async move {
+                    for chunk in pings.chunks(64 << 10) {
+                        to_server.write_all(chunk).await.unwrap();
+                        sent.fetch_add(chunk.len(), Ordering::SeqCst);
+                    }
+                    to_server
+                })
+            };
+            let mut taken = 0;
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let now = sent.load(Ordering::SeqCst);
+                if now == taken {
+                    break;
+                }
+                taken = now;
+            }
+            assert!(taken < total, "the server read all {total} bytes of a client that reads nothing");
+            assert!(taken <= (8 << 20) + (1 << 20), "the server read {taken} bytes");
+
+            let mut received = 0;
+            let mut room = vec![0; 64 << 10];
+            while received < total {
+                let read = from_server.read(&mut room).await.unwrap();
+                assert!(read > 0, "{received} of {total} bytes of PONGs, and the connection ended");
+                received += read;
+            }
+            assert_eq!(received, total, "a PONG for every PING");
+            let to_server = sending.await.unwrap();
+            drop((to_server, from_server));
+            serving.await.unwrap();
+        });
+        store.close().unwrap();
+    }
 }

@@ -287,6 +287,13 @@ never waits.
   once half its window has gone, and not a frame for every frame it takes.
 - **A body past its credit** ends the connection with `GOAWAY` and `protocol`,
   the connection's last frame.
+- **A client that does not read** is read no further. A call's stream ends,
+  and its credit comes back, once its answer is queued rather than read, and
+  a `PONG` counts against no credit; so a connection that owes its client
+  more than 8 MiB reads no frame more until the client takes some, and the
+  server stops reading its socket, where the client's sends wait. What a
+  connection owes is then at most that and the answers of its streams in
+  flight.
 
 64 KiB of credit on stream 5:
 

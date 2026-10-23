@@ -57,9 +57,13 @@ const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
-/// What a connection owes its client below which the subscriptions that
-/// stopped for its output go on.
-#[cfg(feature = "channels")]
+/// What a connection may owe its client before it reads no frame more of
+/// it: a PING's PONG counts against no credit, and a call's answer leaves its
+/// stream's credit once queued, so a client that sends and never reads would
+/// otherwise grow the server's memory at the rate it sends.
+pub(super) const OUTPUT_MOST: usize = 8 << 20;
+/// What a connection owes its client below which it reads the frames that
+/// waited, and the subscriptions that stopped for its output go on.
 const OUTPUT_LOW: usize = 1 << 20;
 
 /// Requests read from a connection at once that send its point reads to the
@@ -129,6 +133,12 @@ struct Shared {
     reads_away: AtomicUsize,
     /// The connection's HELLO admitted it to read only.
     read_only: AtomicBool,
+    /// What the output owes, as of its last change: what the reading of
+    /// frames looks at without the output's lock.
+    owing: AtomicUsize,
+    /// The output owed past [`OUTPUT_MOST`] when a frame came: the frames
+    /// from it on wait in the reader until the host takes what is owed.
+    held: AtomicBool,
     /// What waits for the output to drain: subscriptions that stopped while
     /// the connection owed its client too much.
     #[cfg(feature = "channels")]
@@ -212,6 +222,8 @@ impl Session {
             agreed: AtomicUsize::new(HELLO_MOST),
             reads_away: AtomicUsize::new(0),
             read_only: AtomicBool::new(false),
+            owing: AtomicUsize::new(0),
+            held: AtomicBool::new(false),
             #[cfg(feature = "channels")]
             waiting_output: Mutex::new(Vec::new()),
             ready: Condvar::new(),
@@ -232,47 +244,60 @@ impl Session {
         }
         input.reader.push(bytes);
         input.crowd = input.reader.holds(CROWD);
-        while !input.ended {
-            let max_body = input.max_body.unwrap_or(HELLO_MOST);
-            match input.reader.next(max_body) {
-                Ok(Some(frame)) => self.shared.handle(&mut input, frame),
-                Ok(None) => return,
-                Err(refused) => self.shared.go_away(&mut input, "protocol", &refused.0),
-            }
-        }
+        self.shared.read_frames(&mut input);
+    }
+
+    /// Whether the connection owes its client so much that it reads no frame
+    /// more until the host takes some: what it is handed meanwhile waits.
+    pub(crate) fn full(&self) -> bool {
+        self.shared.held.load(Ordering::SeqCst)
     }
 
     /// The bytes ready now, leaving a wake already called to run: the host's
     /// read after a write, which a wake in flight answers anyway, so that a
     /// host writing often is not woken once a commit.
     pub(crate) fn take_ready(&self) -> Vec<u8> {
-        let taken = self.shared.lock_output().take_all();
-        self.shared.drained();
+        let mut output = self.shared.lock_output();
+        let taken = output.take_all();
+        self.took(output);
         taken
     }
 
     /// As `take_ready`, into the host's own bytes: as many as fit, and how
     /// many they were.
     pub(crate) fn take_ready_into(&self, into: &mut [u8]) -> usize {
-        let taken = self.shared.lock_output().take_into(into);
-        self.shared.drained();
+        let mut output = self.shared.lock_output();
+        let taken = output.take_into(into);
+        self.took(output);
         taken
     }
 
     /// The bytes the client is owed, waiting up to `wait` for the first; the
     /// next bytes ready wake the host again.
     pub(crate) fn take(&self, wait: Duration) -> Vec<u8> {
-        let taken = self.awaited(wait).take_all();
-        self.shared.drained();
+        let mut output = self.awaited(wait);
+        let taken = output.take_all();
+        self.took(output);
         taken
     }
 
     /// As `take`, into the host's own bytes: as many as fit, and how many
     /// they were. What did not fit stays for the next read, and wakes nobody.
     pub(crate) fn take_into(&self, wait: Duration, into: &mut [u8]) -> usize {
-        let taken = self.awaited(wait).take_into(into);
-        self.shared.drained();
+        let mut output = self.awaited(wait);
+        let taken = output.take_into(into);
+        self.took(output);
         taken
+    }
+
+    /// What follows the host's take: what the output owes now counted, then,
+    /// its lock let go, what waited for it run, and the frames held for it
+    /// read.
+    fn took(&self, output: MutexGuard<'_, Output>) {
+        self.shared.owing.store(output.owed(), Ordering::SeqCst);
+        drop(output);
+        self.shared.drained();
+        self.shared.read_held();
     }
 
     /// The output once it owes bytes or `wait` has passed, the host counted
@@ -342,6 +367,7 @@ impl Session {
         let mut output = self.shared.lock_output();
         output.ended = true;
         output.clear();
+        self.shared.owing.store(0, Ordering::SeqCst);
         drop(output);
         self.shared.ready.notify_all();
         // waits for a wake under way: once this returns none runs or will
@@ -379,6 +405,51 @@ impl Session {
 }
 
 impl Shared {
+    /// Answers the frames the reader holds whole, until the connection owes
+    /// its client past its bound: the rest wait in the reader, read once the
+    /// host takes what is owed.
+    fn read_frames(self: &Arc<Self>, input: &mut Input) {
+        while !input.ended {
+            if input.max_body.is_some() && self.owes_past_bound() {
+                return;
+            }
+            let max_body = input.max_body.unwrap_or(HELLO_MOST);
+            match input.reader.next(max_body) {
+                Ok(Some(frame)) => self.handle(input, frame),
+                Ok(None) => return,
+                Err(refused) => self.go_away(input, "protocol", &refused.0),
+            }
+        }
+    }
+
+    /// Whether the connection owes its client past its bound, which holds the
+    /// frames that come. A take that lowers what is owed looks at `held`
+    /// after it counted, and this looks at what is owed again after it set
+    /// `held`: one of the two sees the other, so frames are never held with
+    /// nobody to read them on.
+    fn owes_past_bound(&self) -> bool {
+        if self.owing.load(Ordering::SeqCst) > OUTPUT_MOST {
+            self.held.store(true, Ordering::SeqCst);
+            if self.owing.load(Ordering::SeqCst) > OUTPUT_MOST {
+                return true;
+            }
+        }
+        if self.held.load(Ordering::Relaxed) {
+            self.held.store(false, Ordering::SeqCst);
+        }
+        false
+    }
+
+    /// Reads the frames held for the host's take, once the connection owes
+    /// little.
+    fn read_held(self: &Arc<Self>) {
+        if !self.held.load(Ordering::SeqCst) || self.owing.load(Ordering::SeqCst) > OUTPUT_LOW {
+            return;
+        }
+        let mut input = self.lock_input();
+        self.read_frames(&mut input);
+    }
+
     fn handle(self: &Arc<Self>, input: &mut Input, frame: Frame) {
         match (input.max_body, frame.kind) {
             (None, Kind::Hello) => self.welcome(input, &frame.body),
@@ -1505,6 +1576,7 @@ impl Shared {
     /// What follows the frames' queueing, under the output's lock: their
     /// streams' grants and ends counted, and the host woken.
     fn queued(&self, mut output: MutexGuard<'_, Output>, dropped: bool, frames: &[Frame], ended: Option<u32>) {
+        self.owing.store(output.owed(), Ordering::SeqCst);
         let mut let_go = 0;
         {
             let mut open = self.lock_open();

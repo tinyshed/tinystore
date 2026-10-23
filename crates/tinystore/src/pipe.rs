@@ -166,6 +166,14 @@ impl Pipe {
         self.session.go_away();
     }
 
+    /// Whether the connection owes its client so much that it reads no frame
+    /// more until the host takes some: bytes handed to it meanwhile wait
+    /// unread, so a host that reads them from a socket stops reading until a
+    /// take of its own, since the client may be one that never reads.
+    pub fn full(&self) -> bool {
+        self.session.full()
+    }
+
     /// The streams whose final frame has not left.
     pub fn streams(&self) -> usize {
         self.session.streams()
