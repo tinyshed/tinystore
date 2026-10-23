@@ -86,6 +86,7 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
   database's writer. If a transaction that holds that writer is waiting for
   `kv.db`'s, the write fails `unavailable` instead of waiting forever. Return
   the error so that the transaction rolls back, and run it again.
+  `store.close()` from inside the function fails `invalid`.
 
 ## Across a connection
 

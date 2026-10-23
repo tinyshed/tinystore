@@ -518,7 +518,14 @@ impl Store {
     /// engine, the last opened first, and lets go of the directory. The first
     /// engine that fails to close is the error; the others still close. A
     /// second call does nothing, and neither does the last clone's drop after.
+    /// From inside a transaction it is `Invalid`: it would wait for the writer
+    /// the transaction holds.
     pub fn close(&self) -> Result<()> {
+        if crate::sqlite::in_a_transaction() {
+            let why =
+                "a close from inside a transaction would wait for the writer the transaction holds: close after it";
+            return Err(Error::invalid(why).within(self.describe()));
+        }
         self.inner.close()
     }
 
