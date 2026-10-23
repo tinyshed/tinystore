@@ -14,7 +14,7 @@
 //! any       → stop                 → stopped, once the running call ends
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
@@ -45,6 +45,9 @@ pub(crate) type Run = Box<dyn FnMut(Delivery) + Send>;
 pub(crate) struct Deliverer {
     pool: Arc<Pool>,
     threads: Mutex<Vec<JoinHandle<()>>>,
+    /// Every subscription not stopped, by its number in its log: what keeps
+    /// one whose handle was dropped listening, until `stop` or the close.
+    listening: Mutex<HashMap<u64, Arc<Subscriber>>>,
 }
 
 #[derive(Default)]
@@ -105,6 +108,11 @@ impl Deliverer {
         });
         let place = hub.join(&subscriber.key, wake)?;
         let (log, reader) = subscriber.place.get_or_init(|| place);
+        lock(&self.listening).insert(*reader, Arc::clone(&subscriber));
+        // A close that emptied the map before the insert is met here.
+        if lock(&self.pool.ready).stopped {
+            self.forget(*reader);
+        }
         // A publish between joining and the place being set found no place to
         // deliver from; it is delivered now.
         if log.holds_for(*reader) {
@@ -143,6 +151,15 @@ impl Deliverer {
         for thread in threads.into_iter().filter(|thread| thread.thread().id() != current) {
             let _ = thread.join();
         }
+        // Dropped outside the lock: a handler may hold what takes it again.
+        let listening = std::mem::take(&mut *lock(&self.listening));
+        drop(listening);
+    }
+
+    /// Lets go of a subscription that stopped.
+    fn forget(&self, reader: u64) {
+        let subscriber = lock(&self.listening).remove(&reader);
+        drop(subscriber);
     }
 }
 
@@ -266,6 +283,7 @@ impl Subscriber {
         self.changed.notify_all();
         if let (Some(hub), Some((_, reader))) = (self.hub.upgrade(), self.place.get()) {
             hub.leave(&self.key, *reader);
+            hub.deliverer.forget(*reader);
         }
     }
 }

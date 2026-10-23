@@ -139,6 +139,28 @@ fn a_message_of_a_transaction_is_handed_over_after_its_commit_and_never_after_a_
     sub.stop();
 }
 
+// contract: CHAN-01
+#[test]
+fn a_dropped_subscription_goes_on_listening_until_the_store_closes() {
+    let (_dir, store) = opened();
+    let chat = store.channel::<String>("chat").open().unwrap();
+    let (mut handler, received) = kept();
+    let held = Arc::new(());
+    let in_handler = Arc::clone(&held);
+    drop(
+        chat.subscribe(move |message| {
+            let _held = &in_handler;
+            handler(message);
+        })
+        .unwrap(),
+    );
+    chat.publish(&"after the drop".to_owned()).unwrap();
+    holds_within(PATIENCE, "the message", || received.lock().unwrap().len() == 1);
+    assert_eq!(values(&received), ["after the drop"]);
+    store.close().unwrap();
+    assert_eq!(Arc::strong_count(&held), 1, "the close lets its handler go");
+}
+
 #[test]
 fn stop_from_inside_its_handler_answers_at_once_and_from_outside_waits_for_the_running_call() {
     let (_dir, store) = opened();

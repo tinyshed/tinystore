@@ -62,6 +62,8 @@ sub.stop();
 - `stop()` answers once the running call has finished, and no call starts
   after it. Called from inside the subscription's own handler, it answers at
   once.
+- In Rust, dropping a `Subscription` does not stop it. It goes on listening
+  until you call `stop()` or the store closes, as a queue's worker does.
 
 ## Branches
 
