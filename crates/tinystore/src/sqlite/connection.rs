@@ -188,6 +188,11 @@ pub(crate) fn copy(source: &Path, target: &Path) -> Result<()> {
     super::give_mutexes();
     let connection =
         Connection::open_with_flags(source, flags(Role::Reader)).map_err(|error| sql_error(what(), error))?;
+    // The file's only connection, when no engine holds it, would checkpoint at
+    // its close commits a node's log lacks until the engine opens the file.
+    connection
+        .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+        .map_err(|error| sql_error(what(), error))?;
     connection.busy_timeout(Config::default().busy_timeout).map_err(|error| sql_error(what(), error))?;
     connection.execute(COPY, [into]).map_err(|error| sql_error(what(), error))?;
     Ok(())

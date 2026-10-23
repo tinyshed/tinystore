@@ -160,6 +160,56 @@ fn a_log_whose_tail_a_crash_took_is_mended_from_the_wal_at_any_byte() {
     store.close().unwrap();
 }
 
+// A connection of its own on a file is its last one: closed, SQLite would
+// checkpoint the commits its log lacks into it and delete the WAL that holds them.
+// contract: REPL-03
+#[cfg(feature = "backup")]
+#[test]
+fn a_backup_or_a_check_of_a_file_no_engine_opened_leaves_the_wal_its_log_takes_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = node(dir.path());
+    let db = store
+        .database("app")
+        .migrations([("0001_notes.sql", "create table notes (id integer primary key, body text not null);")])
+        .open()
+        .unwrap();
+    for i in 0..12 {
+        db.exec(sql!("insert into notes (body) values (?)", format!("note {i}"))).unwrap();
+    }
+    let left = tempfile::tempdir().unwrap();
+    copy_as_left(dir.path(), left.path());
+    // the log's last entry torn, which the WAL alone holds
+    let segment = left.path().join(DIR).join("sql/app.db").join(format!("{:020}.log", 1));
+    let whole = fs::read(&segment).unwrap();
+    fs::write(&segment, &whole[..whole.len() - 1]).unwrap();
+    let zips = tempfile::tempdir().unwrap();
+    let backup = |store: &Store| {
+        store.backup().write(zips.path().join("backup.zip")).unwrap();
+    };
+    let check = |store: &Store| {
+        let refused = super::verify::here(store.node().unwrap(), "sql/app.db").unwrap_err();
+        assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
+    };
+    for read in [&backup as &dyn Fn(&Store), &check] {
+        let crashed = tempfile::tempdir().unwrap();
+        copy_as_left(left.path(), crashed.path());
+        let reopened = node(crashed.path());
+        read(&reopened);
+        let db = reopened.database("app").open().unwrap();
+        let notes: i64 = db.scalar(sql!("select count(*) from notes")).unwrap();
+        assert_eq!(notes, 12);
+        drop(db);
+        reopened.close().unwrap();
+        let file = fs::read(crashed.path().join("sql/app.db")).unwrap();
+        assert!(
+            rebuilt_from_its_log(&crashed.path().join(DIR).join("sql/app.db")) == file,
+            "its log holds every commit"
+        );
+    }
+    drop(db);
+    store.close().unwrap();
+}
+
 // contract: REPL-03
 #[test]
 fn a_crash_after_the_wal_started_over_loses_nothing_its_log_had_not_synced() {

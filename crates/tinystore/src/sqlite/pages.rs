@@ -47,7 +47,9 @@ pub(crate) struct Chunk {
 
 impl Pages {
     pub(crate) fn open(path: &Path) -> Result<Pages> {
-        let connection = connection::open(path, &Config::default(), Role::Reader)?;
+        // a node's file no engine holds: its WAL holds what its log may lack
+        let config = Config { keep_wal: true, ..Config::default() };
+        let connection = connection::open(path, &config, Role::Reader)?;
         refuse_without_dbpage(&connection, path)?;
         Ok(Pages { path: path.to_owned(), connection })
     }
