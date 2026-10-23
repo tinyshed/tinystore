@@ -62,12 +62,18 @@ fn accept(state: &Arc<State>, listener: &TcpListener) {
         let Ok(stream) = stream else { continue };
         let peer = stream.peer_addr().ok();
         state.keep_link(&stream);
+        // the link is kept open for the node's stop: ended here, it is closed,
+        // so that the other node hears it at once rather than at its silence
+        let closing = stream.try_clone().ok();
         let serving = Arc::clone(state);
         state.spawn("tinystore node: link", move || {
             if let Err(error) = serve_link(&serving, stream)
                 && !serving.stopping()
             {
                 tracing::info!(target: "tinystore", peer = ?peer, %error, "a node's link ended");
+            }
+            if let Some(closing) = closing {
+                let _ = closing.shutdown(std::net::Shutdown::Both);
             }
         });
     }
@@ -259,14 +265,11 @@ impl Requests<'_> {
             let LeaseAsk { file, epoch, position, holding, synchronous } = asked;
             let synchronous = &synchronous;
             let ask = super::witness::Ask { file: &file, node, address, epoch, position, holding, synchronous };
-            if let Some(holder) = witness.ask(&ask)? {
-                holders.push(LeaseHolder { file, holder });
-            }
+            let holder = witness.ask(&ask)?;
+            holders.push(LeaseHolder { file, holder });
         }
-        if !holders.is_empty() {
-            self.out.send(&Message::Leased { holders })?;
-        }
-        Ok(())
+        // each ask answered, in order, which is how its node times its leases
+        self.out.send(&Message::Leased { holders })
     }
 
     /// Sends a file blobs keeps on a thread of its own.

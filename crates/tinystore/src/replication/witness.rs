@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use super::DIR;
 use crate::sync::lock;
-use crate::{Error, Result};
+use crate::{Error, ErrorKind, Result};
 
 /// How long a lease lasts from the renewal that reached the witness.
 pub(crate) const TTL: Duration = Duration::from_secs(5);
@@ -133,12 +133,17 @@ impl Witness {
     }
 
     /// Answers a node's ask with the file's holder now: renewed when the node
-    /// holds it, granted to the freshest copy standing once it ran out; none
-    /// for a node a test cut off. A grant is kept on disk before it answers,
-    /// and one that cannot be kept is not made.
-    pub(crate) fn ask(&self, ask: &Ask<'_>) -> Result<Option<Holder>> {
+    /// holds it, granted to the freshest copy standing once it ran out. A
+    /// grant is kept on disk before it answers, and one that cannot be kept is
+    /// not made. A node a test cut off is refused, which ends its link as a
+    /// cut ends it: a link that went on would carry answers to some of its
+    /// asks only, and a node times each lease from the ask an answer is to.
+    pub(crate) fn ask(&self, ask: &Ask<'_>) -> Result<Holder> {
         if lock(&self.cut).contains(ask.node) {
-            return Ok(None);
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                "the witness hears nothing of this node: a test cut it off",
+            ));
         }
         let now = Instant::now();
         let mut leases = lock(&self.leases);
@@ -168,7 +173,7 @@ impl Witness {
         }
         let holder = lease.kept.holder.clone();
         leases.insert(ask.file.to_owned(), lease);
-        Ok(Some(holder))
+        Ok(holder)
     }
 
     /// Keeps durably the holder a file's lease was granted to: written beside

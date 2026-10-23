@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use super::entry::Point;
 use super::log::Log;
@@ -53,7 +53,7 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
     let out = Out::new(writing);
     out.send(&state.hello(state.address()))?;
     let mut frames = Frames::default();
-    let (mut welcomed, mut turn, mut asks) = (false, Instant::now(), Asks::default());
+    let (mut welcomed, mut turn, mut asks) = (false, None::<Instant>, Asks::default());
     loop {
         if state.stopping() {
             return Ok(());
@@ -70,18 +70,22 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
                     let Some(store) = store.upgrade() else {
                         return Ok(());
                     };
-                    asks.answered(state, &store, holders);
+                    let Some(sent) = asks.sent.answered() else {
+                        return Err(Error::invalid("a witness answered an ask this node did not make"));
+                    };
+                    asks.answered(state, &store, holders, sent);
                 }
                 _ => {}
             }
         }
-        if welcomed && turn.elapsed() >= RENEW || welcomed && asks.sent.is_none() {
-            turn = Instant::now();
-            asks.sent = Some(turn);
-            let asks = state.judged_files();
-            tracing::debug!(target: "tinystore", asks = asks.len(), "a node asks its witness for its leases");
-            if !asks.is_empty() {
-                out.send(&Message::Lease { node: state.id.clone(), address: state.address(), asks })?;
+        if welcomed && turn.is_none_or(|turn| turn.elapsed() >= RENEW) {
+            let now = Instant::now();
+            turn = Some(now);
+            let asked = state.judged_files();
+            tracing::debug!(target: "tinystore", asks = asked.len(), "a node asks its witness for its leases");
+            if !asked.is_empty() {
+                out.send(&Message::Lease { node: state.id.clone(), address: state.address(), asks: asked })?;
+                asks.sent.sent(now);
             }
         }
         match frames.fill(&mut reading) {
@@ -96,16 +100,30 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
 /// What a judged node knows of its asks of its witness.
 #[derive(Default)]
 struct Asks {
-    /// When the last left, from which a lease granted counts.
-    sent: Option<Instant>,
+    sent: Unanswered,
     /// What failed of each file's lease, said once until it is acted on again.
     failing: HashMap<String, String>,
 }
 
+/// When each ask the witness has not answered yet left, oldest first: one
+/// link carries them in order, and the witness answers each, in order.
+#[derive(Default)]
+struct Unanswered(VecDeque<Instant>);
+
+impl Unanswered {
+    fn sent(&mut self, at: Instant) {
+        self.0.push_back(at);
+    }
+
+    /// When the ask the witness answers now left.
+    fn answered(&mut self) -> Option<Instant> {
+        self.0.pop_front()
+    }
+}
+
 impl Asks {
-    /// Acts on each holder the witness answered.
-    fn answered(&mut self, state: &Arc<State>, store: &Store, holders: Vec<LeaseHolder>) {
-        let sent = self.sent.unwrap_or_else(Instant::now);
+    /// Acts on each holder the witness answered to the ask that left at `sent`.
+    fn answered(&mut self, state: &Arc<State>, store: &Store, holders: Vec<LeaseHolder>, sent: Instant) {
         for held in holders {
             let file = held.file;
             match leased(state, store, &file, &held.holder, sent) {
@@ -194,5 +212,22 @@ impl State {
             asks.push(LeaseAsk { file, epoch: at.epoch, position: at.sequence, holding, synchronous });
         }
         asks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Asks that never reached the witness, sent while the answer to one that
+    // did was on its way, renewed nothing: the lease counts from that one.
+    #[test]
+    fn a_lease_counts_from_the_ask_its_answer_answers() {
+        let first = Instant::now();
+        let (second, third) = (first + RENEW, first + 2 * RENEW);
+        let mut unanswered = Unanswered::default();
+        [first, second, third].into_iter().for_each(|at| unanswered.sent(at));
+        assert_eq!(unanswered.answered(), Some(first));
+        assert_eq!(unanswered.answered(), Some(second));
     }
 }
