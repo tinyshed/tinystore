@@ -26,3 +26,11 @@ all = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "deny"
 dbg_macro = "deny"
 todo = "deny"
+
+# Line tables keep a backtrace's files and lines: the library's test build took
+# 1,210 MiB of target/ rather than 2,013 with full debug information, and a
+# one-line rebuild 14-20 s either way (three passes each beside other builds,
+# Ryzen 7 7700, Windows 11, Rust 1.99: `cargo test -p tinystore --all-features
+# --lib --no-run` with CARGO_PROFILE_DEV_DEBUG set and unset).
+[profile.dev]
+debug = "line-tables-only"
