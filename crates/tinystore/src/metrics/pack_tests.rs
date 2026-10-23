@@ -217,27 +217,55 @@ fn a_quiet_series_is_not_forced_into_a_block() {
     assert_eq!((done.expired, done.reclaimed, done.blocks), (10, 1, 0), "its head expired whole");
 }
 
+/// The one series' blocks as packing would publish them now.
+fn staged(f: &crate::metrics::fixture::Fixture) -> Staged {
+    let engine = f.engine();
+    let mut zstd = engine.codecs.take();
+    let id = f.value("select series_id from series_state");
+    let candidate = engine.candidate(&mut zstd, id, engine.now()).unwrap().unwrap();
+    encode(&mut zstd, candidate).unwrap()
+}
+
 // contract: DUR-03, MET-03
 #[test]
-fn a_publication_another_write_raced_is_dropped_and_tried_again() {
+fn a_publication_another_write_raced_among_its_samples_is_dropped_and_tried_again() {
     let f = fixture();
     let written = f.gauge("cpu", 481, 15 * SECOND, |index| index as f64);
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
-    let engine = f.engine();
-    let now = engine.now();
-    let mut zstd = engine.codecs.take();
-    let id = f.value("select series_id from series_state");
-    let candidate = engine.candidate(&mut zstd, id, now).unwrap().unwrap();
-    let staged = encode(&mut zstd, candidate).unwrap();
-    f.metrics().ingest(&[Series::gauge("cpu").sample(f.now(), 9.0)]).unwrap();
-    let mut packed = Packed::default();
-    engine.publish(vec![staged], &mut packed).unwrap();
-    assert_eq!((packed.conflicts, packed.blocks), (1, 0));
-    assert_eq!((f.rows("groups"), f.rows("payloads"), f.rows("clocks")), (0, 0, 0), "nothing of it was written");
+    let among = written.samples()[100].at;
+    // a sample packing read changed, and one written between two it read
+    let changed = Series::gauge("cpu").sample(among, 9.0);
+    let between = Series::gauge("cpu").sample(among + Duration::from_millis(1), 9.0);
+    for raced in [changed, between] {
+        let staged = staged(&f);
+        f.metrics().ingest(&[raced]).unwrap();
+        let mut packed = Packed::default();
+        f.engine().publish(vec![staged], &mut packed).unwrap();
+        assert_eq!((packed.conflicts, packed.blocks), (1, 0));
+        assert_eq!((f.rows("groups"), f.rows("payloads"), f.rows("clocks")), (0, 0, 0), "nothing of it was written");
+    }
     let done = maintain(&f.store).unwrap();
-    assert_eq!(done.blocks, 2);
+    assert_eq!(done.packed, 481, "every sample but the newest, the one written between them too");
     let read = f.metrics().query().name("cpu").read().unwrap();
-    assert_eq!(read[0].samples().len(), 481);
+    assert_eq!(read[0].samples().len(), 482);
+}
+
+#[test]
+fn a_write_past_what_packing_read_leaves_its_publication_standing() {
+    let f = fixture();
+    let written = f.gauge("cpu", 481, 15 * SECOND, |index| index as f64);
+    f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
+    let staged = staged(&f);
+    // the newest sample, which waits in the head, written again, and one after it
+    let later = Series::gauge("cpu").sample(f.now(), 9.0).sample(f.now() + 15 * SECOND, 10.0);
+    f.metrics().ingest(&[later]).unwrap();
+    let mut packed = Packed::default();
+    f.engine().publish(vec![staged], &mut packed).unwrap();
+    assert_eq!((packed.conflicts, packed.blocks, packed.samples), (0, 2, 480));
+    assert_eq!(f.value("select head_count from series_state"), 2);
+    let read = f.metrics().query().name("cpu").to(f.now() + MINUTE).read().unwrap();
+    let values: Vec<f64> = read[0].samples().iter().map(|sample| sample.value).collect();
+    assert_eq!((values.len(), values[479], values[480], values[481]), (482, 479.0, 9.0, 10.0));
 }
 
 #[test]
@@ -264,16 +292,21 @@ fn a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads
     assert_eq!(f.rows("payloads"), 3);
 }
 
-#[test]
-fn packing_a_head_whose_oldest_samples_have_expired_leaves_none_of_them_before_its_blocks() {
-    let f = fixture();
-    // two hours of 15-second samples kept two hours, then ten minutes on: the first 39 have
-    // expired, and this pass packs the series before its expiry takes them
+/// Two hours of 15-second samples kept two hours, then ten minutes on: the
+/// first 39 have expired, and no expiry has taken them yet.
+fn partly_expired(f: &crate::metrics::fixture::Fixture) -> Series {
     let mut written = Series::gauge("cpu").keep(2 * HOUR);
     let first = f.now() - 2 * HOUR + 15 * SECOND;
     written.extend((0..480_u32).map(|index| (first + 15 * SECOND * index, f64::from(index))));
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
     f.pass(10 * MINUTE);
+    written
+}
+
+#[test]
+fn packing_a_head_whose_oldest_samples_have_expired_leaves_none_of_them_before_its_blocks() {
+    let f = fixture();
+    let written = partly_expired(&f);
     let engine = f.engine();
     let (packed, _) = engine.pack(engine.now()).unwrap();
     assert_eq!((packed.samples, packed.blocks, packed.expired), (440, 2, 39));
@@ -281,4 +314,15 @@ fn packing_a_head_whose_oldest_samples_have_expired_leaves_none_of_them_before_i
     assert_eq!(bits(&read[0]), bits(&written)[39..], "every sample its name keeps, in order");
     assert!(f.metrics().damaged().unwrap().is_empty());
     assert_eq!(f.value("select head_count from series_state"), 1, "the newest sample waits");
+}
+
+#[test]
+fn a_head_packing_expires_first_is_published_only_as_packing_read_it() {
+    let f = fixture();
+    partly_expired(&f);
+    let raced = staged(&f);
+    f.metrics().ingest(&[Series::gauge("cpu").sample(f.now(), 1.0)]).unwrap();
+    let mut packed = Packed::default();
+    f.engine().publish(vec![raced], &mut packed).unwrap();
+    assert_eq!((packed.conflicts, packed.expired, f.rows("groups")), (1, 0, 0));
 }

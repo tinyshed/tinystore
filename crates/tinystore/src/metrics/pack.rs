@@ -36,8 +36,8 @@ const BATCH_BYTES: usize = 1 << 20;
 /// What an entry may add once its payload's id is given: the longest varint.
 const PAYLOAD_ID: usize = 9;
 
-/// A series' head as packing read it: its version, which publication checks
-/// nothing moved since, and the prefix it packs.
+/// A series' head as packing read it: its version, and the prefix it packs,
+/// which publication checks no write reached since.
 #[derive(Debug)]
 pub(super) struct Candidate {
     pub(super) id: i64,

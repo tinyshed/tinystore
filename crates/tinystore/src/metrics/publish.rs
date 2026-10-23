@@ -2,8 +2,9 @@
 //! with everything they change, or nothing.
 //!
 //! ```text
-//! the version it was read at ─► the groups before it merged in ─► its clock held ─► payload ids given
-//!   ─► the merged groups replaced by one ─► its samples taken out of the head ─► what is sealed moved
+//! what its name keeps no longer expired ─► the groups before it merged in ─► its clock held ─► payload ids given
+//!   ─► the merged groups replaced by one ─► its samples taken out of the head, none written among them
+//!   ─► what is sealed moved
 //! ```
 //!
 //! A group takes in the group before it while that one has no more live
@@ -117,11 +118,15 @@ fn publish_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged, now: i64, don
 }
 
 /// Writes one series' blocks and everything they change, and says how many
-/// samples it removed that its name kept no longer.
+/// samples it removed that its name kept no longer. A write since packing
+/// read the series voids the publication only where it reached the samples
+/// packed, which `seal` checks, so that a series written to without a pause
+/// still packs; one whose head packing must expire first is published only
+/// as packing read it, since that expiry goes by the head packing read.
 fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> {
     let candidate = &series.candidate;
     let version: i64 = query_one(tx, VERSION, params![candidate.id], "read a series' version")?;
-    if version != candidate.version {
+    if version != candidate.version && candidate.behind > 0 {
         return Err(Error::new(ErrorKind::Conflict, "a series written to since packing read it"));
     }
     if version == i64::MAX {
@@ -240,8 +245,8 @@ fn give_payloads(tx: &Tx<'_>, group: &mut Group) -> Result<()> {
 }
 
 /// Takes exactly the samples packed out of the head, and moves what is
-/// sealed past them: one sample that changed since packing read it means a
-/// write won the race.
+/// sealed past them: one sample that changed since packing read it, or one
+/// written among them, means a write won the race.
 fn seal(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
     let candidate = &series.candidate;
     let (max_seen, extent, bytes) = head_row(tx, candidate.id)?;
@@ -250,9 +255,12 @@ fn seal(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
         head::decode(zstd, &head::parse(candidate.id, extent, bytes)?, i64::MIN, i64::MAX, &mut points)?;
     }
     let left = without(&points, &candidate.points)?;
+    let sealed_before = series.group.end.saturating_add(1);
+    if left.first().is_some_and(|point| point.at < sealed_before) {
+        return Err(Error::new(ErrorKind::Conflict, "a sample written among those packed since packing read it"));
+    }
     shrink_head(tx, candidate.id, head::encode(zstd, candidate.id, &[], &left)?)?;
     let extent = Extent::of(&left);
-    let sealed_before = series.group.end.saturating_add(1);
     let due =
         due(tx, zstd, candidate.id, left.first().map(|point| point.at))?.map(|oldest| expires(oldest, candidate.keep));
     let (start, end) = if left.is_empty() { (None, None) } else { (Some(extent.start), Some(extent.end)) };
