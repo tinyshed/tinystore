@@ -90,6 +90,20 @@ for (const way of opens) {
 			)
 		})
 
+		test.skipIf(!way.shared)(
+			'a store open with none set refuses one, saying what it has and how to open it',
+			async () => {
+				const dir = directory()
+				await opened(dir, {})
+				const refused = await caught(opened(dir, { durability: 'full' }))
+				expect(refused).toBeInstanceOf(Error)
+				expect((refused as Error).message).toContain(
+					'no durability set, full but os for records and metrics',
+				)
+				expect((refused as Error).message).toContain('open it without durability')
+			},
+		)
+
 		test('a word that is neither is refused before anything opens', async () => {
 			const dir = directory()
 			const refused = await caught(opened(dir, { durability: 'fast' as never }))

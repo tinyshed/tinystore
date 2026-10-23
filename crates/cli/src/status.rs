@@ -4,7 +4,7 @@
 //! learn whether a server still answers there.
 //!
 //! ```text
-//! ● ./data  served by tinystore 0.1.0 · pid 37420 · up 12m
+//! ● ./data  served by tinystore 0.1.0 · pid 37420 · up 12m · durability os
 //!
 //!   kv           36 KiB   home
 //!   sql/app     1.2 MiB   copy · at commit 412
@@ -69,6 +69,7 @@ enum Served {
         server: String,
         pid: u64,
         since: SystemTime,
+        durability: Option<String>,
     },
     /// `SERVE` names a server that does not answer: it died, or is not this
     /// store's.
@@ -83,7 +84,12 @@ impl Report {
         let served = match client::found(dir).map_err(failed)? {
             None => Served::No,
             Some(found) => match found.connect() {
-                Ok(connection) => Served::By { server: connection.server, pid: found.pid, since: found.since },
+                Ok(connection) => Served::By {
+                    server: connection.server,
+                    pid: found.pid,
+                    since: found.since,
+                    durability: connection.durability,
+                },
                 Err(why) => Served::Gone { why },
             },
         };
@@ -104,11 +110,18 @@ impl Report {
         let paint = |style: Style, text: &str| paint(colours, style, text);
         let (bold, dim) = (Style::new().bold(), Style::new().dimmed());
         let mut text = match &self.served {
-            Served::By { server, pid, since } => format!(
+            Served::By { server, pid, since, durability } => format!(
                 "{} {}  {}\n",
                 paint(Color::Green.bold(), "●"),
                 paint(bold, &self.dir),
-                paint(dim, &format!("served by tinystore {server} · pid {pid} · up {}", age(*since)))
+                paint(
+                    dim,
+                    &format!(
+                        "served by tinystore {server} · pid {pid} · up {} · {}",
+                        age(*since),
+                        durability_of(durability.as_deref())
+                    )
+                )
             ),
             Served::Gone { why } => format!(
                 "{} {}  {}\n  {}\n",
@@ -176,10 +189,11 @@ impl Report {
 
     fn json(&self) -> serde_json::Value {
         let served = match &self.served {
-            Served::By { server, pid, since } => json!({
+            Served::By { server, pid, since, durability } => json!({
                 "server": server,
                 "pid": pid,
                 "since": since.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64),
+                "durability": durability,
             }),
             Served::Gone { why } => json!({ "gone": why }),
             Served::No => serde_json::Value::Null,
@@ -235,6 +249,15 @@ fn role(file: &StoreFile, status: Option<&FileStatus>, links: Option<&Links>) ->
         Some(applied) => format!("copy{from} · at commit {applied}"),
         None => format!("copy{from} · waiting for its first snapshot"),
     }
+}
+
+/// How far the server's commits go: what it was started with, or each
+/// engine's own when it was started with neither.
+fn durability_of(started: Option<&str>) -> String {
+    started.map_or_else(
+        || "durability not set: full, os for records and metrics".to_owned(),
+        |started| format!("durability {started}"),
+    )
 }
 
 /// How long ago `since` was, as a person says it: `40s`, `12m`, `3h 5m`, `2d 4h`.

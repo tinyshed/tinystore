@@ -269,9 +269,12 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         if let Some(durability) = asked.durability
             && store.durability() != Some(durability)
         {
-            let opened = store.durability().map_or_else(|| "each engine's own".to_owned(), |opened| opened.to_string());
+            let (opened, instead) = match store.durability() {
+                None => ("no durability set, full but os for records and metrics".to_owned(), String::new()),
+                Some(opened) => (format!("durability {opened}"), format!("with {opened} or ")),
+            };
             return Err(Error::invalid(format!(
-                "pipe: the store is open with durability {opened}, and asked for {durability}"
+                "pipe: the store is open with {opened}, and asked for {durability}: open it {instead}without durability"
             )));
         }
         if let Some(key_file) = &asked.encryption_key_file

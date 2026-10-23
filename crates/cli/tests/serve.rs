@@ -285,11 +285,18 @@ fn a_mistake_in_the_tokens_leaves_no_files_behind() {
 #[test]
 fn status_finds_a_running_server_and_stop_stops_it_its_serve_gone() {
     let dir = tempfile::tempdir().unwrap();
-    let mut server = Command::new(BINARY).arg("serve").arg(dir.path()).stderr(Stdio::null()).spawn().unwrap();
+    let mut server = Command::new(BINARY)
+        .arg("serve")
+        .arg(dir.path())
+        .args(["--durability", "os"])
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     published(&dir.path().join("server").join("SERVE"));
     let status = Command::new(BINARY).arg("status").arg(dir.path()).output().unwrap();
     let said = String::from_utf8_lossy(&status.stdout);
     assert!(status.status.success() && said.contains("served by tinystore"), "{said}");
+    assert!(said.contains("durability os"), "the durability a program must ask for, or ask nothing: {said}");
     let stop = Command::new(BINARY).arg("stop").arg(dir.path()).output().unwrap();
     let said = format!("{}{}", String::from_utf8_lossy(&stop.stdout), String::from_utf8_lossy(&stop.stderr));
     assert!(stop.status.success() && said.contains("stopped"), "{said}");

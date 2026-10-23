@@ -73,6 +73,9 @@ pub(crate) struct Connection {
     stream: Box<dyn Stream>,
     /// The server's version, as its WELCOME says.
     pub(crate) server: String,
+    /// `full` or `os` when the store was opened with one; each engine's own
+    /// when absent.
+    pub(crate) durability: Option<String>,
 }
 
 impl Found {
@@ -108,7 +111,7 @@ fn hello(endpoint: &str, secret: &[u8]) -> Result<Connection, String> {
     mac.update(&challenge);
     let proof = bin_at(&body, 11).ok_or("the server gave no proof")?;
     mac.verify_slice(&proof).map_err(|_| "a process on the endpoint did not prove it is the store's server")?;
-    Ok(Connection { stream, server: text_at(&body, 2).unwrap_or_default() })
+    Ok(Connection { stream, server: text_at(&body, 2).unwrap_or_default(), durability: text_at(&body, 12) })
 }
 
 impl Connection {

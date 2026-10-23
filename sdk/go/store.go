@@ -167,9 +167,11 @@ func asking(dial func(context.Context) (*core.Connection, error), directory, dur
 			c.Close()
 			said := fmt.Sprintf("with durability %q", opened)
 			if opened == "" {
-				said = "with none said"
+				said = "with no durability set, full but os for records and metrics"
 			}
-			return nil, core.Errorf(core.Invalid, "the store in %s is open %s, and this program asked for %q", directory, said, durability)
+			return nil, core.Errorf(core.Invalid,
+				"the store in %s is open %s, and this program asked for %q: open it without durability, or start its server with --durability %s",
+				directory, said, durability, durability)
 		}
 		return c, nil
 	}

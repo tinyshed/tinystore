@@ -63,9 +63,13 @@ export function asking(dial: Dialer, dir: string, durability: Durability | undef
 		const opened = (await connection.session.welcomed).durability
 		if (opened !== durability) {
 			await connection.close()
-			const as = opened === undefined ? 'with none said' : `with durability '${opened}'`
+			const as =
+				opened === undefined
+					? 'with no durability set, full but os for records and metrics'
+					: `with durability '${opened}'`
 			throw new InvalidError(
-				`the store in ${dir} is open ${as}, and this program asked for '${durability}'`,
+				`the store in ${dir} is open ${as}, and this program asked for '${durability}': ` +
+					`open it without durability, or start its server with --durability ${durability}`,
 			)
 		}
 		return connection

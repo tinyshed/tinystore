@@ -113,8 +113,15 @@ def asking(
         opened = (await connection.session.welcomed).durability
         if opened != durability:
             await connection.close()
-            said = "with none said" if opened is None else f"with durability {opened!r}"
-            raise InvalidError(f"the store in {directory} is open {said}, and this program asked for {durability!r}")
+            said = (
+                "with no durability set, full but os for records and metrics"
+                if opened is None
+                else f"with durability {opened!r}"
+            )
+            raise InvalidError(
+                f"the store in {directory} is open {said}, and this program asked for {durability!r}: "
+                f"open it without durability, or start its server with --durability {durability}"
+            )
         return connection
 
     return checked

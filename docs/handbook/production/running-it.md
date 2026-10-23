@@ -12,7 +12,7 @@ tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.1.0 · pid 37420 · up 12m
+● ./data  served by tinystore 0.1.1 · pid 37420 · up 12m · durability full
 
   kv         36 KiB
   jobs       60 KiB
@@ -23,8 +23,11 @@ tinystore status ./data
   total     3.4 MiB
 ```
 
-`status` says who serves the directory and how large each file is. A
-directory no server holds says `○ ./data  not served`. On a node it also
+`status` says who serves the directory, the durability it was started with,
+and how large each file is. A program that passes a durability must pass
+that one, or none: a server started without `--durability` says `not set`,
+and refuses a program that asks for either. A directory no server holds says
+`○ ./data  not served`. On a node it also
 shows which files are homes, which are copies and how far behind they are;
 `tinystore node status` shows the links. `--json` prints the same for
 scripts.

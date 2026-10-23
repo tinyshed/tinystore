@@ -455,7 +455,10 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     let unasked = Pipe::open(dir.path(), &[], None).unwrap();
     let same = Pipe::open(dir.path(), &asking("os"), None).unwrap();
     let refused = Pipe::open(dir.path(), &asking("full"), None).unwrap_err();
-    assert_eq!(refused.to_string(), "pipe: the store is open with durability os, and asked for full: invalid");
+    assert_eq!(
+        refused.to_string(),
+        "pipe: the store is open with durability os, and asked for full: open it with os or without durability: invalid"
+    );
     drop((first, unasked, same));
 
     // a store opened with nothing said keeps each engine's own, which a pipe asking for one is not given
@@ -465,7 +468,8 @@ fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_
     let refused = Pipe::open(dir.path(), &asking("full"), None).unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "pipe: the store is open with durability each engine's own, and asked for full: invalid"
+        "pipe: the store is open with no durability set, full but os for records and metrics, and asked for full: \
+         open it without durability: invalid"
     );
     let unknown = Pipe::open(tempfile::tempdir().unwrap().path(), &asking("fast"), None).unwrap_err();
     assert_eq!(unknown.to_string(), "pipe: durability \"fast\": it is full or os: invalid");
