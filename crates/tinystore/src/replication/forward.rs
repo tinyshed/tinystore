@@ -19,7 +19,8 @@ use super::node::State;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// The tag of a file a copy waits for and its home has not made: the home
-/// opens the engine that keeps it.
+/// opens the engine that keeps it, and answers where the file stands, which
+/// a copy behind its home waits to reach.
 pub(crate) const MAKE: u8 = 0;
 /// The tag of many writes in order, a node's queued ops sent at once.
 pub(crate) const BATCH: u8 = 6;
@@ -98,10 +99,28 @@ pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Ve
 /// Asks the home to make the file `name`, which this node waits for and the
 /// node it takes from does not serve yet.
 pub(crate) fn make(node: &State, name: &str) -> Result<()> {
+    let written = node.write_toward(name, make_op(name), ANSWER_WAIT)?;
+    written.outcome.map(drop).map_err(Refusal::into_error)
+}
+
+fn make_op(name: &str) -> Vec<u8> {
     let mut out = super::Out(vec![MAKE]);
     out.text(name);
-    let written = node.write_toward(name, out.0, ANSWER_WAIT)?;
-    written.outcome.map(drop).map_err(Refusal::into_error)
+    out.0
+}
+
+/// How this node's copy of `file` reaches where the node it takes the file
+/// from stands now: it asks that node to make the file, which it holds, and
+/// waits for the point the answer names.
+pub(crate) fn catching_up(store: &Store, file: &str) -> crate::sqlite::CatchUp {
+    let (store, file) = (store.downgrade(), file.to_owned());
+    crate::sqlite::CatchUp(std::sync::Arc::new(move || {
+        let store = store.upgrade().ok_or_else(|| Error::closed(format!("{file}: the node's store")))?;
+        match pass_on_held(&store, &file, make_op(&file))? {
+            (_, true) => Ok(()),
+            (_, false) => Err(Error::new(ErrorKind::Unavailable, format!("{file}: the copy did not reach its home"))),
+        }
+    }))
 }
 
 /// The tag of the engine whose migrations' history is `history`, which a

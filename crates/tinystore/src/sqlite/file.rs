@@ -368,9 +368,21 @@ impl File {
 
     /// A copy's migrations are its home's: they arrive as pages, and the copy
     /// only checks that its home applied these steps.
+    ///
+    /// A step missing may be on its way: a copy lags its home, and one whole
+    /// from a snapshot read as the file was born lacks every step until the
+    /// home's first commit arrives. The copy then reaches where its home
+    /// stands now and checks again; a step still missing is the home's to run.
     fn check_its_home_migrated(&self, history: &str, migrations: &[Migration]) -> Result<()> {
-        self.read(|connection| migrate::check_applied_steps(connection, history, migrations))
-            .map_err(|error| error.within(self.describe()))
+        let check = || self.read(|connection| migrate::check_applied_steps(connection, history, migrations));
+        let checked = match (check(), &self.config.catch_up) {
+            (Err(missing), Some(catch_up)) if missing.kind() == ErrorKind::Unavailable => match (catch_up.0)() {
+                Ok(()) => check(),
+                Err(_) => Err(missing),
+            },
+            (checked, _) => checked,
+        };
+        checked.map_err(|error| error.within(self.describe()))
     }
 
     /// Applies migrations as `migrate` does, with foreign keys off while they

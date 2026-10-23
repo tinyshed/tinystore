@@ -29,6 +29,19 @@ pub(crate) struct Config {
     pub(crate) memory: Option<std::sync::Arc<crate::Memory>>,
     /// What the file tells of its commits, when the store measures itself.
     pub(crate) probe: Option<crate::probe::FileProbe>,
+    /// How the file, while a copy, reaches where its home stands now: what a
+    /// migration's check runs before it says a step has not arrived.
+    pub(crate) catch_up: Option<CatchUp>,
+}
+
+/// Brings a copy to where its home stands now, or fails saying why not.
+#[derive(Clone)]
+pub(crate) struct CatchUp(pub(crate) std::sync::Arc<dyn Fn() -> crate::Result<()> + Send + Sync>);
+
+impl fmt::Debug for CatchUp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CatchUp")
+    }
 }
 
 impl Default for Config {
@@ -46,6 +59,7 @@ impl Default for Config {
             keep_wal: false,
             memory: None,
             probe: None,
+            catch_up: None,
         }
     }
 }

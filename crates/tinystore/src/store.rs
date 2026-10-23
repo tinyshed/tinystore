@@ -331,6 +331,8 @@ impl Store {
         }
         #[cfg(feature = "replication")]
         if let Some(node) = &self.inner.node {
+            let config =
+                crate::sqlite::Config { catch_up: Some(crate::replication::catching_up(self, name)), ..config };
             // the route is chosen and the file opened on one side of a change of
             // the route: a takeover, a hand-over or a snapshot taken again
             let _opening = node.wait_to_open(name).map_err(|error| error.within(self.describe()))?;

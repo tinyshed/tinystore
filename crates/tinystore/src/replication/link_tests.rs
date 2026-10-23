@@ -1275,6 +1275,44 @@ fn a_file_a_home_makes_after_a_node_linked_reaches_the_node_with_no_wait_for_its
 }
 
 #[test]
+fn a_step_its_home_ran_after_the_copy_s_snapshot_reaches_the_copy_before_its_engine_opens() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address) = serving(home_dir.path());
+    // born at its home with no step run, the file is whole on the copy before any
+    home.database("fresh").open().unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let name = "sql/fresh.db";
+    eventually("the copy holds the file", || copy.node().unwrap().copy(name).is_some());
+    let early = copy.database("fresh").migrations(NOTES).open().unwrap_err();
+    assert_eq!(early.kind(), crate::ErrorKind::Unavailable, "a step its home has not run: {early}");
+
+    // the copy applies nothing while held here, so the home's step stays on its way
+    let held = copy.node().unwrap().copy(name).unwrap();
+    let ((holding, held_now), (release, released)) = (std::sync::mpsc::channel(), std::sync::mpsc::channel());
+    let applying = std::thread::spawn(move || {
+        held.holding(|_| {
+            holding.send(()).unwrap();
+            released.recv().unwrap();
+            Ok(())
+        })
+    });
+    held_now.recv().unwrap();
+    home.database("fresh").migrations(NOTES).open().unwrap();
+    let opening = {
+        let copy = copy.clone();
+        std::thread::spawn(move || copy.database("fresh").migrations(NOTES).open().map(drop))
+    };
+    // time for the open to find the step missing before the copy applies it
+    for_at_most(Duration::from_millis(500), || opening.is_finished());
+    release.send(()).unwrap();
+    applying.join().unwrap().unwrap();
+    let opened = opening.join().unwrap();
+    assert!(opened.is_ok(), "the open waits for the step its home ran: {}", opened.unwrap_err());
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
+#[test]
 fn a_copy_checked_against_its_home_is_its_home_page_for_page_and_a_page_changed_beside_it_is_found() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (home, address) = serving(home_dir.path());

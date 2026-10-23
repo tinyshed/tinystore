@@ -45,7 +45,7 @@ pub(crate) use forward::KV;
 pub(crate) use forward::SEARCH;
 #[cfg(feature = "sql")]
 pub(crate) use forward::SQL;
-pub(crate) use forward::{Lenders, database_file, database_of, enqueue, make_in, pass_on, queued, tag_of};
+pub(crate) use forward::{Lenders, catching_up, database_file, database_of, enqueue, make_in, pass_on, queued, tag_of};
 pub use handover::{Moved, move_home};
 pub use links::{Follower, Links, links};
 pub(crate) use log::Notify;
