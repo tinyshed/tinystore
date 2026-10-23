@@ -190,9 +190,12 @@ struct Loop {
 
 /// What one write of the loop claimed, and when the queue next needs a claim
 /// when it took fewer than it wanted.
+#[derive(Default)]
 struct ClaimResult {
     leases: Vec<Lease>,
     abandoned: Vec<i64>,
+    /// Of the abandoned, those failed for good.
+    failed: usize,
     full: bool,
     next: Option<i64>,
 }
@@ -346,7 +349,7 @@ impl Loop {
     /// write. A settlement whose lease another claim has taken is dropped.
     fn write(&mut self, now: i64, want: usize) -> Result<ClaimResult> {
         if self.pending.is_empty() && want == 0 {
-            return Ok(ClaimResult { leases: Vec::new(), abandoned: Vec::new(), full: false, next: None });
+            return Ok(ClaimResult::default());
         }
         let pending = self.pending.clone();
         let seen = pending.iter().any(|(_, how)| !matches!(how, How::Extend { .. }));
@@ -358,23 +361,20 @@ impl Loop {
                 settled.push(claim::settle(tx, &queue, lease, how, now)?);
             }
             if want == 0 {
-                return Ok((
-                    settled,
-                    ClaimResult { leases: Vec::new(), abandoned: Vec::new(), full: false, next: None },
-                ));
+                return Ok((settled, ClaimResult::default()));
             }
             let claiming = Claiming { queue: &queue, now, until, limit: want };
-            let Claimed { leases, abandoned, more } = claim::claim(tx, claiming)?;
+            let Claimed { leases, abandoned, failed, more } = claim::claim(tx, claiming)?;
             let full = leases.len() + abandoned.len() == want || more;
             let next = if full { None } else { claim::next_claim(tx, &claiming)? };
-            Ok((settled, ClaimResult { leases, abandoned, full, next }))
+            Ok((settled, ClaimResult { leases, abandoned, failed, full, next }))
         })?;
         self.settled(settled, now);
         self.jobs.measure_claims(&self.queue.name, &result.leases, now);
         if seen || !result.leases.is_empty() || !result.abandoned.is_empty() {
             self.queue.watchers.changed();
         }
-        for _ in &result.abandoned {
+        for _ in 0..result.failed {
             self.queue.failures.observe(&self.queue.name, "its attempts ended without a settlement");
         }
         Ok(result)

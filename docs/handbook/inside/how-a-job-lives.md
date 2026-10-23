@@ -99,7 +99,8 @@ over:
 
 Every attempt is counted when it is claimed, before the handler runs. A job
 whose handler crashes the process every time still reaches its `attempts`
-and fails for good, instead of taking the worker down on every restart.
+and fails for good, instead of taking the worker down on every restart. A
+job that repeats moves on to its next time instead, its error kept.
 
 ## Retries and their waits
 

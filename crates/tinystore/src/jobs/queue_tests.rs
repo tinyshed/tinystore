@@ -452,6 +452,30 @@ fn a_schedule_keeps_the_codes_repeat_each_time_it_opens() {
     assert_eq!(*runs.lock().unwrap(), [changed.at], "a run knows when it was due");
 }
 
+// contract: JOB-03
+#[test]
+fn a_schedule_whose_job_failed_for_good_starts_again_under_its_one_id() {
+    let mut f = fixture();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    // as v0.1.0 failed a schedule whose handler killed its process each attempt
+    let fail = "insert into _tinystore_jobs_failed (queue, id, key, at, attempt, failed, error, value, spill, grp)
+            select queue, id, key, at, attempt, 0, 'killed', value, spill, grp from _tinystore_jobs where key = 'nightly';
+        delete from _tinystore_jobs where key = 'nightly'";
+    let jobs = super::engine::Jobs::of(&f.store).unwrap();
+    let failed = |error| crate::sqlite::sql_error("a test", error);
+    jobs.file().transaction(|tx| tx.execute_batch(fail).map_err(failed)).unwrap();
+    assert_eq!(nightly.get().unwrap().unwrap().state, State::Failed);
+    drop((nightly, jobs));
+
+    f.reopen();
+    let nightly = f.store.schedule("nightly").every(HOUR).open().unwrap();
+    assert_eq!(nightly.get().unwrap().unwrap().state, State::Scheduled, "the schedule starts again");
+    let jobs = super::engine::Jobs::of(&f.store).unwrap();
+    let count = "select count(*) from _tinystore_jobs_failed";
+    let kept: i64 = jobs.file().read(|c| c.query_row(count, [], |row| row.get(0)).map_err(failed)).unwrap();
+    assert_eq!(kept, 0, "one job under the schedule's id, not a failed one beside it");
+}
+
 #[test]
 fn a_time_outside_the_years_a_job_keeps_is_refused() {
     let f = fixture();

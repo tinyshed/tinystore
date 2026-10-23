@@ -113,6 +113,26 @@ fn a_job_that_kills_its_process_fails_after_its_attempts() {
     assert!(failed.error.unwrap().contains("each of its 3 attempts ended without a settlement"));
 }
 
+// contract: JOB-07
+#[test]
+fn a_repeating_job_that_kills_its_process_each_attempt_goes_on_at_its_next_time() {
+    let mut f = fixture();
+    let open = |store: &crate::Store| store.queue::<Push>("digests").attempts(2).open().unwrap();
+    open(&f.store).id("nightly").every(HOUR).set(&Push { user: 1 }).unwrap();
+    f.clock.advance(HOUR);
+    for _ in 0..2 {
+        let claimed = open(&f.store).claim().unwrap().expect("the job is due again at once");
+        std::mem::forget(claimed); // the process dies with the job in hand
+        f.reopen();
+    }
+    let digests = open(&f.store);
+    assert!(digests.claim().unwrap().is_none(), "a third attempt is past its two, and its next run is later");
+    let job = digests.get("nightly").unwrap().unwrap();
+    assert_eq!((job.state, job.attempt), (State::Scheduled, 0), "the repeat goes on");
+    assert!(job.at > f.now());
+    assert!(job.error.unwrap().contains("each of its 2 attempts ended without a settlement"));
+}
+
 // contract: JOB-05
 #[test]
 fn a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing() {

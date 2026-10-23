@@ -189,6 +189,8 @@ where
 fn register(c: &Connection, queue: &QueueState, (now, next): (i64, i64), text: &str, value: &Kept) -> Result<()> {
     let key = queue.name.as_str();
     let Some(there) = rows::job_by_key(c, queue.id, key)? else {
+        // a job failed for good holds the id, as a set finds it: the schedule starts again in its place
+        rows::drop_failed(c, queue.id, key)?;
         rows::check_room(c, queue.id, queue.policy.max_waiting)?;
         let id = rows::next_id(c)?;
         let job = NewJob { queue: queue.id, id, key: Some(key), at: next, repeat: Some(text), group: None, value };

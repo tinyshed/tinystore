@@ -69,7 +69,8 @@ let cleanup = store.schedule("cleanup").cron("10 3 * * *", "Europe/Berlin").work
 - After a night down, it runs once when the program comes back, not once for
   every missed time.
 - A failed run retries with its backoff, never past the next time, and the
-  repeat goes on.
+  repeat goes on. So does a run whose handler killed its process on every
+  attempt: past its `attempts`, the next time starts with the error kept.
 - A schedule's handler gets the run alone; `run.at` is when the run was due,
   so "thirty days ago" counts from the night it belongs to even if it starts
   late.

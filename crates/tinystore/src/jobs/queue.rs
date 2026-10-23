@@ -367,7 +367,7 @@ where
                 .file()
                 .write(0, move |tx| claim::claim(tx, Claiming { queue: &queue, now, until, limit: 1 }))
                 .map_err(|error| self.fail(None, error))?;
-            for _ in &claimed.abandoned {
+            for _ in 0..claimed.failed {
                 self.state.failures.observe(&self.state.name, "its attempts ended without a settlement");
             }
             self.jobs.measure_claims(&self.state.name, &claimed.leases, now);
