@@ -157,7 +157,7 @@ impl State {
             effects.answer(reply, Err(Error::closed(ask.place.to_string())));
             return None;
         }
-        let reply = match self.ask_again(&ask, reply, effects) {
+        let reply = match self.ask_again(&ask, reply, now, mint, effects) {
             Ok(reply) => reply,
             Err(waits) => return waits,
         };
@@ -178,8 +178,26 @@ impl State {
     /// Answers a request asked before, by its id: the lease it holds, or its
     /// place in line, which this ask takes over, and whose waiter's id it
     /// gives as `ask` would. Gives the reply back when the request is new.
-    fn ask_again(&mut self, ask: &Ask, reply: Reply, effects: &mut Effects) -> Result<Reply, Option<u64>> {
-        let Some(asked) = ask.request.and_then(|request| self.requests.get(&request).copied()) else {
+    ///
+    /// A lease that ran out since is ended first, and the request is new:
+    /// answered with it, its holder would hold the key beside the next one
+    /// given it.
+    fn ask_again(
+        &mut self,
+        ask: &Ask,
+        reply: Reply,
+        now: i64,
+        mint: &Mint,
+        effects: &mut Effects,
+    ) -> Result<Reply, Option<u64>> {
+        let Some(request) = ask.request else { return Ok(reply) };
+        if let Some(Asked::Held(lease)) = self.requests.get(&request).copied()
+            && let Some(place) = self.leases.get(&lease).cloned()
+        {
+            self.settle(&place, now, mint, effects);
+            self.keep_or_forget(&place, effects);
+        }
+        let Some(asked) = self.requests.get(&request).copied() else {
             return Ok(reply);
         };
         match asked {

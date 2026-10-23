@@ -347,6 +347,28 @@ fn a_request_asked_again_answers_its_lease_or_takes_over_its_place_in_line() {
     granted(&taken_over);
 }
 
+// contract: LOCK-01
+// contract: LOCK-05
+#[cfg(feature = "wire")]
+#[test]
+fn a_request_asked_again_once_its_lease_ran_out_is_asked_afresh_and_the_key_is_held_once() {
+    let f = fixture();
+    let locks = locks(&f.store);
+    let request = Some([7; 16]);
+    let (_, answer) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, request));
+    let lease = granted(&answer);
+    // the answer was lost, and the client asks again after the ttl, nobody asking between
+    f.clock.advance(11 * SECOND);
+    let (_, again) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, request));
+    let again = granted(&again);
+    assert!(again.fence > lease.fence, "a lease of its own, not the one that ran out");
+    assert_eq!(lease.watch.ending(), Ending::Lost);
+    let (_, other) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, None));
+    let busy = other.recv_timeout(PATIENCE).unwrap().unwrap();
+    assert!(matches!(busy, Answer::Busy), "one holder at a time");
+    assert!(locks.release(&again.lease));
+}
+
 // contract: LOCK-06
 #[cfg(feature = "wire")]
 #[test]
