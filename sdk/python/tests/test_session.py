@@ -32,7 +32,7 @@ from tinystore.kv import Bucket, Parts, bucket_open
 from tinystore.sql import open_database
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 
 class Peer:
@@ -97,10 +97,14 @@ async def test_a_request_a_goaway_refused_stays_unsent_when_the_credit_comes_bac
 
 
 def scripted(script: Callable[[f.Header, bytes], list[bytes] | None], dialled: list[Session] | None = None) -> Link:
-    """A link to a server that answers by script, a turn after each write as a socket would.
+    """A link to a server that answers by script; each dial's session is added to dialled."""
+    return Link(scripted_dial(script, dialled))
 
-    Each dial is a connection of its own, its session added to dialled.
-    """
+
+def scripted_dial(
+    script: Callable[[f.Header, bytes], list[bytes] | None], dialled: list[Session] | None = None
+) -> Callable[[], Awaitable[Connection]]:
+    """Dials a server that answers by script, a turn after each write as a socket would, a connection each dial."""
     welcome = Welcome.encode(
         protocol=1,
         server="script/0",
@@ -142,7 +146,7 @@ def scripted(script: Callable[[f.Header, bytes], list[bytes] | None], dialled: l
         await connection.handshake()
         return connection
 
-    return Link(dial)
+    return dial
 
 
 def committing(h: f.Header, body: bytes) -> list[bytes] | None:
@@ -209,3 +213,30 @@ async def test_a_write_whose_handles_open_lost_the_connection_goes_again_on_the_
     await sessions.set("k", "v")
     assert len(dialled) == 2
     assert len(sets) == 1
+
+
+async def test_a_call_cancelled_while_a_dial_runs_leaves_the_dial_to_the_next_call_and_to_close() -> None:
+    dials = 0
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    dial = scripted_dial(lambda h, body: [])
+
+    async def slow() -> Connection:
+        nonlocal dials
+        dials += 1
+        started.set()
+        await finish.wait()
+        return await dial()
+
+    link = Link(slow)
+    given_up = asyncio.ensure_future(link.connection())
+    await started.wait()
+    given_up.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await given_up
+    waiting = asyncio.ensure_future(link.connection())
+    finish.set()
+    connection = await waiting
+    assert dials == 1
+    await link.close()
+    assert connection.session.ended is not None

@@ -491,12 +491,15 @@ class Link:
         # waits for the one new one
         dialled = asyncio.ensure_future(self._dialer())
         self._current = dialled
-        try:
-            return await asyncio.shield(dialled)
-        except BaseException:
-            if self._current is dialled:
-                self._current = None
-            raise
+        dialled.add_done_callback(self._forget_failed)
+        return await asyncio.shield(dialled)
+
+    def _forget_failed(self, dialled: asyncio.Future[Connection]) -> None:
+        # Only a dial that failed is forgotten, so that the next call dials
+        # again. One whose caller was cancelled goes on, and its connection is
+        # the next call's and close's: forgotten, nothing would close it.
+        if (dialled.cancelled() or dialled.exception() is not None) and self._current is dialled:
+            self._current = None
 
     async def run[T](self, idempotence: Idempotence, attempt: Callable[[Connection], Awaitable[T]]) -> T:
         """Runs a call on the link's connection, going again as its idempotence lets it."""
