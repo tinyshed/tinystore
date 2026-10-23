@@ -38,8 +38,9 @@ struct Pool {
     /// comes back wakes the first only when there is one: a wake is a system
     /// call, and it was one a read.
     waiting: VecDeque<Waiter>,
-    /// Readers given to a waiting read, by its ticket, until it wakes to take them.
-    handed: Vec<(u64, Connection)>,
+    /// Readers given to a waiting read, with its place in line, until it
+    /// wakes to take them.
+    handed: Vec<(Waiter, Connection)>,
     tickets: u64,
     /// When a reader that comes back next goes to the longest waiting read.
     fair_from: Option<Instant>,
@@ -108,7 +109,8 @@ impl Readers {
             let idle = std::mem::take(&mut pool.idle);
             let handed = std::mem::take(&mut pool.handed);
             pool.open -= idle.len() + handed.len();
-            let waiting: Vec<Thread> = pool.waiting.iter().map(|waiter| waiter.thread.clone()).collect();
+            let given = handed.iter().map(|(waiter, _)| waiter);
+            let waiting: Vec<Thread> = pool.waiting.iter().chain(given).map(|waiter| waiter.thread.clone()).collect();
             (idle, handed, waiting)
         };
         drop((idle, handed));
@@ -124,6 +126,10 @@ impl Readers {
     /// back, and holds new reads waiting until `resume`: a copy's file is then
     /// open nowhere, and a snapshot can take its place. A read still under way
     /// after `at_most` fails the pause, and the readers go on.
+    ///
+    /// A reader given to a read that has not woken to take it yet closes too,
+    /// and that read goes back to the front of the line, where `resume` wakes
+    /// it: out of the line, it would sleep out its whole patience.
     #[cfg(feature = "replication")]
     pub(crate) fn pause(&self, at_most: std::time::Duration) -> Result<()> {
         let (idle, handed) = {
@@ -132,7 +138,12 @@ impl Readers {
             let idle = std::mem::take(&mut pool.idle);
             let handed = std::mem::take(&mut pool.handed);
             pool.open -= idle.len() + handed.len();
-            (idle, handed)
+            let mut taken = Vec::with_capacity(handed.len());
+            for (waiter, connection) in handed.into_iter().rev() {
+                pool.waiting.push_front(waiter);
+                taken.push(connection);
+            }
+            (idle, taken)
         };
         drop((idle, handed));
         let deadline = Instant::now() + at_most;
@@ -261,8 +272,9 @@ impl Pool {
         let due = self.fair_from.is_none_or(|from| now >= from);
         if due && let Some(oldest) = self.waiting.pop_front() {
             self.fair_from = Some(now + FAIR_EVERY);
-            self.handed.push((oldest.ticket, connection));
-            return Some(oldest.thread);
+            let thread = oldest.thread.clone();
+            self.handed.push((oldest, connection));
+            return Some(thread);
         }
         self.idle.push(Idle { connection, since: now });
         self.waiting.front().map(|waiter| waiter.thread.clone())
@@ -287,7 +299,7 @@ impl Pool {
     }
 
     fn handed_to(&mut self, ticket: u64) -> Option<Connection> {
-        let at = self.handed.iter().position(|(to, _)| *to == ticket)?;
+        let at = self.handed.iter().position(|(to, _)| to.ticket == ticket)?;
         Some(self.handed.swap_remove(at).1)
     }
 }
@@ -346,3 +358,7 @@ fn interruptible<T>(connection: &Connection, read: impl FnOnce(&Connection) -> R
     cancel::check(|| "a read".to_owned())?;
     read(connection)
 }
+
+#[cfg(test)]
+#[path = "readers_tests.rs"]
+mod tests;
