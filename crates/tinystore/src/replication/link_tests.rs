@@ -1907,6 +1907,41 @@ fn a_cut_between_a_home_and_its_witness_never_leaves_two_homes_taking_writes() {
     witness.close().unwrap();
 }
 
+// A transaction checks the lease as it begins, and its code may run past it:
+// the witness may give the file to a copy meanwhile.
+// contract: REPL-08
+#[test]
+fn a_judged_home_s_transaction_that_outlasts_its_lease_commits_nothing() {
+    let dirs: Vec<_> = (0..2).map(|_| tempfile::tempdir().unwrap()).collect();
+    let witness =
+        node_with(dirs[0].path(), Node { serve: Some("127.0.0.1:0".into()), witness: true, ..Node::default() });
+    let judge = Some(bound(witness.node().unwrap()).unwrap().to_string());
+    let home =
+        node_with(dirs[1].path(), Node { serve: Some("127.0.0.1:0".into()), failover: judge, ..Node::default() });
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    eventually("the home writes once its witness leased it the file", || {
+        sessions.set("first", &"leased".to_owned()).is_ok()
+    });
+    let home_id = home.node().unwrap().id.clone();
+    let judging = witness.node().unwrap().witness.as_ref().unwrap();
+    let outlasted = home.tx(|tx| {
+        tx.with(&sessions).set("inside", &"a long transaction".to_owned())?;
+        judging.cut(&home_id);
+        // past the lease the home holds by its own clock, renewed no more
+        std::thread::sleep(super::witness::TTL);
+        Ok::<_, crate::Error>(())
+    });
+    assert_eq!(outlasted.unwrap_err().kind(), crate::ErrorKind::Unavailable);
+    judging.heal(&home_id);
+    eventually("the home writes again once it renewed its lease", || {
+        sessions.set("after", &"the heal".to_owned()).is_ok()
+    });
+    assert_eq!(sessions.get("inside").unwrap(), None, "the transaction committed nothing");
+    drop(sessions);
+    home.close().unwrap();
+    witness.close().unwrap();
+}
+
 // contract: REPL-08
 #[test]
 fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_born_on_it() {

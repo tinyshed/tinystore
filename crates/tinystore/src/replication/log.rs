@@ -794,6 +794,26 @@ impl Observe for Log {
 
     fn refuse(&self) -> Result<()> {
         self.wait_for_a_lease()?;
+        self.refuse_when_fenced()
+    }
+
+    fn refuse_commit(&self) -> Result<()> {
+        let lease = *self.lease.lock().unwrap_or_else(PoisonError::into_inner);
+        if lease.is_some_and(|until| Instant::now() >= until) {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                "this node's lease of this file from its witness ran out while the transaction ran: it commits \
+                 nothing, and the file takes writes again once the lease is renewed",
+            ));
+        }
+        self.refuse_when_fenced()
+    }
+}
+
+impl Log {
+    /// Refuses a write once this node learned another writes the file at a
+    /// later epoch.
+    fn refuse_when_fenced(&self) -> Result<()> {
         let epoch = self.fenced.load(Ordering::SeqCst);
         if epoch == 0 {
             return Ok(());

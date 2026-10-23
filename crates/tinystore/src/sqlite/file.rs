@@ -298,6 +298,10 @@ impl File {
     /// the probe.
     fn commit(&self, connection: &Connection, waited: Option<Duration>) -> Result<()> {
         let capture = logged(&self.capture);
+        if let Some(Err(refused)) = capture.as_deref().map(Capture::refuse_a_commit) {
+            let _ = execute(connection, ROLLBACK);
+            return Err(refused.within(self.describe()));
+        }
         match &capture {
             Some(capture) => capture.arm(!super::capture::is_own_work()),
             None => self.checkpoints.arm(),

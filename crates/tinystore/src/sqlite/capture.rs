@@ -143,6 +143,12 @@ pub(crate) trait Observe: Send + Sync {
     fn refuse(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Refuses a transaction's commit, waiting for nothing: what allowed it
+    /// as it began may have ended while its code ran.
+    fn refuse_commit(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// What hands a file's commits to its log, shared by the file and its
@@ -220,6 +226,11 @@ impl Capture {
             ));
         }
         self.observer.refuse()
+    }
+
+    /// Refuses a transaction's commit the observer no longer allows.
+    pub(crate) fn refuse_a_commit(&self) -> Result<()> {
+        self.observer.refuse_commit()
     }
 
     /// Readies the hook for a commit this thread is about to make, which
