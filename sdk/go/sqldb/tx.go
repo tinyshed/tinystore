@@ -198,7 +198,10 @@ func (tx *Tx) send(ctx context.Context, call wire.SqlTxCall) (wire.SqlTxAnswer, 
 	return answer, nil
 }
 
-// end sends the last call, commit or roll back, and waits for the store's word.
+// end sends the last call, commit or roll back, and waits for the store's
+// word. A commit that left and was not answered, its connection lost or its
+// ctx done, may have committed: its outcome is unknown. One lost before it
+// left was rolled back by the store, and is the loss itself.
 func (tx *Tx) end(ctx context.Context, commit bool) error {
 	tx.turn.Lock()
 	defer tx.turn.Unlock()
@@ -210,5 +213,9 @@ func (tx *Tx) end(ctx context.Context, commit bool) error {
 		return err
 	}
 	_, err := tx.stream.Next(ctx)
+	if lost, _ := core.IsConnectionLost(err); commit && (lost || ctx.Err() != nil) {
+		return core.Wrap(core.OutcomeUnknown, err,
+			"%s: the transaction's commit left with no answer; read what it wrote before running it again", tx.db.describe)
+	}
 	return err
 }

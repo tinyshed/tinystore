@@ -254,6 +254,12 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
   `invalid`, the commit fails too, and nothing of the transaction is written.
 - It runs once. TinyStore never runs it again on a conflict, because a
   function that called a payment API would charge twice.
+- A connection lost after the commit has left fails `outcome unknown`: the
+  transaction may have committed, so read what it wrote before you run it
+  again. A connection lost before the commit leaves fails `closed`, and the
+  server rolls the transaction back (contract WIRE-06). If a Go `ctx`, or a
+  signal in Bun and Node, ends while the commit waits for its answer, that
+  is `outcome unknown` too.
 - It holds the writer: every other write to this file waits. Past five
   seconds it is rolled back and fails `limit`. Call nothing that waits on the
   world inside it, no model, no HTTP.

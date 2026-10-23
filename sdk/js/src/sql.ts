@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { type Channel, channelParts, type TxChannel, txChannel } from './channels.ts'
 import type { Connection, Durability, Idempotence, Link } from './connection.ts'
 import { checkDurability, download } from './connection.ts'
-import { errorOf, InvalidError } from './errors.ts'
+import { CancelledError, errorOf, InvalidError, OutcomeUnknownError } from './errors.ts'
 import {
 	askByCall,
 	checkName,
@@ -36,7 +36,7 @@ import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf 
 import { Table, type TableOptions } from './query.ts'
 import type { StandardSchemaV1 } from './schema.ts'
 import { TableIndex, type TableIndexOptions, tableIndexOpen } from './search.ts'
-import type { Stream } from './session.ts'
+import { ConnectionLostError, type Stream } from './session.ts'
 import type { SqlArg, SqlValue } from './wire/codec.ts'
 import { int64Of } from './wire/msgpack.ts'
 import {
@@ -1114,11 +1114,25 @@ export class SqlTx implements Runner {
 		}
 	}
 
-	/** Sends the last call: commit, or roll back, and waits for the server's word. */
+	/**
+	 * Sends the last call: commit, or roll back, and waits for the server's
+	 * word. A commit that left and was not answered, its connection lost or
+	 * its wait cancelled, may have committed: its outcome is unknown. One lost
+	 * before it left was rolled back by the server, and is the loss itself.
+	 */
 	async end(commit: boolean): Promise<void> {
 		await this.#last.catch(() => {})
 		await this.#stream.send(SqlTxCall.encode({ commit }), true)
-		await this.#stream.next()
+		try {
+			await this.#stream.next()
+		} catch (err) {
+			if (commit && (err instanceof ConnectionLostError || err instanceof CancelledError)) {
+				throw new OutcomeUnknownError(
+					`${this.describe}: the transaction's commit left with no answer; read what it wrote before running it again: ${err.message}`,
+				)
+			}
+			throw err
+		}
 	}
 
 	/**

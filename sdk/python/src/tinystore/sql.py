@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, overload
 from ._connection import Durability, check_durability, check_name, download
 from ._handles import Opener, Via, handle_on, via_link
 from ._rows import SqlArg, SqlValue, cell_of, check_columns, named_values, reader, row_of, value_reader
+from ._session import ConnectionLostError
 from ._values import to_json, values_of
 from ._wire.protocol import (
     SqlBatch,
@@ -43,7 +44,7 @@ from ._wire.protocol import (
     methods,
 )
 from .channels import Channel, TxChannel
-from .errors import InvalidError, error_of
+from .errors import InvalidError, OutcomeUnknownError, error_of
 from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .search import Fields, Hybrid, TableIndex, Vectors, drop_index, index_open
@@ -1175,10 +1176,23 @@ class SqlTx:
         return None
 
     async def end(self, commit: bool) -> None:
-        """Sends the last call, commit or roll back, and waits for the store's word."""
+        """Sends the last call, commit or roll back, and waits for the store's word.
+
+        A commit that left and lost its connection before the answer may have
+        committed: its outcome is unknown. One lost before it left was rolled
+        back by the store, and is the loss itself.
+        """
         async with self._turn:
             await self._stream.send(SqlTxCall.encode(commit=commit), True)
-            await self._stream.next()
+            try:
+                await self._stream.next()
+            except ConnectionLostError as err:
+                if not commit:
+                    raise
+                raise OutcomeUnknownError(
+                    f"{self.describe}: the transaction's commit left with no answer; "
+                    f"read what it wrote before running it again: {err}"
+                ) from err
 
     def _takes(self, home: Any, opener: Opener, what: str) -> None:
         """Refuses a handle kept elsewhere, and one made after the transaction began.

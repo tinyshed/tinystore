@@ -9,20 +9,27 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
+import { Connection, Link } from '../src/connection.ts'
 import {
 	CancelledError,
+	ClosedError,
 	ConflictError,
 	type Constraint,
 	type Database,
 	InvalidError,
 	LimitError,
 	limits,
+	OutcomeUnknownError,
 	type Query,
 	type SqlTx,
 	type Store,
 	sql,
 	withSignal,
 } from '../src/index.ts'
+import { Session } from '../src/session.ts'
+import { openDatabase } from '../src/sql.ts'
+import { Flag, frame, headerSize, Kind, parseHeader } from '../src/wire/frame.ts'
+import { Empty, Handle, methods, SqlTxAnswer, SqlTxCall, Welcome } from '../src/wire/protocol.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 const NOTES = `create table notes (
@@ -816,3 +823,138 @@ for (const way of ways) {
 		})
 	})
 }
+
+/** A frame the client sent: its header and its body. */
+interface Sent {
+	kind: number
+	method: number
+	stream: number
+	body: Uint8Array
+}
+
+/**
+ * A link to a server that answers by a script, a turn after each write as a
+ * socket would: the frames it answers a REQUEST or a DATA with, or the
+ * connection's end there. The session is handed to `dialled`.
+ */
+function scripted(script: (sent: Sent) => Uint8Array[] | 'end', dialled: (s: Session) => void) {
+	const welcome = Welcome.encode({
+		protocol: 1,
+		server: 'script/0',
+		instance: new Uint8Array(16),
+		capability: 'admin',
+		maxBody: 1 << 20,
+		inFlight: 64,
+		connectionCredit: 1 << 20,
+		streamCredit: 1 << 20,
+		engines: ['sql'],
+		now: 0,
+	})
+	return new Link(async () => {
+		let session: Session | undefined
+		const answer = (bytes: Uint8Array) => {
+			for (let at = 0; at < bytes.length; ) {
+				const h = parseHeader(bytes, at)
+				const body = bytes.slice(at + headerSize, at + headerSize + h.length)
+				at += headerSize + h.length
+				if (h.kind === Kind.hello) {
+					session?.receive(frame(Kind.welcome, 0, 0, 0, welcome))
+				}
+				if (h.kind !== Kind.request && h.kind !== Kind.data) {
+					continue
+				}
+				const answered = script({ kind: h.kind, method: h.method, stream: h.stream, body })
+				if (answered === 'end') {
+					session?.end(new Error('the script ended the connection'))
+					return
+				}
+				for (const f of answered) {
+					session?.receive(f)
+				}
+			}
+		}
+		const transport = {
+			write: (bytes: Uint8Array) => queueMicrotask(() => answer(bytes)),
+			close: () => {},
+		}
+		session = new Session(bytes => transport.write(bytes), { client: 'test/0' })
+		dialled(session)
+		return Connection.overPipe(session, transport)
+	})
+}
+
+describe('a transaction whose connection is lost', () => {
+	// opens the database, begins the transaction, answers each statement, and
+	// ends the connection at the commit
+	const committing = (sent: Sent): Uint8Array[] | 'end' => {
+		if (sent.method === methods['sql.open']) {
+			return [frame(Kind.response, Flag.end, 0, sent.stream, Handle.encode({ handle: 1 }))]
+		}
+		if (sent.method === methods['sql.tx']) {
+			return [frame(Kind.response, 0, 0, sent.stream, Empty.encode({}))]
+		}
+		if (SqlTxCall.decode(sent.body).commit === true) {
+			return 'end'
+		}
+		const done = SqlTxAnswer.encode({ done: { changes: 1 } })
+		return [frame(Kind.data, 0, 0, sent.stream, done)]
+	}
+
+	// contract: WIRE-05
+	test('once its commit left, its outcome is unknown', async () => {
+		const db = await openDatabase(
+			scripted(committing, () => {}),
+			new Set(),
+			'app',
+		)
+		const failed = await caught(
+			db.tx(async tx => {
+				await tx.exec`update items set stock = stock - 1 where sku = 'a'`
+			}),
+		)
+		expect(failed).toBeInstanceOf(OutcomeUnknownError)
+		expect((failed as Error).message).toContain('sql app')
+	})
+
+	// contract: WIRE-05
+	test('once its commit left, a signal that ends its wait leaves its outcome unknown', async () => {
+		const controller = new AbortController()
+		const db = await openDatabase(
+			scripted(
+				sent => {
+					if (sent.kind === Kind.data && SqlTxCall.decode(sent.body).commit === true) {
+						// the commit has left, and the program gives up waiting for its answer
+						controller.abort()
+						return []
+					}
+					return committing(sent)
+				},
+				() => {},
+			),
+			new Set(),
+			'app',
+		)
+		const failed = await caught(withSignal(controller.signal, () => db.tx(async () => {})))
+		expect(failed).toBeInstanceOf(OutcomeUnknownError)
+	})
+
+	// contract: WIRE-06
+	test('before its commit left, it is closed, since the server rolls it back', async () => {
+		let session: Session | undefined
+		const db = await openDatabase(
+			scripted(committing, dialled => {
+				session = dialled
+			}),
+			new Set(),
+			'app',
+		)
+		const failed = await caught(
+			db.tx(async tx => {
+				await tx.exec`update items set stock = stock - 1 where sku = 'a'`
+				session?.end(new Error('reset'))
+			}),
+		)
+		expect(failed).toBeInstanceOf(ClosedError)
+		expect(failed).not.toBeInstanceOf(OutcomeUnknownError)
+	})
+})
