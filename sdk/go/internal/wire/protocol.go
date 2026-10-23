@@ -7027,7 +7027,7 @@ func (m MetricsPlan) IsZero() bool {
 
 // MetricsExceeds is the schema's metrics.Exceeds.
 type MetricsExceeds struct {
-	// series, bytes read or samples decoded
+	// series, bytes read, samples decoded or answer
 	Limit  string `wire:"1,limit"`
 	Wanted uint64 `wire:"2,wanted"`
 	Bound  uint64 `wire:"3,bound"`

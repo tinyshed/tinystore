@@ -207,7 +207,7 @@ DescriptionOf is a name's unit and help.
 
 ```go
 type Exceeds struct {
-	// Limit is series, bytes read or samples decoded.
+	// Limit is series, bytes read, samples decoded or answer.
 	Limit         string
 	Wanted, Bound int64
 }

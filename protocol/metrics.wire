@@ -96,7 +96,7 @@ message metrics.Plan {
 }
 
 message metrics.Exceeds {
-  1 limit: str          # series, bytes read or samples decoded
+  1 limit: str          # series, bytes read, samples decoded or answer
   2 wanted: uint
   3 bound: uint
 }

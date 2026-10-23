@@ -6440,7 +6440,7 @@ export const MetricsAggregates = message(
 export const MetricsExceeds = message(
 	'metrics.Exceeds',
 	{
-		/** series, bytes read or samples decoded */
+		/** series, bytes read, samples decoded or answer */
 		limit: [1, str],
 		wanted: [2, uint],
 		bound: [3, uint],

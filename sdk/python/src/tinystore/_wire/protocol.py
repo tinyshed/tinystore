@@ -5296,7 +5296,7 @@ def _read_metrics_exceeds(r: Reader) -> dict[str, Any]:
 MetricsExceeds = Message(
     "metrics.Exceeds",
     {
-        # series, bytes read or samples decoded
+        # series, bytes read, samples decoded or answer
         "limit": (1, str_),
         "wanted": (2, uint),
         "bound": (3, uint),

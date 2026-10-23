@@ -214,7 +214,7 @@ class Point:
 @dataclass(frozen=True, slots=True)
 class Exceeds:
     limit: str
-    """series, bytes read or samples decoded"""
+    """series, bytes read, samples decoded or answer"""
     wanted: int
     bound: int
 

@@ -200,6 +200,7 @@ interface Plan {
     bytes: number
     decoded: number
     exceeds: {
+        /** series, bytes read, samples decoded or answer */
         limit: string
         wanted: number
         bound: number

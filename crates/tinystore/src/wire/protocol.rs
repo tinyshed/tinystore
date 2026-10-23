@@ -6068,7 +6068,7 @@ impl Message for MetricsPlan {
 #[cfg(feature = "metrics")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MetricsExceeds {
-    /// Series, bytes read or samples decoded.
+    /// Series, bytes read, samples decoded or answer.
     pub(crate) limit: String,
     pub(crate) wanted: u64,
     pub(crate) bound: u64,

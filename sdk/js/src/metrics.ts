@@ -217,7 +217,14 @@ export interface Plan {
 	series: number
 	bytes: number
 	decoded: number
-	exceeds: { limit: string; wanted: number; bound: number } | undefined
+	exceeds:
+		| {
+				/** series, bytes read, samples decoded or answer */
+				limit: string
+				wanted: number
+				bound: number
+		  }
+		| undefined
 }
 
 /** A page's options: a prefix, how many, and where the page before ended. */
