@@ -37,7 +37,7 @@ quick:
 # run every crate's tests
 test:
     cargo test --workspace --locked
-    cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked
+    cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport
 
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
 # console alone, the wire alone and every engine without the wire; CI lints on each platform, since cfg
@@ -142,7 +142,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels sql,search wire,search kv,replication kv,replication,replication-tls kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked && cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked'
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels sql,search wire,search kv,replication kv,replication,replication-tls kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked && cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport'
 
 # lint the GitHub workflows
 lint-actions:

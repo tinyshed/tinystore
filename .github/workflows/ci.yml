@@ -65,7 +65,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Test nodes linked through TLS
-        run: cargo test -p tinystore --lib --locked --features replication-tls replication::link_tests::nodes_linked
+        run: cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport
 
   # every SDK over the core built for release, a private child, a sidecar and a
   # remote server

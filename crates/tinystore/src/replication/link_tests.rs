@@ -862,20 +862,37 @@ fn once_on_two_copies_runs_a_key_s_function_once_across_the_nodes() {
     home.close().unwrap();
 }
 
+/// A self-signed certificate for `localhost` and its key, written in `dir`.
+#[cfg(feature = "replication-tls")]
+fn certified(dir: &Path, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    let (cert, key) = (dir.join(format!("{name}.pem")), dir.join(format!("{name}.key")));
+    std::fs::write(&cert, certified.cert.pem()).unwrap();
+    std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
+    (cert, key)
+}
+
+/// Bytes a link's stream packs to nearly their own size, as an encrypted
+/// value's: each of 90 printable characters, from a xorshift.
+#[cfg(feature = "replication-tls")]
+fn incompressible(seed: u64, len: usize) -> String {
+    let mut state = seed | 1;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        char::from(b'!' + (state % 90) as u8)
+    };
+    (0..len).map(|_| next()).collect()
+}
+
 #[cfg(feature = "replication-tls")]
 #[test]
 fn nodes_linked_through_tls_copy_and_pass_writes_on_and_a_stranger_s_certificate_links_none() {
     let (home_dir, copy_dir, certs) =
         (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let write_pair = |name: &str| {
-        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
-        let (cert, key) = (certs.path().join(format!("{name}.pem")), certs.path().join(format!("{name}.key")));
-        std::fs::write(&cert, certified.cert.pem()).unwrap();
-        std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
-        (cert, key)
-    };
-    let (cert, key) = write_pair("home");
-    let (stranger, _) = write_pair("stranger");
+    let (cert, key) = certified(certs.path(), "home");
+    let (stranger, _) = certified(certs.path(), "stranger");
     let tls = NodeTls { cert: Some(cert.clone()), key: Some(key), roots: None };
     let home =
         node_with(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), tls: Some(tls), ..Node::default() });
@@ -897,6 +914,43 @@ fn nodes_linked_through_tls_copy_and_pass_writes_on_and_a_stranger_s_certificate
     std::thread::sleep(Duration::from_secs(1));
     assert!(copy_point(&other, "kv.db").is_none(), "a certificate it does not trust links nothing");
     other.close().unwrap();
+    home.close().unwrap();
+}
+
+// A message packs to more than TLS buffers, 64 KiB, and a read of the socket
+// may finish one record and begin the next: each crosses whole.
+#[cfg(feature = "replication-tls")]
+#[test]
+fn nodes_linked_through_tls_carry_a_snapshot_a_file_and_a_write_of_mebibytes() {
+    let (home_dir, copy_dir, certs) =
+        (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (cert, key) = certified(certs.path(), "home");
+    let tls = NodeTls { cert: Some(cert.clone()), key: Some(key), roots: None };
+    let home =
+        node_with(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), tls: Some(tls), ..Node::default() });
+    let port = bound(home.node().unwrap()).unwrap().port();
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    for i in 0..48 {
+        sessions.set(format!("{i}"), &incompressible(i, 96 << 10)).unwrap();
+    }
+    let film: Vec<u8> = incompressible(99, 3 << 20).into_bytes();
+    home.files("docs").open().unwrap().put("film.bin", &film).unwrap();
+
+    let trusting = NodeTls { roots: Some(cert), ..NodeTls::default() };
+    let from = vec![format!("localhost:{port}")];
+    let copy = node_with(copy_dir.path(), Node { from, tls: Some(trusting), ..Node::default() });
+    let copied = copy.bucket::<String>("sessions").open().unwrap();
+    assert!(copied.get("47").unwrap() == Some(incompressible(47, 96 << 10)), "the snapshot came whole");
+    let files = copy.files("docs").open().unwrap();
+    eventually("the film's bytes reach the copy", || {
+        files.get("film.bin").ok().flatten().and_then(|mut file| file.read_all().ok()).is_some()
+    });
+    assert!(files.get("film.bin").unwrap().unwrap().read_all().unwrap() == film, "byte for byte");
+    sessions.set("after", &incompressible(7, 512 << 10)).unwrap();
+    eventually("an entry of half a mebibyte reaches the copy", || copied.get("after").is_ok_and(|got| got.is_some()));
+    copied.set("back", &incompressible(8, 512 << 10)).unwrap();
+    assert!(sessions.get("back").unwrap() == Some(incompressible(8, 512 << 10)), "a write passed home whole");
+    copy.close().unwrap();
     home.close().unwrap();
 }
 

@@ -33,6 +33,9 @@ pub(crate) struct Reading {
     #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "plain TCP answers nothing by itself"))]
     answers: TcpStream,
     session: Session,
+    /// What was read of the socket and not given to TLS yet.
+    #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "plain TCP keeps nothing back"))]
+    unread: Vec<u8>,
 }
 
 /// The end of a link its threads write, one at a time.
@@ -115,7 +118,7 @@ fn ends(tcp: TcpStream, tls: Option<()>) -> Result<(Reading, Writing)> {
 
 fn split(tcp: TcpStream, session: Session) -> Result<(Reading, Writing)> {
     let clone = || tcp.try_clone().map_err(|error| Error::io("a link", error));
-    let reading = Reading { tcp: clone()?, answers: clone()?, session: session.clone() };
+    let reading = Reading { tcp: clone()?, answers: clone()?, session: session.clone(), unread: Vec::new() };
     Ok((reading, Writing { tcp, session }))
 }
 
@@ -137,17 +140,29 @@ impl Read for Reading {
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                     Err(error) => return Err(error),
                 }
-                let mut raw = [0; 16 << 10];
-                let read = self.tcp.read(&mut raw)?;
-                if read == 0 {
-                    return Ok(0);
+                if self.unread.is_empty() {
+                    let mut raw = [0; 16 << 10];
+                    let read = self.tcp.read(&mut raw)?;
+                    if read == 0 {
+                        return Ok(0);
+                    }
+                    self.unread.extend_from_slice(&raw[..read]);
                 }
+                // Fed only until a record's plaintext is ready, the rest kept for
+                // the next turn: rustls refuses bytes while more than 16 KiB of
+                // plaintext waits unread, and one read may finish two records.
                 let mut connection = lock(tls);
-                let mut rest = &raw[..read];
+                let mut rest = &self.unread[..];
+                let mut closed = false;
                 while !rest.is_empty() {
-                    connection.read_tls(&mut rest)?;
-                    connection.process_new_packets().map_err(io::Error::other)?;
+                    closed = connection.read_tls(&mut rest)? == 0;
+                    let ready = connection.process_new_packets().map_err(io::Error::other)?.plaintext_bytes_to_read();
+                    if closed || ready > 0 {
+                        break;
+                    }
                 }
+                let fed = if closed { self.unread.len() } else { self.unread.len() - rest.len() };
+                self.unread.drain(..fed);
                 while connection.wants_write() {
                     connection.write_tls(&mut self.answers)?;
                 }
@@ -165,12 +180,21 @@ impl Writing {
     pub(crate) fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         match &self.session {
             Session::Plain => self.tcp.write_all(bytes),
+            // rustls takes at most 64 KiB until what it holds is written, so a
+            // message goes a piece at a time, each written before the next
             #[cfg(feature = "replication-tls")]
             Session::Tls(tls) => {
-                let mut connection = lock(tls);
-                connection.writer().write_all(bytes)?;
-                while connection.wants_write() {
-                    connection.write_tls(&mut self.tcp)?;
+                let mut rest = bytes;
+                while !rest.is_empty() {
+                    let mut connection = lock(tls);
+                    let taken = connection.writer().write(rest)?;
+                    while connection.wants_write() {
+                        connection.write_tls(&mut self.tcp)?;
+                    }
+                    if taken == 0 {
+                        return Err(io::Error::new(io::ErrorKind::WriteZero, "a link's TLS took none of a message"));
+                    }
+                    rest = &rest[taken..];
                 }
                 Ok(())
             }
@@ -263,4 +287,54 @@ fn client_config(roots: &std::path::Path) -> Result<rustls::ClientConfig> {
 #[cfg(feature = "replication-tls")]
 fn tls_error(error: rustls::Error) -> Error {
     Error::invalid(format!("a link's TLS: {error}"))
+}
+
+#[cfg(all(test, feature = "replication-tls"))]
+mod tests {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::{client_config, ends, server_config};
+
+    // A message a byte past a TLS record's 16 KiB is a full record and a short
+    // one: a read of the socket that ends past a short one holds more
+    // plaintext than rustls takes before it is read.
+    #[test]
+    fn a_tls_link_reads_messages_whose_records_end_anywhere_in_a_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let (cert, key) = (dir.path().join("cert.pem"), dir.path().join("key.pem"));
+        std::fs::write(&cert, certified.cert.pem()).unwrap();
+        std::fs::write(&key, certified.signing_key.serialize_pem()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let message: Vec<u8> = (0..(16 << 10) + 100).map(|i| (i % 251) as u8).collect();
+        let (sent, count) = (message.clone(), 64);
+        let server = std::thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            let connection = rustls::ServerConnection::new(Arc::new(server_config(&cert, &key).unwrap())).unwrap();
+            let (_reading, mut writing) = ends(tcp, Some(rustls::Connection::Server(connection))).unwrap();
+            for _ in 0..count {
+                writing.write_all(&sent).unwrap();
+            }
+        });
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let roots = Arc::new(client_config(&dir.path().join("cert.pem")).unwrap());
+        let connection = rustls::ClientConnection::new(roots, name).unwrap();
+        let (mut reading, _writing) =
+            ends(TcpStream::connect(address).unwrap(), Some(rustls::Connection::Client(connection))).unwrap();
+        let mut got = Vec::new();
+        let mut buffer = vec![0; 64 << 10];
+        while got.len() < message.len() * count {
+            // the sender runs ahead, so that each read of the socket is a full one
+            std::thread::sleep(Duration::from_millis(2));
+            let read = reading.read(&mut buffer).unwrap();
+            assert!(read > 0, "the link ended after {} bytes", got.len());
+            got.extend_from_slice(&buffer[..read]);
+        }
+        server.join().unwrap();
+        assert!(got.chunks(message.len()).all(|one| one == message), "each message came whole");
+    }
 }
