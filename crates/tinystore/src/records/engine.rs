@@ -133,7 +133,7 @@ impl Records {
             let claim = store.claim(FILE)?;
             // 'os' unless the store says: a log line a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
-            let config = Config { page_size: 1024, ..Config::committing(durability) };
+            let config = Config { page_size: 1024, incremental_vacuum: true, ..Config::committing(durability) };
             let file = store.open_file(claim.name(), config)?;
             file.migrate("records", MIGRATIONS)?;
             let records = Arc::new(Records {

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::Connection;
 
@@ -13,7 +13,7 @@ use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
-use super::{Committed, Config, Left, Settle, Settlers, Tx};
+use super::{Committed, Config, Left, Settle, Settlers, Tx, vacuum};
 use crate::probe::FileProbe;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
@@ -43,6 +43,11 @@ pub(crate) struct File {
     /// reader, whose `query_only` refuses a write.
     copy: Arc<AtomicBool>,
     config: Arc<Config>,
+    /// A vacuum of the file failed: it is not tried again till the file
+    /// opens again, since it would write the whole file again each pass.
+    vacuum_failed: AtomicBool,
+    /// The free pages its writes did not need lately, which it may give back.
+    unneeded: Mutex<vacuum::Unneeded>,
 }
 
 /// What a node holds of an engine's file to change its mode as the file's
@@ -70,8 +75,9 @@ impl File {
     /// copy's file is then open only through its readers, which a snapshot
     /// taken again closes while it takes the file's place.
     pub(crate) fn open_copy(path: impl Into<PathBuf>, config: Config) -> Result<Self> {
-        // a copy's applier checkpoints its WAL, once its position is synced
-        let file = Self::open_observed(path, Config { keep_wal: true, ..config }, None)?;
+        // a copy's applier checkpoints its WAL, once its position is synced,
+        // and its pages, page 1 among them, say how its home made it
+        let file = Self::open_observed(path, Config { keep_wal: true, incremental_vacuum: false, ..config }, None)?;
         let writer = no_writer(&file.describe())?;
         Ok(Self { copy: Arc::new(AtomicBool::new(true)), writer: Arc::new(Mutex::new(writer)), ..file })
     }
@@ -141,6 +147,8 @@ impl File {
             capture,
             copy: Arc::new(AtomicBool::new(false)),
             config,
+            vacuum_failed: AtomicBool::new(false),
+            unneeded: Mutex::default(),
         })
     }
 
@@ -335,6 +343,53 @@ impl File {
         self.refuse_when_closed("a read")?;
         self.refuse_inside_a_transaction("a read", "would not see what the transaction wrote")?;
         self.readers.read(read)
+    }
+
+    /// Gives back to the disk up to `most` bytes of the pages the file held
+    /// free at every call of a window that ends by `now`, and says how many
+    /// pages it gave back: `vacuum` says which files can, and a file made
+    /// before they could is vacuumed once while small.
+    pub(crate) fn give_back(&self, most: usize, now: SystemTime) -> Result<u64> {
+        if self.is_copy() {
+            return Ok(0);
+        }
+        // read first: a file with nothing to give back commits nothing
+        let found = self.read(vacuum::Occupancy::read)?;
+        if !found.incremental {
+            return if found.free > 0 && self.may_vacuum(&found) { self.vacuum() } else { Ok(0) };
+        }
+        let pages = lock(&self.unneeded).note(now, found.free).min(found.free_within(most));
+        if pages == 0 {
+            return Ok(0);
+        }
+        let given = self.write(most, move |tx| vacuum::give_back(tx, pages))?;
+        lock(&self.unneeded).given(given);
+        Ok(given)
+    }
+
+    /// Whether a file made without `auto_vacuum` may be vacuumed now: its
+    /// engine asked for files that give pages back, no node logs it, it is
+    /// small enough, and no vacuum of it failed since it opened.
+    fn may_vacuum(&self, found: &vacuum::Occupancy) -> bool {
+        self.config.incremental_vacuum
+            && logged(&self.capture).is_none()
+            && found.in_use() <= vacuum::VACUUM_UP_TO
+            && !self.vacuum_failed.load(Ordering::SeqCst)
+    }
+
+    /// Writes the whole file again as one that gives its free pages back,
+    /// the writer held meanwhile: a failure is not tried again till the file
+    /// opens again.
+    fn vacuum(&self) -> Result<u64> {
+        self.refuse_inside_a_transaction("a vacuum", "would wait for the writer the transaction holds")?;
+        let _writing = lock(&self.writer);
+        // close takes the writer after it refuses new work
+        self.refuse_when_closed("a vacuum")?;
+        let vacuumed = vacuum::vacuum(&self.path, self.config.busy_timeout);
+        if vacuumed.is_err() {
+            self.vacuum_failed.store(true, Ordering::SeqCst);
+        }
+        vacuumed.map_err(|error| error.within(self.describe()))
     }
 
     /// Copies the file into `target` as one moment of it, its writer and

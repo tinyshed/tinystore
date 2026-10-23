@@ -44,7 +44,7 @@ pub(super) const AHEAD: Duration = Duration::from_mins(10);
 pub(crate) struct Engine {
     pub(super) file: File,
     pub(super) memory: Arc<Memory>,
-    clock: Arc<dyn Clock>,
+    pub(super) clock: Arc<dyn Clock>,
     /// The series the store holds at most, as its options said.
     pub(super) max_series: i64,
     pub(super) names: Names,
@@ -127,7 +127,8 @@ impl Engine {
             let claim = store.claim(FILE)?;
             // 'os' unless the store says: a sample a commit is not worth a sync
             let durability = store.durability().or(Some(Durability::Os));
-            let file = store.open_file(claim.name(), Config::committing(durability))?;
+            let config = Config { incremental_vacuum: true, ..Config::committing(durability) };
+            let file = store.open_file(claim.name(), config)?;
             file.migrate("metrics", MIGRATIONS)?;
             let engine = Arc::new(Engine {
                 names: Names::read(&file)?,

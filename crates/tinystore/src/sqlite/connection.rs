@@ -98,10 +98,21 @@ fn flags(role: Role) -> OpenFlags {
     }
 }
 
+const PAGES: &str = "pragma page_count";
+const INCREMENTAL_AT_FIRST_WRITE: &str = "pragma auto_vacuum = incremental";
+
 /// Sets the writer up and says the journal mode the file is in.
 fn configure_writer(connection: &Connection, config: &Config) -> rusqlite::Result<String> {
-    // page_size takes effect only before the first table, so it comes first.
+    // page_size and auto_vacuum take effect only before the first table, so
+    // they come first.
     connection.pragma_update(None, "page_size", config.page_size)?;
+    if config.incremental_vacuum && connection.query_row(PAGES, [], |row| row.get::<_, i64>(0))? == 0 {
+        // Compiling the pragma sets the mode the file's first write makes it
+        // with; running it would write page 1 on its own as well. On a file
+        // with pages it is never run: it would commit page 1 at every open,
+        // a write beside the store that a node's log takes for a gap.
+        drop(connection.prepare(INCREMENTAL_AT_FIRST_WRITE)?);
+    }
     let mode: String = connection.pragma_update_and_check(None, "journal_mode", "wal", |row| row.get(0))?;
     let synchronous = match config.durability {
         Durability::Full => "full",

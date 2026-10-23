@@ -1,6 +1,7 @@
-//! What the engine does on its own schedule: the events their streams keep
-//! no longer are removed, the heads that are ready are packed, and the small
-//! segments of the streams packed are merged.
+//! What the engine does on its own schedule: the pages the file holds free
+//! are given back to the disk, the events their streams keep no longer are
+//! removed, the heads that are ready are packed, and the small segments of
+//! the streams packed are merged.
 
 use std::sync::PoisonError;
 use std::time::Duration;
@@ -58,12 +59,25 @@ const DROP_PLACES: &str = "delete from segments where holder in
     (select id from segments where stream = ?1 and holder is null and last_at < ?2)";
 const DROP_SEGMENTS: &str = "delete from segments where stream = ?1 and holder is null and last_at < ?2";
 
+/// What a pass gives back at most of the pages the file holds free: a page
+/// given back writes a few, so a pass's commit stays a few MiB.
+const GIVE_BACK: usize = 4 << 20;
+
 impl Records {
-    /// One pass, and one at a time: expire, pack what is ready, merge the
-    /// small segments of the streams packed, and let the appends' zstd
-    /// context go, which the next append makes again.
+    /// One pass, and one at a time: give back the pages that stayed free a
+    /// while, which the appends meanwhile did not need, then expire, pack
+    /// and merge.
     pub(crate) fn maintain(&self) -> Result<Maintenance> {
         let _one = self.maintaining.lock().unwrap_or_else(PoisonError::into_inner);
+        let given_back = self.file.give_back(GIVE_BACK, self.clock().now());
+        let done = self.expire_pack_and_merge()?;
+        given_back.map(|_| done)
+    }
+
+    /// Expires, packs what is ready, merges the small segments of the streams
+    /// packed, and lets the appends' zstd context go, which the next append
+    /// makes again.
+    pub(super) fn expire_pack_and_merge(&self) -> Result<Maintenance> {
         let now = self.now();
         let expired = self.expire(now)?;
         let packing = self.pack(now)?;

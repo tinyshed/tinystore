@@ -119,6 +119,21 @@ fn a_backup_restores_every_engine_while_its_store_keeps_working() {
     assert_eq!(restored.bucket::<String>("codes").open().unwrap().get("after").unwrap(), None);
 }
 
+#[test]
+fn a_restored_records_and_metrics_file_gives_its_free_pages_back_as_its_store_made_it() {
+    let f = fixture();
+    let store = f.filled();
+    store.backup().write(&f.zip).unwrap();
+    store.close().unwrap();
+    restore(&f.zip, &f.restored).unwrap();
+    for name in ["records.db", "metrics.db"] {
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+        let connection = rusqlite::Connection::open_with_flags(f.restored.join(name), flags).unwrap();
+        let mode: i64 = connection.query_row("pragma auto_vacuum", [], |row| row.get(0)).unwrap();
+        assert_eq!(mode, 2, "{name}: incremental, as its store made it");
+    }
+}
+
 // contract: BAK-01
 #[test]
 fn an_engine_no_handle_opened_is_backed_up_from_its_files() {

@@ -336,3 +336,65 @@ fn a_copy_promoted_with_commits_it_cannot_name_begins_its_log_again_past_them() 
     sessions.set("after", &"the promotion".to_owned()).unwrap();
     assert_eq!(Log::last_in(&log).unwrap().unwrap().sequence, last + 1);
 }
+
+/// A node on a clock the test moves, which a give back's window reads.
+fn node_on(dir: &Path, clock: &Arc<crate::TestClock>) -> Store {
+    let options =
+        Options { node: Some(Node::default()), background: false, clock: Some(clock.clone()), ..Options::default() };
+    Store::open(dir, options).unwrap()
+}
+
+/// A node's records.db with the pages of its packed heads free, and what
+/// its file holds then.
+fn packed_on_a_node(dir: &Path, clock: &Arc<crate::TestClock>) -> (Store, crate::sqlite::division::Division) {
+    let home = node_on(dir, clock);
+    let api = home.events("api").open().unwrap();
+    for batch in 0..20 {
+        let event = |n| crate::records::NewEvent::new("request").message(&format!("GET /orders/{batch}/{n} 200"));
+        api.append_all((0..500).map(event)).unwrap();
+    }
+    clock.set(crate::Clock::now(&**clock) + std::time::Duration::from_hours(1)).unwrap();
+    crate::records::maintain(&home).unwrap();
+    let packed = crate::sqlite::division::Division::at(&dir.join("records.db"));
+    (home, packed)
+}
+
+/// Two passes ten minutes apart: the window that ends with the second
+/// found the pages free throughout.
+fn two_windows_on(home: &Store, clock: &Arc<crate::TestClock>) -> crate::sqlite::division::Division {
+    for _ in 0..2 {
+        clock.set(crate::Clock::now(&**clock) + std::time::Duration::from_mins(10)).unwrap();
+        crate::records::maintain(home).unwrap();
+    }
+    crate::sqlite::division::Division::at(&home.dir().join("records.db"))
+}
+
+// contract: REPL-01, REPL-04
+#[test]
+fn a_node_gives_its_records_pages_back_in_a_commit_its_log_and_a_copy_take_as_any() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let clock = Arc::new(crate::TestClock::new(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000)));
+    let (home, packed) = packed_on_a_node(home_dir.path(), &clock);
+    assert!(packed.free > 10, "{packed:?}");
+    let given = two_windows_on(&home, &clock);
+    assert!(given.free == 0 && given.pages < packed.pages, "{packed:?} {given:?}");
+
+    let copy = node(copy_dir.path());
+    ship_checking_each_commit(home_dir.path(), &copy, &["records.db"]);
+    home.close().unwrap();
+    let (home_file, copy_file) = (home_dir.path().join("records.db"), copy_dir.path().join("records.db"));
+    assert!(pages_seen(&copy_file) == pages_seen(&home_file), "the copy is its home's file, cut as it was");
+    copy.close().unwrap();
+}
+
+#[test]
+fn a_node_never_vacuums_a_file_it_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::sqlite::division::made_as_before(&dir.path().join("records.db"), 1024);
+    let clock = Arc::new(crate::TestClock::new(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000)));
+    let (home, packed) = packed_on_a_node(dir.path(), &clock);
+    assert!(packed.free > 10, "{packed:?}");
+    let kept = two_windows_on(&home, &clock);
+    assert_eq!((kept.free, kept.pointer_map), (packed.free, 0), "its log would take the whole file in one commit");
+    home.close().unwrap();
+}

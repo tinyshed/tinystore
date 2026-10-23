@@ -1,7 +1,11 @@
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::metrics::fixture::{DAY, HOUR, SECOND, fixture};
+use crate::metrics::engine::Engine;
+use crate::metrics::fixture::{DAY, HOUR, MINUTE, SECOND, bits, fixture};
 use crate::metrics::{Series, maintain};
+use crate::sqlite::division::Division;
+use crate::{Clock, Options, Store, TestClock};
 
 // contract: MET-12
 #[test]
@@ -55,4 +59,209 @@ fn a_keep_changed_between_runs_moves_when_its_series_are_due() {
     f.metrics().ingest(&[Series::gauge("short").label("a", "b").sample(f.now(), 1.0).keep(week)]).unwrap();
     let done = maintain(&f.store).unwrap();
     assert_eq!((done.expired, done.reclaimed), (1, 1), "the first series is past a week now");
+}
+
+// contract: DUR-09
+#[test]
+fn the_pass_after_an_expiry_gives_the_pages_it_left_back_and_every_read_stays() {
+    let f = fixture();
+    let week = Duration::from_hours(7 * 24);
+    let short = |host: u32| f.gauge("short", 2000, 10 * SECOND, |n| (n % 7) as f64).label("host", host).keep(week);
+    for hosts in (0..50).collect::<Vec<u32>>().chunks(5) {
+        f.metrics().ingest(&hosts.iter().map(|&host| short(host)).collect::<Vec<_>>()).unwrap();
+    }
+    f.metrics().ingest(&[f.gauge("stays", 2000, 10 * SECOND, |n| n as f64).label("host", "a")]).unwrap();
+    maintain(&f.store).unwrap();
+    f.pass(week + HOUR);
+    assert_eq!(maintain(&f.store).unwrap().expired, 100_000);
+    let expired = Division::of(&f.engine().file);
+    assert!(expired.free > 5, "{expired:?}");
+    let read = f.metrics().query().name("stays").since(8 * DAY).read().unwrap();
+
+    // the pages stay free for a window of passes before they go back
+    f.pass(10 * MINUTE);
+    maintain(&f.store).unwrap();
+    assert!(Division::of(&f.engine().file).free > 0, "kept a while for the writes to come");
+    f.pass(10 * MINUTE);
+    maintain(&f.store).unwrap();
+    let after = Division::of(&f.engine().file);
+    assert!(after.free == 0 && after.pages <= expired.pages - expired.free, "{expired:?} {after:?}");
+    let again = f.metrics().query().name("stays").since(8 * DAY).read().unwrap();
+    assert_eq!(bits(&again[0]), bits(&read[0]));
+    assert_eq!(bits(&read[0]).len(), 2000);
+}
+
+/// A store of the measurement below: how its metrics.db was made and how
+/// its passes run, and what they cost.
+struct Way {
+    name: &'static str,
+    dir: tempfile::TempDir,
+    store: Store,
+    pass: fn(&Store) -> crate::Result<()>,
+    passes: Vec<Duration>,
+    ingests: Duration,
+    written: u64,
+}
+
+impl Way {
+    fn open(
+        name: &'static str,
+        made_before: bool,
+        pass: fn(&Store) -> crate::Result<()>,
+        clock: &Arc<TestClock>,
+    ) -> Way {
+        let dir = tempfile::tempdir().unwrap();
+        if made_before {
+            crate::sqlite::division::made_as_before(&dir.path().join("metrics.db"), 4096);
+        }
+        let options = Options { clock: Some(clock.clone()), background: false, ..Options::default() };
+        let store = Store::open(dir.path(), options).unwrap();
+        Way { name, dir, store, pass, passes: Vec::new(), ingests: Duration::ZERO, written: 0 }
+    }
+
+    fn ingest(&mut self, series: &[Series]) {
+        let (started, written) = (Instant::now(), crate::sqlite::division::written());
+        self.store.metrics().unwrap().ingest(series).unwrap();
+        self.ingests += started.elapsed();
+        self.written += crate::sqlite::division::written().zip(written).map_or(0, |(now, then)| now - then);
+    }
+
+    fn pass(&mut self) {
+        let (started, written) = (Instant::now(), crate::sqlite::division::written());
+        (self.pass)(&self.store).unwrap();
+        self.passes.push(started.elapsed());
+        self.written += crate::sqlite::division::written().zip(written).map_or(0, |(now, then)| now - then);
+    }
+
+    fn division(&self) -> Division {
+        Division::of(&Engine::of(&self.store).unwrap().file)
+    }
+}
+
+/// v0.1.0's passes, until one leaves no work: expiry and packing alone.
+fn passes_of_0_1_0(store: &Store) -> crate::Result<()> {
+    let engine = Engine::of(store)?;
+    while engine.expire_and_pack()?.1 {}
+    Ok(())
+}
+
+fn passes_of_now(store: &Store) -> crate::Result<()> {
+    maintain(store).map(drop)
+}
+
+/// A tick of the load below: a sample of each of 2,020 gauges, 101 hosts of
+/// 20, each a walk of whole numbers in 0 to 100, as the TSBS devops corpus's.
+fn tick(walks: &mut [u64], draws: &mut u64, now: std::time::SystemTime) -> Vec<Series> {
+    let step = |walk: &mut u64, draws: &mut u64| {
+        *draws ^= *draws << 13;
+        *draws ^= *draws >> 7;
+        *draws ^= *draws << 17;
+        *walk = (*walk + *draws % 3).saturating_sub(1).min(100);
+        *walk as f64
+    };
+    let series = |(index, walk): (usize, &mut u64)| {
+        let (host, field) = (index / 20, index % 20);
+        let labelled = Series::gauge(format!("cpu_{field}")).label("hostname", format!("host_{host}"));
+        labelled.label("region", host % 7).label("service", host % 19).sample(now, step(walk, draws))
+    };
+    walks.iter_mut().enumerate().map(series).collect()
+}
+
+/// What a wide load leaves in metrics.db, three ways on the same samples: a
+/// file v0.1.0 made under v0.1.0's passes; the same file under this
+/// release's, which vacuums it once; a file this release made. A tick every
+/// 10 s for `TINYSTORE_TICKS` ticks, 2,520 unless it says, seven hours; an
+/// ingest a tick, the ways in turns, and their passes each minute. Then the
+/// load stops and passes follow a minute apart for half an hour. Run by hand
+/// with `--release -- --ignored --nocapture`; on Linux it also says the
+/// bytes each way wrote.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn what_a_wide_load_leaves_in_its_file() {
+    let ticks: u32 = std::env::var("TINYSTORE_TICKS").ok().and_then(|ticks| ticks.parse().ok()).unwrap_or(2520);
+    let clock = Arc::new(TestClock::new(std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000)));
+    let mut ways = [
+        Way::open("0.1.0", true, passes_of_0_1_0, &clock),
+        Way::open("0.1.0's file, passes now", true, passes_of_now, &clock),
+        Way::open("now", false, passes_of_now, &clock),
+    ];
+    let (mut walks, mut draws) = (vec![50_u64; 2020], 0x9e37_79b9_7f4a_7c15_u64);
+    for at in 0..ticks {
+        let series = tick(&mut walks, &mut draws, clock.now());
+        let turn = at as usize % ways.len();
+        ways.rotate_left(turn);
+        ways.iter_mut().for_each(|way| way.ingest(&series));
+        if (at + 1) % 6 == 0 {
+            ways.iter_mut().for_each(Way::pass);
+        }
+        ways.rotate_right(turn);
+        clock.set(clock.now() + 10 * SECOND).unwrap();
+    }
+    ways.iter().for_each(|way| way.division().print(&format!("{} — live, after its last pass", way.name), 10));
+    let live: Vec<(usize, u64)> = ways.iter().map(|way| (way.passes.len(), way.written)).collect();
+    for _ in 0..30 {
+        clock.set(clock.now() + Duration::from_mins(1)).unwrap();
+        ways.iter_mut().for_each(Way::pass);
+    }
+    let stopped =
+        |way: &Way| way.division().print(&format!("{} — stopped, half an hour of passes after", way.name), 10);
+    ways.iter().for_each(stopped);
+    ways.iter().zip(live).for_each(|(way, live)| print_costs(way, live, f64::from(ticks) * 2020.0));
+}
+
+/// What a load written after the fact leaves in metrics.db, the three ways
+/// of the measurement above on the same samples: its seven hours ingested at
+/// once, four ticks a call, in the order of their times, before any pass, as
+/// a bulk load of the TSBS corpus is; then passes until none is left to
+/// pack, and passes a minute apart for half an hour. Run by hand with
+/// `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn what_a_bulk_load_leaves_in_its_file() {
+    let ticks: u32 = std::env::var("TINYSTORE_TICKS").ok().and_then(|ticks| ticks.parse().ok()).unwrap_or(2520);
+    let start = std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let clock = Arc::new(TestClock::new(start + 10 * SECOND * ticks));
+    let mut ways = [
+        Way::open("0.1.0", true, passes_of_0_1_0, &clock),
+        Way::open("0.1.0's file, passes now", true, passes_of_now, &clock),
+        Way::open("now", false, passes_of_now, &clock),
+    ];
+    let (mut walks, mut draws) = (vec![50_u64; 2020], 0x9e37_79b9_7f4a_7c15_u64);
+    for first in (0..ticks).step_by(4) {
+        let series: Vec<Series> = (first..ticks.min(first + 4))
+            .flat_map(|at| tick(&mut walks, &mut draws, start + 10 * SECOND * at))
+            .collect();
+        let turn = first as usize % ways.len();
+        ways.rotate_left(turn);
+        ways.iter_mut().for_each(|way| way.ingest(&series));
+        ways.rotate_right(turn);
+    }
+    ways.iter().for_each(|way| way.division().print(&format!("{} — ingested, before a pass", way.name), 10));
+    ways.iter_mut().for_each(Way::pass);
+    ways.iter().for_each(|way| way.division().print(&format!("{} — packed", way.name), 10));
+    let live: Vec<(usize, u64)> = ways.iter().map(|way| (way.passes.len(), way.written)).collect();
+    for _ in 0..30 {
+        clock.set(clock.now() + Duration::from_mins(1)).unwrap();
+        ways.iter_mut().for_each(Way::pass);
+    }
+    let stopped = |way: &Way| way.division().print(&format!("{} — half an hour of passes after", way.name), 10);
+    ways.iter().for_each(stopped);
+    ways.iter().zip(live).for_each(|(way, live)| print_costs(way, live, f64::from(ticks) * 2020.0));
+}
+
+/// What a way cost: its ingests, its passes, the bytes it wrote under the
+/// load and after, which `live` says of the load, and its file once closed.
+fn print_costs(way: &Way, (passes, written): (usize, u64), samples: f64) {
+    println!(
+        "{}: ingests {:?} in all; {}",
+        way.name,
+        way.ingests,
+        crate::sqlite::division::passes(&way.passes, passes)
+    );
+    if way.written > 0 {
+        println!("  written: {} KiB under the load, {} KiB after", written / 1024, (way.written - written) / 1024);
+    }
+    way.store.close().unwrap();
+    let size = std::fs::metadata(way.dir.path().join("metrics.db")).unwrap().len() as f64;
+    println!("  closed: metrics.db {:.0} KiB, {:.3} bytes a sample", size / 1024.0, size / samples);
 }

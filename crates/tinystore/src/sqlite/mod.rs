@@ -29,6 +29,8 @@ mod capture;
 mod config;
 mod connection;
 mod constraint;
+#[cfg(test)]
+pub(crate) mod division;
 mod file;
 mod given;
 mod group;
@@ -39,6 +41,7 @@ mod pages;
 mod prefix;
 mod readers;
 mod settle;
+mod vacuum;
 
 use std::cell::RefCell;
 use std::fmt;

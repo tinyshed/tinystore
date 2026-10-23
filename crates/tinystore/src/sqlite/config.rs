@@ -8,6 +8,9 @@ pub(crate) struct Config {
     pub(crate) durability: Durability,
     /// The page size of a new file; an existing file keeps its own.
     pub(crate) page_size: u32,
+    /// A new file is made with `auto_vacuum = incremental`, so that it can
+    /// give its free pages back to the disk: see `vacuum`.
+    pub(crate) incremental_vacuum: bool,
     /// The page cache of the writer and of each reader, in KiB.
     pub(crate) cache_kib: u32,
     /// Readers open at once at most. One stays open; the others close once
@@ -49,6 +52,7 @@ impl Default for Config {
         Self {
             durability: Durability::Full,
             page_size: 4096,
+            incremental_vacuum: false,
             cache_kib: 1024,
             readers: readers_of_this_machine(),
             reader_idle: Duration::from_secs(60),
