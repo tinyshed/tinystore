@@ -137,9 +137,16 @@ fn check_applied(history: &str, migrations: &[Migration], applied: &[Applied]) -
                 step.name, step.version, migration.name
             )));
         }
-        if migration.sql != step.sql.as_str() {
+        if !same_statements(&migration.sql, &step.sql) {
             return Err(Error::invalid(format!("{history}: {} changed after it was applied", migration.name)));
         }
     }
     Ok(())
+}
+
+/// Whether two texts of a step say the same, whatever their lines end with:
+/// Git on Windows may check a file out with `\r\n` where the step was applied
+/// from it with `\n`, and the step is the same.
+fn same_statements(given: &str, applied: &str) -> bool {
+    given == applied || given.replace("\r\n", "\n") == applied.replace("\r\n", "\n")
 }

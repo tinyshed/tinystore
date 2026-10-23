@@ -59,6 +59,10 @@ refused.
 | an applied one renamed, deleted or put before another | fails, naming it                                     |
 | more migrations than the folder                       | fails: an older program on a newer file              |
 
+Line endings do not count as an edit. A folder checked out on Windows with
+`\r\n` at the end of each line, for example by Git's `core.autocrlf`, opens a
+file whose migrations were applied from the same files with `\n`.
+
 The migrations that run at one open run in one transaction: the file has the
 old schema or the whole new one, never half (contract SQL-03). A statement
 that fails names its file and stops the open:

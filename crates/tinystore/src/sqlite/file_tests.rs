@@ -529,6 +529,21 @@ fn a_migration_the_program_does_not_have_or_has_edited_is_refused() {
     assert_eq!(gap.kind(), ErrorKind::Invalid);
 }
 
+// contract: SQL-03
+#[test]
+fn a_migration_whose_lines_end_otherwise_on_another_checkout_is_the_step_it_applied() {
+    let (_dir, file) = open(Config::default());
+    let lf = "create table users (id integer primary key);\ncreate index users_by_id on users (id);\n";
+    file.migrate("test", &[Migration::of(1, "0001_users.sql", lf)]).unwrap();
+
+    let crlf = Migration { sql: lf.replace('\n', "\r\n").into(), ..Migration::of(1, "0001_users.sql", lf) };
+    file.migrate("test", &[crlf]).unwrap();
+
+    let edited = Migration::of(1, "0001_users.sql", "create table users (id integer primary key, email text);\r\n");
+    let error = file.migrate("test", &[edited]).unwrap_err();
+    assert!(error.to_string().contains("0001_users.sql changed after it was applied"), "{error}");
+}
+
 #[test]
 fn durability_sets_how_far_a_commit_goes() {
     for (durability, synchronous) in [(Durability::Full, 2), (Durability::Os, 1)] {
