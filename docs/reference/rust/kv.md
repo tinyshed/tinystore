@@ -521,7 +521,8 @@ While another run of the key is under way, in this process or through
 its server, this one waits for it and returns its answer. An error keeps
 nothing, so the next run runs again; an answer meant to be kept, a card
 declined, is a value rather than an error. An answer that could not be
-kept is still returned, and the failure logged.
+kept is still returned, to this caller and to those that waited for this
+run, and the failure logged.
 
 ### Once.get
 
