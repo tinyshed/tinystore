@@ -151,6 +151,30 @@ fn pages_of_a_search_join_into_its_whole_ranking() {
 
 // contract: SRCH-09
 #[test]
+fn two_corrected_pairs_of_one_unspaced_run_read_as_one_text() {
+    let fixture = fixture();
+    let index = |name: &str| fixture.store.index::<String>(name).open().unwrap();
+    let found = |notes: &Index<String>, text: &str| checked(|| notes.search(text).run()).unwrap();
+    // A pair of Thai graphemes, marks and all, is long enough to be corrected.
+    let notes = index("thai");
+    notes.set("a", &"คิ้กิ".to_owned()).unwrap();
+    notes.set("b", &"กิขิ้".to_owned()).unwrap();
+    let thai = found(&notes, "คิ้กิ้ขิ้");
+    assert_eq!(thai.corrected.as_deref(), Some("คิ้กิขิ้"), "both pairs read without the middle tone mark");
+    assert_eq!(ids(&thai), ["a", "b"]);
+    // Read as a character of three bytes, one of four leaves the text after it elsewhere.
+    let (first, second, wide, narrow) =
+        ("\u{e01}\u{e34}\u{e49}\u{e47}", "\u{e02}\u{e34}\u{e49}\u{e47}", "\u{20000}", "中");
+    let notes = index("han");
+    notes.set("c", &format!("{first}{narrow}")).unwrap();
+    notes.set("d", &format!("{narrow}{second}")).unwrap();
+    let han = found(&notes, &format!("{first}{wide}{second}"));
+    assert_eq!(han.corrected, Some(format!("{first}{narrow}{second}")));
+    assert_eq!(ids(&han), ["c", "d"]);
+}
+
+// contract: SRCH-09
+#[test]
 fn a_misspelt_word_is_read_as_the_nearest_and_corrected_says_the_text_read() {
     let fixture = fixture();
     let articles = fixture.articles::<Article>("articles");

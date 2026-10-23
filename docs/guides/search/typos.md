@@ -43,6 +43,9 @@ An edit is a letter added, dropped or changed, or two neighbours swapped:
   `running`.
 - A word is near only words of its own script: a Latin typo is never read as
   a Cyrillic word.
+- Chinese, Japanese and Thai text has no spaces, so the index reads it as
+  overlapping pairs of characters. When two neighbouring pairs are both
+  corrected, the search reads both, and `corrected` shows the first.
 - A search's words are any, not all: a document with one of them is a hit,
   ranked below those with more.
 

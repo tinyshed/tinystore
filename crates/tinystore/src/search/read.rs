@@ -11,6 +11,7 @@
 //! fetch itself.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -405,11 +406,25 @@ fn correct(connection: &Connection, asked: &mut Asked<'_>, version: i64, behind:
     if replaced.is_empty() {
         return Ok(None);
     }
-    let mut text = asked.query.normal.to_owned();
-    for (at, word) in replaced.into_iter().rev() {
+    Ok(Some(written(&asked.query.normal, replaced)))
+}
+
+/// The search's text with the words read otherwise written in, each over
+/// its place, in order. Two pairs of an unspaced run share a grapheme, so
+/// of two corrected pairs only the first is written: the second's place
+/// overlaps it, and the search reads both all the same.
+fn written(normal: &str, replaced: Vec<(Range<usize>, String)>) -> String {
+    let mut apart: Vec<(Range<usize>, String)> = Vec::with_capacity(replaced.len());
+    for (at, word) in replaced {
+        if apart.last().is_none_or(|(last, _)| last.end <= at.start) {
+            apart.push((at, word));
+        }
+    }
+    let mut text = normal.to_owned();
+    for (at, word) in apart.into_iter().rev() {
         text.replace_range(at, &word);
     }
-    Ok(Some(text))
+    text
 }
 
 /// The dictionary of the index's words kept, built from this snapshot when
