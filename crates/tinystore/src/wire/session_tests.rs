@@ -1,13 +1,18 @@
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use super::super::workers::{MOST, Workers};
-use super::{CROWD, Route, route};
+use super::{CROWD, OUTPUT_MOST, Route, Session, route};
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
+use crate::sync::lock;
 use crate::wire::codec::Message;
 use crate::wire::codec::Row;
-use crate::wire::frame::{Frame, Kind};
-use crate::wire::protocol::{KvCall, KvEntry, KvWritten, METHODS, method};
+use crate::wire::frame::{self, Frame, Kind, Reader};
+use crate::wire::protocol::{
+    Failure, Handle, Hello, KvBucketOpen, KvCall, KvEntry, KvList, KvWritten, METHODS, method,
+};
 use crate::{Options, Store};
 
 /// Writes gets of one key on `streams` in one write, and returns what the
@@ -112,6 +117,113 @@ fn a_connection_whose_client_reads_nothing_reads_no_frame_more_past_its_bound_an
     }
     assert_eq!(answered, (1000..1000 + gets).collect());
     assert!(!client.pipe.full());
+}
+
+/// Calls read in one write all reach the workers before a worker answers
+/// any, and each looks at what the connection owes where it starts: a client
+/// that asks for a large value 128 times at once and reads nothing is owed
+/// the bound and the answers of the calls the workers had started, and the
+/// rest once it reads. A crowd of gets goes to the workers, a list runs there
+/// anyway, and a query is a download.
+// contract: WIRE-03
+#[test]
+fn a_burst_of_large_reads_its_client_does_not_read_is_owed_no_further_than_the_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let session = Session::new(store.clone(), Connect::default()).unwrap();
+    let mut reader = Reader::default();
+    let hello = Hello { protocol: 1, client: "test/0".to_owned(), ..Hello::default() };
+    assert_eq!(ask(&session, &mut reader, Frame::new(Kind::Hello, 0, hello.encode())).kind, Kind::Welcome);
+    let open = KvBucketOpen { name: "files".to_owned(), ..KvBucketOpen::default() };
+    let handle = answered::<Handle>(&call(&session, &mut reader, 1, method::KV_BUCKET_OPEN, open.encode())).unwrap();
+    let handle = handle.handle;
+    let value = KvCall { handle, key: "k".to_owned(), value: Some(Row::Bin(vec![7; 1 << 20])), ..KvCall::default() };
+    answered::<KvWritten>(&call(&session, &mut reader, 2, method::KV_SET, value.encode())).unwrap();
+
+    let get = KvCall { handle, key: "k".to_owned(), ..KvCall::default() };
+    let list = KvList { handle, limit: Some(1), ..KvList::default() };
+    #[cfg_attr(not(feature = "sql"), expect(unused_mut, reason = "a query needs sql"))]
+    let mut bursts = vec![(method::KV_GET, get.encode()), (method::KV_LIST, list.encode())];
+    #[cfg(feature = "sql")]
+    {
+        use crate::wire::protocol::{SqlOpen, SqlQuery};
+        let open = SqlOpen { name: "app".to_owned(), ..SqlOpen::default() };
+        let handle = answered::<Handle>(&call(&session, &mut reader, 3, method::SQL_OPEN, open.encode())).unwrap();
+        let text = "SELECT zeroblob(1000000)".to_owned();
+        let query = SqlQuery { handle: handle.handle, text, want: "all".to_owned(), ..SqlQuery::default() };
+        bursts.push((method::SQL_QUERY, query.encode()));
+    }
+    let calls = 128;
+    for (called, request) in bursts {
+        let mut burst = Vec::new();
+        for stream in 1000..1000 + calls {
+            let frame = Frame { method: called, ..Frame::new(Kind::Request, stream, request.clone()) };
+            frame.ending().encode_into(&mut burst);
+        }
+        session.receive(&burst);
+        let owed = owed_once_each_call_answered_or_waits(&session);
+        let most = OUTPUT_MOST + MOST * ((1 << 20) + (1 << 10));
+        assert!(owed <= most, "{called:#06x}: {calls} calls in one write owed {owed} bytes, past {most}");
+
+        let mut got = BTreeSet::new();
+        while got.len() < calls as usize {
+            while let Some(frame) = reader.next(1 << 22).unwrap() {
+                let failed = (frame.flags & frame::ERROR != 0).then(|| Failure::decode(&frame.body).unwrap());
+                assert_eq!((frame.kind, frame.flags, failed), (Kind::Response, frame::END, None), "{called:#06x}");
+                got.insert(frame.stream);
+            }
+            if got.len() < calls as usize {
+                let more = session.take(Duration::from_secs(10));
+                assert!(!more.is_empty(), "{called:#06x}: {} of {calls} answers, and then nothing", got.len());
+                reader.push(&more);
+            }
+        }
+        assert_eq!(got, (1000..1000 + calls).collect(), "{called:#06x}");
+    }
+    session.end();
+    drop(session);
+    store.close().unwrap();
+}
+
+/// Sends `request` on `stream` as a REQUEST of `called`, and returns the frame
+/// that answers it.
+fn call(session: &Session, reader: &mut Reader, stream: u32, called: u16, request: Vec<u8>) -> Frame {
+    ask(session, reader, Frame { method: called, ..Frame::new(Kind::Request, stream, request) }.ending())
+}
+
+/// Sends `frame` and returns the next frame on its stream.
+fn ask(session: &Session, reader: &mut Reader, frame: Frame) -> Frame {
+    let (stream, mut bytes) = (frame.stream, Vec::new());
+    frame.encode_into(&mut bytes);
+    session.receive(&bytes);
+    loop {
+        match reader.next(1 << 22).unwrap() {
+            Some(frame) if frame.stream == stream => return frame,
+            Some(_) => {}
+            None => {
+                let more = session.take(Duration::from_secs(10));
+                assert!(!more.is_empty(), "nothing answered stream {stream}");
+                reader.push(&more);
+            }
+        }
+    }
+}
+
+/// What a session owes once each of its streams is answered or waits for
+/// the output to drain: a stream still open whose call does not wait runs.
+fn owed_once_each_call_answered_or_waits(session: &Session) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        // open streams only fall, and the calls waiting never pass them: the
+        // two are equal only if every open stream's call waited at the second
+        let open = session.shared.lock_open().len();
+        let waiting = lock(&session.shared.waiting_output).len();
+        if open == waiting {
+            return session.shared.owed();
+        }
+        assert!(Instant::now() < deadline, "{open} streams open and {waiting} calls waiting, still");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// A method's line in the schema and its engine's `route` are written apart;

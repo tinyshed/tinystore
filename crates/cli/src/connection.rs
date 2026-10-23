@@ -40,7 +40,7 @@ where
     let done = Arc::new(AtomicBool::new(false));
     let writing = tokio::spawn(write_frames(Arc::clone(&pipe), Arc::clone(&output), Arc::clone(&done)));
     read_frames(reader, &pipe, &output, closing).await;
-    drain(&pipe).await;
+    drain(&pipe, &output).await;
     done.store(true, Ordering::Release);
     output.ready.notify_one();
     let _ = writing.await;
@@ -178,10 +178,11 @@ where
 }
 
 /// Waits for the streams running, so that a client that closed its side, as
-/// a private child's parent does, still gets what it asked for.
-async fn drain(pipe: &Pipe) {
+/// a private child's parent does, still gets what it asked for. A client gone
+/// takes nothing more, and the calls that wait for it to read never start.
+async fn drain<W>(pipe: &Pipe, output: &Output<W>) {
     let deadline = Instant::now() + DRAIN;
-    while pipe.streams() > 0 && !pipe.finished() && Instant::now() < deadline {
+    while pipe.streams() > 0 && !pipe.finished() && !output.gone.load(Ordering::Acquire) && Instant::now() < deadline {
         tokio::time::sleep(DRAIN_TICK).await;
     }
 }
@@ -297,6 +298,65 @@ mod tests {
             assert!(ended.is_ok(), "the connection outlived its client");
         });
         store.close().unwrap();
+    }
+
+    /// A client whose calls wait for it to read, that leaves: its connection
+    /// ends at once, rather than waiting for streams nobody will take.
+    #[test]
+    fn a_client_that_leaves_while_its_calls_wait_for_it_to_read_ends_its_connection_at_once() {
+        const OPEN: u16 = 0x0101;
+        const GET: u16 = 0x0102;
+        const SET: u16 = 0x0104;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        runtime().block_on(async {
+            let (mut from_server, mut to_server, serving) = welcomed(&store).await;
+            // kv.bucket.open {name: "files"}
+            let open = [0x81, 0x01, 0xa5, b'f', b'i', b'l', b'e', b's'];
+            to_server.write_all(&request(1, OPEN, &open)).await.unwrap();
+            let opened = response(&mut from_server).await;
+            assert_eq!((opened.len(), &opened[..2]), (3, &[0x81, 0x01][..]), "a handle of one byte");
+            let handle = opened[2];
+            // kv.set {handle, key: "k", value: a mebibyte}
+            let mut set = vec![0x83, 0x01, handle, 0x03, 0xa1, b'k', 0x04, 0xc6];
+            set.extend_from_slice(&(1u32 << 20).to_be_bytes());
+            set.resize(set.len() + (1 << 20), 7);
+            to_server.write_all(&request(2, SET, &set)).await.unwrap();
+            response(&mut from_server).await;
+            // kv.get {handle, key: "k"}, 64 in one write, their answers never read
+            let get = [0x82, 0x01, handle, 0x03, 0xa1, b'k'];
+            let gets: Vec<u8> = (1000..1064).flat_map(|stream| request(stream, GET, &get)).collect();
+            to_server.write_all(&gets).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            drop((to_server, from_server));
+            let ended = tokio::time::timeout(Duration::from_secs(5), serving).await;
+            assert!(ended.is_ok(), "the connection waited for answers its client could not take");
+        });
+        store.close().unwrap();
+    }
+
+    /// A REQUEST of `method` on `stream`, the client's only frame there.
+    fn request(stream: u32, method: u16, body: &[u8]) -> Vec<u8> {
+        const REQUEST: u8 = 3;
+        const END: u8 = 1;
+        let mut bytes = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[REQUEST, END]);
+        bytes.extend_from_slice(&method.to_le_bytes());
+        bytes.extend_from_slice(&stream.to_le_bytes());
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    /// The body of the next frame, a RESPONSE that did not fail.
+    async fn response(from_server: &mut Reads) -> Vec<u8> {
+        const RESPONSE: u8 = 4;
+        const END: u8 = 1;
+        let mut head = [0u8; 12];
+        from_server.read_exact(&mut head).await.unwrap();
+        assert_eq!((head[4], head[5]), (RESPONSE, END), "a RESPONSE that did not fail");
+        let mut body = vec![0; usize::try_from(u32::from_le_bytes(head[..4].try_into().unwrap())).unwrap()];
+        from_server.read_exact(&mut body).await.unwrap();
+        body
     }
 
     fn runtime() -> tokio::runtime::Runtime {

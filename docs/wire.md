@@ -287,9 +287,13 @@ never waits.
   and its credit comes back, once its answer is queued rather than read, and
   a `PONG` counts against no credit; so a connection that owes its client
   more than 8 MiB reads no frame more until the client takes some, and the
-  server stops reading its socket, where the client's sends wait. What a
-  connection owes is then at most that and the answers of its streams in
-  flight.
+  server stops reading its socket, where the client's sends wait. The
+  requests of one write are all read before any of them is answered, so a
+  call also checks when a worker starts it. Past 8 MiB, it waits until the
+  client has read all but 1 MiB. A connection then owes at most 8 MiB, plus
+  one answer for each of the 16 workers, the answers of writes already
+  queued for a commit, and the `DATA` that its streams send within the
+  credit that the client granted.
 
 64 KiB of credit on stream 5:
 

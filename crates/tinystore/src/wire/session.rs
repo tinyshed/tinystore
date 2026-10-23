@@ -58,12 +58,13 @@ const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
 /// What a connection may owe its client before it reads no frame more of
-/// it: a PING's PONG counts against no credit, and a call's answer leaves its
-/// stream's credit once queued, so a client that sends and never reads would
-/// otherwise grow the server's memory at the rate it sends.
+/// it and its workers start no call more: a PING's PONG counts against no
+/// credit, and a call's answer leaves its stream's credit once queued, so a
+/// client that sends and never reads would otherwise grow the server's
+/// memory at the rate it sends.
 pub(super) const OUTPUT_MOST: usize = 8 << 20;
 /// What a connection owes its client below which it reads the frames that
-/// waited, and the subscriptions that stopped for its output go on.
+/// waited, and the calls and subscriptions that stopped for its output go on.
 const OUTPUT_LOW: usize = 1 << 20;
 
 /// Requests read from a connection at once that send its point reads to the
@@ -139,9 +140,8 @@ struct Shared {
     /// The output owed past [`OUTPUT_MOST`] when a frame came: the frames
     /// from it on wait in the reader until the host takes what is owed.
     held: AtomicBool,
-    /// What waits for the output to drain: subscriptions that stopped while
-    /// the connection owed its client too much.
-    #[cfg(feature = "channels")]
+    /// What waits for the output to drain: calls and subscriptions that
+    /// stopped while the connection owed its client too much.
     waiting_output: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
     ready: Condvar,
     /// The host's wake, called under this lock, which the session's end
@@ -224,7 +224,6 @@ impl Session {
             read_only: AtomicBool::new(false),
             owing: AtomicUsize::new(0),
             held: AtomicBool::new(false),
-            #[cfg(feature = "channels")]
             waiting_output: Mutex::new(Vec::new()),
             ready: Condvar::new(),
             wake,
@@ -358,7 +357,8 @@ impl Session {
     }
 
     /// Ends the session: reads under way stop, other calls finish, what they
-    /// answer is dropped, the runs handed to the client are let go, and its
+    /// answer is dropped, the calls waiting for the client to read are
+    /// dropped unrun, the runs handed to the client are let go, and its
     /// workers end, the jobs they held failing their attempt. It waits for the
     /// workers to write that, so that a store closing with its last pipe finds
     /// them stopped rather than waits out their timeout.
@@ -372,6 +372,9 @@ impl Session {
         self.shared.ready.notify_all();
         // waits for a wake under way: once this returns none runs or will
         lock(&self.shared.wake).take();
+        // a call that waits holds the session, which holds what waits
+        let waiting = std::mem::take(&mut *lock(&self.shared.waiting_output));
+        drop(waiting);
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
         let reads: Vec<CancellationToken> = lock(&self.shared.reads).drain().map(|(_, read)| read).collect();
@@ -602,7 +605,7 @@ impl Shared {
             Route::Worker => {
                 let (shared, reading) = (Arc::clone(self), self.reading(stream, method));
                 let writes = method::access(method) == Some(Access::Write);
-                self.workers.run(Box::new(move || {
+                self.run_call(Box::new(move || {
                     let answered =
                         shared.read_under(stream, reading, || guarded(|| shared.call(method, &body, max_body)));
                     shared.answer(stream, if writes { shared.written_within_agreed(answered) } else { answered });
@@ -615,7 +618,7 @@ impl Shared {
     /// commits.
     fn submit(self: &Arc<Self>, stream: u32, method: u16, body: Vec<u8>) {
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || {
+        self.run_call(Box::new(move || {
             let answering = Arc::clone(&shared);
             let done = move |answered| answering.answer(stream, answering.written_within_agreed(answered));
             let queued = guarded(|| {
@@ -640,18 +643,42 @@ impl Shared {
         let asked = self.asked.fetch_add(1, Ordering::Relaxed);
         self.lock_runs().insert(stream, ClientRun::Asking(asked));
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || shared.run_once(stream, asked, body, None)));
+        self.run_call(Box::new(move || shared.run_once(stream, asked, body, None)));
     }
 
     /// Answers a point read on a worker, counted as away until it is.
     fn read_away(self: &Arc<Self>, stream: u32, method: u16, body: Vec<u8>, max_body: usize) {
         self.reads_away.fetch_add(1, Ordering::AcqRel);
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || {
+        self.run_call(Box::new(move || {
             let answered = guarded(|| shared.call(method, &body, max_body));
             shared.reads_away.fetch_sub(1, Ordering::AcqRel);
             shared.answer(stream, answered);
         }));
+    }
+
+    /// Runs a call on a worker once the connection owes its client within
+    /// its bound. The frames of one write are all read before a worker
+    /// answers any, so the bound looked at where frames are read holds none
+    /// of them: each call looks again where it starts, and one past the
+    /// bound waits, as a subscription does, until the host takes what is
+    /// owed. What the workers had started still answers: a call on each,
+    /// and the writes they queued for a commit.
+    fn run_call(self: &Arc<Self>, call: Box<dyn FnOnce() + Send>) {
+        let shared = Arc::clone(self);
+        self.workers.run(Box::new(move || shared.start_call(call)));
+    }
+
+    /// Runs `call` here, or once the host took what is owed. Between the two
+    /// marks a call waits behind those already waiting, which the calls that
+    /// keep coming would otherwise hold off for as long as they come.
+    fn start_call(self: &Arc<Self>, call: Box<dyn FnOnce() + Send>) {
+        let owing = self.owing.load(Ordering::SeqCst);
+        if owing <= OUTPUT_LOW || (owing <= OUTPUT_MOST && lock(&self.waiting_output).is_empty()) {
+            return call();
+        }
+        let shared = Arc::clone(self);
+        self.when_drained(Box::new(move || shared.start_call(call)));
     }
 
     /// Registers a subscription: the stream's RESPONSE once the store has it,
@@ -740,7 +767,7 @@ impl Shared {
     fn download(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.sql_link(input, stream);
         let (shared, reading) = (Arc::clone(self), self.reading(stream, called));
-        self.workers.run(Box::new(move || {
+        self.run_call(Box::new(move || {
             let (answering, sending) = (Arc::clone(&shared), link.clone());
             let done = move |queried: std::result::Result<sql::Queried, Failure>| match queried {
                 Ok(sql::Queried::Whole(rows)) => answering.answer(stream, Ok(rows)),
@@ -791,7 +818,7 @@ impl Shared {
     fn read(self: &Arc<Self>, input: &Input, stream: u32, body: Vec<u8>) {
         let link = self.stream_link(input, stream);
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || match guarded(|| blobs::read(&shared.blobs, stream, &body, &link)) {
+        self.run_call(Box::new(move || match guarded(|| blobs::read(&shared.blobs, stream, &body, &link)) {
             Ok(blobs::Reading::Whole(response)) => shared.answer(stream, Ok(response)),
             Ok(blobs::Reading::Begun(response, getting)) => {
                 shared.queue_moved(Frame::new(Kind::Response, stream, response), None);
@@ -844,7 +871,7 @@ impl Shared {
     fn parts(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.stream_link(input, stream);
         let (shared, reading) = (Arc::clone(self), self.reading(stream, called));
-        self.workers.run(Box::new(move || {
+        self.run_call(Box::new(move || {
             let bound = super::part_bound(link.max_body, link.credit, 0);
             let parted =
                 shared.read_under(stream, reading, || guarded(|| metrics::parts(&shared.store, called, &body, bound)));
@@ -1395,26 +1422,21 @@ impl Shared {
 
     /// Runs what waited for the output once it owes less than its low mark.
     fn drained(&self) {
-        #[cfg(feature = "channels")]
-        {
-            let mut waiting = self.waiting_output.lock().unwrap_or_else(PoisonError::into_inner);
-            if waiting.is_empty() || self.owed() > OUTPUT_LOW {
-                return;
-            }
-            for task in std::mem::take(&mut *waiting) {
-                self.workers.run(task);
-            }
+        let mut waiting = self.waiting_output.lock().unwrap_or_else(PoisonError::into_inner);
+        if waiting.is_empty() || self.owed() > OUTPUT_LOW {
+            return;
+        }
+        for task in std::mem::take(&mut *waiting) {
+            self.workers.run(task);
         }
     }
 
     /// The bytes queued for the client and not yet taken by the host.
-    #[cfg(feature = "channels")]
     fn owed(&self) -> usize {
         self.lock_output().owed()
     }
 
     /// Runs `task` once the output drains; at once when it has already.
-    #[cfg(feature = "channels")]
     fn when_drained(&self, task: Box<dyn FnOnce() + Send>) {
         self.waiting_output.lock().unwrap_or_else(PoisonError::into_inner).push(task);
         self.drained();
