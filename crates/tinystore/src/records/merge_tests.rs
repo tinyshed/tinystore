@@ -10,8 +10,9 @@ use crate::records::NewEvent;
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
 
+/// A small segment whose blocks were written as its id says.
 fn small(id: i64, first: i64, last: i64, held: usize) -> Small {
-    Small { id, first, last, held, weight: held * 100 }
+    Small { id, first, last, held, weight: held * 100, blocks: (10 * id, 10 * id + 9) }
 }
 
 fn ids(run: Option<Vec<Small>>) -> Vec<i64> {
@@ -73,6 +74,34 @@ fn a_merge_leaves_overlapping_segments_out() {
     assert_eq!(ids(pick(segments)), [1, 3, 4, 5]);
     let three = vec![small(1, 100, 200, 30), small(2, 150, 160, 30), small(3, 155, 300, 30), small(4, 300, 400, 30)];
     assert_eq!(pick(three), None);
+    // one that begins where the one before ends, but whose blocks were written before its, would come after it
+    let earlier = vec![small(1, 100, 100, 1), small(2, 95, 100, 2), small(3, 200, 210, 1), small(4, 300, 310, 1)];
+    assert_eq!(pick(earlier.clone()), None);
+    let fifth = earlier.into_iter().chain([small(5, 400, 410, 1)]).collect();
+    assert_eq!(ids(pick(fifth)), [2, 3, 4, 5]);
+    // a holder of lower id whose blocks a merge wrote after the next one's
+    let rewritten = Small { blocks: (60, 61), ..small(1, 100, 200, 3) };
+    let after = vec![rewritten, small(2, 200, 210, 1), small(3, 300, 310, 1), small(4, 400, 410, 1)];
+    assert_eq!(pick(after), None);
+}
+
+// contract: REC-04
+#[test]
+fn a_merge_keeps_events_of_one_time_in_the_order_reads_gave_them() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let start = fixture.now();
+    let at = |name: &str, millis: u64| NewEvent::new(name).at(start + Duration::from_millis(millis));
+    let rounds = [vec![at("a", 100)], vec![at("e", 95), at("b", 100)], vec![at("c", 200)], vec![at("d", 300)]];
+    for (round, events) in rounds.into_iter().enumerate() {
+        api.append_all(events).unwrap();
+        fixture.pass(HOUR);
+        maintain(&fixture.store).unwrap();
+        if round == 1 {
+            assert_eq!(names(&api.list().page().unwrap().events), ["e", "a", "b"]);
+        }
+    }
+    assert_eq!(names(&api.list().page().unwrap().events), ["e", "a", "b", "c", "d"]);
 }
 
 // contract: DUR-08

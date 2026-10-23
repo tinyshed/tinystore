@@ -43,13 +43,17 @@ struct Small {
     last: i64,
     held: usize,
     weight: usize,
+    /// The ids of its first and last blocks, by which a read gives the
+    /// events of one time of two segments.
+    blocks: (i64, i64),
 }
 
 /// A member's row and its blocks' bodies, in their order.
 type Member = (Vec<u8>, Vec<Vec<u8>>);
 
-const SMALL: &str = "select id, first_at, last_at, held, weight from segments
-    where stream = ?1 and holder is null and held < ?2 and weight < ?3 order by id";
+const SMALL: &str = "select id, first_at, last_at, held, weight,
+    (select min(id) from blocks where segment = segments.id), (select max(id) from blocks where segment = segments.id)
+    from segments where stream = ?1 and holder is null and held < ?2 and weight < ?3 order by id";
 const MEMBER_ROW: &str = "select body from segments where id = ?1 and holder is null";
 const MEMBER_BLOCKS: &str = "select body from blocks where segment = ?1 order by id";
 /// A member's blocks with their filters, and what it held.
@@ -106,7 +110,8 @@ impl Records {
             let found = select.query_map(params![stream, SMALL_EVENTS as i64, small_weight as i64], |row| {
                 let (held, weight): (i64, i64) = (row.get(3)?, row.get(4)?);
                 let (held, weight) = (held.max(0) as usize, weight.max(0) as usize);
-                Ok(Small { id: row.get(0)?, first: row.get(1)?, last: row.get(2)?, held, weight })
+                let blocks = (row.get::<_, Option<i64>>(5)?.unwrap_or(0), row.get::<_, Option<i64>>(6)?.unwrap_or(0));
+                Ok(Small { id: row.get(0)?, first: row.get(1)?, last: row.get(2)?, held, weight, blocks })
             });
             let found: Vec<Small> = found.and_then(Iterator::collect).map_err(failed)?;
             Ok(found.into_iter().filter(|small| !self.is_damaged(Part::Segment, small.id)).collect())
@@ -214,11 +219,17 @@ fn size_of(events: usize) -> u32 {
 /// Up to four segments, earliest first, each beginning where the one before
 /// ended or later, so that their events one after another are in the order
 /// of their times; one that begins before the last taken ends is left out.
+/// So is one that begins where it ends but whose blocks were written before
+/// its: a read gives the events of one time of two blocks in the order the
+/// blocks were written, and the merge would give them the other way round.
 fn in_time_order(mut segments: Vec<Small>) -> Vec<Small> {
     segments.sort_by_key(|segment| (segment.first, segment.id));
     let mut run: Vec<Small> = Vec::with_capacity(FAN_IN);
     for segment in segments {
-        if run.last().is_some_and(|last| segment.first < last.last) {
+        let after = |last: &Small| {
+            segment.first > last.last || (segment.first == last.last && segment.blocks.0 > last.blocks.1)
+        };
+        if run.last().is_some_and(|last| !after(last)) {
             continue;
         }
         run.push(segment);
