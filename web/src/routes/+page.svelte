@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { codeBlocks } from '$lib/code-blocks'
 	import Seo from '$lib/components/Seo.svelte'
-	import { href } from '$lib/href'
+	import { href, rebase } from '$lib/href'
 	import { repository } from '$lib/site'
 	import { track } from '$lib/track'
 
@@ -14,7 +14,7 @@
 <main>
 	<section class="hero">
 		<h1>{data.headline}</h1>
-		<p class="pitch">{@html data.pitch}</p>
+		<p class="pitch">{@html rebase(data.pitch)}</p>
 		<div class="actions">
 			<a class="primary" href={href(data.start)}>Start here</a>
 			<a class="secondary" href={repository} onclick={() => track('outbound', 'github')}>View on GitHub</a>
@@ -73,7 +73,7 @@
 				</div>
 			{/each}
 		</dl>
-		<p class="caveat">{@html data.numbers.caveat}</p>
+		<p class="caveat">{@html rebase(data.numbers.caveat)}</p>
 	</section>
 	{/if}
 </main>
