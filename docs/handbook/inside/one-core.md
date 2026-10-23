@@ -103,9 +103,11 @@ looks for the owner:
    directory. That process takes `LOCK` and publishes a new `SERVE`, or finds
    `LOCK` held and exits, and the client tries again.
 
-The `server/` folder is readable by the directory's owner alone. A name such
-as a Windows pipe can be taken by anyone once its server is gone, so the
-proof, not the name, says that the server really serves this directory.
+On Linux and macOS the `server/` folder is readable by the directory's owner
+alone; on Windows it has the store directory's permissions, so keep a store
+where other users cannot read, as your profile is. A name such as a Windows
+pipe can be taken by anyone once its server is gone, so the proof, not the
+name, says that the server really serves this directory.
 
 The sidecar exits 30 seconds after its last client leaves. Four web processes
 and a cron script that open the same directory all join one sidecar.

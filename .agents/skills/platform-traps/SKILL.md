@@ -25,9 +25,10 @@ Each line cost a debugging session once. The fix named is the one in the code.
 ## Windows pipes, processes and consoles
 
 - **Named pipes share one namespace across every user.** The first instance
-  is made with `first_pipe_instance` and an owner-only DACL
-  (`crates/cli/src/serve.rs`), and a name a dead server left is anyone's: a
-  client proves its server cryptographically, the `SERVE` proof.
+  is made with `first_pipe_instance` (`crates/cli/src/serve.rs`), with the
+  system's default DACL, and a name a dead server left is anyone's: a client
+  proves its server cryptographically, the `SERVE` proof, whose secret is as
+  private as the store's directory, since `server\` inherits its ACL.
 - **Closing stdin ends a read waiting on it only sometimes**: a pipe's close
   cancels it, a console's close waits for it. A private child is ended by
   closing its stdin, and killed when it does not leave.

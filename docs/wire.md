@@ -139,11 +139,13 @@ belongs, with `limit` or `unavailable`.
 ## Finding a local server
 
 A store directory has at most one server, since its `LOCK` lets one process
-open it. That server publishes how to reach it in `<dir>/server/`, which only
-the directory's owner may enter: mode 0700 and, on Windows, which lets anyone
-traverse a directory to a file whose path they know, a protected DACL naming
-its owner alone, which every file made in it inherits. `SERVE` there is a
-hint; `LOCK` is the truth.
+open it. That server publishes how to reach it in `<dir>/server/`, which on
+Linux and macOS only the directory's owner may enter, mode 0700. On Windows
+`server\` and its files take the permissions of the store's directory: a
+directory in the user's profile keeps other users out, and a store kept
+where other local users may read, as a folder at a drive's root may let
+them, shows them `SERVE`'s secret too. `SERVE` there is a hint; `LOCK` is the
+truth.
 
 ```json
 {"protocol": 1, "server": "0.4.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
@@ -203,9 +205,11 @@ Where a local server listens:
   path, in hex: eight, so that a socket under macOS's temporary directory
   still fits.
 - **A named pipe on Windows**, `pipe:tinystore-<hash>`, created as the first
-  instance of its name with a DACL naming its owner alone, which refuses
-  remote clients. No local endpoint takes a token: its permission is the file
-  system's, and a local connection is `admin`.
+  instance of its name, which refuses remote clients, with the system's
+  default permissions for a pipe. No local endpoint takes a token: its
+  permission is the file system's, and a local connection is `admin`. So on
+  Windows the proof keeps a client from a pipe another user took only while
+  that user cannot read the store's directory.
 
 A remote server's tokens file gives each token one capability: `admin`
 may do anything, `data` reads and writes, and `read` reads only. A `read`
