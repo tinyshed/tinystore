@@ -11,6 +11,7 @@ import asyncio
 import weakref
 from typing import TYPE_CHECKING, Protocol
 
+from ._session import ConnectionLostError
 from ._wire.protocol import Handle
 from .errors import InvalidError
 
@@ -123,11 +124,25 @@ async def handle_on(connection: Connection, method: int, opener: Opener) -> int:
         raise
 
 
+async def open_call(connection: Connection, method: int, body: bytes) -> bytes:
+    """A handle's open, whose lost connection the call that needed the handle meets as its own, unsent.
+
+    The open's REQUEST had left, the call's own had not, so the call goes
+    again on the next connection, where the handle opens again.
+    """
+    try:
+        return await connection.session.call(method, body)
+    except ConnectionLostError as err:
+        if not err.sent:
+            raise
+        raise ConnectionLostError(str(err), sent=False) from err
+
+
 async def _opened_by_bytes(connection: Connection, method: int, body: bytes) -> int:
     key = (method, body)
     opening = connection.handles.get(key)
     if opening is None:
-        opening = asyncio.ensure_future(connection.session.call(method, body))
+        opening = asyncio.ensure_future(open_call(connection, method, body))
         connection.handles[key] = opening
     try:
         answer = await asyncio.shield(opening)

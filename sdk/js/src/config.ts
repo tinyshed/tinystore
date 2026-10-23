@@ -11,6 +11,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { Connection, Idempotence, Link } from './connection.ts'
 import { CancelledError, ConflictError, InvalidError, UnavailableError } from './errors.ts'
+import { unsent } from './handles.ts'
 import { check, isSchema, type StandardSchemaV1 } from './schema.ts'
 import { ConnectionLostError, type Stream } from './session.ts'
 import { type DurationText, ms, spelled } from './time.ts'
@@ -893,11 +894,16 @@ export class Config<D> {
 	#handleOn(connection: Connection): Promise<number> {
 		let handle = this.#handles.get(connection)
 		if (handle === undefined) {
-			handle = connection.session.call(methods['config.open'], this.#open).then(async body => {
-				const opened = ConfigValue.decode(body)
-				await this.#take(opened)
-				return opened.handle ?? 0
-			})
+			handle = connection.session.call(methods['config.open'], this.#open).then(
+				async body => {
+					const opened = ConfigValue.decode(body)
+					await this.#take(opened)
+					return opened.handle ?? 0
+				},
+				(err: unknown) => {
+					throw unsent(err)
+				},
+			)
 			this.#handles.set(connection, handle)
 			handle.catch(() => this.#handles.delete(connection))
 		}

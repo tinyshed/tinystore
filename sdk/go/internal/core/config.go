@@ -201,7 +201,7 @@ func (c *Config) handleOn(ctx context.Context, conn *Connection) (uint64, error)
 	}
 	answer, err := conn.Session.Call(ctx, wire.MethodConfigOpen, c.open)
 	if err != nil {
-		return 0, err
+		return 0, openLost(err)
 	}
 	var opened wire.ConfigValue
 	if err := wire.Decode(answer, &opened); err != nil {

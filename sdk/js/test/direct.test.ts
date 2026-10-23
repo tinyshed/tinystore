@@ -137,6 +137,29 @@ test('a read whose connection ends goes on the next one, and a write says its ou
 	expect(await caught(bucket.set('k', 'v'))).toBeInstanceOf(OutcomeUnknownError)
 })
 
+// contract: WIRE-05
+test("a write whose handle's open lost the connection goes again on the next, since it never left", async () => {
+	let sets = 0
+	const dialled: Served[] = []
+	const link = new Link(async () => {
+		const first = dialled.length === 0
+		const server = await served((method, body) => {
+			if (first && method === methods['kv.bucket.open']) {
+				return 'end'
+			}
+			if (method === methods['kv.set']) {
+				sets++
+			}
+			return echo(method, body)
+		})
+		dialled.push(server)
+		return server.connection
+	})
+	await bucketOver(link).set('k', 'v')
+	expect(dialled.length).toBe(2)
+	expect(sets).toBe(1)
+})
+
 test('an answer that is not its message fails its call alone', async () => {
 	let broken = false
 	const server = await served((method, body) =>

@@ -14,9 +14,21 @@ import pytest
 from tinystore._connection import Connection, Link
 from tinystore._runtime import Transport
 from tinystore._session import Session
+from tinystore._values import values_of
 from tinystore._wire import frame as f
-from tinystore._wire.protocol import Empty, GoAway, Handle, KvEntry, SqlTxAnswer, SqlTxCall, Welcome, methods
+from tinystore._wire.protocol import (
+    Empty,
+    GoAway,
+    Handle,
+    KvEntry,
+    KvWritten,
+    SqlTxAnswer,
+    SqlTxCall,
+    Welcome,
+    methods,
+)
 from tinystore.errors import ClosedError, OutcomeUnknownError, UnavailableError
+from tinystore.kv import Bucket, Parts, bucket_open
 from tinystore.sql import open_database
 
 if TYPE_CHECKING:
@@ -167,3 +179,33 @@ async def test_a_transaction_lost_before_its_commit_left_is_closed_since_the_ser
     with pytest.raises(ClosedError) as failed:
         await db.tx(sell)
     assert not isinstance(failed.value, OutcomeUnknownError)
+
+
+# contract: WIRE-05
+async def test_a_write_whose_handles_open_lost_the_connection_goes_again_on_the_next_since_it_never_left() -> None:
+    dialled: list[Session] = []
+    sets: list[int] = []
+
+    def opening_lost_first(h: f.Header, body: bytes) -> list[bytes] | None:
+        if h.method == methods["kv.bucket.open"]:
+            if len(dialled) == 1:
+                return None
+            return [f.frame(f.RESPONSE, f.END, 0, h.stream, Handle.encode(handle=7))]
+        sets.append(h.stream)
+        return [f.frame(f.RESPONSE, f.END, 0, h.stream, KvWritten.encode(written=True, version=bytes(8)))]
+
+    link = scripted(opening_lost_first, dialled)
+    sessions: Bucket[str] = Bucket(
+        Parts(
+            link,
+            "sessions",
+            bucket_open("sessions", None, None, False, None),
+            "kv.bucket.open",
+            (),
+            values_of(str),
+            None,
+        )
+    )
+    await sessions.set("k", "v")
+    assert len(dialled) == 2
+    assert len(sets) == 1

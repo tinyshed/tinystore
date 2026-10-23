@@ -271,10 +271,24 @@ func HandleOn(ctx context.Context, c *Connection, opener *Opener) (uint64, error
 	c.mu.Unlock()
 	select {
 	case <-o.done:
-		return o.handle, o.err
+		return o.handle, openLost(o.err)
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
+}
+
+// openLost is a connection lost while a handle opened, as the call that
+// needed the handle meets it: the open's REQUEST had left, the call's own had
+// not, so the call goes again on the next connection, where the handle opens
+// again.
+func openLost(err error) error {
+	var e *Error
+	if !errors.As(err, &e) || !e.ended || !e.sent {
+		return err
+	}
+	unsent := *e
+	unsent.sent = false
+	return &unsent
 }
 
 func (c *Connection) open(ctx context.Context, opener *Opener) (uint64, error) {

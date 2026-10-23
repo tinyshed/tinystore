@@ -1,5 +1,6 @@
 import { type Connection, goesAgain, type Idempotence, type Link } from './connection.ts'
 import { InvalidError } from './errors.ts'
+import { ConnectionLostError } from './session.ts'
 import type { Key } from './wire/codec.ts'
 import { Reader, Writer } from './wire/msgpack.ts'
 import { Handle } from './wire/protocol.ts'
@@ -158,7 +159,12 @@ export function handleOn(connection: Connection, method: number, open: Open): Pr
 	const key = `${method}:${encoded}`
 	let opening = connection.handles.get(key)
 	if (opening === undefined) {
-		opening = connection.session.call(method, open).then(body => Handle.decode(body).handle ?? 0)
+		opening = connection.session.call(method, open).then(
+			body => Handle.decode(body).handle ?? 0,
+			(err: unknown) => {
+				throw unsent(err)
+			},
+		)
 		connection.handles.set(key, opening)
 		opening.catch(() => connection.handles.delete(key))
 	}
@@ -170,6 +176,17 @@ export function handleOn(connection: Connection, method: number, open: Open): Pr
 		)
 	}
 	return opening
+}
+
+/**
+ * A connection lost while a handle opened, as the call that needed the handle
+ * meets it: the open's REQUEST had left, the call's own had not, so the call
+ * goes again on the next connection, where the handle opens again.
+ */
+export function unsent(err: unknown): unknown {
+	return err instanceof ConnectionLostError && err.sent
+		? new ConnectionLostError(err.message, false)
+		: err
 }
 
 const named = /^[a-z0-9][a-z0-9_-]{0,63}$/

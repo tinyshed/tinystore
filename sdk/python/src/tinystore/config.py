@@ -38,6 +38,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast, overload
 
+from ._handles import open_call
 from ._session import ConnectionLostError
 from ._time import ms
 from ._wire.protocol import ConfigOpen, ConfigReset, ConfigUpdate, ConfigValue, Handle, methods
@@ -673,7 +674,7 @@ class Config[T]:
             raise
 
     async def _opened_on(self, connection: Connection) -> int:
-        opened = ConfigValue.decode(await connection.session.call(methods["config.open"], self._open))
+        opened = ConfigValue.decode(await open_call(connection, methods["config.open"], self._open))
         await self._take(opened)
         return opened.get("handle", 0)
 
