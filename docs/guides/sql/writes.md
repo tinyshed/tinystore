@@ -259,7 +259,9 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
   again. A connection lost before the commit leaves fails `closed`, and the
   server rolls the transaction back (contract WIRE-06). If a Go `ctx`, or a
   signal in Bun and Node, ends while the commit waits for its answer, that
-  is `outcome unknown` too.
+  is `outcome unknown` too. If it ends before the commit leaves, the commit
+  is never sent: the call fails with the `ctx`'s error, or `cancelled` in
+  Bun and Node, and the server rolls the transaction back.
 - It holds the writer: every other write to this file waits. Past five
   seconds it is rolled back and fails `limit`. Call nothing that waits on the
   world inside it, no model, no HTTP.

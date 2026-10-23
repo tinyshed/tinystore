@@ -1,13 +1,15 @@
 package sqldb
 
-// A transaction whose connection is lost, against a server that answers by a
-// script: a loss before the commit left and one after it, which only a
-// script can place.
+// A transaction whose connection is lost or whose ctx ends, against a server
+// that answers by a script: before the commit left, after it, and after its
+// answer came, which only a script can place.
 
 import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"tinyshed.org/tinystore/internal/core"
@@ -69,6 +71,82 @@ func TestATransactionWhoseCommitsWaitIsCancelledHasAnUnknownOutcome(t *testing.T
 	err := db.Tx(ctx, func(tx *Tx) error { return nil })
 	if core.KindOf(err) != core.OutcomeUnknown || !errors.Is(err, context.Canceled) {
 		t.Fatalf("a commit whose wait was cancelled: %v", err)
+	}
+}
+
+// endsOnceAsked is a ctx that ends when its Err is asked once answered is
+// set: a ctx that ended just after the commit's answer came, a moment no
+// cancel from another goroutine places for certain.
+type endsOnceAsked struct {
+	context.Context
+	answered atomic.Bool
+	done     chan struct{}
+	once     sync.Once
+}
+
+func (c *endsOnceAsked) Done() <-chan struct{} { return c.done }
+
+func (c *endsOnceAsked) Err() error {
+	if !c.answered.Load() {
+		return nil
+	}
+	c.once.Do(func() { close(c.done) })
+	return context.Canceled
+}
+
+// contract: WIRE-05
+func TestACommitAnsweredBeforeItsCtxEndedIsItsAnswer(t *testing.T) {
+	failure := wire.Encode(&wire.Failure{Code: string(core.Limit), Message: "a transaction held the writer past its 5s"})
+	for _, c := range []struct {
+		name   string
+		answer scripted.Frame
+		want   error
+	}{
+		{"committed", scripted.Frame{Kind: scripted.Response, Flags: scripted.End, Body: wire.Encode(&wire.Empty{})}, nil},
+		{"refused", scripted.Frame{Kind: scripted.Response, Flags: scripted.End | scripted.Error, Body: failure}, core.ErrLimit},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := &endsOnceAsked{Context: context.Background(), done: make(chan struct{})}
+			db := scriptedDB(scripted.Dial(func(f scripted.Frame) ([]scripted.Frame, bool) {
+				var call wire.SqlTxCall
+				if f.Kind == scripted.Data && wire.Decode(f.Body, &call) == nil && call.Commit {
+					ctx.answered.Store(true)
+					answer := c.answer
+					answer.Stream = f.Stream
+					return []scripted.Frame{answer}, false
+				}
+				return committing(f)
+			}))
+			defer db.store.Close()
+			err := db.Tx(ctx, func(tx *Tx) error { return nil })
+			if (err == nil) != (c.want == nil) || core.KindOf(err) != core.KindOf(c.want) {
+				t.Fatalf("a commit answered %s, its ctx ended after: %v", c.name, err)
+			}
+		})
+	}
+}
+
+// contract: WIRE-06
+func TestATransactionWhoseCtxEndedBeforeItsCommitLeftIsTheCtxsErrorSinceTheServerRollsItBack(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var commits atomic.Int32
+	db := scriptedDB(scripted.Dial(func(f scripted.Frame) ([]scripted.Frame, bool) {
+		var call wire.SqlTxCall
+		if f.Kind == scripted.Data && wire.Decode(f.Body, &call) == nil && call.Commit {
+			commits.Add(1)
+		}
+		return committing(f)
+	}))
+	defer db.store.Close()
+	err := db.Tx(ctx, func(tx *Tx) error {
+		if _, err := tx.Exec(ctx, "update items set stock = stock - 1 where sku = 'a'"); err != nil {
+			return err
+		}
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || core.KindOf(err) == core.OutcomeUnknown || commits.Load() != 0 {
+		t.Fatalf("a transaction whose ctx ended before its commit left: %v, %d commits sent", err, commits.Load())
 	}
 }
 

@@ -23,8 +23,12 @@ const (
 	Data     = 5
 )
 
-// End is the flag of a sender's last frame on its stream.
-const End = 1
+// The flags of a frame: End on a sender's last frame on its stream, and Error
+// beside it on a final frame whose body is a failure.
+const (
+	End   = 1
+	Error = 2
+)
 
 const headerSize = 12
 

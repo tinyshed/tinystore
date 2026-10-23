@@ -380,8 +380,9 @@ end(commit: boolean): Promise<void>
 
 Sends the last call: commit, or roll back, and waits for the server's
 word. A commit that left and was not answered, its connection lost or
-its wait cancelled, may have committed: its outcome is unknown. One lost
-before it left was rolled back by the server, and is the loss itself.
+its wait cancelled, may have committed: its outcome is unknown. One that
+never left, its signal aborted or its connection lost first, was rolled
+back by the server, and fails as it ended.
 
 ## ColumnType
 

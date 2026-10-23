@@ -2,6 +2,7 @@ package sqldb
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"sync"
 
@@ -200,8 +201,9 @@ func (tx *Tx) send(ctx context.Context, call wire.SqlTxCall) (wire.SqlTxAnswer, 
 
 // end sends the last call, commit or roll back, and waits for the store's
 // word. A commit that left and was not answered, its connection lost or its
-// ctx done, may have committed: its outcome is unknown. One lost before it
-// left was rolled back by the store, and is the loss itself.
+// wait given up, may have committed: its outcome is unknown. One that never
+// left, its ctx done or its connection lost first, was rolled back by the
+// store, and fails as it ended.
 func (tx *Tx) end(ctx context.Context, commit bool) error {
 	tx.turn.Lock()
 	defer tx.turn.Unlock()
@@ -209,13 +211,26 @@ func (tx *Tx) end(ctx context.Context, commit bool) error {
 		return nil
 	}
 	tx.ended = true
+	if err := ctx.Err(); err != nil {
+		// the CANCEL leaves in place of the last call, and the store rolls back
+		tx.stream.Cancel()
+		return err
+	}
 	if err := tx.stream.Send(ctx, wire.Encode(&wire.SqlTxCall{Commit: commit}), true); err != nil {
 		return err
 	}
 	_, err := tx.stream.Next(ctx)
-	if lost, _ := core.IsConnectionLost(err); commit && (lost || ctx.Err() != nil) {
+	if commit && leftUnanswered(err) {
 		return core.Wrap(core.OutcomeUnknown, err,
 			"%s: the transaction's commit left with no answer; read what it wrote before running it again", tx.db.describe)
 	}
 	return err
+}
+
+// leftUnanswered says whether a commit that left has no answer: its
+// connection ended, or Next gave up waiting. An answer, the store's failure
+// too, is the outcome, even when ctx has ended since.
+func leftUnanswered(err error) bool {
+	lost, _ := core.IsConnectionLost(err)
+	return lost || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

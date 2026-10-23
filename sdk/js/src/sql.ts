@@ -1117,11 +1117,18 @@ export class SqlTx implements Runner {
 	/**
 	 * Sends the last call: commit, or roll back, and waits for the server's
 	 * word. A commit that left and was not answered, its connection lost or
-	 * its wait cancelled, may have committed: its outcome is unknown. One lost
-	 * before it left was rolled back by the server, and is the loss itself.
+	 * its wait cancelled, may have committed: its outcome is unknown. One that
+	 * never left, its signal aborted or its connection lost first, was rolled
+	 * back by the server, and fails as it ended.
 	 */
 	async end(commit: boolean): Promise<void> {
 		await this.#last.catch(() => {})
+		if (this.#stream.cancelled) {
+			// the signal's CANCEL leaves ahead of a commit sent now, and the server rolls back at it
+			throw new CancelledError(
+				`${this.describe}: the transaction was cancelled before its commit left`,
+			)
+		}
 		await this.#stream.send(SqlTxCall.encode({ commit }), true)
 		try {
 			await this.#stream.next()

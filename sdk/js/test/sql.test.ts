@@ -939,6 +939,36 @@ describe('a transaction whose connection is lost', () => {
 	})
 
 	// contract: WIRE-06
+	test('cancelled by a signal before its commit left, it is cancelled, since the server rolls it back', async () => {
+		const controller = new AbortController()
+		let commits = 0
+		const db = await openDatabase(
+			scripted(
+				sent => {
+					if (sent.kind === Kind.data && SqlTxCall.decode(sent.body).commit === true) {
+						commits++
+					}
+					return committing(sent)
+				},
+				() => {},
+			),
+			new Set(),
+			'app',
+		)
+		const failed = await caught(
+			withSignal(controller.signal, () =>
+				db.tx(async tx => {
+					await tx.exec`update items set stock = stock - 1 where sku = 'a'`
+					controller.abort()
+				}),
+			),
+		)
+		expect(failed).toBeInstanceOf(CancelledError)
+		expect(failed).not.toBeInstanceOf(OutcomeUnknownError)
+		expect(commits).toBe(0)
+	})
+
+	// contract: WIRE-06
 	test('before its commit left, it is closed, since the server rolls it back', async () => {
 		let session: Session | undefined
 		const db = await openDatabase(
