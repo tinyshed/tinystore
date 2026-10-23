@@ -84,3 +84,34 @@ fn a_plan_counts_every_sample_a_call_would_decode_past_their_bound() {
     let fits = f.metrics().query().name("deep").filter("n", "0").since(HOUR).explain(Op::Max).unwrap();
     assert_eq!(fits.exceeds, None);
 }
+
+// contract: MET-07
+#[test]
+fn a_plan_counts_the_samples_or_buckets_a_call_would_answer() {
+    let f = fixture();
+    // 100,001 samples a second apart, packed a minute a block but for the newest
+    let first = f.now() - 100_000 * SECOND;
+    for part in 0..=10_u32 {
+        let mut series = Series::gauge("fine");
+        let indices = part * 10_000..(part * 10_000 + 10_000).min(100_001);
+        series.extend(indices.map(|index| (first + index * SECOND, f64::from(index))));
+        f.metrics().ingest(&[series]).unwrap();
+        maintain(&f.store).unwrap();
+    }
+    let answer = Some(Exceeds { limit: "answer", wanted: 100_001, bound: 100_000 });
+    let all = || f.metrics().query().name("fine");
+    let read = all().explain(None).unwrap();
+    assert_eq!((read.decoded, &read.exceeds), (100_001, &answer));
+    assert_eq!(all().read().unwrap_err().fact("limit"), Some("answer"), "as the call stops");
+    let seconds = all().every(SECOND).explain(Op::Avg).unwrap();
+    assert_eq!(seconds.exceeds, answer);
+    assert_eq!(all().every(SECOND).aggregate(Op::Avg).unwrap_err().fact("limit"), Some("answer"));
+    // a range the newest samples cut, and buckets of two seconds, fit
+    let cut = f.metrics().query().name("fine").from(first + 30 * SECOND).explain(None).unwrap();
+    assert_eq!(cut.exceeds, None);
+    assert_eq!(f.metrics().query().name("fine").from(first + 30 * SECOND).read().unwrap()[0].samples().len(), 99_971);
+    let near = f.metrics().query().name("fine").from(first + 30 * SECOND).to(f.now() - 30 * SECOND);
+    assert_eq!(near.clone().explain(None).unwrap().exceeds, None);
+    assert_eq!(all().every(2 * SECOND).explain(Op::Avg).unwrap().exceeds, None);
+    assert_eq!(all().every(2 * SECOND).aggregate(Op::Avg).unwrap()[0].buckets.len(), 50_001);
+}

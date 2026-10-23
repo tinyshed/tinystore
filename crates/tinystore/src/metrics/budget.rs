@@ -30,9 +30,10 @@ pub(super) struct Budget {
     pub(super) bytes: usize,
     pub(super) decoded: usize,
     pub(super) answer: usize,
-    /// A plan's budget goes on counting the samples a call would decode past
-    /// their bound, which costs it nothing, and stops where the call would at
-    /// the series it finds and the bytes it reads, which are its own work.
+    /// A plan's budget goes on counting the samples a call would decode or
+    /// answer past their bounds, which costs it nothing, and stops where the
+    /// call would at the series it finds and the bytes it reads, which are
+    /// its own work.
     planning: bool,
     /// The first bound a plan found passed, and what was wanted of it there.
     passed: Option<(&'static Bound, usize)>,
@@ -53,7 +54,11 @@ impl Budget {
     /// and the bound.
     pub(super) fn passed(&self) -> Option<(&'static str, usize, usize)> {
         let (bound, wanted) = self.passed?;
-        let wanted = if *bound == DECODED { self.decoded } else { wanted };
+        let wanted = match *bound {
+            DECODED => self.decoded,
+            ANSWER => self.answer,
+            _ => wanted,
+        };
         Some((bound.name, wanted, bound.most))
     }
 
@@ -96,7 +101,7 @@ impl Budget {
         }
         if self.planning {
             self.passed.get_or_insert((bound, wanted));
-            if *bound == DECODED {
+            if *bound == DECODED || *bound == ANSWER {
                 return Ok(wanted);
             }
         }

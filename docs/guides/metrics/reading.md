@@ -169,10 +169,11 @@ plan, err := metrics.Explain(ctx, store, metrics.Query{Name: "cpu", Since: 30 * 
 let plan = stats.query().name("cpu").since(Duration::from_hours(30 * 24)).every(Duration::from_hours(1)).explain(Op::Avg)?;
 ```
 
-A query is bounded before it starts: series, bytes read and samples decoded
-are separate budgets, and a query past one is `limit`, naming it, never a
-smaller answer. `explain` says what a `read` or an `aggregate` would spend of
-each, and in `exceeds` the bound it would stop at.
+A query is bounded before it starts: series, bytes read, samples decoded and
+the size of the answer are separate budgets, and a query past one is `limit`,
+naming it, never a smaller answer. `explain` says how many series, bytes and
+decoded samples a `read` or an `aggregate` would spend, and in `exceeds` the
+bound it would stop at, `answer` included.
 
 | Bound           | A query's limit            |
 |-----------------|----------------------------|

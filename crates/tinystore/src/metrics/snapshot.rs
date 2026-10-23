@@ -396,6 +396,13 @@ impl Taken {
         let chunks = head::parse(self.found.id, taken.extent, &taken.bytes)?;
         head::decode(zstd, &chunks, taken.from, self.window.to, out)
     }
+
+    /// The chunks of its head the call decodes.
+    pub(super) fn head_chunks(&self) -> Result<Vec<Chunk<'_>>> {
+        let Some(taken) = &self.head else { return Ok(Vec::new()) };
+        let chunks = head::parse(self.found.id, taken.extent, &taken.bytes)?;
+        Ok(chunks.into_iter().filter(|chunk| chunk.overlaps(taken.from, self.window.to)).collect())
+    }
 }
 
 /// A block's samples onto `out`: its times from its clock, its values from
