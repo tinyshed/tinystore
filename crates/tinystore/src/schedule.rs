@@ -8,6 +8,10 @@ use crate::{Error, Result};
 
 type Work = Box<dyn FnMut() -> Result<()> + Send>;
 
+/// The longest period a task waits: a longer one, as `Duration::MAX` asks, is
+/// past what the clock can add, and the task runs only when woken.
+const LONGEST: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
 /// The store's periodic work, run one task at a time on one thread of the
 /// store's own, which starts with the first task and stops at close.
 pub(crate) struct Scheduler {
@@ -100,6 +104,7 @@ impl Scheduler {
         }
         let id = state.next_id;
         state.next_id += 1;
+        let period = period.min(LONGEST);
         state.tasks.push(Task {
             id,
             name: name.to_owned(),
@@ -322,6 +327,21 @@ mod tests {
         scheduler.add("test: flush", Duration::from_millis(10), flush).unwrap();
         woken.lock().unwrap().as_ref().unwrap().wake();
         assert!(wait_until(|| flushes.load(Ordering::SeqCst) >= 3), "a task woken on every run starves none");
+        scheduler.stop();
+    }
+
+    #[test]
+    fn a_period_longer_than_the_clock_holds_runs_only_when_woken() {
+        let scheduler = Scheduler::new(true, Arc::default());
+        let (runs, work) = counting();
+        // a counters' flush every Duration::MAX is one written only at close
+        let wake = scheduler.add("test: never", Duration::MAX, work).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        wake.wake();
+        assert!(wait_until(|| runs.load(Ordering::SeqCst) == 1), "a wake runs it");
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "and then it waits again");
         scheduler.stop();
     }
 
