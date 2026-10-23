@@ -205,10 +205,13 @@ impl Search {
                     None => {
                         made = true;
                         let settings = Settings::new(wanted);
+                        // A table's index's triggers commit with it, so that
+                        // the fill it wakes reads no row before its writes are noted.
                         let id = self.file.transaction(|tx| {
                             let id = rebuild::add_index(tx, name, &settings)?;
-                            if settings.table.is_some() {
+                            if let Some(followed) = &settings.table {
                                 table::begin_fill(tx, id)?;
+                                table::follow(tx, name, followed)?;
                             }
                             Ok::<i64, Error>(id)
                         })?;
