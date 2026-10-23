@@ -154,6 +154,13 @@ impl Acks {
         }
     }
 
+    /// The node `node` follows `file` anew, from a point that may be another
+    /// home's: what it held of this node's entries is found again.
+    pub(crate) fn forget(&self, node: &str, file: &str) {
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.entries.remove(&(node.to_owned(), file.to_owned()));
+    }
+
     pub(crate) fn linked(&self, node: &str, address: &str) {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         held.linked.entry(node.to_owned()).or_insert_with(|| (address.to_owned(), 0)).1 += 1;
@@ -227,6 +234,14 @@ impl Acks {
 
     fn counts(&self, node: &str, address: &str) -> bool {
         self.chosen.is_empty() || self.chosen.iter().any(|chosen| chosen == node || chosen == address)
+    }
+
+    /// The last entry of `file` the node `node` is counted as holding.
+    #[cfg(test)]
+    #[allow(dead_code, reason = "the link tests call it, and they build only with every engine")]
+    pub(crate) fn holds(&self, node: &str, file: &str) -> Option<u64> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.entries.get(&(node.to_owned(), file.to_owned())).copied()
     }
 }
 

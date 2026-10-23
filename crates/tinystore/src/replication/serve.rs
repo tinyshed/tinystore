@@ -2,6 +2,7 @@
 //! each link gets a thread that reads what the other node asks and one that
 //! sends it each file's entries as its log grows.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -125,6 +126,38 @@ struct Asked {
     ended: bool,
     /// The node at the link's other end, among the node's followers.
     following: Option<Following>,
+    /// The last entry of this node's chain of each file the link put the
+    /// other node at, or found it at: what its claims to hold count up to. A
+    /// file it follows and is not here yet, the link has not placed: what it
+    /// claims then may be another home's entries.
+    upto: HashMap<String, u64>,
+}
+
+/// The sending end of a link: what it sends, and where that puts the node at
+/// its other end on this node's chain, which the thread reading the node's
+/// claims counts them up to.
+struct Link<'a> {
+    state: &'a State,
+    out: &'a Out,
+    asked: &'a Mutex<Asked>,
+}
+
+impl Link<'_> {
+    /// The other node holds `file` at `at` of this node's chain: the point it
+    /// asked from, found in this node's log.
+    fn found(&self, file: &str, at: Point) {
+        let mut asked = lock(self.asked);
+        asked.upto.insert(file.to_owned(), at.sequence);
+        if let Some(following) = &asked.following {
+            self.state.acks.held(following.node(), file, at.sequence);
+        }
+    }
+
+    /// The link sends what puts the other node at `sequence` of `file`; told
+    /// before it is sent, so that the claim of holding it counts.
+    fn sending(&self, file: &str, sequence: u64) {
+        lock(self.asked).upto.insert(file.to_owned(), sequence);
+    }
 }
 
 fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
@@ -222,8 +255,11 @@ impl Requests<'_> {
                 state.notify.appended();
             }
             Message::Applied { file, sequence } => {
-                if let Some(following) = &lock(self.asked).following {
-                    state.acks.held(following.node(), &file, sequence);
+                let asked = lock(self.asked);
+                if let Some(following) = &asked.following {
+                    if let Some(&upto) = asked.upto.get(&file) {
+                        state.acks.held(following.node(), &file, sequence.min(upto));
+                    }
                     following.applied(&file, sequence);
                 }
             }
@@ -241,13 +277,16 @@ impl Requests<'_> {
             return Err(Error::invalid(format!("a link asked for {file:?}, which is no file's name")));
         }
         let mut held = lock(self.asked);
-        held.follows.push((file, at));
-        if !self.following
-            && let Some(follower) = &held.following
-        {
-            self.following = true;
-            self.state.acks.linked(follower.node(), follower.address());
+        // where it stands on this node's chain is found anew
+        held.upto.remove(&file);
+        if let Some(follower) = &held.following {
+            self.state.acks.forget(follower.node(), &file);
+            if !self.following {
+                self.following = true;
+                self.state.acks.linked(follower.node(), follower.address());
+            }
         }
+        held.follows.push((file, at));
         drop(held);
         self.state.notify.appended();
         Ok(())
@@ -433,8 +472,9 @@ fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>, mut listed: u
             out.send(&verified(state, file))?;
         }
         let mut sent = false;
+        let link = Link { state, out, asked };
         for one in &mut followed {
-            sent |= send_some(state, out, one)?;
+            sent |= send_some(&link, one)?;
         }
         if !sent {
             if out.idle_for() >= PING_EVERY {
@@ -454,7 +494,8 @@ fn verified(state: &State, file: String) -> Message {
 }
 
 /// Sends what is next of one file; whether it sent anything.
-fn send_some(state: &State, out: &Out, followed: &mut Followed) -> Result<bool> {
+fn send_some(link: &Link<'_>, followed: &mut Followed) -> Result<bool> {
+    let (state, out) = (link.state, link.out);
     let file = followed.file.clone();
     let dir = state.log_dir(&file);
     loop {
@@ -470,9 +511,12 @@ fn send_some(state: &State, out: &Out, followed: &mut Followed) -> Result<bool> 
                     Ok(sending) => sending,
                     Err(error) => later(out, &file, at, &error)?,
                 };
+                if let Sending::Entries { last, .. } = followed.sending {
+                    link.found(&file, last);
+                }
             }
             Sending::Snapshot => {
-                followed.sending = match send_snapshot(state, out, &file) {
+                followed.sending = match send_snapshot(link, &file) {
                     Ok(sending) => sending,
                     Err(error) if error.kind() == ErrorKind::Io && error.what() == "a link" => return Err(error),
                     Err(error) => later(out, &file, Point::default(), &error)?,
@@ -484,7 +528,7 @@ fn send_some(state: &State, out: &Out, followed: &mut Followed) -> Result<bool> 
                 if file == crate::blobs::FILE_IN_STORE {
                     send_objects_first(state, out, &mut followed.objects)?;
                 }
-                let (sending, sent) = send_entries(out, &file, &dir, last, segment, offset)?;
+                let (sending, sent) = send_entries(link, &file, &dir, last, segment, offset)?;
                 followed.sending = sending;
                 return Ok(sent);
             }
@@ -594,12 +638,19 @@ fn where_to_begin(state: &State, file: &str, dir: &std::path::Path, at: Point) -
     Ok(Sending::Snapshot)
 }
 
-fn send_snapshot(state: &State, out: &Out, file: &str) -> Result<Sending> {
+fn send_snapshot(link: &Link<'_>, file: &str) -> Result<Sending> {
+    let state = link.state;
     let source = state.source(file).ok_or_else(|| Error::not_found(format!("{file}: this node holds no such file")))?;
     let at = snapshot::read(source.as_ref(), |part| {
         let file = file.to_owned();
-        out.send(&match part {
-            Part::Begin { page_size, at } => Message::SnapshotBegin { file, page_size, at },
+        link.out.send(&match part {
+            // What the other node claims to hold from here counts up to `at`
+            // at most: no commit up to it waits for a copy any more, since
+            // `at` was read with the writer held.
+            Part::Begin { page_size, at } => {
+                link.sending(&file, at.sequence);
+                Message::SnapshotBegin { file, page_size, at }
+            }
             Part::Pages(pages) => Message::SnapshotPages { file, pages },
             Part::End { ready_at } => Message::SnapshotEnd { file, ready_at },
         })
@@ -614,7 +665,7 @@ fn send_snapshot(state: &State, out: &Out, file: &str) -> Result<Sending> {
 
 /// Sends the entries after `last` that the log holds now, a turn's worth.
 fn send_entries(
-    out: &Out,
+    link: &Link<'_>,
     file: &str,
     dir: &std::path::Path,
     mut last: Point,
@@ -646,7 +697,8 @@ fn send_entries(
                 if !entry.follows(&last) || restarts {
                     return Ok((Sending::Snapshot, sent > 0));
                 }
-                out.send(&Message::Entry { file: file.to_owned(), bytes: bytes[at..at + used].to_vec() })?;
+                link.sending(file, entry.sequence);
+                link.out.send(&Message::Entry { file: file.to_owned(), bytes: bytes[at..at + used].to_vec() })?;
                 last = entry.point();
                 sent += used;
             }

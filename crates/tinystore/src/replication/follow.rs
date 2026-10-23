@@ -758,6 +758,9 @@ impl Link<'_> {
         store.applied(file);
         drop(store);
         self.held.insert(file.to_owned(), Held::Whole(copy));
+        // what it said of the copy held before, which may stand further on in
+        // another home's entries, keeps it from saying what this one holds
+        self.said.remove(file);
         tracing::info!(target: "tinystore", %file, "a node holds a whole copy of a file");
         self.blobs_changed(file);
         Ok(())

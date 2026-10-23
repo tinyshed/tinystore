@@ -515,6 +515,58 @@ fn an_old_home_back_without_its_demotion_hands_no_node_of_a_later_epoch_its_file
     europe.close().unwrap();
 }
 
+// A copy linking with an old home's chain says it holds its entries there,
+// which are no entries of the new home's: its commits that copy lacks would
+// answer as held.
+// contract: REPL-09
+#[test]
+fn a_synchronous_home_counts_what_a_copy_holds_of_its_own_entries_not_of_an_older_home_s() {
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, home_address) = serving(dirs[0].path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    sessions.set("first", &"from the first home".to_owned()).unwrap();
+    let europe_node = |from: Vec<String>, serve: String, synchronous| Node {
+        from,
+        serve: Some(serve),
+        synchronous,
+        ..Node::default()
+    };
+    let europe = node_with(dirs[1].path(), europe_node(vec![home_address.clone()], "127.0.0.1:0".into(), false));
+    let europe_address = bound(europe.node().unwrap()).unwrap().to_string();
+    let russia = node_with(dirs[2].path(), Node { from: vec![home_address.clone()], ..Node::default() });
+    russia.bucket::<String>("sessions").open().unwrap();
+    europe.bucket::<String>("sessions").open().unwrap();
+    caught_up(&home, &europe, &["kv.db"]);
+    // europe stops while russia goes on with the first home
+    europe.close().unwrap();
+    for i in 0..20 {
+        sessions.set(format!("late {i}"), &"europe never had it".to_owned()).unwrap();
+    }
+    caught_up(&home, &russia, &["kv.db"]);
+    let russia_id = russia.node().unwrap().id.clone();
+    russia.close().unwrap();
+    drop(sessions);
+    home.close().unwrap();
+
+    promote(dirs[1].path(), &[]).unwrap();
+    let europe = node_with(dirs[1].path(), europe_node(Vec::new(), europe_address.clone(), true));
+    let written = europe.bucket::<String>("sessions").open().unwrap();
+    // its first entry, which no copy holds, makes the file one it serves
+    let alone = written.set("first after", &"the promotion".to_owned()).unwrap_err();
+    assert_eq!(alone.kind(), crate::ErrorKind::CommittedLocally);
+    let russia = node_with(dirs[2].path(), Node { from: vec![europe_address], ..Node::default() });
+    caught_up(&europe, &russia, &["kv.db"]);
+    let acks = &europe.node().unwrap().acks;
+    let stands = home_point(&europe, "kv.db").sequence;
+    assert!(acks.holds(&russia_id, "kv.db").unwrap_or(0) <= stands, "russia holds no entry past europe's");
+    for i in 0..5 {
+        written.set(format!("after {i}"), &"the new home".to_owned()).unwrap();
+        assert!(copy_point(&russia, "kv.db").unwrap().sequence > stands + i, "answered once russia held it");
+    }
+    russia.close().unwrap();
+    europe.close().unwrap();
+}
+
 #[test]
 fn two_nodes_write_their_own_databases_and_copy_each_other_s() {
     let (us_dir, eu_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
