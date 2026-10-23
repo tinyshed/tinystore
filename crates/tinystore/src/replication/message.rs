@@ -367,12 +367,18 @@ impl Frames {
 
     /// The next whole message read, if one is.
     pub(crate) fn next(&mut self) -> Result<Option<Message>> {
+        self.next_within(LARGEST)
+    }
+
+    /// The next whole message read, if one is, `largest` bytes at most: one
+    /// longer is refused once its length arrived, before its bytes are held.
+    pub(crate) fn next_within(&mut self, largest: usize) -> Result<Option<Message>> {
         let held = &self.bytes[self.start..];
         let Some(length) = held.get(..4) else {
             return Ok(None);
         };
         let length = u32::from_le_bytes(length.try_into().expect("four bytes")) as usize;
-        if length == 0 || length > LARGEST {
+        if length == 0 || length > largest {
             return Err(corrupt("a message's length is outside what a message may be"));
         }
         let Some(body) = held.get(4..4 + length) else {

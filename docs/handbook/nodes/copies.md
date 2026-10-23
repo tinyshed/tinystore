@@ -51,8 +51,11 @@ roots = "/etc/tinystore/ca.pem"
 
 A link between two machines takes TLS. A node with no `[tls]` refuses a link
 beyond its own machine unless its config says `insecure = true` (contract
-REPL-11). The European chat processes open `./eu` as they open any store,
-through its sidecar, so their code does not change.
+REPL-11). Anyone who reaches a node's port can open a link, so the node closes
+one that has not shown its token within ten seconds, or that sends more than
+64 KiB before it does, and holds at most 64 such links at once. The European
+chat processes open `./eu` as they open any store, through its sidecar, so
+their code does not change.
 
 A Bun program can be a node itself, with its store inside it:
 

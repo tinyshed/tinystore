@@ -100,7 +100,12 @@ fn ends(tcp: TcpStream, tls: Option<rustls::Connection>) -> Result<(Reading, Wri
         Some(mut connection) => {
             let mut handshaking = tcp.try_clone().map_err(|error| Error::io("a link", error))?;
             handshaking.set_read_timeout(Some(HANDSHAKE)).map_err(|error| Error::io("a link", error))?;
+            // a bound on the whole of it, which a byte at a time would outlast a read at a time
+            let began = std::time::Instant::now();
             while connection.is_handshaking() {
+                if began.elapsed() > HANDSHAKE {
+                    return Err(Error::new(crate::ErrorKind::Unavailable, "a link's TLS handshake took too long"));
+                }
                 connection.complete_io(&mut handshaking).map_err(|error| Error::io("a link's TLS handshake", error))?;
             }
             Session::Tls(Arc::new(Mutex::new(connection)))

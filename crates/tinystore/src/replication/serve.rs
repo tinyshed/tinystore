@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,12 +55,37 @@ fn refuse_plain_beyond_loopback(state: &State, address: &str) -> Result<()> {
     Ok(())
 }
 
+/// The links a node holds at most whose other node has not said its hello
+/// yet: anyone who reaches its port can open one, and each holds a thread.
+const STRANGERS_AT_MOST: usize = 64;
+/// A hello at most: a version, a token, a node's id and its address.
+const HELLO_AT_MOST: usize = 64 << 10;
+/// How long a link has for its hello, however its bytes trickle in.
+const HELLO_WITHIN: Duration = Duration::from_secs(10);
+
+/// A link whose node has not proven its token yet, counted among the
+/// strangers until it has or its link ended.
+struct Stranger(Arc<AtomicUsize>);
+
+impl Drop for Stranger {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn accept(state: &Arc<State>, listener: &TcpListener) {
+    let strangers = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         if state.stopping() {
             return;
         }
         let Ok(stream) = stream else { continue };
+        // past the bound, closed as it came
+        if strangers.fetch_add(1, Ordering::SeqCst) >= STRANGERS_AT_MOST {
+            strangers.fetch_sub(1, Ordering::SeqCst);
+            continue;
+        }
+        let stranger = Stranger(Arc::clone(&strangers));
         let peer = stream.peer_addr().ok();
         state.keep_link(&stream);
         // the link is kept open for the node's stop: ended here, it is closed,
@@ -68,7 +93,7 @@ fn accept(state: &Arc<State>, listener: &TcpListener) {
         let closing = stream.try_clone().ok();
         let serving = Arc::clone(state);
         state.spawn("tinystore node: link", move || {
-            if let Err(error) = serve_link(&serving, stream)
+            if let Err(error) = serve_link(&serving, stream, stranger)
                 && !serving.stopping()
             {
                 tracing::info!(target: "tinystore", peer = ?peer, %error, "a node's link ended");
@@ -160,14 +185,14 @@ impl Link<'_> {
     }
 }
 
-fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
+fn serve_link(state: &Arc<State>, stream: TcpStream, stranger: Stranger) -> Result<()> {
     let address = stream.peer_addr().map_or_else(|_| "an unknown address".to_owned(), |at| at.to_string());
     let (mut reading, writing) = transport::accept(state, stream)?;
     reading.set_timeout(Duration::from_secs(1))?;
     writing.set_timeout(SILENT_AT_MOST)?;
     let out = Arc::new(Out::new(writing));
     let mut frames = Frames::default();
-    let hello = read_one(state, &mut reading, &mut frames, SILENT_AT_MOST)?;
+    let hello = read_hello(state, &mut reading, &mut frames)?;
     let Some(Message::Hello { version, token, node, address: said }) = hello else {
         return Err(Error::invalid("a link began with no hello"));
     };
@@ -179,6 +204,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         out.send(&Message::Refused { why: "the token is not this node's".to_owned() })?;
         return Ok(());
     }
+    drop(stranger);
     // counted before the welcome's list is read, so that a file served once
     // it was read and before its sender starts is told at once too
     let listed = state.notify.served();
@@ -389,6 +415,30 @@ fn read_one(state: &State, reading: &mut Reading, frames: &mut Frames, at_most: 
                     return Err(Error::new(ErrorKind::Unavailable, "a link said nothing for too long"));
                 }
             }
+            Err(error) => return Err(Error::io("a link", error)),
+        }
+    }
+}
+
+/// Reads the hello a link begins with, before anything of the other node is
+/// trusted: `HELLO_AT_MOST` bytes, within `HELLO_WITHIN` however they trickle
+/// in; `None` once the link ended.
+fn read_hello(state: &State, reading: &mut Reading, frames: &mut Frames) -> Result<Option<Message>> {
+    let began = Instant::now();
+    loop {
+        if let Some(message) = frames.next_within(HELLO_AT_MOST)? {
+            return Ok(Some(message));
+        }
+        if state.stopping() {
+            return Ok(None);
+        }
+        if began.elapsed() > HELLO_WITHIN {
+            return Err(Error::new(ErrorKind::Unavailable, "a link said no hello in time"));
+        }
+        match frames.fill(reading) {
+            Ok(true) => {}
+            Ok(false) => return Ok(None),
+            Err(error) if timed_out(&error) => {}
             Err(error) => return Err(Error::io("a link", error)),
         }
     }

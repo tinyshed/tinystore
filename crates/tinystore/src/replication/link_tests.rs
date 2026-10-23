@@ -243,6 +243,63 @@ fn a_node_with_another_token_takes_nothing() {
     home.close().unwrap();
 }
 
+/// Whether the node at the other end of `stranger` closed it within `within`.
+fn closed_within(stranger: &mut std::net::TcpStream, within: Duration) -> bool {
+    use std::io::Read;
+    stranger.set_read_timeout(Some(within)).unwrap();
+    let mut byte = [0; 1];
+    match stranger.read(&mut byte) {
+        Ok(read) => read == 0,
+        Err(error) => !matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    }
+}
+
+// Before its hello, a link is anyone's: what it says is a few KiB at most.
+#[test]
+fn a_link_that_begins_with_no_hello_but_a_gibibyte_is_closed_before_the_node_holds_it() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let (home, address) = serving(dir.path());
+    let mut stranger = std::net::TcpStream::connect(&address).unwrap();
+    stranger.write_all(&(1u32 << 30).to_le_bytes()).unwrap();
+    let _ = stranger.write_all(&vec![0; 1 << 20]);
+    assert!(closed_within(&mut stranger, Duration::from_secs(10)), "the node closed the link");
+    home.close().unwrap();
+}
+
+#[test]
+fn a_link_whose_hello_trickles_in_is_closed_within_a_bound() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let (home, address) = serving(dir.path());
+    let mut stranger = std::net::TcpStream::connect(&address).unwrap();
+    stranger.write_all(&64u32.to_le_bytes()).unwrap();
+    let began = Instant::now();
+    let mut closed = false;
+    while !closed && began.elapsed() < Duration::from_secs(25) {
+        closed = stranger.write_all(&[0]).is_err() || closed_within(&mut stranger, Duration::from_millis(500));
+    }
+    assert!(closed, "a byte each half second holds no link for good");
+    home.close().unwrap();
+}
+
+#[test]
+fn a_node_holds_a_bounded_number_of_links_that_said_no_hello_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, address) = serving(dir.path());
+    let silent: Vec<_> = (0..64).map(|_| std::net::TcpStream::connect(&address).unwrap()).collect();
+    let mut one_more = std::net::TcpStream::connect(&address).unwrap();
+    assert!(closed_within(&mut one_more, Duration::from_secs(5)), "the node closed a link past its bound");
+    drop(silent);
+    // and takes links again once those went
+    let copy_dir = tempfile::tempdir().unwrap();
+    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
+    assert_eq!(copy.bucket::<String>("sessions").open().unwrap().get("k").unwrap().as_deref(), Some("v"));
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
 // contract: REPL-12
 #[test]
 fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once() {
