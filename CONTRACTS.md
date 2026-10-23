@@ -32,8 +32,8 @@ These contracts are what does not.
 ## 2. Durability and transactions
 
 - **DUR-01** A write that returned success MUST survive an abrupt exit of the process, at the durability the store or the database was opened with: unless told, `full` for kv, jobs, files, search and every database, `os` for records and metrics.
-- **DUR-02** A transaction MUST commit all its changes or leave none observable; a call that fails inside it MUST leave it as it was before the call.
-- **DUR-03** Writes grouped into one commit MUST each fail alone: one refused write MUST NOT fail its neighbours.
+- **DUR-02** A transaction MUST commit all its changes or leave none observable; a call that fails inside it MUST leave it as it was before the call, unless that call ended the whole transaction, as a statement's `or rollback`, a trigger's `raise(rollback)` or a failing disk does: then the transaction MUST leave nothing observable, and every later call and its commit MUST fail `invalid`.
+- **DUR-03** Writes grouped into one commit MUST each fail alone: one refused write MUST NOT fail its neighbours, unless it ended the whole commit, as a statement's `or rollback`, a trigger's `raise(rollback)` or a failing disk does: it then fails with its own error, the writes before it in that commit that had not failed MUST fail `unavailable` and write nothing, and those after it MUST run in the next commit.
 - **DUR-04** A write whose caller left before its turn MUST write nothing; one that has started MUST finish with its group.
 - **DUR-05** A write whose outcome cannot be established MUST answer `outcome_unknown`, never success and never an ordinary failure.
 - **DUR-06** Atomicity MUST hold within one file. A write across two files is not atomic, unless the program opened one engine inside another's file (`db.bucket`, `db.queue`, `db.search_index`), which then commits with that file's rows.

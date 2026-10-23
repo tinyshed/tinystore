@@ -12,7 +12,7 @@ program relies on most, and ends with what TinyStore does not promise.
 |---------|------------------------------------------------------------------------------------|
 | DUR-01  | a write that returned success survives the process dying, at the file's durability |
 | DUR-02  | a transaction commits all its changes or none                                      |
-| DUR-03  | writes grouped into one commit each fail alone                                     |
+| DUR-03  | writes grouped into one commit each fail alone, unless one rolls back the commit   |
 | DUR-05  | a write whose outcome cannot be known answers `outcome unknown`, never success     |
 | DUR-06  | a write is atomic within one file, and across two only when you joined them        |
 | DUR-08  | a reader sees one consistent snapshot, every commit whole                          |
