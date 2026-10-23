@@ -12,6 +12,10 @@
 //! no trace or id it asks for, is passed without its body being fetched; a
 //! block fetched has the columns the read asks about read first, and its
 //! others only when an event in it may be kept.
+//!
+//! `all` and the counts read several pages at once while they come back
+//! holding fewer events than a page, as a search for a rare word does: see
+//! `ahead`.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
@@ -55,7 +59,7 @@ pub struct Page {
 
 /// What a read looks for.
 #[derive(Clone, Debug, Default)]
-struct Query {
+pub(super) struct Query {
     since: Option<Duration>,
     from: Option<SystemTime>,
     to: Option<SystemTime>,
@@ -83,6 +87,16 @@ impl Query {
         let holds = |(key, json): &(String, String)| has(&event.fields, key, json) || has(&event.context, key, json);
         let said = self.search.as_ref().is_none_or(|text| says(event, text));
         named && grave && traced && self.filters.iter().all(holds) && said
+    }
+
+    /// The same read over the range `after` writes, as a page's `next` does.
+    pub(super) fn over(&self, after: String) -> Query {
+        Query { after: Some(after), ..self.clone() }
+    }
+
+    /// The events a page holds.
+    pub(super) fn page_events(&self) -> usize {
+        self.limit.unwrap_or(PAGE_EVENTS)
     }
 }
 
@@ -293,16 +307,26 @@ impl List {
 
     /// Every event of the answer, a page at a time.
     pub fn all(self) -> All {
-        All { list: self, page: Vec::new().into_iter(), more: true }
+        All { list: self, page: Vec::new().into_iter(), more: true, wide: 1 }
+    }
+
+    /// The pages from where the read stands as `all` reads them, `wide`
+    /// ranges at once to begin with.
+    #[cfg(test)]
+    pub(super) fn read_ahead(&self, wide: usize) -> Result<(Page, usize)> {
+        self.records.read_ahead(self.stream.as_ref(), &self.query, wide)
     }
 }
 
-/// Every event of an answer, read a page at a time as it is walked.
+/// Every event of an answer, read a page at a time as it is walked, and
+/// several pages at once while they hold fewer events than a page.
 #[derive(Debug)]
 pub struct All {
     list: List,
     page: std::vec::IntoIter<Event>,
     more: bool,
+    /// The pages the next read begins with at once.
+    wide: usize,
 }
 
 impl Iterator for All {
@@ -316,15 +340,17 @@ impl Iterator for All {
             if !self.more {
                 return None;
             }
-            match self.list.page() {
-                Ok(page) => {
+            let list = &self.list;
+            match list.records.read_ahead(list.stream.as_ref(), &list.query, self.wide) {
+                Ok((page, wide)) => {
+                    self.wide = wide;
                     self.more = page.next.is_some();
                     self.list.query.after = page.next;
                     self.page = page.events.into_iter();
                 }
                 Err(error) => {
                     self.more = false;
-                    return Some(Err(error));
+                    return Some(Err(self.list.within(error)));
                 }
             }
         }
@@ -332,12 +358,15 @@ impl Iterator for All {
 }
 
 /// A read with its range and its streams worked out.
-struct Asked {
+#[derive(Clone)]
+pub(super) struct Asked {
     /// The range in nanoseconds, both ends in it.
     first: i64,
     last: i64,
     limit: usize,
     newest: bool,
+    /// The bits of the levels a row must have one of; none for any.
+    levels: i64,
     /// The streams read, by id: each one's name, and the time before which
     /// it keeps nothing.
     streams: HashMap<i64, (Arc<str>, i64)>,
@@ -352,11 +381,42 @@ impl Asked {
         if self.newest { row.last_at } else { row.first_at }
     }
 
+    /// The end of the range a read begins at.
+    pub(super) fn start(&self) -> i64 {
+        if self.newest { self.last } else { self.first }
+    }
+
+    /// The same read over `first` to `last`, both in it.
+    fn narrowed(&self, (first, last): (i64, i64)) -> Asked {
+        Asked { first, last, ..self.clone() }
+    }
+
     /// Whether a row reaches over the end of the range a read begins at, and
     /// so may hold the first event of the page.
     fn reaches_over(&self, row: &Picked) -> bool {
-        if self.newest { row.last_at >= self.last } else { row.first_at <= self.first }
+        !self.past(self.edge(row), self.start())
     }
+
+    /// Whether a read walking its way meets the time `edge` after `start`.
+    fn past(&self, edge: i64, start: i64) -> bool {
+        if self.newest { edge < start } else { edge > start }
+    }
+
+    /// The range from `start` to the end of a read's own, both ends in it.
+    pub(super) fn from(&self, start: i64) -> (i64, i64) {
+        if self.newest { (self.first, start) } else { (start, self.last) }
+    }
+
+    /// The range from `start` to just before `bound`, both ends in it.
+    pub(super) fn between(&self, start: i64, bound: i64) -> (i64, i64) {
+        if self.newest { (bound + 1, start) } else { (start, bound - 1) }
+    }
+}
+
+/// Whether the rows a page has taken are as many as it fetches: the events
+/// it holds, or the rows or the bytes one read fetches.
+fn full(events: u64, rows: usize, bytes: usize, limit: usize) -> bool {
+    events >= limit as u64 || rows >= FETCH_ROWS || bytes >= FETCH_BYTES
 }
 
 /// Where a row of events is. A stream's blocks were written before what
@@ -432,7 +492,7 @@ const FIELD_BLOOM: &str = "select bloom from block_filters where block = ?1 and 
 impl Records {
     /// One page: work out the range → pick and fetch its rows → parse and
     /// keep what matches → cut the page.
-    fn page(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
+    pub(super) fn page(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
         let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
         let (fetched, horizon) = self.fetch(&asked, query)?;
         let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
@@ -440,6 +500,31 @@ impl Records {
         let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
         let found = self.found(&asked, query, fetched, horizon)?;
         cut(found, &asked, horizon)
+    }
+
+    /// Where each range after `start` would begin, `ranges` of them at most,
+    /// read from the index of times alone: a range ends once its rows are
+    /// what one page fetches, the blocks a filter would pass counted with
+    /// the rest, so that a range read alone is a page, or a few.
+    pub(super) fn bounds(&self, asked: &Asked, start: i64, ranges: usize) -> Result<Vec<i64>> {
+        let asked = asked.narrowed(asked.from(start));
+        self.file.read(|connection| {
+            let (mut bounds, mut start) = (Vec::with_capacity(ranges), start);
+            let (mut events, mut rows, mut bytes) = (0, 0, 0);
+            walk_rows(connection, &asked, |row| {
+                let edge = asked.edge(&row);
+                if full(events, rows, bytes, asked.limit) && asked.past(edge, start) {
+                    bounds.push(edge);
+                    (start, events, rows, bytes) = (edge, 0, 0, 0);
+                    if bounds.len() == ranges {
+                        return Ok(false);
+                    }
+                }
+                (events, rows, bytes) = (events + row.events, rows + 1, bytes + row.size);
+                Ok(true)
+            })
+            .map(|()| bounds)
+        })
     }
 
     /// The keys a read's range holds: its packed segments' beside them, and
@@ -474,7 +559,7 @@ impl Records {
     }
 
     /// The range and the streams of a read; `None` when they hold nothing.
-    fn asked(&self, stream: Option<&Stream>, query: &Query) -> Result<Option<Asked>> {
+    pub(super) fn asked(&self, stream: Option<&Stream>, query: &Query) -> Result<Option<Asked>> {
         if let Some(refused) = &query.refused {
             return Err(Error::invalid(refused.clone()));
         }
@@ -498,7 +583,8 @@ impl Records {
         let (first, last) = range(query, now)?;
         let first = first.max(oldest);
         let streams = read.iter().map(|stream| (stream.id, (Arc::clone(&stream.name), kept(stream)))).collect();
-        Ok((first <= last).then_some(Asked { first, last, limit, newest: query.newest, streams, only }))
+        let (newest, levels) = (query.newest, query.min_level.map_or(0, Level::bits_from));
+        Ok((first <= last).then_some(Asked { first, last, limit, newest, levels, streams, only }))
     }
 
     /// The rows of a range from the end a read begins at, picked by their
@@ -512,45 +598,21 @@ impl Records {
     /// so that the edge lies inside the range and the next page begins past
     /// this one.
     fn fetch(&self, asked: &Asked, query: &Query) -> Result<(Fetched, Option<i64>)> {
-        let mask = query.min_level.map_or(0, Level::bits_from);
-        let failed = |error| sql_error("pick the rows of a read", error);
         self.file.read(|connection| {
-            let (heads, blocks) =
-                if asked.newest { (HEADS_NEWEST, BLOCKS_NEWEST) } else { (HEADS_OLDEST, BLOCKS_OLDEST) };
-            let (mut heads, mut blocks) =
-                (connection.prepare_cached(heads).map_err(failed)?, connection.prepare_cached(blocks).map_err(failed)?);
-            let range: [&dyn ToSql; 4] = [&asked.first, &asked.last, &mask, &asked.only];
-            let mut heads = heads.query(range).map_err(failed)?;
-            let mut blocks = blocks.query(range).map_err(failed)?;
-            let mut waiting = [picked(&mut blocks, Kind::Block)?, picked(&mut heads, Kind::Head)?];
             let mut passing = Passing { query, connection, segments: HashMap::new() };
             let (mut taken, mut events, mut bytes) = (Vec::new(), 0, 0);
             let mut horizon = None;
-            loop {
-                // of the two rows that wait, the one a read walking its way meets first
-                let nearer = match (&waiting[0], &waiting[1]) {
-                    (None, None) => break,
-                    (Some(_), None) => 0,
-                    (None, Some(_)) => 1,
-                    (Some(block), Some(head)) if asked.newest => usize::from(asked.edge(head) > asked.edge(block)),
-                    (Some(block), Some(head)) => usize::from(asked.edge(head) < asked.edge(block)),
-                };
-                let Some(row) = waiting[nearer].take() else { break };
-                let full = events >= asked.limit as u64 || taken.len() >= FETCH_ROWS || bytes >= FETCH_BYTES;
-                if full && !asked.reaches_over(&row) {
+            walk_rows(connection, asked, |row| {
+                if full(events, taken.len(), bytes, asked.limit) && !asked.reaches_over(&row) {
                     horizon = Some(asked.edge(&row));
-                    break;
+                    return Ok(false);
                 }
-                waiting[nearer] = if row.kind == Kind::Block {
-                    picked(&mut blocks, Kind::Block)?
-                } else {
-                    picked(&mut heads, Kind::Head)?
-                };
                 if row.kind == Kind::Head || passing.may_find(&row)? {
                     (events, bytes) = (events + row.events, bytes + row.size);
                     taken.push(row);
                 }
-            }
+                Ok(true)
+            })?;
             let mut segments = HashMap::new();
             for row in taken.iter().filter(|row| row.kind == Kind::Block) {
                 if let Entry::Vacant(unread) = segments.entry(row.segment) {
@@ -645,6 +707,37 @@ impl Passing<'_> {
     }
 }
 
+/// Walks the rows of a read's range by their index alone, from the end the
+/// read begins at, the heads' and the blocks' merged by that end, while
+/// `each` says to go on.
+fn walk_rows(connection: &Connection, asked: &Asked, mut each: impl FnMut(Picked) -> Result<bool>) -> Result<()> {
+    let failed = |error| sql_error("pick the rows of a read", error);
+    let (heads, blocks) = if asked.newest { (HEADS_NEWEST, BLOCKS_NEWEST) } else { (HEADS_OLDEST, BLOCKS_OLDEST) };
+    let (mut heads, mut blocks) =
+        (connection.prepare_cached(heads).map_err(failed)?, connection.prepare_cached(blocks).map_err(failed)?);
+    let range: [&dyn ToSql; 4] = [&asked.first, &asked.last, &asked.levels, &asked.only];
+    let mut heads = heads.query(range).map_err(failed)?;
+    let mut blocks = blocks.query(range).map_err(failed)?;
+    let mut waiting = [picked(&mut blocks, Kind::Block)?, picked(&mut heads, Kind::Head)?];
+    loop {
+        // of the two rows that wait, the one a read walking its way meets first; of one time, the block
+        let nearer = match (&waiting[0], &waiting[1]) {
+            (None, None) => return Ok(()),
+            (Some(_), None) => 0,
+            (None, Some(_)) => 1,
+            (Some(block), Some(head)) => usize::from(asked.past(asked.edge(block), asked.edge(head))),
+        };
+        let Some(row) = waiting[nearer].take() else { return Ok(()) };
+        waiting[nearer] = match row.kind {
+            Kind::Block => picked(&mut blocks, Kind::Block)?,
+            Kind::Head => picked(&mut heads, Kind::Head)?,
+        };
+        if !each(row)? {
+            return Ok(());
+        }
+    }
+}
+
 /// The next row a statement picked, if it has one.
 fn picked(rows: &mut Rows<'_>, kind: Kind) -> Result<Option<Picked>> {
     let failed = |error| sql_error("pick the rows of a read", error);
@@ -688,6 +781,11 @@ fn range(query: &Query, now: i64) -> Result<(i64, i64)> {
         (None, None) => i64::MIN,
     };
     Ok((first, query.to.map_or(i64::MAX, |to| unix_nanos(to).saturating_sub(1))))
+}
+
+/// A range as a page's `next` writes it, and `range` reads it back.
+pub(super) fn written((first, last): (i64, i64)) -> String {
+    format!("{first}~{last}")
 }
 
 impl Records {
@@ -747,7 +845,7 @@ impl Records {
 /// A page of what was found: the limit's worth, less the events of a time
 /// the limit would split, and where the next page begins.
 fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Page> {
-    let mut next = horizon.map(|edge| if asked.newest { (asked.first, edge) } else { (edge, asked.last) });
+    let mut next = horizon.map(|edge| asked.from(edge));
     if found.len() > asked.limit {
         let mut whole = asked.limit;
         while whole > 0 && found[whole].at == found[whole - 1].at {
@@ -761,7 +859,7 @@ fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Pag
         next = Some(if asked.newest { (asked.first, edge - 1) } else { (edge + 1, asked.last) });
         found.truncate(whole);
     }
-    let next = next.map(|(first, last)| format!("{first}~{last}"));
+    let next = next.map(written);
     Ok(Page { events: found.into_iter().map(|found| found.event.into_event(&found.stream)).collect(), next })
 }
 

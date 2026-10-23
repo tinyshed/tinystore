@@ -169,6 +169,8 @@ let hourly = store
 ```
 
 - Each takes a query as `list` does, without `newest`, `limit` and `after`.
+- When few events match, as with a search for a rare word, they read several
+  pages at once on several threads. In Rust, `all` does the same.
 - `top` gives a key's most frequent values, ten unless `limit` asks for more,
   1,000 at most. The key is a field's or a context's, or `stream`, `name` or
   `level`.

@@ -792,7 +792,8 @@ their streams' `keep` removed before the cursor reached them.
 pub struct All { /* private fields */ }
 ```
 
-Every event of an answer, read a page at a time as it is walked.
+Every event of an answer, read a page at a time as it is walked, and
+several pages at once while they hold fewer events than a page.
 
 ## List
 

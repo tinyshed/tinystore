@@ -12,6 +12,7 @@
 //! # }
 //! ```
 
+mod ahead;
 mod block;
 mod bloom;
 mod buffer;
