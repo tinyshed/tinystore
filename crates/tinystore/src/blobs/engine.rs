@@ -160,9 +160,13 @@ impl Blobs {
         store.engine(|store| {
             let claim = store.claim(DIR)?;
             let dir = claim.path().to_owned();
-            for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
-                std::fs::create_dir_all(&made)
-                    .map_err(|error| Error::io(format!("blobs: create {}", made.display()), error))?;
+            // a store beside its holder makes nothing in the holder's directory:
+            // without blobs.db there, its open is `NotFound`
+            if !store.is_beside() {
+                for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
+                    std::fs::create_dir_all(&made)
+                        .map_err(|error| Error::io(format!("blobs: create {}", made.display()), error))?;
+                }
             }
             let config = Config::committing(store.durability());
             let durable = config.durability == Durability::Full;

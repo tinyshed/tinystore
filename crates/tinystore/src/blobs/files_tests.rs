@@ -179,6 +179,22 @@ fn a_path_is_its_own_bytes_whatever_the_file_system() {
     assert_eq!(docs.get("CON").unwrap().unwrap().read_all().unwrap(), b"a name windows keeps");
 }
 
+// contract: STORE-01
+#[test]
+fn files_opened_beside_their_holder_make_nothing_in_its_directory() {
+    let f = fixture();
+    let beside = crate::Store::open_beside(f.dir.path()).unwrap();
+    let error = beside.files("docs").open().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NotFound, "{error}");
+    assert!(!f.dir.path().join("blobs").exists(), "a guest makes no directory");
+    beside.close().unwrap();
+    f.files("docs").put("a.md", b"the holder's").unwrap();
+    let beside = crate::Store::open_beside(f.dir.path()).unwrap();
+    let read = beside.files("docs").open().unwrap().get("a.md").unwrap().unwrap().read_all().unwrap();
+    assert_eq!(read, b"the holder's");
+    beside.close().unwrap();
+}
+
 // contract: DUR-01
 #[test]
 fn a_put_that_returned_is_there_after_a_reopen() {
