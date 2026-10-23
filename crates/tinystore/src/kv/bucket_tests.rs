@@ -402,3 +402,57 @@ fn kv_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() {
         store.close().unwrap();
     }
 }
+
+/// Sets of 128-byte values over 100,000 keys at durability `os`, as issue 7's
+/// program makes them from Bun, by callers that each wait on a thread of their
+/// own. A line a run: sets a second, the 99th percentile of a set's wait, and
+/// the writes a commit held. `TINYSTORE_CALLERS`, `1,8,64,256` unless it says,
+/// and `TINYSTORE_SECONDS`, 3, change the runs.
+#[test]
+#[ignore = "a timing, not a check"]
+fn sets_from_many_callers() {
+    let seconds = std::env::var("TINYSTORE_SECONDS").ok().and_then(|seconds| seconds.parse().ok()).unwrap_or(3);
+    let callers = std::env::var("TINYSTORE_CALLERS").unwrap_or_else(|_| "1,8,64,256".to_owned());
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { durability: Some(crate::Durability::Os), ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let sessions = store.bucket::<String>("sessions").open().unwrap();
+    let span = Duration::from_secs(seconds);
+    let commits = || Kv::of(&store).unwrap().file().commits();
+    for callers in callers.split(',').map(|callers| callers.trim().parse::<usize>().unwrap()) {
+        let before = commits();
+        let mut waits = sets_waiting(&sessions, callers, span);
+        let commits = commits() - before;
+        waits.sort();
+        let p99 = waits.get(waits.len() * 99 / 100).copied().unwrap_or_default();
+        println!(
+            "kv sets, {callers} callers: {:.0} a second, p99 {:.2} ms, {:.1} writes a commit",
+            waits.len() as f64 / span.as_secs_f64(),
+            p99.as_secs_f64() * 1000.0,
+            waits.len() as f64 / commits.max(1) as f64,
+        );
+    }
+    store.close().unwrap();
+}
+
+/// How long each set waited, of those `callers` threads made for `span`, each
+/// stepping over the keys by a prime from a key of its own.
+fn sets_waiting(sessions: &Bucket<String>, callers: usize, span: Duration) -> Vec<Duration> {
+    let until = std::time::Instant::now() + span;
+    let threads: Vec<_> = (0..callers)
+        .map(|caller| {
+            let (sessions, value, mut n) = (sessions.clone(), "v".repeat(128), caller);
+            thread::spawn(move || {
+                let mut waits = Vec::new();
+                while std::time::Instant::now() < until {
+                    n = (n + 7919) % 100_000;
+                    let (key, before) = (format!("k{n}"), std::time::Instant::now());
+                    sessions.set(&key, &value).unwrap();
+                    waits.push(before.elapsed());
+                }
+                waits
+            })
+        })
+        .collect();
+    threads.into_iter().flat_map(|thread| thread.join().unwrap()).collect()
+}
