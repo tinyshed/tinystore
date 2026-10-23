@@ -92,7 +92,10 @@ to refuses the late write.
 
 A request to hold carries an id of its own. If the answer is lost on the way
 back, the SDK asks again with the same id, on any connection, and the store
-answers the lease it already gave instead of giving the key twice. The
+answers the lease it already gave instead of giving the key twice. That
+answer also renews the lease for its `ttl`, because the SDK counts the
+deadline from the answer. If the lease ran out before the SDK asked again,
+the store ends it and treats the request as a new one, with a new fence. The
 lease's own id, 128 random bits only its holder learns, is what renewing and
 letting go name: a fence, which a holder hands to others, proves nothing.
 

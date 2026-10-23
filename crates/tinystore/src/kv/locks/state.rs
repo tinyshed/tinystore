@@ -8,6 +8,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use super::lease::{Answer, Ask, Ending, Fence, Granted, LeaseId, Place, Reply, RequestId, Watch};
 use crate::encryption::random;
@@ -179,9 +180,11 @@ impl State {
     /// place in line, which this ask takes over, and whose waiter's id it
     /// gives as `ask` would. Gives the reply back when the request is new.
     ///
-    /// A lease that ran out since is ended first, and the request is new:
-    /// answered with it, its holder would hold the key beside the next one
-    /// given it.
+    /// The holder counts its lease's deadline from this answer, so the lease
+    /// is settled first. One that ran out ends, and the request is new, or its
+    /// holder would hold the key beside the next one given it. One still held
+    /// lasts its `ttl` from `now`, as a renewal would, or the store would let
+    /// it go before its holder gives up.
     fn ask_again(
         &mut self,
         ask: &Ask,
@@ -195,6 +198,7 @@ impl State {
             && let Some(place) = self.leases.get(&lease).cloned()
         {
             self.settle(&place, now, mint, effects);
+            self.last_from(&lease, ask.ttl, now);
             self.keep_or_forget(&place, effects);
         }
         let Some(asked) = self.requests.get(&request).copied() else {
@@ -215,6 +219,16 @@ impl State {
             }
         }
         Err(None)
+    }
+
+    /// Makes a lease held through a connection last `ttl` from `now`.
+    fn last_from(&mut self, lease: &LeaseId, ttl: Option<Duration>, now: i64) {
+        if let Some(holder) = self.holder_mut(lease)
+            && holder.granted.expires.is_some()
+            && let Some(ttl) = ttl
+        {
+            holder.granted.expires = Some(now.saturating_add(millis(ttl)));
+        }
     }
 
     fn grant_at_once(&mut self, ask: Ask, reply: Reply, now: i64, mint: &Mint, effects: &mut Effects) {
@@ -390,7 +404,7 @@ impl State {
     pub(super) fn renew(
         &mut self,
         lease: &LeaseId,
-        ttl: std::time::Duration,
+        ttl: Duration,
         now: i64,
         mint: &Mint,
         effects: &mut Effects,
@@ -415,7 +429,6 @@ impl State {
         self.lines.get(place)?.holders.iter().find(|holder| &holder.granted.lease == lease)
     }
 
-    #[cfg(feature = "wire")]
     fn holder_mut(&mut self, lease: &LeaseId) -> Option<&mut Holder> {
         let place = self.leases.get(lease)?;
         self.lines.get_mut(place)?.holders.iter_mut().find(|holder| &holder.granted.lease == lease)

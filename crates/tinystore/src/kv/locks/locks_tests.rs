@@ -369,6 +369,32 @@ fn a_request_asked_again_once_its_lease_ran_out_is_asked_afresh_and_the_key_is_h
     assert!(locks.release(&again.lease));
 }
 
+// contract: LOCK-01
+// contract: LOCK-05
+#[cfg(feature = "wire")]
+#[test]
+fn a_request_asked_again_late_in_its_lease_holds_it_for_its_ttl_from_the_answer() {
+    let f = fixture();
+    let locks = locks(&f.store);
+    let request = Some([7; 16]);
+    let (_, answer) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, request));
+    let lease = granted(&answer);
+    // the answer was lost, and the client asks again late in the ttl: it counts its deadline from this answer
+    f.clock.advance(9 * SECOND);
+    let (_, again) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, request));
+    let again = granted(&again);
+    assert_eq!((again.lease, again.fence), (lease.lease, lease.fence), "the same lease");
+    assert_eq!(again.expires, Some(unix_millis(f.clock.now()) + 10_000), "ten seconds from the answer");
+    f.clock.advance(2 * SECOND);
+    f.store.clock_moved();
+    let (_, other) = asked(&locks, remote("42", 10 * SECOND, Duration::ZERO, None));
+    let busy = other.recv_timeout(PATIENCE).unwrap().unwrap();
+    assert!(matches!(busy, Answer::Busy), "the client still holds it, as it believes");
+    assert_eq!(lease.watch.ending(), Ending::Live);
+    locks.renew(&lease.lease, 10 * SECOND).unwrap();
+    assert!(locks.release(&lease.lease));
+}
+
 // contract: LOCK-05
 #[cfg(feature = "wire")]
 #[test]
