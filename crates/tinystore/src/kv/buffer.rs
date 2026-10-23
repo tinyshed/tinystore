@@ -198,7 +198,7 @@ impl Buffer {
     fn write(&self, kv: &Kv, batch: Taken) -> Result<()> {
         let (bucket, revision) = (self.bucket, kv.revision());
         kv.file().write(0, move |tx| {
-            let version = next_version(&revision, tx)?;
+            let version = next_version(&revision, tx);
             for (path, counter) in &batch {
                 if counter.absent {
                     cells::remove(tx, bucket, path, None)?;

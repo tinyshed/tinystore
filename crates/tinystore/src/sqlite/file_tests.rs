@@ -635,3 +635,57 @@ fn a_commit_that_panics_outside_its_writes_leaves_a_leader_for_the_next() {
     insert(&file, "b").unwrap();
     assert_eq!(count(&file), 1);
 }
+
+/// A settler that counts the transactions it settled whole, the first of
+/// them failing, as kv's revision would on a file that no longer writes.
+#[derive(Default)]
+struct SettlesWhole {
+    settled: std::sync::atomic::AtomicUsize,
+}
+
+impl Settle for SettlesWhole {
+    fn settle(&self, _tx: &Tx<'_>, left: Left) -> Result<()> {
+        if left != Left::All {
+            return Ok(());
+        }
+        match self.settled.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => Err(Error::internal("what the writes left together")),
+            _ => Ok(()),
+        }
+    }
+}
+
+// contract: DUR-03
+#[test]
+fn what_a_commits_writes_leave_together_settles_once_and_fails_only_those_that_had_not_failed_alone() {
+    let (_dir, file) = open(Config::default());
+    insert(&file, "taken").unwrap();
+    let settler = Arc::new(SettlesWhole::default());
+    let settles: Arc<dyn Settle> = settler.clone();
+    file.settle_with(Arc::downgrade(&settles));
+    let settled = || settler.settled.load(std::sync::atomic::Ordering::SeqCst);
+    let writes = || -> Vec<Call<i64>> {
+        vec![
+            Box::new(|file| insert(file, "a")),
+            Box::new(|file| insert(file, "taken")),
+            Box::new(|file| insert(file, "b")),
+        ]
+    };
+
+    let answers = queue_behind_the_writer(&file, writes());
+    assert_eq!(settled(), 1, "once for the commit of three writes");
+    let kinds: Vec<ErrorKind> = answers.iter().map(|answer| answer.as_ref().unwrap_err().kind()).collect();
+    assert_eq!(
+        kinds,
+        [ErrorKind::Internal, ErrorKind::Conflict, ErrorKind::Internal],
+        "the refused write keeps its own"
+    );
+    assert_eq!(count(&file), 1, "nothing of the commit stays");
+
+    let answers = queue_behind_the_writer(&file, writes());
+    assert_eq!(settled(), 2);
+    assert!(answers[0].is_ok() && answers[2].is_ok());
+    assert_eq!(count(&file), 3);
+    file.transaction(|tx| tx.execute("delete from t", []).map_err(|error| sql_error("delete", error))).unwrap();
+    assert_eq!(settled(), 3, "a transaction of its own settles whole too");
+}

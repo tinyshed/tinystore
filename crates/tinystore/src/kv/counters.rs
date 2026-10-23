@@ -247,7 +247,7 @@ impl Counters {
             if cells::queued_applied(tx, &node)?.is_some_and(|applied| applied >= op) {
                 return Ok(live(tx, id, &path, now)?.map_or(0, |live| live.value));
             }
-            let version = next_version(revision, tx)?;
+            let version = next_version(revision, tx);
             let added = cells::add(tx, id, &path, (version, created), n, now)?;
             cells::keep_queued_applied(tx, &node, op)?;
             // its caller had its answer when the node queued it, so an add past
@@ -277,7 +277,7 @@ impl Counters {
         let now = self.scope.now();
         let (id, path, created) = (self.scope.id, self.scope.path(key)?, self.created(now));
         Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
-            let version = next_version(revision, tx)?;
+            let version = next_version(revision, tx);
             cells::add(tx, id, &path, (version, created), n, now)?.ok_or_else(|| overflow(n))
         })
     }

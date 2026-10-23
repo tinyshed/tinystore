@@ -10,7 +10,7 @@ use super::renewals::Renewals;
 use super::scope::Kind;
 use crate::encryption::EncryptionKey;
 use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
-use crate::sqlite::{Config, File, Migration, Tx, own_work};
+use crate::sqlite::{Config, File, Left, Migration, Settle, Tx, own_work};
 use crate::store::WeakStore;
 use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -44,6 +44,8 @@ pub(crate) struct Kv {
     /// What kv tells the store's own metrics.
     probe: Arc<crate::probe::Probe>,
     revision: Arc<AtomicI64>,
+    /// The revision the last transaction to keep one kept in the file.
+    kept: AtomicI64,
     names: Mutex<HashMap<String, (i64, Kind)>>,
     /// How each name of counters counts in this process, every handle on it
     /// alike: in the file, or in one buffer.
@@ -114,6 +116,7 @@ impl Kv {
             store: store.downgrade(),
             probe: Arc::clone(store.probe()),
             revision: Arc::new(AtomicI64::new(revision)),
+            kept: AtomicI64::new(revision),
             names: Mutex::new(HashMap::new()),
             counting: Mutex::new(HashMap::new()),
             renewals: Renewals::default(),
@@ -124,6 +127,7 @@ impl Kv {
             configs: Mutex::new(HashMap::new()),
             _claim: claim,
         });
+        kv.file.settle_with(Arc::downgrade(&kv) as Weak<dyn Settle>);
         // A copy's expiry and renewals are its home's, and reach it as pages:
         // each turn asks, since a file's home may move while it is open.
         let weak = Arc::downgrade(&kv);
@@ -338,13 +342,30 @@ impl Kv {
     }
 }
 
-/// Takes the next version inside a write and keeps the revision's high-water
-/// mark with it, so a version never repeats across a delete or a reopen. A
-/// write rolled back leaves its number unused, which is all the rule needs.
-pub(crate) fn next_version(revision: &AtomicI64, tx: &Tx<'_>) -> Result<i64> {
-    let version = revision.fetch_add(1, Ordering::SeqCst) + 1;
-    cells::keep_revision(tx, version)?;
-    Ok(version)
+/// Takes the next version inside `taken_in`, whose end keeps the revision's
+/// high-water mark, as kv settles it: a version never repeats across a delete
+/// or a reopen. A write rolled back leaves its number unused, which is all the
+/// rule needs.
+pub(crate) fn next_version(revision: &AtomicI64, _taken_in: &Tx<'_>) -> i64 {
+    revision.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+impl Settle for Kv {
+    /// Keeps the revision once a transaction, at its end, where every write
+    /// that took a version kept it with its own: a commit of 64 sets ran 64
+    /// updates of the one row (issue 7). A transaction that took none skips
+    /// it, since every version is taken after the last one kept.
+    fn settle(&self, tx: &Tx<'_>, left: Left) -> Result<()> {
+        let revision = self.revision.load(Ordering::SeqCst);
+        if left != Left::All || revision <= self.kept.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        cells::keep_revision(tx, revision)?;
+        // Ahead of the file if the commit then fails: every version taken
+        // next is past it all the same, and one never taken needs no keeping.
+        self.kept.store(revision, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 fn with(kv: &Weak<Kv>, work: impl FnOnce(&Kv) -> Result<()>) -> Result<()> {

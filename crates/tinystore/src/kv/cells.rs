@@ -1,7 +1,7 @@
 //! The rows of kv.db: one statement a step, each a named constant, and no
 //! vocabulary above a row's bucket, path, version, expiry and value.
 
-use rusqlite::types::ValueRef;
+use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::value::Raw;
@@ -60,6 +60,17 @@ const UPSERT: &str = "insert into _tinystore_kv_cells as c (bucket, path, versio
     values (?1, ?2, ?3, ?4, ?5, ?6)
     on conflict (bucket, path) do update set
         version = excluded.version, expires = excluded.expires, value = excluded.value, spill = excluded.spill";
+/// A write of a cell in one statement, where one that reads the cell first
+/// takes two. It writes over a cell only where nothing the cell holds can
+/// change the write: a value that did not spill, whose row would be the
+/// write's to delete, and, when a live cell keeps its expiry (`?6`), an
+/// expiry that is the write's own, which a cell gone takes too. `returning`
+/// would say what the cell kept, at a third more than a read first costs.
+const SET: &str = "insert into _tinystore_kv_cells as c (bucket, path, version, expires, value)
+    values (?1, ?2, ?3, ?4, ?5)
+    on conflict (bucket, path) do update set
+        version = excluded.version, expires = excluded.expires, value = excluded.value
+    where c.spill is null and (not ?6 or c.expires is ?4)";
 /// A counter's add in one statement: a counter gone starts again from the
 /// number added, with a new expiry, and a live one keeps its own. A sum past
 /// the int64 range updates nothing, since SQLite would make it a REAL.
@@ -185,13 +196,44 @@ pub(crate) fn put(
     let (value, spill) = match raw {
         Raw::Bytes(bytes) if bytes.len() > SPILL => {
             execute(connection, INSERT_SPILLED, params![bytes], "a write: its large value")?;
-            (rusqlite::types::Value::Null, Some(connection.last_insert_rowid()))
+            (ToSqlOutput::Borrowed(ValueRef::Null), Some(connection.last_insert_rowid()))
         }
-        Raw::Bytes(bytes) => (rusqlite::types::Value::Blob(bytes.clone()), None),
-        Raw::Int(int) => (rusqlite::types::Value::Integer(*int), None),
-        Raw::None => (rusqlite::types::Value::Null, None),
+        raw => (in_the_cell(raw), None),
     };
     execute(connection, UPSERT, params![bucket, path, version, expires, value, spill], "a write").map(drop)
+}
+
+/// Whether a value lives in a row of its own rather than in its cell.
+pub(crate) fn spills(raw: &Raw) -> bool {
+    matches!(raw, Raw::Bytes(bytes) if bytes.len() > SPILL)
+}
+
+/// Writes a value that does not spill at `stamp` without reading its cell
+/// first, and says whether it did: it writes nothing over a cell whose value
+/// spilled nor, when a live cell `keeps` its expiry, over one whose expiry is
+/// not `stamp`'s, since a read must say what the cell then holds.
+pub(crate) fn set(
+    connection: &Connection,
+    bucket: i64,
+    path: &[u8],
+    stamp: (i64, Option<i64>),
+    raw: &Raw,
+    keeps: bool,
+) -> Result<bool> {
+    debug_assert!(!spills(raw), "a value that spills is written by put, which makes its row");
+    let (version, expires) = stamp;
+    let value = in_the_cell(raw);
+    let written = execute(connection, SET, params![bucket, path, version, expires, value, keeps], "a write")?;
+    Ok(written > 0)
+}
+
+/// A value as its cell holds it, when it does not spill.
+fn in_the_cell(raw: &Raw) -> ToSqlOutput<'_> {
+    ToSqlOutput::Borrowed(match raw {
+        Raw::Bytes(bytes) => ValueRef::Blob(bytes),
+        Raw::Int(int) => ValueRef::Integer(*int),
+        Raw::None => ValueRef::Null,
+    })
 }
 
 /// Deletes a cell and the row its value spilled to.

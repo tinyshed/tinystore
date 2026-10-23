@@ -128,7 +128,7 @@ impl Hub {
             if kept.version != expected {
                 return Ok(Written::Moved(kept));
             }
-            let version = next_version(&revision, tx)?;
+            let version = next_version(&revision, tx);
             for (path, value) in &leaves {
                 let value = value.to_string();
                 execute(tx, UPSERT_CHANGE, params![name, path, value, version, now], "a change")?;
@@ -156,7 +156,7 @@ impl Hub {
                 .and_then(|mut delete| delete.execute(params![name, path]))
                 .map_err(|error| sql_error("its changes", error))?;
             if dropped > 0 {
-                let version = next_version(&revision, tx)?;
+                let version = next_version(&revision, tx);
                 execute(tx, KEEP_VERSION, params![name, version], "its version")?;
             }
             Ok((read(tx, &name)?.0, dropped > 0))

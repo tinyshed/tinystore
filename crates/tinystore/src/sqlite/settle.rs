@@ -1,16 +1,18 @@
 //! What an engine kept in a file brings up to date inside each transaction
 //! of it, before the transaction commits: a table's search index, from the
 //! keys its triggers left, so that the index commits with the rows or not at
-//! all.
+//! all, and kv's revision, the highest version the transaction's writes took.
 //!
 //! ```text
-//! begin ── settle(Before) ── a write ── settle(Here) ── a write ── settle(Here) ── commit
+//! begin ── settle(Before) ── a write ── settle(Here) ── a write ── settle(Here) ── settle(All) ── commit
 //! ```
 //!
 //! A transaction settles what was left before it began, by a process that
 //! writes the file beside the store, then what each of its writes leaves,
 //! inside that write's savepoint: a write whose work fails to settle fails
-//! alone, as its savepoint rolls back.
+//! alone, as its savepoint rolls back. Last, once, what its writes leave
+//! together: a grouped commit of 64 sets keeps the revision once, not 64
+//! times.
 
 use std::sync::{PoisonError, RwLock, Weak};
 
@@ -26,6 +28,9 @@ pub(crate) enum Left {
     Before,
     /// The write that just ran, which a failure fails.
     Here,
+    /// Every write of the transaction, once the last has run. A failure fails
+    /// them all, so it settles only what no one write can fail.
+    All,
 }
 
 /// An engine kept in a file whose transactions settle it.

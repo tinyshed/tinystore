@@ -4,7 +4,7 @@ use std::thread;
 use super::*;
 use crate::Options;
 use crate::kv::engine::Kv;
-use crate::kv::fixture::{MINUTE, SECOND, Session, fixture, session};
+use crate::kv::fixture::{Fixture, MINUTE, SECOND, Session, fixture, session};
 use crate::kv::path::Branch;
 use crate::kv::{self, Bytes};
 
@@ -104,6 +104,107 @@ fn a_version_never_repeats_across_a_delete_and_a_reopen() {
     settings.set("a", &1).unwrap();
     assert_ne!(settings.entry("a").unwrap().unwrap().version, first);
     store.close().unwrap();
+}
+
+/// The revision kv.db keeps, and the highest version its cells hold.
+fn revisions(f: &Fixture) -> (i64, i64) {
+    let kv = Kv::of(&f.store).unwrap();
+    kv.file()
+        .read(|connection| {
+            let highest = connection.query_row("select max(version) from _tinystore_kv_cells", [], |row| row.get(0));
+            Ok((cells::revision(connection)?, highest.unwrap()))
+        })
+        .unwrap()
+}
+
+// contract: KV-05
+#[test]
+fn a_commit_of_many_sets_keeps_the_highest_version_they_took() {
+    let f = fixture();
+    let settings = f.store.bucket::<i64>("settings").open().unwrap();
+    let start = Arc::new(Barrier::new(16));
+    let threads: Vec<_> = (0..16)
+        .map(|thread| {
+            let (settings, start) = (settings.clone(), Arc::clone(&start));
+            thread::spawn(move || {
+                start.wait();
+                (0..20).map(|n| settings.set(format!("{thread}-{n}"), &n)).collect::<Result<Vec<()>>>().unwrap();
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    let (kept, highest) = revisions(&f);
+    assert_eq!(kept, highest, "in {} commits for 320 sets", f.commits());
+
+    settings.delete("15-19").unwrap();
+    let f = f.reopen();
+    let settings = f.store.bucket::<i64>("settings").open().unwrap();
+    settings.set("15-19", &0).unwrap();
+    assert!(settings.entry("15-19").unwrap().unwrap().version.0 > highest, "a reopened file goes on past it");
+}
+
+/// The stamp a set leaves, what the wire answers a set with.
+fn stamped(bucket: &Bucket<i64>, key: &str, options: WriteOptions) -> Stamp {
+    let (bytes, work) = bucket.put_work(key, bucket.encode(key, &1).unwrap(), options, Put::Always).unwrap();
+    let stamp = bucket.scope.write(key, bytes, work).unwrap();
+    let entry = bucket.entry(key).unwrap().unwrap();
+    assert_eq!((entry.version, entry.expires_at.map(unix_millis)), (stamp.version, stamp.expires), "{key}");
+    stamp
+}
+
+// contract: KV-03
+#[test]
+fn a_set_keeps_the_expiry_of_a_live_key_unless_it_gives_one_and_a_key_gone_takes_its_buckets() {
+    let f = fixture();
+    let (plain, ttl, idle) = (
+        f.store.bucket::<i64>("plain").open().unwrap(),
+        f.store.bucket::<i64>("ttl").ttl(10 * MINUTE).open().unwrap(),
+        f.store.bucket::<i64>("idle").idle(30 * MINUTE).open().unwrap(),
+    );
+    let (none, a_minute) = (WriteOptions::default(), WriteOptions::default().ttl(MINUTE));
+    let at = |since_now: Duration| Some(unix_millis(f.store.now() + since_now));
+
+    assert_eq!(stamped(&plain, "a", none).expires, None, "a new key of a bucket whose keys never expire");
+    assert_eq!(stamped(&plain, "b", a_minute).expires, at(MINUTE));
+    let first = at(MINUTE);
+    assert_eq!(stamped(&plain, "b", none).expires, first, "a live key keeps its own");
+    assert_eq!(stamped(&ttl, "c", none).expires, at(10 * MINUTE));
+    let c = at(10 * MINUTE);
+    f.clock.advance(2 * MINUTE);
+    assert_eq!(stamped(&plain, "b", none).expires, None, "a key gone takes its bucket's: none");
+    assert_eq!(stamped(&ttl, "c", none).expires, c, "a key with a ttl keeps its own");
+    assert_eq!(stamped(&ttl, "c", a_minute).expires, at(MINUTE), "an expiry given wins over the key's");
+    assert_eq!(stamped(&idle, "d", none).expires, at(30 * MINUTE));
+    f.clock.advance(2 * MINUTE);
+    assert_eq!(stamped(&ttl, "c", none).expires, at(10 * MINUTE), "a key gone takes its bucket's ttl");
+    assert_eq!(stamped(&idle, "d", none).expires, at(30 * MINUTE), "an idle key lives on from its write");
+}
+
+// contract: KV-03
+#[test]
+fn a_set_of_a_key_a_large_clear_hid_keeps_nothing_of_the_cell_it_writes_over() {
+    let f = fixture();
+    let items = f.store.bucket::<i64>("items").open().unwrap();
+    let (kv, id) = (Kv::of(&f.store).unwrap(), items.scope.id);
+    let (revision, expires) = (kv.revision(), unix_millis(f.store.now() + MINUTE));
+    let paths: Vec<Vec<u8>> =
+        (0..=CLEAR_BOUND).map(|n| Branch::default().under("big").unwrap().path(&n.to_string()).unwrap()).collect();
+    kv.file()
+        .transaction(|tx| -> Result<()> {
+            for path in &paths {
+                cells::put(tx, id, path, (next_version(&revision, tx), Some(expires)), &Raw::Int(1), None)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    items.under("big").clear().unwrap();
+    assert_eq!(f.rows("_tinystore_kv_branches"), 1, "marked rather than deleted");
+
+    assert_eq!(stamped(&items.under("big"), "7", WriteOptions::default()).expires, None, "not the hidden cell's");
+    assert_eq!(items.under("big").get("7").unwrap(), Some(1));
+    assert_eq!(items.under("big").get("8").unwrap(), None);
 }
 
 #[test]
@@ -243,7 +344,7 @@ fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     kv.file()
         .transaction(|tx| -> Result<()> {
             for path in &paths {
-                let version = next_version(&revision, tx)?;
+                let version = next_version(&revision, tx);
                 cells::put(tx, id, path, (version, None), &Raw::Int(1), None)?;
             }
             Ok(())

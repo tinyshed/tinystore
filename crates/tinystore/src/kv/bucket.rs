@@ -484,31 +484,28 @@ impl<V> Bucket<V> {
             return Err(too_large.within(self.scope.shown_key(key)));
         }
         let now = self.scope.now();
-        let (id, path, given, default) =
-            (self.scope.id, self.scope.path(key)?, options.expires(now), self.default_expires(now));
+        let path = self.scope.path(key)?;
         let raw =
             if seal { self.kept(&path, raw).map_err(|error| error.within(self.scope.shown_key(key)))? } else { raw };
-        let (if_version, bytes) = (options.if_version, raw.len());
-        // a write is a use of an idle key, which lives on from it; a key with a ttl keeps its own
-        let keeps_its_expiry = !matches!(self.expiry, Expiry::Idle(_));
+        let bytes = raw.len();
+        let cell = PutCell {
+            id: self.scope.id,
+            path,
+            raw,
+            now,
+            put,
+            if_version: options.if_version,
+            given: options.expires(now),
+            default: self.default_expires(now),
+            // a write is a use of an idle key, which lives on from it; a key with a ttl keeps its own
+            keeps_its_expiry: !matches!(self.expiry, Expiry::Idle(_)),
+        };
         let encrypted = self.encrypted.clone();
         let work = move |tx: &Tx<'_>, revision: &AtomicI64| {
             if let Some(encrypted) = &encrypted {
                 encrypted.claim(tx)?;
             }
-            let current = cells::current(tx, id, &path, now)?;
-            let live = current.filter(|current| current.live);
-            if let (Put::OnlyNew, Some(live)) = (put, live) {
-                return Ok(Stamp { written: false, version: Version(live.version), expires: live.expires });
-            }
-            check_version(live.map(|live| live.version), if_version)?;
-            let expires = given.or(match live {
-                Some(live) if keeps_its_expiry => live.expires,
-                _ => default,
-            });
-            let version = next_version(revision, tx)?;
-            cells::put(tx, id, &path, (version, expires), &raw, current.and_then(|current| current.spill))?;
-            Ok(Stamp { written: true, version: Version(version), expires })
+            cell.write(tx, revision)
         };
         Ok((bytes, work))
     }
@@ -964,7 +961,7 @@ pub(crate) fn clear_work(scope: &Scope) -> Result<impl Work<()> + use<>> {
         if cells::delete_under(tx, id, (&everything.0, &everything.1), CLEAR_BOUND)? {
             return Ok(());
         }
-        let cleared = next_version(revision, tx)?;
+        let cleared = next_version(revision, tx);
         cells::mark_cleared(tx, id, &prefix, cleared)
     })
 }
@@ -982,6 +979,62 @@ fn opened(encrypted: Option<&Encrypted>, path: &[u8], mut cell: Cell) -> Result<
 pub(crate) fn decode<V: Value>(raw: &Raw) -> Result<V> {
     value::decode(raw)
         .map_err(|mismatch| Error::corrupt(format!("its value does not read as the bucket's type: {mismatch}")))
+}
+
+/// A put of one cell, made before it waits for the writer.
+struct PutCell {
+    id: i64,
+    path: Vec<u8>,
+    raw: Raw,
+    now: i64,
+    put: Put,
+    if_version: Option<Version>,
+    /// The expiry the call asks for.
+    given: Option<i64>,
+    /// The bucket's expiry, for a key the write makes.
+    default: Option<i64>,
+    /// A live key keeps the expiry it has where the call gives none.
+    keeps_its_expiry: bool,
+}
+
+impl PutCell {
+    /// Writes the cell in one statement where nothing the cell there holds
+    /// can change the write: a set, not at a version, of a value small enough
+    /// for its cell, whose expiry no live key keeps or is none, as a bucket's
+    /// whose keys never expire. A key with a ttl keeps an expiry only a read
+    /// says. The read first cost a set a third of its instructions (issue 7).
+    fn write(self, tx: &Tx<'_>, revision: &AtomicI64) -> Result<Stamp> {
+        let expires = self.given.or(self.default);
+        let keeps = self.keeps_its_expiry && self.given.is_none();
+        let alone = self.put == Put::Always && self.if_version.is_none() && !cells::spills(&self.raw);
+        if alone && (!keeps || expires.is_none()) {
+            let version = next_version(revision, tx);
+            if cells::set(tx, self.id, &self.path, (version, expires), &self.raw, keeps)? {
+                return Ok(Stamp { written: true, version: Version(version), expires });
+            }
+        }
+        self.read_then_write(tx, revision)
+    }
+
+    /// Reads the cell, then writes it as what it holds says: a create of a
+    /// key that is not there, a write at the version the key has, or one that
+    /// deletes the row the cell's last value spilled to.
+    fn read_then_write(self, tx: &Tx<'_>, revision: &AtomicI64) -> Result<Stamp> {
+        let current = cells::current(tx, self.id, &self.path, self.now)?;
+        let live = current.filter(|current| current.live);
+        if let (Put::OnlyNew, Some(live)) = (self.put, live) {
+            return Ok(Stamp { written: false, version: Version(live.version), expires: live.expires });
+        }
+        check_version(live.map(|live| live.version), self.if_version)?;
+        let expires = self.given.or(match live {
+            Some(live) if self.keeps_its_expiry => live.expires,
+            _ => self.default,
+        });
+        let version = next_version(revision, tx);
+        let spilled = current.and_then(|current| current.spill);
+        cells::put(tx, self.id, &self.path, (version, expires), &self.raw, spilled)?;
+        Ok(Stamp { written: true, version: Version(version), expires })
+    }
 }
 
 /// The key's current cell when it is live and, if a version is asked, at that

@@ -391,10 +391,10 @@ fn waits(batch: &[Arc<Write>], started: Instant) -> Vec<Duration> {
 }
 
 /// Runs a batch in one transaction, each write in a savepoint, and says how
-/// each one ended. What the writes that succeeded asked to run once they
-/// commit runs after the commit, in their order, the writer still held. A
-/// commit that holds measured writes, whose `waits` are given, is told to the
-/// probe.
+/// each one ended; what the writes left together settles once, after the
+/// last. What the writes that succeeded asked to run once they commit runs
+/// after the commit, in their order, the writer still held. A commit that
+/// holds measured writes, whose `waits` are given, is told to the probe.
 fn commit(
     connection: &Connection,
     batch: &[Arc<Write>],
@@ -426,6 +426,10 @@ fn commit(
         let _ = execute(connection, ROLLBACK);
         let failure = Error::internal("a grouped write's savepoint did not roll back; its batch rolled back");
         return batch.iter().map(|_| Err(failure.duplicate())).collect();
+    }
+    if let Err(failure) = Tx::new(connection, &committed, settlers).settle(Left::All) {
+        let _ = execute(connection, ROLLBACK);
+        return answers.into_iter().map(|answer| answer.and_then(|()| Err(failure.duplicate()))).collect();
     }
     if let Some(capture) = capture {
         capture.arm(batch.iter().any(|write| write.for_a_caller));

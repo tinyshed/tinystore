@@ -335,7 +335,7 @@ fn held(connection: &rusqlite::Connection, id: i64, path: &[u8], now: i64) -> Re
 fn keep(tx: &Tx<'_>, revision: &AtomicI64, (id, path): (i64, &[u8]), next: &Held, spill: Option<i64>) -> Result<()> {
     let row = serde_json::to_vec(next).map_err(|error| Error::internal(format!("a quota's row: {error}")))?;
     let expires = next.values().map(|(_, resets)| *resets).max();
-    let version = next_version(revision, tx)?;
+    let version = next_version(revision, tx);
     cells::put(tx, id, path, (version, expires), &Raw::Bytes(row), spill)
 }
 

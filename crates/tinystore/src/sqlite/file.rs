@@ -262,6 +262,7 @@ impl File {
         tx.settle(Left::Before)?;
         let value = work(&tx)?;
         tx.settle(Left::Here)?;
+        tx.settle(Left::All)?;
         open.finished = true;
         let handed = self.commit(connection, waited);
         if in_the_file(&handed) {
@@ -642,6 +643,7 @@ impl Begun<'_> {
     /// run once it did, the writer still held.
     pub(crate) fn commit(mut self) -> Result<()> {
         self.tx().settle(Left::Here)?;
+        self.tx().settle(Left::All)?;
         self.committed = true;
         let handed = self.file.commit(&self.connection, self.waited);
         if in_the_file(&handed) {
