@@ -53,6 +53,16 @@ fn a_window_starts_at_the_first_use_after_the_last_ended() {
     assert_eq!((session.used, session.resets_at), (1, Some(start + 10 * HOUR + 25 * MINUTE)));
 }
 
+#[test]
+fn a_window_too_long_for_a_time_to_end_never_resets() {
+    let f = fixture();
+    let trial = f.store.quota("trial").window("ever", 2, std::time::Duration::MAX).open().unwrap();
+    expect(&trial.allow("user-1").unwrap(), true, 1, &[1]);
+    expect(&trial.allow("user-1").unwrap(), true, 0, &[2]);
+    f.clock.advance(1000 * DAY);
+    expect(&trial.allow("user-1").unwrap(), false, 0, &[2]);
+}
+
 // contract: KV-10
 #[test]
 fn peek_counts_nothing_and_a_refund_never_goes_below_nothing() {

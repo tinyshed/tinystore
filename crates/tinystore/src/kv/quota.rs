@@ -278,7 +278,7 @@ fn decide(windows: &[Window], held: &Held, now: i64, n: u64) -> (Held, Allowance
         for (window, (used, resets)) in windows.iter().zip(kept.iter_mut()) {
             *used += n;
             if *resets == 0 {
-                *resets = now + window.span;
+                *resets = now.saturating_add(window.span);
             }
         }
     }
