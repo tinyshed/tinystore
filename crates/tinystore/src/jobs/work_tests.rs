@@ -380,3 +380,42 @@ fn a_worker_its_program_let_go_of_still_stops_when_the_store_closes() {
     f.store.close().unwrap();
     assert!(closing.elapsed() < Duration::from_secs(5), "{:?}", closing.elapsed());
 }
+
+#[cfg(feature = "replication")]
+#[test]
+fn a_commit_a_copy_applied_leaves_the_queues_open_here_as_they_were() {
+    let f = fixture();
+    let emails = f.store.queue::<Push>("emails").attempts(5).open().unwrap();
+    let (ran_tx, ran_rx) = mpsc::channel();
+    let worker = emails
+        .work(move |push: Push, _run| -> Result<()> {
+            ran_tx.send(push.user).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    emails.add(&Push { user: 1 }).unwrap();
+    assert_eq!(ran_rx.recv_timeout(Duration::from_secs(5)), Ok(1), "the worker ran its first job, and sleeps");
+    for file in ["kv.db", "jobs.db"] {
+        f.store.applied(file);
+        let refused = f.store.queue::<Push>("emails").attempts(3).open().unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::Invalid, "{file}: the queue is still open here with 5 attempts");
+        let again = f.store.queue::<Push>("emails").attempts(5).open().unwrap();
+        again.add(&Push { user: 2 }).unwrap();
+        let ran = ran_rx.recv_timeout(Duration::from_secs(5));
+        assert_eq!(ran, Ok(2), "{file}: an add through a handle opened since wakes the worker");
+    }
+    worker.stop();
+}
+
+#[cfg(feature = "replication")]
+#[test]
+fn a_queue_its_file_registers_otherwise_after_a_commit_is_read_again_at_its_next_open() {
+    let f = fixture();
+    let emails = f.store.queue::<Push>("emails").open().unwrap();
+    let renumber = "update _tinystore_jobs_queues set id = id + 100 where name = 'emails'";
+    let file = emails.jobs.file();
+    file.transaction(|tx| tx.execute(renumber, []).map_err(|error| crate::sqlite::sql_error("a test", error))).unwrap();
+    f.store.applied("jobs.db");
+    let again = f.store.queue::<Push>("emails").open().unwrap();
+    assert_eq!(again.state.id, emails.state.id + 100, "a copy taken again from another home");
+}

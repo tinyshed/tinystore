@@ -288,10 +288,50 @@ impl Engine for Jobs {
         Ok(vec![copy_file(&self.file, FILE, "jobs", into)?])
     }
 
-    /// A queue's settings are its home's, read again on a copy once its
-    /// home's commits arrive.
-    fn applied(&self, _: &str) {
-        lock(&self.queues).clear();
+    /// A queue's registration is its home's, and a copy taken again may hold
+    /// another: once a commit of jobs' own file arrives, a queue it names
+    /// otherwise now is forgotten, and read again at its next open.
+    #[cfg(feature = "replication")]
+    fn applied(&self, file: &str) {
+        if file == self.file_name() {
+            self.forget_queues_registered_otherwise();
+        }
+    }
+}
+
+#[cfg(feature = "replication")]
+impl Jobs {
+    /// The file's name in the store's directory, as a copy's commits name it:
+    /// `jobs.db`, or a database's `sql/app.db`.
+    fn file_name(&self) -> String {
+        self.lent_by()
+            .and_then(crate::replication::database_of)
+            .map_or_else(|| FILE.to_owned(), crate::engine::database_file)
+    }
+
+    /// Forgets each queue open here whose registration the file no longer
+    /// holds as it was. A queue whose registration stands keeps its state:
+    /// its handles and workers share it, and a second state of one queue
+    /// would wake none of the first's workers nor stop their handlers.
+    fn forget_queues_registered_otherwise(&self) {
+        let open: Vec<(String, Arc<QueueState>)> =
+            lock(&self.queues).iter().map(|(name, state)| (name.clone(), Arc::clone(state))).collect();
+        if open.is_empty() {
+            return;
+        }
+        let registered =
+            self.file.read(|c| open.iter().map(|(name, _)| rows::find_queue(c, name)).collect::<Result<Vec<_>>>());
+        // a read that failed learned nothing, and the states stay
+        let Ok(registered) = registered else {
+            return;
+        };
+        let mut queues = lock(&self.queues);
+        for ((name, state), found) in open.iter().zip(registered) {
+            let stands = found.is_some_and(|(id, kind)| id == state.id && kind == state.kind.as_str());
+            if !stands && queues.get(name).is_some_and(|kept| Arc::ptr_eq(kept, state)) {
+                queues.remove(name);
+            }
+        }
     }
 }
 
