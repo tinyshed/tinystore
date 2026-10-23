@@ -62,7 +62,8 @@ let worker = emails.work(|email: Email, run| -> Result<(), AppError> {
 - A job added in a transaction commits with its rows, or not at all
   (contract JOB-02).
 - A job runs at least once: a run that ends before it is settled runs again,
-  and its stale lease settles nothing (contract JOB-05).
+  and its stale lease settles nothing, so an `update` or a `set` made once
+  the lease ended runs (contract JOB-05).
 - A step runs once per job, across its attempts (contract JOB-06).
 - `concurrency` and `rate` count every worker of every process.
 

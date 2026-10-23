@@ -639,7 +639,8 @@ impl<V> Claimed<V> {
 
     /// Settles the job by `outcome`, as a handler's answer does: `()` for done,
     /// or one of the run's answers. A job whose lease ended and that another
-    /// claim took since, or that a cancel took, is a `conflict`.
+    /// claim, a set or an update took since, or that a cancel took, is a
+    /// `conflict`, and the settlement changes nothing.
     pub fn settle(self, outcome: impl Into<Outcome>) -> Result<()> {
         let (lease, queue, jobs) = (&self.run.lease, &self.run.queue, &self.run.jobs);
         let now = jobs.now();
@@ -662,7 +663,7 @@ impl<V> Claimed<V> {
             let why = if lease.cancelled() {
                 "a cancel took the job"
             } else {
-                "the job's lease ended and another claim took it"
+                "the job's lease ended and another claim or a change took it"
             };
             return Err(Error::new(ErrorKind::Conflict, why).within(self.run.describe()));
         }

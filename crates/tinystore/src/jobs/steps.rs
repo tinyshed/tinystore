@@ -72,7 +72,7 @@ pub(crate) fn keep_encoded(jobs: &Jobs, lease: &Lease, name: &str, encoded: Vec<
             .map_err(|error| sql_error("a step's answer", error))
     })?;
     if kept == 0 {
-        return Err(Error::new(ErrorKind::Conflict, "the job's lease ended and another claim took it"));
+        return Err(Error::new(ErrorKind::Conflict, "the job's lease ended and another claim or a change took it"));
     }
     Ok(())
 }

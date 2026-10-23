@@ -46,9 +46,14 @@ const NEXT_DUE: &str = "select next from _tinystore_jobs j where queue = ?1 and 
     order by next, id limit 1";
 const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases where queue = ?1 and until > ?2";
 
-const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2";
+/// A settlement takes its lease where its claim left it. A lease's next follows
+/// its job's row, as a parked row's does, and a write that moves a row no live
+/// lease holds ends the lease first; so a lease found where its claim left it
+/// finds its row there too, and one whose row a claim moved since writes
+/// nothing, not even the drop of its lease.
+const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
-const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2";
+const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
 const JOB_HELD: &str =
     "select again, repeat, error, attempt from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
 const DELETE_JOB: &str = "delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3 returning spill";
@@ -486,10 +491,10 @@ pub(crate) fn settle(c: &Connection, queue: &QueueState, lease: &Lease, how: &Ho
 
 fn write(c: &Connection, queue: &QueueState, lease: &Lease, how: &How, now: i64) -> Result<Settled> {
     if let How::Extend { until } = how {
-        changed_one(c, EXTEND_LEASE, params![lease.id, lease.attempt, until])?;
+        changed_one(c, EXTEND_LEASE, params![lease.id, lease.attempt, until, lease.next])?;
         return Ok(Settled { until: Some(*until), ..Settled::default() });
     }
-    changed_one(c, DROP_LEASE, params![lease.id, lease.attempt])?;
+    changed_one(c, DROP_LEASE, params![lease.id, lease.attempt, lease.next])?;
     if !matches!(how, How::GiveBack)
         && let (Some(group), Some(_)) = (&lease.group, queue.policy.concurrency.group)
     {
@@ -767,7 +772,7 @@ fn changed_one(c: &Connection, sql: &str, params: impl rusqlite::Params) -> Resu
 }
 
 fn lost() -> Error {
-    Error::new(ErrorKind::Conflict, "the job's lease ended and another claim took it")
+    Error::new(ErrorKind::Conflict, "the job's lease ended and another claim or a change took it")
 }
 
 #[cfg(test)]

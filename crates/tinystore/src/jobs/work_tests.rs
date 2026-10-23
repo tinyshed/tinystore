@@ -149,6 +149,51 @@ fn a_job_whose_lease_ended_runs_again_and_its_stale_lease_settles_nothing() {
     assert!(pushes.get("p").unwrap().is_none());
 }
 
+// contract: JOB-05
+#[test]
+fn a_change_after_a_lease_ended_runs_and_the_stale_lease_settles_nothing() {
+    let f = fixture();
+    let drafts = f.store.queue::<Push>("drafts").timeout(MINUTE).open().unwrap();
+    let due = f.now();
+    for (change, attempt) in [("update", 2), ("set", 1)] {
+        drafts.id(change).at(due).add(&Push { user: 1 }).unwrap();
+        let stale = drafts.claim().unwrap().unwrap();
+        f.clock.advance(MINUTE);
+        match change {
+            "update" => assert!(drafts.id(change).update(&Push { user: 2 }).unwrap(), "it has not started again"),
+            _ => drafts.id(change).at(due).set(&Push { user: 2 }).unwrap(),
+        }
+        assert_eq!(
+            stale.settle(()).unwrap_err().kind(),
+            ErrorKind::Conflict,
+            "{change}: the stale lease settles nothing"
+        );
+        let next = drafts.claim().unwrap().expect("the changed job runs");
+        assert_eq!((next.value.user, next.run().attempt()), (2, attempt), "{change}");
+        next.settle(()).unwrap();
+    }
+}
+
+// contract: JOB-05
+#[test]
+fn a_stale_lease_of_a_job_a_claim_parked_since_settles_nothing() {
+    let f = fixture();
+    let refreshes = f.store.queue::<Push>("refreshes").timeout(MINUTE).open().unwrap();
+    refreshes.id("a").add(&Push { user: 1 }).unwrap();
+    let stale = refreshes.claim().unwrap().unwrap();
+    f.clock.advance(MINUTE);
+    // as a claim parks a due job whose group is full: its row and its ended lease move together
+    let (queue, next, id) = (refreshes.state.id, stale.run().lease.next, stale.run().lease.id);
+    let park = |from: i64, to: i64| {
+        refreshes.jobs.file().transaction(|tx| super::rows::move_to(tx, queue, (from, id, Some("a")), to)).unwrap();
+    };
+    park(next, next + super::rows::PARKED_BY);
+    assert_eq!(stale.settle(()).unwrap_err().kind(), ErrorKind::Conflict);
+    park(next + super::rows::PARKED_BY, next);
+    let claimed = refreshes.claim().unwrap().unwrap();
+    assert_eq!(claimed.run().attempt(), 2, "the stale settlement wrote nothing: its attempt still counts");
+}
+
 // contract: JOB-11
 #[test]
 fn a_worker_runs_jobs_on_the_stores_threads_until_it_stops() {

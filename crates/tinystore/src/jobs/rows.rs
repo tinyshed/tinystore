@@ -44,6 +44,10 @@ const NEXT_ID: &str = "update _tinystore_jobs_meta set value = value + 1 where n
 const COUNT_DEAD_ATTEMPTS: &str = "update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
     where _tinystore_jobs.queue = l.queue and _tinystore_jobs.next = l.next and _tinystore_jobs.id = l.id";
 const DROP_DEAD_LEASES: &str = "delete from _tinystore_jobs_leases";
+/// A lease that ended without a settlement, of a job a write changes: its
+/// attempt counts as a dead process's does.
+const COUNT_ENDED_ATTEMPT: &str = "update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
+    where l.id = ?1 and _tinystore_jobs.queue = l.queue and _tinystore_jobs.next = l.next and _tinystore_jobs.id = l.id";
 
 const JOB_BY_KEY: &str = "select j.next, j.id, j.again, j.repeat, j.spill
     from _tinystore_jobs_keys k join _tinystore_jobs j on j.queue = k.queue and j.next = k.next and j.id = k.id
@@ -235,18 +239,29 @@ pub(crate) fn insert(c: &Connection, job: &NewJob<'_>) -> Result<()> {
 }
 
 /// Makes the job a set names new: its value, time, repeat and group, its
-/// attempts from one, its steps gone with the run they belonged to.
+/// attempts from one, its steps gone with the run they belonged to. No live
+/// lease holds it.
 pub(crate) fn renew(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
+    end_lease(c, there.id)?;
     rewrite(c, queue, there, change, (RENEW_JOB, "a set's job"))?;
     execute(c, DROP_STEPS, [there.id], "a set's job: the steps of its last run")?;
     follow(c, queue, key, there.next, change.next)
 }
 
 /// Gives a job that has not started what an update names; a repeat or a group
-/// left out stays as it was.
+/// left out stays as it was. No live lease holds it.
 pub(crate) fn update(c: &Connection, queue: i64, key: &str, there: &Row, change: &Change<'_>) -> Result<()> {
+    end_lease(c, there.id)?;
     rewrite(c, queue, there, change, (UPDATE_JOB, "an update's job"))?;
     follow(c, queue, key, there.next, change.next)
+}
+
+/// Ends the lease of a job whose lease ended before a write changed it, its
+/// attempt counted: its holder may still settle, and would settle the job as
+/// the write left it, deleting a change it was never given.
+fn end_lease(c: &Connection, id: i64) -> Result<()> {
+    execute(c, COUNT_ENDED_ATTEMPT, [id], "the lease a changed job outlived")?;
+    execute(c, DROP_LEASE, [id], "the lease a changed job outlived").map(drop)
 }
 
 /// Writes what a change names over the job that is there with `statement`,
