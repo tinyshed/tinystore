@@ -74,8 +74,20 @@ async def _remote(directory: Path) -> tinystore.Store:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    await until(serve.exists)
-    endpoints: list[str] = json.loads(serve.read_text())["endpoints"]
+    endpoints: list[str] = []
+
+    def published() -> bool:
+        # the server may still be writing SERVE when it appears: Windows
+        # refuses a read meanwhile, and one elsewhere may find it half written
+        nonlocal endpoints
+        try:
+            endpoints = json.loads(serve.read_text())["endpoints"]
+        except (OSError, ValueError, KeyError):
+            return False
+        return len(endpoints) >= 2
+
+    await until(published)
+    assert len(endpoints) >= 2, f"SERVE of the remote server: {serve}"
     return await tinystore.connect(endpoints[1], token=TOKEN)
 
 

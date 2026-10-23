@@ -95,11 +95,17 @@ func remote(t *testing.T, dir string) *tinystore.Store {
 		_ = cmd.Wait()
 	})
 	serve := filepath.Join(served, "server", "SERVE")
-	until(func() bool { _, err := os.Stat(serve); return err == nil })
 	var published struct {
 		Endpoints []string `json:"endpoints"`
 	}
-	text, err := os.ReadFile(serve)
+	var text []byte
+	var err error
+	// the server may still be writing SERVE when it appears: Windows refuses
+	// a read meanwhile, and one elsewhere may find it half written
+	until(func() bool {
+		text, err = os.ReadFile(serve)
+		return err == nil && json.Unmarshal(text, &published) == nil && len(published.Endpoints) >= 2
+	})
 	if err != nil || json.Unmarshal(text, &published) != nil || len(published.Endpoints) < 2 {
 		t.Fatalf("SERVE of the remote server: %s %v", text, err)
 	}

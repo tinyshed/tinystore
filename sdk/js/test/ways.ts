@@ -69,8 +69,17 @@ export const ways: Way[] = [
 			]
 			remotes.set(dir, spawn(binary!, args, { stdio: 'ignore' }))
 			const serve = join(dir, 'store', 'server', 'SERVE')
-			await until(() => existsSync(serve))
-			const endpoints: string[] = JSON.parse(readFileSync(serve, 'utf8')).endpoints
+			let endpoints: string[] = []
+			// the server may still be writing SERVE when it appears: Windows
+			// refuses a read meanwhile, and one elsewhere may find it half written
+			await until(() => {
+				try {
+					endpoints = JSON.parse(readFileSync(serve, 'utf8')).endpoints ?? []
+				} catch {
+					return false
+				}
+				return endpoints.length >= 2
+			})
 			return connect(endpoints[1]!, { token })
 		},
 		leave: async dir => {
