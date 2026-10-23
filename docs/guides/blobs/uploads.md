@@ -80,6 +80,8 @@ What an upload promises, step by step:
    after, the new file; never part of it (contract BLOB-01).
 3. An upload aborted, dropped, or left by a process that died is no file. Its
    bytes are removed at once, or, after a crash, when the store next opens.
+   On Windows, bytes that another program such as a virus scanner holds then
+   are removed in the background once it lets them go, and the store opens.
 4. A commit whose outcome is unknown publishes nothing it cannot account for:
    the next open removes bytes no file names.
 

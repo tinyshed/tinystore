@@ -67,6 +67,31 @@ fn an_open_removes_what_a_process_that_died_left() {
     assert_eq!(docs.get("kept").unwrap().unwrap().read_all().unwrap(), kept);
 }
 
+// contract: BLOB-06
+#[test]
+#[cfg(windows)]
+fn an_open_leaves_to_maintenance_what_a_process_that_died_left_and_another_program_holds() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let f = fixture();
+    let blobs = f.blobs();
+    let orphan = blobs.take_id().unwrap();
+    std::fs::write(blobs.disk.upload_path(orphan), b"renamed, never committed").unwrap();
+    blobs.disk.place(orphan).unwrap();
+    let path = blobs.disk.object_path(orphan);
+    drop(blobs);
+    // as a scanner holds a new file: shared with no one, so it cannot go
+    let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+    let f = f.reopen();
+    let docs = f.store.files("docs").open().expect("files open while another program holds what is left");
+    docs.put("a", b"written beside it").unwrap();
+    assert!(path.exists());
+    drop(held);
+    maintain(&f.store).unwrap();
+    assert!(!path.exists(), "maintenance removes it once it is let go");
+    let f = f.reopen();
+    assert_eq!(f.files("docs").get("a").unwrap().unwrap().read_all().unwrap(), b"written beside it");
+}
+
 // contract: BLOB-02
 #[test]
 fn the_scrub_finds_a_changed_byte_and_a_read_of_it_is_corrupt() {

@@ -251,7 +251,9 @@ impl Blobs {
     }
 
     /// Removes the files of one directory of `objects/` whose ids lie past
-    /// `settled`, up to `reserved`, and that no content names.
+    /// `settled`, up to `reserved`, and that no content names. One that will
+    /// not go now, as one a scanner holds on Windows, stays in doubt: the
+    /// settled mark stays below it, and maintenance removes it later.
     fn remove_unnamed_in(&self, fan: i64, settled: i64, reserved: i64) -> Result<()> {
         let ids = self.disk.ids_in(fan)?;
         if ids.is_empty() {
@@ -263,7 +265,10 @@ impl Blobs {
         let named: Vec<i64> =
             self.file.read(|connection| rows_of(connection, named, params![low, high], |row| row.get(0)))?;
         for id in ids.into_iter().filter(|id| (low..=high).contains(id) && !named.contains(id)) {
-            self.disk.remove_object(id)?;
+            if let Err(error) = self.disk.remove_object(id) {
+                tracing::warn!(target: "tinystore", %error, "blobs: a file left by a process that died stays for now");
+                self.ids.doubt(id);
+            }
         }
         Ok(())
     }
