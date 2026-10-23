@@ -718,6 +718,12 @@ impl Log {
         self.lock().tears_at = Some(at);
     }
 
+    /// Whether an entry was appended since the log's last sync.
+    #[cfg(test)]
+    pub(crate) fn unsynced(&self) -> bool {
+        self.lock().unsynced
+    }
+
     fn lock(&self) -> MutexGuard<'_, Tail> {
         self.tail.lock().unwrap_or_else(PoisonError::into_inner)
     }

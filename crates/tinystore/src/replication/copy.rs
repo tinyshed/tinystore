@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 
 use super::entry::{Entry, Kind, Point};
 use super::log::Log;
-use crate::sqlite::{Applier, Durability, Position as WalEnd};
+use crate::sqlite::{Applier, Durability, Observe, Position as WalEnd};
 use crate::store::WeakStore;
 use crate::{Error, ErrorKind, Result, Store};
 
@@ -140,7 +140,7 @@ impl Copy {
         }
         position.keep(entry.point(), wal).map_err(|error| error.within(format!("copy {}", self.name)))?;
         if self.applier.is_long() {
-            position.sync().map_err(|error| error.within(format!("copy {}", self.name)))?;
+            self.sync(&mut position).map_err(|error| error.within(format!("copy {}", self.name)))?;
             self.applier.checkpoint()?;
         }
         drop(position);
@@ -174,6 +174,13 @@ impl Copy {
         Ok(unnamed.pop_front().expect("one is left"))
     }
 
+    /// Makes the log and then the position durable: a position synced first
+    /// would, after a power loss, name entries the log lost.
+    fn sync(&self, position: &mut Position) -> Result<()> {
+        self.log.sync()?;
+        position.sync()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Position> {
         self.position.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -191,13 +198,17 @@ impl Copy {
     pub(crate) fn unnamed(&self) -> u64 {
         self.unnamed.lock().unwrap_or_else(PoisonError::into_inner).len() as u64
     }
+
+    pub(crate) fn log_unsynced(&self) -> bool {
+        self.log.unsynced()
+    }
 }
 
 impl Drop for Copy {
     fn drop(&mut self) {
         // the position is what says how far the file went once its
         // connections close: synced before them
-        let _ = self.lock().sync();
+        let _ = self.sync(&mut self.lock());
         self.applier.close();
     }
 }

@@ -287,6 +287,49 @@ fn a_copy_killed_between_a_commit_and_its_position_names_what_its_file_holds_and
     assert!(pages_seen(&copy_dir.path().join("kv.db")) == home_pages, "the copy is its home's file");
 }
 
+// A position synced past what its log synced would, after a power loss,
+// name entries the log lost: the copy, and each node copying it, would take
+// a snapshot again.
+#[test]
+fn a_copy_syncs_its_log_before_the_position_it_checkpoints_its_file_at() {
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let home = node(home_dir.path());
+    let sessions = home.bucket::<String>("sessions").open().unwrap();
+    // Values a page holds many of: a commit that grows the file writes page 1,
+    // after which the copy's writer opens again rather than checkpoint.
+    for i in 0..1500 {
+        sessions.set(format!("k{}", i % 100), &format!("{i}{}", "v".repeat(200))).unwrap();
+    }
+    home.close().unwrap();
+    let logs = home_dir.path().join(DIR).join("kv.db");
+    let mut entries = Vec::new();
+    for first in super::log::segments_in(&logs).unwrap() {
+        let segment = fs::read(super::log::segment_path(&logs, first)).unwrap();
+        let mut at = MAGIC.len();
+        while let Some((_, used)) = entry::decode(&segment[at..]).unwrap() {
+            entries.push(segment[at..at + used].to_vec());
+            at += used;
+        }
+    }
+
+    let copy = node(copy_dir.path());
+    let shipped = Copy::start(&copy, "kv.db").unwrap();
+    let generation = || {
+        let wal = crate::sqlite::wal_end(&copy_dir.path().join("kv.db")).unwrap();
+        (wal.checkpoints, wal.salts)
+    };
+    let mut after = Vec::new();
+    for bytes in &entries {
+        shipped.apply(&entry::decode(bytes).unwrap().unwrap().0, Some(bytes)).unwrap();
+        after.push((generation(), shipped.log_unsynced()));
+    }
+    // the WAL, once there, starts over at the commit after a checkpoint
+    let checkpointed: Vec<bool> =
+        after.windows(2).filter(|two| two[0].0 != (0, [0, 0]) && two[0].0 != two[1].0).map(|two| two[0].1).collect();
+    assert!(!checkpointed.is_empty(), "the copy checkpointed its file");
+    assert!(checkpointed.iter().all(|unsynced| !unsynced), "its log was synced before each checkpoint");
+}
+
 #[test]
 fn a_copy_whose_last_position_a_power_loss_took_names_what_its_file_holds() {
     let (home_dir, copy_dir, last) = a_home_and_a_copy();
