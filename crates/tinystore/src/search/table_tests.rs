@@ -168,6 +168,36 @@ fn a_search_in_a_transaction_goes_on_while_a_switch_of_its_index_waits_for_that_
     assert_eq!(switched.unwrap(), "1", "the switch went on once the transaction committed");
 }
 
+// contract: DUR-07
+#[test]
+fn a_status_asked_inside_a_transaction_is_refused_while_a_switch_waits_for_that_transaction() {
+    let f = fixture();
+    let titles = f.db.search_index::<Article>("articles_search").table("articles").field("title", 1.0).open().unwrap();
+    f.ready(&titles);
+    f.insert(1, "bread", "salt");
+    let both = f.db.search_index::<Article>("articles_search").table("articles");
+    let both = both.field("title", 1.0).field("body", 1.0).open().unwrap();
+    let (answer, answered) = std::sync::mpsc::channel();
+    // A thread of its own, which takes the store along, as above.
+    std::thread::spawn(move || {
+        let f = f;
+        let asked = f.db.tx(|_| -> crate::Result<_> {
+            let (search, open) = (Arc::clone(&both.inner().search), Arc::clone(&both.inner().open));
+            let switch = std::thread::spawn(move || search.rebuild(&open));
+            while !both.inner().open.changing() {
+                assert!(!switch.is_finished(), "the switch ended before it held the index");
+                std::thread::yield_now();
+            }
+            Ok((both.status().map(drop), switch))
+        });
+        let asked = asked.and_then(|(status, switch)| switch.join().unwrap().map(|()| status));
+        answer.send(asked).unwrap();
+    });
+    let waited = "the status waited for the switch, which waited for the status's transaction";
+    let status = answered.recv_timeout(Duration::from_secs(30)).expect(waited).unwrap();
+    assert_eq!(status.unwrap_err().kind(), ErrorKind::Invalid, "a read inside a transaction of its file");
+}
+
 // contract: SRCH-07
 #[test]
 fn a_search_in_a_transaction_that_rolls_back_leaves_later_searches_what_committed() {

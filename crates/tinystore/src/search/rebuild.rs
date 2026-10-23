@@ -347,16 +347,20 @@ impl Search {
         Ok(())
     }
 
+    /// Where the index stands, in one snapshot. Inside a transaction of the
+    /// file the read is refused before the index is held, since a change of
+    /// it may hold it while waiting for that transaction's writer.
     pub(crate) fn status(&self, open: &OpenIndex) -> Result<Status> {
         open.refuse_dropped()?;
-        let current = open.current();
-        let Some(beside) = current.beside.clone() else {
+        self.file.read(|connection| {
+            let current = open.current();
             let serving = &current.serving;
-            let filling = self.file.read(|connection| table::filling(connection, serving.id, &serving.settings))?;
-            return Ok(filling.map_or(Status::Ready, |done| Status::Rebuilding { done }));
-        };
-        let progress = self.file.read(|connection| progress(connection, (open.id(), beside.data.id)))?;
-        Ok(progress.status())
+            let Some(beside) = &current.beside else {
+                let filling = table::filling(connection, serving.id, &serving.settings)?;
+                return Ok(filling.map_or(Status::Ready, |done| Status::Rebuilding { done }));
+            };
+            Ok(progress(connection, (serving.id, beside.data.id))?.status())
+        })
     }
 
     /// Waits until the index serves the settings it was opened with: its
