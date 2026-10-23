@@ -160,9 +160,11 @@ impl Search {
         // each turn asks, since a file's home may move while it is open.
         let weak = Arc::downgrade(&search);
         let wake = store.every(&format!("{tasks}: maintenance"), MAINTENANCE, move || {
-            weak.upgrade()
-                .filter(|search| !search.file.is_copy())
-                .map_or(Ok(()), |search| search.maintain(false).map(drop))
+            weak.upgrade().filter(|search| !search.file.is_copy()).map_or(Ok(()), |search| {
+                // a burst of reads otherwise keeps its readers open for good
+                search.file.sweep();
+                search.maintain(false).map(drop)
+            })
         })?;
         let _ = search.wake.set(wake);
         Ok(search)

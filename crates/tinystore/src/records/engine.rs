@@ -157,7 +157,11 @@ impl Records {
             }
             let weak = Arc::downgrade(&records);
             store.every("records: maintenance", MAINTENANCE, move || {
-                weak.upgrade().map_or(Ok(()), |records| records.maintain().map(drop))
+                weak.upgrade().map_or(Ok(()), |records| {
+                    // a burst of reads otherwise keeps its readers open for good
+                    records.file.sweep();
+                    records.maintain().map(drop)
+                })
             })?;
             Ok(records)
         })

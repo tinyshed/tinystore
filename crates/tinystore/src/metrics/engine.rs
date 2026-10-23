@@ -155,7 +155,11 @@ impl Engine {
             }
             let weak = Arc::downgrade(&engine);
             let wake = store.every("metrics: maintenance", MAINTENANCE, move || {
-                weak.upgrade().map_or(Ok(()), |engine| engine.maintain_in_background())
+                weak.upgrade().map_or(Ok(()), |engine| {
+                    // a burst of reads otherwise keeps its readers open for good
+                    engine.file.sweep();
+                    engine.maintain_in_background()
+                })
             })?;
             *lock(&engine.wake) = Some(wake);
             let weak = Arc::downgrade(&engine);

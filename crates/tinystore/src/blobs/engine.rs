@@ -193,7 +193,11 @@ impl Blobs {
             }
             let weak = Arc::downgrade(&blobs);
             store.every("blobs: maintenance", MAINTENANCE, move || {
-                weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| blobs.maintain().map(drop))
+                weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| {
+                    // a burst of reads otherwise keeps its readers open for good
+                    blobs.file.sweep();
+                    blobs.maintain().map(drop)
+                })
             })?;
             Ok(blobs)
         })
