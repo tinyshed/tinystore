@@ -9,11 +9,11 @@ program runs.
 > change the commands.
 
 ```sh
-LIBSQLITE3_FLAGS="SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB" cargo install tinystore-cli
+LIBSQLITE3_FLAGS="SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1" cargo install tinystore-cli
 ```
 
 The flags are the SQLite build TinyStore expects; without them readers wait
-on one another. The npm and PyPI packages and each GitHub release carry the
+on one another, and a synced commit on Linux takes 1.5x as long. The npm and PyPI packages and each GitHub release carry the
 same command already built, and `ghcr.io/tinyshed/tinystore` is its image.
 
 ```sh

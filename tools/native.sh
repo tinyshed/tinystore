@@ -25,14 +25,6 @@ fi
 rustup target add "$TRIPLE" >/dev/null
 
 case "$TRIPLE" in
-*-linux-*)
-	# SQLite calls fsync for every commit on Linux unless told it has
-	# fdatasync, which skips the inode's times: .cargo/config.toml's flags and
-	# this one, as CI builds them. v0.1.0 shipped without it.
-	export LIBSQLITE3_FLAGS="SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1"
-	;;
-esac
-case "$TRIPLE" in
 *-linux-musl)
 	# a cdylib needs musl linked dynamically, as Alpine's Bun, Node and Python load it
 	export RUSTFLAGS="-C target-feature=-crt-static"
@@ -67,6 +59,19 @@ cp "$built/$library" "$out/lib/tinystore.node"
 
 PYO3_BUILD_EXTENSION_MODULE=1 cargo build --release --locked --target "$TRIPLE" -p tinystore-ffi --features python
 cp "$built/$library" "$out/python/$module"
+
+# SQLite's own archive says which sync a commit calls: v0.1.0's Linux builds
+# called fsync for want of HAVE_FDATASYNC, and nothing failed
+case "$TRIPLE" in
+*-linux-*)
+	for archive in "$built"/build/libsqlite3-sys-*/out/libsqlite3.a; do
+		if ! nm "$archive" | grep -q ' U fdatasync$'; then
+			echo "$archive: SQLite was built without HAVE_FDATASYNC and calls fsync on every commit" >&2
+			exit 1
+		fi
+	done
+	;;
+esac
 
 # a build for another processor than this machine is not run here; macOS's
 # sh, bash 3.2, misreads a quoted pattern inside "$(...)", so none is there

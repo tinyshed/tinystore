@@ -34,7 +34,7 @@ cargo add tracing tracing-subscriber
 ```toml title=".cargo/config.toml" for=rust
 # the SQLite build TinyStore expects, which a dependency cannot set for you
 [env]
-LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB"
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1"
 ```
 
 | Language     | Needs                     | The core comes as                                         |
@@ -46,7 +46,8 @@ LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE
 
 Rust programs compile the core in, so a Rust program is the store. It builds
 SQLite too, with the flags in `.cargo/config.toml`: without them readers wait
-on one another, which the store logs once when it opens. The other
+on one another, which the store logs once when it opens, and a synced commit
+on Linux takes 1.5x as long. The other
 languages talk to the same core in a separate process by default, as
 [How the store runs](#how-the-store-runs) explains below.
 

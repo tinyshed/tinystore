@@ -48,13 +48,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # without it SQLite's Unix VFS calls fsync for fdatasync, which cost a
-      # 64 KiB set 1.5x (research kv-optimization-2026-10-09)
-      - name: SQLite's flags on Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
-
       # each platform's code is linted where it compiles: cfg hides it elsewhere
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -91,13 +84,6 @@ jobs:
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
-
-      # without it SQLite's Unix VFS calls fsync for fdatasync, which cost a
-      # 64 KiB set 1.5x (research kv-optimization-2026-10-09)
-      - name: SQLite's flags on Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: echo 'LIBSQLITE3_FLAGS=SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1' >> "$GITHUB_ENV"
 
       - name: Build the core's library and tinystore
         run: cargo build --release --locked -p tinystore-ffi -p tinystore-cli

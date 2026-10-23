@@ -6,7 +6,8 @@
 # since reads by sixteen callers ran 9x slower with it (research
 # rust-slice-2026-10-10). A program that builds the crate outside this workspace
 # sets the same flags.
-# Linux builds add HAVE_FDATASYNC in CI and the release: without it the Unix VFS
-# calls fsync, which cost a 64 KiB set 1.5x (research kv-optimization-2026-10-09).
+# Without HAVE_FDATASYNC the Unix VFS calls fsync, which also writes the inode's
+# times and cost a 64 KiB set 1.5x (research kv-optimization-2026-10-09); macOS
+# and Windows call neither, so one set of flags serves every platform.
 # A copy of a node's file writes its home's pages through sqlite_dbpage.
-LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB"
+LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1"

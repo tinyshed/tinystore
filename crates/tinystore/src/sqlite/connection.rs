@@ -56,7 +56,8 @@ fn warn_of_a_slow_build() {
                 target: "tinystore",
                 "SQLite was built with SQLITE_ENABLE_MEMORY_MANAGEMENT, so every connection shares one page cache \
                  behind one mutex and readers stop one another: build with \
-                 LIBSQLITE3_FLAGS=\"SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB\""
+                 LIBSQLITE3_FLAGS=\"SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB \
+                 -DHAVE_FDATASYNC=1\""
             );
         }
         if !super::mutexes_given() {
