@@ -353,6 +353,27 @@ describe('the end of a connection', () => {
 		}
 		expect((await peer.session.welcomed).inFlight).toBe(1)
 	})
+
+	test('a long answer in many pieces, its header split too, reads as whole', async () => {
+		const peer = new Peer()
+		peer.welcome()
+		await peer.frames()
+		const long = peer.session.call(0x0102, new Uint8Array([0x80]))
+		const short = peer.session.call(0x0102, new Uint8Array([0x80]))
+		const [first, second] = (await peer.frames()).filter(f => f.kind === Kind.request)
+		const body = new Uint8Array(300_000).map((_, n) => n % 251)
+		const bytes = new Uint8Array([
+			...frame(Kind.response, Flag.end, 0, first!.stream, body),
+			...frame(Kind.response, Flag.end, 0, second!.stream, entry(true)),
+		])
+		// a piece ends inside the first header, another inside the second
+		const cuts = [0, 5, 70_000, 140_001, 300_011, 300_014, bytes.length]
+		for (let n = 1; n < cuts.length; n++) {
+			peer.session.receive(bytes.subarray(cuts[n - 1], cuts[n]))
+		}
+		expect(await long).toEqual(body)
+		expect(KvEntry.decode(await short).found).toBe(true)
+	})
 })
 
 // a server nobody listens on fails as the store's kind on every platform,

@@ -81,6 +81,23 @@ for (const way of ways) {
 			expect(await sizes.head('nothing')).toBeUndefined()
 		})
 
+		test("each read of a file's bytes is its own, the bytes changed in one in no other", async () => {
+			const sizes = store.files('own')
+			const bytes = pattern(1 << 20)
+			await sizes.put('a', bytes)
+			const file = (await sizes.get('a'))!
+			const first = await file.bytes()
+			first.fill(0)
+			expect(await file.bytes()).toEqual(bytes)
+			const buffer = await file.arrayBuffer()
+			expect(buffer.byteLength).toBe(bytes.length)
+			expect(new Uint8Array(buffer)).toEqual(bytes)
+			const part = file.slice(10, 20)
+			const piece = await part.bytes()
+			piece.fill(0)
+			expect(await part.bytes()).toEqual(bytes.slice(10, 20))
+		})
+
 		test('a Blob gives its type, and a stream of unknown length goes in pieces', async () => {
 			const bodies = store.files('bodies')
 			const note = await bodies.put('note.txt', new Blob(['hello'], { type: 'text/plain' }))

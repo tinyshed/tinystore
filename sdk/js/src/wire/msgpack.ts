@@ -469,12 +469,19 @@ export class Reader {
 	readonly #seen = new Array<number>(maxDepth + 1).fill(0)
 	/** The numbers past those, rare enough to be kept in a set, made when one comes. */
 	readonly #others: (Set<number> | undefined)[] = []
+	/** Whether `bytes()` gives views of the bytes, which nothing else holds, rather than copies. */
+	readonly #views: boolean
 
-	/** Reads a message that is the bytes from `at` to `end`: all of them unless said. */
-	constructor(bytes: Uint8Array, at = 0, end = bytes.length) {
+	/**
+	 * Reads a message that is the bytes from `at` to `end`: all of them unless
+	 * said. With `views`, the bytes are the reader's alone, and the bins it
+	 * reads keep them rather than copy them.
+	 */
+	constructor(bytes: Uint8Array, at = 0, end = bytes.length, views = false) {
 		this.#bytes = bytes
 		this.#at = at
 		this.#end = end
+		this.#views = views
 	}
 
 	/** Turns to another message, for a reader kept from one answer to the next. */
@@ -746,11 +753,11 @@ export class Reader {
 		return this.#bytes.subarray(at, at + n)
 	}
 
-	/** Reads a bin as bytes of its own, which outlive the body. */
+	/** Reads a bin as bytes of its own, which outlive the body: a view where the body is the reader's. */
 	bytes(): Uint8Array {
 		const n = this.#binLength()
 		const at = this.#take(n)
-		return this.#bytes.slice(at, at + n)
+		return this.#views ? this.#bytes.subarray(at, at + n) : this.#bytes.slice(at, at + n)
 	}
 
 	#binLength(): number {

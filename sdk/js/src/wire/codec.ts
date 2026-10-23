@@ -463,6 +463,17 @@ export class Message<F extends Fields> implements Codec<Read<F>, Written<F>> {
 		return value
 	}
 
+	/**
+	 * Reads a body as `decode` does, for a body nothing else holds: its bins
+	 * are views of it rather than copies, as a file's bytes are of a get's.
+	 */
+	view(body: Uint8Array): Read<F> {
+		const r = new Reader(body, 0, body.length, true)
+		const value = this.read(r)
+		r.end()
+		return value
+	}
+
 	#read(r: Reader): Read<F> {
 		const read: Record<string, unknown> = {}
 		r.fields(key => {

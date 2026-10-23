@@ -18,6 +18,7 @@ import {
 } from './errors.ts'
 import type { Read } from './wire/codec.ts'
 import {
+	bodyLength,
 	checkHeader,
 	credit,
 	Flag,
@@ -279,7 +280,9 @@ export class Session {
 	readonly #leave = () => this.#flush()
 	readonly #reader = new Reader(new Uint8Array(0))
 
-	#rest: Uint8Array | undefined
+	// a frame's first part, as long as the whole frame, and how much of it came
+	#partial: Uint8Array | undefined
+	#gathered = 0
 	#goingAway = false
 	#ended: Error | undefined
 	readonly #endListeners: ((err: Error) => void)[] = []
@@ -547,16 +550,54 @@ export class Session {
 		if (this.#ended !== undefined) {
 			return
 		}
-		let bytes = chunk
-		if (this.#rest !== undefined) {
-			bytes = new Uint8Array(this.#rest.length + chunk.length)
-			bytes.set(this.#rest)
-			bytes.set(chunk, this.#rest.length)
-			this.#rest = undefined
+		const at = this.#partial === undefined ? 0 : this.#gather(chunk)
+		if (at === chunk.length || this.#ended !== undefined) {
+			return
 		}
-		const at = this.read(bytes, bytes.length)
-		if (at < bytes.length && this.#ended === undefined) {
-			this.#rest = bytes.slice(at)
+		const rest = chunk.subarray(at)
+		const taken = this.read(rest, rest.length)
+		if (taken < rest.length && this.#ended === undefined) {
+			this.#hold(rest.subarray(taken))
+		}
+	}
+
+	// Keeps a frame's first part in bytes as long as the whole frame, once
+	// its header has come, which `read` has checked: the rest is written
+	// behind it as it comes. A mebibyte that came in sixteen pieces was
+	// copied again for each piece before (issue #10).
+	#hold(part: Uint8Array): void {
+		const length = part.length < headerSize ? headerSize : headerSize + bodyLength(part)
+		this.#partial = new Uint8Array(length)
+		this.#partial.set(part)
+		this.#gathered = part.length
+	}
+
+	// writes the chunk's first bytes behind the frame held, reads the frame
+	// once it is whole, and says how many of the chunk's bytes it took
+	#gather(chunk: Uint8Array): number {
+		let at = 0
+		for (;;) {
+			const partial = this.#partial
+			if (partial === undefined) {
+				return at
+			}
+			const taken = Math.min(chunk.length - at, partial.length - this.#gathered)
+			partial.set(chunk.subarray(at, at + taken), this.#gathered)
+			this.#gathered += taken
+			at += taken
+			if (this.#gathered < partial.length) {
+				return at
+			}
+			this.#partial = undefined
+			if (partial.length === headerSize && bodyLength(partial) > 0) {
+				// only its header had come, which says how long the frame is
+				this.read(partial, headerSize)
+				if (this.#ended === undefined) {
+					this.#hold(partial)
+				}
+				continue
+			}
+			this.read(partial, partial.length, true)
 		}
 	}
 
@@ -564,9 +605,10 @@ export class Session {
 	 * Takes the frames whole in the first `length` bytes and says how many
 	 * bytes they were: the rest is a frame's first part, which whoever owns
 	 * the bytes keeps for its end. Nothing of the bytes is kept here, so their
-	 * owner may write them over once this returns.
+	 * owner may write them over once this returns, unless they are `kept`:
+	 * bytes given to the session, whose bodies are views of them.
 	 */
-	read(bytes: Uint8Array, length: number): number {
+	read(bytes: Uint8Array, length: number, kept = false): number {
 		if (this.#ended !== undefined) {
 			return length
 		}
@@ -579,7 +621,7 @@ export class Session {
 				if (stop > length) {
 					break
 				}
-				this.#take(h, bytes, at + headerSize, stop)
+				this.#take(h, bytes, at + headerSize, stop, kept)
 				at = stop
 			}
 		} catch (err) {
@@ -590,9 +632,15 @@ export class Session {
 	}
 
 	// takes the frame whose body is the bytes from `from` to `to`
-	#take(h: ReturnType<typeof parseHeader>, bytes: Uint8Array, from: number, to: number): void {
+	#take(
+		h: ReturnType<typeof parseHeader>,
+		bytes: Uint8Array,
+		from: number,
+		to: number,
+		kept: boolean,
+	): void {
 		if (this.#agreed !== undefined && (h.kind === Kind.response || h.kind === Kind.data)) {
-			this.#answer(h, bytes, from, to)
+			this.#answer(h, bytes, from, to, kept)
 			return
 		}
 		const body = bytes.slice(from, to)
@@ -659,7 +707,13 @@ export class Session {
 		this.#welcome.resolve(agreed)
 	}
 
-	#answer(h: ReturnType<typeof parseHeader>, bytes: Uint8Array, from: number, to: number): void {
+	#answer(
+		h: ReturnType<typeof parseHeader>,
+		bytes: Uint8Array,
+		from: number,
+		to: number,
+		kept: boolean,
+	): void {
 		const { kind, flags, stream: id } = h
 		const stream = this.#streams.get(id)
 		if (stream === undefined) {
@@ -670,7 +724,7 @@ export class Session {
 			return
 		}
 		// a body of its own, since events outlive the read's buffer
-		const body = bytes.slice(from, to)
+		const body = kept ? bytes.subarray(from, to) : bytes.slice(from, to)
 		const end = (flags & Flag.end) !== 0
 		if (end) {
 			this.#release(stream)

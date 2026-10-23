@@ -605,6 +605,7 @@ export function embedded(
 					})
 				: (await import('./runtime/pipe.ts')).openPipe(library(), resolve(dir), options, {
 						frames: (bytes, length) => session?.read(bytes, length) ?? length,
+						frame: bytes => session?.read(bytes, bytes.length, true),
 						end,
 					})
 		session = new Session(bytes => transport.write(bytes), { client: runtime.client })

@@ -75,6 +75,11 @@ export function parseHeader(bytes: Uint8Array, at = 0): Header {
 	}
 }
 
+/** The body's length a header at `at` says, its twelve bytes there and not checked. */
+export function bodyLength(bytes: Uint8Array, at = 0): number {
+	return uint32At(bytes, at)
+}
+
 /** Writes a header where its twelve bytes were kept, once its body's length is known. */
 export function putHeader(
 	bytes: Uint8Array,

@@ -159,7 +159,8 @@ export class Files {
 			handle => BlobsAt.encode({ handle, folder: this.#folder, path }),
 			'read',
 		)
-		const got = BlobsGot.decode(answer)
+		// the answer is this call's alone: the file's bytes stay where they came
+		const got = BlobsGot.view(answer)
 		if (got.info === undefined) {
 			return undefined
 		}
@@ -516,11 +517,14 @@ export class Upload implements AsyncDisposable {
 export class FileBytes {
 	readonly size: number
 	readonly #stream: () => ReadableStream<Uint8Array>
+	/** its bytes when they came with the get, which each read copies once */
+	readonly #held: Uint8Array | undefined
 
 	/** File bytes come from `files.get` and `slice`. */
-	constructor(size: number, stream: () => ReadableStream<Uint8Array>) {
+	constructor(size: number, stream: () => ReadableStream<Uint8Array>, held?: Uint8Array) {
 		this.size = size
 		this.#stream = stream
+		this.#held = held
 	}
 
 	/** Its bytes as they come, the credit of each given back once it is taken. */
@@ -529,6 +533,10 @@ export class FileBytes {
 	}
 
 	async bytes(): Promise<Uint8Array<ArrayBuffer>> {
+		if (this.#held !== undefined) {
+			// a copy, which a Buffer's slice under Node is not
+			return new Uint8Array(this.#held)
+		}
 		const whole = new Uint8Array(this.size)
 		let at = 0
 		for await (const piece of this.stream() as AsyncIterable<Uint8Array>) {
@@ -573,7 +581,7 @@ export class StoredFile extends FileBytes implements FileInfo {
 		whole: Uint8Array | undefined,
 		read: (offset?: number, length?: number) => ReadableStream<Uint8Array>,
 	) {
-		super(info.size, () => (whole === undefined ? read() : streamOf(whole)))
+		super(info.size, () => (whole === undefined ? read() : streamOf(whole)), whole)
 		this.path = info.path
 		this.etag = info.etag
 		this.contentType = info.contentType
@@ -595,7 +603,7 @@ export class StoredFile extends FileBytes implements FileInfo {
 		const whole = this.#whole
 		if (whole !== undefined) {
 			const bytes = whole.subarray(from, to)
-			return new FileBytes(bytes.length, () => streamOf(bytes))
+			return new FileBytes(bytes.length, () => streamOf(bytes), bytes)
 		}
 		return new FileBytes(to - from, () => this.#read(from, to - from))
 	}
@@ -615,7 +623,7 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
 			if (bytes.length > 0) {
-				controller.enqueue(bytes.slice())
+				controller.enqueue(new Uint8Array(bytes))
 			}
 			controller.close()
 		},
