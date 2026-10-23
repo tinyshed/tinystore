@@ -160,6 +160,27 @@ test("a write whose handle's open lost the connection goes again on the next, si
 	expect(sets).toBe(1)
 })
 
+test('a link closed while a dial fails dials no other', async () => {
+	let dials = 0
+	let fail: (err: Error) => void = () => {}
+	const link = new Link(() => {
+		dials++
+		if (dials > 1) {
+			return Promise.reject(new Error('a dial after the close'))
+		}
+		return new Promise<Connection>((_, reject) => {
+			fail = reject
+		})
+	})
+	const first = caught(link.connection())
+	const second = caught(link.connection())
+	const closing = link.close()
+	fail(new Error('the sidecar did not start'))
+	await closing
+	await Promise.all([first, second])
+	expect(dials).toBe(1)
+})
+
 test('an answer that is not its message fails its call alone', async () => {
 	let broken = false
 	const server = await served((method, body) =>

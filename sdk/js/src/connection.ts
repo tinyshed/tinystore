@@ -661,6 +661,11 @@ export class Link {
 	// one dial at a time: every caller that found the same dead connection
 	// waits for the one new one
 	#redial(dead: Promise<Connection> | undefined): Promise<Connection> {
+		// a caller that waited on a dial the close let go of finds the link
+		// closed: a dial now would be a connection nothing closes
+		if (this.#closed) {
+			return Promise.reject(new ClosedError('the store is closed'))
+		}
 		if (this.#current !== dead && this.#current !== undefined) {
 			return this.connection()
 		}
