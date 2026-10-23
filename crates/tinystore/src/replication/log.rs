@@ -116,7 +116,7 @@ struct Held {
 
 /// How long a synchronous commit waits for a copy to hold it before it
 /// answers `CommittedLocally`.
-const ACK_WAIT: Duration = Duration::from_secs(5);
+pub(super) const ACK_WAIT: Duration = Duration::from_secs(5);
 
 impl Acks {
     /// The acks of a home whose commits wait for the nodes `chosen`, by

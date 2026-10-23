@@ -551,12 +551,13 @@ fn a_synchronous_home_answers_a_write_once_a_copy_holds_it() {
     let home =
         node_with(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), synchronous: true, ..Node::default() });
     let sessions = home.bucket::<String>("sessions").open().unwrap();
-    let alone = Instant::now();
     for i in 0..20 {
+        // each timed alone: a commit that waited for a copy would take the whole wait
+        let alone = Instant::now();
         let unheld = sessions.set(format!("alone {i}"), &"no copy follows".to_owned()).unwrap_err();
         assert_eq!(unheld.kind(), crate::ErrorKind::CommittedLocally, "{unheld}");
+        assert!(alone.elapsed() < super::log::ACK_WAIT, "with no copy following, a commit waits for none");
     }
-    assert!(alone.elapsed() < Duration::from_secs(4), "with no copy following, a commit waits for none");
     assert_eq!(sessions.get("alone 19").unwrap().as_deref(), Some("no copy follows"), "a commit no copy held stands");
     let address = bound(home.node().unwrap()).unwrap().to_string();
     let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
@@ -1411,7 +1412,15 @@ fn a_copy_checked_while_its_home_writes_is_checked_at_the_point_the_home_answere
                 if !writing.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                sessions.set(format!("{i}"), &"x".repeat(2000)).unwrap();
+                // A busy machine leaves the copy applying more slowly than its
+                // home commits, so the home keeps a few entries ahead at most:
+                // a check then waits for a lag, not for a backlog that grows
+                // for as long as the checks run.
+                let held = copy_point(&copy, "kv.db").map_or(0, |point| point.sequence);
+                let ahead = home_point(&home, "kv.db").sequence.saturating_sub(held);
+                if ahead < 64 {
+                    sessions.set(format!("{i}"), &"x".repeat(2000)).unwrap();
+                }
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
@@ -1736,10 +1745,18 @@ fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_bo
     let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
     let home =
         node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), failover: Some(nobody), ..Node::default() });
-    let began = Instant::now();
     let refused = home.bucket::<String>("sessions").open().unwrap_err();
     assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
+
+    // A database opened with no migrations is born here and writes nothing, so
+    // that its first write is timed alone: making a file, on a busy machine,
+    // takes longer than the wait for a lease.
+    let db = home.database("app").open().unwrap();
+    let began = Instant::now();
+    let refused = db.exec(crate::sql!("create table t (v text)")).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
     assert!(began.elapsed() < Duration::from_secs(10), "a write waits for a lease a bound, not for good");
+    drop(db);
     home.close().unwrap();
 }
 
@@ -1907,15 +1924,20 @@ fn a_node_that_stops_refuses_at_once_the_writes_waiting_for_a_lease() {
     let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
     let home =
         node_with(dir.path(), Node { serve: Some("127.0.0.1:0".into()), failover: Some(nobody), ..Node::default() });
-    let waiting = {
-        let home = home.clone();
-        std::thread::spawn(move || home.bucket::<String>("sessions").open().map(drop))
-    };
+    // opened with no migrations, the database wrote nothing: its first write
+    // waits for a lease at once, with no file to make first
+    let db = home.database("app").open().unwrap();
+    let waiting =
+        std::thread::spawn(move || (db.exec(crate::sql!("create table t (v text)")).map(drop), Instant::now()));
     std::thread::sleep(Duration::from_millis(500));
     let began = Instant::now();
+    // the close itself waits for the node's threads, the one dialing the
+    // witness among them, which a refused dial holds two seconds on Windows
     home.close().unwrap();
-    assert!(began.elapsed() < Duration::from_secs(2), "the close waited {:?} for a lease", began.elapsed());
-    assert!(waiting.join().unwrap().is_err(), "a write no lease holds is refused");
+    let (refused, at) = waiting.join().unwrap();
+    assert!(refused.is_err(), "a write no lease holds is refused");
+    let waited = at.saturating_duration_since(began);
+    assert!(waited < Duration::from_secs(2), "the write waited {waited:?} for a lease once the node stopped");
 }
 
 #[cfg(feature = "metrics")]
