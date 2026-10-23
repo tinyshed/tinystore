@@ -159,9 +159,11 @@ err := store.Close()
 store.close()?;
 ```
 
-`close` stops the workers, waits for the handlers that are running, writes
-what the loggers and metrics still hold, and closes the engines in the
-reverse order of opening. A store whose last handle is dropped closes the same
+`close` stops the workers and the channels' subscriptions, and waits for the
+handlers that are running. Every engine is still open while they finish, so a
+handler can still write a bucket or a table. Then `close` writes what the
+loggers and metrics still hold, and closes the engines in the reverse order of
+opening. A store whose last handle is dropped closes the same
 way. A handle used after its store closed fails with a `closed` error
 (`ClosedError` in TypeScript and Python, `tinystore.ErrClosed` in Go,
 `ErrorKind::Closed` in Rust).

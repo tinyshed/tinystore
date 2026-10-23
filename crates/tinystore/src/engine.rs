@@ -21,6 +21,12 @@ pub(crate) use shared::{LentWrite, Wrote};
 
 /// An engine as its store sees it: something to close at the store's close.
 pub trait Engine: Send + Sync + 'static {
+    /// Stops the threads that run the program's code, a queue's handlers or a
+    /// channel's, and waits for those running. The store stops every engine
+    /// before it closes any, so that a handler finishes while every file it
+    /// writes is open. A second call does nothing.
+    fn stop(&self) {}
+
     /// Closes the engine. A second call, or a call after the engine closed by
     /// itself, does nothing.
     fn close(&self) -> Result<()>;

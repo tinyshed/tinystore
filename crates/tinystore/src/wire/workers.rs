@@ -255,6 +255,11 @@ impl Queue {
 }
 
 impl Engine for Workers {
+    /// Lets the queued calls run while every engine they reach is open.
+    fn stop(&self) {
+        let _ = self.close();
+    }
+
     /// Lets the queued calls run, then stops every thread and waits for it.
     fn close(&self) -> Result<()> {
         self.lock().stopped = true;

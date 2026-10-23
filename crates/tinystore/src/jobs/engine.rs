@@ -248,16 +248,21 @@ fn check_name(name: &str) -> Result<()> {
 
 impl Engine for Jobs {
     /// Stops every worker, which takes no job more and waits for its handlers
-    /// under way, then closes jobs.db. A file another engine lends is that
-    /// engine's to close.
-    fn close(&self) -> Result<()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
+    /// under way.
+    fn stop(&self) {
         let workers: Vec<Arc<Running>> = lock(&self.workers).drain(..).collect();
         for worker in workers {
             worker.stop();
         }
+    }
+
+    /// Stops every worker, then closes jobs.db. A file another engine lends
+    /// is that engine's to close.
+    fn close(&self) -> Result<()> {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.stop();
         let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         // a watcher waiting for a change reads again, and hears the store closed
         for queue in self.open_queues() {

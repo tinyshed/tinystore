@@ -160,6 +160,11 @@ impl Hub {
 }
 
 impl Engine for Hub {
+    /// Stops the threads that run handlers, a handler running finishing first.
+    fn stop(&self) {
+        self.deliverer.close();
+    }
+
     /// Stops every subscription and drops every message; a handler running
     /// finishes, and an `each` waiting ends.
     fn close(&self) -> Result<()> {

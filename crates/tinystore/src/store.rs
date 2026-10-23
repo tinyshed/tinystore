@@ -514,12 +514,13 @@ impl Store {
         &self.inner.probe
     }
 
-    /// Stops background work, waiting for the task under way, closes every
-    /// engine, the last opened first, and lets go of the directory. The first
-    /// engine that fails to close is the error; the others still close. A
-    /// second call does nothing, and neither does the last clone's drop after.
-    /// From inside a transaction it is `Invalid`: it would wait for the writer
-    /// the transaction holds.
+    /// Stops background work, waiting for the task under way, then every
+    /// handler the engines run, a queue's or a channel's, waiting for those
+    /// running; then closes every engine, the last opened first, and lets go
+    /// of the directory. The first engine that fails to close is the error;
+    /// the others still close. A second call does nothing, and neither does
+    /// the last clone's drop after. From inside a transaction it is
+    /// `Invalid`: it would wait for the writer the transaction holds.
     pub fn close(&self) -> Result<()> {
         if crate::sqlite::in_a_transaction() {
             let why =
@@ -643,6 +644,10 @@ impl Inner {
         }
         self.scheduler.stop();
         let engines = std::mem::take(&mut *lock(&self.engines));
+        // a handler writes engines opened after its own, so none closes before every handler ended
+        for engine in engines.iter().rev() {
+            engine.stop();
+        }
         let mut first_failure = None;
         for engine in engines.iter().rev() {
             if let Err(error) = engine.close() {
@@ -811,6 +816,91 @@ mod tests {
         }
         store.close().unwrap();
         assert_eq!(*lock(&closed), ["records", "jobs", "kv"]);
+    }
+
+    // contract: STORE-03
+    // contract: JOB-11
+    #[test]
+    #[cfg(all(feature = "kv", feature = "jobs"))]
+    fn a_close_waits_for_the_handlers_running_while_every_engine_they_write_is_open() {
+        use std::sync::mpsc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        // the queue opens before the bucket its handler writes, so kv closes first
+        let mail = store.queue::<String>("mail").open().unwrap();
+        let sent = store.bucket::<String>("sent").open().unwrap();
+        let (started, handler_started) = mpsc::channel();
+        let (go_on, handler_goes_on) = mpsc::channel::<()>();
+        let handler_goes_on = Mutex::new(handler_goes_on);
+        let wrote = Arc::new(Mutex::new(None));
+        let written = Arc::clone(&wrote);
+        let _worker = mail
+            .work(move |id: String, _| -> Result<()> {
+                started.send(()).unwrap();
+                lock(&handler_goes_on).recv().unwrap();
+                let result = sent.set(&id, &"sent".to_owned());
+                *lock(&written) = Some(result.as_ref().map_err(Error::kind).copied());
+                result
+            })
+            .unwrap();
+        mail.id("m-1").add(&"m-1".to_owned()).unwrap();
+        handler_started.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let closing = {
+            let store = store.clone();
+            std::thread::spawn(move || store.close())
+        };
+        while store.claim("a-probe").is_ok() {
+            std::thread::yield_now();
+        }
+        // time for a close that closes the engines first to reach kv.db
+        std::thread::sleep(Duration::from_millis(100));
+        go_on.send(()).unwrap();
+        closing.join().unwrap().unwrap();
+        assert_eq!(*lock(&wrote), Some(Ok(())), "the handler wrote while kv.db was open");
+
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let sent = store.bucket::<String>("sent").open().unwrap();
+        assert_eq!(sent.get("m-1").unwrap().as_deref(), Some("sent"));
+        let job = store.queue::<String>("mail").open().unwrap().get("m-1").unwrap();
+        let state = job.map(|job| job.state);
+        assert!(state.is_none_or(|state| state == crate::jobs::State::Done), "the mail is sent once: {state:?}");
+        store.close().unwrap();
+    }
+
+    // contract: STORE-03
+    #[test]
+    #[cfg(all(feature = "kv", feature = "channels"))]
+    fn a_close_waits_for_a_channels_handler_while_the_bucket_it_writes_is_open() {
+        use std::sync::mpsc;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        let orders = store.channel::<String>("orders").open().unwrap();
+        let seen = store.bucket::<String>("seen").open().unwrap();
+        let (started, handler_started) = mpsc::channel();
+        let (go_on, handler_goes_on) = mpsc::channel::<()>();
+        let (wrote, written) = mpsc::channel();
+        let _subscription = orders
+            .subscribe(move |message| {
+                started.send(()).unwrap();
+                handler_goes_on.recv().unwrap();
+                wrote.send(seen.set(&message.value, &"seen".to_owned()).map_err(|error| error.kind())).unwrap();
+            })
+            .unwrap();
+        orders.publish(&"o-1".to_owned()).unwrap();
+        handler_started.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let closing = {
+            let store = store.clone();
+            std::thread::spawn(move || store.close())
+        };
+        while store.claim("a-probe").is_ok() {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        go_on.send(()).unwrap();
+        closing.join().unwrap().unwrap();
+        assert_eq!(written.recv().unwrap(), Ok(()), "the handler wrote while kv.db was open");
     }
 
     #[test]
