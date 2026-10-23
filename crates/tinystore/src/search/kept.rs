@@ -71,6 +71,22 @@ pub(crate) struct Moment {
 }
 
 impl Kept {
+    /// What a search on the writer of a transaction starts from, as its own:
+    /// the lengths and the clusters, which only maintenance's commits change,
+    /// and the dictionary, built only from snapshots of what committed. The
+    /// documents gone stay out, since the transaction's writes change them,
+    /// and what the search reads it keeps to itself: the transaction may
+    /// roll back, and a version it counted come again with other documents.
+    #[cfg(feature = "sql")]
+    pub(crate) fn committed(&self) -> Kept {
+        Kept {
+            norms: Mutex::new(lock(&self.norms).clone()),
+            gone: Mutex::default(),
+            corrector: Mutex::new(lock(&self.corrector).clone()),
+            clusters: Mutex::new(lock(&self.clusters).clone()),
+        }
+    }
+
     /// The documents gone at `moment`, read again if it is not the one kept.
     pub(crate) fn gone(&self, connection: &Connection, moment: Moment) -> Result<Arc<Gone>> {
         if let Some(gone) = lock(&self.gone).as_ref().filter(|gone| gone.version == moment.gone_version) {

@@ -8,6 +8,8 @@
 //! delete ──► serving and beside, one commit      switch: beside serves, the old rows dropped
 //! ```
 
+#[cfg(feature = "sql")]
+use std::sync::TryLockError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
@@ -132,6 +134,22 @@ impl OpenIndex {
         self.current.write().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// What searches keep of the serving rows `id`, for a search on the
+    /// writer of a transaction to start from; nothing while a change holds
+    /// the rows, since the change may be waiting for that very writer.
+    #[cfg(feature = "sql")]
+    pub(crate) fn kept_for_a_transaction(&self, id: i64) -> Kept {
+        let current = match self.current.try_read() {
+            Ok(held) => Arc::clone(&held),
+            Err(TryLockError::Poisoned(poisoned)) => Arc::clone(&poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => return Kept::default(),
+        };
+        if current.serving.id != id {
+            return Kept::default();
+        }
+        current.serving.kept.committed()
+    }
+
     /// The serving rows' id.
     pub(crate) fn id(&self) -> i64 {
         self.hold().serving.id
@@ -141,6 +159,12 @@ impl OpenIndex {
     #[cfg(test)]
     pub(crate) fn settings(&self) -> Arc<Settings> {
         Arc::clone(&self.hold().serving.settings)
+    }
+
+    /// Whether a change holds the rows, or waits to.
+    #[cfg(all(test, feature = "sql"))]
+    pub(crate) fn changing(&self) -> bool {
+        matches!(self.current.try_read(), Err(TryLockError::WouldBlock))
     }
 
     pub(crate) fn refuse_dropped(&self) -> Result<()> {

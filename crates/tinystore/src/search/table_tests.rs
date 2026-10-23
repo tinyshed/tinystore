@@ -4,6 +4,7 @@
 //! index of the table's rows made afresh would.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -128,6 +129,65 @@ fn a_search_in_the_transaction_that_wrote_sees_its_writes() {
     assert_eq!(found, ["1"]);
     let around = f.db.tx(|_| articles.search("inside").run().map(drop)).unwrap_err();
     assert_eq!(around.kind(), ErrorKind::Invalid, "a search beside the transaction would not see its writes");
+}
+
+// contract: SRCH-07
+#[test]
+fn a_search_in_a_transaction_goes_on_while_a_switch_of_its_index_waits_for_that_transaction() {
+    let f = fixture();
+    let titles = f.db.search_index::<Article>("articles_search").table("articles").field("title", 1.0).open().unwrap();
+    f.ready(&titles);
+    f.insert(1, "bread", "salt");
+    let both = f.db.search_index::<Article>("articles_search").table("articles");
+    let both = both.field("title", 1.0).field("body", 1.0).open().unwrap();
+    assert!(matches!(both.status().unwrap(), Status::Rebuilding { .. }));
+    let (answer, answered) = std::sync::mpsc::channel();
+    // A thread of its own, which takes the store along, so that a deadlock
+    // fails the test rather than hanging it in the store's close.
+    std::thread::spawn(move || {
+        let f = f;
+        let searched = f.db.tx(|tx| -> crate::Result<_> {
+            tx.exec(sql!("insert into articles (id, title) values (2, 'fresh bread')"))?;
+            let (search, open) = (Arc::clone(&both.inner().search), Arc::clone(&both.inner().open));
+            let switch = std::thread::spawn(move || search.rebuild(&open));
+            while !both.inner().open.changing() {
+                assert!(!switch.is_finished(), "the switch ended before it held the index");
+                std::thread::yield_now();
+            }
+            let found = tx.with(&both).search("fresh").run()?;
+            Ok((ids(&found).join(" "), switch))
+        });
+        let searched = searched.and_then(|(found, switch)| switch.join().unwrap().map(|()| found));
+        let switched = both.search("salt").run().map(|found| ids(&found).join(" "));
+        answer.send((searched, switched)).unwrap();
+    });
+    let waited = "the search waited for the switch, which waited for the search's transaction";
+    let (searched, switched) = answered.recv_timeout(Duration::from_secs(30)).expect(waited);
+    assert_eq!(searched.unwrap(), "2", "the search saw its transaction's write");
+    assert_eq!(switched.unwrap(), "1", "the switch went on once the transaction committed");
+}
+
+// contract: SRCH-07
+#[test]
+fn a_search_in_a_transaction_that_rolls_back_leaves_later_searches_what_committed() {
+    let f = fixture();
+    let articles = f.articles();
+    f.insert(1, "bread", "");
+    f.insert(2, "bread", "");
+    search::maintain(&f.store).unwrap();
+    let rolled: crate::Result<()> = f.db.tx(|tx| {
+        tx.exec(sql!("update articles set title = 'bread zebrafish' where id = 1"))?;
+        let found = tx.with(&articles).search("bread zebrafisj").run()?;
+        assert_eq!(found.corrected.as_deref(), Some("bread zebrafish"), "the transaction's own word");
+        Err(Error::invalid("changed its mind"))
+    });
+    assert!(rolled.is_err());
+    // The rows' counts come back as they were, and these writes count them on again.
+    f.db.exec(sql!("delete from articles where id = 2")).unwrap();
+    f.insert(3, "quokkas", "");
+    let corrected = articles.search("quokkaz").run().unwrap();
+    assert_eq!(corrected.corrected.as_deref(), Some("quokkas"), "a word committed after the rollback");
+    assert_eq!(ids(&articles.search("bread").run().unwrap()), ["1"], "the row the rollback kept, not the one deleted");
 }
 
 // contract: SRCH-07

@@ -351,8 +351,8 @@ pub(crate) fn found<T, R>(
     query: Query,
     tx: Option<&Transaction<'_>>,
 ) -> Result<Found<R>> {
-    let table = table_of(&index.open.current().serving.settings)?;
-    let read = |connection: &Connection, answer: &Answer| -> Result<Vec<Option<R>>> {
+    let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<Vec<Option<R>>> {
+        let table = table_of(settings)?;
         let rows = answer.hits.iter().map(|(_, value, _)| {
             let (select, key) = table::hit_row(&table, value)?;
             read_row(connection, &select, &key)
@@ -363,7 +363,7 @@ pub(crate) fn found<T, R>(
         None => index.search.search_then(&index.open, query, read)?,
         Some(tx) => {
             tx.takes(&index.search.file, index.search.place())?;
-            tx.call(|writer| index.search.search_on(writer, &index.open, query, read))?
+            tx.call(|writer| index.search.search_in(writer, &index.open, query, read))?
         }
     };
     let hits = answer.hits.into_iter().zip(rows);

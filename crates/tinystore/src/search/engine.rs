@@ -386,36 +386,59 @@ impl Search {
     }
 
     pub(crate) fn search(&self, open: &OpenIndex, query: Query) -> Result<Answer> {
-        self.search_then(open, query, |_, _| Ok(())).map(|(answer, ())| answer)
+        self.search_then(open, query, |_, _, _| Ok(())).map(|(answer, ())| answer)
     }
 
-    /// Searches, then runs `then` on its answer in the same snapshot, as a
-    /// table's index reads its hits' rows.
+    /// Searches, then runs `then` on its answer in the same snapshot, told
+    /// the settings it searched by, as a table's index reads its hits' rows.
     pub(crate) fn search_then<R>(
         &self,
         open: &OpenIndex,
         query: Query,
-        then: impl FnOnce(&Connection, &Answer) -> Result<R>,
+        then: impl FnOnce(&Connection, &Settings, &Answer) -> Result<R>,
     ) -> Result<(Answer, R)> {
-        self.file.read(|connection| self.search_on(connection, open, query, then))
+        self.file.read(|connection| {
+            let serving = open.current().serving.clone();
+            self.search_on(connection, open, &serving, query, then)
+        })
     }
 
-    /// Searches on `connection`, a reader's snapshot or the writer of a
-    /// transaction that holds the file, whose writes the search then sees.
-    pub(crate) fn search_on<R>(
+    /// Searches on the writer of a transaction that holds the file, seeing
+    /// what it wrote. The index is read from the transaction's rows, never
+    /// from the lock a change of the index holds while it waits for this
+    /// writer, and what searches keep is borrowed only as far as no
+    /// transaction changes it.
+    #[cfg(feature = "sql")]
+    pub(crate) fn search_in<R>(
+        &self,
+        writer: &Connection,
+        open: &OpenIndex,
+        query: Query,
+        then: impl FnOnce(&Connection, &Settings, &Answer) -> Result<R>,
+    ) -> Result<(Answer, R)> {
+        open.refuse_dropped()?;
+        let current = rebuild::read_current(writer, &open.name)?;
+        let serving = current.ok_or_else(|| Error::invalid("the index was dropped"))?.serving;
+        let serving = Data { kept: Arc::new(open.kept_for_a_transaction(serving.id)), ..serving };
+        self.search_on(writer, open, &serving, query, then)
+    }
+
+    /// Searches `serving` on `connection`, a reader's snapshot or the writer
+    /// of a transaction that holds the file.
+    fn search_on<R>(
         &self,
         connection: &Connection,
         open: &OpenIndex,
+        serving: &Data,
         query: Query,
-        then: impl FnOnce(&Connection, &Answer) -> Result<R>,
+        then: impl FnOnce(&Connection, &Settings, &Answer) -> Result<R>,
     ) -> Result<(Answer, R)> {
         open.refuse_dropped()?;
         let started = self.probe.start();
-        let serving = open.current().serving.clone();
         let asked =
             Asked { index: serving.id, settings: &serving.settings, kept: &serving.kept, memory: &self.memory, query };
         let answer = read::search(connection, asked)?;
-        let then = then(connection, &answer)?;
+        let then = then(connection, &serving.settings, &answer)?;
         if let Some(started) = started {
             self.probe.time("tinystore_search_ms", &[("index", &open.name)], started.elapsed());
         }
