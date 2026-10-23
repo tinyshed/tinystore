@@ -20,6 +20,13 @@ fn eventually(condition: impl Fn() -> bool) {
     crate::testing::holds_within(crate::testing::PATIENCE, "the condition", condition);
 }
 
+/// The leases the queue's file holds: the jobs claimed and not yet settled.
+fn leases<V>(queue: &super::Queue<V>) -> i64 {
+    let count =
+        |c: &rusqlite::Connection| c.query_row("select count(*) from _tinystore_jobs_leases", [], |row| row.get(0));
+    queue.jobs.file().read(|c| count(c).map_err(|error| crate::sqlite::sql_error("the leases", error))).unwrap()
+}
+
 // contract: JOB-07
 #[test]
 fn a_handler_settles_its_job_by_what_it_returns() {
@@ -166,7 +173,7 @@ fn a_stopping_worker_waits_for_its_handlers_and_gives_back_what_it_had_not_start
     assert_eq!(started_rx.recv().unwrap(), 1, "one handler, the second job held for it");
     eventually(|| pushes.get("second").unwrap().is_some_and(|job| job.state == State::Waiting));
     let stopping = thread::spawn(move || worker.stop());
-    thread::sleep(Duration::from_millis(20));
+    eventually(|| leases(&pushes) == 1); // the second given back while the first's handler runs
     release_tx.send(()).unwrap();
     stopping.join().unwrap();
     assert!(pushes.get("first").unwrap().is_none(), "the handler under way finished");
