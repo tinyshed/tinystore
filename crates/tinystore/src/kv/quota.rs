@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 
 use super::allowance::{Allowance, Window as WindowUse};
 use super::bucket::Work;
 use super::cells;
-use super::engine::next_version;
+use super::engine::{Revision, next_version};
 use super::path::Key;
 use super::scope::{Kind, Scope};
 use super::value::Raw;
@@ -134,7 +133,7 @@ impl Quota {
         }
         let now = self.scope.now();
         let (id, path, windows) = (self.scope.id, self.scope.path(key)?, Arc::clone(&self.windows));
-        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, revision: &Revision| {
             let (held, spill) = held(tx, id, &path, now)?;
             let (next, usage) = decide(&windows, &held, now, n);
             if usage.ok {
@@ -183,7 +182,7 @@ impl Quota {
     fn refund_work(&self, key: &str, n: u64) -> Result<impl Work<()> + use<>> {
         let now = self.scope.now();
         let (id, path) = (self.scope.id, self.scope.path(key)?);
-        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, revision: &Revision| {
             let (held, spill) = held(tx, id, &path, now)?;
             let next: Held = held
                 .into_iter()
@@ -230,7 +229,7 @@ impl Quota {
     fn reset_work(&self, key: &str) -> Result<impl Work<()> + use<>> {
         let now = self.scope.now();
         let (id, path) = (self.scope.id, self.scope.path(key)?);
-        Ok(move |tx: &Tx<'_>, _: &AtomicI64| match cells::current(tx, id, &path, now)? {
+        Ok(move |tx: &Tx<'_>, _: &Revision| match cells::current(tx, id, &path, now)? {
             Some(current) => cells::remove(tx, id, &path, current.spill),
             None => Ok(()),
         })
@@ -332,10 +331,10 @@ fn held(connection: &rusqlite::Connection, id: i64, path: &[u8], now: i64) -> Re
 }
 
 /// Writes a key's windows, the row expiring as the last of them resets.
-fn keep(tx: &Tx<'_>, revision: &AtomicI64, (id, path): (i64, &[u8]), next: &Held, spill: Option<i64>) -> Result<()> {
+fn keep(tx: &Tx<'_>, revision: &Revision, (id, path): (i64, &[u8]), next: &Held, spill: Option<i64>) -> Result<()> {
     let row = serde_json::to_vec(next).map_err(|error| Error::internal(format!("a quota's row: {error}")))?;
     let expires = next.values().map(|(_, resets)| *resets).max();
-    let version = next_version(revision, tx);
+    let version = next_version(revision, tx)?;
     cells::put(tx, id, path, (version, expires), &Raw::Bytes(row), spill)
 }
 

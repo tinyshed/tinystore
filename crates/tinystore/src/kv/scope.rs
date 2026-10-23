@@ -2,11 +2,10 @@
 //! the engine's file, what the name holds, and the branch the handle sees.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 
 use rusqlite::Connection;
 
-use super::engine::Kv;
+use super::engine::{Kv, Revision};
 use super::path::{Branch, Key};
 use crate::engine::Home;
 use crate::sqlite::Tx;
@@ -148,7 +147,7 @@ impl Scope {
         &self,
         key: &str,
         bytes: usize,
-        work: impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static,
+        work: impl FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let revision = self.kv.revision();
         self.kv.file().write(bytes, move |tx| work(tx, &revision)).map_err(|error| error.within(self.shown_key(key)))
@@ -161,7 +160,7 @@ impl Scope {
         &self,
         key: &str,
         bytes: usize,
-        work: impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static,
+        work: impl FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static,
         done: impl FnOnce(Result<T>) + Send + 'static,
     ) {
         let revision = self.kv.revision();
@@ -176,7 +175,7 @@ impl Scope {
         &self,
         key: &str,
         bytes: usize,
-        work: Result<impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static>,
+        work: Result<impl FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static>,
         done: impl FnOnce(Result<T>) + Send + 'static,
     ) {
         match work {

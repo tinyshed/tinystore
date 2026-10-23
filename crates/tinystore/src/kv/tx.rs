@@ -3,11 +3,11 @@
 //! opened from.
 
 use std::fmt;
-use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 
 use super::bucket::{Bucket, Entry, PAGE_KEYS, Page, clear_work};
 use super::counters::Counters;
+use super::engine::Revision;
 use super::key_call::KeyCall;
 use super::path::Key;
 use super::scope::Scope;
@@ -22,7 +22,7 @@ pub(crate) fn call_on_key<T>(
     tx: &Transaction<'_>,
     scope: &Scope,
     key: &str,
-    work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>,
+    work: impl FnOnce(&SqlTx<'_>, &Revision) -> Result<T>,
 ) -> Result<T> {
     call(tx, scope, work).map_err(|error| error.within(scope.shown_key(key)))
 }
@@ -32,12 +32,12 @@ pub(crate) fn call_on_key<T>(
 pub(crate) fn call_on_branch<T>(
     tx: &Transaction<'_>,
     scope: &Scope,
-    work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>,
+    work: impl FnOnce(&SqlTx<'_>, &Revision) -> Result<T>,
 ) -> Result<T> {
     call(tx, scope, work).map_err(|error| error.within(scope.shown_branch()))
 }
 
-fn call<T>(tx: &Transaction<'_>, scope: &Scope, work: impl FnOnce(&SqlTx<'_>, &AtomicI64) -> Result<T>) -> Result<T> {
+fn call<T>(tx: &Transaction<'_>, scope: &Scope, work: impl FnOnce(&SqlTx<'_>, &Revision) -> Result<T>) -> Result<T> {
     let revision = scope.kv.revision();
     tx.takes(scope.kv.file(), scope.kv.place())?;
     tx.call(|sql| work(sql, &revision))

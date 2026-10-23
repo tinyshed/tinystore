@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -43,7 +43,7 @@ pub(crate) struct Kv {
     store: WeakStore,
     /// What kv tells the store's own metrics.
     probe: Arc<crate::probe::Probe>,
-    revision: Arc<AtomicI64>,
+    revision: Arc<Revision>,
     /// The revision the last transaction to keep one kept in the file.
     kept: AtomicI64,
     names: Mutex<HashMap<String, (i64, Kind)>>,
@@ -108,6 +108,7 @@ impl Kv {
     fn start(store: &Store, file: Arc<File>, lent_by: Option<String>, claim: Option<Claim>) -> Result<Arc<Kv>> {
         crate::engine::migrate_in(store, &file, "kv", MIGRATIONS, lent_by.as_deref())?;
         let revision = file.read(cells::revision)?;
+        let behind = file.is_copy();
         let tasks = lent_by.as_ref().map_or_else(|| "kv".to_owned(), |owner| format!("kv in {owner}"));
         let kv = Arc::new(Kv {
             file,
@@ -115,7 +116,7 @@ impl Kv {
             clock: store.clock(),
             store: store.downgrade(),
             probe: Arc::clone(store.probe()),
-            revision: Arc::new(AtomicI64::new(revision)),
+            revision: Arc::new(Revision { taken: AtomicI64::new(revision), behind: AtomicBool::new(behind) }),
             kept: AtomicI64::new(revision),
             names: Mutex::new(HashMap::new()),
             counting: Mutex::new(HashMap::new()),
@@ -186,7 +187,7 @@ impl Kv {
         &*self.clock
     }
 
-    pub(crate) fn revision(&self) -> Arc<AtomicI64> {
+    pub(crate) fn revision(&self) -> Arc<Revision> {
         Arc::clone(&self.revision)
     }
 
@@ -343,12 +344,30 @@ impl Kv {
     }
 }
 
+/// Where every version of a file comes from: the last one taken here, and
+/// whether the file may hold a later one.
+#[derive(Debug)]
+pub(crate) struct Revision {
+    taken: AtomicI64,
+    /// Set while the file is a copy, whose home takes versions this process
+    /// never sees: the next version is taken past the file's revision, so
+    /// that a copy that became the home goes on after its old home's.
+    behind: AtomicBool,
+}
+
 /// Takes the next version inside `taken_in`, whose end keeps the revision's
-/// high-water mark, as kv settles it: a version never repeats across a delete
-/// or a reopen. A write rolled back leaves its number unused, which is all the
-/// rule needs.
-pub(crate) fn next_version(revision: &AtomicI64, _taken_in: &Tx<'_>) -> i64 {
-    revision.fetch_add(1, Ordering::SeqCst) + 1
+/// high-water mark, as kv settles it: a version never repeats across a delete,
+/// a reopen or a change of home. A write rolled back leaves its number unused,
+/// which is all the rule needs.
+///
+/// The file's revision is read on its writer, so that no commit of an old
+/// home is missed: one applied after the read sets `behind` again.
+pub(crate) fn next_version(revision: &Revision, taken_in: &Tx<'_>) -> Result<i64> {
+    if revision.behind.swap(false, Ordering::SeqCst) {
+        let kept = cells::revision(taken_in).inspect_err(|_| revision.behind.store(true, Ordering::SeqCst))?;
+        revision.taken.fetch_max(kept, Ordering::SeqCst);
+    }
+    Ok(revision.taken.fetch_add(1, Ordering::SeqCst) + 1)
 }
 
 impl Settle for Kv {
@@ -357,7 +376,7 @@ impl Settle for Kv {
     /// updates of the one row (issue 7). A transaction that took none skips
     /// it, since every version is taken after the last one kept.
     fn settle(&self, tx: &Tx<'_>, left: Left) -> Result<()> {
-        let revision = self.revision.load(Ordering::SeqCst);
+        let revision = self.revision.taken.load(Ordering::SeqCst);
         if left != Left::All || revision <= self.kept.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -420,9 +439,12 @@ impl Engine for Kv {
 
     /// A bucket's name and id are its home's, and a copy forgets those it
     /// read once its home's commits arrive, since a name dropped there may
-    /// come back as another bucket.
+    /// come back as another bucket; and so are the versions its home took.
     fn applied(&self, _: &str) {
         lock(&self.names).clear();
+        if self.file.is_copy() {
+            self.revision.behind.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -431,3 +453,7 @@ impl std::fmt::Debug for Kv {
         write!(f, "Kv({})", self.file.path().display())
     }
 }
+
+#[cfg(all(test, feature = "replication", feature = "sql"))]
+#[path = "engine_tests.rs"]
+mod tests;

@@ -4,19 +4,18 @@
 //! write, or none of them.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 
 use super::bucket::{Bucket, Put, Stamp, WriteOptions, clear_work};
 use super::cells::{self, Cell};
 use super::counters::Counters;
-use super::engine::Kv;
+use super::engine::{Kv, Revision};
 use super::scope::Scope;
 use super::value::Raw;
 use crate::sqlite::Tx;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
-type Step = Box<dyn FnOnce(&Tx<'_>, &AtomicI64) -> Result<Outcome> + Send>;
+type Step = Box<dyn FnOnce(&Tx<'_>, &Revision) -> Result<Outcome> + Send>;
 
 /// Checks and writes to commit together.
 #[derive(Default)]
@@ -101,7 +100,7 @@ impl Batch {
         &mut self,
         scope: &Scope,
         key: &str,
-        work: impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<bool> + Send + 'static,
+        work: impl FnOnce(&Tx<'_>, &Revision) -> Result<bool> + Send + 'static,
     ) -> Result<()> {
         self.write(scope, key, move |tx, revision| {
             work(tx, revision).map(|found| Outcome { found, ..Outcome::default() })
@@ -157,7 +156,7 @@ impl Batch {
         &mut self,
         scope: &Scope,
         key: &str,
-        work: impl FnOnce(&Tx<'_>, &AtomicI64) -> Result<Outcome> + Send + 'static,
+        work: impl FnOnce(&Tx<'_>, &Revision) -> Result<Outcome> + Send + 'static,
     ) -> Result<()> {
         let shown = scope.shown_key(key);
         self.writes.push(Box::new(move |tx, revision| work(tx, revision).map_err(|error| error.within(shown))));

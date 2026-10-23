@@ -194,7 +194,7 @@ fn a_set_of_a_key_a_large_clear_hid_keeps_nothing_of_the_cell_it_writes_over() {
     kv.file()
         .transaction(|tx| -> Result<()> {
             for path in &paths {
-                cells::put(tx, id, path, (next_version(&revision, tx), Some(expires)), &Raw::Int(1), None)?;
+                cells::put(tx, id, path, (next_version(&revision, tx)?, Some(expires)), &Raw::Int(1), None)?;
             }
             Ok(())
         })
@@ -344,7 +344,7 @@ fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     kv.file()
         .transaction(|tx| -> Result<()> {
             for path in &paths {
-                let version = next_version(&revision, tx);
+                let version = next_version(&revision, tx)?;
                 cells::put(tx, id, path, (version, None), &Raw::Int(1), None)?;
             }
             Ok(())
@@ -363,6 +363,23 @@ fn a_large_clear_hides_its_keys_at_once_and_maintenance_deletes_them() {
     assert_eq!(f.rows("_tinystore_kv_branches"), 0);
     assert_eq!(items.under("big").get("7").unwrap(), Some(2));
     assert!(items.under("small").has("a").unwrap());
+}
+
+// contract: KV-03
+#[test]
+fn a_clear_marked_again_at_an_earlier_version_keeps_hidden_what_the_later_mark_hid() {
+    let f = fixture();
+    let items = f.store.bucket::<i64>("items").open().unwrap();
+    let (kv, id) = (Kv::of(&f.store).unwrap(), items.scope.id);
+    let prefix = Branch::default().under("big").unwrap().prefix().to_vec();
+    kv.file()
+        .transaction(|tx| -> Result<()> {
+            cells::mark_cleared(tx, id, &prefix, 40)?;
+            cells::mark_cleared(tx, id, &prefix, 20)
+        })
+        .unwrap();
+    let marks = kv.file().read(cells::marks).unwrap();
+    assert_eq!(marks.iter().map(|mark| mark.cleared).collect::<Vec<_>>(), [40]);
 }
 
 // contract: KV-13

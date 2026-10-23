@@ -2,14 +2,13 @@ use std::fmt;
 use std::marker::PhantomData;
 #[cfg(any(feature = "sql", feature = "wire"))]
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 use std::time::{Duration, SystemTime};
 
 use rusqlite::Connection;
 
 use super::cells::{self, Cell, MAX_VALUE};
 use super::encrypted::Encrypted;
-use super::engine::next_version;
+use super::engine::{Revision, next_version};
 #[cfg(feature = "replication")]
 use super::forward;
 use super::key_call::KeyCall;
@@ -238,9 +237,9 @@ pub(crate) struct Stamp {
 }
 
 /// A write as a closure the group commit or a transaction runs.
-pub(crate) trait Work<T>: FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static {}
+pub(crate) trait Work<T>: FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static {}
 
-impl<T, F: FnOnce(&Tx<'_>, &AtomicI64) -> Result<T> + Send + 'static> Work<T> for F {}
+impl<T, F: FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static> Work<T> for F {}
 
 impl<V: Value> Bucket<V> {
     /// Writes `value` under `key`. A key that is there keeps its ttl; a new one
@@ -326,7 +325,7 @@ impl<V: Value> Bucket<V> {
 
     pub(crate) fn take_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<Option<V>> + use<V>> {
         let take = self.take_cell_work(key, options)?;
-        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, revision: &Revision| {
             let cell = take(tx, revision)?;
             cell.map(|cell| decode::<V>(&cell.raw)).transpose()
         })
@@ -501,7 +500,7 @@ impl<V> Bucket<V> {
             keeps_its_expiry: !matches!(self.expiry, Expiry::Idle(_)),
         };
         let encrypted = self.encrypted.clone();
-        let work = move |tx: &Tx<'_>, revision: &AtomicI64| {
+        let work = move |tx: &Tx<'_>, revision: &Revision| {
             if let Some(encrypted) = &encrypted {
                 encrypted.claim(tx)?;
             }
@@ -556,7 +555,7 @@ impl<V> Bucket<V> {
     pub(crate) fn remove_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<bool> + use<V>> {
         let now = self.scope.now();
         let (id, path, if_version) = (self.scope.id, self.scope.path(key)?, options.if_version);
-        Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, _: &Revision| {
             let Some(found) = live_at(tx, id, &path, now, if_version)? else {
                 return Ok(false);
             };
@@ -591,7 +590,7 @@ impl<V> Bucket<V> {
         let now = self.scope.now();
         let (id, path, if_version) = (self.scope.id, self.scope.path(key)?, options.if_version);
         let encrypted = self.encrypted.clone();
-        Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, _: &Revision| {
             let Some(found) = live_at(tx, id, &path, now, if_version)? else {
                 return Ok(None);
             };
@@ -607,7 +606,7 @@ impl<V> Bucket<V> {
             .expires(now)
             .ok_or_else(|| Error::invalid("an expiry needs a ttl or a time").within(self.scope.shown_key(key)))?;
         let (id, path, if_version) = (self.scope.id, self.scope.path(key)?, options.if_version);
-        Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, _: &Revision| {
             if live_at(tx, id, &path, now, if_version)?.is_none() {
                 return Ok(false);
             }
@@ -705,7 +704,7 @@ impl<V> Bucket<V> {
             return cell;
         }
         let (id, written_path) = (self.scope.id, path.clone());
-        let at_once = move |tx: &Tx<'_>, _: &AtomicI64| {
+        let at_once = move |tx: &Tx<'_>, _: &Revision| {
             cells::renew(tx, id, &written_path, (renewal.version, renewal.seen), renewal.until)
         };
         match self.scope.write(key, 0, at_once) {
@@ -953,7 +952,7 @@ impl<V> fmt::Debug for All<V> {
 pub(crate) fn clear_work(scope: &Scope) -> Result<impl Work<()> + use<>> {
     let branch = scope.branch()?;
     let (id, prefix, everything) = (scope.id, branch.prefix().to_vec(), branch.everything());
-    Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
+    Ok(move |tx: &Tx<'_>, revision: &Revision| {
         // a bucket cleared whole holds no value of any key, and takes the key of its next write
         if prefix.is_empty() {
             cells::keep_bucket_key(tx, id, None)?;
@@ -961,7 +960,7 @@ pub(crate) fn clear_work(scope: &Scope) -> Result<impl Work<()> + use<>> {
         if cells::delete_under(tx, id, (&everything.0, &everything.1), CLEAR_BOUND)? {
             return Ok(());
         }
-        let cleared = next_version(revision, tx);
+        let cleared = next_version(revision, tx)?;
         cells::mark_cleared(tx, id, &prefix, cleared)
     })
 }
@@ -1003,12 +1002,12 @@ impl PutCell {
     /// for its cell, whose expiry no live key keeps or is none, as a bucket's
     /// whose keys never expire. A key with a ttl keeps an expiry only a read
     /// says. The read first cost a set a third of its instructions (issue 7).
-    fn write(self, tx: &Tx<'_>, revision: &AtomicI64) -> Result<Stamp> {
+    fn write(self, tx: &Tx<'_>, revision: &Revision) -> Result<Stamp> {
         let expires = self.given.or(self.default);
         let keeps = self.keeps_its_expiry && self.given.is_none();
         let alone = self.put == Put::Always && self.if_version.is_none() && !cells::spills(&self.raw);
         if alone && (!keeps || expires.is_none()) {
-            let version = next_version(revision, tx);
+            let version = next_version(revision, tx)?;
             if cells::set(tx, self.id, &self.path, (version, expires), &self.raw, keeps)? {
                 return Ok(Stamp { written: true, version: Version(version), expires });
             }
@@ -1019,7 +1018,7 @@ impl PutCell {
     /// Reads the cell, then writes it as what it holds says: a create of a
     /// key that is not there, a write at the version the key has, or one that
     /// deletes the row the cell's last value spilled to.
-    fn read_then_write(self, tx: &Tx<'_>, revision: &AtomicI64) -> Result<Stamp> {
+    fn read_then_write(self, tx: &Tx<'_>, revision: &Revision) -> Result<Stamp> {
         let current = cells::current(tx, self.id, &self.path, self.now)?;
         let live = current.filter(|current| current.live);
         if let (Put::OnlyNew, Some(live)) = (self.put, live) {
@@ -1030,7 +1029,7 @@ impl PutCell {
             Some(live) if self.keeps_its_expiry => live.expires,
             _ => self.default,
         });
-        let version = next_version(revision, tx);
+        let version = next_version(revision, tx)?;
         let spilled = current.and_then(|current| current.spill);
         cells::put(tx, self.id, &self.path, (version, expires), &self.raw, spilled)?;
         Ok(Stamp { written: true, version: Version(version), expires })

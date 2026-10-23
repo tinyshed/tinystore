@@ -99,8 +99,10 @@ const COUNT_UNDER: &str = "select count(*) from (
     select 1 from _tinystore_kv_cells where bucket = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer))";
 const DELETE_UNDER: &str =
     "delete from _tinystore_kv_cells where bucket = ?1 and path >= ?2 and path < ?3 returning spill";
+/// A clear's mark, which never moves back: one lowered would show again what
+/// the later clear hid.
 const MARK_CLEARED: &str = "insert into _tinystore_kv_branches (bucket, prefix, cleared) values (?1, ?2, ?3)
-    on conflict (bucket, prefix) do update set cleared = excluded.cleared";
+    on conflict (bucket, prefix) do update set cleared = max(cleared, excluded.cleared)";
 const EXPIRE: &str = "delete from _tinystore_kv_cells where (bucket, path) in (
     select bucket, path from _tinystore_kv_cells where expires <= ?1 order by expires limit cast(?2 as integer)
 ) returning spill";

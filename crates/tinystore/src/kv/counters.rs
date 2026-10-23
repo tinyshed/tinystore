@@ -1,6 +1,5 @@
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -8,7 +7,7 @@ use rusqlite::Connection;
 use super::bucket::{Work, clear_work};
 use super::buffer::{Buffer, Change, Live};
 use super::cells;
-use super::engine::next_version;
+use super::engine::{Revision, next_version};
 #[cfg(feature = "replication")]
 use super::forward;
 use super::path::Key;
@@ -243,11 +242,11 @@ impl Counters {
         let now = self.scope.now();
         let (id, path, created) = (self.scope.id, self.scope.path(key)?, self.created(now));
         let (node, op) = (node.to_owned(), i64::try_from(op).map_err(|_| Error::invalid("an op past 2^63"))?);
-        self.scope.write(key, 0, move |tx: &Tx<'_>, revision: &AtomicI64| {
+        self.scope.write(key, 0, move |tx: &Tx<'_>, revision: &Revision| {
             if cells::queued_applied(tx, &node)?.is_some_and(|applied| applied >= op) {
                 return Ok(live(tx, id, &path, now)?.map_or(0, |live| live.value));
             }
-            let version = next_version(revision, tx);
+            let version = next_version(revision, tx)?;
             let added = cells::add(tx, id, &path, (version, created), n, now)?;
             cells::keep_queued_applied(tx, &node, op)?;
             // its caller had its answer when the node queued it, so an add past
@@ -276,8 +275,8 @@ impl Counters {
     pub(crate) fn add_work(&self, key: &str, n: i64) -> Result<impl Work<i64> + use<>> {
         let now = self.scope.now();
         let (id, path, created) = (self.scope.id, self.scope.path(key)?, self.created(now));
-        Ok(move |tx: &Tx<'_>, revision: &AtomicI64| {
-            let version = next_version(revision, tx);
+        Ok(move |tx: &Tx<'_>, revision: &Revision| {
+            let version = next_version(revision, tx)?;
             cells::add(tx, id, &path, (version, created), n, now)?.ok_or_else(|| overflow(n))
         })
     }
@@ -285,7 +284,7 @@ impl Counters {
     pub(crate) fn delete_work(&self, key: &str) -> Result<impl Work<bool> + use<>> {
         let now = self.scope.now();
         let (id, path) = (self.scope.id, self.scope.path(key)?);
-        Ok(move |tx: &Tx<'_>, _: &AtomicI64| {
+        Ok(move |tx: &Tx<'_>, _: &Revision| {
             let was_live = cells::current(tx, id, &path, now)?.is_some_and(|current| current.live);
             cells::remove(tx, id, &path, None)?;
             Ok(was_live)
