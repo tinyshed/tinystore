@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import {
+	CancelledError,
 	ConflictError,
 	type Constraint,
 	type Database,
@@ -19,6 +20,7 @@ import {
 	type SqlTx,
 	type Store,
 	sql,
+	withSignal,
 } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
@@ -227,6 +229,29 @@ for (const way of ways) {
 			}
 			expect(count).toBe(3000)
 			expect((await app.all`select id from notes where author_id = 3`).length).toBe(3000)
+		})
+
+		// contract: WIRE-10
+		test('queries a signal aborts stop on the server, and the next one answers at once', async () => {
+			// more queries of minutes than the server has threads and the file readers
+			const slow =
+				'with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) select count(*) from c'
+			const visitor = new AbortController()
+			const panels = withSignal(visitor.signal, () =>
+				Array.from({ length: 20 }, () => caught(app.scalar<number>(slow))),
+			)
+			await sleep(100)
+			visitor.abort()
+			for (const err of await Promise.all(panels)) {
+				expect(err).toBeInstanceOf(CancelledError)
+			}
+			const timedOut = await caught(
+				withSignal(AbortSignal.timeout(100), () => app.scalar<number>(slow)),
+			)
+			expect(timedOut).toBeInstanceOf(CancelledError)
+			const next = performance.now()
+			expect(await app.scalar<number>`select 1`).toBe(1)
+			expect(performance.now() - next).toBeLessThan(2000)
 		})
 
 		test('a statement gives by its columns what it gives by its rows', async () => {

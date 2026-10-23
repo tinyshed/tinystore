@@ -112,3 +112,19 @@ fn a_read_past_a_bound_is_a_limit_naming_it() {
     let fits = f.metrics().query().name("wide").filter("n", Not("0")).read().unwrap();
     assert_eq!(fits.len(), 1000);
 }
+
+#[test]
+fn a_read_or_an_aggregate_whose_token_was_cancelled_fails_cancelled() {
+    // contract: STORE-09
+    let f = fixture();
+    written(&f);
+    let token = crate::CancellationToken::new();
+    token.cancel();
+    let query = || f.metrics().query().name("http_requests_total").since(HOUR);
+    let read = token.run(|| query().read()).unwrap_err();
+    assert_eq!(read.kind(), ErrorKind::Cancelled, "{read}");
+    assert!(read.to_string().starts_with("metrics: "), "{read}");
+    let summed = token.run(|| query().aggregate(crate::metrics::Op::Sum)).unwrap_err();
+    assert_eq!(summed.kind(), ErrorKind::Cancelled, "{summed}");
+    assert_eq!(query().read().unwrap().len(), 4, "a read without the token answers");
+}

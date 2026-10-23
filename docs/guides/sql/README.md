@@ -61,6 +61,8 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
   `invalid` (contract SQL-08).
 - A statement may not attach a file, begin a transaction or set a pragma
   (contract SQL-02).
+- A query you cancel, or whose timeout passes, stops at once and gives its
+  connection back (contract STORE-09).
 
 ## In these guides
 
@@ -68,6 +70,7 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 |-----------------------------------------------------------|---------------------------------------------------------|
 | [Migrations](migrations.md)                               | files, their order, checksums, changing a schema        |
 | [Writes and transactions](writes.md)                      | `exec`, `batch`, `tx`, errors and `outcome unknown`     |
+| [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query at once        |
 | [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
 | [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
 | [Buckets and queues in a database](buckets-and-queues.md) | keys and jobs that commit with rows                     |

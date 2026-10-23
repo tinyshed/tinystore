@@ -23,13 +23,14 @@ program relies on most, and ends with what TinyStore does not promise.
 
 ## Your errors
 
-| Id     | TinyStore promises                                                          |
-|--------|-----------------------------------------------------------------------------|
-| ERR-01 | every failure is one of a few kinds, the same in every engine and language  |
-| ERR-02 | an error names what failed and keeps its cause                              |
-| ERR-05 | a call past a bound fails `limit`, naming the bound, and never answers less |
-| ERR-06 | a call that fails `limit` or `invalid` changes nothing                      |
-| ERR-07 | damage to one item never stops its neighbours                               |
+| Id       | TinyStore promises                                                               |
+|----------|----------------------------------------------------------------------------------|
+| ERR-01   | every failure is one of a few kinds, the same in every engine and language       |
+| ERR-02   | an error names what failed and keeps its cause                                   |
+| ERR-05   | a call past a bound fails `limit`, naming the bound, and never answers less      |
+| ERR-06   | a call that fails `limit` or `invalid` changes nothing                           |
+| ERR-07   | damage to one item never stops its neighbours                                    |
+| STORE-09 | a read you cancel, or whose timeout passes, stops at once and frees what it held |
 
 ## Your work in the background
 
@@ -50,6 +51,7 @@ program relies on most, and ends with what TinyStore does not promise.
 |---------|---------------------------------------------------------------------------------|
 | WIRE-01 | every SDK answers as the Rust core does, embedded, as a sidecar or remote       |
 | WIRE-05 | a write whose connection ended before its answer surfaces as `outcome unknown`  |
+| WIRE-10 | a read whose client cancels it, or leaves, stops on the server too              |
 | SEC-01  | a read token only reads                                                         |
 | SEC-02  | a remote connection shows its token; a local server proves itself to its client |
 | SEC-03  | an encrypted bucket's file shows no value                                       |

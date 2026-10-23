@@ -560,3 +560,23 @@ async def test_a_worker_runs_a_job_its_transaction_added_once_the_transaction_co
     await until(lambda: len(seen) == 1)
     await worker.stop()
     assert seen == ["w1"]
+
+
+# contract: WIRE-10
+async def test_queries_whose_tasks_are_cancelled_stop_on_the_server(app: tinystore.Database) -> None:
+    # more queries of minutes than the server has threads and the file readers
+    slow = "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) select count(*) from c"
+    panels = [asyncio.create_task(app.scalar(int, slow)) for _ in range(20)]
+    await asyncio.sleep(0.1)
+    for panel in panels:
+        panel.cancel()
+    for panel in panels:
+        with pytest.raises(asyncio.CancelledError):
+            await panel
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):
+            await app.scalar(int, slow)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    assert await app.scalar(int, "select 1") == 1
+    assert loop.time() - started < 2

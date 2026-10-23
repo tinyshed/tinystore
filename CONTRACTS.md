@@ -27,6 +27,7 @@ These contracts are what does not.
 - **STORE-06** Background work MUST stop with `background: false`; a failure of it MUST be logged once and its recovery once, never a line a run.
 - **STORE-07** A program that links some engines MUST NOT pay for the others: an engine is a cargo feature, and a program that only logs links no store and no SQLite.
 - **STORE-08** A time an engine keeps MUST lie inside `[now − retention, now + skew]`, `now` read once a call from the store's clock; outside it MUST be `too_old` or `too_new`, naming the item.
+- **STORE-09** A read whose caller cancelled it, or whose timeout passed, MUST stop where it is, waiting or running, free at once what it held and fail `cancelled`; a cancel MUST NOT stop another caller's read, nor a write that runs.
 
 ## 2. Durability and transactions
 
@@ -218,6 +219,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **WIRE-07** A closing server MUST say `GOAWAY`, let running streams finish, and answer later requests `unavailable` unrun.
 - **WIRE-08** Every codec and every SDK MUST read the protocol's vectors as the same messages.
 - **WIRE-09** A private child MUST leave when its stdin ends; a sidecar MUST leave once idle with its `SERVE` and lock.
+- **WIRE-10** A read whose client cancels its stream or leaves MUST stop on the server as a cancelled read does, its stream ending `cancelled`.
 
 ## 7. Security
 

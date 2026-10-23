@@ -275,6 +275,12 @@ through the file that holds no turn runs one, PASSIVE, on a connection of its
 own, and the writer checkpoints itself only at 32,000, which writes that never
 pause reach. A file a capture logs and a copy run their own, never these.
 
+**A cancel interrupts its own read and no other.** `sqlite3_interrupt` stops
+whatever its connection runs, so a read lends its reader to its call's tokens
+only from its first statement to its last, and a token interrupts under the
+lock the read takes its reader back with; a reader's progress handler reads
+only the tokens of the thread stepping it (`cancel.rs`).
+
 **An engine kept in a file settles before its commits.** Every transaction
 of a file runs, before it commits, what an engine kept in it asked for: a
 table's index reads the rows whose keys its triggers left. It settles first

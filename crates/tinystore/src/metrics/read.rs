@@ -34,6 +34,7 @@ impl Engine {
         let mut answer = Vec::new();
         let mut points = Vec::new();
         for series in taken {
+            crate::cancel::check(|| "a read".to_owned())?;
             points.clear();
             let decoded = series.blocks.iter().try_for_each(|part| decode_block(zstd, &part.block, &mut points));
             let decoded = decoded.and_then(|()| series.decode_head(zstd, &mut points));

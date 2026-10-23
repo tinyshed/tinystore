@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use super::Config;
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
+use crate::cancel::{self, Given};
 use crate::{Error, ErrorKind, Result};
 
 /// How often a reader that comes back goes to the read that has waited
@@ -56,6 +57,9 @@ struct Idle {
 struct Waiter {
     ticket: u64,
     thread: Thread,
+    /// What wakes the thread when its call is cancelled, until it leaves the
+    /// queue.
+    _woken: Option<Given>,
 }
 
 impl Readers {
@@ -66,9 +70,14 @@ impl Readers {
     /// Runs `read` in one read transaction, so every statement it runs sees the
     /// same snapshot of the file. The snapshot covers fetching bytes: decode
     /// after it ends, or a heavy query holds the WAL from shrinking.
+    ///
+    /// A read whose call was cancelled takes no reader, stops waiting for one,
+    /// and stops its statement, giving the reader back: it fails `Cancelled`.
     pub(crate) fn read<T>(&self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let what = || format!("{}: a read", self.path.display());
+        cancel::check(what)?;
         let lease = self.lease()?;
-        snapshot(lease.connection(), read)
+        snapshot(lease.connection(), read).map_err(|error| cancel::named(error, what))
     }
 
     /// Closes the readers unused for longer than the configured time, keeping
@@ -183,6 +192,10 @@ impl Readers {
                 drop(pool);
                 return self.open_one();
             }
+            if let Err(cancelled) = cancel::check(|| format!("{}: a read", self.path.display())) {
+                pool.leave(ticket);
+                return Err(cancelled);
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 pool.leave(ticket);
@@ -194,10 +207,13 @@ impl Readers {
                 return Err(Error::new(ErrorKind::Unavailable, format!("{}: {why}", self.path.display())));
             }
             if ticket.is_none() {
+                // a cancel from here on wakes the thread: look again before it sleeps
                 ticket = Some(pool.queue());
+                continue;
             }
             drop(pool);
-            thread::park_timeout(left);
+            let timed_out = cancel::deadline().map(|at| at.saturating_duration_since(Instant::now()));
+            thread::park_timeout(timed_out.map_or(left, |timed_out| timed_out.min(left)));
             pool = self.lock();
         }
     }
@@ -255,7 +271,12 @@ impl Pool {
     fn queue(&mut self) -> u64 {
         let ticket = self.tickets;
         self.tickets += 1;
-        self.waiting.push_back(Waiter { ticket, thread: thread::current() });
+        let thread = thread::current();
+        let woken = cancel::on_cancel({
+            let thread = thread.clone();
+            move || thread.unpark()
+        });
+        self.waiting.push_back(Waiter { ticket, thread, _woken: woken });
         ticket
     }
 
@@ -303,7 +324,7 @@ const END_READ: &str = own!("commit");
 
 fn snapshot<T>(connection: &Connection, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     execute(connection, BEGIN_READ).map_err(|error| sql_error("a read: its snapshot", error))?;
-    let outcome = read(connection);
+    let outcome = interruptible(connection, read);
     if connection.is_autocommit() {
         return outcome;
     }
@@ -311,4 +332,17 @@ fn snapshot<T>(connection: &Connection, read: impl FnOnce(&Connection) -> Result
         Err(error) if outcome.is_ok() => Err(sql_error("a read: its snapshot", error)),
         _ => outcome,
     }
+}
+
+/// Runs `read` with the reader given to the tokens of its call, which
+/// interrupt the reader when cancelled, until `read` returns: the reader then
+/// goes back to the call's own last statement, which no cancel reaches.
+fn interruptible<T>(connection: &Connection, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    let _given = cancel::in_scope().then(|| {
+        let interrupt = connection.get_interrupt_handle();
+        cancel::on_cancel(move || interrupt.interrupt())
+    });
+    // a cancel that came before the reader was given interrupted nothing
+    cancel::check(|| "a read".to_owned())?;
+    read(connection)
 }

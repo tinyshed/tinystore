@@ -253,7 +253,9 @@ connection.
 - **`CANCEL` asks the server to stop.** It answers with the final frame it
   would have sent, or with the error `cancelled`; a client may drop what
   arrives on a stream it cancelled. A client ends an upload early with
-  `CANCEL`: ERROR is the server's alone.
+  `CANCEL`: ERROR is the server's alone. A read under way stops at once,
+  its statement interrupted, and answers `cancelled`, as do the reads of a
+  connection that ends; a call that writes runs to its end.
 - **A frame for a stream no longer in use is dropped**: a `DATA` the client
   sent before the final frame reached it, a `CANCEL` or a `CREDIT` that
   crossed it. The dropped `DATA` still gives its connection credit back.

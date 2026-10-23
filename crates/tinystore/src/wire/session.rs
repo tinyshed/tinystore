@@ -39,7 +39,8 @@ use crate::clock::from_unix_millis;
 use crate::engine::SharedFile;
 use crate::kv::Handed;
 use crate::pipe::{Capability, Connect};
-use crate::{Clock, Result, Store, unix_millis};
+use crate::sync::lock;
+use crate::{CancellationToken, Clock, Result, Store, unix_millis};
 
 /// The protocol this server speaks; a client of another is refused.
 const PROTOCOL: u64 = 1;
@@ -106,6 +107,9 @@ struct Shared {
     output: Mutex<Output>,
     /// Clients' runs of once, by stream, from the REQUEST to the last frame.
     runs: Mutex<HashMap<u32, ClientRun>>,
+    /// The tokens of the reads the workers run, by stream, which a CANCEL of
+    /// the stream or the connection's end cancels.
+    reads: Mutex<HashMap<u32, CancellationToken>>,
     /// Numbers each run's asking, so that a wait that ends after its stream
     /// was cancelled, and its number named again, finds another run there.
     asked: AtomicU64,
@@ -195,6 +199,7 @@ impl Session {
             input: Mutex::new(Input::default()),
             output: Mutex::new(Output::default()),
             runs: Mutex::new(HashMap::new()),
+            reads: Mutex::new(HashMap::new()),
             asked: AtomicU64::new(0),
             open: Mutex::new(HashMap::new()),
             outstanding: AtomicU64::new(0),
@@ -321,11 +326,11 @@ impl Session {
         output.ended && output.owes_nothing()
     }
 
-    /// Ends the session: calls under way finish, what they answer is dropped,
-    /// the runs handed to the client are let go, and its workers end, the jobs
-    /// they held failing their attempt. It waits for the workers to write
-    /// that, so that a store closing with its last pipe finds them stopped
-    /// rather than waits out their timeout.
+    /// Ends the session: reads under way stop, other calls finish, what they
+    /// answer is dropped, the runs handed to the client are let go, and its
+    /// workers end, the jobs they held failing their attempt. It waits for the
+    /// workers to write that, so that a store closing with its last pipe finds
+    /// them stopped rather than waits out their timeout.
     pub(crate) fn end(&self) {
         self.shared.lock_input().ended = true;
         let mut output = self.shared.lock_output();
@@ -335,6 +340,8 @@ impl Session {
         self.shared.ready.notify_all();
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
+        let reads: Vec<CancellationToken> = lock(&self.shared.reads).drain().map(|(_, read)| read).collect();
+        reads.iter().for_each(CancellationToken::cancel);
         #[cfg(feature = "jobs")]
         {
             for watch in self.shared.jobs.take_watches() {
@@ -514,9 +521,11 @@ impl Shared {
             #[cfg(feature = "channels")]
             Route::Subscribe => self.subscribe(input, stream, &body),
             Route::Worker => {
-                let shared = Arc::clone(self);
+                let (shared, reading) = (Arc::clone(self), self.reading(stream, method));
                 self.workers.run(Box::new(move || {
-                    shared.answer(stream, guarded(|| shared.call(method, &body, max_body)));
+                    let answered =
+                        shared.read_under(stream, reading, || guarded(|| shared.call(method, &body, max_body)));
+                    shared.answer(stream, answered);
                 }));
             }
         }
@@ -650,7 +659,7 @@ impl Shared {
     #[cfg(feature = "sql")]
     fn download(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.sql_link(input, stream);
-        let shared = Arc::clone(self);
+        let (shared, reading) = (Arc::clone(self), self.reading(stream, called));
         self.workers.run(Box::new(move || {
             let (answering, sending) = (Arc::clone(&shared), link.clone());
             let done = move |queried: std::result::Result<sql::Queried, Failure>| match queried {
@@ -661,10 +670,12 @@ impl Shared {
                 }
                 Err(failure) => answering.answer(stream, Err(failure)),
             };
-            let queued = guarded(|| {
-                let read_only = shared.read_only.load(Ordering::Relaxed);
-                sql::query(&shared.sql, (called, &body), &link, read_only, done);
-                Ok(())
+            let queued = shared.read_under(stream, reading, || {
+                guarded(|| {
+                    let read_only = shared.read_only.load(Ordering::Relaxed);
+                    sql::query(&shared.sql, (called, &body), &link, read_only, done);
+                    Ok(())
+                })
             });
             if let Err(failure) = queued {
                 shared.answer(stream, Err(failure));
@@ -752,10 +763,12 @@ impl Shared {
     #[cfg(feature = "metrics")]
     fn parts(self: &Arc<Self>, input: &Input, stream: u32, called: u16, body: Vec<u8>) {
         let link = self.stream_link(input, stream);
-        let shared = Arc::clone(self);
+        let (shared, reading) = (Arc::clone(self), self.reading(stream, called));
         self.workers.run(Box::new(move || {
             let bound = super::part_bound(link.max_body, link.credit, 0);
-            match guarded(|| metrics::parts(&shared.store, called, &body, bound)) {
+            let parted =
+                shared.read_under(stream, reading, || guarded(|| metrics::parts(&shared.store, called, &body, bound)));
+            match parted {
                 Ok(mut parts) if parts.len() == 1 => shared.answer(stream, Ok(parts.pop_front().unwrap_or_default())),
                 Ok(parts) => {
                     shared.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
@@ -1055,11 +1068,16 @@ impl Shared {
         self.channels.grant(frame.stream, granted);
     }
 
-    /// Lets go of a client's run of once, answering `cancelled`; a call
-    /// cancelled runs to its end, short as a call is. A worker cancelled ends
-    /// as its END would end it, the jobs it held failing their attempt, and a
-    /// watch cancelled ends.
+    /// Lets go of a client's run of once, answering `cancelled`. A read under
+    /// way stops, its statement interrupted, and answers `cancelled`; a call
+    /// that writes runs to its end, short as a call is. A worker cancelled
+    /// ends as its END would end it, the jobs it held failing their attempt,
+    /// and a watch cancelled ends.
     fn cancel(self: &Arc<Self>, stream: u32) {
+        let read = lock(&self.reads).get(&stream).cloned();
+        if let Some(read) = read {
+            read.cancel();
+        }
         #[cfg(feature = "sql")]
         if self.sql.cancel(stream) {
             return;
@@ -1111,6 +1129,29 @@ impl Shared {
             }
             None => {}
         }
+    }
+
+    /// The token of a read a worker runs for `stream`, which a CANCEL of the
+    /// stream cancels; none for a call that writes, which runs to its end.
+    fn reading(&self, stream: u32, method: u16) -> Option<CancellationToken> {
+        if method::access(method) != Some(Access::Read) {
+            return None;
+        }
+        let token = CancellationToken::new();
+        lock(&self.reads).insert(stream, token.clone());
+        Some(token)
+    }
+
+    /// Runs `read` under its stream's token, then lets the token go, unless a
+    /// REQUEST that named the stream's number again has put its own there.
+    fn read_under<T>(&self, stream: u32, token: Option<CancellationToken>, read: impl FnOnce() -> T) -> T {
+        let Some(token) = token else { return read() };
+        let answered = token.run(read);
+        let mut reads = lock(&self.reads);
+        if reads.get(&stream).is_some_and(|kept| kept.same(&token)) {
+            reads.remove(&stream);
+        }
+        answered
     }
 
     /// The server's own methods, answered before this returns: a stop once its

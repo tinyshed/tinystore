@@ -2,6 +2,81 @@
 
 Every public type, trait and function of the store in `tinystore`, generated from its source. The [Store guide](../../handbook/start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Python](../python/store.md) and [Go](../go/store.md) pages list the same API.
 
+## CancellationToken
+
+```rust
+pub struct CancellationToken { /* private fields */ }
+```
+
+Stops the reads of a call from another thread, at once or after a
+timeout: a read under way stops, gives its reader back and fails
+`Cancelled`, and one that has not started fails before it takes one.
+
+The token stops what [`run`](CancellationToken::run) runs, on its thread:
+
+```rust
+use tinystore::CancellationToken;
+
+let token = CancellationToken::new();
+let counting = std::thread::spawn({
+    let (db, token) = (db.clone(), token.clone());
+    move || token.run(|| db.scalar::<i64>("select count(*) from events"))
+});
+token.cancel(); // the visitor left: the count stops with `Cancelled`, its reader back
+
+let timed = CancellationToken::timeout(Duration::from_secs(2));
+let total: i64 = timed.run(|| db.scalar("select count(*) from events"))?;
+```
+
+Only reads stop: a write runs to its end, and so does a read inside a
+transaction, which its own bound stops. Clones share the token.
+
+### CancellationToken.new
+
+```rust
+pub fn new() -> Self
+```
+
+### CancellationToken.timeout
+
+```rust
+pub fn timeout(after: Duration) -> Self
+```
+
+A token that stops its reads once `after` has passed since it was
+made, or earlier when it is cancelled.
+
+A timeout is read as a statement runs and as a read waits; a statement
+SQLite runs as one step, as a `count(*)` of a whole table, finishes that
+step first, where `cancel` stops it at once.
+
+### CancellationToken.cancel
+
+```rust
+pub fn cancel(&self)
+```
+
+Stops the reads under the token now and from now on.
+
+### CancellationToken.is_cancelled
+
+```rust
+pub fn is_cancelled(&self) -> bool
+```
+
+Whether the token was cancelled or its timeout passed.
+
+### CancellationToken.run
+
+```rust
+pub fn run<T>(&self, call: impl FnOnce() -> T) -> T
+```
+
+Runs `call` on this thread with the token over every read it makes:
+once the token is cancelled, each read under way fails `Cancelled` and
+each one after it fails before it starts. Tokens nest: a read stops
+when any token around it does.
+
 ## Clock
 
 ```rust

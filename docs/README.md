@@ -89,6 +89,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Overview](guides/sql/README.md)
 - [Migrations](guides/sql/migrations.md)
 - [Writes and transactions](guides/sql/writes.md)
+- [Stopping a slow query](guides/sql/cancel.md)
 - [Tables and queries](guides/sql/tables.md)
 - [Rows that include rows](guides/sql/include.md)
 - [Buckets and queues in a database](guides/sql/buckets-and-queues.md)

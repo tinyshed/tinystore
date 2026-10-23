@@ -356,3 +356,18 @@ fn a_read_finds_the_events_of_blocks_of_every_size() {
         assert_eq!(read, written, "{count}");
     }
 }
+
+#[test]
+fn a_page_or_a_count_whose_token_was_cancelled_fails_cancelled() {
+    // contract: STORE-09
+    let fixture = fixture();
+    let api = fixture.events("api");
+    timeline(&fixture, &api, 5);
+    let token = crate::CancellationToken::new();
+    token.cancel();
+    let page = token.run(|| api.list().page()).unwrap_err();
+    assert_eq!(page.kind(), ErrorKind::Cancelled, "{page}");
+    let counted = token.run(|| api.list().count()).unwrap_err();
+    assert_eq!(counted.kind(), ErrorKind::Cancelled, "{counted}");
+    assert_eq!(api.list().page().unwrap().events.len(), 5, "a read without the token answers");
+}

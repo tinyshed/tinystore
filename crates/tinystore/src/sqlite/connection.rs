@@ -130,6 +130,9 @@ fn configure_writer(connection: &Connection, config: &Config) -> rusqlite::Resul
 
 fn configure_reader(connection: &Connection, config: &Config) -> rusqlite::Result<()> {
     connection.pragma_update(None, "query_only", true)?;
+    // A statement stops once the call stepping it was cancelled or timed out:
+    // the handler reads the tokens of the thread that steps it, its caller's.
+    connection.progress_handler(crate::cancel::STEPS, Some(crate::cancel::stopped))?;
     configure_shared(connection, config)
 }
 

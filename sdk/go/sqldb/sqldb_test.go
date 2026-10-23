@@ -505,3 +505,39 @@ func TestADatabaseOpensWithoutMigrationsAndRefusesOneChangedAfterItWasApplied(t 
 		}
 	})
 }
+
+// contract: WIRE-10
+func TestQueriesWhoseContextEndsStopOnTheServer(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		db := app(t, store)
+		// more queries of minutes than the server has threads and the file readers
+		const slow = `with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) select count(*) from c`
+		visit, leave := context.WithCancel(context.Background())
+		panels := make(chan error, 20)
+		for range 20 {
+			go func() {
+				_, err := sqldb.Scalar[int64](visit, db, slow)
+				panels <- err
+			}()
+		}
+		time.Sleep(100 * time.Millisecond)
+		leave()
+		for range 20 {
+			if err := <-panels; !errors.Is(err, context.Canceled) {
+				t.Fatalf("a query its context cancelled: %v", err)
+			}
+		}
+		timed, done := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer done()
+		if _, err := sqldb.Scalar[int64](timed, db, slow); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a query past its context's deadline: %v", err)
+		}
+		started := time.Now()
+		if ways.Must(sqldb.Scalar[int64](context.Background(), db, `select 1`)) != 1 {
+			t.Fatal("select 1")
+		}
+		if waited := time.Since(started); waited > 2*time.Second {
+			t.Fatalf("the next query waited %v", waited)
+		}
+	})
+}

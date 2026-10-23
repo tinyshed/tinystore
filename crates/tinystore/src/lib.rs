@@ -8,6 +8,8 @@
 pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
+#[cfg(feature = "store")]
+mod cancel;
 #[cfg(feature = "channels")]
 pub mod channels;
 mod clock;
@@ -71,6 +73,8 @@ pub mod typos;
 #[cfg(feature = "wire")]
 pub(crate) mod wire;
 
+#[cfg(feature = "store")]
+pub use cancel::CancellationToken;
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};
 pub use error::{Constraint, ConstraintKind, Error, ErrorKind, Result};
 pub use key::Key;

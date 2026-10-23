@@ -389,6 +389,63 @@ fn transactions_of_every_connection_wait_for_a_writer_held_elsewhere_on_one_work
     store.close().unwrap();
 }
 
+#[test]
+fn a_query_its_client_cancels_stops_and_frees_its_worker_and_reader() {
+    // contract: WIRE-10
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+    // more queries of minutes than the session has workers and the file readers
+    let text = "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) \
+        select count(*) from c";
+    let slow: Vec<u32> = (0..20)
+        .map(|_| {
+            let asked = SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned() };
+            client.start(method::SQL_QUERY, &asked)
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(100));
+    for stream in &slow {
+        client.write(Frame::new(Kind::Cancel, *stream, Vec::new()));
+    }
+    for stream in slow {
+        assert_eq!(answered::<SqlRows>(&client.next_on(stream)).unwrap_err().code, "cancelled");
+    }
+    let next = std::time::Instant::now();
+    assert_eq!(query(&mut client, handle, "select 1", "scalar").rows, [vec![Cell::Int(1)]]);
+    assert!(next.elapsed() < Duration::from_secs(2), "the next query waited {:?}", next.elapsed());
+    assert_eq!(client.pipe.streams(), 0, "every stream ended once");
+}
+
+#[test]
+fn the_queries_of_a_client_that_leaves_stop() {
+    // contract: WIRE-10
+    use crate::pipe::{Connect, Pipe};
+    use crate::{Options, Store};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut leaving = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    leaving.hello(1).unwrap();
+    let handle = open(&mut leaving);
+    let text = "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) \
+        select count(*) from c";
+    for _ in 0..20 {
+        let asked = SqlQuery { handle, text: text.to_owned(), values: Vec::new(), want: "scalar".to_owned() };
+        leaving.start(method::SQL_QUERY, &asked);
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    drop(leaving);
+    let mut next = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    next.hello(1).unwrap();
+    let handle = open(&mut next);
+    let started = std::time::Instant::now();
+    assert_eq!(query(&mut next, handle, "select 1", "scalar").rows, [vec![Cell::Int(1)]]);
+    assert!(started.elapsed() < Duration::from_secs(2), "the next client waited {:?}", started.elapsed());
+    drop(next);
+    store.close().unwrap();
+}
+
 /// A call of kv or jobs inside a transaction: its method and its request.
 #[cfg(feature = "jobs")]
 fn nested(client: &mut Client, stream: u32, called: u16, request: &impl Message) -> SqlTxAnswer {

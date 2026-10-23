@@ -2,13 +2,13 @@
 //! transactions, and the values between the program and SQLite.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use super::{Database, Done, Migrations};
-use crate::{ConstraintKind, ErrorKind, Options, Store, TestClock, sql};
+use crate::{CancellationToken, ConstraintKind, ErrorKind, Options, Store, TestClock, sql};
 
 const NOTES: &str = "create table notes (
     id         text primary key,
@@ -716,4 +716,50 @@ fn a_kept_statement_names_the_columns_a_table_has_after_a_change_of_it() {
     assert_eq!(added, [serde_json::json!({ "a": 1, "c": 3, "d": 4 })]);
     let none: Vec<serde_json::Value> = db.all(sql!("select * from t where a = 0")).unwrap();
     assert!(none.is_empty());
+}
+
+/// Counts to a billion, minutes of work: a read only its cancel ends.
+const COUNT_FOR_MINUTES: &str =
+    "with recursive c(x) as (select 1 union all select x + 1 from c where x < 1000000000) select count(*) from c";
+
+#[test]
+fn reads_their_callers_cancelled_give_their_readers_back_at_once() {
+    // contract: STORE-09
+    // issue #1: a page's twelve panels asked three times, two of the pages
+    // gone; the next visitor's read waited for every reader and failed
+    let f = fixture();
+    let db = f.app();
+    let tokens: Vec<CancellationToken> = (0..36).map(|_| CancellationToken::new()).collect();
+    let reads: Vec<_> = tokens
+        .iter()
+        .map(|token| {
+            let (db, token) = (db.clone(), token.clone());
+            std::thread::spawn(move || token.run(|| db.scalar::<i64>(COUNT_FOR_MINUTES)))
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(100));
+    tokens.iter().for_each(CancellationToken::cancel);
+    let next = Instant::now();
+    assert_eq!(db.scalar::<i64>("select 1").unwrap(), 1);
+    assert!(next.elapsed() < Duration::from_secs(2), "the next read waited {:?}", next.elapsed());
+    for read in reads {
+        let error = read.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
+        assert!(error.to_string().starts_with(r#"sql app: statement "with recursive"#), "{error}");
+        assert!(error.to_string().ends_with("app.db: a read: cancelled"), "{error}");
+    }
+}
+
+#[test]
+fn a_read_past_its_timeout_fails_cancelled_and_a_write_under_the_token_runs() {
+    // contract: STORE-09
+    let f = fixture();
+    let db = f.app();
+    let token = CancellationToken::timeout(Duration::from_millis(50));
+    let error = token.run(|| db.scalar::<i64>(COUNT_FOR_MINUTES)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Cancelled, "{error}");
+    assert!(error.to_string().ends_with("a read past its timeout of 50ms: cancelled"), "{error}");
+    let written = token.run(|| db.exec(sql!("insert into notes (id, author_id, title) values ('n1', 7, 'kept')")));
+    assert_eq!(written.unwrap().changes, 1, "a write is not a read a token stops");
+    assert_eq!(db.scalar::<i64>("select count(*) from notes").unwrap(), 1);
 }

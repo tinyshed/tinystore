@@ -89,6 +89,7 @@ impl Counting<'_> {
         members.sort_by_cached_key(|series| self.shape.order_of(&series.found));
         let mut joining = Joining::new(self.shape);
         for series in &members {
+            crate::cancel::check(|| "an aggregate".to_owned())?;
             let counted = joining.begin(series).and_then(|()| self.series(series, &mut joining));
             counted.map_err(|error| self.engine.met(&series.found, error))?;
         }
