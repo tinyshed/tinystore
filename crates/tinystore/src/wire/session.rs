@@ -134,6 +134,10 @@ struct Shared {
     #[cfg(feature = "channels")]
     waiting_output: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
     ready: Condvar,
+    /// The host's wake, called under this lock, which the session's end
+    /// takes to let it go: a host frees its wake once the pipe closed, and a
+    /// thread that queued a frame just before must not call it after.
+    wake: Mutex<Option<Wake>>,
     connect: Connect,
 }
 
@@ -170,8 +174,9 @@ struct Input {
 }
 
 impl Session {
-    pub(crate) fn new(store: Store, connect: Connect) -> Result<Session> {
+    pub(crate) fn new(store: Store, mut connect: Connect) -> Result<Session> {
         let workers = Workers::of(&store)?;
+        let wake = Mutex::new(connect.wake.take());
         let shared = Shared {
             store,
             workers,
@@ -210,6 +215,7 @@ impl Session {
             #[cfg(feature = "channels")]
             waiting_output: Mutex::new(Vec::new()),
             ready: Condvar::new(),
+            wake,
             connect,
         };
         shared.store.probe().shift("tinystore_wire_connections", &[], 1.0);
@@ -338,6 +344,8 @@ impl Session {
         output.clear();
         drop(output);
         self.shared.ready.notify_all();
+        // waits for a wake under way: once this returns none runs or will
+        lock(&self.shared.wake).take();
         let runs = std::mem::take(&mut *self.shared.lock_runs());
         drop(runs);
         let reads: Vec<CancellationToken> = lock(&self.shared.reads).drain().map(|(_, read)| read).collect();
@@ -1505,7 +1513,7 @@ impl Shared {
         if awaited {
             self.ready.notify_all();
         }
-        if let (true, Some(wake)) = (wake, &self.connect.wake) {
+        if wake && let Some(wake) = &*lock(&self.wake) {
             wake();
         }
         // the output's lock is let go: a grant goes out as a frame of its own

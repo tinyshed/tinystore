@@ -400,6 +400,47 @@ fn writes_of_kv_in_flight_hold_no_thread_of_the_session() {
     store.close().unwrap();
 }
 
+/// A host frees its wake once the pipe closes, as Bun frees its callback: a
+/// wake that a commit's thread is making when the session ends has returned
+/// by the time the end does, and none comes after.
+#[test]
+fn a_pipe_closed_while_a_commit_wakes_its_host_returns_once_that_wake_has() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let (armed, returned) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (waking, woken) = std::sync::mpsc::channel();
+    let wake: Wake = {
+        let (armed, returned) = (Arc::clone(&armed), Arc::clone(&returned));
+        let waking = std::sync::Mutex::new(waking);
+        Arc::new(move || {
+            if armed.load(Ordering::SeqCst) {
+                let _ = waking.lock().unwrap().send(std::thread::current().id());
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                returned.store(true, Ordering::SeqCst);
+            }
+        })
+    };
+    let pipe = Pipe::connect(&store, Connect { wake: Some(wake), ..Connect::default() }).unwrap();
+    let mut client = Client::over(pipe);
+    client.hello(1).unwrap();
+    let handle = client.bucket("sessions");
+    client.pipe.recv(std::time::Duration::ZERO);
+
+    armed.store(true, Ordering::SeqCst);
+    let set = KvCall { handle, key: "k".to_owned(), value: Some(Row::Int(1)), ..KvCall::default() };
+    let mut request = Vec::new();
+    Frame { method: method::KV_SET, ..Frame::new(Kind::Request, 99, set.encode()) }.ending().encode_into(&mut request);
+    client.pipe.push(&request);
+    let waker = woken.recv().unwrap();
+    assert_ne!(waker, std::thread::current().id(), "the commit's thread wakes the host");
+    client.pipe.session.end();
+    assert!(returned.load(Ordering::SeqCst), "the session ended while its host was being woken");
+    drop(client);
+    store.close().unwrap();
+}
+
 #[test]
 fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_what_became_ready() {
     let dir = tempfile::tempdir().unwrap();
