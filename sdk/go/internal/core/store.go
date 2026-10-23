@@ -97,7 +97,14 @@ func (s *Store) Close() {
 	}
 	s.closed = true
 	close(s.closing)
-	stages := s.stops
+	// copied under the lock: a stop that ends what it stops lets that forget
+	// it, which takes it off its stage's map while the others still run
+	var stages [stopStages][]func()
+	for stage, stops := range s.stops {
+		for _, stop := range stops {
+			stages[stage] = append(stages[stage], stop)
+		}
+	}
 	s.mu.Unlock()
 	for _, stops := range stages {
 		var running sync.WaitGroup
