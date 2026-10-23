@@ -127,10 +127,12 @@ loop {
   batch again and loses none. Make the copy's insert idempotent.
 - The order is the store's, not the events': a batch at a time of one
   stream, in the order of its times. Sort where the events land.
-- An event reaches `poll` within an hour of being written, sooner in a busy
-  stream, since `poll` reads packed segments.
-- `expired` counts the events `keep` removed before the cursor reached them:
-  more than none means the copy has a hole.
+- An event reaches `poll` within an hour of being written, or within half
+  its stream's `keep` when that is shorter, and sooner in a busy stream,
+  since `poll` reads packed segments.
+- `expired` counts the events `keep` removed before the cursor reached them,
+  those it removed before they were packed included: more than none means
+  the copy has a hole.
 - A batch is 1,000 events unless `limit` says. Only `store.events()` polls.
 
 ## See also

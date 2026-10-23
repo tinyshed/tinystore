@@ -13,7 +13,7 @@
 //! A segment's row holds what its blocks share, and a block its events by
 //! columns: see `segment` and `block`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::PoisonError;
 use std::time::Duration;
 
@@ -34,7 +34,9 @@ pub(super) const SEGMENT_EVENTS: usize = 16_384;
 pub(super) const SEGMENT_WEIGHT: usize = 4 << 20;
 /// How long a quiet stream's events wait before they are packed however few
 /// they are, and so how far behind them a poll may be: longer makes fewer,
-/// larger segments.
+/// larger segments. A stream that keeps its events less than twice as long
+/// waits half its keep, so that keep does not take them before a poll sees
+/// them.
 const WAIT: Duration = Duration::from_hours(1);
 /// What packing one segment holds of the store's memory for each byte its
 /// events weigh: the rows read, the events parsed and sorted, the blocks made.
@@ -127,10 +129,16 @@ impl Records {
         let mut packing = Packing::default();
         // a head whose rows left to pack no longer read waits for their drop
         let mut stuck = BTreeSet::new();
+        let waits: HashMap<i64, Duration> =
+            self.every_stream().into_iter().map(|stream| (stream.id, WAIT.min(stream.keeps() / 2))).collect();
         for _ in 0..SWEEPS {
             let heads = self.heads()?.into_iter();
-            let ready: Vec<Head> =
-                heads.filter(|head| ready(head, now) && !stuck.contains(&(head.stream, head.late))).collect();
+            let ready: Vec<Head> = heads
+                .filter(|head| {
+                    let wait = waits.get(&head.stream).copied().unwrap_or(WAIT);
+                    ready(head, now, wait) && !stuck.contains(&(head.stream, head.late))
+                })
+                .collect();
             if ready.is_empty() {
                 break;
             }
@@ -312,9 +320,9 @@ pub(super) fn settle(tx: &Connection, (stream, late): (i64, bool), events: i64, 
 }
 
 /// Whether a head is packed now: it holds a segment's worth, or its oldest
-/// row has waited its hour.
-fn ready(head: &Head, now: i64) -> bool {
-    head.events >= SEGMENT_EVENTS || head.weight >= SEGMENT_WEIGHT || now.saturating_sub(head.since) >= nanos(WAIT)
+/// row has waited `wait`.
+fn ready(head: &Head, now: i64, wait: Duration) -> bool {
+    head.events >= SEGMENT_EVENTS || head.weight >= SEGMENT_WEIGHT || now.saturating_sub(head.since) >= nanos(wait)
 }
 
 /// A segment of `events`, which are in the order of their times: what its

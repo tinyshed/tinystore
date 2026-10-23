@@ -12,7 +12,8 @@
 //! A segment its stream's `keep` removed before the cursor reached it is
 //! counted in `expired`, by the events each held, which the file keeps for
 //! thirty days; past them a segment counts one, so that more than none still
-//! says the copy has a hole.
+//! says the copy has a hole. Head rows `keep` removed before they were packed
+//! are counted as a segment of their own.
 
 use std::collections::HashMap;
 

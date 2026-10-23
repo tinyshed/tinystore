@@ -17,8 +17,9 @@ flowchart LR
 
 An event is written first as a row of the stream's head, so that `append`
 returns quickly and a read finds it at once. Once a stream has a segment's
-worth of events, or its oldest waiting event is an hour old, the engine packs
-them into a segment: blocks of events sorted by their time. Events that
+worth of events, or its oldest waiting event is an hour old (half the
+stream's `keep` when that is shorter), the engine packs them into a segment:
+blocks of events sorted by their time. Events that
 arrive more than ten seconds late are packed apart, so they never force a
 packed segment to be rewritten. Small segments are later merged, four of a
 size at a time, keeping the places where each one began.

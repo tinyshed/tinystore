@@ -39,6 +39,13 @@ const COUNT_EXPIRED: &str = "select
 const EXPIRED_HEADS: &str =
     "select late, sum(count), sum(weight) from heads where stream = ?1 and last_at < ?2 group by late";
 const DROP_HEADS: &str = "delete from heads where stream = ?1 and last_at < ?2";
+/// Head rows keep removed before they were packed take a segment's id of
+/// their own, which no segment holds: a poll behind it counts their events,
+/// as a segment's that expired.
+const TAKE_ID: &str = "insert into segments (stream, count, start, held, weight, body)
+    values (?1, ?2, 0, ?2, 0, x'') returning id";
+const GIVE_UP_ID: &str = "delete from segments where id = ?1";
+const NOTE_EXPIRED_HEADS: &str = "insert into expired (segment, events, at) values (?1, ?2, ?3)";
 /// What each segment a stream keeps no longer held, its places' among them.
 const NOTE_EXPIRED: &str = "insert or replace into expired (segment, events, at)
     select id, count, ?3 from segments where stream = ?1 and (holder is null and last_at < ?2
@@ -118,7 +125,7 @@ impl Records {
         self.file.write(0, move |tx| {
             past.iter().try_for_each(|(stream, cutoff, _)| {
                 execute(tx, NOTE_EXPIRED, params![stream, cutoff, now], "note what a stream keeps no longer")?;
-                drop_past(tx, *stream, *cutoff)
+                drop_past(tx, *stream, *cutoff, now)
             })?;
             execute(tx, FORGET_EXPIRED, [forgotten], "forget what was removed long ago").map(drop)
         })?;
@@ -128,13 +135,14 @@ impl Records {
 
 /// Removes a stream's head rows and segments whose newest event is before
 /// `cutoff`, a segment's blocks and places with it, and takes the rows from
-/// what their heads hold.
-fn drop_past(tx: &Connection, stream: i64, cutoff: i64) -> Result<()> {
+/// what their heads hold; the events of the rows are noted for the polls.
+fn drop_past(tx: &Connection, stream: i64, cutoff: i64, now: i64) -> Result<()> {
     let left = tx.prepare_cached(EXPIRED_HEADS).and_then(|mut select| {
         let heads = select.query_map(params![stream, cutoff], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)));
         heads.and_then(Iterator::collect::<rusqlite::Result<Vec<(bool, i64, i64)>>>)
     });
     let left = left.map_err(|error| sql_error("count the head rows a stream keeps no longer", error))?;
+    note_expired_heads(tx, stream, left.iter().map(|(_, events, _)| events).sum(), now)?;
     let drops = [
         (DROP_HEADS, "head rows"),
         (DROP_TRACES, "blocks' traces"),
@@ -148,6 +156,19 @@ fn drop_past(tx: &Connection, stream: i64, cutoff: i64) -> Result<()> {
         execute(tx, sql, params![stream, cutoff], &format!("remove the {what} a stream keeps no longer"))?;
     }
     left.into_iter().try_for_each(|(late, events, weight)| settle(tx, (stream, late), events, weight).map(drop))
+}
+
+/// Notes the events of head rows keep removed under a segment's id that
+/// only grows, as a packing would have given them.
+fn note_expired_heads(tx: &Connection, stream: i64, events: i64, now: i64) -> Result<()> {
+    if events == 0 {
+        return Ok(());
+    }
+    let taken =
+        tx.prepare_cached(TAKE_ID).and_then(|mut take| take.query_row(params![stream, events], |row| row.get(0)));
+    let id: i64 = taken.map_err(|error| sql_error("take a segment's id for expired head rows", error))?;
+    execute(tx, GIVE_UP_ID, [id], "leave a segment's id to expired head rows")?;
+    execute(tx, NOTE_EXPIRED_HEADS, params![id, events, now], "note the head rows a stream keeps no longer").map(drop)
 }
 
 #[cfg(test)]

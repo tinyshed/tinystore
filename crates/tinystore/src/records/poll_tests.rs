@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::super::fixture::{DAY, Fixture, fixture};
+use super::super::fixture::{DAY, Fixture, SECOND, fixture};
 use super::super::maintain::maintain;
 use super::*;
 use crate::ErrorKind;
@@ -113,4 +113,35 @@ fn a_poll_counts_the_events_keep_removed_before_its_cursor_reached_them() {
     let next = all.poll(Some(&first.cursor)).unwrap();
     assert_eq!((names(&next), next.expired), (spelled(&["2-0", "2-1"]), 7));
     assert_eq!(all.poll(None).unwrap().expired, 0);
+}
+
+// contract: REC-07
+#[test]
+fn a_poll_counts_the_events_keep_removed_while_they_waited_in_a_head() {
+    let fixture = fixture();
+    let audit = fixture.store.events("audit").keep(2 * HOUR).open().unwrap();
+    segment(&fixture, "audit", 0, 1);
+    let all = fixture.store.all_events().unwrap();
+    let first = all.poll(None).unwrap();
+    assert_eq!((names(&first), first.cursor.as_str()), (spelled(&["0-0"]), "2:0"));
+    // a backfilled event near what the stream keeps waits in its late head, and goes before it is packed
+    audit.append_all([NewEvent::new("backfilled").at(fixture.now() - 2 * HOUR + 60 * SECOND)]).unwrap();
+    fixture.pass(2 * 60 * SECOND);
+    assert_eq!(maintain(&fixture.store).unwrap().expired, 1);
+    segment(&fixture, "audit", 1, 1);
+    let next = all.poll(Some(&first.cursor)).unwrap();
+    assert_eq!((names(&next), next.expired), (spelled(&["1-0"]), 1));
+    assert_eq!(all.poll(Some(&next.cursor)).unwrap().expired, 0, "a cursor after it passed none of it");
+}
+
+// contract: REC-07
+#[test]
+fn a_stream_that_keeps_less_than_an_hour_packs_its_events_before_keep_takes_them() {
+    let fixture = fixture();
+    let audit = fixture.store.events("audit").keep(30 * 60 * SECOND).open().unwrap();
+    audit.append("signed in", &()).unwrap();
+    fixture.pass(15 * 60 * SECOND);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1, "packed at half what its stream keeps");
+    let all = fixture.store.all_events().unwrap();
+    assert_eq!(names(&all.poll(None).unwrap()), spelled(&["signed in"]));
 }
