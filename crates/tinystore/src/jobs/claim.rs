@@ -46,11 +46,11 @@ const NEXT_DUE: &str = "select next from _tinystore_jobs j where queue = ?1 and 
     order by next, id limit 1";
 const EARLIEST_LEASE: &str = "select min(until) from _tinystore_jobs_leases where queue = ?1 and until > ?2";
 
-/// A settlement takes its lease where its claim left it. A lease's next follows
-/// its job's row, as a parked row's does, and a write that moves a row no live
-/// lease holds ends the lease first; so a lease found where its claim left it
-/// finds its row there too, and one whose row a claim moved since writes
-/// nothing, not even the drop of its lease.
+/// A settlement drops its lease only where its claim left it: a claim that
+/// parks a row moves its lease along, and a write that changes a row no live
+/// lease holds ends the lease first, so a lease found there finds its row
+/// there too. One whose row moved since writes nothing, not even the drop of
+/// its lease, and is lost.
 const DROP_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1 and attempt = ?2 and next = ?3";
 const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
@@ -113,7 +113,8 @@ struct LeaseState {
     progress: Option<serde_json::Value>,
 }
 
-/// Where a job's row lies, and the id its key row follows it by.
+/// Where a job's row lies, its next and its number, and its id, whose row
+/// follows it when it moves.
 type Place<'a> = (i64, i64, Option<&'a str>);
 
 impl Lease {
