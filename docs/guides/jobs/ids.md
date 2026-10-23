@@ -133,6 +133,11 @@ failed, err := emails.List(ctx, jobs.Failed)
 A prefix is text: `chat:4` matches chat 42 too, so end a prefix with a
 separator.
 
+In Rust, a job whose value no longer reads as the queue's type, kept failed
+after the type changed, makes a page or a `get` that meets it fail `corrupt`,
+and the error names the job's id. The same queue opened as
+`store.queue::<serde_json::Value>(name)` reads it, and `cancel` removes it.
+
 | What   | Limit                                        |
 |--------|----------------------------------------------|
 | an id  | 1 to 1,024 bytes                             |

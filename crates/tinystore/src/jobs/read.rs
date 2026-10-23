@@ -243,7 +243,10 @@ pub(crate) fn page<V: DeserializeOwned>(
         last = Some(cursor_of(filter, found));
         // whether a held job runs is memory's to say, so a page of one state
         // leaves out the rows it read that turn out another, and may hold fewer
-        let job = job_of::<V>(c, queue, found, now)?;
+        let job = job_of::<V>(c, queue, found, now).map_err(|error| match &found.key {
+            Some(key) => error.within(format!("id {key:?}")),
+            None => error,
+        })?;
         if filter.state.is_none_or(|state| state == job.state) {
             page.jobs.push(job);
         }

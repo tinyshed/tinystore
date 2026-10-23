@@ -284,6 +284,25 @@ fn the_failed_jobs_list_the_last_failed_first() {
     assert_eq!(texts, ["c", "b", "a"]);
 }
 
+// contract: JOB-12
+#[test]
+fn a_page_that_meets_a_value_that_no_longer_reads_names_its_job() {
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Renamed {
+        body: String,
+    }
+    let f = fixture();
+    f.store.queue::<Note>("notes").attempts(1).open().unwrap().id("old").add(&note("from before")).unwrap();
+    let renamed = f.store.queue::<Renamed>("notes").attempts(1).open().unwrap();
+    renamed.run_due(|_: Renamed, _run| -> Result<()> { Ok(()) }).unwrap();
+    let error = renamed.list(&Filter::default().state(State::Failed)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Corrupt);
+    assert!(error.to_string().contains("id \"old\""), "the id a program cancels, or reads as JSON: {error}");
+    let raw = f.store.queue::<serde_json::Value>("notes").attempts(1).open().unwrap();
+    let failed = raw.list(&Filter::default().state(State::Failed)).unwrap();
+    assert_eq!(failed.jobs[0].value, serde_json::json!({ "text": "from before" }), "kept as it was");
+}
+
 #[test]
 fn a_value_comes_back_as_the_json_it_went_in() {
     let f = fixture();
