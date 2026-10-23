@@ -25,6 +25,14 @@ fi
 rustup target add "$TRIPLE" >/dev/null
 
 case "$TRIPLE" in
+*-linux-*)
+	# SQLite calls fsync for every commit on Linux unless told it has
+	# fdatasync, which skips the inode's times: .cargo/config.toml's flags and
+	# this one, as CI builds them. v0.1.0 shipped without it.
+	export LIBSQLITE3_FLAGS="SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1"
+	;;
+esac
+case "$TRIPLE" in
 *-linux-musl)
 	# a cdylib needs musl linked dynamically, as Alpine's Bun, Node and Python load it
 	export RUSTFLAGS="-C target-feature=-crt-static"
