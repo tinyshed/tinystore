@@ -195,7 +195,12 @@ impl Search {
         };
         let serving = &current.serving;
         let set = prepared_row(tx, serving.id, &serving.settings, key, &id).and_then(|prepared| match prepared {
-            Some(prepared) if kept_value(tx, serving.id, &id)?.as_deref() == Some(prepared.value.as_slice()) => Ok(()),
+            Some(prepared)
+                if kept_value(tx, serving.id, &id)?.as_deref() == Some(prepared.value.as_slice())
+                    && !read_otherwise_beside(tx, current, key, (&id, &prepared.value))? =>
+            {
+                Ok(())
+            }
             Some(prepared) => {
                 write::set(tx, &prepared)?;
                 self.table_set(name);
@@ -359,6 +364,26 @@ fn kept_value(tx: &Tx<'_>, index: i64, id: &str) -> Result<Option<Vec<u8>>> {
     let failed = |error| sql_error("read a document", error);
     let mut select = tx.prepare_cached(READ_KEPT).map_err(failed)?;
     select.query_row((index, id), |row| row.get(0)).optional().map_err(failed)
+}
+
+/// Whether a rebuild under way reads the row keyed `key` otherwise than its
+/// rows hold it, where the serving rows hold it as `serving` reads: a change
+/// of a column only the new settings read. The serving rows then set it
+/// again, so that its new number brings the rebuild's copy back to it.
+fn read_otherwise_beside(tx: &Tx<'_>, current: &Current, key: &SqlValue, (id, serving): (&str, &[u8])) -> Result<bool> {
+    let Some(beside) = current.beside.as_ref().filter(|beside| !beside.failed) else { return Ok(false) };
+    let read = match read(tx, &beside.data.settings, key) {
+        Ok(Some(row)) => [row.digest.as_slice(), &key_json(key)].concat(),
+        Ok(None) => return Ok(false),
+        // What the new settings cannot read fails the rebuild at its copy, not this write.
+        Err(error) if matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) => return Ok(true),
+        Err(error) => return Err(error),
+    };
+    // Settings that read the same columns read the row as the serving rows do.
+    if read == serving {
+        return Ok(false);
+    }
+    Ok(kept_value(tx, beside.data.id, id)?.as_deref() != Some(read.as_slice()))
 }
 
 /// The row keyed `key` as the index `index` sets it, or none when the table

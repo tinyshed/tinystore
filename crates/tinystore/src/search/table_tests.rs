@@ -319,6 +319,28 @@ fn a_column_added_reads_the_table_again_beside_the_index_and_a_drop_takes_the_tr
     assert_eq!(pending, 0);
 }
 
+// contract: SRCH-06
+#[test]
+fn a_row_changed_while_its_index_is_read_again_reaches_the_new_rows_by_what_only_they_read() {
+    let f = fixture();
+    let titles = f.db.search_index::<Article>("articles_search").table("articles").field("title", 1.0).open().unwrap();
+    f.ready(&titles);
+    for id in 1..=3 {
+        f.insert(id, &format!("shoes {id}"), "");
+    }
+    let opened = f.db.search_index::<Article>("articles_search").table("articles").field("title", 1.0);
+    let both = opened.filters(["category"]).vectors("embedding", 3).open().unwrap();
+    assert!(matches!(both.status().unwrap(), Status::Rebuilding { .. }));
+    let search = Arc::clone(&both.inner().search);
+    assert!(!search.copy_step(&both.inner().open).unwrap(), "every row copied in one step");
+    let embedding = floats(&[1.0, 0.0, 0.0]);
+    f.db.exec(sql!("update articles set embedding = ?, category = 'red' where id = 2", embedding)).unwrap();
+    f.ready(&both);
+    assert_eq!(ids(&both.search_vector(&[1.0, 0.1, 0.0]).run().unwrap()), ["2"], "a vector only the new rows read");
+    let red = both.search("shoes").filter(eq("category", "red")).run().unwrap();
+    assert_eq!(ids(&red), ["2"], "a filter only the new rows read");
+}
+
 /// Words the mix writes, few, so that searches find many rows.
 const WORDS: [&str; 12] =
     ["bread", "salt", "flour", "rye", "milk", "cream", "butter", "honey", "tea", "jam", "oat", "corn"];
