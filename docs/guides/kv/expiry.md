@@ -74,6 +74,10 @@ the copy's home, so a session read only on a copy stays alive too.
 [Copies](../../handbook/nodes/copies.md#reads-are-local) says what that
 costs.
 
+A renewal is a write, so a client with a `read` token cannot open a bucket
+with `idle`: that open fails with `permission`. Its reads renew nothing, and
+a dashboard that reads sessions does not keep them alive either.
+
 ## Limits and defaults
 
 | What                  | Default                                 |

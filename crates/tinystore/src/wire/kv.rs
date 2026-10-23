@@ -66,7 +66,7 @@ pub(crate) fn call(
 ) -> Answered {
     match called {
         method::KV_BUCKET_OPEN => handles.open(open_bucket(store, lent, KvBucketOpen::decode(body)?, read_only)?),
-        method::KV_COUNTERS_OPEN => handles.open(open_counters(store, KvCountersOpen::decode(body)?)?),
+        method::KV_COUNTERS_OPEN => handles.open(open_counters(store, KvCountersOpen::decode(body)?, read_only)?),
         method::KV_RATE_LIMIT_OPEN => handles.open(open_rate_limit(store, KvRateLimitOpen::decode(body)?)?),
         method::KV_QUOTA_OPEN => handles.open(open_quota(store, KvQuotaOpen::decode(body)?)?),
         method::KV_ONCE_OPEN => {
@@ -272,9 +272,16 @@ impl Handles {
 
 /// Opens a bucket as the call says. A connection that only reads opens no
 /// encrypted one: what it may read is what the file shows without the key.
+/// Nor does it give the bucket an idle term, under which each read renews a
+/// key's expiry: a write, of a term the writers never chose.
 fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: bool) -> Result<Opened, Failure> {
     if open.encrypted && read_only {
         return Err(Failure::permission("a read connection opens no encrypted bucket"));
+    }
+    if open.idle.is_some() && read_only {
+        return Err(Failure::permission(
+            "a read connection gives a bucket no idle: a read that renews a key writes it",
+        ));
     }
     let mut builder = match open.database {
         Some(database) => BucketBuilder::in_file(lent(database)?, &open.name),
@@ -292,7 +299,15 @@ fn open_bucket(store: &Store, lent: Lent<'_>, open: KvBucketOpen, read_only: boo
     Ok(Opened::Bucket(builder.open()?))
 }
 
-fn open_counters(store: &Store, open: KvCountersOpen) -> Result<Opened, Failure> {
+/// Opens counters as the call says. How a name's counters count, each change
+/// written or kept in memory, is the process's from its first open, so a
+/// connection that only reads leaves it to the writers.
+fn open_counters(store: &Store, open: KvCountersOpen, read_only: bool) -> Result<Opened, Failure> {
+    if open.flush_every.is_some() && read_only {
+        return Err(Failure::permission(
+            "a read connection gives counters no flush_every: how they count is the writers'",
+        ));
+    }
     let mut builder = store.counters(&open.name);
     if let Some(ttl) = open.ttl {
         builder = builder.ttl(Duration::from_millis(ttl));

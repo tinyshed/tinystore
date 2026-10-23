@@ -588,6 +588,36 @@ fn a_read_connection_reads_and_writes_nothing() {
     assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
 }
 
+/// What a bucket's reads renew and how counters count are the writers' to
+/// choose: a read connection that chose them would write through its reads,
+/// or bind the application's own opens.
+// contract: SEC-01
+#[test]
+fn a_read_connection_gives_a_bucket_no_idle_and_counters_no_flush() {
+    use crate::wire::protocol::KvBucketOpen;
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let mut owner = Client::admitted(&store, Capability::Data);
+    let handle = owner.bucket("sessions");
+    let hour = 3_600_000;
+    let session =
+        KvCall { handle, key: "s1".to_owned(), value: Some(Row::Int(1)), ttl: Some(hour), ..KvCall::default() };
+    let expires = owner.call::<KvWritten>(method::KV_SET, &session).unwrap().expires_at;
+
+    let mut reader = Client::admitted(&store, Capability::Read);
+    let idle =
+        KvBucketOpen { name: "sessions".to_owned(), idle: Some(100 * 365 * 24 * hour), ..KvBucketOpen::default() };
+    let refused = reader.call::<Handle>(method::KV_BUCKET_OPEN, &idle).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
+    let flushed = KvCountersOpen { name: "visits".to_owned(), flush_every: Some(hour), ..KvCountersOpen::default() };
+    let refused = reader.call::<Handle>(method::KV_COUNTERS_OPEN, &flushed).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
+
+    let read = reader.bucket("sessions");
+    let entry: KvEntry = reader.call(method::KV_GET, &KvCall { handle: read, ..session.clone() }).unwrap();
+    assert_eq!(entry.expires_at, expires, "a read connection's read renews nothing");
+}
+
 /// A take commits before its answer is sized: one past the agreed body says
 /// the write ran, where `limit` would have the client send it again and find
 /// the key gone.

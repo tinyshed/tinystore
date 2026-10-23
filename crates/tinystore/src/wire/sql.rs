@@ -119,8 +119,13 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], r
 }
 
 /// Opens a database by name, its migrations applied and checked; a read
-/// connection's applies none, and opens the file as it is.
+/// connection's applies none, and opens the file as it is. It chooses no
+/// durability either: the first open fixes a file's for every writer.
 fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> Answered {
+    if asked.durability.is_some() && read_only {
+        let refused = format!("sql {}: a read connection chooses no durability: a file's is its writers'", asked.name);
+        return Err(Failure::permission(refused));
+    }
     let mut builder = store.database(&asked.name);
     if let Some(migrations) = asked.migrations.filter(|_| !read_only) {
         let files = migrations.into_iter().map(|migration| (migration.name, migration.sql)).collect();

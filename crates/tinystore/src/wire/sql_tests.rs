@@ -674,6 +674,11 @@ fn a_read_connection_queries_on_a_reader_and_changes_nothing() {
     assert_eq!(reader.call::<SqlDone>(method::SQL_EXEC, &statement).unwrap_err().code, "permission");
     assert_eq!(query(&mut owner, handle, "select title from notes", "all").rows.len(), 1);
     assert!(!copy.exists() && !other.exists(), "no file was made");
+
+    // a file's durability is its writers', which the first open fixes
+    let durable = SqlOpen { name: "later".to_owned(), migrations: None, durability: Some("os".to_owned()) };
+    let refused = reader.call::<Handle>(method::SQL_OPEN, &durable).unwrap_err();
+    assert_eq!(refused.code, "permission", "{}", refused.message);
 }
 
 // contract: SQL-02

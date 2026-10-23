@@ -222,7 +222,9 @@ one being `permission`; its SQL runs on a reader and is a query, a
 statement that writes, attaches a file or sets a pragma being `permission`
 too; and its `sql.open` applies no migration. Its opens may still name a
 bucket, a queue or files the store did not have, as any first open does,
-and its reads of an `idle` key renew it, as any read does.
+but choose nothing the writers live with: a bucket's `idle`, under which a
+read renews a key, counters' `flushEvery`, a database's `durability` and a
+stream's `keep` are `permission`. Its reads renew no key.
 
 ## Streams
 
