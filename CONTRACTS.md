@@ -65,7 +65,7 @@ These contracts are what does not.
 - **KV-08** Counters kept in memory MUST reach the file at a flush, at close and when the store is dropped unclosed; `LoseAtMost` MUST lose no more than its interval.
 - **KV-09** A rate limit MUST let its burst through and then its rate, racing callers included.
 - **KV-10** A quota MUST count a use in every window or in none; `peek` MUST count nothing, and a refund MUST NOT go below zero.
-- **KV-11** `once` MUST run a key's function once and keep its answer; other callers MUST wait for it, and a run that failed or was abandoned MUST let the next caller run.
+- **KV-11** `once` MUST run a key's function once and keep its answer; other callers MUST wait for it and get its answer, one too large to keep included, and a run that failed or was abandoned MUST let the next caller run.
 - **KV-12** Of two transactions taking the last item, one MUST get it.
 - **KV-13** A page MUST NOT hold a snapshot between pages, and MUST end before the value that passes its bytes.
 

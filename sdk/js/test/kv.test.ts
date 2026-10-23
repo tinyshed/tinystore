@@ -311,6 +311,30 @@ for (const way of ways) {
 				expect(answers).toEqual([99, 99])
 				expect(ran).toBe(1)
 			})
+
+			test('an answer too large to keep still reaches the runs that waited for it', async () => {
+				// past the 1 MiB a value of kv.db holds, within the 2 MiB a frame carries
+				const panels = store.once<string>('panels')
+				const table = 'x'.repeat(1.5 * 2 ** 20)
+				let ran = 0
+				const slow = () =>
+					new Promise<string>(resolve => {
+						ran++
+						setTimeout(() => resolve(table), 50)
+					})
+				const answers = await Promise.all([
+					panels.run('panel-7', slow),
+					panels.run('panel-7', slow),
+					panels.run('panel-7', slow),
+				])
+				expect(answers.map(answer => answer.length)).toEqual([
+					table.length,
+					table.length,
+					table.length,
+				])
+				expect(ran).toBe(1)
+				expect(await panels.run('panel-7', () => 'small')).toBe('small')
+			})
 		})
 
 		describe('transactions', () => {

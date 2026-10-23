@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
@@ -10,9 +10,7 @@ use super::bucket::{Bucket, Expiry};
 use super::bucket::{Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
-#[cfg(any(feature = "wire", feature = "replication"))]
-use super::value::Raw;
-use super::value::Value;
+use super::value::{Raw, Value};
 use crate::engine::Home;
 use crate::{Error, Result, Store};
 
@@ -89,7 +87,7 @@ pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Ha
     if !answers.scope.kv.runs().claim_or_wait(running.clone(), None, waiter)? {
         return Ok(Hand::Wait);
     }
-    let handed = Handed { answers: answers.clone(), key: key.to_owned(), running };
+    let handed = Handed { answers: answers.clone(), key: key.to_owned(), running, unkept: None };
     match answers.read_cell(key)? {
         Some(cell) => Ok(Hand::Kept(cell.raw)),
         None => Ok(Hand::Yours(handed)),
@@ -103,16 +101,20 @@ pub(crate) struct Handed {
     answers: Bucket<()>,
     key: String,
     running: (i64, Vec<u8>),
+    /// The client's answer when it could not be kept, for the runs waiting.
+    unkept: Option<Box<Raw>>,
 }
 
 #[cfg(any(feature = "wire", feature = "replication"))]
 impl Handed {
     /// Keeps the client's answer, or nothing when its function failed, and
-    /// lets the key go.
-    pub(crate) fn keep(self, answer: Option<Raw>) -> Result<()> {
-        match answer {
-            Some(raw) => self.answers.put_raw(&self.key, raw, WriteOptions::default(), Put::Always).map(|_| ()),
-            None => Ok(()),
+    /// lets the key go. An answer that could not be kept goes to the runs that
+    /// waited for this one, as [`Once::run`]'s does, and the failure is logged.
+    pub(crate) fn keep(mut self, answer: Option<Raw>) {
+        let Some(raw) = answer else { return };
+        if let Err(error) = self.answers.put_raw(&self.key, raw.clone(), WriteOptions::default(), Put::Always) {
+            not_kept(&error);
+            self.unkept = Some(Box::new(raw));
         }
     }
 }
@@ -120,7 +122,7 @@ impl Handed {
 #[cfg(any(feature = "wire", feature = "replication"))]
 impl Drop for Handed {
     fn drop(&mut self) {
-        self.answers.scope.kv.runs().release(&self.running);
+        self.answers.scope.kv.runs().release(&self.running, self.unkept.take().map(|raw| *raw));
     }
 }
 
@@ -149,20 +151,22 @@ impl<V: Value> Once<V> {
     /// its server, this one waits for it and returns its answer. An error keeps
     /// nothing, so the next run runs again; an answer meant to be kept, a card
     /// declined, is a value rather than an error. An answer that could not be
-    /// kept is still returned, and the failure logged.
+    /// kept is still returned, to this caller and to those that waited for this
+    /// run, and the failure logged.
     pub fn run<E: From<Error>>(&self, key: impl Key, work: impl FnOnce() -> Result<V, E>) -> Result<V, E> {
         let key = key.text();
         #[cfg(feature = "replication")]
         if self.answers.is_copy() {
             return self.run_at_home(&key, work);
         }
-        let claimed = loop {
+        let mut claimed = loop {
             if let Some(answer) = self.answers.get(&*key)? {
                 return Ok(answer);
             }
             match self.claim(&key)? {
-                Some(claim) => break claim,
-                None => continue,
+                Claim::Yours(claimed) => break claimed,
+                Claim::Unkept(raw) => return Ok(super::bucket::decode(&raw)?),
+                Claim::Ended => continue,
             }
         };
         if let Some(answer) = self.answers.get(&*key)? {
@@ -170,11 +174,8 @@ impl<V: Value> Once<V> {
         }
         let answer = work()?;
         if let Err(error) = self.answers.set(&*key, &answer) {
-            tracing::warn!(
-                target: "tinystore",
-                %error,
-                "a once answer was not kept; the next run of its key runs again",
-            );
+            not_kept(&error);
+            claimed.unkept = self.answers.encode(&key, &answer).ok();
         }
         drop(claimed);
         Ok(answer)
@@ -217,22 +218,23 @@ impl<V: Value> Once<V> {
         self.answers.delete(key)
     }
 
-    /// Claims `key` for this caller, or waits for the run under way to end and
-    /// says so with `None`.
-    fn claim(&self, key: &str) -> Result<Option<Claimed<'_>>> {
+    /// Claims `key` for this caller, or waits for the run under way to end.
+    fn claim(&self, key: &str) -> Result<Claim<'_>> {
         let running = (self.answers.scope.id, self.answers.scope.path(key)?);
         let (ended, waiting) = mpsc::channel();
         let runs = self.answers.scope.kv.runs();
-        let wake = Box::new(move || {
-            let _ = ended.send(());
+        let wake = Box::new(move |unkept| {
+            let _ = ended.send(unkept);
         });
         let claimed = runs.claim_or_wait(running.clone(), Some(thread::current().id()), wake);
         if claimed.map_err(|error| error.within(self.answers.scope.shown_key(key)))? {
-            return Ok(Some(Claimed { runs, running }));
+            return Ok(Claim::Yours(Claimed { runs, running, unkept: None }));
         }
         // A sender dropped unsent is a run let go as well.
-        let _ = waiting.recv();
-        Ok(None)
+        Ok(match waiting.recv() {
+            Ok(Some(raw)) => Claim::Unkept(raw),
+            _ => Claim::Ended,
+        })
     }
 }
 
@@ -254,8 +256,10 @@ impl<V> fmt::Debug for OnceBuilder<V> {
     }
 }
 
-/// What the end of a run calls: one for every caller that waited for it.
-pub(crate) type Waiter = Box<dyn FnOnce() + Send>;
+/// What the end of a run calls: one for every caller that waited for it,
+/// given the run's answer when it could not be kept, since they waited for
+/// that run rather than for the next.
+pub(crate) type Waiter = Box<dyn FnOnce(Option<Arc<Raw>>) + Send>;
 
 /// The keys whose function runs now in this process, each with the callers
 /// waiting for its end. A waiter is a callback rather than a blocked thread, so
@@ -296,11 +300,13 @@ impl Runs {
         }
     }
 
-    /// Lets go of `key` and calls everyone who waited for it, outside the lock.
-    pub(crate) fn release(&self, key: &(i64, Vec<u8>)) {
+    /// Lets go of `key` and calls everyone who waited for it, outside the lock,
+    /// with the answer the run could not keep.
+    pub(crate) fn release(&self, key: &(i64, Vec<u8>), unkept: Option<Raw>) {
         let run = self.lock().remove(key);
+        let unkept = unkept.map(Arc::new);
         for waiter in run.map(|run| run.waiters).unwrap_or_default() {
-            waiter();
+            waiter(unkept.clone());
         }
     }
 
@@ -315,17 +321,38 @@ impl fmt::Debug for Runs {
     }
 }
 
+/// How a caller's claim of a key ended.
+enum Claim<'a> {
+    Yours(Claimed<'a>),
+    /// The run waited for ended with an answer it could not keep.
+    Unkept(Arc<Raw>),
+    /// The run waited for ended; what it kept, if anything, is in the bucket.
+    Ended,
+}
+
 /// A key this caller runs; dropping it, a panic's unwinding included, lets the
 /// callers waiting for it go on.
 struct Claimed<'a> {
     runs: &'a Runs,
     running: (i64, Vec<u8>),
+    /// The answer when it could not be kept, for the callers waiting.
+    unkept: Option<Raw>,
 }
 
 impl Drop for Claimed<'_> {
     fn drop(&mut self) {
-        self.runs.release(&self.running);
+        self.runs.release(&self.running, self.unkept.take());
     }
+}
+
+/// Says that a run's answer was not kept: the callers that waited for it have
+/// it, and the next run of its key runs again.
+fn not_kept(error: &Error) {
+    tracing::warn!(
+        target: "tinystore",
+        %error,
+        "a once answer was not kept; the callers that waited have it, and the next run of its key runs again",
+    );
 }
 
 #[cfg(test)]

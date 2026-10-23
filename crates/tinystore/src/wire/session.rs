@@ -598,7 +598,7 @@ impl Shared {
         let asked = self.asked.fetch_add(1, Ordering::Relaxed);
         self.lock_runs().insert(stream, ClientRun::Asking(asked));
         let shared = Arc::clone(self);
-        self.workers.run(Box::new(move || shared.run_once(stream, asked, body)));
+        self.workers.run(Box::new(move || shared.run_once(stream, asked, body, None)));
     }
 
     /// Answers a point read on a worker, counted as away until it is.
@@ -927,20 +927,27 @@ impl Shared {
 
     /// Starts a client's run of a once key: its kept answer ends the stream, a
     /// run handed over waits for the client's last DATA, and a run held
-    /// elsewhere asks again once it ends. A run cancelled meanwhile goes back.
-    fn run_once(self: &Arc<Self>, stream: u32, asked: u64, body: Vec<u8>) {
+    /// elsewhere asks again once it ends, unless it ends with an answer it
+    /// could not keep, which is this client's. A run cancelled meanwhile goes
+    /// back.
+    fn run_once(self: &Arc<Self>, stream: u32, asked: u64, body: Vec<u8>, unkept: Option<Arc<crate::kv::Raw>>) {
         if !still_asking(&self.lock_runs(), stream, asked) {
             return;
         }
-        let again = {
-            let (shared, body) = (Arc::clone(self), body.clone());
-            Box::new(move || {
-                let asking = Arc::clone(&shared);
-                shared.workers.run(Box::new(move || asking.run_once(stream, asked, body)));
-            })
+        let started = match unkept {
+            Some(raw) => Ok(kv::unkept(&raw)),
+            None => {
+                let again = {
+                    let (shared, body) = (Arc::clone(self), body.clone());
+                    Box::new(move |unkept| {
+                        let asking = Arc::clone(&shared);
+                        shared.workers.run(Box::new(move || asking.run_once(stream, asked, body, unkept)));
+                    })
+                };
+                catch_unwind(AssertUnwindSafe(|| kv::run(&self.kv, &body, again)))
+                    .unwrap_or_else(|_| Err(Failure::internal("a call panicked")))
+            }
         };
-        let started = catch_unwind(AssertUnwindSafe(|| kv::run(&self.kv, &body, again)))
-            .unwrap_or_else(|_| Err(Failure::internal("a call panicked")));
         // the answer leaves under the lock, so that a CANCEL either finds the
         // run or comes after this stream's frames
         let mut runs = self.lock_runs();
@@ -955,7 +962,7 @@ impl Shared {
                 self.answer(stream, Ok(answer));
             }
             Ok(Run::Handed(handed, answer)) => {
-                runs.insert(stream, ClientRun::Handed(handed));
+                runs.insert(stream, ClientRun::Handed(*handed));
                 self.send(&[Frame::new(Kind::Response, stream, answer)]);
             }
             Ok(Run::Waiting) => {}

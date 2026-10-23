@@ -41,6 +41,7 @@ let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id))
 | the key is running elsewhere  | waits for that run, in this process or another, and returns its answer |
 | the key is free               | runs `fn`, keeps its answer for `keep`, and returns it                 |
 | `fn` throws                   | keeps nothing: the next `run` runs again                               |
+| `fn`'s answer is over 1 MiB   | returns it to this run and the runs that waited, and keeps nothing     |
 
 A run of the same key inside its own run is `invalid`, because it would wait
 for itself (contract KV-11).
@@ -69,6 +70,12 @@ let data = panels.run(&format!("dashboard:{id}"), || compute_panels(&id))?;
 
 Ten users who open the dashboard in the same second share one computation,
 and the next 30 seconds answer from what it kept.
+
+Each kept answer is a write to `kv.db`, synced like any other, and a value
+there holds at most 1 MiB: a larger answer still reaches the users who waited
+for it, but the next run computes it again. A run waits for the one under way
+however long it takes, so a memo of a slow query that callers may give up on
+belongs in the program's memory.
 
 ## What it does not promise
 

@@ -362,7 +362,7 @@ fn on_once(answers: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
             let handed = answers.scope.kv.take_passed(token).ok_or_else(|| {
                 Error::new(ErrorKind::Lost, "the run's claim went before it answered: another run may have run")
             })?;
-            handed.keep(answer)?;
+            handed.keep(answer);
             Ok(Answer::Done)
         }
         _ => Err(Error::invalid("a call once's answers do not take")),
@@ -486,17 +486,23 @@ pub(crate) fn claimed(bytes: &[u8]) -> Result<Claimed> {
 fn claim_here(answers: &Bucket<()>, key: &str) -> Result<Claimed> {
     let deadline = std::time::Instant::now() + Duration::from_secs(25);
     loop {
-        let (ended, waiting) = std::sync::mpsc::channel::<()>();
-        let waiter = Box::new(move || {
-            let _ = ended.send(());
+        let (ended, waiting) = std::sync::mpsc::channel();
+        let waiter = Box::new(move |unkept| {
+            let _ = ended.send(unkept);
         });
         match super::once::hand(answers, key, waiter)? {
             super::once::Hand::Kept(raw) => return Ok(Claimed::Kept(raw)),
             super::once::Hand::Yours(handed) => return Ok(Claimed::Yours(answers.scope.kv.keep_passed(handed))),
             super::once::Hand::Wait => {
                 let left = deadline.saturating_duration_since(std::time::Instant::now());
-                if left.is_zero() || waiting.recv_timeout(left).is_err() && std::time::Instant::now() >= deadline {
-                    return Err(Error::new(ErrorKind::Unavailable, "another run of the key held it too long"));
+                match waiting.recv_timeout(left) {
+                    // the run waited for could not keep its answer, which is this node's to have
+                    Ok(Some(unkept)) => return Ok(Claimed::Kept(Raw::clone(&unkept))),
+                    Ok(None) => {}
+                    Err(_) if std::time::Instant::now() >= deadline => {
+                        return Err(Error::new(ErrorKind::Unavailable, "another run of the key held it too long"));
+                    }
+                    Err(_) => {}
                 }
             }
         }

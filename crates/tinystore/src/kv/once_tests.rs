@@ -86,6 +86,41 @@ fn a_run_waits_for_the_run_of_its_key_and_takes_its_answer() {
 
 // contract: KV-11
 #[test]
+fn an_answer_too_large_to_keep_still_reaches_the_runs_that_waited_for_it() {
+    // past the 1 MiB a value of kv.db holds: before, each waiter woke to
+    // nothing kept and ran the function itself, one after another
+    let f = fixture();
+    let panels = f.store.once::<String>("panels").open().unwrap();
+    let table = "x".repeat(2 << 20);
+    let (started, starting) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    thread::scope(|scope| {
+        let (panels, table) = (&panels, &table);
+        let first = scope.spawn(move || {
+            panels.run("panel-7", move || {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                Ok::<_, Error>(table.clone())
+            })
+        });
+        starting.recv().unwrap();
+        let waiting: Vec<_> = (0..3)
+            .map(|_| scope.spawn(|| panels.run("panel-7", || -> Result<String> { panic!("ran beside its key's run") })))
+            .collect();
+        thread::sleep(Duration::from_millis(100));
+        assert!(waiting.iter().all(|run| !run.is_finished()), "the runs wait");
+        release.send(()).unwrap();
+        assert_eq!(first.join().unwrap().unwrap().len(), table.len());
+        for run in waiting {
+            assert_eq!(run.join().unwrap().unwrap().len(), table.len(), "the answer of the run it waited for");
+        }
+    });
+    let runs = AtomicUsize::new(0);
+    assert_eq!(panels.run("panel-7", counting(&runs)).unwrap(), "receipt 1", "nothing was kept: the next run runs");
+}
+
+// contract: KV-11
+#[test]
 fn a_run_after_one_that_failed_runs_its_own_function() {
     let f = fixture();
     let imports = f.store.once::<i64>("imports").open().unwrap();

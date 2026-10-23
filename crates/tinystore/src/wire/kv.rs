@@ -19,7 +19,7 @@ use crate::Transaction;
 use crate::clock::from_unix_millis;
 use crate::kv::{
     Allowance, Batch, Bucket, BucketBuilder, Cell, Counters, Hand, Handed, MAX_KEY, Outcome, PAGE_KEYS, Place, Put,
-    Quota, RateLimit, Raw, Stamp, Version, WriteOptions, hand, once_rows,
+    Quota, RateLimit, Raw, Stamp, Version, Waiter, WriteOptions, hand, once_rows,
 };
 #[cfg(feature = "sql")]
 use crate::kv::{call_on_branch, call_on_key, clear_work};
@@ -199,19 +199,20 @@ fn write(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered
 
 /// How a client's run of a once key starts: the answer kept, which ends the
 /// stream; the run handed over, kept until the client's answer; or a wait for
-/// the run that holds the key, `again` asked once it ends.
+/// the run that holds the key, `again` asked once it ends with the answer it
+/// could not keep, if any.
 pub(crate) enum Run {
     Answered(Vec<u8>),
-    Handed(Handed, Vec<u8>),
+    Handed(Box<Handed>, Vec<u8>),
     Waiting,
 }
 
-pub(crate) fn run(handles: &Handles, body: &[u8], again: Box<dyn FnOnce() + Send>) -> Result<Run, Failure> {
+pub(crate) fn run(handles: &Handles, body: &[u8], again: Waiter) -> Result<Run, Failure> {
     let call = KvCall::decode(body)?;
     let answers = handles.once(call.handle, &call.under)?;
     Ok(match hand(&answers, &call.key, again)? {
         Hand::Kept(raw) => Run::Answered(answer(Some(raw)).encode()),
-        Hand::Yours(handed) => Run::Handed(handed, answer(None).encode()),
+        Hand::Yours(handed) => Run::Handed(Box::new(handed), answer(None).encode()),
         Hand::Wait => Run::Waiting,
     })
 }
@@ -220,8 +221,13 @@ pub(crate) fn run(handles: &Handles, body: &[u8], again: Box<dyn FnOnce() + Send
 pub(crate) fn kept(handed: Handed, body: &[u8]) -> Answered {
     let answered = KvAnswer::decode(body)?;
     let raw = answered.found.then(|| raw_of(answered.value.unwrap_or_default()));
-    handed.keep(raw)?;
+    handed.keep(raw);
     Ok(Empty {}.encode())
+}
+
+/// The answer of the run a client waited for, which that run could not keep.
+pub(crate) fn unkept(raw: &Raw) -> Run {
+    Run::Answered(answer(Some(raw.clone())).encode())
 }
 
 impl Handles {

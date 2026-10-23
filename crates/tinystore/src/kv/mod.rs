@@ -59,7 +59,7 @@ pub(crate) use {
     batch::{Batch, Outcome, Place},
     bucket::{Put, Stamp, WriteOptions},
     cells::Cell,
-    once::{Hand, Handed, hand, rows as once_rows},
+    once::{Hand, Handed, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
     value::Raw,
 };
