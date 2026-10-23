@@ -4,11 +4,19 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(feature = "search")]
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Statement, params_from_iter};
 
 use super::database::Done;
+#[cfg(feature = "search")]
+use super::rows::Rows;
 use super::rows::{Answer, Held, MOST_READ, failure};
 use super::statement::Sql;
+#[cfg(feature = "search")]
+use super::values::Value;
+#[cfg(feature = "search")]
+use crate::Memory;
 use crate::sqlite::given;
 use crate::{Error, Result};
 
@@ -102,26 +110,63 @@ fn answered<A: Answer>(
     Ok(rows)
 }
 
-/// The one row `statement` gives on `connection`, as a `T`, or none: a
-/// table's search index reads a hit's row so, in its search's snapshot.
+/// The rows of a table's search index's hits as `T`s, each the one row
+/// `select` gives with its hit's key, or none: in the search's snapshot, and
+/// within the store's memory and one call's bound together, as `db.all`
+/// reads its rows.
 #[cfg(feature = "search")]
-pub(crate) fn row_on<T: serde::de::DeserializeOwned>(connection: &Connection, statement: &Sql) -> Result<Option<T>> {
-    let rows: super::rows::Rows = write(connection, statement, Wanted::One, Held::default())?;
-    Ok(rows.decode()?.into_iter().next())
+pub(crate) fn rows_on<T: serde::de::DeserializeOwned>(
+    connection: &Connection,
+    memory: &Arc<Memory>,
+    (select, keys): (&str, &[SqlValue]),
+) -> Result<Vec<Option<T>>> {
+    hit_rows(connection, memory, (select, keys), |rows| Ok(rows.decode()?.into_iter().next()))
 }
 
-/// The one row `statement` gives on `connection` as its columns and values,
-/// or none: the wire sends a table's index's hits so.
+/// A row as its columns' names and its values.
+#[cfg(all(feature = "search", feature = "wire"))]
+pub(crate) type Cells = (Vec<String>, Vec<Value>);
+
+/// The rows of a table's index's hits as [`rows_on`] reads them, each as its
+/// cells: the wire sends them so.
 #[cfg(all(feature = "search", feature = "wire"))]
 pub(crate) fn cells_on(
     connection: &Connection,
-    statement: &Sql,
-) -> Result<Option<(Vec<String>, Vec<super::values::Value>)>> {
-    let rows: super::rows::Rows = write(connection, statement, Wanted::One, Held::default())?;
-    if rows.len() == 0 {
-        return Ok(None);
+    memory: &Arc<Memory>,
+    (select, keys): (&str, &[SqlValue]),
+) -> Result<Vec<Option<Cells>>> {
+    hit_rows(connection, memory, (select, keys), |rows| {
+        Ok((rows.len() > 0).then(|| (rows.columns().to_vec(), rows.into_values())))
+    })
+}
+
+/// Each hit's row, read by a statement of its own and made what the caller
+/// keeps by `read`, while every row read so far holds the store's memory
+/// and counts toward one call's bound: a thousand hits of large rows are
+/// `limit`, not gigabytes the store does not know of.
+#[cfg(feature = "search")]
+fn hit_rows<R>(
+    connection: &Connection,
+    memory: &Arc<Memory>,
+    (select, keys): (&str, &[SqlValue]),
+    read: impl Fn(Rows) -> Result<Option<R>>,
+) -> Result<Vec<Option<R>>> {
+    let mut held = Held::of(memory);
+    let mut bytes = 0;
+    let mut found = Vec::with_capacity(keys.len());
+    for key in keys {
+        let key = match key {
+            SqlValue::Integer(number) => Value::Integer(*number),
+            SqlValue::Text(text) => Value::Text(text.clone()),
+            _ => return Err(Error::internal("a row's key of neither an integer nor text")),
+        };
+        let rows: Rows =
+            write(connection, &Sql::piece(select.to_owned(), vec![key], false), Wanted::One, Held::default())?;
+        bytes += rows.bytes();
+        held.cover(bytes)?;
+        found.push(read(rows)?);
     }
-    Ok(Some((rows.columns().to_vec(), rows.into_values())))
+    Ok(found)
 }
 
 /// Runs `statement` on the writer to its end and says what it changed.

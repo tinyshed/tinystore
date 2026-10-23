@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
 use super::TableIndex;
@@ -358,6 +359,43 @@ fn a_row_changed_while_its_index_is_read_again_reaches_the_new_rows_by_what_only
     assert_eq!(ids(&both.search_vector(&[1.0, 0.1, 0.0]).run().unwrap()), ["2"], "a vector only the new rows read");
     let red = both.search("shoes").filter(eq("category", "red")).run().unwrap();
     assert_eq!(ids(&red), ["2"], "a filter only the new rows read");
+}
+
+const DOCUMENTS: &str = "create table documents (id integer primary key, title text not null, attachment blob)";
+
+// contract: STORE-05
+#[test]
+fn the_rows_of_a_table_index_s_hits_hold_the_store_s_memory_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { memory: Some(1 << 20), background: false, ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let db = store.database("app").migrations([("0001_documents.sql", DOCUMENTS)]).open().unwrap();
+    let documents = db.search_index::<IgnoredAny>("documents_search").table("documents").field("title", 1.0);
+    let documents = documents.open().unwrap();
+    search::maintain(&store).unwrap();
+    for _ in 0..12 {
+        db.exec(sql!("insert into documents (title, attachment) values ('report', zeroblob(100000))")).unwrap();
+    }
+    assert_eq!(documents.search("report").limit(8).run().unwrap().hits.len(), 8);
+    assert_eq!(store.memory().used(), 0, "the rows' memory is given back with the search");
+    let past = documents.search("report").limit(12).run().unwrap_err();
+    assert_eq!((past.kind(), past.fact("limit")), (ErrorKind::Limit, Some("store memory")), "{past}");
+}
+
+// contract: ERR-05
+#[test]
+fn the_rows_of_a_table_index_s_hits_are_one_call_s_rows_within_its_bound() {
+    let f = fixture();
+    f.db.exec(DOCUMENTS).unwrap();
+    let documents = f.db.search_index::<IgnoredAny>("documents_search").table("documents").field("title", 1.0);
+    let documents = documents.open().unwrap();
+    f.ready(&documents);
+    let mebibytes = "with recursive n(at) as (select 1 union all select at + 1 from n where at < 65)
+        insert into documents (title, attachment) select 'report', zeroblob(1048576) from n";
+    f.db.exec(mebibytes).unwrap();
+    let past = documents.search("report").limit(65).run().unwrap_err();
+    let limit = (past.kind(), past.fact("limit"), past.fact("bound"));
+    assert_eq!(limit, (ErrorKind::Limit, Some("bytes of a call's rows"), Some("67108864")), "{past}");
 }
 
 /// Words the mix writes, few, so that searches find many rows.

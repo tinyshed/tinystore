@@ -56,11 +56,11 @@ pub(crate) use {
     values::Value,
 };
 
-// What a table's search index reads of a hit's row.
+// What a table's search index reads of its hits' rows.
 #[cfg(all(feature = "search", feature = "wire"))]
 pub(crate) use run::cells_on;
 #[cfg(feature = "search")]
-pub(crate) use run::row_on;
+pub(crate) use run::rows_on;
 
 #[cfg(test)]
 #[path = "database_tests.rs"]

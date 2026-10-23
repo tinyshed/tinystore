@@ -106,8 +106,8 @@ impl Database {
     /// # }
     /// ```
     pub fn search_index<T: DeserializeOwned + 'static>(&self, name: &str) -> crate::search::TableIndexBuilder<T> {
-        let read_row: crate::search::ReadRow<T> = std::sync::Arc::new(read_row::<T>);
-        crate::search::TableIndexBuilder::in_file(std::sync::Arc::clone(self.shared()), name, read_row)
+        let read_rows: crate::search::ReadRows<T> = std::sync::Arc::new(crate::sql::rows_on::<T>);
+        crate::search::TableIndexBuilder::in_file(std::sync::Arc::clone(self.shared()), name, read_rows)
     }
 
     /// Drops the table's index `name` this database keeps: its triggers come
@@ -116,23 +116,6 @@ impl Database {
     pub fn drop_search_index(&self, name: &str) -> crate::Result<bool> {
         crate::search::drop_in_file(self.shared(), name)
     }
-}
-
-/// The row a table's index reads for a hit, as a `T`, as the database's own
-/// reads read one.
-#[cfg(feature = "search")]
-fn read_row<T: DeserializeOwned>(
-    connection: &rusqlite::Connection,
-    select: &str,
-    key: &rusqlite::types::Value,
-) -> crate::Result<Option<T>> {
-    let statement = crate::sql::Sql::new(select);
-    let statement = match key {
-        rusqlite::types::Value::Integer(number) => statement.bind(number),
-        rusqlite::types::Value::Text(text) => statement.bind(text),
-        _ => return Err(crate::Error::internal("a row's key of neither an integer nor text")),
-    };
-    crate::sql::row_on(connection, &statement)
 }
 
 #[cfg(all(test, feature = "kv", feature = "jobs"))]

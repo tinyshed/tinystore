@@ -18,7 +18,7 @@ use super::table;
 use crate::engine::{Host, SharedFile};
 use crate::sqlite::{Settle, sql_error};
 use crate::transaction::sealed::Sealed;
-use crate::{Error, Result, Transaction, TxHandle};
+use crate::{Error, Memory, Result, Transaction, TxHandle};
 
 /// How often a database's file is looked at for keys a process beside the
 /// store left, when no write of the store's settled them sooner.
@@ -104,10 +104,12 @@ pub(crate) fn resolve(connection: &Connection, table: &Table, read: &[&str]) -> 
     Ok(Table { name: table.name.clone(), key, vector: table.vector.clone() })
 }
 
-/// How a hit's row is read as a `T`, in the snapshot its search read: the
-/// statement that selects it whole, and its key. The database lends it,
-/// since a row is read as its own queries read one.
-pub(crate) type ReadRow<T> = Arc<dyn Fn(&Connection, &str, &SqlValue) -> Result<Option<T>> + Send + Sync>;
+/// How the hits' rows are read as `T`s, in the snapshot their search read:
+/// the statement that selects one whole, each hit's key, and the store's
+/// memory the rows hold together. The database lends it, since a row is
+/// read as its own queries read one.
+pub(crate) type ReadRows<T> =
+    Arc<dyn Fn(&Connection, &Arc<Memory>, (&str, &[SqlValue])) -> Result<Vec<Option<T>>> + Send + Sync>;
 
 /// What `db.search_index` opens: an index's table and its settings.
 #[must_use = "an index opens at `open`"]
@@ -115,7 +117,7 @@ pub struct TableIndexBuilder<T> {
     shared: Arc<SharedFile>,
     name: String,
     wanted: Wanted,
-    read_row: ReadRow<T>,
+    read_rows: ReadRows<T>,
 }
 
 impl<T> std::fmt::Debug for TableIndexBuilder<T> {
@@ -125,10 +127,10 @@ impl<T> std::fmt::Debug for TableIndexBuilder<T> {
 }
 
 impl<T: DeserializeOwned> TableIndexBuilder<T> {
-    pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str, read_row: ReadRow<T>) -> Self {
+    pub(crate) fn in_file(shared: Arc<SharedFile>, name: &str, read_rows: ReadRows<T>) -> Self {
         let table = Table { name: String::new(), key: String::new(), vector: None };
         let wanted = Wanted { table: Some(table), ..Wanted::default() };
-        TableIndexBuilder { shared, name: name.to_owned(), wanted, read_row }
+        TableIndexBuilder { shared, name: name.to_owned(), wanted, read_rows }
     }
 
     /// The table whose rows the index holds and follows from then on.
@@ -234,7 +236,7 @@ impl<T: DeserializeOwned> TableIndexBuilder<T> {
         let table = search.file.read(|connection| resolve(connection, &asked, &read)).map_err(within)?;
         self.wanted.table = Some(table);
         let open = crate::sqlite::own_work(|| search.open_index(&self.name, &self.wanted, reindex)).map_err(within)?;
-        Ok(TableIndex { index: Index::of_table(search, open, self.read_row) })
+        Ok(TableIndex { index: Index::of_table(search, open, self.read_rows) })
     }
 }
 
@@ -333,13 +335,14 @@ impl<'a, T: DeserializeOwned> TxTableIndex<'a, T> {
 
 impl<T> Index<T> {
     /// A table's index, whose hits' values are their rows.
-    pub(crate) fn of_table(search: Arc<Search>, open: Arc<OpenIndex>, read_row: ReadRow<T>) -> Self {
-        Index { search, open, read_row: Some(read_row), _value: std::marker::PhantomData }
+    pub(crate) fn of_table(search: Arc<Search>, open: Arc<OpenIndex>, read_rows: ReadRows<T>) -> Self {
+        Index { search, open, read_rows: Some(read_rows), _value: std::marker::PhantomData }
     }
 }
 
-/// How a row of a table is read, as a `T` or the wire's cells.
-pub(crate) type RowReader<'r, R> = &'r dyn Fn(&Connection, &str, &SqlValue) -> Result<Option<R>>;
+/// How the rows of a table's hits are read, as `T`s or the wire's cells.
+pub(crate) type RowsReader<'r, R> =
+    &'r dyn Fn(&Connection, &Arc<Memory>, (&str, &[SqlValue])) -> Result<Vec<Option<R>>>;
 
 /// The hits of `query` in a table's index, each with its row as its value,
 /// read in the snapshot the search read, or in the transaction `tx` of the
@@ -347,17 +350,14 @@ pub(crate) type RowReader<'r, R> = &'r dyn Fn(&Connection, &str, &SqlValue) -> R
 /// deleted that its index has not settled yet is left out.
 pub(crate) fn found<T, R>(
     index: &Index<T>,
-    read_row: RowReader<'_, R>,
+    read_rows: RowsReader<'_, R>,
     query: Query,
     tx: Option<&Transaction<'_>>,
 ) -> Result<Found<R>> {
     let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<Vec<Option<R>>> {
-        let table = table_of(settings)?;
-        let rows = answer.hits.iter().map(|(_, value, _)| {
-            let (select, key) = table::hit_row(&table, value)?;
-            read_row(connection, &select, &key)
-        });
-        rows.collect()
+        let select = table::hit_select(&table_of(settings)?);
+        let keys = answer.hits.iter().map(|(_, value, _)| table::hit_key(value)).collect::<Result<Vec<_>>>()?;
+        read_rows(connection, &index.search.memory, (&select, &keys))
     };
     let (answer, rows) = match tx {
         None => index.search.search_then(&index.open, query, read)?,
@@ -377,15 +377,15 @@ pub(crate) fn drop_in_file(shared: &SharedFile, name: &str) -> Result<bool> {
     Search::in_file(shared).and_then(|search| search.drop_index(name)).map_err(within)
 }
 
-/// A search of a table's index whose hits' rows `read_row` reads: the wire
+/// A search of a table's index whose hits' rows `read_rows` reads: the wire
 /// sends them by their cells.
 #[cfg(feature = "wire")]
 pub(crate) fn found_by<T: DeserializeOwned, R>(
     call: SearchCall<'_, T>,
-    read_row: RowReader<'_, R>,
+    read_rows: RowsReader<'_, R>,
 ) -> Result<Found<R>> {
     let (index, query) = call.asked()?;
-    found(index, read_row, query, None)
+    found(index, read_rows, query, None)
 }
 
 /// The table's index `name` as it is, for a connection that may only read.
@@ -403,7 +403,7 @@ pub(crate) fn table_as_it_is<T: DeserializeOwned>(shared: &SharedFile, name: &st
 /// What a table's index the wire opened reads its rows with: nothing, since
 /// the wire reads them by their cells, through [`found_by`].
 #[cfg(feature = "wire")]
-pub(crate) fn by_cells<T>() -> ReadRow<T> {
+pub(crate) fn by_cells<T>() -> ReadRows<T> {
     Arc::new(|_, _, _| Err(Error::internal("the wire reads a table's rows by their cells")))
 }
 

@@ -15,7 +15,7 @@ use super::open::{Data, OpenIndex, Status};
 use super::read::Query;
 use super::settings::{Settings, Wanted, check_hybrid};
 #[cfg(feature = "sql")]
-use super::table_index::ReadRow;
+use super::table_index::ReadRows;
 use super::vectors::Question;
 use super::write::{Incoming, Prepared};
 #[cfg(feature = "sql")]
@@ -182,7 +182,7 @@ pub struct Index<T> {
     pub(crate) open: Arc<OpenIndex>,
     /// How a table's index reads its hits' rows, which are their values.
     #[cfg(feature = "sql")]
-    pub(crate) read_row: Option<ReadRow<T>>,
+    pub(crate) read_rows: Option<ReadRows<T>>,
     pub(crate) _value: PhantomData<fn() -> T>,
 }
 
@@ -192,7 +192,7 @@ impl<T> Clone for Index<T> {
             search: Arc::clone(&self.search),
             open: Arc::clone(&self.open),
             #[cfg(feature = "sql")]
-            read_row: self.read_row.clone(),
+            read_rows: self.read_rows.clone(),
             _value: PhantomData,
         }
     }
@@ -203,7 +203,7 @@ impl<T> Index<T> {
     #[cfg(feature = "wire")]
     pub(crate) fn follows_table(&self) -> bool {
         #[cfg(feature = "sql")]
-        return self.read_row.is_some();
+        return self.read_rows.is_some();
         #[cfg(not(feature = "sql"))]
         false
     }
@@ -211,7 +211,7 @@ impl<T> Index<T> {
     /// An index of documents of its own, in search.db.
     fn of_documents(search: Arc<Search>, open: Arc<OpenIndex>) -> Self {
         #[cfg(feature = "sql")]
-        return Index { search, open, read_row: None, _value: PhantomData };
+        return Index { search, open, read_rows: None, _value: PhantomData };
         #[cfg(not(feature = "sql"))]
         Index { search, open, _value: PhantomData }
     }
@@ -568,8 +568,8 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         let within = |error: Error| error.within(format!("index {name}"));
         let query = self.query().map_err(within)?;
         #[cfg(feature = "sql")]
-        if let Some(read_row) = &self.index.read_row {
-            return super::table_index::found(self.index, &**read_row, query, self.tx).map_err(within);
+        if let Some(read_rows) = &self.index.read_rows {
+            return super::table_index::found(self.index, &**read_rows, query, self.tx).map_err(within);
         }
         self.index.found(query).map_err(within)
     }

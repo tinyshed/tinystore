@@ -48,7 +48,7 @@ pub(crate) struct Search {
     probe: Arc<crate::probe::Probe>,
     /// What the log calls a file another engine lends: `sql app`.
     pub(super) lent_by: Option<String>,
-    memory: Arc<Memory>,
+    pub(super) memory: Arc<Memory>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
     /// The store, for the writes a copy passes to its home.

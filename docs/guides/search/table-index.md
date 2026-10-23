@@ -84,6 +84,11 @@ let found = articles.search("хлеба").filter(eq("author_id", &7)).filter(eq(
 A hit's `value` is its row as `db.all` reads it, every column. The index
 lives in the database's file, `sql/blog.db`, beside the table.
 
+The rows of one search count together, as the rows of one `db.all` do. If
+they pass 64 MiB, or more than the store's memory has free, the search fails
+with a limit error instead of returning fewer hits. Ask for fewer hits, or
+keep large columns such as files in a table of their own.
+
 ## Every change reaches it
 
 Opening the index puts triggers on the table that note each changed row's

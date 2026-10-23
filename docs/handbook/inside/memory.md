@@ -14,6 +14,7 @@ else is going on:
 | Call                           | Bound                                                      |
 |--------------------------------|------------------------------------------------------------|
 | SQL `all`, `columns`           | 64 MiB of values; read more with `each` or a page          |
+| a search of a table's index    | 64 MiB of its hits' rows together; ask for fewer hits      |
 | a page of `list`               | 1,000 keys, files, jobs or events                          |
 | an aggregate of metrics        | 100,000 buckets, and its own budgets of samples and bytes  |
 | `top` and `distinct` of events | 64 MiB of different values                                 |

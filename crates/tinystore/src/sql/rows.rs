@@ -75,6 +75,16 @@ impl Held {
         reservation.grow(doubled, "its rows").or_else(|_| reservation.grow(short, "its rows"))
     }
 
+    /// Covers `bytes` of the rows several statements read for one call,
+    /// within one call's bound, or fails `limit`.
+    #[cfg(feature = "search")]
+    pub(crate) fn cover(&mut self, bytes: usize) -> Result<()> {
+        if bytes > MOST_READ {
+            return Err(past_bound(bytes, MOST_READ));
+        }
+        self.reach(bytes as u64)
+    }
+
     /// Gives back what the rows no longer hold: a part of them sent.
     #[cfg(feature = "wire")]
     pub(crate) fn give_back(&mut self, bytes: u64) {
@@ -257,6 +267,12 @@ impl Rows {
 
     pub(crate) fn columns(&self) -> &[String] {
         &self.columns
+    }
+
+    /// The bytes of their values, as their bound counts them.
+    #[cfg(feature = "search")]
+    pub(crate) fn bytes(&self) -> usize {
+        self.values.iter().map(Value::size).sum()
     }
 
     /// The values, a row after another, each `width()` long.

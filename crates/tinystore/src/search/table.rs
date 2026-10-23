@@ -415,12 +415,16 @@ pub(crate) fn prepared_again(
     prepared_row(connection, index, settings, &key, id)
 }
 
-/// The statement that reads a hit's row whole, and the key it binds, from
-/// the value its document keeps.
+/// The statement that reads a hit's row whole, by the key it binds.
+#[cfg(feature = "sql")]
+pub(crate) fn hit_select(table: &Table) -> String {
+    format!("select * from {} where {} = ?", quoted(&table.name), quoted(&table.key))
+}
+
+/// The key of the row a hit stands for, from the value its document keeps.
 #[cfg(any(feature = "sql", test))]
-pub(crate) fn hit_row(table: &Table, value: &[u8]) -> Result<(String, SqlValue)> {
-    let key = row_key(value).ok_or_else(|| Error::corrupt("a hit's row key that does not read"))?;
-    Ok((format!("select * from {} where {} = ?", quoted(&table.name), quoted(&table.key)), key))
+pub(crate) fn hit_key(value: &[u8]) -> Result<SqlValue> {
+    row_key(value).ok_or_else(|| Error::corrupt("a hit's row key that does not read"))
 }
 
 /// The row's key the value of a table's document keeps after its digest.
@@ -553,10 +557,9 @@ mod tests {
 
     #[test]
     fn a_key_reads_back_from_the_value_a_document_keeps() {
-        let table = Table { name: "t".to_owned(), key: "id".to_owned(), vector: None };
         for key in [SqlValue::Integer(-42), SqlValue::Integer(i64::MAX), SqlValue::Text("a \"b\"".to_owned())] {
             let value = [[7; DIGEST].as_slice(), &key_json(&key)].concat();
-            assert_eq!(hit_row(&table, &value).unwrap().1, key);
+            assert_eq!(hit_key(&value).unwrap(), key);
         }
         assert!(key_id(&SqlValue::Real(1.5)).is_err());
         assert!(key_id(&SqlValue::Null).is_err());

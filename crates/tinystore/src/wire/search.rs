@@ -263,16 +263,7 @@ fn query<'i>(
 /// once: every row is read whole, so all have the same.
 #[cfg(feature = "sql")]
 fn rows_found(call: SearchCall<'_, Value>) -> Answered {
-    let read_row = |connection: &rusqlite::Connection, select: &str, key: &rusqlite::types::Value| {
-        let statement = crate::sql::Sql::new(select);
-        let statement = match key {
-            rusqlite::types::Value::Integer(number) => statement.bind(number),
-            rusqlite::types::Value::Text(text) => statement.bind(text),
-            _ => return Err(crate::Error::internal("a row's key of neither an integer nor text")),
-        };
-        crate::sql::cells_on(connection, &statement)
-    };
-    let found = search::found_by(call, &read_row)?;
+    let found = search::found_by(call, &crate::sql::cells_on)?;
     let columns = found.hits.first().map(|hit| hit.value.0.clone()).unwrap_or_default();
     let hits = found.hits.into_iter().map(|hit| SearchHit {
         id: hit.id,

@@ -67,7 +67,7 @@ pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild
 pub use open::Status;
 pub use rebuild::Listed;
 #[cfg(feature = "sql")]
-pub(crate) use table_index::{ReadRow, drop_in_file};
+pub(crate) use table_index::{ReadRows, drop_in_file};
 #[cfg(feature = "sql")]
 pub use table_index::{TableIndex, TableIndexBuilder, TxTableIndex};
 #[cfg(all(feature = "sql", feature = "wire"))]
