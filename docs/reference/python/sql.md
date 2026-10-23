@@ -524,6 +524,10 @@ async def end(commit: bool) -> None: ...
 
 Sends the last call, commit or roll back, and waits for the store's word.
 
+A commit that left and lost its connection before the answer may have
+committed: its outcome is unknown. One lost before it left was rolled
+back by the store, and is the loss itself.
+
 ### SqlTx.nested
 
 ```python

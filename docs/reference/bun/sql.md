@@ -378,7 +378,10 @@ rows(statement: Sql, want: Want): Promise<Answered>
 end(commit: boolean): Promise<void>
 ```
 
-Sends the last call: commit, or roll back, and waits for the server's word.
+Sends the last call: commit, or roll back, and waits for the server's
+word. A commit that left and was not answered, its connection lost or
+its wait cancelled, may have committed: its outcome is unknown. One lost
+before it left was rolled back by the server, and is the loss itself.
 
 ## ColumnType
 
