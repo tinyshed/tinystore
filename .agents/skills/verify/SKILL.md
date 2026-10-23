@@ -18,10 +18,11 @@ which checks ran, where, and which could not.
 
 - `just quick`: what changed since the branch's upstream, the working tree
   and new files included, in minutes: formatting, clippy, the tests of each
-  area touched, every lint set that names it, and each SDK the change
-  reaches. Its table of what runs for what is at the top of
-  `tools/quick.ts`. Then commit and push: the owner does not wait on a
-  local full run.
+  area touched, the area's lint set alone and the widest (four sets for a
+  root file or what every engine stands on, where CI runs all of them), and
+  each SDK the change reaches. Its table of what runs for what is at the top
+  of `tools/quick.ts`; `QUICK_PLAN=1 just quick` prints it and runs nothing.
+  Then commit and push: the owner does not wait on a local full run.
 
 ## After the push
 
