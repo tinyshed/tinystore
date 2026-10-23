@@ -148,6 +148,36 @@ pub(crate) fn unknown(number: u64, name: &str) -> Failure {
     Failure::unimplemented(format!("field {number} of {name}"))
 }
 
+/// Reads past the value of a field the message `name` lacks, well formed and
+/// nested no deeper than the profile's eight levels: what a server reading a
+/// newer client's HELLO does with a field it does not know.
+pub(crate) fn skip(r: &mut Reader<'_>, name: &str) -> Result<(), Failure> {
+    skip_at(r, name, 1)
+}
+
+fn skip_at(r: &mut Reader<'_>, name: &str, depth: usize) -> Result<(), Failure> {
+    if depth > 8 {
+        return Err(Failure::invalid(format!("a field of {name} nested past eight levels")));
+    }
+    match r.next()? {
+        Token::Array(count) => {
+            for _ in 0..count {
+                skip_at(r, name, depth + 1)?;
+            }
+        }
+        Token::Map(count) => {
+            for _ in 0..count {
+                if !matches!(r.next()?, Token::Uint(_) | Token::Str(_)) {
+                    return Err(Failure::invalid("a key that is neither an unsigned integer nor a name"));
+                }
+                skip_at(r, name, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(crate) fn bool(r: &mut Reader<'_>, name: &str) -> Result<bool, Failure> {
     match r.next()? {
         Token::Bool(flag) => Ok(flag),

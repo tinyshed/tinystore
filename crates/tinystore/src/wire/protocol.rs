@@ -1811,7 +1811,7 @@ impl Message for Hello {
                 4 => message.max_body = Some(codec::uint(r, "maxBody")?),
                 5 => message.stream_credit = Some(codec::uint(r, "streamCredit")?),
                 6 => message.challenge = Some(codec::bin(r, "challenge")?),
-                number => return Err(codec::unknown(number, Self::NAME)),
+                _ => codec::skip(r, Self::NAME)?,
             }
         }
         Ok(message)

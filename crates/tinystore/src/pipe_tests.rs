@@ -74,6 +74,37 @@ fn a_client_of_another_protocol_is_refused_with_goaway() {
     assert_eq!(refused.code, "protocol");
 }
 
+/// A newer client's HELLO may carry a field this server lacks: the server
+/// reads past it, as docs/wire.md says, where a request's would be refused.
+#[test]
+fn a_hello_with_a_field_the_server_lacks_is_welcomed_and_one_nested_past_the_profile_is_not() {
+    use crate::wire::msgpack::{write_array_head, write_map_head, write_str, write_uint};
+    let hello = |nested: usize| {
+        let mut body = Vec::new();
+        write_map_head(&mut body, 3);
+        write_uint(&mut body, 1);
+        write_uint(&mut body, 1);
+        write_uint(&mut body, 2);
+        write_str(&mut body, "test/9");
+        write_uint(&mut body, 99);
+        for _ in 0..nested {
+            write_map_head(&mut body, 1);
+            write_str(&mut body, "later");
+        }
+        write_array_head(&mut body, 0);
+        let mut bytes = Vec::new();
+        Frame::new(Kind::Hello, 0, body).encode_into(&mut bytes);
+        bytes
+    };
+    // the message is level 0 and its field level 1: seven maps put the array at 8
+    for (nested, answered) in [(0, Kind::Welcome), (7, Kind::Welcome), (8, Kind::GoAway)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = Client::connect(dir.path());
+        client.reader.push(&client.pipe.send(&hello(nested)));
+        assert_eq!(client.read().kind, answered, "a field {nested} maps deep");
+    }
+}
+
 #[test]
 fn a_frame_before_hello_ends_the_pipe_with_goaway() {
     let dir = tempfile::tempdir().unwrap();

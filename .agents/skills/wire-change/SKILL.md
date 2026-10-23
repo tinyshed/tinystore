@@ -63,7 +63,9 @@ SDK that starts a server passes the same as `tinystore serve`'s flags
 - A body is a MessagePack map with small integer keys, written canonically,
   the shortest integer, keys in the schema's order; a decoder takes any
   order and refuses a key it does not know as `unimplemented`, naming the
-  field: `field 99 of kv.Call: not in tinystore 0.1.0`.
+  field: `field 99 of kv.Call: not in tinystore 0.1.0`. `HELLO` alone is
+  read past such a key (`SKIPPING` in `crates/protocol/src/rust.rs`), so
+  that a newer client still reaches an older server.
 - `str` is UTF-8 and anything else `bin`; a field of the wrong type is
   refused, and `nil` only where the schema says `?`.
 - A field at its zero value is left out.

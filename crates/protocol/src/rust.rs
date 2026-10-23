@@ -45,7 +45,7 @@ fn write_message(out: &mut String, message: &Message) {
     let _ = writeln!(out, "impl Message for {name} {{");
     let _ = writeln!(out, "    const NAME: &'static str = \"{}\";\n", message.name);
     let fields = by_number(message);
-    write_read(out, &fields);
+    write_read(out, &fields, SKIPPING.contains(&message.name.as_str()));
     write_write(out, &fields);
     write_size(out, &fields);
     write_is_zero(out, &fields);
@@ -60,9 +60,15 @@ fn by_number(message: &Message) -> Vec<&Field> {
     fields
 }
 
-fn write_read(out: &mut String, fields: &[&Field]) {
+/// The messages whose reader reads past a key it does not know rather than
+/// refuse it: `HELLO`, which a server skips as docs/wire.md says, so that a
+/// newer client still reaches an older server, if only to stop it.
+const SKIPPING: &[&str] = &["Hello"];
+
+fn write_read(out: &mut String, fields: &[&Field], skipping: bool) {
     out.push_str("    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {\n");
     if fields.is_empty() {
+        assert!(!skipping, "a message that skips has fields");
         out.push_str("        match codec::fields(r, Self::NAME)? {\n");
         out.push_str("            0 => Ok(Self {}),\n");
         out.push_str("            _ => Err(codec::unknown(codec::field(r, Self::NAME, &mut 0)?, Self::NAME)),\n");
@@ -78,7 +84,10 @@ fn write_read(out: &mut String, fields: &[&Field]) {
         let read = if field.optional { format!("Some({read})") } else { read };
         let _ = writeln!(out, "                {} => message.{} = {read},", field.number, rust_field(&field.name));
     }
-    out.push_str("                number => return Err(codec::unknown(number, Self::NAME)),\n");
+    out.push_str(match skipping {
+        true => "                _ => codec::skip(r, Self::NAME)?,\n",
+        false => "                number => return Err(codec::unknown(number, Self::NAME)),\n",
+    });
     out.push_str("            }\n        }\n        Ok(message)\n    }\n\n");
 }
 
