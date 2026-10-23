@@ -513,7 +513,7 @@ impl File {
     }
 
     /// The readers the file opens at once at most.
-    #[cfg(feature = "records")]
+    #[cfg(any(feature = "records", all(test, feature = "search")))]
     pub(crate) fn readers_at_most(&self) -> usize {
         self.config.readers
     }

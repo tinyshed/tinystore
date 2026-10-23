@@ -41,7 +41,8 @@ const ADD_BESIDE: &str = "insert into _tinystore_search_indexes (name, settings,
 const MARK_DROPPING: &str =
     "update _tinystore_search_indexes set dropping = 1, beside_of = null, name = '~drop:' || id where id = ?1";
 const MARK_NAMED_DROPPING: &str = "update _tinystore_search_indexes set dropping = 1, beside_of = null,
-    name = '~drop:' || id where name = ?1 or beside_of = (select id from _tinystore_search_indexes where name = ?1)";
+    name = '~drop:' || id where name = ?1 or beside_of = (select id from _tinystore_search_indexes where name = ?1)
+    returning id";
 const READ_PROGRESS: &str = "select (select next_doc from _tinystore_search_indexes where id = ?2),
     copied_through, failed, why from _tinystore_search_indexes where id = ?1";
 const WRITE_COPIED: &str = "update _tinystore_search_indexes set copied_through = ?2 where id = ?1";
@@ -396,19 +397,41 @@ impl Search {
         // once it committed: a drop that fails leaves them as they were.
         let held = open.as_ref().map(|open| open.change());
         let named = name.to_owned();
-        let dropped = self.file.transaction(|tx| {
+        let marked = self.file.transaction(|tx| {
             table::unfollow(tx, &named)?;
-            let marked = tx.prepare_cached(MARK_NAMED_DROPPING).and_then(|mut update| update.execute([&named]));
-            marked.map_err(|error| sql_error("drop an index", error))
+            mark_named_dropping(tx, &named)
         })?;
-        let removed = crate::sync::lock(&self.indexes).remove(name);
-        open.iter().chain(removed.iter()).for_each(|open| open.mark_dropped());
+        if let Some(open) = &open {
+            open.mark_dropped();
+        }
         drop(held);
-        if dropped > 0 {
+        self.forget(name, open.as_ref(), &marked);
+        if !marked.is_empty() {
             tracing::info!(target: "tinystore", "search {name}: dropped; its rows go in the background");
             self.wake();
         }
-        Ok(dropped > 0)
+        Ok(!marked.is_empty())
+    }
+
+    /// Takes out of the indexes open here the one a drop meant, and refuses
+    /// its handles: the one it held, or one read from the rows it marked
+    /// before it committed. One an open made after that commit is a new
+    /// index, and stays.
+    ///
+    /// The entry's rows are read with the indexes let go, since a change
+    /// holding them may wait for a writer whose transaction opens an index.
+    fn forget(&self, name: &str, held: Option<&std::sync::Arc<OpenIndex>>, marked: &[i64]) {
+        let Some(found) = crate::sync::lock(&self.indexes).get(name).cloned() else { return };
+        let meant = held.is_some_and(|held| std::sync::Arc::ptr_eq(held, &found)) || marked.contains(&found.id());
+        if !meant {
+            return;
+        }
+        let mut indexes = crate::sync::lock(&self.indexes);
+        if indexes.get(name).is_some_and(|now| std::sync::Arc::ptr_eq(now, &found)) {
+            indexes.remove(name);
+        }
+        drop(indexes);
+        found.mark_dropped();
     }
 
     /// Drops the rows of every index dropped or switched out, a step a commit.
@@ -524,6 +547,15 @@ fn drop_step(tx: &Tx<'_>, index: i64) -> Result<bool> {
         execute(tx, DROP_ROW, [index], "drop an index's row")?;
     }
     Ok(dropped > 0)
+}
+
+/// Marks the rows of the index `name` and of a rebuild's beside it to be
+/// dropped a step a commit; says their ids.
+fn mark_named_dropping(tx: &Tx<'_>, name: &str) -> Result<Vec<i64>> {
+    let failed = |error| sql_error("drop an index", error);
+    let mut update = tx.prepare_cached(MARK_NAMED_DROPPING).map_err(failed)?;
+    let ids = update.query_map([name], |row| row.get::<_, i64>(0)).map_err(failed)?;
+    ids.collect::<rusqlite::Result<Vec<i64>>>().map_err(failed)
 }
 
 /// Marks an index's rows to be dropped a step a commit.

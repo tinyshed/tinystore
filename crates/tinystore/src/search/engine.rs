@@ -500,16 +500,19 @@ impl Search {
     fn keep_reached(&self) -> Result<()> {
         let names = std::mem::take(&mut *lock(&self.reached));
         for name in &names {
-            if lock(&self.indexes).contains_key(name) {
+            // Held across the read, as an open holds them, so that a drop
+            // that commits meanwhile finds what the read made, and takes it out.
+            let mut indexes = lock(&self.indexes);
+            if indexes.contains_key(name) {
                 continue;
             }
             match self.file.read(|connection| rebuild::read_current(connection, name)) {
                 Ok(Some(current)) => {
-                    let open = Arc::new(OpenIndex::new(name, current));
-                    lock(&self.indexes).entry(name.clone()).or_insert(open);
+                    indexes.insert(name.clone(), Arc::new(OpenIndex::new(name, current)));
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    drop(indexes);
                     // The names not opened yet wait for the next pass.
                     lock(&self.reached).extend(names.iter().skip_while(|left| *left != name).cloned());
                     return Err(error);

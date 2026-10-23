@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Barrier;
+use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
 
@@ -1407,4 +1409,82 @@ fn a_dropped_index_refuses_its_handles_and_leaves_no_row() {
     assert_eq!(rows, 0, "every row of the dropped index is gone");
     let again = fixture.articles::<Article>("articles");
     assert!(search(&again, "bread").hits.is_empty(), "the name opens a new index");
+}
+
+/// Waits up to five seconds for `holds`, and says whether it held.
+fn holds_soon(holds: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !holds() {
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    true
+}
+
+/// Holds every reader of `file` until the barrier given back is waited on.
+fn every_reader_held(file: &Arc<crate::sqlite::File>) -> (Arc<Barrier>, Vec<JoinHandle<crate::Result<()>>>) {
+    let readers = file.readers_at_most();
+    let (hold, release) = (Arc::new(Barrier::new(readers + 1)), Arc::new(Barrier::new(readers + 1)));
+    let holders = (0..readers)
+        .map(|_| {
+            let (file, hold, release) = (Arc::clone(file), Arc::clone(&hold), Arc::clone(&release));
+            std::thread::spawn(move || {
+                file.read(|_| {
+                    hold.wait();
+                    release.wait();
+                    Ok(())
+                })
+            })
+        })
+        .collect();
+    hold.wait();
+    (release, holders)
+}
+
+#[test]
+fn a_drop_leaves_working_the_index_an_open_made_after_the_drop_committed() {
+    let fixture = fixture();
+    fixture.articles::<Article>("articles").set("a", &article("Rye", "flour")).unwrap();
+    fixture.store.close().unwrap();
+    // Opened again, the store finds the index in its file and has it open nowhere.
+    let store = open(fixture.dir.path());
+    let engine = Arc::clone(&store.index::<Article>("other").field("title", 1.0).open().unwrap().search);
+    let writer = engine.file.hold_writer();
+    let before = Arc::strong_count(&engine);
+    let dropping = {
+        let store = store.clone();
+        std::thread::spawn(move || store.drop_index("articles"))
+    };
+    // Holding the engine, the drop finds no index open here, then waits for the writer.
+    assert!(holds_soon(|| Arc::strong_count(&engine) > before), "the drop began");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    // With every reader held, an open waits for one while it holds the indexes open here.
+    let (release, holders) = every_reader_held(&engine.file);
+    let opening = {
+        let store = store.clone();
+        std::thread::spawn(move || store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open())
+    };
+    assert!(holds_soon(|| engine.file.readers_waiting() == 1), "the open waits for a reader");
+    // The drop commits, then waits for those indexes; the open then reads
+    // that no index has the name, and makes a new one.
+    drop(writer);
+    let beside = rusqlite::Connection::open(fixture.dir.path().join("search.db")).unwrap();
+    beside.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let named = "select count(*) from _tinystore_search_indexes where name = 'articles'";
+    let committed_first = holds_soon(|| beside.query_row(named, [], |row| row.get::<_, i64>(0)).unwrap() == 0);
+    drop(beside);
+    release.wait();
+    holders.into_iter().for_each(|holder| holder.join().unwrap().unwrap());
+    let reopened = opening.join().unwrap().unwrap();
+    assert!(dropping.join().unwrap().unwrap(), "the drop found the index");
+    let works = reopened.set("b", &article("Spelt", "flour")).is_ok();
+    let listed = crate::search::list(&store).unwrap().iter().any(|index| index.name == "articles");
+    assert_eq!(works, listed, "a handle works while its index is in the file, and only then");
+    // A machine too slow to begin the drop first leaves only that to check.
+    if committed_first {
+        assert!(works, "the open came after the drop's commit: its index is a new one");
+        assert_eq!(ids(&search(&reopened, "flour")), ["b"], "and holds nothing of the dropped one's");
+    }
 }
