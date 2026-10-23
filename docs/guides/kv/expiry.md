@@ -69,7 +69,8 @@ A `get`, `entry` or `has` of an idle key renews its span. To keep reads
 cheap, the renewal is written only once a thirtieth of the span has passed,
 about once a day for 30 days, together with other writes a second later.
 `list` and `all` renew nothing, so a page that lists every session does not
-keep them alive.
+keep them alive. A read on a copy of the store's files sends its renewal to
+the copy's home, so a session read only on a copy stays alive too.
 
 ## Limits and defaults
 

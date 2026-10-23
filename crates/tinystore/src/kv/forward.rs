@@ -18,6 +18,7 @@ use super::counters::Counters;
 use super::engine::Kv;
 use super::quota::Quota;
 use super::rate_limit::RateLimit;
+use super::renewals::Renewal;
 use super::scope::Kind;
 use super::value::Raw;
 use crate::clock::from_unix_millis;
@@ -124,6 +125,9 @@ pub(crate) enum Call {
         put: Put,
         options: WriteOptions,
     },
+    /// Renews an idle key a read on a copy found due, bound to the cell that
+    /// read saw.
+    Renew(Renewal),
 }
 
 /// What a call answered.
@@ -208,6 +212,9 @@ fn call_out(out: &mut Out, call: &Call) {
             None => out.byte(15).long(*n as u64),
         },
         Call::TakeSealed { options, key_id } => options_out(out.byte(16), options).text(key_id),
+        Call::Renew(renewal) => {
+            out.byte(17).long(renewal.version as u64).long(renewal.seen as u64).long(renewal.until as u64)
+        }
     };
 }
 
@@ -273,6 +280,7 @@ fn call_in(at: &mut In<'_>) -> Result<Call> {
         14 => Call::OnceKeep { token: at.long()?, answer: if at.byte()? == 1 { Some(raw_in(at)?) } else { None } },
         15 => Call::AddQueued { n: at.long()? as i64, from: Some((at.text()?, at.long()?)) },
         16 => Call::TakeSealed { options: options_in(at)?, key_id: at.text()? },
+        17 => Call::Renew(Renewal { version: at.long()? as i64, seen: at.long()? as i64, until: at.long()? as i64 }),
         _ => return Err(corrupt("a call")),
     })
 }
@@ -347,6 +355,7 @@ fn on_bucket(bucket: &Bucket<()>, key: &str, call: Call) -> Result<Answer> {
         Call::Take(options) => Answer::Cell(bucket.take_cell(key, options)?),
         Call::TakeSealed { options, key_id } => Answer::Cell(bucket.take_sealed(key, options, &key_id)?),
         Call::Expire(options) => Answer::Found(bucket.expire_as(key, options)?),
+        Call::Renew(renewal) => Answer::Found(bucket.renew_as(key, renewal)?),
         Call::Clear => {
             bucket.clear()?;
             Answer::Done
@@ -542,6 +551,11 @@ pub(crate) fn sum(bytes: &[u8]) -> Result<i64> {
 /// Passes a call to the home of the copy `store`'s kv.db is.
 pub(crate) fn pass_on(store: &Store, handle: &Handle, owners: &[String], key: &str, call: &Call) -> Result<Vec<u8>> {
     crate::replication::pass_on(store, FILE, encode(handle, owners, key, call))
+}
+
+/// Passes calls `encode` made to the home of the copy, run there in order.
+pub(crate) fn pass_on_all(store: &Store, requests: &[Vec<u8>]) -> Result<()> {
+    crate::replication::pass_on_all(store, FILE, requests)
 }
 
 fn raw_out<'a>(out: &'a mut Out, raw: &Raw) -> &'a mut Out {

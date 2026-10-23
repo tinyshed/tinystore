@@ -688,16 +688,16 @@ impl<V> Bucket<V> {
 
     /// Renews a due idle key: with the next flush of renewals, or before the
     /// read returns when the key has less than a minute left. A renewal that
-    /// cannot be written now waits for the flush.
+    /// cannot be written now waits for the flush. A copy's renewals are its
+    /// home's to write, and go there.
     fn renew(&self, key: &str, path: Vec<u8>, mut cell: Cell, now: i64) -> Cell {
-        // A copy's renewals are its home's: one queued here would never be written.
-        #[cfg(feature = "replication")]
-        if self.is_copy() {
-            return cell;
-        }
         let Some(renewal) = self.renewal_due(&cell, now) else {
             return cell;
         };
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return self.renew_at_home(key, path, cell, renewal, now);
+        }
         let renewals = self.scope.kv.renewals();
         if renewal.seen - now >= RENEW_AT_ONCE {
             renewals.ask(self.scope.id, path, renewal);
@@ -754,11 +754,55 @@ impl<V> Bucket<V> {
     pub(crate) fn pass_on(&self, key: &str, call: forward::Call) -> Result<Vec<u8>> {
         let shown = || self.scope.shown_key(key);
         let call = self.sealed(key, call).map_err(|error| error.within(shown()))?;
+        self.scope.pass_on(&self.handle(), key, &call)
+    }
+
+    /// The handle a call on this bucket is made on at its home.
+    fn handle(&self) -> forward::Handle {
         let name = self.scope.name().to_owned();
         let database = self.scope.kv.lent_by().and_then(crate::replication::database_of).map(str::to_owned);
-        let handle =
-            forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database };
-        self.scope.pass_on(&handle, key, &call)
+        forward::Handle::Bucket { name, expiry: self.expiry, encrypted: self.encrypted.is_some(), database }
+    }
+
+    /// Asks the home of the copy for a due renewal, as the home's own reads
+    /// renew a key: with the next pass of renewals, or before the read
+    /// returns when the key has less than a minute left. A store opened
+    /// beside the process that holds it passes nothing on, and renews nothing.
+    fn renew_at_home(&self, key: &str, path: Vec<u8>, mut cell: Cell, renewal: Renewal, now: i64) -> Cell {
+        let (Ok(store), Ok(branch)) = (self.scope.kv.store(), self.scope.branch()) else { return cell };
+        if store.is_beside() {
+            return cell;
+        }
+        let request = forward::encode(&self.handle(), branch.owners(), key, &forward::Call::Renew(renewal));
+        let renewals = self.scope.kv.renewals();
+        if renewal.seen - now >= RENEW_AT_ONCE {
+            renewals.pass(self.scope.id, path, renewal, request);
+            return cell;
+        }
+        let renewed = crate::replication::pass_on(&store, forward::FILE, request.clone());
+        match renewed.and_then(|answer| forward::found(&answer)) {
+            Ok(true) => cell.expires = Some(renewal.until),
+            Ok(false) => {}
+            Err(_) => renewals.pass(self.scope.id, path, renewal, request),
+        }
+        cell
+    }
+
+    /// Renews `key` for a read on a copy, as this node's own reads do: with
+    /// the next flush, or at once when it has less than a minute left; says
+    /// whether it renewed it now. A node that holds a copy passes it on.
+    pub(crate) fn renew_as(&self, key: &str, renewal: Renewal) -> Result<bool> {
+        if self.is_copy() {
+            return forward::found(&self.pass_on(key, forward::Call::Renew(renewal))?);
+        }
+        let (id, path) = (self.scope.id, self.scope.path(key)?);
+        if renewal.seen - self.scope.now() >= RENEW_AT_ONCE {
+            self.scope.kv.renewals().ask(id, path, renewal);
+            return Ok(false);
+        }
+        self.scope.write(key, 0, move |tx: &Tx<'_>, _: &Revision| {
+            cells::renew(tx, id, &path, (renewal.version, renewal.seen), renewal.until)
+        })
     }
 
     /// The call as it crosses the link: an encrypted bucket's value sealed

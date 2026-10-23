@@ -135,8 +135,7 @@ impl Kv {
         let maintain = move || with(&weak, |kv| if kv.file.is_copy() { Ok(()) } else { kv.maintain().map(drop) });
         store.every(&format!("{tasks}: maintenance"), MAINTENANCE, maintain)?;
         let weak = Arc::downgrade(&kv);
-        let renew =
-            move || with(&weak, |kv| if kv.file.is_copy() { Ok(()) } else { kv.renewals.flush(&kv.file).map(drop) });
+        let renew = move || with(&weak, |kv| kv.flush_renewals().map(drop));
         store.every(&format!("{tasks}: renewals"), RENEWALS, renew)?;
         Ok(kv)
     }
@@ -208,6 +207,18 @@ impl Kv {
 
     pub(crate) fn renewals(&self) -> &Renewals {
         &self.renewals
+    }
+
+    /// Writes the renewals reads asked for, and says how many keys they
+    /// renewed; a copy passes them to its home, and says how many it passed.
+    fn flush_renewals(&self) -> Result<usize> {
+        match self.file.is_copy() {
+            false => self.renewals.flush(&self.file),
+            #[cfg(feature = "replication")]
+            true => self.renewals.pass_home(&self.store()?),
+            #[cfg(not(feature = "replication"))]
+            true => Ok(0),
+        }
     }
 
     pub(crate) fn runs(&self) -> &Runs {
