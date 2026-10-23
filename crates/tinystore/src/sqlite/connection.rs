@@ -238,6 +238,9 @@ mod tests {
     use super::*;
 
     fn broken(sql: &str) -> Error {
+        // as the adapter does before a connection of its own, so that this one
+        // does not start SQLite with other mutexes than the adapter's
+        super::super::give_mutexes();
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
