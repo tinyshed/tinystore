@@ -64,9 +64,12 @@ const HANDING_WOKEN: u8 = 2;
 struct Output<W> {
     writing: Mutex<Writing<W>>,
     ready: Notify,
-    /// The writer task took what the pipe owed: a reader that stopped while
-    /// the pipe was full looks again.
+    /// The writer task took what the pipe owed, or left: a reader that
+    /// stopped while the pipe was full looks again.
     drained: Notify,
+    /// The writer task left, its client gone: a reader that waits for it to
+    /// take what the pipe owes would wait for ever, so it reads no more.
+    gone: AtomicBool,
     handing: AtomicU8,
 }
 
@@ -82,7 +85,8 @@ struct Writing<W> {
 impl<W: AsyncWrite + Unpin> Output<W> {
     fn new(writer: W) -> Self {
         let writing = Mutex::new(Writing { writer, left: Vec::new(), unflushed: false });
-        Output { writing, ready: Notify::new(), drained: Notify::new(), handing: AtomicU8::new(IDLE) }
+        let (drained, gone) = (Notify::new(), AtomicBool::new(false));
+        Output { writing, ready: Notify::new(), drained, gone, handing: AtomicU8::new(IDLE) }
     }
 
     /// The pipe's wake, from whichever thread made the frames: one that
@@ -151,7 +155,7 @@ where
         pipe.go_away();
     }
     loop {
-        if pipe.finished() || (going_away && pipe.streams() == 0) {
+        if pipe.finished() || (going_away && pipe.streams() == 0) || output.gone.load(Ordering::Acquire) {
             return;
         }
         let full = pipe.full();
@@ -223,6 +227,8 @@ async fn write_frames<W: AsyncWrite + Unpin>(pipe: Arc<Pipe>, output: Arc<Output
     let mut writing = output.writing.lock().await;
     let _ = writing.writer.flush().await;
     let _ = writing.writer.shutdown().await;
+    output.gone.store(true, Ordering::Release);
+    output.drained.notify_one();
 }
 
 #[cfg(test)]
@@ -250,52 +256,12 @@ mod tests {
     // contract: WIRE-03
     #[test]
     fn a_client_that_sends_and_never_reads_is_read_no_further_than_the_pipes_bound() {
-        const HELLO: u8 = 1;
-        const WELCOME: u8 = 2;
-        const PING: u8 = 8;
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
-        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
-        runtime.block_on(async {
-            let (client, server) = tokio::io::duplex(64 << 10);
-            let (server_reads, server_writes) = tokio::io::split(server);
-            let (_closing, closed) = watch::channel(false);
-            let serving = {
-                let store = store.clone();
-                tokio::spawn(async move {
-                    super::serve(server_reads, server_writes, &store, Connect::default(), closed).await
-                })
-            };
-            let (mut from_server, mut to_server) = tokio::io::split(client);
-            to_server.write_all(&frame(HELLO, &[0x81, 0x01, 0x01])).await.unwrap();
-            let mut head = [0u8; 12];
-            from_server.read_exact(&mut head).await.unwrap();
-            assert_eq!(head[4], WELCOME);
-            let mut welcome = vec![0; usize::try_from(u32::from_le_bytes(head[..4].try_into().unwrap())).unwrap()];
-            from_server.read_exact(&mut welcome).await.unwrap();
-
-            let pings: Vec<u8> = (0..800_000).flat_map(|_| frame(PING, &[7; 8])).collect();
-            let total = pings.len();
-            let sent = Arc::new(AtomicUsize::new(0));
-            let sending = {
-                let sent = Arc::clone(&sent);
-                tokio::spawn(async move {
-                    for chunk in pings.chunks(64 << 10) {
-                        to_server.write_all(chunk).await.unwrap();
-                        sent.fetch_add(chunk.len(), Ordering::SeqCst);
-                    }
-                    to_server
-                })
-            };
-            let mut taken = 0;
-            loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                let now = sent.load(Ordering::SeqCst);
-                if now == taken {
-                    break;
-                }
-                taken = now;
-            }
+        runtime().block_on(async {
+            let (mut from_server, to_server, serving) = welcomed(&store).await;
+            let (sending, sent, total) = pinging(to_server);
+            let taken = sent_until_held(&sent).await;
             assert!(taken < total, "the server read all {total} bytes of a client that reads nothing");
             assert!(taken <= (8 << 20) + (1 << 20), "the server read {taken} bytes");
 
@@ -312,5 +278,84 @@ mod tests {
             serving.await.unwrap();
         });
         store.close().unwrap();
+    }
+
+    /// A client held at the pipe's bound that leaves: its connection ends,
+    /// though the server reads nothing of it while it waits to write.
+    #[test]
+    fn a_client_held_at_the_pipes_bound_that_leaves_ends_its_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        runtime().block_on(async {
+            let (from_server, to_server, serving) = welcomed(&store).await;
+            let (sending, sent, total) = pinging(to_server);
+            assert!(sent_until_held(&sent).await < total, "the server held the client");
+            sending.abort();
+            let _ = sending.await;
+            drop(from_server);
+            let ended = tokio::time::timeout(Duration::from_secs(10), serving).await;
+            assert!(ended.is_ok(), "the connection outlived its client");
+        });
+        store.close().unwrap();
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap()
+    }
+
+    type Reads = tokio::io::ReadHalf<tokio::io::DuplexStream>;
+    type Writes = tokio::io::WriteHalf<tokio::io::DuplexStream>;
+
+    /// A client of `store` served over bytes in memory, its HELLO welcomed.
+    async fn welcomed(store: &Store) -> (Reads, Writes, tokio::task::JoinHandle<()>) {
+        const HELLO: u8 = 1;
+        const WELCOME: u8 = 2;
+        let (client, server) = tokio::io::duplex(64 << 10);
+        let (server_reads, server_writes) = tokio::io::split(server);
+        let serving = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                let (_closing, closed) = watch::channel(false);
+                super::serve(server_reads, server_writes, &store, Connect::default(), closed).await;
+            })
+        };
+        let (mut from_server, mut to_server) = tokio::io::split(client);
+        to_server.write_all(&frame(HELLO, &[0x81, 0x01, 0x01])).await.unwrap();
+        let mut head = [0u8; 12];
+        from_server.read_exact(&mut head).await.unwrap();
+        assert_eq!(head[4], WELCOME);
+        let mut welcome = vec![0; usize::try_from(u32::from_le_bytes(head[..4].try_into().unwrap())).unwrap()];
+        from_server.read_exact(&mut welcome).await.unwrap();
+        (from_server, to_server, serving)
+    }
+
+    /// Sends PINGs, 16 MB of them, counting the bytes the server took.
+    fn pinging(mut to_server: Writes) -> (tokio::task::JoinHandle<Writes>, Arc<AtomicUsize>, usize) {
+        const PING: u8 = 8;
+        let pings: Vec<u8> = (0..800_000).flat_map(|_| frame(PING, &[7; 8])).collect();
+        let total = pings.len();
+        let sent = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&sent);
+        let sending = tokio::spawn(async move {
+            for chunk in pings.chunks(64 << 10) {
+                to_server.write_all(chunk).await.unwrap();
+                counting.fetch_add(chunk.len(), Ordering::SeqCst);
+            }
+            to_server
+        });
+        (sending, sent, total)
+    }
+
+    /// The bytes sent once they stop growing for half a second.
+    async fn sent_until_held(sent: &AtomicUsize) -> usize {
+        let mut taken = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let now = sent.load(Ordering::SeqCst);
+            if now == taken {
+                return taken;
+            }
+            taken = now;
+        }
     }
 }
