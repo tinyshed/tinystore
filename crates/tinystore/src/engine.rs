@@ -41,13 +41,6 @@ pub trait Engine: Send + Sync + 'static {
         let _ = file;
     }
 
-    /// The id of an encryption key that a value the engine keeps is sealed
-    /// with, if one is: the store makes no key in place of a lost one while a
-    /// value sealed with it remains.
-    fn sealed_with(&self) -> Result<Option<String>> {
-        Ok(None)
-    }
-
     /// Copies the engine's files into `into`, each at the path it has in the
     /// store's directory, as one moment of the engine while it keeps working.
     /// An engine whose file another lends copies nothing: the lender does.
@@ -91,10 +84,15 @@ pub(crate) fn in_batches(mut batch: impl FnMut() -> Result<usize>) -> Result<usi
     Ok(total)
 }
 
+/// The folder of the store's directory that holds the databases' files,
+/// and with them the buckets and queues opened from a database.
+#[cfg(any(feature = "kv", feature = "sql", feature = "replication"))]
+pub(crate) const DATABASES: &str = "sql";
+
 /// The file a database's name keeps, by its path in the store's directory.
 #[cfg(any(feature = "sql", feature = "replication"))]
 pub(crate) fn database_file(name: &str) -> String {
-    format!("sql/{name}.db")
+    format!("{DATABASES}/{name}.db")
 }
 
 #[cfg_attr(

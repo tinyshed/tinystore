@@ -54,6 +54,8 @@ pub(crate) use apply::{Applier, checkpoint_away};
 pub(crate) use capture::{Commit, Observe, Position, answering, commits_past, own_work, wal_end, wal_of};
 pub use config::Durability;
 pub(crate) use config::{CatchUp, Config, GroupLimits};
+#[cfg(feature = "kv")]
+pub(crate) use connection::read_file;
 pub(crate) use connection::{
     copy, execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
 };

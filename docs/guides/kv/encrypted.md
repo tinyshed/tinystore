@@ -79,10 +79,10 @@ stolen disk or a copied directory is the worry.
 The store never makes a new key in place of a lost one. If `encryption.key`
 is gone while buckets still hold values sealed with it, opening an encrypted
 bucket fails with an `io` error that names the missing key. This includes a
-new, empty bucket, when the buckets with sealed values are in the same file or
-in a database that the program has open. A new key would seal values that the
-old key cannot open once you put it back. Put the key back, and every bucket
-opens again.
+new, empty bucket, wherever the sealed values are: in `kv.db` or in any
+database of the store's directory, whether the program has opened it yet or
+not. A new key would seal values that the old key cannot open once you put it
+back. Put the key back, and every bucket opens again.
 
 > [!CAUTION]
 > **Lose the key and the values are gone**

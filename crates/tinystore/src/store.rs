@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
-use crate::encryption::{self, EncryptionKey};
+use crate::encryption::{self, EncryptionKey, SealedIn};
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::probe::Probe;
 use crate::schedule::Scheduler;
@@ -458,22 +458,23 @@ impl Store {
 
     /// The store's encryption key: the one in the file its options named, or
     /// in `encryption.key` of its directory, which the store makes when it is
-    /// not there and no engine open keeps a value sealed with a key. For a
-    /// bucket that holds nothing sealed yet.
+    /// not there and `sealed_in` finds no value of its directory sealed with
+    /// a key. For a bucket that holds nothing sealed yet.
     #[cfg(feature = "kv")]
-    pub(crate) fn encryption_key(&self) -> Result<Arc<EncryptionKey>> {
-        self.read_encryption_key(true)
+    pub(crate) fn encryption_key(&self, sealed_in: SealedIn) -> Result<Arc<EncryptionKey>> {
+        self.read_encryption_key(Some(sealed_in))
     }
 
     /// The store's encryption key, which is there already: a key lost is not
     /// replaced, since values sealed with it open with no other.
     #[cfg(feature = "kv")]
     pub(crate) fn encryption_key_there(&self) -> Result<Arc<EncryptionKey>> {
-        self.read_encryption_key(false)
+        self.read_encryption_key(None)
     }
 
+    /// The key, made only by a call that says how to find what is sealed.
     #[cfg(feature = "kv")]
-    fn read_encryption_key(&self, make: bool) -> Result<Arc<EncryptionKey>> {
+    fn read_encryption_key(&self, make: Option<SealedIn>) -> Result<Arc<EncryptionKey>> {
         self.refuse_when_closed("its encryption key")?;
         let mut kept = lock(&self.inner.encryption_key);
         if let Some(key) = &*kept {
@@ -482,35 +483,32 @@ impl Store {
         let own = self.inner.dir.join(encryption::FILE);
         // a store opened beside its holder never makes the key file: it reads
         // the key there, as any other file
-        let key = Arc::new(match &self.inner.encryption_key_file {
-            Some(file) => EncryptionKey::read(file)?,
-            None if make && !self.inner.beside => self.read_or_make_key(&own)?,
-            None => EncryptionKey::read(&own)?,
+        let key = Arc::new(match (&self.inner.encryption_key_file, make) {
+            (Some(file), _) => EncryptionKey::read(file)?,
+            (None, Some(sealed_in)) if !self.inner.beside => self.read_or_make_key(&own, sealed_in)?,
+            (None, _) => EncryptionKey::read(&own)?,
         });
         *kept = Some(Arc::clone(&key));
         Ok(key)
     }
 
-    /// The key of `own`, made when it is not there, unless an engine open
-    /// keeps a value sealed with a key: that key was lost, a backup left it
-    /// out or it was deleted, and a new one would seal what the lost one
-    /// cannot open once it is put back.
+    /// The key of `own`, made when it is not there, unless values of the
+    /// store's directory are sealed with a key, in a file open or not: that
+    /// key was lost, a backup left it out or it was deleted, and a new one
+    /// would seal what the lost one cannot open once it is put back.
     #[cfg(feature = "kv")]
-    fn read_or_make_key(&self, own: &Path) -> Result<EncryptionKey> {
-        if !own.exists() {
-            let engines = lock(&self.inner.engines).clone();
-            for engine in engines {
-                if let Some(id) = engine.sealed_with()? {
-                    return Err(Error::new(
-                        ErrorKind::Io,
-                        format!(
-                            "the encryption key {}: not there, and values sealed with the key {id} remain: \
-                             put the key back, since the store makes no other while they do",
-                            own.display()
-                        ),
-                    ));
-                }
-            }
+    fn read_or_make_key(&self, own: &Path, sealed_in: SealedIn) -> Result<EncryptionKey> {
+        if !own.exists()
+            && let Some(id) = sealed_in(&self.inner.dir)?
+        {
+            return Err(Error::new(
+                ErrorKind::Io,
+                format!(
+                    "the encryption key {}: not there, and values sealed with the key {id} remain: \
+                     put the key back, since the store makes no other while they do",
+                    own.display()
+                ),
+            ));
         }
         EncryptionKey::read_or_make(own)
     }

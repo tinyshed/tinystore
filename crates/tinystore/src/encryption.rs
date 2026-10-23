@@ -32,6 +32,10 @@ use crate::{Error, Result};
 /// The file a store makes its key in, in its directory.
 pub(crate) const FILE: &str = "encryption.key";
 
+/// What finds the id of a key that values in a store's directory are sealed
+/// with, which kv knows: the store makes no key while one is.
+pub(crate) type SealedIn = fn(&Path) -> Result<Option<String>>;
+
 const FORMAT: u8 = 1;
 const ID: usize = 4;
 const NONCE: usize = 24;

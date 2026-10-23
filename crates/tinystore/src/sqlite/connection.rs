@@ -203,6 +203,26 @@ pub(crate) fn read_copy<T>(path: &Path, read: impl FnOnce(&Connection) -> rusqli
     read(&connection).map_err(|error| sql_error(what(), error))
 }
 
+/// Reads the SQLite file at `path` once, through a connection of its own,
+/// whether a connection of the store's has it open or not: for what the
+/// store asks of a file no engine may have opened yet. The connection writes
+/// nothing, not even the checkpoint SQLite runs as the last one closes, which
+/// would move a node's frames into the file before its log holds them.
+#[cfg(feature = "kv")]
+pub(crate) fn read_file<T>(path: &Path, read: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T> {
+    let what = || format!("read {}", path.display());
+    super::give_mutexes();
+    let open = || -> rusqlite::Result<Connection> {
+        let connection = Connection::open_with_flags(path, flags(Role::Reader))?;
+        connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+        connection.busy_timeout(Config::default().busy_timeout)?;
+        connection.pragma_update(None, "query_only", true)?;
+        Ok(connection)
+    };
+    let connection = open().map_err(|error| sql_error(what(), error))?;
+    read(&connection).map_err(|error| sql_error(what(), error))
+}
+
 /// Runs a statement of the adapter's own that returns no rows, compiled once
 /// a connection.
 pub(crate) fn execute(connection: &Connection, sql: &str) -> rusqlite::Result<()> {

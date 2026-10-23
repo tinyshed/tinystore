@@ -180,12 +180,41 @@ fn a_key_lost_is_not_replaced_for_a_databases_bucket_while_kv_db_holds_values_se
     let key = f.dir.path().join("encryption.key");
     fs::remove_file(&key).unwrap();
 
+    // the database's bucket opens first, and nothing has opened kv.db
     let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
-    store.bucket::<String>("notes").open().unwrap();
     let db = store.database("app").open().unwrap();
     let lost = db.bucket::<String>("tokens").encrypted().open().unwrap_err();
     assert_eq!(lost.kind(), ErrorKind::Io, "{lost}");
+    assert!(lost.to_string().contains("put the key back"), "{lost}");
     assert!(!key.exists(), "no key was made for the database's bucket");
+}
+
+// contract: SEC-04
+#[test]
+#[cfg(feature = "sql")]
+fn a_key_lost_is_not_replaced_for_a_bucket_of_kv_db_while_a_database_holds_values_sealed_with_it() {
+    let f = fixture();
+    let db = f.store.database("app").open().unwrap();
+    db.bucket::<String>("secrets").encrypted().open().unwrap().set("s-1", &PASSWORD.to_owned()).unwrap();
+    drop(db);
+    f.store.close().unwrap();
+    let key = f.dir.path().join("encryption.key");
+    let kept = fs::read_to_string(&key).unwrap();
+    fs::remove_file(&key).unwrap();
+
+    // kv.db's buckets open first, as a program starts, and the database later
+    let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let lost = store.bucket::<String>("tokens").encrypted().open().unwrap_err();
+    assert_eq!(lost.kind(), ErrorKind::Io, "{lost}");
+    assert!(lost.to_string().contains("put the key back"), "{lost}");
+    assert!(!key.exists(), "no key was made for kv.db's bucket");
+    store.close().unwrap();
+
+    fs::write(&key, kept).unwrap();
+    let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    store.bucket::<String>("tokens").encrypted().open().unwrap();
+    let secrets = store.database("app").open().unwrap().bucket::<String>("secrets").encrypted().open().unwrap();
+    assert_eq!(secrets.get("s-1").unwrap().as_deref(), Some(PASSWORD), "put back, the one key opens both files");
 }
 
 #[test]

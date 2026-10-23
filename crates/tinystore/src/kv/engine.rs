@@ -193,12 +193,12 @@ impl Kv {
     /// The store's encryption key, for a bucket whose values are sealed with
     /// the key of the id `kept`, or with none yet. A bucket that has a key
     /// takes no new one: the store makes a key only for a bucket that holds
-    /// nothing sealed, while no bucket open elsewhere does, so that a key lost
-    /// is never replaced unseen.
+    /// nothing sealed, while no bucket of its directory does, open or not, so
+    /// that a key lost is never replaced unseen.
     pub(crate) fn encryption_key(&self, kept: Option<&str>) -> Result<Arc<EncryptionKey>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: its store", self.place())))?;
         match kept {
-            None => store.encryption_key(),
+            None => store.encryption_key(super::encrypted::sealed_in),
             Some(kept) => store.encryption_key_there().map_err(|error| {
                 error.within(format!("its values are encrypted with the key {kept}, and the store makes no other"))
             }),
@@ -404,10 +404,6 @@ impl Engine for Kv {
         let flushed = self.flush_buffers();
         let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
         renewed.and(flushed).and(closed)
-    }
-
-    fn sealed_with(&self) -> Result<Option<String>> {
-        self.file.read(cells::a_bucket_key)
     }
 
     /// Writes what memory holds, so that the copy has every counter and

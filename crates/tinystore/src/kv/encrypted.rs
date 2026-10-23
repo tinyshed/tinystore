@@ -13,8 +13,9 @@
 //!
 //! A bucket keeps the id of the key its values are sealed with, from its
 //! first write until it is cleared whole. So a key lost is never replaced
-//! unseen, while any bucket open in the store keeps a value it sealed, and no
-//! value is written under another key among those it could not open:
+//! unseen while any bucket keeps a value it sealed, in kv.db or in a
+//! database's file, opened by the program or not; and no value is written
+//! under another key among those it could not open:
 //!
 //! | The bucket's key | The store's key            | Opening the bucket    | A read    | A write   |
 //! |------------------|----------------------------|-----------------------|-----------|-----------|
@@ -24,6 +25,9 @@
 //! | `3fa9…`          | lost                       | `Io`: no key is made  |           |           |
 //! | `3fa9…`          | `81c2…`                    | opens, to be cleared  | `Invalid` | `Invalid` |
 
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::Connection;
@@ -114,6 +118,41 @@ impl Encrypted {
     fn at(&self, path: &[u8]) -> Vec<u8> {
         [&self.place[..], path].concat()
     }
+}
+
+/// The id of a key that values of a bucket in the store's directory `dir`
+/// are sealed with, if one is: in kv.db or in a database's file, whether a
+/// handle opened it or not, since a program opens its buckets in any order.
+/// A backup asks its snapshot the same.
+pub(crate) fn sealed_in(dir: &Path) -> Result<Option<String>> {
+    for file in files_of_buckets(dir)? {
+        if let Some(id) = crate::sqlite::read_file(&file, cells::a_bucket_key)? {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
+/// kv.db and each database's file that `dir` holds: every file a bucket
+/// may live in.
+fn files_of_buckets(dir: &Path) -> Result<Vec<PathBuf>> {
+    let databases = dir.join(crate::engine::DATABASES);
+    let failed = |error: io::Error| Error::io(format!("the databases of {}", dir.display()), error);
+    let mut files = vec![dir.join(super::engine::FILE)];
+    match fs::read_dir(&databases) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry.map_err(failed)?.path();
+                if path.extension().is_some_and(|extension| extension == "db") {
+                    files.push(path);
+                }
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(failed(error)),
+    }
+    files.retain(|file| file.is_file());
+    Ok(files)
 }
 
 #[cfg(test)]
