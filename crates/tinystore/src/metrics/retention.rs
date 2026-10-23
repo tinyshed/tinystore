@@ -49,7 +49,6 @@ const SAVEPOINT: &str = "savepoint metrics_expiry";
 const RELEASE: &str = "release metrics_expiry";
 const ROLLBACK_TO: &str = "rollback to metrics_expiry";
 const SUSPEND: &str = "update series_state set failed_at = ?2, failure = ?3 where series_id = ?1 and failed_at is null";
-const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
 const SAVE_STATE: &str = "update series_state set version = version + 1, ready = ?2,
     head_count = ?3, head_start = ?4, head_end = ?5 where series_id = ?1";
@@ -148,12 +147,7 @@ fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
     let points = &points[kept_from..];
     if kept_from > 0 {
         let extent = Extent::of(points);
-        let encoded = head::encode(zstd, due.id, &[], points)?;
-        if encoded.is_empty() {
-            execute(tx, DROP_HEAD, params![due.id], "remove a head")?;
-        } else {
-            execute(tx, SAVE_HEAD, params![due.id, encoded], "write a head")?;
-        }
+        publish::shrink_head(tx, due.id, head::encode(zstd, due.id, &[], points)?)?;
         let saved = params![due.id, ready(extent, max_seen), extent.count as i64, first_of(&extent), last_of(&extent)];
         execute(tx, SAVE_STATE, saved, "write a series' state")?;
     }

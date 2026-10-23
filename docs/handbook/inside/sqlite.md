@@ -109,6 +109,12 @@ fills its free pages again before then, so a live file does not shrink and
 grow every minute. A stream that stopped, or a shorter `keep`, starts giving
 its pages back ten to twenty minutes later, 4 MiB a minute.
 
+SQLite merges a page that is less than a third full only when a row is
+deleted from it, not when a row on it is rewritten smaller. So when packing
+or expiry shrinks a metric's head, the engine deletes the row and inserts it
+again. Otherwise the heads would keep the pages they grew into during a bulk
+load, which held thousands of samples per series before the first pass.
+
 A file written by TinyStore 0.1.0 was made without the setting, and only a
 `vacuum` of the whole file can add it. A vacuum holds the file's writer while
 it rewrites the file. Maintenance vacuums such a file once, while it holds at

@@ -42,8 +42,17 @@ const INSERT_GROUP: &str =
     "insert into groups (series_id, start_ts, end_ts, clock, directory) values (?1, ?2, ?3, ?4, ?5)";
 const HEAD: &str = "select st.max_seen, st.head_count, st.head_start, st.head_end, h.body
     from series_state st left join heads h on h.series_id = st.series_id where st.series_id = ?1";
-const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
+const INSERT_HEAD: &str = "insert into heads (series_id, body) values (?1, ?2)";
+#[cfg(test)]
+const SAVE_HEAD: &str = "update heads set body = ?2 where series_id = ?1";
+
+#[cfg(test)]
+thread_local! {
+    /// A head packing or expiry shrank is rewritten in place on this thread,
+    /// as 0.1.0 did, for the measurement that compares the two.
+    pub(super) static IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 const SEAL: &str = "update series_state set sealed_before = ?2, version = version + 1, ready = ?3, scale = ?4,
     head_count = ?5, head_start = ?6, head_end = ?7, due = ?8 where series_id = ?1";
 pub(super) const SUSPEND: &str =
@@ -222,12 +231,7 @@ fn seal(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
         head::decode(zstd, &head::parse(candidate.id, extent, bytes)?, i64::MIN, i64::MAX, &mut points)?;
     }
     let left = without(&points, &candidate.points)?;
-    let encoded = head::encode(zstd, candidate.id, &[], &left)?;
-    if encoded.is_empty() {
-        execute(tx, DROP_HEAD, params![candidate.id], "remove a head")?;
-    } else {
-        execute(tx, SAVE_HEAD, params![candidate.id, encoded], "write a head")?;
-    }
+    shrink_head(tx, candidate.id, head::encode(zstd, candidate.id, &[], &left)?)?;
     let extent = Extent::of(&left);
     let sealed_before = series.group.end.saturating_add(1);
     let due =
@@ -244,6 +248,25 @@ fn seal(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
         due
     ];
     execute(tx, SEAL, sealed, "move what a series has sealed").map(drop)
+}
+
+/// Writes a head that packing or expiry left smaller, `encoded`, or removes
+/// it when it holds nothing: out and in again rather than in place. SQLite
+/// merges a page left less than a third full only when a row leaves it, so
+/// heads rewritten smaller in place keep the pages of their largest for
+/// good: after the bulk load of `what_a_bulk_load_leaves_in_its_file`,
+/// 2.1 MiB of pages held 0.2 MiB of heads, and 0.2 MiB once they went out
+/// and in.
+pub(super) fn shrink_head(tx: &Tx<'_>, series: i64, encoded: Vec<u8>) -> Result<()> {
+    #[cfg(test)]
+    if IN_PLACE.get() && !encoded.is_empty() {
+        return execute(tx, SAVE_HEAD, params![series, encoded], "write a head").map(drop);
+    }
+    execute(tx, DROP_HEAD, params![series], "remove a head")?;
+    if encoded.is_empty() {
+        return Ok(());
+    }
+    execute(tx, INSERT_HEAD, params![series, encoded], "write a head").map(drop)
 }
 
 type HeadRow = (i64, Extent, Option<Vec<u8>>);

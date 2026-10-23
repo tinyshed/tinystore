@@ -91,6 +91,28 @@ fn the_pass_after_an_expiry_gives_the_pages_it_left_back_and_every_read_stays() 
     assert_eq!(bits(&read[0]).len(), 2000);
 }
 
+fn heads_pages(f: &crate::metrics::fixture::Fixture) -> u64 {
+    let division = Division::of(&f.engine().file);
+    division.trees.iter().find(|tree| tree.name == "heads").map_or(0, |tree| tree.pages)
+}
+
+#[test]
+fn heads_a_bulk_load_grew_leave_their_pages_once_packed() {
+    let f = fixture();
+    // samples written after the fact, before any pass: each head holds its series' two thousand
+    let series = |host: u32| f.gauge("cpu", 2000, 10 * SECOND, |n| ((n * 7919 + host as usize) % 101) as f64);
+    for hosts in (0..45).collect::<Vec<u32>>().chunks(5) {
+        f.metrics().ingest(&hosts.iter().map(|&host| series(host).label("host", host)).collect::<Vec<_>>()).unwrap();
+    }
+    let grown = heads_pages(&f);
+    let read = f.metrics().query().name("cpu").since(DAY).read().unwrap();
+    maintain(&f.store).unwrap();
+    let packed = heads_pages(&f);
+    assert!(packed * 4 < grown, "the heads' pages: {grown} grown, {packed} packed");
+    let again = f.metrics().query().name("cpu").since(DAY).read().unwrap();
+    assert_eq!(again.iter().map(bits).collect::<Vec<_>>(), read.iter().map(bits).collect::<Vec<_>>());
+}
+
 /// A store of the measurement below: how its metrics.db was made and how
 /// its passes run, and what they cost.
 struct Way {
@@ -138,11 +160,18 @@ impl Way {
     }
 }
 
-/// v0.1.0's passes, until one leaves no work: expiry and packing alone.
+/// v0.1.0's passes, until one leaves no work: expiry and packing alone, the
+/// heads they shrink rewritten in place.
 fn passes_of_0_1_0(store: &Store) -> crate::Result<()> {
     let engine = Engine::of(store)?;
-    while engine.expire_and_pack()?.1 {}
-    Ok(())
+    let passes = || -> crate::Result<()> {
+        while engine.expire_and_pack()?.1 {}
+        Ok(())
+    };
+    crate::metrics::publish::IN_PLACE.set(true);
+    let passed = passes();
+    crate::metrics::publish::IN_PLACE.set(false);
+    passed
 }
 
 fn passes_of_now(store: &Store) -> crate::Result<()> {
@@ -247,6 +276,54 @@ fn what_a_bulk_load_leaves_in_its_file() {
     let stopped = |way: &Way| way.division().print(&format!("{} — half an hour of passes after", way.name), 10);
     ways.iter().for_each(stopped);
     ways.iter().zip(live).for_each(|(way, live)| print_costs(way, live, f64::from(ticks) * 2020.0));
+}
+
+/// The packing of what a bulk load grew, timed: 600 of the load's gauges,
+/// seven hours of them ingested sixteen ticks a call into a fresh store,
+/// then its passes until none is left to pack, its shrunk heads rewritten in
+/// place or out and in.
+fn pack_of_a_bulk_load(made_before: bool, in_place: bool) -> Duration {
+    let start = std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let clock = Arc::new(TestClock::new(start + 10 * SECOND * 2520));
+    let way = Way::open("", made_before, passes_of_now, &clock);
+    let (mut walks, mut draws) = (vec![50_u64; 600], 0x9e37_79b9_7f4a_7c15_u64);
+    for first in (0..2520).step_by(16) {
+        let series: Vec<Series> =
+            (first..first + 16).flat_map(|at| tick(&mut walks, &mut draws, start + 10 * SECOND * at)).collect();
+        way.store.metrics().unwrap().ingest(&series).unwrap();
+    }
+    let engine = Engine::of(&way.store).unwrap();
+    crate::metrics::publish::IN_PLACE.set(in_place);
+    let started = Instant::now();
+    while engine.expire_and_pack().unwrap().1 {}
+    let took = started.elapsed();
+    crate::metrics::publish::IN_PLACE.set(false);
+    took
+}
+
+/// What packing the heads a bulk load grew costs, its shrunk heads rewritten
+/// in place against out and in, on a file 0.1.0 made and on one made now:
+/// `TINYSTORE_ROUNDS` rounds, 5 unless it says, of a fresh store each way,
+/// the ways in turns. Run by hand with `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn what_packing_grown_heads_costs() {
+    let rounds: usize = std::env::var("TINYSTORE_ROUNDS").ok().and_then(|rounds| rounds.parse().ok()).unwrap_or(5);
+    let ways =
+        [("0.1.0's file, in place", true, true), ("0.1.0's file, out and in", true, false), ("now", false, false)];
+    let mut took = vec![Vec::new(); ways.len()];
+    for round in 0..rounds {
+        for turn in 0..ways.len() {
+            let index = (round + turn) % ways.len();
+            let (_, made_before, in_place) = ways[index];
+            took[index].push(pack_of_a_bulk_load(made_before, in_place));
+        }
+    }
+    for ((name, ..), took) in ways.iter().zip(&mut took) {
+        took.sort();
+        let (median, fastest, slowest) = (took[took.len() / 2], took[0], took[took.len() - 1]);
+        println!("{name}: packing {median:?} at the median of {rounds}, {fastest:?} to {slowest:?}");
+    }
 }
 
 /// What a way cost: its ingests, its passes, the bytes it wrote under the
