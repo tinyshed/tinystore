@@ -739,5 +739,49 @@ for (const way of ways) {
 			await worker.stop()
 			expect(seen).toEqual(['w1'])
 		})
+
+		// contract: JOB-02
+		test("a batch writes its statements and a queue's adds together, or none of them", async () => {
+			const indexing = app.queue<{ note: string }>('indexing')
+			const insert = (id: string) =>
+				sql`insert into notes (id, author_id, title) values (${id}, 13, 'a')`
+			const done = await app.batch([
+				insert('j1'),
+				indexing.adding({ note: 'j1' }, { id: 'j1' }),
+				indexing.adding({ note: 'again' }, { id: 'j1' }),
+			])
+			expect(done.map(each => each.changes)).toEqual([1, 1, 0])
+			expect((await indexing.get('j1'))?.value).toEqual({ note: 'j1' })
+
+			const taken = await caught(
+				app.batch([indexing.adding({ note: 'j2' }, { id: 'j2' }), insert('j1')]),
+			)
+			expect(taken).toBeInstanceOf(ConflictError)
+			expect(await indexing.get('j2')).toBeUndefined()
+
+			const inJobs = store.queue<{ note: string }>('indexing')
+			const elsewhere = await caught(app.batch([insert('j3'), inJobs.adding({ note: 'j3' })]))
+			expect(elsewhere).toBeInstanceOf(InvalidError)
+			expect((elsewhere as Error).message).toContain(
+				'kept in jobs.db, outside this batch of sql app',
+			)
+			expect(await app.scalar<number>`select count(*) from notes where author_id = 13`).toBe(1)
+		})
+
+		// contract: JOB-02
+		test('a worker runs a job its batch added, once the batch commits', async () => {
+			const sent = app.queue<{ note: string }>('batched')
+			const seen: string[] = []
+			const worker = sent.work(async email => {
+				seen.push(email.note)
+			})
+			await app.batch([
+				sql`insert into notes (id, author_id, title) values ('w2', 14, 'a')`,
+				sent.adding({ note: 'w2' }),
+			])
+			await until(() => seen.length === 1)
+			await worker.stop()
+			expect(seen).toEqual(['w2'])
+		})
 	})
 }

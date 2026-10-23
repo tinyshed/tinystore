@@ -54,12 +54,57 @@ db.tx(|tx| -> tinystore::Result<()> {
 })?;
 ```
 
+## Add a job in a batch
+
+When the job does not depend on what a read finds, add it in a batch instead
+of a transaction. The queue's `adding` gives a job that `db.batch` writes with
+its statements, in the same shared commit as other writes:
+
+```ts
+await db.batch([
+	sql`update notes set body = ${body} where id = ${noteId}`,
+	indexing.adding({ noteId }), // commits with the row, or not at all
+])
+```
+
+```python
+await db.batch([
+    sql("update notes set body = ? where id = ?", body, note_id),
+    indexing.adding(Index(note_id=note_id)),  # commits with the row, or not at all
+])
+```
+
+```go
+err = db.Batch(ctx,
+	sqldb.SQL(`update notes set body = ? where id = ?`, body, noteID),
+	indexing.Adding(Index{NoteID: noteID}), // commits with the row, or not at all
+)
+```
+
+```rust
+db.batch([
+    sql!("update notes set body = ? where id = ?", body, note_id).into(),
+    indexing.adding(&Index { note_id }), // commits with the row, or not at all
+])?;
+```
+
+`adding` accepts the same options as `add`. If its id is taken, the job is
+not added, and its entry in the batch's answer has `changes` set to 0.
+
+A transaction holds the writer and pays for its own sync, so `db.tx` with
+`tx.with(queue)` costs one sync per call and never groups with other writes.
+Two separate commits, the row and then a job in `jobs.db`, do group, but a
+crash between them keeps the row and loses the job. A batch is atomic and
+still shares its commit. See [Writes and
+transactions](../sql/writes.md#a-row-and-its-job-in-one-batch).
+
 ## How it behaves
 
-- A job added in a transaction commits with its rows, or not at all, and a
-  worker never sees it before the commit (contract JOB-02).
-- A transaction takes a queue's `add`, `set`, `update`, `cancel` and `get`;
-  `work`, `runDue`, `watch` and pages work outside it.
+- A job added in a transaction or a batch commits with its rows, or not at
+  all, and a worker never sees it before the commit (contract JOB-02).
+- A transaction takes a queue's `add`, `set`, `update`, `cancel` and `get`,
+  and a batch takes its `adding`. `work`, `runDue`, `watch` and pages work
+  outside them.
 - The queue's handle and its calls are the same as a queue of the store. What
   differs is where its jobs live, and that they share the database's writer.
 - The engine keeps its tables under names that start with `_tinystore_`,

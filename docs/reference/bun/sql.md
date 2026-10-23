@@ -264,10 +264,15 @@ first call; open each once, in the module that owns it.
 ### Database.batch
 
 ```ts
-batch(statements: readonly Sql[]): Promise<Done[]>
+batch(writes: readonly (Sql | Adding)[]): Promise<Done[]>
 ```
 
-Statements known before they run, written as one: all of them or none, in a shared commit.
+Writes known before they run, written as one: all of them or none, in a
+shared commit, and what each did, in their order. A write is a statement,
+or a job's add of a queue opened from the database, `queue.adding`, which
+commits with the rows and changed 1 job, or 0 when its id was taken.
+
+    await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
 
 ### Database.tx
 

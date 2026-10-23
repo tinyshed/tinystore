@@ -44,7 +44,7 @@ from ._wire.protocol import (
 )
 from .channels import Channel, TxChannel
 from .errors import InvalidError, error_of
-from .jobs import Backoff, Concurrency, Job, Queue, QueueOptions, open_queue
+from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
 from .search import Fields, Hybrid, TableIndex, Vectors, drop_index, index_open
 
@@ -877,17 +877,29 @@ class Database:
         """Runs a write once it is durable; writes from many callers share a commit, each failing alone."""
         return await self.exec_piece(statement_of(statement, values))
 
-    async def batch(self, statements: Sequence[Sql]) -> list[Done]:
-        """Statements known before they run, written as one: all of them or none, in a shared commit."""
-        texts: list[dict[str, Any]] = []
-        for each in statements:
-            if not isinstance(each, Sql):  # pyright: ignore[reportUnnecessaryIsInstance]
-                raise InvalidError('a batch takes pieces of SQL: sql("...", ...)')
-            texts.append({"text": each.text, "values": list(each.values)})
+    async def batch(self, writes: Sequence[Sql | Adding]) -> list[Done]:
+        """Writes known before they run, written as one: all of them or none, in a shared commit.
+
+        A write is a statement, or a job's add of a queue opened from the
+        database, ``queue.adding``, which commits with the rows and changed 1
+        job, or 0 when its id was taken. The answer says what each did, in
+        their order.
+
+            await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
+        """
+        parts: list[dict[str, Any] | Callable[[Connection], Awaitable[dict[str, Any]]]] = []
+        for each in writes:
+            if isinstance(each, Sql):
+                parts.append({"text": each.text, "values": list(each.values)})
+            elif isinstance(each, Adding):  # pyright: ignore[reportUnnecessaryIsInstance]
+                parts.append(adding_in(each, self))
+            else:
+                raise InvalidError("a batch takes pieces of SQL, sql(...), and a queue's adding")
         self.refuse_around("a batch")
 
         async def attempt(connection: Connection) -> bytes:
-            body = SqlBatch.encode(handle=await self.handle(connection), statements=texts)
+            statements = [await part(connection) if callable(part) else part for part in parts]
+            body = SqlBatch.encode(handle=await self.handle(connection), statements=statements)
             return await connection.session.call(methods["sql.batch"], body)
 
         answered = await self._link.run("write", attempt)

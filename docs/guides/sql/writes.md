@@ -2,15 +2,16 @@
 
 A database has three ways to write, and they cost different things. `exec`
 runs one statement and shares its commit with whatever else arrives at the
-same moment. `batch` runs a list of statements known in advance as one, in
-the same shared commit. `tx` runs your function while it holds the writer
-alone, for writes that depend on what it reads.
+same moment. `batch` runs a list of writes known in advance as one, in the
+same shared commit. A batch takes statements, and jobs for a queue that the
+database keeps. `tx` runs your function while it holds the writer alone, for
+writes that depend on what it reads.
 
-| Call    | Use it for                             | Commit                      | Fails                |
-|---------|----------------------------------------|-----------------------------|----------------------|
-| `exec`  | one statement                          | shared with other writes    | alone                |
-| `batch` | statements known before they run       | shared, all of them or none | all of them together |
-| `tx`    | writes that depend on what reads found | its own                     | all of them together |
+| Call    | Use it for                                | Commit                      | Fails                |
+|---------|-------------------------------------------|-----------------------------|----------------------|
+| `exec`  | one statement                             | shared with other writes    | alone                |
+| `batch` | statements and jobs known before they run | shared, all of them or none | all of them together |
+| `tx`    | writes that depend on what reads found    | its own                     | all of them together |
 
 ## One statement
 
@@ -121,6 +122,71 @@ All three statements are written, or none. A batch is one savepoint of the
 next shared commit, so it costs what one write does. Prefer it to a
 transaction whenever the statements do not depend on a read: a `check
 (balance >= 0)` on the table refuses an overdraft without one.
+
+## A row and its job in one batch
+
+A queue that you open from the database, `db.queue(…)`, keeps its jobs in the
+database's file. Its `adding` gives a job that a batch writes together with
+its statements:
+
+```ts
+const indexing = db.queue<{ noteId: number }>('indexing')
+
+await db.batch([
+	sql`update notes set body = ${body} where id = ${noteId}`,
+	indexing.adding({ noteId }), // written with the row, or not at all
+])
+```
+
+```python
+indexing = db.queue("indexing", Index)
+
+await db.batch([
+    sql("update notes set body = ? where id = ?", body, note_id),
+    indexing.adding(Index(note_id=note_id)),  # written with the row, or not at all
+])
+```
+
+```go
+indexing, err := jobs.OpenQueue[Index](db, "indexing")
+
+err = db.Batch(ctx,
+	sqldb.SQL(`update notes set body = ? where id = ?`, body, noteID),
+	indexing.Adding(Index{NoteID: noteID}), // written with the row, or not at all
+)
+```
+
+```rust
+let indexing = db.queue::<Index>("indexing").open()?;
+
+db.batch([
+    sql!("update notes set body = ? where id = ?", body, note_id).into(),
+    indexing.adding(&Index { note_id }), // written with the row, or not at all
+])?;
+```
+
+- The row and the job are both written, or neither, and a worker sees the
+  job only after the commit (contract JOB-02).
+- `adding` accepts the same options as `add`: an id, a time, a group. If the
+  id is taken, the job is not added, and its entry in the batch's answer has
+  `changes` set to 0 instead of 1.
+- A queue of the store, `store.queue(…)`, lives in `jobs.db`. A batch of the
+  database refuses its jobs with an invalid error, because no write is atomic
+  across two files.
+
+Pick the write by what it costs:
+
+| Write                                      | Atomic | Shares its commit with other writes |
+|--------------------------------------------|--------|-------------------------------------|
+| `exec`, then `add` on a queue of the store | no     | yes                                 |
+| `tx` with `tx.with(queue).add`             | yes    | no                                  |
+| `batch` with `queue.adding`                | yes    | yes                                 |
+
+A transaction holds the writer and pays for its own sync. So `db.tx` with
+`tx.with(queue)` costs one sync per call, and it never groups with other
+writes. Two separate commits do group, but a crash between them keeps the row
+and loses the job. Use a batch when the job does not depend on what a read
+finds.
 
 ## A transaction
 

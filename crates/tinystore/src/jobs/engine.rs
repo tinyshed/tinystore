@@ -128,6 +128,13 @@ impl Jobs {
         &self.file
     }
 
+    /// The file itself, which a batch of the engine that lends it holds a
+    /// queue's write to.
+    #[cfg(feature = "sql")]
+    pub(crate) fn shared_file(&self) -> &Arc<File> {
+        &self.file
+    }
+
     /// The file as an error names it: `jobs.db`, or `sql app`.
     pub(crate) fn place(&self) -> &str {
         self.lent_by.as_deref().unwrap_or(FILE)

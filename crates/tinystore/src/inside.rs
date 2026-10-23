@@ -1,8 +1,8 @@
 //! kv, jobs and search inside an application's database: a bucket or a queue
 //! opened from a database lives in its file, beside its tables, and commits
-//! with its rows in `db.tx`; a table's index follows a table, changed in the
-//! commit that changes a row. This is the one place two engines meet, so
-//! that neither imports the other.
+//! with its rows in `db.tx`, and a queue's job in `db.batch` too; a table's
+//! index follows a table, changed in the commit that changes a row. This is
+//! the one place two engines meet, so that neither imports the other.
 
 #[cfg(feature = "jobs")]
 use serde::Serialize;
@@ -34,6 +34,51 @@ impl Database {
         V: Serialize + DeserializeOwned + Send + 'static,
     {
         crate::jobs::QueueBuilder::in_file(std::sync::Arc::clone(self.shared()), name)
+    }
+}
+
+#[cfg(feature = "jobs")]
+impl<V> crate::jobs::Queue<V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+{
+    /// A job's add for a batch of the database the queue was opened from:
+    /// in [`Database::batch`] it commits with the batch's rows or not at
+    /// all, and shares the commit with every other write of the file, where
+    /// [`Database::tx`] holds the writer and pays a sync of its own. It adds
+    /// as [`add`](crate::jobs::Queue::add) does, unless its id is taken; a
+    /// queue kept in another file fails the batch, `Invalid`.
+    ///
+    /// ```no_run
+    /// # #[derive(serde::Serialize, serde::Deserialize)]
+    /// # struct Index { note: i64 }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// # let note = 7;
+    /// let db = store.database("app").open()?;
+    /// let indexing = db.queue::<Index>("indexing").open()?;
+    /// db.batch([
+    ///     tinystore::sql!("update notes set version = version + 1 where id = ?", note).into(),
+    ///     indexing.adding(&Index { note }),
+    /// ])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn adding(&self, value: &V) -> crate::sql::Write {
+        crate::jobs::JobCall::new(self, None).adding(value)
+    }
+}
+
+#[cfg(feature = "jobs")]
+impl<V> crate::jobs::JobCall<'_, V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+{
+    /// The job's add for a batch of the database the queue was opened from,
+    /// with what the call asks beside its value; see
+    /// [`Queue::adding`](crate::jobs::Queue::adding).
+    pub fn adding(self, value: &V) -> crate::sql::Write {
+        crate::sql::Write::lent(self.lent(crate::jobs::Change::Add, value))
     }
 }
 

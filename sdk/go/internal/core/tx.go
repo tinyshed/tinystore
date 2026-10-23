@@ -48,6 +48,21 @@ type JobOp struct {
 	ID     string
 }
 
+// Lent is a write of another engine that a database's batch carries: a
+// queue's add, for a queue kept in the database's file. Body writes its
+// request once the queue's handle is open on the batch's connection.
+type Lent struct {
+	// Home is the database whose file keeps the handle; nil for the store's own files.
+	Home Database
+	// What names the handle as an error says it: "jobs queue indexing".
+	What   string
+	Opener *Opener
+	Method uint16
+	Body   func(handle uint64) []byte
+	// Err is why the write could not be made, which fails its batch.
+	Err error
+}
+
 // StoreTx is the store's transaction while its function runs.
 type StoreTx struct {
 	store   *Store

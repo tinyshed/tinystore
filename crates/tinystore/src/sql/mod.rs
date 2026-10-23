@@ -21,6 +21,7 @@
 //! docs/guides/sql/README.md is the guide: the TypeScript, Python and Go spellings, and
 //! why each call is as it is.
 
+mod batch;
 #[cfg(feature = "wire")]
 mod columns;
 mod database;
@@ -37,6 +38,7 @@ mod statement;
 mod tx;
 mod values;
 
+pub use batch::Write;
 pub use database::{Database, DatabaseBuilder, Done};
 pub use migrations::Migrations;
 pub use pieces::{and, eq, has, ident, is_in, json, list, or, value};

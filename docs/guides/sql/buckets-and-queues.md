@@ -86,6 +86,11 @@ all, and what it reads sees what the transaction wrote. A worker never sees a
 job before its commit (contract JOB-02), and a subscriber never receives a
 message of a transaction that rolled back.
 
+A job that does not depend on a read can go in a batch instead, with the
+queue's `adding`. A batch shares its commit with other writes, and a
+transaction does not. See [A row and its job in one
+batch](writes.md#a-row-and-its-job-in-one-batch).
+
 A bucket or a queue of the store, `store.bucket(…)`, lives in `kv.db` or
 `jobs.db`, another file with another writer, so it cannot join a database's
 transaction. Open it from the database instead.

@@ -85,6 +85,13 @@ impl QueueState {
         QueueState::described(self.lent_by.as_deref(), self.kind, &self.name)
     }
 
+    /// The queue without the file that keeps it, for an error of that file's
+    /// own, which names the file first: `jobs queue emails`.
+    #[cfg(feature = "sql")]
+    pub(crate) fn describe_alone(&self) -> String {
+        QueueState::described(None, self.kind, &self.name)
+    }
+
     /// A queue as an error names it: `jobs queue emails`, or `sql app: jobs
     /// queue emails` for one kept in a database's file.
     pub(crate) fn described(lent_by: Option<&str>, kind: Kind, name: &str) -> String {

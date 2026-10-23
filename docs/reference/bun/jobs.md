@@ -285,6 +285,21 @@ is always added.
 
     await reminders.add({ userId: 42, text: 'Call mom' }, { delay: '1h' })
 
+### Queue.adding
+
+```ts
+adding(value: T, options?: AddOptions): Adding
+```
+
+A job's add for a batch of the database the queue was opened from:
+`db.batch` writes it with the batch's statements, so the job commits
+with the rows or not at all, and shares the commit with every other
+write of the file, where `db.tx` holds the writer and pays a sync of
+its own. It adds as `add` does, unless its id is taken: its `Done` in
+the batch's answer changed 1 job, or 0.
+
+    await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
+
 ### Queue.set
 
 ```ts
@@ -426,6 +441,14 @@ get(id: string): Promise<Job<T> | undefined>
 ```
 
 The job under id as the transaction sees it, its own writes among it.
+
+## Adding
+
+```ts
+class Adding {}
+```
+
+A job's add that a database's batch carries, from `queue.adding`: it commits with the batch's statements, or not at all.
 
 ## StoreTxQueue
 

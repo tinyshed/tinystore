@@ -37,6 +37,16 @@ pub struct JobCall<'a, V> { /* private fields */ }
 A call on one job with what it asks beside its value, run by its last
 step: `later.id(&key).at(nine_am).add(&draft)`.
 
+### JobCall.adding
+
+```rust
+pub fn adding(self, value: &V) -> Write
+```
+
+The job's add for a batch of the database the queue was opened from,
+with what the call asks beside its value; see
+[`Queue::adding`](crate::jobs::Queue::adding).
+
 ### JobCall.id
 
 ```rust
@@ -209,6 +219,28 @@ pub struct Queue<V> { /* private fields */ }
 
 Jobs of one type in the order of their time. A handle is cheap to clone
 and to keep.
+
+### Queue.adding
+
+```rust
+pub fn adding(&self, value: &V) -> Write
+```
+
+A job's add for a batch of the database the queue was opened from:
+in `Database::batch` it commits with the batch's rows or not at
+all, and shares the commit with every other write of the file, where
+`Database::tx` holds the writer and pays a sync of its own. It adds
+as [`add`](crate::jobs::Queue::add) does, unless its id is taken; a
+queue kept in another file fails the batch, `Invalid`.
+
+```rust
+let db = store.database("app").open()?;
+let indexing = db.queue::<Index>("indexing").open()?;
+db.batch([
+    tinystore::sql!("update notes set version = version + 1 where id = ?", note).into(),
+    indexing.adding(&Index { note }),
+])?;
+```
 
 ### Queue.add
 

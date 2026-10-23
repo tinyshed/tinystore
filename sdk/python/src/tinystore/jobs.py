@@ -428,6 +428,31 @@ class Queue[T]:
         fields = {**timing, "id": id, "value": self._source.encode(value)}
         return await self._changed("jobs.add", fields)
 
+    def adding(
+        self,
+        value: T,
+        *,
+        id: str | None = None,
+        at: datetime | None = None,
+        delay: Duration | None = None,
+        group: str | None = None,
+        every: Duration | None = None,
+        cron: str | None = None,
+        time_zone: str | None = None,
+    ) -> Adding:
+        """A job's add for a batch of the database the queue was opened from.
+
+        ``db.batch`` writes it with the batch's statements, so the job commits
+        with the rows or not at all, and shares the commit with every other
+        write of the file, where ``db.tx`` holds the writer and pays a sync of
+        its own. It adds as ``add`` does, unless its id is taken: its ``Done``
+        in the batch's answer changed 1 job, or 0.
+
+            await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
+        """
+        timing = job_fields(at=at, delay=delay, group=group, every=every, cron=cron, time_zone=time_zone)
+        return Adding(self.name, self._source, {**timing, "id": id, "value": self._source.encode(value)})
+
     async def set(
         self,
         id: str,
@@ -569,6 +594,37 @@ async def _open_watch(connection: Connection, source: Source[Any], job_id: str) 
     stream = await connection.session.open(methods["jobs.watch"], JobsId.encode(handle=handle, id=job_id), True)
     await stream.next()
     return stream
+
+
+@dataclass(frozen=True, slots=True)
+class Adding:
+    """A job's add that a database's batch carries, from ``queue.adding``: it commits with the batch's statements."""
+
+    queue: str
+    """the queue's name"""
+    source: Source[Any] = field(repr=False)
+    call: dict[str, Any] = field(repr=False)
+    """the add's call but its handle"""
+
+
+def adding_in(adding: Adding, home: Home) -> Callable[[Connection], Awaitable[dict[str, Any]]]:
+    """What a batch of home sends of an add, on the connection it goes on: its call, its queue's handle opened there.
+
+    A queue kept outside home is refused, since its job would not commit
+    with the rows.
+    """
+    source, call = adding.source, adding.call
+    if source.home is not home:
+        kept = "jobs.db" if source.home is None else source.home.describe
+        raise InvalidError(
+            f"{home.describe}: jobs queue {adding.queue}: kept in {kept}, outside this batch of {home.describe}"
+        )
+
+    async def sent(connection: Connection) -> dict[str, Any]:
+        handle = await handle_on(connection, source.open_method, source.opener)
+        return {"text": "", "values": [], "method": methods["jobs.add"], "body": JobsCall.encode(call, handle=handle)}
+
+    return sent
 
 
 @dataclass(slots=True)

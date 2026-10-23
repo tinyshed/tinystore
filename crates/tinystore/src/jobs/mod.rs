@@ -63,11 +63,14 @@ pub use work::Worker;
 #[cfg(feature = "wire")]
 pub(crate) use {
     claim::{How, Lease},
-    queue::Change,
     steps::{keep_encoded, kept},
     watch::{Hears, Report, Seen, Subscription},
     work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote},
 };
+
+// What a job's call writes: the wire's calls, and a database's batch.
+#[cfg(any(feature = "wire", feature = "sql"))]
+pub(crate) use queue::Change;
 
 #[cfg(test)]
 #[path = "queue_tests.rs"]

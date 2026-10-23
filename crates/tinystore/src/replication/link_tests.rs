@@ -295,6 +295,12 @@ fn a_write_on_a_copy_two_links_away_commits_at_its_home_and_reads_back_at_once()
     .unwrap();
     let count: i64 = home_db.scalar(crate::sql!("select count(*) from notes")).unwrap();
     assert_eq!(count, 3);
+    home_db.queue::<String>("indexing").open().unwrap();
+    caught_up(&home, &far, &["sql/app.db"]);
+    let indexing = db.queue::<String>("indexing").open().unwrap();
+    let with_a_job = [crate::sql!("insert into notes (body) values ('c')").into(), indexing.adding(&"c".to_owned())];
+    let refused = db.batch(with_a_job).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "a copy passes statements on, not a job: {refused}");
     caught_up(&home, &far, &["kv.db", "sql/app.db"]);
     far.close().unwrap();
     between.close().unwrap();

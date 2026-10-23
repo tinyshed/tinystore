@@ -541,24 +541,65 @@ func (db *DB) Exec(ctx context.Context, text string, args ...any) (Result, error
 	return db.exec(ctx, statementOf(text, args))
 }
 
-// Batch runs statements known before they run as one: all of them or none,
-// in a shared commit.
+// Batch runs writes known before they run as one: all of them or none, in a
+// shared commit. A write is a statement, or a job's add of a queue opened
+// from the database, its Adding, which commits with the rows.
+//
+//	err = db.Batch(ctx, sqldb.SQL(`update notes set body = ? where id = ?`, body, id), indexing.Adding(Index{NoteID: id}))
 func (db *DB) Batch(ctx context.Context, statements ...Statement) error {
-	texts := make([]wire.SqlText, len(statements))
-	for i, each := range statements {
-		if each.err != nil {
+	for _, each := range statements {
+		if each.lent != nil {
+			if err := db.takes(each.lent); err != nil {
+				return err
+			}
+		} else if each.err != nil {
 			return each.err
 		}
-		texts[i] = wire.SqlText{Text: each.text, Values: each.values}
 	}
 	return db.store.Link.Run(ctx, core.Writing, func(c *core.Connection) error {
 		handle, err := db.Handle(ctx, c)
 		if err != nil {
 			return err
 		}
+		texts := make([]wire.SqlText, len(statements))
+		for i, each := range statements {
+			if texts[i], err = textOf(ctx, c, each); err != nil {
+				return err
+			}
+		}
 		_, err = c.Session.Call(ctx, wire.MethodSqlBatch, wire.Encode(&wire.SqlBatch{Handle: handle, Statements: texts}))
 		return err
 	})
+}
+
+// takes refuses a write that cannot be made, and one of a handle kept
+// outside the database, whose write would not commit with its rows.
+func (db *DB) takes(lent *core.Lent) error {
+	if lent.Err != nil {
+		return lent.Err
+	}
+	if lent.Home != core.Database(db) {
+		kept := "jobs.db"
+		if lent.Home != nil {
+			kept = lent.Home.Describe()
+		}
+		return core.Errorf(core.Invalid, "%s: %s: kept in %s, outside this batch of %s", db.describe, lent.What, kept, db.describe)
+	}
+	return nil
+}
+
+// textOf is a write of a batch as it goes on c: a statement's text and
+// values, or another engine's call, its handle opened on c first.
+func textOf(ctx context.Context, c *core.Connection, write Statement) (wire.SqlText, error) {
+	if write.lent == nil {
+		return wire.SqlText{Text: write.text, Values: write.values}, nil
+	}
+	handle, err := core.HandleOn(ctx, c, write.lent.Opener)
+	if err != nil {
+		return wire.SqlText{}, err
+	}
+	method, body := uint64(write.lent.Method), write.lent.Body(handle)
+	return wire.SqlText{Method: &method, Body: &body}, nil
 }
 
 func decode(answer []byte, m wire.Message) error {

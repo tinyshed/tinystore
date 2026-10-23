@@ -84,7 +84,9 @@ Open opens the application's database name, sql/\&lt;name>.db, once its migratio
 func (db *DB) Batch(ctx context.Context, statements ...Statement) error
 ```
 
-Batch runs statements known before they run as one: all of them or none, in a shared commit.
+Batch runs writes known before they run as one: all of them or none, in a shared commit. A write is a statement, or a job's add of a queue opened from the database, its Adding, which commits with the rows.
+
+	err = db.Batch(ctx, sqldb.SQL(`update notes set body = ? where id = ?`, body, id), indexing.Adding(Index{NoteID: id}))
 
 ### DB.CoreHome
 
@@ -538,7 +540,15 @@ Set is the columns an update sets: values, or pieces of SQL.
 type Statement = Piece
 ```
 
-Statement is a statement of a batch: a piece of SQL.
+Statement is a write of a batch: a piece of SQL, or a queue's Adding.
+
+### CoreLent
+
+```go
+func CoreLent(write core.Lent) Statement
+```
+
+CoreLent is how this module's packages put a write of their own in a batch, as a queue's Adding does; a program has no use for it.
 
 ## Table
 

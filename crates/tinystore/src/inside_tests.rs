@@ -132,6 +132,95 @@ fn a_worker_runs_a_job_added_in_a_transaction_once_it_commits() {
     worker.stop();
 }
 
+// contract: JOB-02
+#[test]
+fn a_batch_commits_its_rows_and_its_jobs_together_or_not_at_all() {
+    let f = fixture();
+    let db = f.app();
+    let emails = db.queue::<Email>("emails").open().unwrap();
+
+    let done = db
+        .batch([
+            sql!("insert into orders (id, total) values (?, ?)", 1, 70).into(),
+            emails.id("order-1").adding(&Email { order: 1 }),
+            emails.adding(&Email { order: 1 }),
+        ])
+        .unwrap();
+    assert_eq!(done.iter().map(|done| done.changes).collect::<Vec<_>>(), [1, 1, 1]);
+    assert_eq!((done[0].last_insert_rowid, done[1].last_insert_rowid), (1, 0), "a job has no rowid");
+    assert_eq!(orders(&db), 1);
+    assert_eq!(emails.get("order-1").unwrap().unwrap().value, Email { order: 1 });
+
+    let taken = db
+        .batch([
+            sql!("insert into orders (id, total) values (?, ?)", 2, 80).into(),
+            emails.id("order-1").adding(&Email { order: 2 }),
+        ])
+        .unwrap();
+    assert_eq!(taken.iter().map(|done| done.changes).collect::<Vec<_>>(), [1, 0], "a taken id adds nothing");
+    assert_eq!(emails.get("order-1").unwrap().unwrap().value, Email { order: 1 });
+
+    let failed = db.batch([
+        emails.id("order-3").adding(&Email { order: 3 }),
+        sql!("insert into orders (id, total) values (?, ?)", 1, 90).into(),
+    ]);
+    assert_eq!(failed.unwrap_err().kind(), ErrorKind::Conflict, "the row's key is taken");
+    assert!(emails.get("order-3").unwrap().is_none(), "the job rolled back with the batch");
+    assert_eq!(orders(&db), 2);
+}
+
+// contract: JOB-02
+#[test]
+fn a_worker_runs_a_job_added_in_a_batch_once_it_commits() {
+    let f = fixture();
+    let db = f.app();
+    let emails = db.queue::<Email>("emails").open().unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&sent);
+    let worker = emails
+        .work(move |email: Email, _run| -> crate::Result<()> {
+            kept.lock().unwrap().push(email.order);
+            Ok(())
+        })
+        .unwrap();
+    thread::sleep(Duration::from_millis(50)); // the worker finds nothing and sleeps
+
+    db.batch([sql!("insert into orders (total) values (?)", 9).into(), emails.adding(&Email { order: 9 })]).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sent.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the worker slept past the commit");
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(*sent.lock().unwrap(), [9]);
+    worker.stop();
+}
+
+#[test]
+fn a_batch_refuses_a_queue_kept_in_another_file_and_an_add_it_cannot_make() {
+    let f = fixture();
+    let db = f.app();
+    let other = f.store.database("other").open().unwrap();
+    let in_jobs = f.store.queue::<Email>("emails").open().unwrap();
+    let in_other = other.queue::<Email>("emails").open().unwrap();
+    let emails = db.queue::<Email>("emails").open().unwrap();
+
+    let insert = || sql!("insert into orders (total) values (?)", 1).into();
+    let error = db.batch([insert(), in_jobs.adding(&Email { order: 1 })]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid);
+    let said = "sql app: jobs queue emails: kept in jobs.db, outside this batch of sql app";
+    assert!(error.to_string().starts_with(said), "{error}");
+    let error = db.batch([insert(), in_other.adding(&Email { order: 1 })]).unwrap_err();
+    assert!(error.to_string().contains("kept in sql other, outside this batch of sql app"), "{error}");
+
+    let error = db.batch([insert(), emails.id("").adding(&Email { order: 1 })]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid);
+    assert!(error.to_string().starts_with("sql app: jobs queue emails: id \"\": an id of 0 bytes"), "{error}");
+    let error = db.tx(|tx| db.batch([tx.with(&emails).id("in-tx").adding(&Email { order: 1 })])).unwrap_err();
+    assert!(error.to_string().contains("made through a transaction runs in it, not in a batch"), "{error}");
+    assert_eq!(orders(&db), 0, "a refused batch writes nothing");
+    assert!(in_jobs.get("in-tx").unwrap().is_none() && emails.get("in-tx").unwrap().is_none());
+}
+
 #[test]
 fn a_transaction_refuses_a_handle_kept_in_another_file() {
     let f = fixture();

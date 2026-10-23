@@ -260,6 +260,16 @@ func (q *Queue[T]) Add(ctx context.Context, value T, opts ...AddOption) (bool, e
 
 Add adds a job unless its id is taken, and says whether it added one. An id is taken by a job scheduled, waiting, running or failed, or done while the queue's dedupe keeps it. It returns once the job is on disk; a job without an id is always added. Inside the store's transaction it is kept for the commit, and says true.
 
+### Queue.Adding
+
+```go
+func (q *Queue[T]) Adding(value T, opts ...AddOption) sqldb.Statement
+```
+
+Adding is a job's add for a batch of the database the queue was opened from: db.Batch writes it with its statements, so the job commits with the rows or not at all, and shares the commit with every other write of the file, where db.Tx holds the writer and pays a sync of its own. It adds as Add does, unless its id is taken.
+
+	err = db.Batch(ctx, sqldb.SQL(`update notes set body = ? where id = ?`, body, id), indexing.Adding(Index{NoteID: id}))
+
 ### Queue.All
 
 ```go

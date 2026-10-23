@@ -8619,6 +8619,14 @@ def _write_sql_text(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             sql_value.write(w, item0)
         n += 1
+    if (x := v.get("method")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    if (x := v.get("body")) is not None:
+        w.uint(4)
+        w.bin(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8633,18 +8641,27 @@ def _read_sql_text(r: Reader) -> dict[str, Any]:
                 items0 = [sql_value.read(r) for _ in range(r.array())]
                 r.leave()
                 read["values"] = items0
+            case 3:
+                read["method"] = r.uint()
+            case 4:
+                read["body"] = r.bin()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# A statement's text and the values of its ?s, in order.
+# A statement's text and the values of its ?s, in order. In a batch it may
+# be a call of jobs on a queue kept in the database's file instead, jobs.add
+# with its request in body and no text, which commits with the batch's rows.
 SqlText = Message(
     "sql.Text",
     {
         "text": (1, str_),
         "values": (2, list_(sql_value)),
+        # in a batch, jobs.add: the call in body
+        "method": (3, uint),
+        "body": (4, bin_),
     },
     _write_sql_text,
     _read_sql_text,
@@ -9025,7 +9042,8 @@ def _read_sql_batch(r: Reader) -> dict[str, Any]:
     return read
 
 
-# Statements known before they run, written as one in a shared commit.
+# Writes known before they run, written as one in a shared commit: its
+# statements, and the adds of a queue kept in the database's file.
 SqlBatch = Message(
     "sql.Batch",
     {
@@ -9064,6 +9082,8 @@ def _read_sql_batched(r: Reader) -> dict[str, Any]:
     return read
 
 
+# What each write of a batch did, in their order: a job's add changed one
+# job, or none when its id was taken.
 SqlBatched = Message(
     "sql.Batched",
     {

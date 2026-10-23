@@ -149,7 +149,8 @@ runtime.
   and metrics both pack with. A file one engine lends another,
   a database's to its buckets and queues, goes through `engine::SharedFile`,
   and three files alone name two engines: `inside.rs`, `db.bucket`,
-  `db.queue` and `db.search_index`; `log_config.rs`, a store's logger
+  `db.queue`, `db.search_index` and `queue.adding`, a job of a database's
+  batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
 - **`unsafe` lives in four places**: `sqlite::memory`, `sqlite::mutex`,

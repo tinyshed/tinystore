@@ -180,6 +180,32 @@ An id is taken by a job scheduled, waiting, running or failed, or done
 while the queue's dedupe keeps it. It returns once the job is on disk;
 a job without an id is always added.
 
+### Queue.adding
+
+```python
+def adding(
+    value: T,
+    *,
+    id: str | None = None,
+    at: datetime | None = None,
+    delay: Duration | None = None,
+    group: str | None = None,
+    every: Duration | None = None,
+    cron: str | None = None,
+    time_zone: str | None = None,
+) -> Adding: ...
+```
+
+A job's add for a batch of the database the queue was opened from.
+
+``db.batch`` writes it with the batch's statements, so the job commits
+with the rows or not at all, and shares the commit with every other
+write of the file, where ``db.tx`` holds the writer and pays a sync of
+its own. It adds as ``add`` does, unless its id is taken: its ``Done``
+in the batch's answer changed 1 job, or 0.
+
+    await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
+
 ### Queue.set
 
 ```python
@@ -308,6 +334,18 @@ async def run_due(
 Runs what is due when it starts and what falls due meanwhile, then says how many jobs ran.
 
 It never waits for a later job. Tests, scripts and commands use it.
+
+## Adding
+
+```python
+@dataclass(frozen=True, slots=True)
+class Adding:
+    queue: str  # the queue's name
+    source: Source[Any] = field(repr=False)
+    call: dict[str, Any] = field(repr=False)  # the add's call but its handle
+```
+
+A job's add that a database's batch carries, from ``queue.adding``: it commits with the batch's statements.
 
 ## StoreTxQueue
 

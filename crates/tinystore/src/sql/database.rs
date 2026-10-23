@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 
+use super::batch::{Batch, Ran, Write};
 use super::engine::{Base, Databases};
 use super::migrations::Migrations;
 #[cfg(feature = "wire")]
@@ -152,16 +153,23 @@ impl Database {
             .map_err(|error| self.base.failed(&statement, error))
     }
 
-    /// Runs statements known before they run as one, all of them or none, in
-    /// one savepoint of the next shared commit: it costs what one write does.
-    pub fn batch<I>(&self, statements: I) -> Result<Vec<Done>>
+    /// Runs writes known before they run as one, all of them or none, in one
+    /// savepoint of the next shared commit: it costs what one write does, and
+    /// gives what each did, in their order. A write is a statement, or a job's
+    /// add of a queue opened from the database, `queue.adding(&job)`, which
+    /// commits with the rows and changes one job, or none when its id was
+    /// taken; see [`Write`].
+    pub fn batch<I>(&self, writes: I) -> Result<Vec<Done>>
     where
         I: IntoIterator,
-        I::Item: Into<Sql>,
+        I::Item: Into<Write>,
     {
-        let statements: Vec<Sql> = statements.into_iter().map(Into::into).collect();
+        let owner = self.base.describe();
+        let writes = writes.into_iter().map(Into::into).collect();
+        let batch = Batch::checked(writes, self.base.file(), &owner).map_err(|error| error.within(&owner))?;
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
+            let statements = batch.statements();
             let done = self.pass_on(&statements, true)?;
             if done.len() != statements.len() {
                 let why = format!("a batch of {} statements answered with {} results", statements.len(), done.len());
@@ -169,8 +177,8 @@ impl Database {
             }
             return Ok(done);
         }
-        let (weight, write) = batch_write(statements);
-        self.base.file().write(weight, write).map_err(|error| error.within(self.base.describe()))
+        let (weight, write) = batch.write();
+        self.base.file().write(weight, write).map(Ran::finish).map_err(|error| error.within(owner))
     }
 
     /// Runs `work` in a transaction that holds the writer, for writes that
@@ -216,16 +224,20 @@ impl Database {
 
     /// `batch` without waiting: `done` is called on the thread that commits it.
     #[cfg(feature = "wire")]
-    pub(crate) fn batch_then(&self, statements: Vec<Sql>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
+    pub(crate) fn batch_then(&self, writes: Vec<Write>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
             let db = self.clone();
-            std::thread::spawn(move || done(db.batch(statements)));
+            std::thread::spawn(move || done(db.batch(writes)));
             return;
         }
-        let (weight, write) = batch_write(statements);
-        let describe = self.base.describe();
-        self.base.file().submit(weight, write, move |ran| done(ran.map_err(|error| error.within(describe))));
+        let owner = self.base.describe();
+        let (weight, write) = match Batch::checked(writes, self.base.file(), &owner) {
+            Ok(batch) => batch.write(),
+            Err(error) => return done(Err(error.within(owner))),
+        };
+        let ran = move |ran: Result<Ran>| done(ran.map(Ran::finish).map_err(|error| error.within(owner)));
+        self.base.file().submit(weight, write, ran);
     }
 
     /// `rows_of` without waiting for a commit: a read's rows come before this
@@ -304,19 +316,6 @@ impl fmt::Debug for Database {
 /// cannot climb out of `sql/` or meet another on a file system that folds case.
 fn check_name(name: &str) -> Result<()> {
     crate::text::check_name("a database's", name)
-}
-
-/// What a batch weighs in its commit, and its write: every statement in
-/// order, a failure naming its own.
-fn batch_write(
-    statements: Vec<Sql>,
-) -> (usize, impl FnOnce(&crate::sqlite::Tx<'_>) -> Result<Vec<Done>> + Send + 'static) {
-    let weight = statements.iter().map(Sql::weight).sum();
-    let write = move |tx: &crate::sqlite::Tx<'_>| {
-        let exec = |statement| run::exec(tx, statement).map_err(|error| error.within(statement.describe()));
-        statements.iter().map(exec).collect()
-    };
-    (weight, write)
 }
 
 /// Whether a statement may be a query: its first word, past spaces and

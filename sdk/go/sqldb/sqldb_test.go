@@ -491,6 +491,70 @@ func TestABucketAndAQueueOpenedFromTheDatabaseCommitWithItsRows(t *testing.T) {
 	})
 }
 
+// contract: JOB-02
+func TestABatchWritesItsStatementsAndAQueuesAddsTogetherOrNoneOfThem(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		indexing := ways.Must(jobs.OpenQueue[map[string]string](db, "indexing"))
+		insert := func(id string) sqldb.Statement {
+			return sqldb.SQL(`insert into notes (id, author_id, title) values (?, 13, 'a')`, id)
+		}
+		ways.Must(0, db.Batch(ctx, insert("j1"), indexing.Adding(map[string]string{"note": "j1"}, jobs.ID("j1"))))
+		if job, found := ways.Must2(indexing.Get(ctx, "j1")); !found || job.Value["note"] != "j1" {
+			t.Fatalf("the job commits with the row: %+v %v", job, found)
+		}
+
+		err := db.Batch(ctx, indexing.Adding(map[string]string{"note": "j2"}, jobs.ID("j2")), insert("j1"))
+		is(t, err, tinystore.ErrConflict)
+		if _, found := ways.Must2(indexing.Get(ctx, "j2")); found {
+			t.Fatal("the job rolled back with the batch")
+		}
+
+		inJobs := ways.Must(jobs.OpenQueue[map[string]string](store, "indexing"))
+		err = db.Batch(ctx, insert("j3"), inJobs.Adding(map[string]string{"note": "j3"}))
+		if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "kept in jobs.db, outside this batch of sql app") {
+			t.Fatalf("a queue of jobs.db is refused: %v", err)
+		}
+		_, err = sqldb.All[sqldb.Row](ctx, db, `select * from notes where ?`, indexing.Adding(map[string]string{}))
+		is(t, err, tinystore.ErrInvalid)
+		if ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from notes where author_id = 13`)) != 1 {
+			t.Fatal("a refused batch writes nothing")
+		}
+	})
+}
+
+// contract: JOB-02
+func TestAWorkerRunsAJobItsBatchAddedOnceTheBatchCommits(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx, cancel := context.WithCancel(context.Background())
+		db := app(t, store)
+		sent := ways.Must(jobs.OpenQueue[map[string]string](db, "batched"))
+		seen := make(chan string, 1)
+		done := make(chan error, 1)
+		go func() {
+			done <- sent.Work(ctx, func(_ context.Context, email map[string]string, _ *jobs.Run) error {
+				seen <- email["note"]
+				return nil
+			})
+		}()
+		ways.Must(0, db.Batch(ctx, sqldb.SQL(`insert into notes (id, author_id, title) values ('w2', 14, 'a')`),
+			sent.Adding(map[string]string{"note": "w2"})))
+		select {
+		case note := <-seen:
+			if note != "w2" {
+				t.Fatalf("ran %q", note)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the worker slept past the commit")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("work: %v", err)
+		}
+	})
+}
+
 func TestADatabaseOpensWithoutMigrationsAndRefusesOneChangedAfterItWasApplied(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

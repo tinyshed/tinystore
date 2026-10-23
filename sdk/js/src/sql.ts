@@ -22,6 +22,8 @@ import {
 	viaLink,
 } from './handles.ts'
 import {
+	Adding,
+	addingIn,
 	openQueue,
 	type Queue,
 	type QueueOptions,
@@ -889,21 +891,32 @@ export class Database implements Runner, Home {
 		return new Table(this, name, options)
 	}
 
-	/** Statements known before they run, written as one: all of them or none, in a shared commit. */
-	async batch(statements: readonly Sql[]): Promise<Done[]> {
-		const texts = statements.map(each => {
-			if (!(each instanceof Sql)) {
-				throw new InvalidError('a batch takes pieces of SQL: sql`…`')
+	/**
+	 * Writes known before they run, written as one: all of them or none, in a
+	 * shared commit, and what each did, in their order. A write is a statement,
+	 * or a job's add of a queue opened from the database, `queue.adding`, which
+	 * commits with the rows and changed 1 job, or 0 when its id was taken.
+	 *
+	 *     await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
+	 */
+	async batch(writes: readonly (Sql | Adding)[]): Promise<Done[]> {
+		const parts = writes.map(each => {
+			if (each instanceof Sql) {
+				return { text: each.text, values: [...each.values] }
 			}
-			return { text: each.text, values: [...each.values] }
+			if (each instanceof Adding) {
+				return addingIn(each, this)
+			}
+			throw new InvalidError("a batch takes pieces of SQL, sql`…`, and a queue's adding")
 		})
 		this.#refuseAround('a batch')
 		const answered = await this.#link.run('write', async connection => {
 			const handle = await this.handle(connection)
-			return connection.session.call(
-				methods['sql.batch'],
-				SqlBatch.encode({ handle, statements: texts }),
-			)
+			const statements = []
+			for (const part of parts) {
+				statements.push(typeof part === 'function' ? await part(connection) : part)
+			}
+			return connection.session.call(methods['sql.batch'], SqlBatch.encode({ handle, statements }))
 		})
 		return (SqlBatched.decode(answered).done ?? []).map(doneOf)
 	}

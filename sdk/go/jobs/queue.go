@@ -21,6 +21,7 @@ import (
 	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 // State is where a job stands: done while its queue's dedupe keeps its id,
@@ -198,6 +199,33 @@ func (q *Queue[T]) Add(ctx context.Context, value T, opts ...AddOption) (bool, e
 		opt.add(&o)
 	}
 	return q.changed(ctx, wire.MethodJobsAdd, value, o)
+}
+
+// Adding is a job's add for a batch of the database the queue was opened
+// from: db.Batch writes it with its statements, so the job commits with the
+// rows or not at all, and shares the commit with every other write of the
+// file, where db.Tx holds the writer and pays a sync of its own. It adds as
+// Add does, unless its id is taken.
+//
+//	err = db.Batch(ctx, sqldb.SQL(`update notes set body = ? where id = ?`, body, id), indexing.Adding(Index{NoteID: id}))
+func (q *Queue[T]) Adding(value T, opts ...AddOption) sqldb.Statement {
+	var o jobOptions
+	for _, opt := range opts {
+		opt.add(&o)
+	}
+	call, err := q.callOf(value, o)
+	switch {
+	case q.err != nil:
+		err = q.err
+	case q.tx != nil:
+		err = core.Errorf(core.Invalid, "%s: a queue taken into a transaction adds there, not in a batch", q.describe)
+	}
+	body := func(handle uint64) []byte {
+		c := call
+		c.Handle = handle
+		return wire.Encode(&c)
+	}
+	return sqldb.CoreLent(core.Lent{Home: q.home, What: "jobs queue " + q.name, Opener: q.opener, Method: wire.MethodJobsAdd, Body: body, Err: err})
 }
 
 // Set makes the id's job this value at this time, whatever it was: one

@@ -20,6 +20,8 @@ use crate::clock::millis;
 use crate::engine::Home;
 #[cfg(any(feature = "sql", feature = "wire"))]
 use crate::engine::SharedFile;
+#[cfg(feature = "sql")]
+use crate::engine::{LentWrite, Wrote};
 use crate::sqlite::Tx as SqlTx;
 use crate::{Error, ErrorKind, Result, Store, Transaction};
 
@@ -482,6 +484,31 @@ where
             }
             done(due.map(|due| due.is_some()).map_err(|error| error.within(named)));
         });
+    }
+
+    /// An add, a set or an update for a batch of the file the queue is kept
+    /// in, which runs it in its savepoint: the call checked and its value
+    /// encoded now, the queue's workers woken once the batch's commit is
+    /// durable. Its errors name the queue as a part of the batch's file.
+    #[cfg(feature = "sql")]
+    pub(crate) fn lent(&self, change: Change, asked: Asked, value: &V) -> Result<LentWrite> {
+        let describe = match asked.id() {
+            Some(id) => format!("{}: id {id:?}", self.state.describe_alone()),
+            None => self.state.describe_alone(),
+        };
+        let call = self.prepared(change, asked, value).map_err(|error| error.within(describe.clone()))?;
+        let (weight, write, state) = (call.value.len(), self.change_of(change, call), Arc::clone(&self.state));
+        Ok(LentWrite {
+            file: Arc::clone(self.jobs.shared_file()),
+            place: self.jobs.place().to_owned(),
+            describe,
+            weight,
+            write: Box::new(move |tx| {
+                let due = write(tx)?;
+                let wake = due.map(|at| Box::new(move || state.wake(at)) as Box<dyn FnOnce() + Send>);
+                Ok(Wrote { changed: change == Change::Set || due.is_some(), committed: wake })
+            }),
+        })
     }
 
     /// A call checked, its value encoded, before its write waits for the writer.

@@ -5255,6 +5255,12 @@
     },
     {
       "fields": {
+        "body": {
+          "bin": "01ff"
+        },
+        "method": {
+          "uint": "307"
+        },
         "text": {
           "str": "text"
         },
@@ -5266,7 +5272,7 @@
           ]
         }
       },
-      "hex": "8201a4746578740291a676616c756573",
+      "hex": "8401a4746578740291a676616c75657303cd013304c40201ff",
       "message": "sql.Text",
       "name": "sql.Text with every field"
     },
@@ -5468,6 +5474,12 @@
           "list": [
             {
               "fields": {
+                "body": {
+                  "bin": "01ff"
+                },
+                "method": {
+                  "uint": "307"
+                },
                 "text": {
                   "str": "text"
                 },
@@ -5483,7 +5495,7 @@
           ]
         }
       },
-      "hex": "82016b02918201a4746578740291a676616c756573",
+      "hex": "82016b02918401a4746578740291a676616c75657303cd013304c40201ff",
       "message": "sql.Batch",
       "name": "sql.Batch with every field"
     },

@@ -56,6 +56,7 @@ export { type ConsoleFormat, type ConsoleTime, secrets } from './console.ts'
 export * from './errors.ts'
 export type { Page } from './handles.ts'
 export type {
+	Adding,
 	AddOptions,
 	Answer,
 	Backoff,

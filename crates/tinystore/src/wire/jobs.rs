@@ -174,6 +174,13 @@ pub(crate) fn call_in(handles: &Handles, tx: &Transaction<'_>, called: u16, body
     }
 }
 
+/// A job's add that a database's batch carries, for a queue kept in its
+/// file: it commits with the batch's rows, or not at all.
+#[cfg(feature = "sql")]
+pub(crate) fn lend(handles: &Handles, body: &[u8]) -> Result<crate::sql::Write, Failure> {
+    on_job(handles, JobsCall::decode(body)?, None, |job, value| Ok(job.adding(&value)))
+}
+
 /// A transaction's writes in one transaction of jobs.db, all of them or
 /// none; one that fails names its place in `what`.
 fn tx(store: &Store, handles: &Handles, asked: &JobsTx) -> Answered {

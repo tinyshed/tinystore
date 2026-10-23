@@ -18,10 +18,14 @@ message sql.Open {
   3 durability: str?  # full or os: how far its commits go before they return; the store's own when absent
 }
 
-# A statement's text and the values of its ?s, in order.
+# A statement's text and the values of its ?s, in order. In a batch it may
+# be a call of jobs on a queue kept in the database's file instead, jobs.add
+# with its request in body and no text, which commits with the batch's rows.
 message sql.Text {
   1 text: str
   2 values: [cell]
+  3 method: uint?     # in a batch, jobs.add: the call in body
+  4 body: bin?
 }
 
 # A statement on a database: a write, or a read answered by its columns.
@@ -77,12 +81,15 @@ message sql.Done {
   2 lastInsertRowid: int64
 }
 
-# Statements known before they run, written as one in a shared commit.
+# Writes known before they run, written as one in a shared commit: its
+# statements, and the adds of a queue kept in the database's file.
 message sql.Batch {
   1 handle: uint
   2 statements: [sql.Text]
 }
 
+# What each write of a batch did, in their order: a job's add changed one
+# job, or none when its id was taken.
 message sql.Batched {
   1 done: [sql.Done]
 }

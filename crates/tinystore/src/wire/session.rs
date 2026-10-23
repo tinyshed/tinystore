@@ -543,7 +543,7 @@ impl Shared {
                     #[cfg(feature = "jobs")]
                     0x02 => jobs::submit(&shared.jobs, method, &body, done),
                     #[cfg(feature = "sql")]
-                    0x03 => sql::submit(&shared.sql, method, &body, done),
+                    0x03 => sql::submit(&shared.sql, (method, &body), &|called, body| shared.lend(called, body), done),
                     _ => kv::submit(&shared.kv, method, &body, done),
                 }
                 Ok(())
@@ -1258,6 +1258,19 @@ impl Shared {
         return self.sql.shared(handle);
         #[cfg(not(feature = "sql"))]
         Err(Failure::invalid(format!("database {handle}: this server keeps no databases")))
+    }
+
+    /// A call of another engine that a database's batch carries: a queue's
+    /// add, for a queue kept in the database's file.
+    #[cfg(feature = "sql")]
+    fn lend(&self, called: u16, body: &[u8]) -> std::result::Result<crate::sql::Write, Failure> {
+        match called {
+            #[cfg(feature = "jobs")]
+            method::JOBS_ADD => jobs::lend(&self.jobs, body),
+            _ => Err(Failure::invalid(format!(
+                "method {called:#06x} does not run in a batch, which takes a queue's add"
+            ))),
+        }
     }
 
     /// Answers a call of kv or jobs made inside a database's transaction.

@@ -10077,12 +10077,17 @@ impl Message for SqlOpen {
     }
 }
 
-/// A statement's text and the values of its ?s, in order.
+/// A statement's text and the values of its ?s, in order. In a batch it may
+/// be a call of jobs on a queue kept in the database's file instead, jobs.add
+/// with its request in body and no text, which commits with the batch's rows.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlText {
     pub(crate) text: String,
     pub(crate) values: Vec<Cell>,
+    /// In a batch, jobs.add: the call in body.
+    pub(crate) method: Option<u64>,
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 #[cfg(feature = "sql")]
@@ -10096,6 +10101,8 @@ impl Message for SqlText {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.text = codec::str(r, "text")?,
                 2 => message.values = codec::list(r, "values", codec::cell)?,
+                3 => message.method = Some(codec::uint(r, "method")?),
+                4 => message.body = Some(codec::bin(r, "body")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10112,6 +10119,14 @@ impl Message for SqlText {
             map.field(out, 2);
             codec::write_list(out, &self.values, codec::write_cell);
         }
+        if let Some(method) = &self.method {
+            map.field(out, 3);
+            codec::write_uint(out, method);
+        }
+        if let Some(body) = &self.body {
+            map.field(out, 4);
+            codec::write_bin(out, body);
+        }
         map.close(out);
     }
 
@@ -10119,11 +10134,15 @@ impl Message for SqlText {
         3
             + 1 + 5 + self.text.len()
             + 1 + codec::list_size(&self.values, codec::cell_size)
+            + self.method.map_or(0, |_| 10)
+            + self.body.as_ref().map_or(0, |body| 1 + 5 + body.len())
     }
 
     fn is_zero(&self) -> bool {
         self.text.is_empty()
             && self.values.is_empty()
+            && self.method.is_none()
+            && self.body.is_none()
     }
 }
 
@@ -10499,7 +10518,8 @@ impl Message for SqlDone {
     }
 }
 
-/// Statements known before they run, written as one in a shared commit.
+/// Writes known before they run, written as one in a shared commit: its
+/// statements, and the adds of a queue kept in the database's file.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlBatch {
@@ -10549,6 +10569,8 @@ impl Message for SqlBatch {
     }
 }
 
+/// What each write of a batch did, in their order: a job's add changed one
+/// job, or none when its id was taken.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlBatched {

@@ -87,3 +87,39 @@ pub(crate) enum Home {
     )]
     Shared(Arc<SharedFile>),
 }
+
+/// A write of a handle kept in a file another engine lends, which the
+/// lender's batch runs in its own savepoint: a queue's add in a database's
+/// batch, which commits with the batch's rows and shares the batch's commit.
+#[cfg(all(feature = "sql", feature = "jobs"))]
+pub(crate) struct LentWrite {
+    /// The file the handle is kept in, which must be the batch's.
+    pub(crate) file: Arc<File>,
+    /// The file as an error names it: `jobs.db`, or `sql app`.
+    pub(crate) place: String,
+    /// The handle and what it writes, as an error names them: `jobs queue
+    /// indexing: id "n-7"`.
+    pub(crate) describe: String,
+    /// What the write adds to a shared commit.
+    pub(crate) weight: usize,
+    pub(crate) write: LentWork,
+}
+
+/// What a lent write runs on the writer, inside the batch's savepoint.
+#[cfg(all(feature = "sql", feature = "jobs"))]
+pub(crate) type LentWork = Box<dyn FnOnce(&crate::sqlite::Tx<'_>) -> Result<Wrote> + Send>;
+
+#[cfg(all(feature = "sql", feature = "jobs"))]
+impl fmt::Debug for LentWrite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "LentWrite({})", self.describe)
+    }
+}
+
+/// What a lent write did: whether it changed anything, and what runs once
+/// its commit is durable, as a queue's workers wake for the job it added.
+#[cfg(all(feature = "sql", feature = "jobs"))]
+pub(crate) struct Wrote {
+    pub(crate) changed: bool,
+    pub(crate) committed: Option<Box<dyn FnOnce() + Send>>,
+}

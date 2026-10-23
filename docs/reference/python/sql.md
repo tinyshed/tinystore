@@ -324,10 +324,17 @@ Runs a write once it is durable; writes from many callers share a commit, each f
 ### Database.batch
 
 ```python
-async def batch(statements: Sequence[Sql]) -> list[Done]: ...
+async def batch(writes: Sequence[Sql | Adding]) -> list[Done]: ...
 ```
 
-Statements known before they run, written as one: all of them or none, in a shared commit.
+Writes known before they run, written as one: all of them or none, in a shared commit.
+
+A write is a statement, or a job's add of a queue opened from the
+database, ``queue.adding``, which commits with the rows and changed 1
+job, or 0 when its id was taken. The answer says what each did, in
+their order.
+
+    await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
 
 ### Database.tx
 

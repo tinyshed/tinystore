@@ -603,6 +603,21 @@ export class Queue<T> {
 	}
 
 	/**
+	 * A job's add for a batch of the database the queue was opened from:
+	 * `db.batch` writes it with the batch's statements, so the job commits
+	 * with the rows or not at all, and shares the commit with every other
+	 * write of the file, where `db.tx` holds the writer and pays a sync of
+	 * its own. It adds as `add` does, unless its id is taken: its `Done` in
+	 * the batch's answer changed 1 job, or 0.
+	 *
+	 *     await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
+	 */
+	adding(value: T, options: AddOptions = {}): Adding {
+		const call = { ...jobFields(options), id: options.id, value: this.#source.values.encode(value) }
+		return new Adding({ name: this.name, source: this.#source as Source<unknown>, call })
+	}
+
+	/**
 	 * Makes the id's job this value at this time, whatever it was: one waiting
 	 * is made new, a failed one starts again, and a running one runs once more
 	 * after this run, with this value.
@@ -764,6 +779,52 @@ export class TxQueue<T> {
 	/** The job under id as the transaction sees it, its own writes among it. */
 	get(id: string): Promise<Job<T> | undefined> {
 		return this.#queue.get(id)
+	}
+}
+
+/** A queue's add as a database's batch carries it: the queue, and the add's call but its handle. */
+interface AddingParts {
+	name: string
+	source: Source<unknown>
+	call: Omit<Written<typeof JobsCall.fields>, 'handle'>
+}
+
+// reads an add's parts, which only this module sees
+let partsOf: (adding: Adding) => AddingParts
+
+/** A job's add that a database's batch carries, from `queue.adding`: it commits with the batch's statements, or not at all. */
+export class Adding {
+	readonly #parts: AddingParts
+
+	/** Comes from `queue.adding`. */
+	constructor(parts: AddingParts) {
+		this.#parts = parts
+	}
+
+	static {
+		partsOf = adding => adding.#parts
+	}
+}
+
+/**
+ * What a batch of `home` sends of an add, on the connection it goes on: the
+ * add's call, its queue's handle opened there first. A queue kept outside
+ * `home` is refused, since its job would not commit with the rows.
+ */
+export function addingIn(
+	adding: Adding,
+	home: Home,
+): (connection: Connection) => Promise<{ method: number; body: Uint8Array }> {
+	const { name, source, call } = partsOf(adding)
+	if (source.home !== home) {
+		const kept = source.home === undefined ? 'jobs.db' : source.home.describe
+		throw new InvalidError(
+			`${home.describe}: jobs queue ${name}: kept in ${kept}, outside this batch of ${home.describe}`,
+		)
+	}
+	return async connection => {
+		const handle = await handleOn(connection, source.openMethod, source.open)
+		return { method: methods['jobs.add'], body: JobsCall.encode({ ...call, handle }) }
 	}
 }
 

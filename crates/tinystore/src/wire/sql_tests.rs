@@ -81,10 +81,12 @@ fn a_client_opens_a_database_writes_it_and_reads_its_rows() {
             SqlText {
                 text: "insert into notes (id, title) values (?, ?)".to_owned(),
                 values: vec![text("n2"), text("Call mom")],
+                ..SqlText::default()
             },
             SqlText {
                 text: "update notes set done = ? where id = ?".to_owned(),
                 values: vec![Cell::Int(1), text("n1")],
+                ..SqlText::default()
             },
         ],
     };
@@ -512,6 +514,65 @@ fn a_bucket_and_a_queue_opened_from_a_database_write_inside_its_transactions() {
     }
     let in_kv_db = client.call::<KvEntry>(method::KV_GET, &KvCall { handle: in_kv, ..session.clone() }).unwrap();
     assert!(!in_kv_db.found, "kv.db is another file");
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+// contract: JOB-02
+#[cfg(feature = "jobs")]
+#[test]
+fn a_batch_carries_a_queues_add_which_commits_with_its_rows() {
+    use crate::wire::protocol::{JobsCall, JobsId, JobsJob, JobsQueueOpen};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let database = open(&mut client);
+    let mut queue = |database| {
+        let open = JobsQueueOpen { name: "indexing".to_owned(), database, ..JobsQueueOpen::default() };
+        client.call::<Handle>(method::JOBS_QUEUE_OPEN, &open).unwrap().handle
+    };
+    let (indexing, in_jobs) = (queue(Some(database)), queue(None));
+    let insert = |id: &str| SqlText {
+        text: "insert into notes (id, title) values (?, 'a')".to_owned(),
+        values: vec![text(id)],
+        ..SqlText::default()
+    };
+    let add = |handle, id: &str| SqlText {
+        method: Some(u64::from(method::JOBS_ADD)),
+        body: Some(
+            JobsCall { handle, id: Some(id.to_owned()), value: "{}".to_owned(), ..JobsCall::default() }.encode(),
+        ),
+        ..SqlText::default()
+    };
+    let batch = |statements| SqlBatch { handle: database, statements };
+    let found = |client: &mut Client, id: &str| {
+        let job = JobsId { handle: indexing, id: id.to_owned() };
+        client.call::<JobsJob>(method::JOBS_GET, &job).unwrap().found
+    };
+
+    let batched: SqlBatched =
+        client.call(method::SQL_BATCH, &batch(vec![insert("n1"), add(indexing, "n1"), add(indexing, "n1")])).unwrap();
+    assert_eq!(batched.done.iter().map(|done| done.changes).collect::<Vec<_>>(), [1, 1, 0], "the id was taken");
+    assert!(found(&mut client, "n1"));
+
+    let taken = client.call::<SqlBatched>(method::SQL_BATCH, &batch(vec![add(indexing, "n2"), insert("n1")]));
+    assert_eq!(taken.unwrap_err().code, "conflict");
+    assert!(!found(&mut client, "n2"), "the job rolled back with the row");
+
+    let elsewhere = client.call::<SqlBatched>(method::SQL_BATCH, &batch(vec![insert("n3"), add(in_jobs, "n3")]));
+    let elsewhere = elsewhere.unwrap_err();
+    assert!(elsewhere.message.contains("kept in jobs.db, outside this batch of sql app"), "{}", elsewhere.message);
+    let cancel = SqlText {
+        method: Some(u64::from(method::JOBS_CANCEL)),
+        body: Some(JobsId { handle: indexing, id: "n1".to_owned() }.encode()),
+        ..SqlText::default()
+    };
+    let cancelled = client.call::<SqlBatched>(method::SQL_BATCH, &batch(vec![insert("n4"), cancel]));
+    assert_eq!(cancelled.unwrap_err().code, "invalid", "a batch takes a queue's add alone");
+    let with_text = SqlText { text: "delete from notes".to_owned(), ..add(indexing, "n5") };
+    assert_eq!(client.call::<SqlBatched>(method::SQL_BATCH, &batch(vec![with_text])).unwrap_err().code, "invalid");
+
+    let rows = query(&mut client, database, "select count(*) from notes", "scalar").rows;
+    assert_eq!(rows, [vec![Cell::Int(1)]], "a refused batch wrote nothing");
     assert_eq!(client.pipe.streams(), 0);
 }
 

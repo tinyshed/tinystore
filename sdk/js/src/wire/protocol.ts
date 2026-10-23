@@ -10442,13 +10442,18 @@ export const SqlOpen = message(
 )
 
 /**
- * A statement's text and the values of its ?s, in order.
+ * A statement's text and the values of its ?s, in order. In a batch it may
+ * be a call of jobs on a queue kept in the database's file instead, jobs.add
+ * with its request in body and no text, which commits with the batch's rows.
  */
 export const SqlText = message(
 	'sql.Text',
 	{
 		text: [1, str],
 		values: [2, list(sqlValue)],
+		/** in a batch, jobs.add: the call in body */
+		method: [3, uint],
+		body: [4, bin],
 	},
 	{
 		write(w, v) {
@@ -10467,11 +10472,23 @@ export const SqlText = message(
 				}
 				n++
 			}
+			if (v.method !== undefined) {
+				w.field(3)
+				w.uint(v.method)
+				n++
+			}
+			if (v.body !== undefined) {
+				w.field(4)
+				w.bin(v.body)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $text: string | undefined
 			let $values: (SqlValue | boolean)[] | undefined
+			let $method: number | undefined
+			let $body: Uint8Array | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10486,12 +10503,18 @@ export const SqlText = message(
 						$values = items0
 						break
 					}
+					case 3:
+						$method = r.uint()
+						break
+					case 4:
+						$body = r.bytes()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { text: $text, values: $values }
+			return { text: $text, values: $values, method: $method, body: $body }
 		},
 	},
 )
@@ -10921,7 +10944,8 @@ export const SqlDone = message(
 )
 
 /**
- * Statements known before they run, written as one in a shared commit.
+ * Writes known before they run, written as one in a shared commit: its
+ * statements, and the adds of a queue kept in the database's file.
  */
 export const SqlBatch = message(
 	'sql.Batch',
@@ -10975,6 +10999,10 @@ export const SqlBatch = message(
 	},
 )
 
+/**
+ * What each write of a batch did, in their order: a job's add changed one
+ * job, or none when its id was taken.
+ */
 export const SqlBatched = message(
 	'sql.Batched',
 	{

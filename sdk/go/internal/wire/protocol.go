@@ -11316,10 +11316,15 @@ func (m SqlOpen) IsZero() bool {
 
 // SqlText is the schema's sql.Text.
 //
-// A statement's text and the values of its ?s, in order.
+// A statement's text and the values of its ?s, in order. In a batch it may
+// be a call of jobs on a queue kept in the database's file instead, jobs.add
+// with its request in body and no text, which commits with the batch's rows.
 type SqlText struct {
 	Text   string `wire:"1,text"`
 	Values []Cell `wire:"2,values"`
+	// in a batch, jobs.add: the call in body
+	Method *uint64 `wire:"3,method"`
+	Body   *[]byte `wire:"4,body"`
 }
 
 func (m SqlText) Write(w *Writer) {
@@ -11336,6 +11341,16 @@ func (m SqlText) Write(w *Writer) {
 		for _, item0 := range m.Values {
 			w.Cell(item0)
 		}
+		n++
+	}
+	if m.Method != nil {
+		w.Uint(3)
+		w.Uint(*m.Method)
+		n++
+	}
+	if m.Body != nil {
+		w.Uint(4)
+		w.Bin(*m.Body)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -11356,6 +11371,12 @@ func (m *SqlText) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Values = v
+		case 3:
+			v := r.Uint()
+			m.Method = &v
+		case 4:
+			v := r.Bin()
+			m.Body = &v
 		default:
 			r.Skip()
 		}
@@ -11366,7 +11387,9 @@ func (m *SqlText) Read(r *Reader) {
 // IsZero says whether SqlText writes as no field at all.
 func (m SqlText) IsZero() bool {
 	return m.Text == "" &&
-		len(m.Values) == 0
+		len(m.Values) == 0 &&
+		m.Method == nil &&
+		m.Body == nil
 }
 
 // SqlStatement is the schema's sql.Statement.
@@ -11792,7 +11815,8 @@ func (m SqlDone) IsZero() bool {
 
 // SqlBatch is the schema's sql.Batch.
 //
-// Statements known before they run, written as one in a shared commit.
+// Writes known before they run, written as one in a shared commit: its
+// statements, and the adds of a queue kept in the database's file.
 type SqlBatch struct {
 	Handle     uint64    `wire:"1,handle"`
 	Statements []SqlText `wire:"2,statements"`
@@ -11847,6 +11871,9 @@ func (m SqlBatch) IsZero() bool {
 }
 
 // SqlBatched is the schema's sql.Batched.
+//
+// What each write of a batch did, in their order: a job's add changed one
+// job, or none when its id was taken.
 type SqlBatched struct {
 	Done []SqlDone `wire:"1,done"`
 }

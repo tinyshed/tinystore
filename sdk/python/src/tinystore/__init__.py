@@ -36,7 +36,20 @@ from .errors import (
     UnavailableError,
     UnimplementedError,
 )
-from .jobs import Backoff, Concurrency, Job, JobPage, LastRun, Outcome, Queue, Run, Schedule, StoreTxQueue, Worker
+from .jobs import (
+    Adding,
+    Backoff,
+    Concurrency,
+    Job,
+    JobPage,
+    LastRun,
+    Outcome,
+    Queue,
+    Run,
+    Schedule,
+    StoreTxQueue,
+    Worker,
+)
 from .kv import Bucket, Counters, Entry, Page
 from .limits import Allowance, Quota, RateLimit, WindowUse
 from .locks import Holding, Lease, Lock, Permit, Semaphore
@@ -81,6 +94,7 @@ from .trace import trace
 from .tx import Tx, TxBucket, TxCounters
 
 __all__ = [
+    "Adding",
     "Aggregate",
     "AggregateBucket",
     "AllEvents",

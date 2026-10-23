@@ -580,3 +580,46 @@ async def test_queries_whose_tasks_are_cancelled_stop_on_the_server(app: tinysto
     started = loop.time()
     assert await app.scalar(int, "select 1") == 1
     assert loop.time() - started < 2
+
+
+# contract: JOB-02
+async def test_a_batch_writes_its_statements_and_a_queues_adds_together_or_none_of_them(
+    store: tinystore.Store, app: tinystore.Database
+) -> None:
+    indexing = app.queue("indexing", dict[str, str])
+
+    def insert(note_id: str) -> tinystore.Sql:
+        return sql("insert into notes (id, author_id, title) values (?, 13, 'a')", note_id)
+
+    done = await app.batch(
+        [insert("j1"), indexing.adding({"note": "j1"}, id="j1"), indexing.adding({"note": "again"}, id="j1")]
+    )
+    assert [each.changes for each in done] == [1, 1, 0]
+    job = await indexing.get("j1")
+    assert job is not None and job.value == {"note": "j1"}
+
+    with pytest.raises(tinystore.ConflictError):
+        await app.batch([indexing.adding({"note": "j2"}, id="j2"), insert("j1")])
+    assert await indexing.get("j2") is None
+
+    in_jobs = store.queue("indexing", dict[str, str])
+    with pytest.raises(tinystore.InvalidError, match=r"kept in jobs\.db, outside this batch of sql app"):
+        await app.batch([insert("j3"), in_jobs.adding({"note": "j3"})])
+    assert await app.scalar(int, "select count(*) from notes where author_id = 13") == 1
+
+
+# contract: JOB-02
+async def test_a_worker_runs_a_job_its_batch_added_once_the_batch_commits(app: tinystore.Database) -> None:
+    sent = app.queue("batched", dict[str, str])
+    seen: list[str] = []
+
+    async def send(email: dict[str, str], run: tinystore.Run) -> None:
+        seen.append(email["note"])
+
+    worker = sent.work(send)
+    await app.batch(
+        [sql("insert into notes (id, author_id, title) values ('w2', 14, 'a')"), sent.adding({"note": "w2"})]
+    )
+    await until(lambda: len(seen) == 1)
+    await worker.stop()
+    assert seen == ["w2"]

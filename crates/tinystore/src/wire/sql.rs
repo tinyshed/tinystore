@@ -13,11 +13,13 @@ use std::time::{Duration, Instant};
 use super::codec::{Cell, Map, Message};
 use super::protocol::{
     Empty, Failure, Handle, SqlBatch, SqlBatched, SqlColumn, SqlColumns, SqlDone, SqlOpen, SqlQuery, SqlRows,
-    SqlStatement, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
+    SqlStatement, SqlText, SqlTxAnswer, SqlTxCall, SqlTxOpen, method,
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
-use crate::sql::{Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, Tx, Value, Wanted};
+use crate::sql::{
+    Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, Tx, Value, Wanted, Write,
+};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
 
@@ -133,9 +135,19 @@ fn open(store: &Store, handles: &Handles, asked: SqlOpen, read_only: bool) -> An
     Ok(Handle { handle }.encode())
 }
 
+/// A call of another engine that a database's batch carries, made into a
+/// write of the batch: its method, and its request.
+pub(crate) type Lend<'a> = &'a dyn Fn(u16, &[u8]) -> Result<Write, Failure>;
+
 /// Queues a write; `done` answers it on the thread that commits it, or at
-/// once when the call is refused before it is queued.
-pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnOnce(Answered) + Send + 'static) {
+/// once when the call is refused before it is queued. A batch's call of
+/// another engine goes to `lend`.
+pub(crate) fn submit(
+    handles: &Handles,
+    (called, body): (u16, &[u8]),
+    lend: Lend<'_>,
+    done: impl FnOnce(Answered) + Send + 'static,
+) {
     match called {
         method::SQL_EXEC => {
             let prepared = SqlStatement::decode(body)
@@ -150,11 +162,11 @@ pub(crate) fn submit(handles: &Handles, called: u16, body: &[u8], done: impl FnO
         method::SQL_BATCH => {
             let prepared = SqlBatch::decode(body).and_then(|asked| {
                 let database = handles.database(asked.handle)?;
-                let statements = asked.statements.into_iter().map(|text| statement(text.text, text.values));
-                Ok((database, statements.collect::<Result<Vec<_>, _>>()?))
+                let writes = asked.statements.into_iter().map(|text| write_of(text, lend));
+                Ok((database, writes.collect::<Result<Vec<_>, _>>()?))
             });
             match prepared {
-                Ok((database, statements)) => database.batch_then(statements, move |written| {
+                Ok((database, writes)) => database.batch_then(writes, move |written| {
                     let batched = written.map(|done| SqlBatched { done: done.iter().map(done_of).collect() }.encode());
                     done(batched.map_err(Failure::from));
                 }),
@@ -702,6 +714,19 @@ fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize, nested: Nested<'_>) -> 
         Ok(SqlTxAnswer { rows: Some(rows), ..SqlTxAnswer::default() })
     };
     ran().unwrap_or_else(|failure| SqlTxAnswer { failure: Some(failure), ..SqlTxAnswer::default() })
+}
+
+/// A batch's write: a statement, or a call of another engine, which has no
+/// text and goes to `lend`.
+fn write_of(text: SqlText, lend: Lend<'_>) -> Result<Write, Failure> {
+    let Some(method) = text.method else {
+        return Ok(statement(text.text, text.values)?.into());
+    };
+    if !text.text.is_empty() || !text.values.is_empty() {
+        return Err(Failure::invalid("a batch's call of a queue has no text: its request is its body"));
+    }
+    let method = u16::try_from(method).map_err(|_| Failure::invalid(format!("method {method:#06x}")))?;
+    lend(method, text.body.as_deref().unwrap_or_default())
 }
 
 /// A statement from its text and the cells of its `?`s.

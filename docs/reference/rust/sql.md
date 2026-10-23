@@ -21,6 +21,24 @@ directory, made the first time it opens:
 let db = store.database("app").migrations("migrations").open()?;
 ```
 
+## Write
+
+```rust
+pub struct Write(_)
+```
+
+A write of a batch: a statement, or a job's add of a queue opened from
+the database, `queue.adding(&job)`. A statement becomes one by `into`:
+
+```rust
+let db = store.database("app").open()?;
+let indexing = db.queue::<Index>("indexing").open()?;
+db.batch([
+    tinystore::sql!("update notes set body = ? where id = ?", body, note).into(),
+    indexing.adding(&Index { note }), // committed with the row, or not at all
+])?;
+```
+
 ## Database
 
 ```rust
@@ -134,14 +152,18 @@ commit, each in a savepoint of it: one that fails rolls back alone.
 ### Database.batch
 
 ```rust
-pub fn batch<I>(&self, statements: I) -> Result<Vec<Done>>
+pub fn batch<I>(&self, writes: I) -> Result<Vec<Done>>
 where
     I: IntoIterator,
-    <I as >::Item: Into<Sql>,
+    <I as >::Item: Into<Write>,
 ```
 
-Runs statements known before they run as one, all of them or none, in
-one savepoint of the next shared commit: it costs what one write does.
+Runs writes known before they run as one, all of them or none, in one
+savepoint of the next shared commit: it costs what one write does, and
+gives what each did, in their order. A write is a statement, or a job's
+add of a queue opened from the database, `queue.adding(&job)`, which
+commits with the rows and changes one job, or none when its id was
+taken; see `Write`.
 
 ### Database.tx
 

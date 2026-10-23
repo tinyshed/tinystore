@@ -19,10 +19,20 @@ type Piece struct {
 	// parentheses: one column's comparison
 	bare bool
 	err  error
+	// lent is a write of another engine a batch carries in the piece's
+	// place, a queue's Adding; err refuses it anywhere else
+	lent *core.Lent
 }
 
-// Statement is a statement of a batch: a piece of SQL.
+// Statement is a write of a batch: a piece of SQL, or a queue's Adding.
 type Statement = Piece
+
+// CoreLent is how this module's packages put a write of their own in a
+// batch, as a queue's Adding does; a program has no use for it.
+func CoreLent(write core.Lent) Statement {
+	refused := core.Errorf(core.Invalid, "%s: a queue's Adding goes in a batch, not in a piece of SQL", write.What)
+	return Piece{lent: &write, err: refused}
+}
 
 // Condition is a condition a query keeps to: equal values by column, Eq, or
 // a piece of SQL.
@@ -90,7 +100,7 @@ func SQL(text string, values ...any) Piece {
 			out.values = append(out.values, cell)
 		} else {
 			if inner.err != nil {
-				return *inner
+				return Piece{err: inner.err}
 			}
 			out.text += inner.text
 			out.values = append(out.values, inner.values...)
@@ -208,7 +218,7 @@ func joinedWith(pieces []Piece, joiner string) Piece {
 	var values []any
 	for i, each := range pieces {
 		if each.err != nil {
-			return each
+			return Piece{err: each.err}
 		}
 		if several && !each.bare && !standsAlone(each.text) {
 			texts[i] = "(" + each.text + ")"

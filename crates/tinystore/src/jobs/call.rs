@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "sql"))]
 use super::queue::Change;
 use super::queue::Queue;
 use super::repeat::Asked as Repeat;
@@ -120,6 +120,16 @@ where
     #[cfg(feature = "wire")]
     pub(crate) fn write_then(self, change: Change, value: &V, done: impl FnOnce(Result<bool>) + Send + 'static) {
         self.queue.write_then(change, self.asked, value, done);
+    }
+
+    /// The call's write for a batch of the file the queue is kept in; see
+    /// [`Queue::lent`]. A call made through a transaction runs in it instead.
+    #[cfg(feature = "sql")]
+    pub(crate) fn lent(self, change: Change, value: &V) -> Result<crate::engine::LentWrite> {
+        if self.tx.is_some() {
+            return Err(Error::invalid("a job's call made through a transaction runs in it, not in a batch"));
+        }
+        self.queue.lent(change, self.asked, value)
     }
 
     fn when(mut self, when: When) -> Self {
