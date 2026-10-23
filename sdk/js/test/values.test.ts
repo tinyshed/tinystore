@@ -37,9 +37,15 @@ const codecs = {
 	float: valuesOf('float'),
 } as const
 
+// a u64 and an f32 are Rust's and Go's: JavaScript has neither
+const known = (kind: string): kind is keyof typeof codecs => kind in codecs
+
 test('every language writes and reads the same rows', () => {
 	for (const value of vectors.values) {
-		const kind = value.kind as keyof typeof codecs
+		const kind = value.kind
+		if (!known(kind)) {
+			continue
+		}
 		const given = kind === 'bytes' ? unhex(value.bytes ?? '') : value[kind]
 		const row = codecs[kind].encode(given)
 		expect(hex(row as Uint8Array), value.kind).toBe(value.row)
@@ -49,7 +55,10 @@ test('every language writes and reads the same rows', () => {
 
 test('a row read as another kind than wrote it is corrupt', () => {
 	for (const refused of vectors.refused) {
-		const codec = codecs[refused.read_as as keyof typeof codecs]
+		if (!known(refused.read_as)) {
+			continue
+		}
+		const codec = codecs[refused.read_as]
 		expect(() => codec.decode(unhex(refused.row))).toThrow(refused.says)
 	}
 })

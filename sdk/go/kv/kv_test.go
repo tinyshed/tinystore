@@ -235,8 +235,12 @@ func TestEachTypeKeepsItsValuesAsTheCoreKeepsARustType(t *testing.T) {
 		mixed := ways.Must(kv.OpenBucket[int64](store, "strings"))
 		_, _, err := mixed.Get(ctx, "mixed")
 		is(t, err, tinystore.ErrCorrupt)
+		// a uint64 past an int64 is kept, as Rust keeps a u64
 		wide := ways.Must(kv.OpenBucket[uint64](store, "wide"))
-		is(t, wide.Set(ctx, "j", math.MaxUint64), tinystore.ErrInvalid)
+		check(t, wide.Set(ctx, "j", math.MaxUint64))
+		if got, _ := ways.Must2(wide.Get(ctx, "j")); got != math.MaxUint64 {
+			t.Fatalf("the largest uint64 reads back %d", got)
+		}
 	})
 }
 

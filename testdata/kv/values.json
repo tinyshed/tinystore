@@ -1,5 +1,5 @@
 {
-  "about": "A kv value as every language writes its row: a bin's first byte the kind that wrote it, 1 text, 2 bytes, 3 JSON, 4 a float's eight bytes, big-endian. An integer is a row of its own, not bytes. Each SDK writes these rows and reads them back.",
+  "about": "A kv value as every language writes its row: a bin's first byte the kind that wrote it, 1 text, 2 bytes, 3 JSON, 4 a float's eight bytes, 5 a u64's eight bytes, 6 an f32's four, big-endian. An integer is a row of its own, not bytes. Each SDK writes these rows and reads them back; one whose language has no u64 or f32, Bun's and Python's, leaves their rows out.",
   "values": [
     {
       "kind": "text",
@@ -40,6 +40,26 @@
       "kind": "float",
       "float": -2.25,
       "row": "04c002000000000000"
+    },
+    {
+      "kind": "u64",
+      "u64": 5,
+      "row": "050000000000000005"
+    },
+    {
+      "kind": "u64",
+      "u64": 18446744073709551615,
+      "row": "05ffffffffffffffff"
+    },
+    {
+      "kind": "f32",
+      "f32": 1.0,
+      "row": "063f800000"
+    },
+    {
+      "kind": "f32",
+      "f32": -2.25,
+      "row": "06c0100000"
     }
   ],
   "refused": [
@@ -62,6 +82,11 @@
       "read_as": "float",
       "row": "020000000000000000",
       "says": "from a row of bytes"
+    },
+    {
+      "read_as": "f32",
+      "row": "050000000000000005",
+      "says": "an f32 from a row of a u64"
     }
   ]
 }

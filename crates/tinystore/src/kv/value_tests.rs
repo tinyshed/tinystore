@@ -119,6 +119,8 @@ fn every_language_writes_and_reads_the_same_rows() {
             "bytes" => round_trip(Bytes(unhex(case["bytes"].as_str().unwrap())), row),
             "json" => round_trip(case["json"].clone(), row),
             "float" => round_trip(case["float"].as_f64().unwrap(), row),
+            "u64" => round_trip(case["u64"].as_u64().unwrap(), row),
+            "f32" => round_trip(case["f32"].as_f64().unwrap() as f32, row),
             other => panic!("a kind {other}"),
         }
     }
@@ -129,6 +131,7 @@ fn every_language_writes_and_reads_the_same_rows() {
             "json" => decode::<Session>(&row).unwrap_err(),
             "bytes" => decode::<Bytes>(&row).unwrap_err(),
             "float" => decode::<f64>(&row).unwrap_err(),
+            "f32" => decode::<f32>(&row).unwrap_err(),
             other => panic!("a kind {other}"),
         };
         assert!(refused.0.contains(case["says"].as_str().unwrap()), "{}", refused.0);
