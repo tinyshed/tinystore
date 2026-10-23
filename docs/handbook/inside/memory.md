@@ -45,7 +45,9 @@ waits up to ten seconds for other work to give memory back, then fails with
 `limit`. A server that listens on the network has a budget of 1 GiB unless
 `--memory` says otherwise, because its callers are not under your control.
 Without a budget, as in an embedded store or the sidecar by default, every
-call still has its own bound.
+call still has its own bound. The store never reads a container's memory
+limit to make a budget of its own: inside a container, give `memory` (or
+`--memory`) a part of the container's limit yourself (contract STORE-05).
 
 The budget counts what the store's work holds: the rows of an answer, a block
 being decoded, an upload's buffers. It is not a limit on the process's

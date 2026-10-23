@@ -102,6 +102,13 @@ editor that loses reads the file again and decides: merge, ask the user, or
 save as a copy. `ifMatch` works on `put`, `upload`, `delete`, `copy` and
 `rename`.
 
+An ETag names the file's bytes and nothing else, so it is the same for the
+same bytes however they got there. A write that puts back exactly the bytes
+it read leaves the ETag as it was, and a second editor holding that ETag still
+matches. When "nobody wrote at all since I read" matters rather than "the
+bytes are the ones I read", keep a version of your own beside the file, in a
+bucket for example; a revision of the file's own is planned, and is not built.
+
 ## Write only if there is none
 
 ```ts

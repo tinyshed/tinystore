@@ -46,7 +46,8 @@ avatars.folder("users").folder(42).clear()?; // every file of user 42
   before its end if a byte changed (contract BLOB-02).
 - A reader keeps the version it opened through a replace or a delete
   (contract BLOB-03).
-- Of two writes that read the same ETag, one conflicts (contract BLOB-04).
+- Of two writes that read the same ETag, one conflicts, unless the first put
+  back the very bytes it read: an ETag names the bytes alone (contract BLOB-04).
 - A copy shares the bytes and outlives its source (contract BLOB-05).
 - A path is its own bytes on every file system: `Photo.jpg` and `photo.jpg`
   are two files everywhere (contract BLOB-08).

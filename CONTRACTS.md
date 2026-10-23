@@ -23,7 +23,7 @@ These contracts are what does not.
 - **STORE-02** Each engine MUST keep its own file in the store's directory, and no engine MUST wait on another engine's writer.
 - **STORE-03** Engines MUST close last opened first, each once, when the store closes or its last handle is dropped; a handle that outlives its store MUST fail `closed`.
 - **STORE-04** A store dropped without `close` MUST close its engines, keep what they held, and let go of its directory.
-- **STORE-05** The store's memory MUST stay within its budget, which a container's memory limit gives unless the program does; work that holds a writer MUST NOT wait for memory, and a large reservation MUST NOT be passed over forever by small ones.
+- **STORE-05** The store's memory MUST stay within the budget its program gives, and a store given none MUST bound each call alone, never reading a container's limit on its own; work that holds a writer MUST NOT wait for memory, and a large reservation MUST NOT be passed over forever by small ones.
 - **STORE-06** Background work MUST stop with `background: false`; a failure of it MUST be logged once and its recovery once, never a line a run.
 - **STORE-07** A program that links some engines MUST NOT pay for the others: an engine is a cargo feature, and a program that only logs links no store and no SQLite.
 - **STORE-08** A time an engine keeps MUST lie inside `[now − retention, now + skew]`, `now` read once a call from the store's clock; outside it MUST be `too_old` or `too_new`, naming the item.
@@ -131,7 +131,7 @@ These contracts are what does not.
 - **BLOB-01** A file MUST appear whole at its commit or not at all; an upload that does not commit, is cancelled, or disagrees with its size MUST leave nothing.
 - **BLOB-02** A whole read MUST be checked against the file's SHA-256 and fail `corrupt` before its end if a byte changed; the scrub MUST find each change once.
 - **BLOB-03** A reader MUST keep what it opened through a replace or a delete, on every platform.
-- **BLOB-04** Of two writes that read one ETag, one MUST conflict; `create` MUST write once.
+- **BLOB-04** Of two writes that read one ETag, one MUST conflict unless the first put back the very bytes it read, since an ETag names a file's bytes alone; `create` MUST write once.
 - **BLOB-05** A copy MUST share the bytes and outlive its source.
 - **BLOB-06** Opening the store MUST remove what a process that died left half written.
 - **BLOB-07** A file past `max_file_size`, or one that would leave the disk less free than the store keeps, MUST be refused and leave nothing.
