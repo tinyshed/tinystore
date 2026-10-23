@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant, SystemTime};
 
 use rusqlite::Connection;
@@ -187,6 +188,7 @@ impl File {
         if self.is_copy() {
             return self.as_a_copy(write);
         }
+        let _waiting = self.wait_for_the_writer("a write")?;
         let (work, slot) = keeping(write);
         self.group.write(&self.writer, bytes, work).map_err(|error| error.within(self.describe()))?;
         taken(&slot, &self.describe())
@@ -212,12 +214,17 @@ impl File {
         if self.is_copy() {
             return done(self.as_a_copy(write));
         }
+        let waiting = match self.wait_for_the_writer("a write") {
+            Ok(waiting) => waiting,
+            Err(error) => return done(Err(error)),
+        };
         let (work, slot) = keeping(write);
         let describe = self.describe();
         let answered: Done = Box::new(move |answer| {
             done(answer.map_err(|error| error.within(&describe)).and_then(|()| taken(&slot, &describe)));
         });
         self.group.submit(&self.writer, bytes, work, answered);
+        drop(waiting);
     }
 
     /// Runs `work` in a transaction that holds the writer alone, for reads that
@@ -233,7 +240,9 @@ impl File {
             return self.as_a_copy(work);
         }
         let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
+        let waiting = self.wait_for_the_writer("a transaction")?;
         let connection = lock(&self.writer);
+        drop(waiting);
         let waited = queued.map(|queued| queued.elapsed());
         let outcome = self.transaction_on(&connection, waited, work);
         drop(connection);
@@ -267,6 +276,7 @@ impl File {
         self.refuse_when_unlogged()?;
         execute(connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
         let _held = Held::enter(self.address());
+        let _holding = Holding::enter(self.address());
         let mut open = Open { connection, finished: false };
         let committed = Committed::default();
         let tx = Tx::new(connection, &committed, &self.settlers);
@@ -339,11 +349,15 @@ impl File {
             return Err(a_copy_takes_no_transaction(&self.describe()));
         }
         let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
+        let waiting = self.wait_for_the_writer("a transaction")?;
         let connection = lock(&self.writer);
+        drop(waiting);
+        let holding = Holding::enter(self.address());
         let waited = queued.map(|queued| queued.elapsed());
         self.refuse_when_unlogged()?;
         execute(&connection, BEGIN).map_err(|error| sql_error(format!("{}: a transaction", self.describe()), error))?;
-        let begun = Begun { file: self, connection, hooks: Committed::default(), committed: false, waited };
+        let begun =
+            Begun { file: self, _holding: holding, connection, hooks: Committed::default(), committed: false, waited };
         begun.tx().settle(Left::Before)?;
         Ok(begun)
     }
@@ -399,7 +413,9 @@ impl File {
     /// opens again.
     fn vacuum(&self) -> Result<u64> {
         self.refuse_inside_a_transaction("a vacuum", "would wait for the writer the transaction holds")?;
+        let waiting = self.wait_for_the_writer("a vacuum")?;
         let _writing = lock(&self.writer);
+        drop(waiting);
         // close takes the writer after it refuses new work
         self.refuse_when_closed("a vacuum")?;
         let vacuumed = vacuum::vacuum(&self.path, self.config.busy_timeout);
@@ -470,7 +486,9 @@ impl File {
         if self.migrated(history, migrations)? {
             return Ok(());
         }
+        let waiting = self.wait_for_the_writer("a migration")?;
         let connection = lock(&self.writer);
+        drop(waiting);
         let what = || format!("{}: {history}: foreign keys", self.describe());
         // foreign_keys cannot change inside a transaction, so it changes around one.
         execute(&connection, FOREIGN_KEYS_OFF).map_err(|error| sql_error(what(), error))?;
@@ -550,6 +568,30 @@ impl File {
             return Err(Error::closed(format!("{}: {what}", self.describe())));
         }
         Ok(())
+    }
+
+    /// Notes that this thread waits for the file's writer, when it does from
+    /// inside a transaction of another file, and refuses the wait when the
+    /// transaction that holds this writer waits, itself or through others,
+    /// for a writer this thread holds: neither would ever end.
+    fn wait_for_the_writer(&self, what: &str) -> Result<Waiting> {
+        if !in_a_transaction() {
+            return Ok(Waiting(None));
+        }
+        let (thread, file) = (thread::current().id(), self.address());
+        let mut waits = Waits::lock();
+        if waits.closes_a_ring(thread, file) {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                format!(
+                    "{}: {what} from inside a transaction would wait for the writer of a transaction that waits \
+                     for this one: roll this one back, and run it again",
+                    self.describe()
+                ),
+            ));
+        }
+        waits.waiting.push((thread, file));
+        Ok(Waiting(Some((thread, file))))
     }
 
     fn refuse_inside_a_transaction(&self, what: &str, why: &str) -> Result<()> {
@@ -656,6 +698,9 @@ fn no_writer(describe: &str) -> Result<Connection> {
 /// A transaction begun on a file by [`File::begin`].
 pub(crate) struct Begun<'f> {
     file: &'f File,
+    /// Let go before the writer, so that no wait reads the writer as this
+    /// thread's once another thread holds it.
+    _holding: Holding,
     connection: MutexGuard<'f, Connection>,
     hooks: Committed,
     committed: bool,
@@ -767,6 +812,84 @@ impl Drop for Held {
                 held.remove(at);
             }
         });
+    }
+}
+
+/// Which thread holds each file's writer in a transaction, and which file's
+/// writer each thread inside a transaction waits for.
+///
+/// Two transactions that each write the other's file would each wait for the
+/// writer the other holds, and neither would ever end. A wait that would
+/// close such a ring is refused instead, so that its transaction rolls back
+/// and the others go on. A thread outside a transaction holds no writer while
+/// it waits, so it closes no ring and is not noted.
+static WAITS: Mutex<Waits> = Mutex::new(Waits { holders: Vec::new(), waiting: Vec::new() });
+
+struct Waits {
+    /// A file, by address, and the thread that holds its writer in a transaction.
+    holders: Vec<(usize, ThreadId)>,
+    /// A thread inside a transaction, and the file whose writer it waits for.
+    waiting: Vec<(ThreadId, usize)>,
+}
+
+impl Waits {
+    fn lock() -> MutexGuard<'static, Waits> {
+        WAITS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether `thread` waiting for the writer of `file` closes a ring: the
+    /// thread that holds that writer waits, itself or through others, for a
+    /// writer `thread` holds.
+    fn closes_a_ring(&self, thread: ThreadId, file: usize) -> bool {
+        let mut wanted = file;
+        // a ring passes each thread that waits once at most
+        for _ in 0..=self.waiting.len() {
+            let Some(&(_, holder)) = self.holders.iter().find(|(held, _)| *held == wanted) else {
+                return false;
+            };
+            if holder == thread {
+                return true;
+            }
+            let Some(&(_, next)) = self.waiting.iter().find(|(waiter, _)| *waiter == holder) else {
+                return false;
+            };
+            wanted = next;
+        }
+        false
+    }
+}
+
+/// This thread holding a file's writer in a transaction, until it is dropped.
+struct Holding(usize, ThreadId);
+
+impl Holding {
+    fn enter(file: usize) -> Holding {
+        let thread = thread::current().id();
+        Waits::lock().holders.push((file, thread));
+        Holding(file, thread)
+    }
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        let mut waits = Waits::lock();
+        if let Some(at) = waits.holders.iter().position(|&held| held == (self.0, self.1)) {
+            waits.holders.swap_remove(at);
+        }
+    }
+}
+
+/// This thread, inside a transaction, waiting for a file's writer, until it
+/// is dropped; nothing for a thread outside one.
+struct Waiting(Option<(ThreadId, usize)>);
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        let Some(waits_for) = self.0 else { return };
+        let mut waits = Waits::lock();
+        if let Some(at) = waits.waiting.iter().rposition(|&waiting| waiting == waits_for) {
+            waits.waiting.remove(at);
+        }
     }
 }
 

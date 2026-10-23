@@ -233,6 +233,58 @@ fn a_transaction_a_statement_rolled_back_commits_nothing_of_what_runs_after() {
     insert(&file, "next").unwrap();
 }
 
+/// Runs `scenario` on a thread of its own, and fails the test when it has
+/// not ended within a minute, as two writers waiting for each other never do.
+fn within_a_minute<T: Send + 'static>(scenario: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, ended) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = done.send(scenario());
+    });
+    ended.recv_timeout(Duration::from_secs(60)).expect("it waited for good")
+}
+
+/// Two transactions, each of a file of its own, that call `across` on the
+/// other's file once both hold their writer: what each answered.
+fn each_across(across: fn(&File) -> Result<()>) -> [Result<()>; 2] {
+    let (_one_dir, one) = open(Config::default());
+    let (_two_dir, two) = open(Config::default());
+    within_a_minute(move || {
+        let both_hold = Arc::new(Barrier::new(2));
+        let transactions = [(Arc::clone(&one), Arc::clone(&two)), (two, one)].map(|(own, other)| {
+            let both_hold = Arc::clone(&both_hold);
+            thread::spawn(move || {
+                own.transaction(|tx| -> Result<()> {
+                    tx.execute("insert into t (v) values ('own')", []).map_err(|error| sql_error("insert", error))?;
+                    both_hold.wait();
+                    across(&other)
+                })
+            })
+        });
+        transactions.map(|transaction| transaction.join().unwrap())
+    })
+}
+
+/// That one of two transactions gave way, `unavailable`, and the other went on.
+fn one_gave_way(answers: &[Result<()>; 2]) {
+    let failed: Vec<&Error> = answers.iter().filter_map(|answer| answer.as_ref().err()).collect();
+    assert_eq!(failed.len(), 1, "one gives way, and the other goes on: {answers:?}");
+    assert_eq!(failed[0].kind(), ErrorKind::Unavailable, "{}", failed[0]);
+}
+
+#[test]
+fn two_transactions_each_writing_the_others_file_do_not_wait_for_each_other_for_good() {
+    one_gave_way(&each_across(|other| insert(other, "across").map(drop)));
+}
+
+#[test]
+fn two_transactions_each_beginning_one_of_the_others_file_do_not_wait_for_each_other_for_good() {
+    one_gave_way(&each_across(|other| {
+        other.transaction(|tx| {
+            tx.execute("insert into t (v) values ('across')", []).map(drop).map_err(|error| sql_error("insert", error))
+        })
+    }));
+}
+
 #[test]
 fn a_panicking_write_fails_alone_and_the_writer_goes_on() {
     let (_dir, file) = open(Config::default());

@@ -263,6 +263,11 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
 - A call on the database itself, not on `tx`, from inside its own
   transaction is `invalid`: it would wait for the writer the transaction
   holds.
+- In Rust, a write to another file from inside the function, such as a
+  bucket of the store, waits for that file's writer. If a transaction that
+  holds that writer is waiting for this one's, the write fails `unavailable`
+  instead of waiting forever. Return the error so that the transaction rolls
+  back, and run it again.
 
 ## When a write fails
 

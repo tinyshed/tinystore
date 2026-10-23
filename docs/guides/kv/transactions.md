@@ -82,6 +82,10 @@ let placed = store.tx(|tx| -> Result<bool, ShopError> {
   in `jobs.db`, so a handle of the other file is `invalid`. To commit keys and
   jobs together, open both from a database, `db.bucket` and `db.queue`, and
   use `db.tx`.
+- In Rust, a write to a database from inside the function waits for that
+  database's writer. If a transaction that holds that writer is waiting for
+  `kv.db`'s, the write fails `unavailable` instead of waiting forever. Return
+  the error so that the transaction rolls back, and run it again.
 
 ## Across a connection
 
