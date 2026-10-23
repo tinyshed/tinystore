@@ -60,7 +60,8 @@ fn refuse_plain_beyond_loopback(state: &State, address: &str) -> Result<()> {
 const STRANGERS_AT_MOST: usize = 64;
 /// A hello at most: a version, a token, a node's id and its address.
 const HELLO_AT_MOST: usize = 64 << 10;
-/// How long a link has for its hello, however its bytes trickle in.
+/// How long a link has for its hello from when it came, its TLS handshake
+/// included, however its bytes trickle in.
 const HELLO_WITHIN: Duration = Duration::from_secs(10);
 
 /// A link whose node has not proven its token yet, counted among the
@@ -186,13 +187,14 @@ impl Link<'_> {
 }
 
 fn serve_link(state: &Arc<State>, stream: TcpStream, stranger: Stranger) -> Result<()> {
+    let came = Instant::now();
     let address = stream.peer_addr().map_or_else(|_| "an unknown address".to_owned(), |at| at.to_string());
     let (mut reading, writing) = transport::accept(state, stream)?;
     reading.set_timeout(Duration::from_secs(1))?;
     writing.set_timeout(SILENT_AT_MOST)?;
     let out = Arc::new(Out::new(writing));
     let mut frames = Frames::default();
-    let hello = read_hello(state, &mut reading, &mut frames)?;
+    let hello = read_hello(state, &mut reading, &mut frames, came)?;
     let Some(Message::Hello { version, token, node, address: said }) = hello else {
         return Err(Error::invalid("a link began with no hello"));
     };
@@ -421,10 +423,9 @@ fn read_one(state: &State, reading: &mut Reading, frames: &mut Frames, at_most: 
 }
 
 /// Reads the hello a link begins with, before anything of the other node is
-/// trusted: `HELLO_AT_MOST` bytes, within `HELLO_WITHIN` however they trickle
-/// in; `None` once the link ended.
-fn read_hello(state: &State, reading: &mut Reading, frames: &mut Frames) -> Result<Option<Message>> {
-    let began = Instant::now();
+/// trusted: `HELLO_AT_MOST` bytes, by `HELLO_WITHIN` after the link `came`
+/// however they trickle in; `None` once the link ended.
+fn read_hello(state: &State, reading: &mut Reading, frames: &mut Frames, came: Instant) -> Result<Option<Message>> {
     loop {
         if let Some(message) = frames.next_within(HELLO_AT_MOST)? {
             return Ok(Some(message));
@@ -432,7 +433,7 @@ fn read_hello(state: &State, reading: &mut Reading, frames: &mut Frames) -> Resu
         if state.stopping() {
             return Ok(None);
         }
-        if began.elapsed() > HELLO_WITHIN {
+        if came.elapsed() > HELLO_WITHIN {
             return Err(Error::new(ErrorKind::Unavailable, "a link said no hello in time"));
         }
         match frames.fill(reading) {

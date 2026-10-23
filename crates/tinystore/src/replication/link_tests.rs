@@ -243,14 +243,23 @@ fn a_node_with_another_token_takes_nothing() {
     home.close().unwrap();
 }
 
-/// Whether the node at the other end of `stranger` closed it within `within`.
+/// Whether the node at the other end of `stranger` closed it within `within`;
+/// what it sent meanwhile, as TLS's tickets, is read and dropped.
 fn closed_within(stranger: &mut std::net::TcpStream, within: Duration) -> bool {
     use std::io::Read;
-    stranger.set_read_timeout(Some(within)).unwrap();
-    let mut byte = [0; 1];
-    match stranger.read(&mut byte) {
-        Ok(read) => read == 0,
-        Err(error) => !matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    let deadline = Instant::now() + within;
+    let mut sent = [0; 4096];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        stranger.set_read_timeout(Some(left)).unwrap();
+        match stranger.read(&mut sent) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(error) => return !super::message::timed_out(&error),
+        }
     }
 }
 
@@ -287,6 +296,7 @@ fn a_link_whose_hello_trickles_in_is_closed_within_a_bound() {
 fn a_node_holds_a_bounded_number_of_links_that_said_no_hello_yet() {
     let dir = tempfile::tempdir().unwrap();
     let (home, address) = serving(dir.path());
+    home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
     let silent: Vec<_> = (0..64).map(|_| std::net::TcpStream::connect(&address).unwrap()).collect();
     let mut one_more = std::net::TcpStream::connect(&address).unwrap();
     assert!(closed_within(&mut one_more, Duration::from_secs(5)), "the node closed a link past its bound");
@@ -294,7 +304,6 @@ fn a_node_holds_a_bounded_number_of_links_that_said_no_hello_yet() {
     // and takes links again once those went
     let copy_dir = tempfile::tempdir().unwrap();
     let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
-    home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
     assert_eq!(copy.bucket::<String>("sessions").open().unwrap().get("k").unwrap().as_deref(), Some("v"));
     copy.close().unwrap();
     home.close().unwrap();
@@ -1063,6 +1072,78 @@ fn nodes_linked_through_tls_carry_a_snapshot_a_file_and_a_write_of_mebibytes() {
     home.close().unwrap();
 }
 
+/// A node serving TLS with a certificate written in `certs`, and the
+/// certificate a stranger trusts it by.
+#[cfg(feature = "replication-tls")]
+fn serving_tls(dir: &Path, certs: &Path) -> (Store, std::net::SocketAddr, std::path::PathBuf) {
+    let (cert, key) = certified(certs, "home");
+    let tls = NodeTls { cert: Some(cert.clone()), key: Some(key), roots: None };
+    let home = node_with(dir, Node { serve: Some("127.0.0.1:0".into()), tls: Some(tls), ..Node::default() });
+    let address = bound(home.node().unwrap()).unwrap();
+    (home, address, cert)
+}
+
+/// The TLS of a stranger to a node, who trusts its certificate `cert`.
+#[cfg(feature = "replication-tls")]
+fn stranger_s_tls(cert: &Path) -> rustls::ClientConnection {
+    let config = Arc::new(super::transport::client_config(cert).unwrap());
+    rustls::ClientConnection::new(config, rustls::pki_types::ServerName::try_from("localhost").unwrap()).unwrap()
+}
+
+/// Sends `bytes` to the node at the other end of `stranger` a byte each
+/// quarter second, longer than the 25 seconds it has to close the link;
+/// whether it did.
+#[cfg(feature = "replication-tls")]
+fn closed_as_bytes_trickle(stranger: &mut std::net::TcpStream, bytes: &[u8]) -> bool {
+    use std::io::Write;
+    let (quarter, bound) = (Duration::from_millis(250), Duration::from_secs(25));
+    assert!(quarter * bytes.len() as u32 > bound, "the bytes outlast the bound");
+    let began = Instant::now();
+    bytes
+        .iter()
+        .take_while(|_| began.elapsed() < bound)
+        .any(|&byte| stranger.write_all(&[byte]).is_err() || closed_within(stranger, quarter))
+}
+
+// rustls' own handshake reads on until the handshake ends: bytes that trickle
+// in, each before a read times out, would hold the link for good.
+#[cfg(feature = "replication-tls")]
+#[test]
+fn nodes_linked_through_tls_close_a_link_whose_handshake_trickles_in_within_a_bound() {
+    let (dir, certs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address, cert) = serving_tls(dir.path(), certs.path());
+    let mut client_hello = Vec::new();
+    stranger_s_tls(&cert).write_tls(&mut client_hello).unwrap();
+    let mut stranger = std::net::TcpStream::connect(address).unwrap();
+    assert!(closed_as_bytes_trickle(&mut stranger, &client_hello), "a handshake a byte at a time holds no link");
+    home.close().unwrap();
+}
+
+// A read of a TLS link waits for a record whole: one whose bytes trickle in
+// would hold the read, and its link, past the hello's bound.
+#[cfg(feature = "replication-tls")]
+#[test]
+fn nodes_linked_through_tls_close_a_link_whose_hello_trickles_in_within_a_bound() {
+    use std::io::Write;
+    let (dir, certs) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (home, address, cert) = serving_tls(dir.path(), certs.path());
+    let mut stranger = std::net::TcpStream::connect(address).unwrap();
+    let mut tls = stranger_s_tls(&cert);
+    while tls.is_handshaking() {
+        tls.complete_io(&mut stranger).unwrap();
+    }
+    // the beginning of a message no longer than a hello may be, one record of 2 KiB
+    let mut begun = 60_000u32.to_le_bytes().to_vec();
+    begun.resize(2048, 0);
+    tls.writer().write_all(&begun).unwrap();
+    let mut record = Vec::new();
+    while tls.wants_write() {
+        tls.write_tls(&mut record).unwrap();
+    }
+    assert!(closed_as_bytes_trickle(&mut stranger, &record), "a record a byte at a time holds no link");
+    home.close().unwrap();
+}
+
 // contract: REPL-12
 #[test]
 fn a_counter_s_adds_on_a_copy_answer_at_once_and_reach_its_home_each_once() {
@@ -1445,7 +1526,7 @@ impl Unasking {
     fn to(dir: &Path, address: &str) -> Unasking {
         let state = State::new(dir, Node::default(), 0).unwrap();
         let tcp = super::follow::connect(address).unwrap();
-        let (reading, writing) = super::transport::connect(&state, address, tcp).unwrap();
+        let (mut reading, writing) = super::transport::connect(&state, address, tcp).unwrap();
         reading.set_timeout(Duration::from_millis(100)).unwrap();
         let out = super::serve::Out::new(writing);
         out.send(&state.hello(String::new())).unwrap();

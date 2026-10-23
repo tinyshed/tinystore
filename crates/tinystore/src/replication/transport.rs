@@ -8,7 +8,11 @@ use std::net::TcpStream;
 #[cfg(feature = "replication-tls")]
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(feature = "replication-tls")]
+use std::time::Instant;
 
+#[cfg(feature = "replication-tls")]
+use super::message::timed_out;
 use super::node::State;
 #[cfg(feature = "replication-tls")]
 use crate::sync::lock;
@@ -36,6 +40,8 @@ pub(crate) struct Reading {
     /// What was read of the socket and not given to TLS yet.
     #[cfg_attr(not(feature = "replication-tls"), expect(dead_code, reason = "plain TCP keeps nothing back"))]
     unread: Vec<u8>,
+    /// How long a read waits for a record whole, as the socket's for a byte.
+    timeout: Option<Duration>,
 }
 
 /// The end of a link its threads write, one at a time.
@@ -98,21 +104,49 @@ pub(crate) fn plain_refused() -> &'static str {
 fn ends(tcp: TcpStream, tls: Option<rustls::Connection>) -> Result<(Reading, Writing)> {
     let session = match tls {
         Some(mut connection) => {
-            let mut handshaking = tcp.try_clone().map_err(|error| Error::io("a link", error))?;
-            handshaking.set_read_timeout(Some(HANDSHAKE)).map_err(|error| Error::io("a link", error))?;
-            // a bound on the whole of it, which a byte at a time would outlast a read at a time
-            let began = std::time::Instant::now();
-            while connection.is_handshaking() {
-                if began.elapsed() > HANDSHAKE {
-                    return Err(Error::new(crate::ErrorKind::Unavailable, "a link's TLS handshake took too long"));
-                }
-                connection.complete_io(&mut handshaking).map_err(|error| Error::io("a link's TLS handshake", error))?;
-            }
+            handshake(&mut connection, &tcp)?;
             Session::Tls(Arc::new(Mutex::new(connection)))
         }
         None => Session::Plain,
     };
     split(tcp, session)
+}
+
+/// Makes a link's TLS handshake within `HANDSHAKE`, however its bytes trickle
+/// in: rustls' `complete_io` reads on until the handshake ends, so a peer
+/// sending a byte a second would hold the link, and a stranger's slot, for good.
+#[cfg(feature = "replication-tls")]
+fn handshake(connection: &mut rustls::Connection, tcp: &TcpStream) -> Result<()> {
+    let deadline = Instant::now() + HANDSHAKE;
+    let too_long = || Error::new(crate::ErrorKind::Unavailable, "a link's TLS handshake took too long");
+    let failed =
+        |error: io::Error| if timed_out(&error) { too_long() } else { Error::io("a link's TLS handshake", error) };
+    let mut socket = tcp;
+    loop {
+        // each wait on the socket ends by the deadline
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(too_long());
+        }
+        socket.set_read_timeout(Some(left)).and_then(|()| socket.set_write_timeout(Some(left))).map_err(failed)?;
+        while connection.wants_write() {
+            connection.write_tls(&mut socket).map_err(failed)?;
+        }
+        if !connection.is_handshaking() {
+            return Ok(());
+        }
+        match connection.read_tls(&mut socket) {
+            Ok(0) => return Err(Error::new(crate::ErrorKind::Unavailable, "a link ended in its TLS handshake")),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(failed(error)),
+        }
+        if let Err(error) = connection.process_new_packets() {
+            // the alert that says why, if the socket takes it
+            let _ = connection.write_tls(&mut socket);
+            return Err(tls_error(error));
+        }
+    }
 }
 
 #[cfg(not(feature = "replication-tls"))]
@@ -123,13 +157,16 @@ fn ends(tcp: TcpStream, tls: Option<()>) -> Result<(Reading, Writing)> {
 
 fn split(tcp: TcpStream, session: Session) -> Result<(Reading, Writing)> {
     let clone = || tcp.try_clone().map_err(|error| Error::io("a link", error));
-    let reading = Reading { tcp: clone()?, answers: clone()?, session: session.clone(), unread: Vec::new() };
+    let reading =
+        Reading { tcp: clone()?, answers: clone()?, session: session.clone(), unread: Vec::new(), timeout: None };
     Ok((reading, Writing { tcp, session }))
 }
 
 impl Reading {
-    /// How long a read waits for bytes before it says it timed out.
-    pub(crate) fn set_timeout(&self, timeout: Duration) -> Result<()> {
+    /// How long a read waits for bytes before it says it timed out: over TLS,
+    /// for a record whole, however its bytes trickle in.
+    pub(crate) fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
+        self.timeout = Some(timeout);
         self.tcp.set_read_timeout(Some(timeout)).map_err(|error| Error::io("a link", error))
     }
 }
@@ -139,39 +176,57 @@ impl Read for Reading {
         match &self.session {
             Session::Plain => self.tcp.read(buf),
             #[cfg(feature = "replication-tls")]
-            Session::Tls(tls) => loop {
-                match lock(tls).reader().read(buf) {
-                    Ok(read) => return Ok(read),
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) => return Err(error),
+            Session::Tls(tls) => {
+                let tls = Arc::clone(tls);
+                self.read_records(&tls, buf)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "replication-tls")]
+impl Reading {
+    /// Reads what TLS decrypted, reading the socket until a record is whole or
+    /// the read's timeout passed: a record whose bytes trickle in times out as
+    /// a silent socket does, so that the caller checks its own bound, a
+    /// hello's above all, where a read that waited for it whole would wait on.
+    fn read_records(&mut self, tls: &Mutex<rustls::Connection>, buf: &mut [u8]) -> io::Result<usize> {
+        let began = Instant::now();
+        loop {
+            match lock(tls).reader().read(buf) {
+                Ok(read) => return Ok(read),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error),
+            }
+            if self.unread.is_empty() {
+                if self.timeout.is_some_and(|timeout| began.elapsed() >= timeout) {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "no TLS record came whole in time"));
                 }
-                if self.unread.is_empty() {
-                    let mut raw = [0; 16 << 10];
-                    let read = self.tcp.read(&mut raw)?;
-                    if read == 0 {
-                        return Ok(0);
-                    }
-                    self.unread.extend_from_slice(&raw[..read]);
+                let mut raw = [0; 16 << 10];
+                let read = self.tcp.read(&mut raw)?;
+                if read == 0 {
+                    return Ok(0);
                 }
-                // Fed only until a record's plaintext is ready, the rest kept for
-                // the next turn: rustls refuses bytes while more than 16 KiB of
-                // plaintext waits unread, and one read may finish two records.
-                let mut connection = lock(tls);
-                let mut rest = &self.unread[..];
-                let mut closed = false;
-                while !rest.is_empty() {
-                    closed = connection.read_tls(&mut rest)? == 0;
-                    let ready = connection.process_new_packets().map_err(io::Error::other)?.plaintext_bytes_to_read();
-                    if closed || ready > 0 {
-                        break;
-                    }
+                self.unread.extend_from_slice(&raw[..read]);
+            }
+            // Fed only until a record's plaintext is ready, the rest kept for
+            // the next turn: rustls refuses bytes while more than 16 KiB of
+            // plaintext waits unread, and one read may finish two records.
+            let mut connection = lock(tls);
+            let mut rest = &self.unread[..];
+            let mut closed = false;
+            while !rest.is_empty() {
+                closed = connection.read_tls(&mut rest)? == 0;
+                let ready = connection.process_new_packets().map_err(io::Error::other)?.plaintext_bytes_to_read();
+                if closed || ready > 0 {
+                    break;
                 }
-                let fed = if closed { self.unread.len() } else { self.unread.len() - rest.len() };
-                self.unread.drain(..fed);
-                while connection.wants_write() {
-                    connection.write_tls(&mut self.answers)?;
-                }
-            },
+            }
+            let fed = if closed { self.unread.len() } else { self.unread.len() - rest.len() };
+            self.unread.drain(..fed);
+            while connection.wants_write() {
+                connection.write_tls(&mut self.answers)?;
+            }
         }
     }
 }
@@ -269,7 +324,7 @@ fn server_config(cert: &std::path::Path, key: &std::path::Path) -> Result<rustls
 }
 
 #[cfg(feature = "replication-tls")]
-fn client_config(roots: &std::path::Path) -> Result<rustls::ClientConfig> {
+pub(super) fn client_config(roots: &std::path::Path) -> Result<rustls::ClientConfig> {
     use rustls::pki_types::CertificateDer;
     use rustls::pki_types::pem::PemObject;
     let mut store = rustls::RootCertStore::empty();
