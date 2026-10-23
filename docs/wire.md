@@ -53,16 +53,8 @@ END is 1: the sender's last frame on its stream. ERROR is 2, only beside END:
 the body is [an error](#errors).
 
 A method's high byte is its engine and its low byte the operation, so a new
-engine takes a new high byte and the frame stays as it is:
-
-| high byte | engine  |
-|-----------|---------|
-| `0x01`    | kv      |
-| `0x02`    | jobs    |
-| `0x03`    | blobs   |
-| `0x04`    | sql     |
-| `0x05`    | records |
-| `0x06`    | metrics |
+engine takes a new high byte and the frame stays as it is; [Methods](#methods)
+has every engine's byte and every method's number.
 
 A `HELLO` from Bun:
 
@@ -447,47 +439,57 @@ that refuses to stop. In both cases, it prints a warning once on stderr.
 
 ## Methods
 
-Each engine's messages are fixed on this page with its slice, before its
-code: numbers, keys, types, shapes and vectors. A call answers with one
-message; whatever returns a collection is a download, its items `DATA` under
-credit and its last `DATA` saying where the next page begins. What each will
-carry:
+Every method is declared in `protocol/*.wire`, a file an engine, in the
+language `protocol/README.md` defines: its number, who
+may call it, the message it takes, and its answer's shape and messages. Each
+message's fields are declared there too, their keys, their types and a
+comment after a field saying what it holds, and `testdata/wire/protocol.json`
+holds a vector of every message, which every SDK reads. The tables below are
+written from those files by `just protocol`, and CI checks them, so a number
+here is the number the server answers.
 
-| engine     | operations                                                                               | shape                                                                                                   |
-|------------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| the server | stop                                                                                     | a call                                                                                                  |
-| kv         | open, get, has, set, delete, take, touch, add, max, clear, batch, view, allow, configure | calls                                                                                                   |
-|            | scan                                                                                     | a download, an entry a message                                                                          |
-|            | watch                                                                                    | a download that does not end: a config's kept fields, again after each change                           |
-|            | run                                                                                      | both ways: the answer a key keeps, or the key's run handed over and its answer back                     |
-|            | usage, refund                                                                            | calls on a quota, which allow uses                                                                      |
-| jobs       | open, enqueue of many, update, cancel, get, claim, settle of many, step, keep            | calls                                                                                                   |
-|            | scan                                                                                     | a download, an entry a message                                                                          |
-|            | watch                                                                                    | a download that ends with its job: its entry, again after each change                                   |
-|            | work                                                                                     | both ways: jobs out, their outcomes back                                                                |
-| blobs      | open, stat, delete, copy, move, usage, clear                                             | calls                                                                                                   |
-|            | scan                                                                                     | a download, an object a message                                                                         |
-|            | put                                                                                      | an upload                                                                                               |
-|            | get, with an offset and a length                                                         | a download; a whole read whose bytes do not match its hash ends with ERROR and `corrupt` instead of END |
-| sql        | open, with its migration files; exec; batch                                              | calls                                                                                                   |
-|            | query                                                                                    | a download: the columns, then rows a message at a time                                                  |
-| records    | append of many, drop                                                                     | calls                                                                                                   |
-|            | read, follow                                                                             | a download, records a message at a time                                                                 |
-|            | lines                                                                                    | an upload of another program's output                                                                   |
-| metrics    | ingest, drop                                                                             | calls                                                                                                   |
-|            | read, aggregate                                                                          | a download, a series a message, or several for a series longer than a body holds                        |
-| search     | open, set, setMany, delete, get, search, status, dropIndex, list                         | calls                                                                                                   |
+A method's high byte is its engine and its low byte the operation:
+
+<!-- written from protocol/*.wire by `just protocol`: engines -->
+| high byte | engine   |
+|-----------|----------|
+| `0x00`    | server   |
+| `0x01`    | kv       |
+| `0x02`    | jobs     |
+| `0x03`    | sql      |
+| `0x04`    | blobs    |
+| `0x05`    | records  |
+| `0x06`    | metrics  |
+| `0x07`    | config   |
+| `0x08`    | backup   |
+| `0x09`    | locks    |
+| `0x0a`    | channels |
+| `0x0b`    | search   |
+<!-- end of what `just protocol` writes -->
+
+`may` is who may call it: a `read` connection calls the methods marked
+`read` alone, and an `admin` method is an admin connection's. An answer
+`T` is a call's one message; the others are the shapes of
+[Streams](#streams):
+
+| answer                 | the stream                                                                                                                                       |
+|------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| `T`                    | a call: a `T` as its `RESPONSE`·END                                                                                                              |
+| download `T` until `U` | after its `RESPONSE`, any number of `T` as `DATA`, then a `U` with END; an answer that fits one message may be a `U` as the `RESPONSE`·END alone |
+| handover `T`           | a `T` as the `RESPONSE`·END; or the run handed to the client, which sends the `T` to keep as its last `DATA`                                     |
+| exchange `T` for `U`   | after its `RESPONSE`, `T` from the server and `U` from the client as `DATA`, until each side ends its own                                        |
 
 The values they carry:
 
-- the server's own call carries nothing, `{}` each way;
 - a kv value is nil, an integer or bin, as its row keeps it, a bin's first
-  byte the kind that wrote it (1 text, 2 bytes, 3 JSON, 4 a float's eight
-  bytes), and a version is an opaque bin compared only for equality;
+  byte the kind that wrote it (1 text, 2 bytes, 3 JSON, 4 a float 64's eight
+  bytes, 5 an unsigned 64, 6 a float 32), and a version is an opaque bin
+  compared only for equality;
 - a job's value is its JSON as str;
 - an SQL value is one of SQLite's five: nil, an integer, a float, str or bin;
-- a record's attribute keeps its JSON spelling as str;
-- a series' samples, and an aggregate's buckets and values, are bin columns.
+- an event's fields and context are a JSON object as str;
+- a series' samples are two bin columns, an int64 time and a float64 value a
+  sample, 8 bytes each, little-endian, so that every value's bits come back;
 - a search's document is its JSON as str, and a vector bin, four bytes a
   little-endian float a dimension.
 
@@ -495,11 +497,12 @@ The values they carry:
 
 The server's own methods take the range below the engines', `0x00xx`.
 
-| method   |        | request                                                                            | answer                                                                                                                                                             |
-|----------|--------|------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `0x0001` | stop   | `{}`                                                                               | `{}`, then the server stops as its closing does: the streams running finish, every connection is told `GOAWAY`, and a sidecar gives back `SERVE` and its directory |
-| `0x0002` | clock  | a clock: a time to set it to, a while to move it forward by, or neither to read it | a clock: the time it reads once moved                                                                                                                              |
-| `0x0003` | backup | `{1: files}`                                                                       | a download: `{}`, then the zip of the whole store in `DATA`, its bytes as they come, the last with END                                                             |
+<!-- written from protocol/*.wire by `just protocol`: methods of server -->
+| method   | name         | may   | request        | answer         |
+|----------|--------------|-------|----------------|----------------|
+| `0x0001` | server.stop  | admin | `Empty`        | `Empty`        |
+| `0x0002` | server.clock | admin | `server.Clock` | `server.Clock` |
+<!-- end of what `just protocol` writes -->
 
 A stop is an admin connection's alone, `permission` to a data connection, and
 a server whose program said nothing of stopping refuses it with `permission`
@@ -508,130 +511,60 @@ too: a program serving its own store decides when that store's server stops.
 `tinystore stop` ends a sidecar and how an SDK newer than the sidecar it found
 replaces it with its own binary, as [Versions](#versions) says.
 
-Only an admin connection can ask for a backup. The server first opens each
-engine whose file is in the directory. It copies each database that no client
-has opened, without opening it. Then it sends what the `backup` package
-writes: a copy of every engine's file, and a manifest of their sizes and
-checksums, which a restore checks. `files`, an array of str, names files of
-the application's by their paths inside the store's directory, which the zip
-holds beside the engines' with the engine `host`; a path outside the
-directory, or an engine's own, is `invalid`.
-
-A clock is `{1: at, 2: advance}`. `at` is a time in unix milliseconds, and
-`advance` is a duration in milliseconds. Only a private server started with
-`tinystore serve --stdio --clock <time>` has a clock that moves, and the store
-runs on it instead of the system's clock. An SDK starts such a server when you
-open a store with `private` and `clock`. Only an admin connection can move the
-clock, and only forward. The server answers `invalid` to a time before the
-clock's, a negative duration, both fields at once, or a clock call to a server
-that runs on the system's clock.
+Only a private server started with `tinystore serve --stdio --clock <time>`
+has a clock that moves, and the store runs on it instead of the system's
+clock. An SDK starts such a server when you open a store with `private` and
+`clock`. Only an admin connection can move the clock, and only forward. The
+server answers `invalid` to a time before the clock's, both fields at once,
+or a clock call to a server that runs on the system's clock.
 
 ### kv
 
-`kv.open` answers a handle on a bucket of values, on counters, on a config, on
-a limiter, on once's answers or on a quota, and every other call carries it. A handle holds `kv.Raw` values, so the server reads
-what any bucket wrote.
+Each open, of a bucket, counters, a rate limit, a quota or once's answers,
+answers a handle, which every call on it carries. A handle holds kv's rows as
+they are, so the server reads what any bucket wrote.
 
-| method   |           | request                                                                      | answer                                                                                                                                                                           |
-|----------|-----------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `0x0101` | open      | a bucket                                                                     | a handle                                                                                                                                                                         |
-| `0x0102` | get       | a call                                                                       | an entry: found, value, version, expires; on counters the value, 0 when absent                                                                                                   |
-| `0x0103` | has       | a call                                                                       | an entry: found                                                                                                                                                                  |
-| `0x0104` | set       | a call with its value                                                        | an entry: found, version, expires; with if absent, found is false when a live key was there, and the entry is that key's                                                         |
-| `0x0105` | delete    | a call                                                                       | `{}`                                                                                                                                                                             |
-| `0x0106` | take      | a call                                                                       | an entry: found, value                                                                                                                                                           |
-| `0x0107` | touch     | a call with ttl or expire at                                                 | an entry: found                                                                                                                                                                  |
-| `0x0108` | add       | a call with n                                                                | an entry: the counter's value                                                                                                                                                    |
-| `0x0109` | max       | a call with n                                                                | an entry: the counter's value                                                                                                                                                    |
-| `0x010a` | clear     | a call naming a branch                                                       | `{}`                                                                                                                                                                             |
-| `0x010b` | batch     | calls, in one transaction                                                    | results; a call that fails fails them all, and `what` names it as `call`                                                                                                         |
-| `0x010c` | view      | calls, get and has, from one snapshot                                        | results                                                                                                                                                                          |
-| `0x010d` | scan      | a call naming a branch, after and limit                                      | a download: `{}`, an entry a `DATA` with its key, a page                                                                                                                         |
-| `0x010e` | allow     | a call on a limiter or a quota: a key, and n requests or uses, 1 when absent | an allowance                                                                                                                                                                     |
-| `0x010f` | configure | a config's fields to keep and paths to forget                                | `{}`                                                                                                                                                                             |
-| `0x0110` | watch     | a call on a config                                                           | a download that does not end: `{}`, then the kept fields a `DATA`, now and after each change                                                                                     |
-| `0x0111` | run       | a call on once's answers, whose REQUEST leaves the client's side open        | the answer kept, found, which ends the stream; or not found, the run handed over: the client's last `DATA` is the entry to keep, and the server's, `{}`, follows once it is kept |
-| `0x0112` | usage     | a call on a quota: a key                                                     | an allowance, nothing used: ok says one more use would pass                                                                                                                      |
-| `0x0113` | refund    | a call on a quota: a key, and n uses, 1 when absent                          | `{}`                                                                                                                                                                             |
+<!-- written from protocol/*.wire by `just protocol`: methods of kv -->
+| method   | name               | may   | request            | answer               |
+|----------|--------------------|-------|--------------------|----------------------|
+| `0x0101` | kv.bucket.open     | read  | `kv.BucketOpen`    | `Handle`             |
+| `0x0102` | kv.get             | read  | `kv.Call`          | `kv.Entry`           |
+| `0x0103` | kv.has             | read  | `kv.Call`          | `kv.Found`           |
+| `0x0104` | kv.set             | write | `kv.Call`          | `kv.Written`         |
+| `0x0105` | kv.create          | write | `kv.Call`          | `kv.Written`         |
+| `0x0106` | kv.take            | write | `kv.Call`          | `kv.Entry`           |
+| `0x0107` | kv.delete          | write | `kv.Call`          | `kv.Found`           |
+| `0x0108` | kv.expire          | write | `kv.Call`          | `kv.Found`           |
+| `0x0109` | kv.clear           | write | `kv.Branch`        | `Empty`              |
+| `0x010a` | kv.list            | read  | `kv.List`          | `kv.Page`            |
+| `0x0110` | kv.counters.open   | read  | `kv.CountersOpen`  | `Handle`             |
+| `0x0111` | kv.counters.add    | write | `kv.Call`          | `kv.Count`           |
+| `0x0112` | kv.counters.get    | read  | `kv.Call`          | `kv.Count`           |
+| `0x0113` | kv.counters.delete | write | `kv.Call`          | `kv.Found`           |
+| `0x0114` | kv.counters.clear  | write | `kv.Branch`        | `Empty`              |
+| `0x0120` | kv.rateLimit.open  | read  | `kv.RateLimitOpen` | `Handle`             |
+| `0x0121` | kv.quota.open      | read  | `kv.QuotaOpen`     | `Handle`             |
+| `0x0122` | kv.allow           | write | `kv.Call`          | `kv.Allowance`       |
+| `0x0123` | kv.peek            | read  | `kv.Call`          | `kv.Allowance`       |
+| `0x0124` | kv.reset           | write | `kv.Call`          | `Empty`              |
+| `0x0125` | kv.refund          | write | `kv.Call`          | `Empty`              |
+| `0x0130` | kv.once.open       | read  | `kv.OnceOpen`      | `Handle`             |
+| `0x0131` | kv.once.run        | write | `kv.Call`          | handover `kv.Answer` |
+| `0x0132` | kv.once.get        | read  | `kv.Call`          | `kv.Answer`          |
+| `0x0133` | kv.once.delete     | write | `kv.Call`          | `kv.Found`           |
+| `0x0140` | kv.tx              | write | `kv.Tx`            | `kv.TxResults`       |
+<!-- end of what `just protocol` writes -->
 
-A bucket:
-
-| key | field        | type             |                                                                                               |
-|-----|--------------|------------------|-----------------------------------------------------------------------------------------------|
-| 1   | name         | str              | `[a-z0-9][a-z0-9_-]{0,63}`                                                                    |
-| 2   | counters     | bool             | counters rather than values                                                                   |
-| 3   | default ttl  | uint             | milliseconds                                                                                  |
-| 4   | sliding      | uint             | milliseconds; values alone                                                                    |
-| 5   | lose at most | uint             | milliseconds; counters alone                                                                  |
-| 6   | config       | bool             | a config rather than values                                                                   |
-| 7   | rate         | uint             | a limiter's requests every per; a bucket with a rate is a limiter                             |
-| 8   | per          | uint             | milliseconds                                                                                  |
-| 9   | burst        | uint             | the requests a limiter lets through at once; rate when absent                                 |
-| 10  | once         | bool             | the answers `kv.run` keeps, a day unless default ttl says; get and delete read and forget one |
-| 11  | windows      | array of windows | a quota's, one to eight: a bucket with windows is a quota, which delete also takes            |
-| 12  | in           | str              | a SQL database's name, already opened; omitted for kv.db                                      |
-
-A window is `{1: name, 2: limit, 3: per}`: a key may use up to limit every per
-milliseconds from its first use, the name `[a-z][a-z0-9_]{0,31}`.
-
-A handle is `{1: uint}`. A call:
-
-| key | field      | type            |                                                                                                                |
-|-----|------------|-----------------|----------------------------------------------------------------------------------------------------------------|
-| 1   | handle     | uint            |                                                                                                                |
-| 2   | owners     | array of keys   | the branch below the bucket's root; absent for the root                                                        |
-| 3   | key        | a key           |                                                                                                                |
-| 4   | value      | nil, int or bin | nil when absent                                                                                                |
-| 5   | ttl        | uint            | milliseconds                                                                                                   |
-| 6   | expire at  | int             | unix milliseconds                                                                                              |
-| 7   | if version | bin             | a version that an entry carried. A get or a has with it fails `conflict` if the key no longer has that version |
-| 8   | if absent  | bool            | A get or a has with it fails `conflict` if the key holds a value                                               |
-| 9   | n          | int             | what add adds, and max compares                                                                                |
-| 10  | after      | a key           | the key a scan's page begins after                                                                             |
-| 11  | limit      | uint            | the keys a page returns: 100 when absent, 1000 at most                                                         |
-
-A key is text: a str, a bin, or an integer, which is its decimal spelling, so
-that `42` and `"42"` name one key. The server writes a key as str, or as bin
-when it is not UTF-8. An entry:
-
-| key | field   | type            |                                                        |
-|-----|---------|-----------------|--------------------------------------------------------|
-| 1   | found   | bool            |                                                        |
-| 2   | value   | nil, int or bin |                                                        |
-| 3   | version | bin             |                                                        |
-| 4   | expires | int             | unix milliseconds; absent for a key that never expires |
-| 5   | key     | a key           | a scan's item alone                                    |
-
-A limiter answers `kv.allow` with an allowance, `{1: ok, 2: left, 3: retry
-after}`: whether the requests pass, how many more would pass now, and how many
-milliseconds until they would, rounded up, when they do not. More requests
-than the burst at once are `invalid`. A quota's allowance adds `4: windows`,
-each `{1: name, 2: used, 3: limit, 4: left, 5: reset at}` in the order its
-open gave them, reset at in unix milliseconds and absent for a window not
-started; its `kv.allow` counts in every window or in none, and more uses than
-a window's limit are `invalid`.
-
-`kv.configure` is `{1: handle, 2: set, 3: reset}`, set an array of str, a path
-and its JSON each, and reset the paths to forget; the server keeps both in one
-transaction, checking only that a value is JSON within the config's bounds,
-since the types are the client's. `kv.watch` answers `{}`, then `{1: changes,
-2: fields}` a `DATA`, fields a path and its JSON each, now and after each
-change, whoever made it: a watcher behind is sent the latest fields, never a
-state the config did not have. It ends when the client cancels it, when the
-client's side of the connection ends, or with the server.
-
-`kv.run` lets one run of a key go at a time, every client's: another
-`kv.run` of the key waits until that run ends, then is answered what it kept,
-or is handed the run when it kept nothing. The client that is handed a run,
-`{}` as its RESPONSE, runs its function and sends an entry as its last
-`DATA`: found with the value to keep, or not found when the function failed,
-which keeps nothing. A client that cancels or leaves keeps nothing either,
-and the next run of the key is handed over again.
-
-A page, a scan's trailer, is `{1: more, 2: after}`: more says the limit or
-the page's 4 MiB of values ended it before the branch did, and after is the
-key the next page begins after. Calls are `{1: [call…]}`, each call's map
-holding its method under key 0, and results `{1: [entry…]}`.
+Its messages are in `protocol/kv.wire`. A `kv.tx` checks every read it
+carries and applies every write, all or none; one that fails names its place
+in `what`, as `check` or `write` and its index. `kv.once.run` lets one run of
+a key go at a time, every client's: another run of the key waits until that
+run ends, then is answered what it kept, or is handed the run when it kept
+nothing. A client that is handed a run, an answer not found as its
+`RESPONSE`, runs its function and sends a `kv.Answer` as its last `DATA`:
+found with the value to keep, or not found when the function failed, which
+keeps nothing. A client that cancels or leaves keeps nothing either, and the
+next run of the key is handed over again.
 
 `kv.get` of `token` under the owner `7`, on handle 1, and its answer:
 
@@ -639,553 +572,248 @@ holding its method under key 0, and results `{1: [entry…]}`.
 0e 00 00 00  03  01  02 01  01 00 00 00                                   a body of 14 bytes, REQUEST, END, 0x0102, stream 1
 83                                                                        a map of three
    01 01                                                                  handle: 1
-   02 91 a1 37                                                            owners: ["7"]
+   02 91 a1 37                                                            under: ["7"]
    03 a5 74 6f 6b 65 6e                                                   key: "token"
 
-19 00 00 00  04  01  00 00  01 00 00 00                                   a body of 25 bytes, RESPONSE, END, stream 1
+1a 00 00 00  04  01  00 00  01 00 00 00                                   a body of 26 bytes, RESPONSE, END, stream 1
 84                                                                        a map of four
    01 c3                                                                  found: true
-   02 c4 05 68 65 6c 6c 6f                                                value: bin "hello"
+   02 c4 06 01 68 65 6c 6c 6f                                             value: bin 01 "hello", the text "hello"
    03 c4 01 31                                                            version: bin "1"
-   04 cf 00 00 01 a0 c4 50 6c 00                                          expires: 1,790,000,000,000
+   04 cf 00 00 01 a0 c4 50 6c 00                                          expiresAt: 1,790,000,000,000
 ```
 
 ### jobs
 
-`jobs.open` answers a handle on a queue of JSON values, or on a schedule,
-the queue of one repeating job under its name; every other call carries it.
-A job's value is its JSON as str, checked before it is kept; a schedule's is
-`{}`.
+`jobs.queue.open` answers a handle on a queue of JSON values, and
+`jobs.schedule.open` one on a schedule, the queue of one repeating job under
+its name; every other call carries it.
 
-| method   |         | request                                                 | answer                                                                                  |
-|----------|---------|---------------------------------------------------------|-----------------------------------------------------------------------------------------|
-| `0x0201` | open    | a queue                                                 | a handle                                                                                |
-| `0x0202` | enqueue | a batch: jobs one transaction adds, all or none         | `{}`; `what` names a refused job as `call`                                              |
-| `0x0203` | update  | a change: a job by its key, a new value, time or repeat | `{}`                                                                                    |
-| `0x0204` | cancel  | a key                                                   | an entry: found says there was a job, which a running one's handler is told             |
-| `0x0205` | get     | a key                                                   | an entry                                                                                |
-| `0x0206` | claim   | a lease                                                 | a held job, found false when none was due                                               |
-| `0x0207` | settle  | outcomes of claimed jobs, written in one group          | settled: nil or an error each                                                           |
-| `0x0208` | scan    | a query                                                 | a download: `{}`, an entry a `DATA`, a page                                             |
-| `0x0209` | work    | workers                                                 | both ways: `{}`, then held jobs out and outcomes back, `DATA`·END each side             |
-| `0x020a` | watch   | a key                                                   | a download: `{}`, then an entry a `DATA`, now and after each change, until the job ends |
-| `0x020b` | step    | an answer's job and name                                | kept: the answer the job's run kept under the name, found false for none                |
-| `0x020c` | keep    | an answer                                               | `{}` once the answer is written, the attempt holding the job's lease                    |
+<!-- written from protocol/*.wire by `just protocol`: methods of jobs -->
+| method   | name               | may   | request             | answer                                 |
+|----------|--------------------|-------|---------------------|----------------------------------------|
+| `0x0201` | jobs.queue.open    | read  | `jobs.QueueOpen`    | `Handle`                               |
+| `0x0202` | jobs.schedule.open | write | `jobs.ScheduleOpen` | `Handle`                               |
+| `0x0203` | jobs.add           | write | `jobs.Call`         | `jobs.Changed`                         |
+| `0x0204` | jobs.set           | write | `jobs.Call`         | `Empty`                                |
+| `0x0205` | jobs.update        | write | `jobs.Call`         | `jobs.Changed`                         |
+| `0x0206` | jobs.cancel        | write | `jobs.Id`           | `jobs.Changed`                         |
+| `0x0207` | jobs.get           | read  | `jobs.Id`           | `jobs.Job`                             |
+| `0x0208` | jobs.list          | read  | `jobs.List`         | `jobs.Page`                            |
+| `0x0209` | jobs.work          | write | `jobs.Work`         | exchange `jobs.Held` for `jobs.Answer` |
+| `0x020a` | jobs.step          | write | `jobs.Step`         | `jobs.Kept`                            |
+| `0x020b` | jobs.keep          | write | `jobs.Step`         | `Empty`                                |
+| `0x020c` | jobs.watch         | read  | `jobs.Id`           | download `jobs.Job` until `Empty`      |
+| `0x020d` | jobs.tx            | write | `jobs.Tx`           | `jobs.TxResults`                       |
+<!-- end of what `just protocol` writes -->
 
-A queue:
-
-| key | field                | type     |                                                                                                                                                                                                             |
-|-----|----------------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1   | name                 | str      | `[a-z0-9][a-z0-9_-]{0,63}`                                                                                                                                                                                  |
-| 2   | lease                | uint     | milliseconds; 30 seconds when absent                                                                                                                                                                        |
-| 3   | max attempts         | uint     | 10 when absent                                                                                                                                                                                              |
-| 4   | backoff first        | uint     | milliseconds, the first wait after a failure; a second when absent                                                                                                                                          |
-| 5   | backoff most         | uint     | milliseconds, the longest; an hour when absent                                                                                                                                                              |
-| 6   | max waiting          | uint     | ten million when absent                                                                                                                                                                                     |
-| 7   | keep failed          | uint     | milliseconds; seven days when absent                                                                                                                                                                        |
-| 8   | keep done            | uint     | milliseconds; absent forgets a key when its job is done                                                                                                                                                     |
-| 9   | schedule             | a repeat | a schedule rather than a queue                                                                                                                                                                              |
-| 10  | max running          | uint     | the jobs that may run at once, across every worker of the store; absent bounds none                                                                                                                         |
-| 11  | in                   | str      | a database's name. The queue lives in that database's file instead of `jobs.db`, and the database's batches can enqueue on it. A client opens the database first, on any connection. Absent means `jobs.db` |
-| 12  | max running in group | uint     | the jobs of one group that may run at once, across every worker of the store; absent bounds none                                                                                                            |
-| 13  | rate                 | uint     | the jobs that may start in any span of per; absent bounds none                                                                                                                                              |
-| 14  | per                  | uint     | milliseconds, the rate's span, at least one                                                                                                                                                                 |
-
-A repeat is `{1: cron, 2: zone}`, five cron fields and the zone's name, or
-`{3: every, 4: spread}`, milliseconds, at least a second; spread true runs
-each key's job at a phase of its own within the interval, which the job's
-repeat text then shows, `@every 30s +6178ms`. A job, a batch's item:
-
-| key | field  | type     |                                                                                                                                              |
-|-----|--------|----------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| 1   | value  | str      | its JSON                                                                                                                                     |
-| 2   | key    | str      | 1 to 1024 bytes                                                                                                                              |
-| 3   | at     | int      | unix milliseconds; a time past runs now                                                                                                      |
-| 4   | after  | uint     | milliseconds from now                                                                                                                        |
-| 5   | repeat | a repeat | needs a key                                                                                                                                  |
-| 7   | move   | bool     | sets the time of its key's job either way: a waiting one moves, a running one runs again then, and a key without a job gets one; needs a key |
-| 8   | group  | str      | 1 to 1024 bytes: the group whose running jobs max running in group bounds                                                                    |
-
-A batch is `{1: handle, 2: [job…]}`; a change is a job's fields with the
-handle under key 6; a key is `{1: handle, 2: key}`. An entry:
-
-| key | field    | type |                                                                                                             |
-|-----|----------|------|-------------------------------------------------------------------------------------------------------------|
-| 1   | found    | bool |                                                                                                             |
-| 2   | key      | str  |                                                                                                             |
-| 3   | value    | str  |                                                                                                             |
-| 4   | at       | int  | unix milliseconds: the time it runs for                                                                     |
-| 5   | attempt  | uint | its attempts, a running one included                                                                        |
-| 6   | state    | uint | 1 waiting, 2 running, 3 failed, 4 done while keep done keeps its key, 5 cancelled, which only a watch sends |
-| 7   | err      | str  | its last failure                                                                                            |
-| 8   | repeat   | str  | a repeating job's cron text and zone, as jobs.db keeps it                                                   |
-| 9   | ahead    | uint | the jobs that run before a waiting one, up to 10,000; get and watch alone                                   |
-| 10  | progress | str  | what a running job's worker last reported, as JSON                                                          |
-| 11  | ran      | int  | unix milliseconds: when the last run a worker finished began                                                |
-| 12  | took     | uint | milliseconds: how long that run took                                                                        |
-
-A job a work loop claimed ahead for a busy worker is waiting, 0 ahead, until
-a worker has it. A lease is `{1: handle, 2: lease}`, milliseconds, the
-queue's when absent. A held job is `{1: found, 2: job, 3: key, 4: value, 5:
-at, 6: attempt, 7: cancelled}`, job being the number its outcome names: a
-claim's lives on its connection until it is settled, and a work stream's on
-its stream. An outcome:
-
-| key | field    | type |                                                                                                                                                                        |
-|-----|----------|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1   | job      | uint |                                                                                                                                                                        |
-| 2   | how      | uint | 1 ack, 2 retry, 3 fail for good, 4 snooze, 5 extend, 6 progress                                                                                                        |
-| 3   | err      | str  | why a retry or a failure                                                                                                                                               |
-| 4   | at       | int  | unix milliseconds: when a retry or a snooze runs again                                                                                                                 |
-| 5   | after    | uint | milliseconds: the same from now, or how long an extend holds; written when given, 0 too, which runs a retry or a snooze now where one without a time waits its backoff |
-| 6   | progress | str  | a progress's report, any JSON, which get and watch show until the job is settled                                                                                       |
-
-A progress settles nothing: the job stays in its worker's hands, claimed or on
-a work stream, and a report that is not JSON is `invalid`. The server keeps
-the last one in memory, 4 KiB of JSON at most, a larger one dropped and
-logged, so the SDKs refuse one past it before it leaves.
-
-Outcomes are `{1: [outcome…]}` and settled `{1: [nil or error…]}`; settling a
-claimed job a cancel took is `conflict`. A query is `{1: handle, 2: prefix, 3:
-state, 4: after, 5: limit}`, state 1, 2 or 3, and a page `{1: more, 2:
-after}`, as `jobs.Query` and `jobs.Page` are.
-
-Workers are `{1: handle, 2: workers, 3: timeout, 4: until idle, 5: cancels}`:
-the queue's own Work loop runs for the stream, `workers` at once, 1 when
-absent and at most the streams in flight, each job `timeout` milliseconds in
-the client's hands, a minute when absent, and with `until idle` only until no
-job is due and none runs, as a test wants it. Each job it hands a handler goes
-out as a held job; the client settles it by sending its outcome as `DATA` on
-the same stream, and ends its side with `DATA`·END once it takes no more. An
-extend is not one of those outcomes: the loop extends its leases itself, and
-ends the stream `invalid` on one rather than take it as an ack. A progress is,
-and leaves the job in the client's hands. When that side ends, or the client
-cancels or leaves, the jobs in its hands fail that attempt, as a worker whose
-process died fails it, and only after their handlers return does the loop
-stop, so that the jobs it claimed ahead and never handed over go back
-uncounted. The server's `DATA`·END, `{}`, follows.
-
-A cancel that takes a job in the client's hands sends it again as `{2: job,
-7: true}` on a stream that asked with `cancels`, so that its handler stops; a
-stream that did not ask is told nothing. Either way the outcome the client
-sends for that job settles nothing, and the stream goes on.
-
-A held job's number is its connection's, the same for a claim's and a work
-stream's, so that `jobs.step` and `jobs.keep` name either; a work stream's job
-is settled on its stream alone, and `jobs.settle` of one is `invalid`. An
-answer names a step of the held job's run:
-
-| key | field  | type |                                                                               |
-|-----|--------|------|-------------------------------------------------------------------------------|
-| 1   | job    | uint | the held job's number                                                         |
-| 2   | name   | str  | the step's, 1 to 256 bytes, within the run                                    |
-| 3   | answer | str  | jobs.keep's: the step's answer as JSON, at most 1 MiB; jobs.step carries none |
-
-and kept is `{1: found, 2: answer}`. A step kept by an attempt whose lease
-another claim took is `conflict`, and nothing is kept; a run that ends takes
-its steps along, and a repeating job's next run starts without them. A worker
-asks `jobs.step` before it runs a step and sends `jobs.keep` once it has, so
-that the attempt after a retry or a lost worker gets the answer back without
-running the step again.
-
-`jobs.watch` answers `{}`, then the job under the key as an entry a `DATA`,
-now and each time its state, place, attempt, time, progress or error changes,
-and ends after the entry in which the job ended: done, failed or cancelled. A
-key that names no job ends it at once. A watcher behind a busy queue is sent
-the latest entry, read at most five times a second, never every change. It
-follows the job it found, so a later job under the key is another watch's,
-and it also ends when the client cancels it, when the client's side of the
-connection ends, or with the server.
-
-### blobs
-
-`blobs.open` answers a handle on a bucket; every other call carries it, the
-owners a call names being the folder under the bucket's root it works in.
-
-| method   |        | request                                               | answer                                                                                       |
-|----------|--------|-------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `0x0301` | open   | a bucket                                              | a handle                                                                                     |
-| `0x0302` | stat   | a call                                                | an object, found false for a key that holds none                                             |
-| `0x0303` | delete | a call, if match its one option                       | `{}`                                                                                         |
-| `0x0304` | copy   | a call from key to to, with the destination's options | the object written                                                                           |
-| `0x0305` | move   | the same                                              | the object written                                                                           |
-| `0x0306` | usage  | a call naming a folder                                | a total                                                                                      |
-| `0x0307` | clear  | a call naming a folder                                | `{}`                                                                                         |
-| `0x0308` | scan   | a call naming a folder, prefix, after and limit       | a download: `{}`, an object a `DATA`, a page                                                 |
-| `0x0309` | put    | a call with the object's options                      | an upload: its bytes as `DATA`, 64 KiB at most each; the object committed                    |
-| `0x030a` | get    | a call, with an offset and a length for a range       | a download: the object, then its bytes as `DATA`; or the object alone, found false, with END |
-
-A bucket is `{1: name, 2: default ttl, 3: max size}`, milliseconds and bytes.
-A call:
-
-| key        | field                | type                |                                                        |
-|------------|----------------------|---------------------|--------------------------------------------------------|
-| 1          | handle               | uint                |                                                        |
-| 2          | owners               | array of str or int | the folder's segments                                  |
-| 3          | key                  | str                 | a path                                                 |
-| 4          | to                   | str                 | copy's and move's destination                          |
-| 5          | content type         | str                 | absent keeps what a copy's source has                  |
-| 6          | meta                 | a map of names      | absent keeps it; present replaces all of it            |
-| 7          | ttl                  | uint                | milliseconds                                           |
-| 8          | expire at            | int                 | unix milliseconds                                      |
-| 9          | size                 | uint                | a put's length: a stream that disagrees leaves nothing |
-| 10         | if match             | str                 | as an HTTP `If-Match` header spells it                 |
-| 11         | if none match        | bool                | writes only where no live object is                    |
-| 12, 13, 14 | prefix, after, limit | str, str, uint      | a scan's                                               |
-| 15, 16     | offset, length       | uint, uint          | a get's range; a length absent reads to the end        |
-
-A method refuses an option it does not take, as the engine's call does. An
-object:
-
-| key | field        | type           |                                                                   |
-|-----|--------------|----------------|-------------------------------------------------------------------|
-| 1   | found        | bool           | absent, and nothing else set, for a key that holds no live object |
-| 2   | key          | str            | its path under the handle's folder                                |
-| 3   | size         | uint           |                                                                   |
-| 4   | etag         | str            | quoted, as a header carries it                                    |
-| 5   | content type | str            |                                                                   |
-| 6   | modified     | int            | unix milliseconds                                                 |
-| 7   | expires      | int            | unix milliseconds; absent for an object that does not expire      |
-| 8   | meta         | a map of names |                                                                   |
-
-A total is `{1: objects, 2: bytes}` and a page `{1: more, 2: after}`. A put
-that does not commit leaves nothing: a client that cancels it, a stream
-shorter or longer than its size, and a connection lost halfway. A get read
-whole is checked against the object's hash, and one whose bytes changed ends
-with `DATA`·END·ERROR and `corrupt` instead of its last bytes; a range is not
-checked.
+Its messages are in `protocol/jobs.wire`. A `jobs.work` stream hands the
+client's worker each job as a `jobs.Held`, and the client answers it with a
+`jobs.Answer` on the same stream: how its run ended, how far it got, which
+settles nothing, or a stop, which takes no job more. The client ends its side
+with `DATA`·END once it takes no more. When that side ends, or the client
+cancels or leaves, the jobs in its hands fail that attempt, as a worker's
+whose process died, and the server's `DATA`·END, `{}`, follows once that is
+written. `jobs.watch` sends the job as it is now, then again as it changes,
+and ends after the job ends. `jobs.step` asks for the answer a step of a held
+job's run kept, and `jobs.keep` keeps one, so that the attempt after a retry
+or a lost worker gets it back without running the step again.
 
 ### sql
 
-`sql.open` answers a handle on a database by its name, and every other call
-carries it. The first open of a name in the server opens it: an admin
-connection's applies the migrations it carries, and a data connection's finds
-them applied, or is refused with `permission` and makes no file. A database
-opens once a store, so every later open, and an open of a database the
-embedding program passed the server, checks the migrations it carries against
-those the file applied: one the file has not applied is `permission` for a
-data connection and `in_use` for an admin one, since a database applies its
-migrations as it opens, and one changed after it was applied is `invalid`. A
-first open without migrations is `invalid`; a later one may carry none.
+`sql.open` answers a handle on a database by its name, its migrations applied
+and checked; a read connection's applies none and chooses no durability, and
+opens the file as it is.
 
-| method   |       | request                                                                             | answer                                                                        |
-|----------|-------|-------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `0x0401` | open  | a database                                                                          | a handle                                                                      |
-| `0x0402` | exec  | a statement                                                                         | done: the rows it changed and the rowid of the last it inserted               |
-| `0x0403` | query | a statement                                                                         | a download: the columns, a row a `DATA`, then `{}`                            |
-| `0x0404` | batch | statements one transaction runs, all or none, or with read, reads from one snapshot | results; a statement that fails fails them all, and `what` names it as `call` |
+<!-- written from protocol/*.wire by `just protocol`: methods of sql -->
+| method   | name        | may   | request         | answer                                     |
+|----------|-------------|-------|-----------------|--------------------------------------------|
+| `0x0301` | sql.open    | read  | `sql.Open`      | `Handle`                                   |
+| `0x0302` | sql.query   | read  | `sql.Query`     | download `sql.Rows` until `sql.Rows`       |
+| `0x0303` | sql.exec    | write | `sql.Statement` | `sql.Done`                                 |
+| `0x0304` | sql.batch   | write | `sql.Batch`     | `sql.Batched`                              |
+| `0x0305` | sql.tx      | write | `sql.TxOpen`    | exchange `sql.TxAnswer` for `sql.TxCall`   |
+| `0x0306` | sql.columns | read  | `sql.Statement` | download `sql.Columns` until `sql.Columns` |
+<!-- end of what `just protocol` writes -->
 
-A database:
+Its messages are in `protocol/sql.wire`. A query's rows come in its
+`RESPONSE` when they fit one message, and otherwise as `DATA` parts within
+the client's credit. A row a query downloads past the agreed body is `limit`.
+A batch's results travel in one message, and past the agreed body they are
+`outcome_unknown`, since the batch committed. A query holds its rows in the
+server's memory, 64 MiB of them at most, before the first leaves. A
+`sql.tx` holds its database's writer while the client's calls come as `DATA`,
+and a transaction whose client stalls, cancels or leaves is rolled back.
 
-| key | field      | type           |                                                                                    |
-|-----|------------|----------------|------------------------------------------------------------------------------------|
-| 1   | name       | str            | `[a-z0-9][a-z0-9_-]{0,63}`, its file `sql/<name>.db`                               |
-| 2   | migrations | array of files | each `{1: name, 2: text}`: a `.sql` file's name, without a directory, and its text |
+### blobs
 
-A statement:
+`blobs.open` answers a handle on a bucket of files, which every other call
+carries.
 
-| key | field  | type            |                                                                             |
-|-----|--------|-----------------|-----------------------------------------------------------------------------|
-| 1   | handle | uint            | absent in a batch, whose handle is its own                                  |
-| 2   | sql    | str             |                                                                             |
-| 3   | args   | array of values | positional                                                                  |
-| 4   | named  | a map of names  | each name without the `:`, `@` or `$` the statement spells it with          |
-| 5   | write  | bool            | a query's: run on the writer, for a returning clause                        |
-| 6   | rows   | bool            | a batch statement's: answer the rows it returns rather than what it changed |
+<!-- written from protocol/*.wire by `just protocol`: methods of blobs -->
+| method   | name         | may   | request        | answer                                     |
+|----------|--------------|-------|----------------|--------------------------------------------|
+| `0x0401` | blobs.open   | read  | `blobs.Open`   | `Handle`                                   |
+| `0x0402` | blobs.put    | write | `blobs.Write`  | `blobs.Written`                            |
+| `0x0403` | blobs.upload | write | `blobs.Write`  | exchange `blobs.Written` for `blobs.Piece` |
+| `0x0404` | blobs.get    | read  | `blobs.At`     | `blobs.Got`                                |
+| `0x0405` | blobs.head   | read  | `blobs.At`     | `blobs.Head`                               |
+| `0x0406` | blobs.delete | write | `blobs.Delete` | `Empty`                                    |
+| `0x0407` | blobs.copy   | write | `blobs.Move`   | `blobs.Info`                               |
+| `0x0408` | blobs.rename | write | `blobs.Move`   | `blobs.Info`                               |
+| `0x0409` | blobs.expire | write | `blobs.Expire` | `blobs.Found`                              |
+| `0x040a` | blobs.list   | read  | `blobs.List`   | `blobs.Page`                               |
+| `0x040b` | blobs.usage  | read  | `blobs.Folder` | `blobs.Usage`                              |
+| `0x040c` | blobs.clear  | write | `blobs.Folder` | `Empty`                                    |
+| `0x040d` | blobs.read   | read  | `blobs.Read`   | download `blobs.Piece` until `Empty`       |
+<!-- end of what `just protocol` writes -->
 
-An argument is nil, an integer, a float, str, bin, or a bool, which SQLite
-keeps as 1 or 0; a NaN is `invalid`, since SQLite would keep NULL. A value
-that comes back is one of SQLite's five, nil, an integer, a float, str or bin,
-bin also carrying TEXT that is not UTF-8, and it is what the row keeps: a time
-held as text travels as its text, whatever its column declares.
-
-Done is `{1: changes, 2: last id}`, the columns `{1: [name…]}` and a row
-`{1: [value…]}`. Statements are `{1: handle, 2: [statement…], 3: read, 4:
-[jobs…], 5: [kv…]}` and their results `{1: [result…]}`, a result being done, or `{3:
-columns, 4: [[value…]…]}` for a statement that returned rows.
-
-Each item of `jobs` has the shape of an enqueue's request, `{1: handle, 2:
-[job…]}`, and its queue must be opened `in` this database. The transaction
-writes the jobs after the statements, so a job commits with the rows it is
-about, or not at all. A job has no result. When a job fails, `what` names it as
-`call`, counted after the statements. A job in a view, or on a queue that lives
-in another file, is `invalid`.
-
-Each item of `kv` is `{1: handle, 2: [call…]}`, with the calls of
-`kv.batch`: each has its method under key 0 and the fields of a KV call.
-Its outer handle identifies the bucket. The calls may set, delete or clear
-keys in a bucket opened `in` this database, and run after the statements and
-jobs. A key change has no result. A read, a set-if-absent, a change in a view,
-or a bucket in another file is `invalid`. A failure's `what.call` counts
-key changes after the statements and jobs.
-
-A row a query downloads past the agreed body is `limit`. A batch's results
-travel in one message, and past the agreed body they are `outcome_unknown`,
-since the batch committed. A query holds its rows in the server's memory, 64
-MiB of them at most, before the first leaves.
-
-A data connection's statement, each of a batch's included, runs only once the
-check [server.md](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md#what-a-connection-may-do) describes lets it, and
-one it refuses is `permission`; it runs 30 seconds at most, past which it is
-`limit`. An admin connection's runs as it is.
-
-`sql.exec` of an insert on handle 1, and its answer:
-
-```text
-31 00 00 00  03  01  02 04  03 00 00 00                                   a body of 49 bytes, REQUEST, END, 0x0402, stream 3
-83                                                                        a map of three
-   01 01                                                                  handle: 1
-   02 d9 24 69 6e 73 65 72 74 20 69 6e 74 6f 20 6e 6f 74 65 73 20 28 74   sql: "insert into notes (title) values (?)"
-      69 74 6c 65 29 20 76 61 6c 75 65 73 20 28 3f 29
-   03 91 a4 6d 69 6c 6b                                                   args: ["milk"]
-
-05 00 00 00  04  01  00 00  03 00 00 00                                   a body of 5 bytes, RESPONSE, END, stream 3
-82                                                                        a map of two
-   01 01                                                                  changes: 1
-   02 07                                                                  last id: 7
-```
+Its messages are in `protocol/blobs.wire`. `blobs.upload` takes a file's
+bytes as `DATA` pieces, its last publishing the file, and `blobs.read` sends
+them back, the first piece in its `RESPONSE` and the rest as `DATA` within the
+client's credit.
 
 ### records
 
-Records are one log of the store's, and each call names the streams it is
-about, so none opens a handle.
+`records.open` answers a handle on a stream of events, which every other call
+carries.
 
-| method   |         | request                                     | answer                                                                  |
-|----------|---------|---------------------------------------------|-------------------------------------------------------------------------|
-| `0x0501` | append  | records, one transaction writes all or none | `{}`; `what` names a refused record as `call`, with its stream and name |
-| `0x0502` | read    | a query                                     | a download: `{}`, a record a `DATA`, then a page                        |
-| `0x0503` | follow  | a cursor                                    | a download: `{}`, a record a `DATA`, then the cursor after them         |
-| `0x0504` | lines   | a stream                                    | an upload: another program's output as `DATA`, cut anywhere; `{}`       |
-| `0x0505` | damaged | `{}`                                        | the damage: `{1: [damage…]}`                                            |
-| `0x0506` | drop    | a damage                                    | `{}`; an admin connection's alone, since it is a repair                 |
+<!-- written from protocol/*.wire by `just protocol`: methods of records -->
+| method   | name               | may   | request                   | answer                                         |
+|----------|--------------------|-------|---------------------------|------------------------------------------------|
+| `0x0501` | records.open       | read  | `records.Open`            | `Handle`                                       |
+| `0x0502` | records.append     | write | `records.Append`          | `Empty`                                        |
+| `0x0503` | records.list       | read  | `records.Query`           | `records.Page`                                 |
+| `0x0504` | records.count      | read  | `records.Query`           | `records.Count`                                |
+| `0x0505` | records.top        | read  | `records.TopAsked`        | `records.Tops`                                 |
+| `0x0506` | records.aggregate  | read  | `records.AggregateAsked`  | `records.Rows`                                 |
+| `0x0507` | records.streams    | read  | `Empty`                   | `records.Streams`                              |
+| `0x0508` | records.fieldNames | read  | `records.FieldNamesAsked` | `records.Names`                                |
+| `0x0509` | records.poll       | read  | `records.PollAsked`       | `records.Batch`                                |
+| `0x050a` | records.tail       | read  | `records.Query`           | download `records.TailBatch` until `Empty`     |
+| `0x050b` | records.lines      | write | `Handle`                  | exchange `records.Dropped` for `records.Piece` |
+| `0x050c` | records.damaged    | read  | `Empty`                   | `records.Damages`                              |
+| `0x050d` | records.drop       | write | `records.Damage`          | `Empty`                                        |
+<!-- end of what `just protocol` writes -->
 
-A record:
-
-| key | field    | type  |                                                            |
-|-----|----------|-------|------------------------------------------------------------|
-| 1   | at       | int   | unix nanoseconds, past what a JavaScript number holds      |
-| 2   | stream   | str   | a namespace the application names                          |
-| 3   | name     | str   | the event: `log` for a log line                            |
-| 4   | level    | int   | slog's: -4 debug, 0 info, 4 warn, 8 error; absent for none |
-| 5   | body     | str   | absent for none, which an empty body is not                |
-| 6   | trace id | bin   | 16 bytes; absent for none                                  |
-| 7   | span id  | bin   | 8 bytes; absent for none                                   |
-| 8   | context  | array | who produced it: a key, then its value's JSON, and so on   |
-| 9   | attrs    | array | what happened, as context                                  |
-
-`["user", "42", "tags", "[\"a\"]"]` is two fields, `user` and `tags`, whose
-values are JSON spelled as they were given, `1.2300`, `-0` and a big integer
-coming back byte for byte; keys keep their order and may repeat. A text,
-a stream, a name, a body, a key or a value, whose bytes are not UTF-8, as
-another program's output may be, travels as bin and comes back byte for byte.
-
-A query:
-
-| key  | field          | type         |                                                                     |
-|------|----------------|--------------|---------------------------------------------------------------------|
-| 1, 2 | from, to       | int          | unix nanoseconds, to excluded; absent for an open end               |
-| 3    | streams        | array of str | absent or empty for every stream                                    |
-| 4    | names          | array of str | absent or empty for every name                                      |
-| 5    | min level      | int          | a record without a level does not match                             |
-| 6    | trace id       | bin          | 16 bytes                                                            |
-| 7, 8 | attrs, context | array        | fields as a record's, each one a record must hold                   |
-| 9    | newest         | bool         | newest first; oldest first when absent                              |
-| 10   | limit          | uint         | the records a page holds: 1000 when absent, at most 10000           |
-| 11   | budget blocks  | uint         | the blocks one read may open; each budget narrows the server's      |
-| 12   | budget bytes   | uint         | the bytes it may fetch                                              |
-| 13   | budget records | uint         | the records it may decode                                           |
-| 14   | search         | str          | text a record's body or name holds, its case ignored; 1 KiB at most |
-
-A page, a read's trailer, is `{1: more, 2: from, 3: to}`: more says the limit
-or the budget ended the page before the range did, and from and to are the
-range the next page reads, the query's own with one end moved past this page.
-A page never splits a timestamp; more records at one time than a page holds
-is `limit`.
-
-A cursor is `{1: segment, 2: row, 3: limit, 4: expired}`: follow's request
-names the place the records it asks for begin at, `{}` being the oldest
-segment kept, and the records it takes at most; its trailer the place the
-next follow begins at, and the segments retention or a drop removed before
-the cursor reached them. A record reaches follow once its head is sealed, a
-segment's worth or the server's seal age, an hour unless it says otherwise,
-after it arrived; read sees it at once.
-
-`records.lines` is `{1: stream}`, then the program's output in `DATA` frames:
-each line becomes a record of the stream as Go's `Lines` makes it, a stack
-trace's lines joined, a JSON or logfmt line's fields kept, its level found
-where its program writes it. The upload's end hands over the record the
-writer holds, a line cut short included, and its answer follows; a line
-longer than a record holds is dropped and counted in the engine's stats.
-
-A damage is `{1: stream, 2: segment, 3: head row, 4: from, 5: to, 6:
-reason}`: a sealed segment, dropped whole, or a head row, the other absent;
-the times it held, unix nanoseconds; the invariant its bytes broke. A read or
-a follow that meets one ends with `corrupt`, its `what` naming it by the same
-names, `segment` or `head row`, `stream`, `from`, `to` and `reason`, and a
-drop of one that still reads is `conflict`.
-
-`records.append` of one click on stream 5:
-
-```text
-2a 00 00 00  03  01  01 05  05 00 00 00                                   a body of 42 bytes, REQUEST, END, 0x0501, stream 5
-81                                                                        a map of one
-   01 91                                                                  records: an array of one
-      84                                                                  a map of four
-         01 cf 18 d7 5b 84 2b 4e cd 15                                    at: 1,790,000,000,123,456,789 ns
-         02 a3 77 65 62                                                   stream: "web"
-         03 a5 63 6c 69 63 6b                                             name: "click"
-         09 92 a7 65 6c 65 6d 65 6e 74 a5 22 62 75 79 22                  attrs: ["element", "\"buy\""]
-```
+Its messages are in `protocol/records.wire`. `records.tail` sends a batch
+each time events arrive that its query finds. `records.lines` takes another
+program's output as `DATA`, cut anywhere, and its last answers with what the
+writer dropped.
 
 ### metrics
 
 Metrics are one store of series, each named by its labels, so none opens a
 handle.
 
-| method   |           | request                                      | answer                                                                                          |
-|----------|-----------|----------------------------------------------|-------------------------------------------------------------------------------------------------|
-| `0x0601` | ingest    | series and their samples, stored all or none | `{}`; `what` is a refused series' labels                                                        |
-| `0x0602` | read      | a range                                      | a download: `{}`, a series a `DATA`, then `{}`                                                  |
-| `0x0603` | aggregate | a range with a width and an operation        | a download: `{}`, a series' buckets a `DATA`, then `{}`                                         |
-| `0x0604` | drop      | labels                                       | `{1: found, 2: unreadable groups}`                                                              |
-| `0x0605` | explain   | a range; with an operation, the aggregate's  | a plan                                                                                          |
-| `0x0606` | latest    | a range                                      | a download: `{}`, a series' newest sample a `DATA`, then `{}`; a series without one is left out |
-| `0x0607` | describe  | a description                                | `{}`                                                                                            |
-| `0x0608` | described | a description of a name alone                | the name's description, its unit and help empty when it has none                                |
+<!-- written from protocol/*.wire by `just protocol`: methods of metrics -->
+| method   | name                     | may   | request                  | answer                                                   |
+|----------|--------------------------|-------|--------------------------|----------------------------------------------------------|
+| `0x0601` | metrics.read             | read  | `metrics.Query`          | download `metrics.Read` until `metrics.Read`             |
+| `0x0602` | metrics.latest           | read  | `metrics.Query`          | download `metrics.Latest` until `metrics.Latest`         |
+| `0x0603` | metrics.aggregate        | read  | `metrics.AggregateAsked` | download `metrics.Aggregates` until `metrics.Aggregates` |
+| `0x0604` | metrics.explain          | read  | `metrics.AggregateAsked` | `metrics.Plan`                                           |
+| `0x0605` | metrics.names            | read  | `metrics.PageAsked`      | `metrics.NamePage`                                       |
+| `0x0606` | metrics.labelNames       | read  | `metrics.PageAsked`      | `metrics.TextPage`                                       |
+| `0x0607` | metrics.labelValues      | read  | `metrics.PageAsked`      | `metrics.TextPage`                                       |
+| `0x0608` | metrics.description      | read  | `metrics.NameAsked`      | `metrics.Description`                                    |
+| `0x0609` | metrics.damaged          | read  | `Empty`                  | `metrics.Damages`                                        |
+| `0x060a` | metrics.ingest           | write | `metrics.Ingest`         | `Empty`                                                  |
+| `0x060b` | metrics.describe         | write | `metrics.Description`    | `Empty`                                                  |
+| `0x060c` | metrics.delete           | write | `metrics.SeriesNamed`    | `metrics.Deleted`                                        |
+| `0x060d` | metrics.flush            | write | `Empty`                  | `Empty`                                                  |
+| `0x060e` | metrics.instruments      | write | `metrics.Session`        | exchange `metrics.Ack` for `metrics.Batch`               |
+| `0x060f` | metrics.ingestPrometheus | write | `metrics.Exposition`     | `Empty`                                                  |
+<!-- end of what `just protocol` writes -->
 
-A description is what a metric's name means. It belongs to the name, and
-every series of the name shares it:
+Its messages are in `protocol/metrics.wire`. A read, the newest samples and an
+aggregate answer in parts within the client's credit, a series longer than a
+part cut across parts. `metrics.instruments` takes a client's batches on a
+stream of their own, applied in turn, each answered with the last batch of
+the session the store applied.
 
-| key | field | type |                                                                  |
-|-----|-------|------|------------------------------------------------------------------|
-| 1   | name  | str  | the metric's name, its `__name__`                                |
-| 2   | unit  | str  | such as `ms`, `bytes` or `%`, 32 bytes at most; absent when none |
-| 3   | help  | str  | a line of help, 1024 bytes at most; absent when none             |
+### config
 
-A describe with neither a unit nor help removes the name's description.
+<!-- written from protocol/*.wire by `just protocol`: methods of config -->
+| method   | name          | may   | request         | answer                                |
+|----------|---------------|-------|-----------------|---------------------------------------|
+| `0x0701` | config.open   | read  | `config.Open`   | `config.Value`                        |
+| `0x0702` | config.follow | read  | `Handle`        | download `config.Value` until `Empty` |
+| `0x0703` | config.update | write | `config.Update` | `config.Value`                        |
+| `0x0704` | config.reset  | write | `config.Reset`  | `config.Value`                        |
+<!-- end of what `just protocol` writes -->
 
-A plan is what a read, or an aggregate when the range names an operation,
-would spend, found in one snapshot from the series, their block directories
-and their heads, with no payload fetched and no sample decoded:
+Its messages are in `protocol/config.wire`. `config.follow` sends the
+config's value now and again each time it changes, until the client cancels
+it.
 
-| key     | field                                          | type     |                                                                      |
-|---------|------------------------------------------------|----------|----------------------------------------------------------------------|
-| 1       | series                                         | uint     | the series it matches                                                |
-| 2       | blocks                                         | uint     | the blocks it opens                                                  |
-| 3       | summarized                                     | uint     | the blocks an aggregate answers from their summaries                 |
-| 4       | bytes                                          | uint     | the bytes it fetches                                                 |
-| 5       | decoded                                        | uint     | the samples it decodes                                               |
-| 6 to 10 | limit series, blocks, bytes, decoded, answered | uint     | the limits it runs under                                             |
-| 11      | stops                                          | an error | the `limit` it would end with, `what` naming it; absent when it fits |
+### backup
 
-A series:
+<!-- written from protocol/*.wire by `just protocol`: methods of backup -->
+| method   | name         | may   | request        | answer                                         |
+|----------|--------------|-------|----------------|------------------------------------------------|
+| `0x0801` | backup.write | admin | `backup.Write` | download `backup.Piece` until `backup.Written` |
+<!-- end of what `just protocol` writes -->
 
-| key | field  | type           |                                                                                                |
-|-----|--------|----------------|------------------------------------------------------------------------------------------------|
-| 1   | labels | a map of names | the series' name as `__name__` among them, required on ingest; names unique, every text UTF-8  |
-| 2   | kind   | str            | `gauge` or `counter`                                                                           |
-| 3   | times  | bin            | unix milliseconds, a little-endian int64 each                                                  |
-| 4   | values | bin            | a little-endian float64 each, its bits the data: -0 and a NaN's payload come back as they went |
+Its messages are in `protocol/backup.wire`. Only an admin connection can ask
+for a backup, since it holds every byte of the store. The server sends the zip
+of every engine's files in pieces, as it writes them, within the client's
+credit, then what it holds. `include` names files of the application's by
+their paths inside the store's directory, which the zip holds beside the
+engines'.
 
-The wire carries a series' name as the store keeps it, its label `__name__`;
-the Go API and every SDK give it apart from the labels, as `name`, and refuse a
-label of the application's beginning with `__`.
+### locks
 
-The two columns hold as many values each. A series longer than half a body
-holds comes in several `DATA`, one after another, each with its labels and
-kind, its samples going on in time order; a client joins them. Ingest keeps
-the value given last for a time repeated.
+<!-- written from protocol/*.wire by `just protocol`: methods of locks -->
+| method   | name          | may   | request       | answer       |
+|----------|---------------|-------|---------------|--------------|
+| `0x0901` | locks.hold    | write | `locks.Hold`  | `locks.Held` |
+| `0x0902` | locks.renew   | write | `locks.Renew` | `Empty`      |
+| `0x0903` | locks.release | write | `locks.Lease` | `Empty`      |
+<!-- end of what `just protocol` writes -->
 
-A range:
+Its messages are in `protocol/locks.wire`. A hold is answered once its key is
+given, from whichever thread lets it go, and a client that cancels it before
+is answered `cancelled`.
 
-| key    | field          | type                |                                                                                                                                   |
-|--------|----------------|---------------------|-----------------------------------------------------------------------------------------------------------------------------------|
-| 1      | matchers       | a map of names      | the labels a series has, exactly, its name as `__name__`                                                                          |
-| 2, 3   | from, to       | int                 | unix milliseconds, to excluded; both required, 2^63−1 the open end                                                                |
-| 4      | limit series   | uint                | the series it matches; each limit narrows the server's                                                                            |
-| 5      | limit blocks   | uint                | the blocks it decodes                                                                                                             |
-| 6      | limit bytes    | uint                | the bytes it fetches                                                                                                              |
-| 7      | limit decoded  | uint                | the samples it decodes                                                                                                            |
-| 8      | limit answered | uint                | the samples or buckets it answers                                                                                                 |
-| 9      | width          | uint                | aggregate's: milliseconds, the buckets starting at from                                                                           |
-| 10     | op             | str                 | aggregate's: `count`, `sum`, `min`, `max`, `avg`, `first`, `last`, `increase` or `rate`, a counter's alone, or `delta`, a gauge's |
-| 11     | where          | array of conditions | labels beyond equality, each label once, in the byte order of its name                                                            |
-| 12, 13 | by, without    | array of str        | aggregate's: the labels a group keeps, or all but these; an empty `by` is sent and joins every series of a name                   |
-| 14     | lookback       | uint                | aggregate's: milliseconds before from where an increase, a rate or a delta looks for its first step; the width when absent        |
+### channels
 
-A condition:
+<!-- written from protocol/*.wire by `just protocol`: methods of channels -->
+| method   | name               | may   | request              | answer                                  |
+|----------|--------------------|-------|----------------------|-----------------------------------------|
+| `0x0a01` | channels.publish   | write | `channels.Publish`   | `Empty`                                 |
+| `0x0a02` | channels.subscribe | read  | `channels.Subscribe` | download `channels.Batch` until `Empty` |
+<!-- end of what `just protocol` writes -->
 
-| key | field  | type         |                                                                                                          |
-|-----|--------|--------------|----------------------------------------------------------------------------------------------------------|
-| 1   | label  | str          | the label's name                                                                                         |
-| 2   | kind   | str          | `one_of` its values, `none_of` them, which a series without the label is too, or `prefix`, its one value |
-| 3   | values | array of str | one at least, a thousand at most                                                                         |
-
-A range finds its series by a matcher, a `one_of` or a `prefix`: a range of
-`none_of` alone is invalid, since it would scan every series. A condition of a
-kind the server does not have is `unimplemented`, `what` naming it, as is an
-operation, `what` naming it as `op`.
-
-The server reads a range whole, within its limits, before the first series
-leaves, so that a slow client holds none of the engine's readers; a read or an
-aggregate that fails sends no series.
-
-An aggregate's item is a series, keys 1 and 2, and its buckets as columns, as
-many values each:
-
-| key | field  | type |                                                                                                                                                                                                                                           |
-|-----|--------|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 3   | from   | bin  | each bucket's start, unix milliseconds, a little-endian int64 each                                                                                                                                                                        |
-| 4   | to     | bin  | its end, excluded                                                                                                                                                                                                                         |
-| 5   | count  | bin  | the samples it counted, an int64 each                                                                                                                                                                                                     |
-| 6   | resets | bin  | the resets among them, an int64 each                                                                                                                                                                                                      |
-| 7   | values | bin  | its value, a float64 computed exactly and rounded once                                                                                                                                                                                    |
-| 8   | flags  | bin  | a byte each: 1 when the value overflowed to an infinity, 2 when retention cut the bucket, which counted only its samples from the cutoff on, or not the step into its first, 4 when its first step started from a sample before the range |
-
-An increase, a rate and a delta count each step between samples in the bucket
-where it ends, the first bucket's from the last sample up to the lookback
-before from, so the buckets add up to the range; only a bucket holding samples
-is answered.
-
-Drop removes one series and everything it holds, whether it still reads or
-not, the labels naming it exactly; unreadable groups counts the groups removed
-without the payload rows their directory no longer names.
-
-`metrics.ingest` of one sample of `cpu{host="web-1"}` on stream 9:
-
-```text
-3b 00 00 00  03  01  01 06  09 00 00 00                                   a body of 59 bytes, REQUEST, END, 0x0601, stream 9
-81                                                                        a map of one
-   01 91                                                                  series: an array of one
-      84                                                                  a map of four
-         01 82                                                            labels: a map of two names
-            a8 5f 5f 6e 61 6d 65 5f 5f a3 63 70 75                        __name__: "cpu"
-            a4 68 6f 73 74 a5 77 65 62 2d 31                              host: "web-1"
-         02 a5 67 61 75 67 65                                             kind: "gauge"
-         03 c4 08 00 6c 50 c4 a0 01 00 00                                 times: [1,790,000,000,000]
-         04 c4 08 00 00 00 00 00 00 e0 3f                                 values: [0.5]
-```
+Its messages are in `protocol/channels.wire`. A subscription answers once the
+store has it, then sends its batches within the client's credit. A client
+that grants nothing falls behind and misses messages, and the next batch says
+how many it missed: the log is bounded, and neither the publisher nor the
+server waits for it.
 
 ### search
 
 An index opens a handle, as a bucket does; its documents are JSON as str, and
 a vector is bin, its floats little-endian, four bytes a dimension.
-`protocol/search.wire` holds every message.
 
-| method   |           | request                                       | answer                                                            |
-|----------|-----------|-----------------------------------------------|-------------------------------------------------------------------|
-| `0x0b01` | open      | a name and the index's settings               | a handle; a read connection's opens an index only as it is        |
-| `0x0b02` | set       | a handle, an id, a document, a vector or none | `{}`                                                              |
-| `0x0b03` | setMany   | a handle and documents, all set or none       | `{}`; `what` names a refused one's place and id                   |
-| `0x0b04` | delete    | a handle and an id                            | `{1: deleted}`                                                    |
-| `0x0b05` | get       | a handle and an id                            | `{1: found, 2: the document}`                                     |
-| `0x0b06` | search    | a handle, text, a vector, a where, a page     | `{1: hits, 2: corrected}`, a hit `{1: id, 2: document, 3: score}` |
-| `0x0b07` | status    | a handle                                      | `{1: ready, rebuilding or failed, 2: done, 3: error}`             |
-| `0x0b08` | dropIndex | a name                                        | `{1: dropped}`                                                    |
-| `0x0b09` | list      | `{}`                                          | the indexes: name, documents, vectors, opened, status             |
+<!-- written from protocol/*.wire by `just protocol`: methods of search -->
+| method   | name             | may   | request          | answer           |
+|----------|------------------|-------|------------------|------------------|
+| `0x0b01` | search.open      | read  | `search.Open`    | `Handle`         |
+| `0x0b02` | search.set       | write | `search.Set`     | `Empty`          |
+| `0x0b03` | search.setMany   | write | `search.SetMany` | `Empty`          |
+| `0x0b04` | search.delete    | write | `search.Key`     | `search.Deleted` |
+| `0x0b05` | search.get       | read  | `search.Key`     | `search.Got`     |
+| `0x0b06` | search.search    | read  | `search.Query`   | `search.Found`   |
+| `0x0b07` | search.status    | read  | `Handle`         | `search.Status`  |
+| `0x0b08` | search.dropIndex | write | `search.Name`    | `search.Dropped` |
+| `0x0b09` | search.list      | read  | `Empty`          | `search.Listed`  |
+<!-- end of what `just protocol` writes -->
 
-A set on an index with vectors gives `vector`, or `noVector: true` for a
-document only its words find; one that says neither is `invalid`.
+Its messages are in `protocol/search.wire`. A set on an index with vectors
+gives `vector`, or `noVector: true` for a document only its words find; one
+that says neither is `invalid`. A read connection opens an index only as it
+is.
 
 A table's index opens with `database`, a handle `sql.open` gave, and
 `table`, with `key` and `vectorColumn` where it needs them: its fields and

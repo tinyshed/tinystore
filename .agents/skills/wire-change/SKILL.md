@@ -24,6 +24,7 @@ language [protocol/README.md](../../../protocol/README.md) defines;
 | `sdk/python/src/tinystore/_wire/protocol.py` | Python                                      |
 | `sdk/go/internal/wire/protocol.go`           | Go                                          |
 | `testdata/wire/protocol.json`                | a vector of every message, every SDK's test |
+| `docs/wire.md`, between its markers          | the tables of engines and methods           |
 
 - `just protocol` writes them all again; `just protocol-check` fails when
   one differs from what the schema writes, and CI runs it. Never edit a

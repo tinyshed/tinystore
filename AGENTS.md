@@ -69,11 +69,12 @@ What has cost time before, so that it does not again:
   reach only builds inside this workspace. A program that builds the crate
   elsewhere, from crates.io or by `cargo install`, sets them itself, as the
   crates' READMEs say; the store logs once when they are missing.
-- **Generated files are written, never edited**: the codecs and vectors from
-  `protocol/*.wire` (`just protocol`), the API pages in `docs/reference/`
-  from the doc comments (`cd web && bun run reference`), the README's
-  headline, sample and engines from `web/landing.md` (`task readme`). Each
-  has a check that fails when they differ.
+- **Generated files are written, never edited**: the codecs, the vectors
+  and `docs/wire.md`'s tables of methods from `protocol/*.wire` (`just
+  protocol`), the API pages in `docs/reference/` from the doc comments (`cd
+  web && bun run reference`), the README's headline, sample and engines from
+  `web/landing.md` (`task readme`). Each has a check that fails when they
+  differ.
 - **Windows is the slowest platform and the strictest**: files held open,
   paths, pipes, processes and their exit. Read the `platform-traps` skill
   before touching files, processes, stdio or sockets.

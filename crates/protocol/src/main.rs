@@ -10,9 +10,11 @@
 //! | `rust`, `typescript`, `python`  | write a codec from the schema                        |
 //! | `golang`                        | writes the Go codec, laid out as gofmt lays it out   |
 //! | `vectors`                       | writes a vector of every message from the schema     |
+//! | `docs`                          | writes docs/wire.md's tables of engines and methods  |
 
 #[cfg(test)]
 mod agreement_tests;
+mod docs;
 mod format;
 mod golang;
 mod names;
@@ -43,12 +45,14 @@ fn main() -> ExitCode {
 
 fn run(root: &Path, check: bool) -> Result<(), String> {
     let (schema, mut stale) = read(&root.join("protocol"), check)?;
+    let page = fs::read_to_string(root.join("docs/wire.md")).map_err(|error| format!("docs/wire.md: {error}"))?;
     let outputs = [
         ("crates/tinystore/src/wire/protocol.rs", rust::write(&schema)),
         ("sdk/js/src/wire/protocol.ts", typescript::write(&schema)),
         ("sdk/python/src/tinystore/_wire/protocol.py", python::write(&schema)),
         ("sdk/go/internal/wire/protocol.go", golang::write(&schema)),
         ("testdata/wire/protocol.json", vectors::write(&schema)),
+        ("docs/wire.md", docs::write(&schema, &page).map_err(|failure| format!("docs/wire.md: {failure}"))?),
     ];
     for (name, text) in outputs {
         let path = root.join(name);
