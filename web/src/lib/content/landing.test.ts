@@ -74,7 +74,9 @@ describe('the benchmark cards', () => {
 	test('read back from every SVG the README shows, in its order', () => {
 		for (const card of readCards(checkout())) {
 			expect(card.title).not.toBe('')
-			expect(card.rows.filter(row => row.ours)).toHaveLength(1)
+			// TinyStore's rows, its server and its core in process, against at least one other
+			expect(card.rows.some(row => row.ours)).toBe(true)
+			expect(card.rows.some(row => !row.ours)).toBe(true)
 			expect(Math.max(...card.rows.flatMap(row => row.bars.map(bar => bar.fraction)))).toBe(1)
 		}
 	})

@@ -216,96 +216,46 @@ claude mcp add tinystore -- tinystore mcp ./data   # logs, kv, jobs and SQL for 
 at work. The image `ghcr.io/tinyshed/tinystore` serves a store to
 remote clients, as [One directory, many engines](docs/handbook/start/directory.md#four-ways-to-open-a-store) shows.
 
-<!-- The Go engine's numbers, hidden until the Rust engine is measured.
-
 ## Numbers
 
-**TinyStore does not beat every specialized database at its own workload.
-It makes the combined workload of a small application cheap enough that
-replacing several services does not mean giving up performance.**
-
-The application workload at 64 concurrent clients completes **81,531
-requests/s locally** and **43,178 requests/s on an 8-vCPU Yandex VM**, median
-of three passes. With jobs joined to the application's SQL file and written
-in one `Batch`, that is **1.49x and 1.52x** the Redis + PostgreSQL +
-VictoriaMetrics + files stack. Every pass of this configuration has zero
-errors, dropped logs and jobs left waiting.
-
-Two three-minute passes on the VM complete 35,151 and 35,169 requests/s,
-**1.35x the service stack**, and handle every queued job. This is a bounded
-sustained-load check, not a half-hour steady-state guarantee.
-
-**TinyStore Batch** stores the queue in the application's SQL database and
-commits its rows and job together. **TinyStore Split** uses the default jobs
-file and commits each file independently.
+**TinyStore is not faster than each service at its own job. It replaces five
+of them with one process, holds a fraction of their memory, and under load
+an application on it answers more requests.**
 
 <p>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-stack-dark.svg"><img src=".github/assets/bench-stack-light.svg" width="400" alt="Application requests per second, 64 clients"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-stack-memory-dark.svg"><img src=".github/assets/bench-stack-memory-light.svg" width="400" alt="Application composite memory, client and services included"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-kv-dark.svg"><img src=".github/assets/bench-kv-light.svg" width="400" alt="kv"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sqldb-dark.svg"><img src=".github/assets/bench-sqldb-light.svg" width="400" alt="sqldb"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-records-dark.svg"><img src=".github/assets/bench-records-light.svg" width="400" alt="records"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-disk-dark.svg"><img src=".github/assets/bench-metrics-disk-light.svg" width="400" alt="metrics-disk"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-memory-dark.svg"><img src=".github/assets/bench-metrics-memory-light.svg" width="400" alt="metrics-memory"></picture>
-<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-ingest-dark.svg"><img src=".github/assets/bench-metrics-ingest-light.svg" width="400" alt="metrics-ingest"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-memory-dark.svg"><img src=".github/assets/bench-memory-light.svg" width="400" alt="Memory at rest, every engine open"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-ready-dark.svg"><img src=".github/assets/bench-ready-light.svg" width="400" alt="Time from start until every engine is open"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-requests-dark.svg"><img src=".github/assets/bench-requests-light.svg" width="400" alt="An application at 64 clients, requests a second"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-requests-one-dark.svg"><img src=".github/assets/bench-requests-one-light.svg" width="400" alt="An application with one client, requests a second"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-load-memory-dark.svg"><img src=".github/assets/bench-load-memory-light.svg" width="400" alt="An application's memory at 64 clients"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-kv-read-dark.svg"><img src=".github/assets/bench-kv-read-light.svg" width="400" alt="A key read, one at a time"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-metrics-disk-dark.svg"><img src=".github/assets/bench-metrics-disk-light.svg" width="400" alt="Metrics on disk, bytes a sample"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-logs-disk-dark.svg"><img src=".github/assets/bench-logs-disk-light.svg" width="400" alt="Logs on disk, percent of the text"></picture>
 </p>
 
-The cards use local Linux-container medians on a Ryzen 7 7700, 16 visible
-CPUs, Go 1.27.1 and Docker Desktop 29.6.2. Records: 445,136 private production
-lines. Metrics: 5,090,400 TSBS samples, with ingest plus settle timed together.
-Memory is client high-water RSS plus the greater of service high-water RSS
-and final service-tree PSS, not a simultaneous whole-stack peak.
-Application memory covers the full 8/64/256-client run.
-In the application memory card, the upper solid bar is idle and the lower
-faded bar is the load peak from the same process run. That card uses a separate
-three-pass, three-second round with service idle memory explicitly measured.
-Its TinyStore row uses the Batch configuration.
+**TinyStore** is `tinystore serve`, the server `open()` starts beside a
+program, with every engine open. **In process** is the same core loaded into
+the program, `open(dir, { embedded: true })`. **The five services** are
+PostgreSQL 18, Redis 8.10, MinIO, VictoriaMetrics 1.154 and Loki 3.7, each as
+it ships. The application reads a session and a note, logs a line and counts
+itself; one request in ten updates the note and queues a job, one in fifty
+uploads 16 KiB. Every side kept every job and every log line, and a write
+returns once it is on the disk.
 
-These full-comparison processes also link the comparison libraries. Small,
-independently linked consumers on the Yandex VM start at **3.4 MiB** for the
-empty probe, **3.7 MiB** for `tinystore.Open` alone, **8.5-9.3 MiB** for one
-engine and **14.9 MiB** for all six engines, without a loaded corpus.
+Where TinyStore loses: with one to eight clients the services answer twice
+the requests, because a request that writes syncs two files where
+PostgreSQL syncs one. Writes that return before the sync stop at 30,000 a
+second where Redis reaches 200,000. MinIO reads a 1 MiB file twice as fast,
+VictoriaMetrics keeps a sample in 0.71 bytes against 1.00, and zstd keeps
+LogHub's text in 5.5 % where TinyStore keeps 14.2 %.
+[Benchmarks](docs/handbook/production/benchmarks.md) has every test and
+these losses beside the wins.
 
-**Raw binary** is an actual uncompressed TSBS export: an eight-byte timestamp
-and eight-byte float value per sample, plus a JSON index with the series'
-labels, offsets and counts. Its **78.2 MiB** includes both files and has been
-checked bit for bit. It is a plain representation, not a database with
-queries, retention or integrity checks.
-
-<details>
-<summary><b>KV: embedded, sidecar and server benchmarks</b></summary>
-
-<p>
-<picture>
-<source media="(prefers-color-scheme: dark) and (max-width: 600px)" srcset=".github/assets/bench-sdk-modes-mobile-dark.svg">
-<source media="(max-width: 600px)" srcset=".github/assets/bench-sdk-modes-mobile-light.svg">
-<source media="(prefers-color-scheme: dark)" srcset=".github/assets/bench-sdk-modes-dark.svg">
-<img src=".github/assets/bench-sdk-modes-light.svg" width="800" alt="KV read and write throughput: embedded Go and Go, Bun, Python clients over sidecar and TCP server">
-</picture>
-</p>
-
-Embedded means a direct Go library call. Bun and Python use their SDKs through
-a local sidecar or a loopback TCP server with a token; they have no embedded
-mode. Go sidecar/server rows isolate the process boundary within one language;
-SDK rows also include that language's encoding and scheduling. All modes use
-the same 100,000 keys and 128-byte values, in one interleaved session.
-
-</details>
-
-These are workload comparisons, not universal wins: cloud KV writes did
-not improve, specialized KV engines read faster, and Batch at 256 clients
-leaves a growing jobs queue. Metrics competitors do not have identical
-commit durability. The cards measure `ad4f047`, before the exact block
-summaries, which [a round of their own](https://github.com/tinyshed/research/blob/main/tinystore/reports/self-summary-2026-10-01.md)
-measures. The saved revisions, all passes, limits and reproduction commands
-are in the [round report](https://github.com/tinyshed/research/blob/main/tinystore/reports/runtime-continuation-2026-10-01.md).
-The [consumer-memory and client-mode follow-up](https://github.com/tinyshed/research/blob/main/tinystore/reports/consumer-memory-2026-10-01.md)
-records the small consumers, paired memory bars, raw representation and SDK modes.
-
-The rounds, prototypes and open questions behind the design are in
-[tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore).
-
--->
+v0.1.0 from npm and crates.io, medians of three passes in one Linux container
+on a Ryzen 7 7700, programs in Bun 1.4.2 with Bun's own Redis, PostgreSQL and
+S3 clients. Metrics: TSBS DevOps, 26 million samples. Logs: 13 LogHub
+datasets, 2.6 GiB. Method, every pass, the raw data and the commands are in
+the [round's report](https://github.com/tinyshed/research/blob/main/tinystore/reports/release-2026-10-23.md).
 
 ## Origin
 

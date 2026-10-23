@@ -115,13 +115,16 @@ store.metrics()?.counter("signups_total").open()?.inc();
 
 ## Measured against what it replaces.
 
-|          |                                                                                     |
-|----------|-------------------------------------------------------------------------------------|
-| Services | The stack TinyStore replaces: Redis, PostgreSQL, VictoriaMetrics and files on disk. |
-| Batch    | The queue lives in the application's SQL file; a job commits with its rows.         |
-| Split    | The queue has a file of its own, as by default; each file commits apart.            |
+|                   |                                                                                         |
+|-------------------|-----------------------------------------------------------------------------------------|
+| TinyStore         | `tinystore serve`, the server `open()` starts beside a program, with every engine open. |
+| In process        | The same core loaded into the program: `open(dir, { embedded: true })`.                 |
+| The five services | PostgreSQL 18, Redis 8.10, MinIO, VictoriaMetrics 1.154 and Loki 3.7, each as it ships. |
 
-Local Linux-container medians on a Ryzen 7 7700 with Go 1.27.1. These are
-workload comparisons, not universal wins: specialized KV engines read faster,
-and Prometheus and VictoriaMetrics ingest more samples a second.
-[Methodology and reports ↗](https://github.com/tinyshed/research/tree/main/tinystore)
+v0.1.0, medians of three passes in one Linux container on a Ryzen 7 7700,
+driven from Bun 1.4.2 with Bun's own Redis, PostgreSQL and S3 clients. These
+are not universal wins: with one to eight clients the services answer twice
+the requests, Redis takes writes that skip the disk sync six times faster, and
+VictoriaMetrics keeps a sample in fewer bytes.
+[Every test, the wins and the losses](../docs/handbook/production/benchmarks.md) ·
+[The round's report ↗](https://github.com/tinyshed/research/blob/main/tinystore/reports/release-2026-10-23.md)

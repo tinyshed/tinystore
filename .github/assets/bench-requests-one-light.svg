@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="210" viewBox="0 0 400 210" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0.5" y="0.5" width="399" height="209" rx="6" fill="none" stroke="#d1d9e0"/>
+<text x="20" y="36" font-size="16" font-weight="600" fill="#1f2328">An application, one client</text>
+<text x="20" y="56" font-size="12" fill="#59636e">requests a second · higher is better</text>
+<text x="20" y="89.0" font-size="14" font-weight="600" fill="#1f2328">TinyStore</text>
+<rect x="152" y="74" width="56.6" height="20" rx="3" fill="#23212B"/>
+<text x="216.6" y="89.0" font-size="14" font-weight="600" fill="#1f2328">756</text>
+<text x="20" y="121.0" font-size="14" font-weight="600" fill="#1f2328">In process</text>
+<rect x="152" y="106" width="59.0" height="20" rx="3" fill="#23212B"/>
+<text x="219.0" y="121.0" font-size="14" font-weight="600" fill="#1f2328">788</text>
+<text x="20" y="153.0" font-size="14" font-weight="400" fill="#1f2328">The five services</text>
+<rect x="152" y="138" width="148.0" height="20" rx="3" fill="#d1d9e0"/>
+<text x="308.0" y="153.0" font-size="14" font-weight="400" fill="#1f2328">2.0 k</text>
+</svg>

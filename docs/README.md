@@ -75,6 +75,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [What TinyStore promises](handbook/production/promises.md)
 - [Limits and defaults](handbook/production/limits.md)
 - [Running it](handbook/production/running-it.md)
+- [Benchmarks](handbook/production/benchmarks.md)
 
 ## Guides
 
