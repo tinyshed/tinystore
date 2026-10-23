@@ -368,6 +368,47 @@ func TestAPageReadsAfterTheLastRowOfTheOneBeforeAndOnlyItsOwnQuery(t *testing.T)
 	})
 }
 
+func TestPagesReadOnPastANullAndAnInfinityInTheirOrder(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := ways.Must(sqldb.Open(ctx, store, "shop", sqldb.MigrationFiles(map[string]string{
+			"0001_orders.sql": "create table orders (id integer primary key, shipped_at integer, total real)",
+		})))
+		ways.Must(db.Exec(ctx, `insert into orders values (1, null, 1.0), (2, null, 9e999), (3, null, -9e999),
+			(4, 10, 2.0), (5, 20, 9e999)`))
+		type Order struct {
+			ID int64
+		}
+		orders := sqldb.OpenTable[Order](db, "orders")
+		paged := func(query *sqldb.Query[Order]) string {
+			var ids []string
+			var after []sqldb.ListOption
+			for {
+				page := ways.Must(query.List(ctx, append(after, sqldb.Limit(2))...))
+				for _, row := range page.Rows {
+					ids = append(ids, fmt.Sprint(row.ID))
+				}
+				if page.Next == "" {
+					return strings.Join(ids, ",")
+				}
+				after = []sqldb.ListOption{sqldb.After(page.Next)}
+			}
+		}
+		for _, each := range []struct {
+			query *sqldb.Query[Order]
+			want  string
+		}{
+			{orders.OrderBy("shipped_at", sqldb.Asc).OrderBy("id", sqldb.Asc), "1,2,3,4,5"},
+			{orders.OrderBy("shipped_at", sqldb.Desc).OrderBy("id", sqldb.Desc), "5,4,3,2,1"},
+			{orders.OrderBy("total", sqldb.Asc).OrderBy("id", sqldb.Asc), "3,1,4,2,5"},
+		} {
+			if got := paged(each.query); got != each.want {
+				t.Fatalf("pages read %s, want %s", got, each.want)
+			}
+		}
+	})
+}
+
 type Post struct {
 	ID    int64
 	Title string

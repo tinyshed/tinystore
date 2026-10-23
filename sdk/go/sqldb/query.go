@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"math"
 	"reflect"
 	"regexp"
 	"sort"
@@ -955,30 +956,44 @@ func render(p parts) Piece {
 }
 
 // keysetOf is the condition that starts a page after a row's order values.
+// SQLite orders a null before every value, first in ascending order and last
+// in descending, and a comparison with a null is never true: equal is `is`,
+// and past a null is every value ascending and nothing descending.
 func keysetOf(order []ordered, after []any) Piece {
 	var alternatives []string
 	var values []any
 	for at, each := range order {
-		var equal []string
-		for _, earlier := range order[:at] {
-			equal = append(equal, earlier.piece.text+" = ?")
-		}
-		values = append(values, after[:min(at, len(after))]...)
-		sign := ">"
-		if each.direction == Desc {
-			sign = "<"
-		}
-		past := each.piece.text + " " + sign + " ?"
+		column := each.piece.text
 		var value any
 		if at < len(after) {
 			value = after[at]
 		}
-		values = append(values, value)
+		if value == nil && each.direction == Desc {
+			continue
+		}
+		var equal []string
+		for _, earlier := range order[:at] {
+			equal = append(equal, earlier.piece.text+" is ?")
+		}
+		values = append(values, after[:min(at, len(after))]...)
+		past := column + " is not null"
+		switch {
+		case value == nil:
+		case each.direction == Desc:
+			past = "(" + column + " < ? or " + column + " is null)"
+			values = append(values, value)
+		default:
+			past = column + " > ?"
+			values = append(values, value)
+		}
 		if len(equal) == 0 {
 			alternatives = append(alternatives, past)
 		} else {
 			alternatives = append(alternatives, "("+strings.Join(append(equal, past), " and ")+")")
 		}
+	}
+	if len(alternatives) == 0 {
+		return Piece{text: "0"}
 	}
 	return Piece{text: "(" + strings.Join(alternatives, " or ") + ")", values: values}
 }
@@ -1026,9 +1041,15 @@ func pythonJSON(value any) string {
 	return out.String()
 }
 
+// cursorText is a page's cursor of its last row's order values: an infinity,
+// which JSON has no number for, as {"r": "+Inf"}.
 func cursorText(values []any, digest string) string {
 	items := make([]any, len(values))
 	for i, v := range values {
+		if f, ok := v.(float64); ok && math.IsInf(f, 0) {
+			items[i] = map[string]string{"r": strconv.FormatFloat(f, 'g', -1, 64)}
+			continue
+		}
 		items[i] = jsonable(v)
 	}
 	text, _ := json.Marshal(map[string]any{"q": digest, "v": items})
@@ -1053,6 +1074,14 @@ func cursorOf(cursor, digest string) ([]any, error) {
 	for i, v := range read.V {
 		switch item := v.(type) {
 		case map[string]any:
+			if r, ok := item["r"]; ok {
+				f, err := strconv.ParseFloat(fmt.Sprint(r), 64)
+				if err != nil {
+					return nil, core.Errorf(core.Invalid, "a cursor that is not one: pass the Next of a page")
+				}
+				out[i] = f
+				continue
+			}
 			bytes, _ := hex.DecodeString(fmt.Sprint(item["b"]))
 			out[i] = bytes
 		case json.Number:

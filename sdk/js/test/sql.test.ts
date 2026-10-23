@@ -17,6 +17,7 @@ import {
 	InvalidError,
 	LimitError,
 	limits,
+	type Query,
 	type SqlTx,
 	type Store,
 	sql,
@@ -493,6 +494,36 @@ for (const way of ways) {
 				.orderBy('created_at', 'desc')
 				.orderBy('id', 'desc')
 			expect(await caught(other.list({ limit: 2, after: first.next }))).toBeInstanceOf(InvalidError)
+		})
+
+		test('pages read on past a null and an infinity in their order', async () => {
+			const shop = await store.database('shop', {
+				migrations: {
+					'0001_orders.sql':
+						'create table orders (id integer primary key, shipped_at integer, total real)',
+				},
+			})
+			await shop.exec`insert into orders values (1, null, 1.0), (2, null, 9e999), (3, null, -9e999), (4, 10, 2.0), (5, 20, 9e999)`
+			const orders = shop.table<{ id: number }>('orders')
+			const paged = async (query: Query<{ id: number }>) => {
+				const ids: number[] = []
+				let after: string | undefined
+				do {
+					const page = await query.list({ limit: 2, after })
+					ids.push(...page.rows.map(row => Number(row.id)))
+					after = page.next
+				} while (after !== undefined)
+				return ids
+			}
+			expect(await paged(orders.orderBy('shipped_at', 'asc').orderBy('id', 'asc'))).toEqual([
+				1, 2, 3, 4, 5,
+			])
+			expect(await paged(orders.orderBy('shipped_at', 'desc').orderBy('id', 'desc'))).toEqual([
+				5, 4, 3, 2, 1,
+			])
+			expect(await paged(orders.orderBy('total', 'asc').orderBy('id', 'asc'))).toEqual([
+				3, 1, 4, 2, 5,
+			])
 		})
 
 		test('a join reads its first table, a query in a piece is a subquery, and a plan explains it', async () => {

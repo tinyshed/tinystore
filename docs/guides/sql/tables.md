@@ -229,7 +229,9 @@ let next = newest.list(50, page.next.as_deref())?; // page.next is None after th
 The next page starts after the last row of this one, by the query's order,
 so a row inserted while the user reads never appears twice and never pushes
 another out of view, as `offset` would. The order must end in a unique
-column: sort by `created_at`, then `id`.
+column: sort by `created_at`, then `id`. A column that holds nulls pages in
+SQLite's order, so its nulls come first in ascending order and last in
+descending order.
 
 ## Columns, groups and joins
 

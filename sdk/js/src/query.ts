@@ -868,18 +868,31 @@ function render(parts: Parts): Sql {
 	return new Sql(text, values)
 }
 
-/** The condition that starts a page after a row's order values. */
+/**
+ * The condition that starts a page after a row's order values. SQLite orders
+ * a null before every value, first in ascending order and last in descending,
+ * and a comparison with a null is never true: equal is `is`, and past a null
+ * is every value ascending and nothing descending.
+ */
 function keyset(order: Parts['order'], after: readonly SqlValue[]): Sql {
 	const alternatives: string[] = []
 	const values: SqlArg[] = []
 	order.forEach((each, at) => {
-		const equal = order.slice(0, at).map(earlier => `${earlier.piece.text} = ?`)
+		const column = each.piece.text
+		const value = after[at] ?? null
+		if (value === null && each.direction === 'desc') {
+			return
+		}
+		const equal = order.slice(0, at).map(earlier => `${earlier.piece.text} is ?`)
 		values.push(...after.slice(0, at))
-		const past = `${each.piece.text} ${each.direction === 'asc' ? '>' : '<'} ?`
-		values.push(after[at] ?? null)
+		let past = `${column} is not null`
+		if (value !== null) {
+			past = each.direction === 'asc' ? `${column} > ?` : `(${column} < ? or ${column} is null)`
+			values.push(value)
+		}
 		alternatives.push(equal.length === 0 ? past : `(${[...equal, past].join(' and ')})`)
 	})
-	return new Sql(`(${alternatives.join(' or ')})`, values)
+	return new Sql(alternatives.length === 0 ? '0' : `(${alternatives.join(' or ')})`, values)
 }
 
 /** A short digest of a query, which a cursor carries so that another query refuses it. */
@@ -893,10 +906,14 @@ function digestOf(statement: Sql): string {
 	return hash.toString(36)
 }
 
+/** A cursor of order values: a bigint, and an infinity JSON has no number for, as their text. */
 function cursorText(values: readonly SqlValue[], digest: string): string {
-	const json = JSON.stringify({ q: digest, v: values }, (_, v) =>
-		typeof v === 'bigint' ? { n: String(v) } : v,
-	)
+	const json = JSON.stringify({ q: digest, v: values }, (_, v) => {
+		if (typeof v === 'bigint') {
+			return { n: String(v) }
+		}
+		return typeof v === 'number' && !Number.isFinite(v) ? { r: String(v) } : v
+	})
 	return Buffer.from(json).toString('base64url')
 }
 
@@ -912,11 +929,14 @@ function cursorOf(cursor: string, digest: string): SqlValue[] {
 			"a cursor of another query: a page's next reads only the query that made it",
 		)
 	}
-	return read.v.map(v =>
-		typeof v === 'object' && v !== null && 'n' in v
-			? BigInt((v as { n: string }).n)
-			: (v as SqlValue),
-	)
+	return read.v.map(v => {
+		if (typeof v === 'object' && v !== null && 'n' in v) {
+			return BigInt((v as { n: string }).n)
+		}
+		return typeof v === 'object' && v !== null && 'r' in v
+			? Number((v as { r: string }).r)
+			: (v as SqlValue)
+	})
 }
 
 /** An insert of rows of the same columns, the first row's. */

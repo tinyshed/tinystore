@@ -317,6 +317,31 @@ async def test_a_page_reads_after_the_last_row_of_the_one_before_and_only_its_ow
         await other.list(limit=2, after=first.next)
 
 
+async def test_pages_read_on_past_a_null_and_an_infinity_in_their_order(store: tinystore.Store) -> None:
+    shop = await store.database(
+        "shop",
+        migrations={"0001_orders.sql": "create table orders (id integer primary key, shipped_at integer, total real)"},
+    )
+    await shop.exec(
+        "insert into orders values (1, null, 1.0), (2, null, 9e999), (3, null, -9e999), (4, 10, 2.0), (5, 20, 9e999)"
+    )
+    orders = shop.table("orders")
+
+    async def paged(query: Any) -> list[int]:
+        ids: list[int] = []
+        after = None
+        while True:
+            page = await query.list(limit=2, after=after)
+            ids.extend(row["id"] for row in page.rows)
+            if page.next is None:
+                return ids
+            after = page.next
+
+    assert await paged(orders.order_by("shipped_at", "asc").order_by("id", "asc")) == [1, 2, 3, 4, 5]
+    assert await paged(orders.order_by("shipped_at", "desc").order_by("id", "desc")) == [5, 4, 3, 2, 1]
+    assert await paged(orders.order_by("total", "asc").order_by("id", "asc")) == [3, 1, 4, 2, 5]
+
+
 async def test_a_join_reads_its_first_table_a_query_in_a_piece_is_a_subquery_and_a_plan_explains_it(
     store: tinystore.Store,
 ) -> None:

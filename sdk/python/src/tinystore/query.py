@@ -634,15 +634,29 @@ def _render(parts: _Parts) -> Sql:
 
 
 def _keyset(order: Sequence[_Order], after: Sequence[SqlValue]) -> Sql:
-    """The condition that starts a page after a row's order values."""
+    """The condition that starts a page after a row's order values.
+
+    SQLite orders a null before every value, first in ascending order and last
+    in descending, and a comparison with a null is never true: equal is `is`,
+    and past a null is every value ascending and nothing descending.
+    """
     alternatives: list[str] = []
     values: list[SqlArg] = []
     for at, each in enumerate(order):
-        equal = [f"{earlier.piece.text} = ?" for earlier in order[:at]]
+        column = each.piece.text
+        value = after[at] if at < len(after) else None
+        if value is None and each.direction == "desc":
+            continue
+        equal = [f"{earlier.piece.text} is ?" for earlier in order[:at]]
         values.extend(after[:at])
-        past = f"{each.piece.text} {'>' if each.direction == 'asc' else '<'} ?"
-        values.append(after[at] if at < len(after) else None)
+        if value is None:
+            past = f"{column} is not null"
+        else:
+            past = f"{column} > ?" if each.direction == "asc" else f"({column} < ? or {column} is null)"
+            values.append(value)
         alternatives.append(past if not equal else f"({' and '.join([*equal, past])})")
+    if not alternatives:
+        return Sql("0", ())
     return Sql(f"({' or '.join(alternatives)})", tuple(values))
 
 
