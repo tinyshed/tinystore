@@ -7,6 +7,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -118,5 +119,59 @@ func TestARequestAGoAwayRefusedStaysUnsentWhenTheCreditComesBack(t *testing.T) {
 	}
 	if err := p.session.Ended(); err != nil {
 		t.Fatalf("the session ended: %v", err)
+	}
+}
+
+// waiting counts the opens that wait for a free stream.
+func (p *peer) waiting() int {
+	p.session.mu.Lock()
+	defer p.session.mu.Unlock()
+	return len(p.session.waiting)
+}
+
+func (p *peer) waitFor(done func() bool) {
+	p.t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !done(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			p.t.Fatal("not done within five seconds")
+		}
+	}
+}
+
+func TestAStreamFreedWakesTheOpenThatStillWaitsNotOneThatGaveUp(t *testing.T) {
+	ctx := context.Background()
+	p := newPeer(t, wire.Welcome{MaxBody: 1 << 20, InFlight: 1, ConnectionCredit: 1 << 20, StreamCredit: 1 << 16})
+	held, err := p.session.Open(ctx, 0x0102, []byte{0x80}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// an open whose deadline passes while every stream is in use
+	gaveUp, cancel := context.WithCancel(ctx)
+	gone := make(chan error, 1)
+	go func() {
+		_, err := p.session.Open(gaveUp, 0x0102, []byte{0x80}, true)
+		gone <- err
+	}()
+	p.waitFor(func() bool { return p.waiting() == 1 })
+	cancel()
+	if err := <-gone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the open that gave up: %v", err)
+	}
+	// and one that waits on, with no deadline
+	before := p.waiting()
+	opened := make(chan error, 1)
+	go func() {
+		_, err := p.session.Open(ctx, 0x0102, []byte{0x80}, true)
+		opened <- err
+	}()
+	p.waitFor(func() bool { return p.waiting() > before })
+	p.session.Receive(frame(kindResponse, flagEnd, 0, held.ID, wire.Encode(&wire.KvEntry{Found: true})))
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Fatalf("the open that waited on: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream freed did not wake the open that waited on")
 	}
 }

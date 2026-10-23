@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"slices"
 	"sync"
 	"time"
 
@@ -188,6 +189,9 @@ func (s *Session) Open(ctx context.Context, method uint16, body []byte, end bool
 		select {
 		case <-slot:
 		case <-ctx.Done():
+			s.mu.Lock()
+			s.abandon(slot)
+			s.mu.Unlock()
 			return nil, ctx.Err()
 		}
 		s.mu.Lock()
@@ -348,10 +352,26 @@ func (s *Session) release(st *Stream) {
 		}
 	}
 	s.queue = kept
+	s.wakeNext()
+}
+
+// wakeNext wakes the open that has waited longest for a free stream.
+func (s *Session) wakeNext() {
 	if len(s.waiting) > 0 {
 		close(s.waiting[0])
 		s.waiting = s.waiting[1:]
 	}
+}
+
+// abandon takes the slot of an open that gave up out of the line, so that
+// no freed stream wakes it rather than one still waiting. A slot already
+// woken passes its wakeup on: the stream freed for it is free for the next.
+func (s *Session) abandon(slot chan struct{}) {
+	if at := slices.Index(s.waiting, slot); at >= 0 {
+		s.waiting = slices.Delete(s.waiting, at, at+1)
+		return
+	}
+	s.wakeNext()
 }
 
 // Receive takes bytes the transport read: any part of a frame, or several.
