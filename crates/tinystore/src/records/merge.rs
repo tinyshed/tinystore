@@ -13,10 +13,17 @@
 //! event once. The merged blocks are written, the members' removed and their
 //! rows made places in one commit, so a read finds each event once, before
 //! and after.
+//!
+//! A read gives a stream's events of one time in the order their blocks were
+//! written, and a merge writes its blocks after every block there is. So a
+//! member that begins where the one before ends is taken only when its
+//! blocks were written after that one's, and a member waits while a block
+//! beside the run, written after one of its own, holds one of its times:
+//! merged, its event would come before the member's.
 
 use std::collections::BTreeMap;
 
-use rusqlite::params;
+use rusqlite::{Connection, params};
 
 use super::block;
 use super::engine::{Records, execute};
@@ -48,14 +55,48 @@ struct Small {
     blocks: (i64, i64),
 }
 
-/// A member's row and its blocks' bodies, in their order.
-type Member = (Vec<u8>, Vec<Vec<u8>>);
+/// Where a block stands: its id, its segment and the times it spans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Placed {
+    id: i64,
+    segment: i64,
+    first: i64,
+    last: i64,
+}
+
+impl Placed {
+    /// Whether the two may hold events of one time.
+    fn meets(&self, other: &Placed) -> bool {
+        self.first <= other.last && other.first <= self.last
+    }
+}
+
+/// A segment's row and the blocks a merge reads of it, in their order.
+struct Bodies {
+    id: i64,
+    row: Vec<u8>,
+    blocks: Vec<(Placed, Vec<u8>)>,
+}
+
+/// What became of a run.
+enum Merged {
+    Written,
+    /// The members a block beside the run would pass, left for a later pass.
+    Waits(Vec<i64>),
+}
 
 const SMALL: &str = "select id, first_at, last_at, held, weight,
     (select min(id) from blocks where segment = segments.id), (select max(id) from blocks where segment = segments.id)
     from segments where stream = ?1 and holder is null and held < ?2 and weight < ?3 order by id";
 const MEMBER_ROW: &str = "select body from segments where id = ?1 and holder is null";
-const MEMBER_BLOCKS: &str = "select body from blocks where segment = ?1 order by id";
+const MEMBER_BLOCKS: &str = "select id, first_at, last_at, body from blocks where segment = ?1 order by id";
+/// The blocks of a stream's segments whose times meet `[?2, ?3]`, written
+/// after the block `?4`.
+const WRITTEN_AFTER: &str = "select blocks.id, blocks.segment, blocks.first_at, blocks.last_at
+    from segments join blocks on blocks.segment = segments.id
+    where segments.stream = ?1 and segments.holder is null and segments.last_at >= ?2 and segments.first_at <= ?3
+    and blocks.id > ?4 and blocks.last_at >= ?2 and blocks.first_at <= ?3";
+const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 /// A member's blocks with their filters, and what it held.
 const DROP_MEMBER: [&str; 4] = [
     "delete from block_traces where block in (select id from blocks where segment = ?1)",
@@ -88,16 +129,18 @@ impl Records {
     }
 
     fn merge_stream(&self, stream: i64) -> Result<u64> {
-        let mut merged = 0;
-        while let Some(run) = pick(self.small(stream)?) {
+        let (mut merged, mut waiting) = (0, Vec::new());
+        loop {
+            let small = self.small(stream)?.into_iter().filter(|small| !waiting.contains(&small.id)).collect();
+            let Some(run) = pick(small) else { return Ok(merged) };
             match self.merge_run(stream, &run) {
-                Ok(()) => merged += run.len() as u64 - 1,
+                Ok(Merged::Written) => merged += run.len() as u64 - 1,
+                Ok(Merged::Waits(members)) => waiting.extend(members),
                 // a member met that no longer reads is left out of the next pick
                 Err(_) if run.iter().any(|member| self.is_damaged(Part::Segment, member.id)) => {}
                 Err(error) => return Err(error),
             }
         }
-        Ok(merged)
     }
 
     /// A stream's segments that hold their own events, under a quarter of
@@ -118,28 +161,39 @@ impl Records {
         })
     }
 
-    /// Merges a run of segments in the order of their times: read them in
-    /// one snapshot → parse their events one after another → make one
+    /// Merges a run of segments in the order of their times: read them and
+    /// the blocks beside them in one snapshot → parse their events one after
+    /// another → leave the members a block beside them would pass → make one
     /// segment of them → write it in place of them, in one commit.
-    fn merge_run(&self, stream: i64, run: &[Small]) -> Result<()> {
+    fn merge_run(&self, stream: i64, run: &[Small]) -> Result<Merged> {
         let weight = run.iter().map(|member| member.weight as u64).sum::<u64>();
         let _held = self.memory.reserve(weight * HELD, "records: merging segments", PATIENCE)?;
-        let members = self.members(run)?;
+        let (members, beside) = self.members(stream, run)?;
+        let _beside = self.memory.reserve(bytes_of(&beside), "records: merging segments", PATIENCE)?;
         let mut codec = Codec::default();
-        let mut events: Vec<Kept> = Vec::new();
+        let (mut events, mut times): (Vec<Kept>, Vec<(Placed, Vec<i64>)>) = (Vec::new(), Vec::new());
         let name = self.name_of(stream);
-        for (member, (row, blocks)) in run.iter().zip(&members) {
+        for (member, read) in run.iter().zip(&members) {
             let within = |error: Error| self.met((Part::Segment, member.id), &name, error);
-            let schema = Schema::parse(row, &mut codec).map_err(within)?;
-            for body in blocks {
-                events.extend(block::parse(&schema, body, &mut codec).map_err(within)?);
+            let schema = Schema::parse(&read.row, &mut codec).map_err(within)?;
+            for (placed, body) in &read.blocks {
+                let parsed = block::parse(&schema, body, &mut codec).map_err(within)?;
+                times.push((*placed, parsed.iter().map(|event| event.at).collect()));
+                events.extend(parsed);
             }
         }
+        let waits = self.passed(&name, &times, &beside, &mut codec);
+        if !waits.is_empty() {
+            return Ok(Merged::Waits(waits));
+        }
         let made = made_of(&events, &mut codec)?;
-        self.publish_merge(stream, run, &made)
+        self.publish_merge(stream, run, &made).map(|()| Merged::Written)
     }
 
-    fn members(&self, run: &[Small]) -> Result<Vec<Member>> {
+    /// A run's members and the segments beside it, read in one snapshot.
+    /// Only a maintenance pass writes blocks, one pass at a time, so none is
+    /// written between this read and the merge's commit.
+    fn members(&self, stream: i64, run: &[Small]) -> Result<(Vec<Bodies>, Vec<Bodies>)> {
         let failed = |error| sql_error("read the segments to merge", error);
         self.file.read(|connection| {
             let mut row = connection.prepare_cached(MEMBER_ROW).map_err(failed)?;
@@ -147,11 +201,43 @@ impl Records {
             let mut members = Vec::with_capacity(run.len());
             for member in run {
                 let body: Vec<u8> = row.query_row([member.id], |row| row.get(0)).map_err(failed)?;
-                let bodies = blocks.query_map([member.id], |row| row.get(0));
-                members.push((body, bodies.and_then(Iterator::collect).map_err(failed)?));
+                let found = blocks.query_map([member.id], |row| {
+                    let placed = Placed { id: row.get(0)?, segment: member.id, first: row.get(1)?, last: row.get(2)? };
+                    Ok((placed, row.get(3)?))
+                });
+                members.push(Bodies {
+                    id: member.id,
+                    row: body,
+                    blocks: found.and_then(Iterator::collect).map_err(failed)?,
+                });
             }
-            Ok(members)
+            let beside = beside(connection, stream, run, &members).map_err(failed)?;
+            Ok((members, beside))
         })
+    }
+
+    /// The members whose events of a time a block beside the run would come
+    /// before once it is merged, since the merged blocks are written after
+    /// it. A block beside it that no longer reads is noted as damage, and
+    /// the members whose blocks it meets wait: nothing shows they share no
+    /// time with it.
+    fn passed(&self, name: &str, mine: &[(Placed, Vec<i64>)], beside: &[Bodies], codec: &mut Codec) -> Vec<i64> {
+        let mut waits = Vec::new();
+        for segment in beside {
+            let noted = |error: Error| self.met((Part::Segment, segment.id), name, error);
+            let schema = Schema::parse(&segment.row, codec).map_err(noted).ok();
+            for (placed, body) in &segment.blocks {
+                let times = schema.as_ref().and_then(|schema| block::times(schema, body).map_err(noted).ok());
+                for (member, member_times) in mine {
+                    let shares = |times: &Vec<i64>| times.iter().any(|at| member_times.binary_search(at).is_ok());
+                    let passes = member.id < placed.id && member.meets(placed) && times.as_ref().is_none_or(shares);
+                    if passes && !waits.contains(&member.segment) {
+                        waits.push(member.segment);
+                    }
+                }
+            }
+        }
+        waits
     }
 
     /// Writes a merged segment in its holder's row, which keeps its place,
@@ -195,6 +281,42 @@ impl Records {
             Ok(())
         })
     }
+}
+
+/// The segments of `stream` beside `run`, each with its blocks written after
+/// a member's block whose times they meet.
+fn beside(connection: &Connection, stream: i64, run: &[Small], members: &[Bodies]) -> rusqlite::Result<Vec<Bodies>> {
+    let mine: Vec<Placed> = members.iter().flat_map(|member| member.blocks.iter().map(|(placed, _)| *placed)).collect();
+    let span = (mine.iter().map(|block| block.first).min(), mine.iter().map(|block| block.last).max());
+    let (Some(first), Some(last), Some(oldest)) = (span.0, span.1, mine.iter().map(|block| block.id).min()) else {
+        return Ok(Vec::new());
+    };
+    let mut select = connection.prepare_cached(WRITTEN_AFTER)?;
+    let found = select.query_map(params![stream, first, last, oldest], |row| {
+        Ok(Placed { id: row.get(0)?, segment: row.get(1)?, first: row.get(2)?, last: row.get(3)? })
+    })?;
+    let mut after: BTreeMap<i64, Vec<Placed>> = BTreeMap::new();
+    for placed in found {
+        let placed = placed?;
+        let passes = |member: &Placed| member.id < placed.id && member.meets(&placed);
+        if !run.iter().any(|member| member.id == placed.segment) && mine.iter().any(passes) {
+            after.entry(placed.segment).or_default().push(placed);
+        }
+    }
+    let (mut row, mut body) = (connection.prepare_cached(MEMBER_ROW)?, connection.prepare_cached(BLOCK_BODY)?);
+    let mut beside = Vec::with_capacity(after.len());
+    for (segment, placed) in after {
+        let blocks = placed.into_iter().map(|placed| Ok((placed, body.query_row([placed.id], |row| row.get(0))?)));
+        let blocks = blocks.collect::<rusqlite::Result<_>>()?;
+        beside.push(Bodies { id: segment, row: row.query_row([segment], |row| row.get(0))?, blocks });
+    }
+    Ok(beside)
+}
+
+/// The bytes a merge read of the segments beside its run.
+fn bytes_of(beside: &[Bodies]) -> u64 {
+    let blocks = |segment: &Bodies| segment.blocks.iter().map(|(_, body)| body.len()).sum::<usize>();
+    beside.iter().map(|segment| segment.row.len() + blocks(segment)).sum::<usize>() as u64
 }
 
 /// The next segments to merge, the smallest size first: four of one size,

@@ -191,6 +191,12 @@ impl<'b> Opened<'b> {
     }
 }
 
+/// A block's times in their order, no other column expanded.
+pub(super) fn times(schema: &Schema, body: &[u8]) -> Result<Vec<i64>> {
+    let opened = Opened::of(schema, body)?;
+    opened.ints(TIMES, opened.count, "a block's times")
+}
+
 /// A block's events in the order of their times.
 pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
     let opened = Opened::of(schema, body)?;

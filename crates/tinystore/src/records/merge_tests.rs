@@ -104,6 +104,88 @@ fn a_merge_keeps_events_of_one_time_in_the_order_reads_gave_them() {
     assert_eq!(names(&api.list().page().unwrap().events), ["e", "a", "b", "c", "d"]);
 }
 
+/// Events of api to append, a round at a time: each a name and its time in
+/// milliseconds from `start`.
+type Rounds<'a> = &'a [&'a [(&'a str, u64)]];
+
+/// Appends each round's events and packs them an hour on as a segment of
+/// their own, and says how many segments merged.
+fn pack_rounds(fixture: &Fixture, start: std::time::SystemTime, rounds: Rounds<'_>) -> u64 {
+    let api = fixture.events("api");
+    let mut merged = 0;
+    for events in rounds {
+        let at = |(name, millis): &(&str, u64)| NewEvent::new(name).at(start + Duration::from_millis(*millis));
+        api.append_all(events.iter().map(at)).unwrap();
+        fixture.pass(HOUR);
+        merged += maintain(&fixture.store).unwrap().merged;
+    }
+    merged
+}
+
+/// What a read of api gives once every round is packed, and how many
+/// segments merged.
+fn read_after(rounds: Rounds<'_>) -> (Vec<String>, u64) {
+    let fixture = fixture();
+    let merged = pack_rounds(&fixture, fixture.now(), rounds);
+    let read = fixture.events("api").list().page().unwrap();
+    (names(&read.events).into_iter().map(str::to_owned).collect(), merged)
+}
+
+// contract: REC-04
+#[test]
+fn a_member_waits_while_a_larger_segment_written_after_it_holds_one_of_its_times() {
+    // x's segment, of the next size, is written after a's and holds its time
+    let larger: &[(&str, u64)] = &[("x", 100), ("x2", 101), ("x3", 102), ("x4", 103)];
+    let rounds = [&[("a", 100)][..], larger, &[("c", 200)], &[("d", 300)], &[("f", 400)]];
+    assert_eq!(read_after(&rounds), (["a", "x", "x2", "x3", "x4", "c", "d", "f"].map(String::from).to_vec(), 0));
+}
+
+// contract: REC-04
+#[test]
+fn a_segment_a_merge_passed_over_for_overlapping_takes_the_place_of_the_member_whose_time_it_holds() {
+    // x's segment begins before a's ends, so a merge in time order leaves it
+    // out; a's then waits, and x's merges with the others in a's place
+    let rounds =
+        [&[("a", 100), ("a2", 110)][..], &[("x", 100), ("x2", 105)], &[("c", 200)], &[("d", 300)], &[("f", 400)]];
+    assert_eq!(read_after(&rounds), (["a", "x", "x2", "a2", "c", "d", "f"].map(String::from).to_vec(), 3));
+}
+
+#[test]
+fn a_member_waits_while_a_block_written_after_it_whose_times_meet_its_no_longer_reads() {
+    // x's segment, written after a's, spans a's time and holds none of it
+    let larger: &[(&str, u64)] = &[("x", 99), ("x2", 101), ("x3", 102), ("x4", 103)];
+    let rounds = [&[("a", 100)][..], larger, &[("c", 200)], &[("d", 300)]];
+    for broken in [false, true] {
+        let fixture = fixture();
+        let start = fixture.now();
+        pack_rounds(&fixture, start, &rounds);
+        if broken {
+            let broken =
+                |tx: &rusqlite::Connection| execute(tx, "update segments set body = x'00' where id = 2", [], "break");
+            fixture.records().file.write(0, move |tx| broken(tx).map(drop)).unwrap();
+        }
+        let merged = pack_rounds(&fixture, start, &[&[("f", 400)]]);
+        let damaged = fixture.store.all_events().unwrap().damaged().unwrap();
+        let damaged: Vec<String> = damaged.iter().map(ToString::to_string).collect();
+        let expected = if broken { (0, vec!["segment 2 of api".to_owned()]) } else { (3, Vec::new()) };
+        assert_eq!((merged, damaged), expected, "broken: {broken}");
+    }
+}
+
+#[test]
+fn the_blocks_beside_a_run_are_found_through_their_streams_segments() {
+    let plan = |connection: &rusqlite::Connection| {
+        let mut explain = connection.prepare(&format!("explain query plan {WRITTEN_AFTER}")).unwrap();
+        let details = explain.query_map(rusqlite::params![1, 0, 1, 0], |row| row.get::<_, String>(3)).unwrap();
+        Ok(details.map(Result::unwrap).collect::<Vec<_>>().join("; "))
+    };
+    let plan = fixture().records().file.read(plan).unwrap();
+    assert!(
+        plan.contains("USING INDEX segments_by_stream") && plan.contains("USING INDEX blocks_by_segment"),
+        "{plan}"
+    );
+}
+
 // contract: DUR-08
 #[test]
 fn four_small_segments_merge_into_the_one_of_lowest_id_and_keep_their_places() {
