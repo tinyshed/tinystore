@@ -19,8 +19,8 @@ use super::directory::{Group, MOST_ENTRIES, Row};
 use super::engine::{Engine, execute, query_one};
 use super::head::{self, Extent};
 use super::ingest::ready;
-use super::pack::{Packed, Staged, mask};
-use super::retention::expires;
+use super::pack::{Candidate, Packed, Staged, mask};
+use super::retention::{Due, expire_series, expires};
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Result};
@@ -82,22 +82,25 @@ impl Engine {
         packed.blocks += done.blocks;
         packed.conflicts += done.conflicts;
         packed.suspended += done.suspended;
+        packed.expired += done.expired;
         Ok(())
     }
 }
 
 fn publish_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged, now: i64, done: &mut Packed) -> Result<()> {
     execute(tx, SAVEPOINT, params![], "start a series' publication")?;
-    let published = publish_series(tx, zstd, series);
-    if published.is_ok() {
-        execute(tx, RELEASE, params![], "end a series' publication")?;
-        done.samples += series.candidate.points.len() as u64;
-        done.blocks += series.group.blocks.len() as u64;
-        return Ok(());
-    }
+    let error = match publish_series(tx, zstd, series) {
+        Ok(expired) => {
+            execute(tx, RELEASE, params![], "end a series' publication")?;
+            done.samples += series.candidate.points.len() as u64;
+            done.blocks += series.group.blocks.len() as u64;
+            done.expired += expired;
+            return Ok(());
+        }
+        Err(error) => error,
+    };
     execute(tx, ROLLBACK_TO, params![], "undo a series' publication")?;
     execute(tx, RELEASE, params![], "end a series' publication")?;
-    let error = published.err().unwrap_or_else(|| Error::internal("a publication"));
     match error.kind() {
         ErrorKind::Conflict => done.conflicts += 1,
         ErrorKind::Corrupt | ErrorKind::Limit => {
@@ -113,8 +116,9 @@ fn publish_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged, now: i64, don
     Ok(())
 }
 
-/// Writes one series' blocks and everything they change.
-fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
+/// Writes one series' blocks and everything they change, and says how many
+/// samples it removed that its name kept no longer.
+fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> {
     let candidate = &series.candidate;
     let version: i64 = query_one(tx, VERSION, params![candidate.id], "read a series' version")?;
     if version != candidate.version {
@@ -123,6 +127,7 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
     if version == i64::MAX {
         return Err(Error::limit("its version cannot move once more"));
     }
+    let expired = expire_behind(tx, zstd, candidate)?;
     let (mut group, merged) = merge_before(tx, zstd, series.group.clone())?;
     group.clock = clock::hold(tx, &clock::encode(&times_of(&group)))?;
     give_payloads(tx, &mut group)?;
@@ -133,7 +138,21 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<()> {
     let directory = group.encode(zstd)?;
     let row = params![group.series, group.start, group.end, group.clock, directory];
     execute(tx, INSERT_GROUP, row, "write a group")?;
-    seal(tx, zstd, series)
+    seal(tx, zstd, series)?;
+    Ok(expired)
+}
+
+/// Expires the samples the head held before its cutoff, which packing left
+/// out of the blocks: left in the head, they would lie before the blocks,
+/// and a read that met them out of order would suspend the series. A pass
+/// expires and packs series it chooses apart, so one ready may not have
+/// been expired yet.
+fn expire_behind(tx: &Tx<'_>, zstd: &mut Zstd, candidate: &Candidate) -> Result<u64> {
+    if candidate.behind == 0 {
+        return Ok(0);
+    }
+    let due = Due { id: candidate.id, cutoff: candidate.cutoff, keep: candidate.keep };
+    Ok(expire_series(tx, zstd, &due)?.samples)
 }
 
 fn times_of(group: &Group) -> Vec<Times> {

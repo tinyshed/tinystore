@@ -263,3 +263,22 @@ fn a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads
     assert_eq!(read[0].samples().len(), 961 - 240);
     assert_eq!(f.rows("payloads"), 3);
 }
+
+#[test]
+fn packing_a_head_whose_oldest_samples_have_expired_leaves_none_of_them_before_its_blocks() {
+    let f = fixture();
+    // two hours of 15-second samples kept two hours, then ten minutes on: the first 39 have
+    // expired, and this pass packs the series before its expiry takes them
+    let mut written = Series::gauge("cpu").keep(2 * HOUR);
+    let first = f.now() - 2 * HOUR + 15 * SECOND;
+    written.extend((0..480_u32).map(|index| (first + 15 * SECOND * index, f64::from(index))));
+    f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
+    f.pass(10 * MINUTE);
+    let engine = f.engine();
+    let (packed, _) = engine.pack(engine.now()).unwrap();
+    assert_eq!((packed.samples, packed.blocks, packed.expired), (440, 2, 39));
+    let read = f.metrics().query().name("cpu").read().unwrap();
+    assert_eq!(bits(&read[0]), bits(&written)[39..], "every sample its name keeps, in order");
+    assert!(f.metrics().damaged().unwrap().is_empty());
+    assert_eq!(f.value("select head_count from series_state"), 1, "the newest sample waits");
+}

@@ -43,12 +43,18 @@ pub(super) struct Candidate {
     pub(super) id: i64,
     pub(super) version: i64,
     pub(super) keep: i64,
+    /// The oldest time its name kept when packing read it.
+    pub(super) cutoff: i64,
     /// The hint of the grid's scale its next block tries.
     pub(super) scale: i64,
     pub(super) kind: Kind,
     /// The samples of its head before its watermark and within what its
     /// name keeps.
     pub(super) points: Vec<Point>,
+    /// The samples of its head before the cutoff, which publication removes
+    /// before the blocks, since a read takes every block for older than the
+    /// head.
+    pub(super) behind: usize,
 }
 
 /// A series' blocks, encoded and waiting for their publication.
@@ -75,6 +81,9 @@ pub(super) struct Packed {
     pub(super) blocks: u64,
     pub(super) conflicts: u64,
     pub(super) suspended: u64,
+    /// The samples a publication removed from a head, which its name kept no
+    /// longer when packing read it.
+    pub(super) expired: u64,
 }
 
 const READY_AFTER: &str = "select series_id from series_state where ready = 1 and failed_at is null
@@ -160,8 +169,9 @@ impl Engine {
         }
         let cutoff = now.saturating_sub(keep);
         let kind = Kind::parse(&row.kind).ok_or_else(|| Error::corrupt("a series whose name has no kind"))?;
+        let behind = points.partition_point(|point| point.at < cutoff);
         let points = complete_units(&points, cutoff, row.max_seen);
-        Ok(Some(Candidate { id, version: row.version, keep, scale: row.scale, kind, points }))
+        Ok(Some(Candidate { id, version: row.version, keep, cutoff, scale: row.scale, kind, points, behind }))
     }
 
     /// Clears a series' ready flag when nothing has moved since it was read:

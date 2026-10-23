@@ -66,7 +66,7 @@ impl Engine {
         let (packed, more_ready) = self.pack(now)?;
         self.codecs.release();
         let done = Maintenance {
-            expired: expired.samples,
+            expired: expired.samples + packed.expired,
             reclaimed: expired.reclaimed,
             packed: packed.samples,
             blocks: packed.blocks,

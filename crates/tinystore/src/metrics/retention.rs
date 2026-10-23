@@ -27,9 +27,9 @@ pub(super) const PASS_SERIES: usize = 64;
 /// A series due: its id, and the oldest time its name keeps.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Due {
-    id: i64,
-    cutoff: i64,
-    keep: i64,
+    pub(super) id: i64,
+    pub(super) cutoff: i64,
+    pub(super) keep: i64,
 }
 
 /// What expiry did.
@@ -132,7 +132,7 @@ fn expire_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Due) -> Result<Option<
 
 /// Removes one series' samples behind its cutoff, and the series itself once
 /// nothing is left of it.
-fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
+pub(super) fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
     let Some((version, max_seen, extent, bytes)) = read_head(tx, due.id)? else { return Ok(Expired::default()) };
     if version == i64::MAX {
         return Err(Error::limit("its version cannot move once more"));
