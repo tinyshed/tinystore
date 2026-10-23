@@ -86,9 +86,14 @@ async def _remote(directory: Path) -> tinystore.Store:
             return False
         return len(endpoints) >= 2
 
-    await until(published)
-    assert len(endpoints) >= 2, f"SERVE of the remote server: {serve}"
-    return await tinystore.connect(endpoints[1], token=TOKEN)
+    try:
+        await until(published)
+        assert len(endpoints) >= 2, f"SERVE of the remote server: {serve}"
+        return await tinystore.connect(endpoints[1], token=TOKEN)
+    except BaseException:
+        # a store the fixture never had is a server no leave stops
+        await _remote_gone(directory)
+        raise
 
 
 async def _remote_gone(directory: Path) -> None:

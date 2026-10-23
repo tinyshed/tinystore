@@ -80,19 +80,25 @@ export const ways: Way[] = [
 				}
 				return endpoints.length >= 2
 			})
-			return connect(endpoints[1]!, { token })
+			// a store the suite never had is a server no leave stops
+			return connect(endpoints[1]!, { token }).catch(async (err: unknown) => {
+				await stopRemote(dir)
+				throw err
+			})
 		},
-		leave: async dir => {
-			const server = remotes.get(dir)
-			if (server !== undefined && server.exitCode === null) {
-				const exited = new Promise(done => server.once('exit', done))
-				server.kill()
-				await exited
-			}
-		},
+		leave: dir => stopRemote(dir),
 		home: dir => join(dir, 'store'),
 	},
 ]
+
+async function stopRemote(dir: string): Promise<void> {
+	const server = remotes.get(dir)
+	if (server !== undefined && server.exitCode === null) {
+		const exited = new Promise(done => server.once('exit', done))
+		server.kill()
+		await exited
+	}
+}
 
 export async function until(done: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 10_000
