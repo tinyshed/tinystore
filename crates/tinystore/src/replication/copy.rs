@@ -38,9 +38,38 @@ pub(crate) struct Copy {
     applier: Applier,
     position: Mutex<Position>,
     log: Log,
-    /// Where each commit the file holds past the position ends in its WAL,
-    /// as a crash left them: the next entries, whose pages it holds already.
-    unnamed: Mutex<VecDeque<WalEnd>>,
+    /// Each commit the file holds past the position, as a crash left them:
+    /// the next entries, whose pages it holds already.
+    unnamed: Mutex<VecDeque<Unnamed>>,
+}
+
+/// A commit a copy's file holds that its position does not name.
+pub(crate) struct Unnamed {
+    /// Where it ends in the file's WAL.
+    end: WalEnd,
+    /// What it wrote, as `pages_sum` sums it.
+    sum: [u8; 32],
+}
+
+/// The SHA-256 of a commit's pages and the file's size after it, page 1's
+/// change counters, which SQLite writes at each commit of its own, taken as
+/// zeros: the same for an entry and for the commit a copy made of it.
+fn pages_sum(page_size: u32, size: u32, pages: &[(u32, &[u8])]) -> [u8; 32] {
+    let mut sum = Sha256::new();
+    sum.update(page_size.to_le_bytes());
+    sum.update(size.to_le_bytes());
+    for &(number, page) in pages {
+        sum.update(number.to_le_bytes());
+        if number == 1 && page.len() >= 96 {
+            let mut first = page.to_vec();
+            first[24..28].fill(0);
+            first[92..96].fill(0);
+            sum.update(&first);
+        } else {
+            sum.update(page);
+        }
+    }
+    sum.finalize().into()
 }
 
 /// The entry applied last, where the file's WAL ended after its commit, and
@@ -154,12 +183,14 @@ impl Copy {
     /// already, a crash having left the position behind it; where the WAL
     /// ends after it. Those commits are the old home's, of the position's
     /// epoch: an entry of a later epoch while some remain is another home's,
-    /// and the copy starts again from a snapshot.
+    /// and the copy starts again from a snapshot. So is one of its epoch whose
+    /// pages are not that commit's: a home that lost the commit too, in the
+    /// same power loss, made another after the same entry.
     fn commit(&self, entry: &Entry<'_>, position: &Position) -> Result<WalEnd> {
         let mut unnamed = self.unnamed.lock().unwrap_or_else(PoisonError::into_inner);
-        if unnamed.is_empty() {
+        let Some(next) = unnamed.front() else {
             return self.applier.apply(entry.page_size, entry.size, &entry.pages);
-        }
+        };
         if entry.epoch != position.point.epoch {
             return Err(Position::conflict(format!(
                 "copy {}: its file holds {} commits of epoch {} past its position, and entry {} is of epoch {}: it \
@@ -171,7 +202,14 @@ impl Copy {
                 entry.epoch
             )));
         }
-        Ok(unnamed.pop_front().expect("one is left"))
+        if next.sum != pages_sum(entry.page_size, entry.size, &entry.pages) {
+            return Err(Position::conflict(format!(
+                "copy {}: the commit its file holds past its position is not entry {}, which its home made again \
+                 after the same entry: it starts again from a snapshot",
+                self.name, entry.sequence
+            )));
+        }
+        Ok(unnamed.pop_front().expect("one is left").end)
     }
 
     /// Makes the log and then the position durable: a position synced first
@@ -258,9 +296,13 @@ impl Position {
     /// Finds the commits the file at `file` holds past the position, as a
     /// crash leaves them: those the copy's log in `log` names become the
     /// position, and the others are answered, each with where it ends in the
-    /// WAL, for the entries to come.
-    pub(crate) fn settle(&mut self, file: &Path, log: &Path) -> Result<VecDeque<WalEnd>> {
-        let mut past: VecDeque<WalEnd> = crate::sqlite::commits_past(file, self.wal)?.into();
+    /// WAL and what it wrote, for the entries to come.
+    pub(crate) fn settle(&mut self, file: &Path, log: &Path) -> Result<VecDeque<Unnamed>> {
+        let mut past = VecDeque::new();
+        crate::sqlite::each_commit_past(file, self.wal, |commit| {
+            let sum = pages_sum(commit.page_size, commit.size, &commit.pages);
+            past.push_back(Unnamed { end: commit.position, sum });
+        })?;
         if let Some(last) = Log::last_in(log)?.filter(|last| last.sequence > self.point.sequence) {
             let mut commits = 0;
             Log::read(log, |entry| {
@@ -272,7 +314,7 @@ impl Position {
                     "its log names commits its file does not hold: it starts again from a snapshot",
                 ));
             }
-            let wal = past.drain(..commits).next_back().unwrap_or(self.wal);
+            let wal = past.drain(..commits).next_back().map_or(self.wal, |named| named.end);
             self.keep_durably_at(last, wal)?;
         }
         if !past.is_empty() {

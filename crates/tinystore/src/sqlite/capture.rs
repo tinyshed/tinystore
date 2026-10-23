@@ -425,15 +425,26 @@ pub(crate) fn wal_end(path: &Path) -> Result<Position> {
     Ok(commits_in(path)?.map_or_else(Position::default, |wal| wal.header.at(wal.end)))
 }
 
-/// Where each commit the WAL beside `path` holds past `mark` ends: those after
-/// its frame in its generation, or every one of a later generation, which
-/// began after `mark`.
-pub(crate) fn commits_past(path: &Path, mark: Position) -> Result<Vec<Position>> {
-    let Some(wal) = commits_in(path)? else {
-        return Ok(Vec::new());
+/// Hands `each` every commit the WAL beside `path` holds past `mark`, a
+/// commit's frames read at a time: those after its frame in its generation,
+/// or every one of a later generation, which began after `mark`.
+pub(crate) fn each_commit_past(path: &Path, mark: Position, mut each: impl FnMut(&Commit<'_>)) -> Result<()> {
+    let wal = wal_of(path);
+    let mut file = match fs::File::open(&wal) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::io(wal.display().to_string(), error)),
     };
-    let after = if mark.same_generation(&wal.header.at(0)) { mark.frame } else { 0 };
-    Ok(wal.commit_ends.iter().filter(|&&end| end > after).map(|&end| wal.header.at(end)).collect())
+    let Some(commits) = WalCommits::scan(&mut file).map_err(|error| error.within(wal.display()))? else {
+        return Ok(());
+    };
+    let after = if mark.same_generation(&commits.header.at(0)) { mark.frame } else { 0 };
+    for (start, end) in commits.commits_from(after + 1) {
+        let frames =
+            read_frames(&mut file, &commits.header, start, end).map_err(|error| error.within(wal.display()))?;
+        each(&commit_of(&commits.header, end, &frames)?);
+    }
+    Ok(())
 }
 
 /// The commits the WAL beside `path` holds, as SQLite would recover them.

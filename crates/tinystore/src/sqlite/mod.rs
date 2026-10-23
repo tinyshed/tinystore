@@ -51,7 +51,7 @@ use std::ops::Deref;
 use rusqlite::Connection;
 
 pub(crate) use apply::{Applier, checkpoint_away};
-pub(crate) use capture::{Commit, Observe, Position, answering, commits_past, own_work, wal_end, wal_of};
+pub(crate) use capture::{Commit, Observe, Position, answering, each_commit_past, own_work, wal_end, wal_of};
 pub use config::Durability;
 pub(crate) use config::{CatchUp, Config, GroupLimits};
 #[cfg(feature = "kv")]

@@ -287,6 +287,60 @@ fn a_copy_killed_between_a_commit_and_its_position_names_what_its_file_holds_and
     assert!(pages_seen(&copy_dir.path().join("kv.db")) == home_pages, "the copy is its home's file");
 }
 
+// The commits a crash left past a copy's position are its home's at that
+// epoch, unless the home lost them too, as one power loss of both may leave
+// it: its next commits then follow the same entry, and are others.
+// contract: REPL-07
+#[test]
+fn a_copy_names_a_commit_its_file_holds_only_for_the_entry_that_commit_is() {
+    let (home_dir, copy_dir, last) = a_home_and_a_copy();
+    let other_dir = tempfile::tempdir().unwrap();
+    super::node_tests::copy_as_left(home_dir.path(), other_dir.path());
+    // values a page each, so that each commit grows the file and writes page 1
+    for (dir, value) in [(home_dir.path(), "lost with its home"), (other_dir.path(), "written again")] {
+        let home = node(dir);
+        let sessions = home.bucket::<String>("sessions").open().unwrap();
+        for i in 0..3 {
+            sessions.set(format!("after {i}"), &value.repeat(200)).unwrap();
+        }
+        drop(sessions);
+        home.close().unwrap();
+    }
+    let mut first_pages = 0;
+    each_entry(home_dir.path(), |entry| {
+        first_pages += usize::from(entry.sequence > last && entry.pages.iter().any(|&(number, _)| number == 1));
+        Ok(())
+    });
+    assert!(first_pages > 0, "a commit past the position wrote page 1, whose change counters SQLite moves");
+    let crashed = |dir: &Path| {
+        let copy = node(dir);
+        let shipped = Copy::start(&copy, "kv.db").unwrap();
+        each_entry(home_dir.path(), |entry| {
+            if entry.sequence > last { shipped.commit_and_die(entry) } else { shipped.apply(entry, None) }
+        });
+        drop(shipped);
+        let opened = Copy::open(&copy, "kv.db").unwrap();
+        assert_eq!(opened.unnamed(), 3, "three commits its position does not name");
+        (copy, opened)
+    };
+
+    let named = tempfile::tempdir().unwrap();
+    let (_copy, opened) = crashed(named.path());
+    each_entry(home_dir.path(), |entry| opened.apply(entry, None));
+    assert_eq!(opened.unnamed(), 0, "its home's own entries name each commit");
+    assert!(pages_seen(&named.path().join("kv.db")) == pages_seen(&home_dir.path().join("kv.db")));
+
+    let (_copy, opened) = crashed(copy_dir.path());
+    let mut refused = None;
+    each_entry(other_dir.path(), |entry| {
+        if refused.is_none() {
+            refused = opened.apply(entry, None).err();
+        }
+        Ok(())
+    });
+    assert_eq!(refused.map(|error| error.kind()), Some(ErrorKind::Conflict), "the copy takes a snapshot again");
+}
+
 // A position synced past what its log synced would, after a power loss,
 // name entries the log lost: the copy, and each node copying it, would take
 // a snapshot again.

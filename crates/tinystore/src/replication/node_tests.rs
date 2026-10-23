@@ -117,7 +117,7 @@ fn a_store_alone_keeps_no_log() {
 
 /// Copies a store's directory as a process that died left it: its files,
 /// WALs and logs as they are, the store still open.
-fn copy_as_left(from: &Path, to: &Path) {
+pub(super) fn copy_as_left(from: &Path, to: &Path) {
     for found in fs::read_dir(from).unwrap() {
         let found = found.unwrap();
         let target = to.join(found.file_name());
