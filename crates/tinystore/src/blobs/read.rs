@@ -215,11 +215,19 @@ impl StoredFile {
             return Ok(());
         }
         let from = usize::try_from(self.hashed - self.position).unwrap_or(0);
-        self.hash.update(&bytes[from..]);
-        self.hashed = end;
-        if self.hashed == self.info.size && self.hash.clone().finalize().as_slice() != self.sha256.as_slice() {
+        if end < self.info.size {
+            self.hash.update(&bytes[from..]);
+            self.hashed = end;
+            return Ok(());
+        }
+        // The last bytes count as hashed only once they match, so that a read
+        // again after a failure fails again rather than find them hashed.
+        let mut whole = self.hash.clone();
+        whole.update(&bytes[from..]);
+        if whole.finalize().as_slice() != self.sha256.as_slice() {
             return Err(io::Error::other(self.corrupt("its bytes do not hash to its SHA-256")));
         }
+        self.hashed = end;
         Ok(())
     }
 

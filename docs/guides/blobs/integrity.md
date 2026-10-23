@@ -45,8 +45,9 @@ match file.read_all() {
 
 A whole read hashes the bytes as they come and compares them with the hash
 taken when they were written. The last bytes are held back until they match,
-so a file whose bytes changed fails `corrupt` before its end, and a whole
-body is never handed over as good (contract BLOB-02).
+so a file whose bytes changed fails `corrupt` before its end, each time it is
+read again too, and a whole body is never handed over as good (contract
+BLOB-02).
 
 A response that is already streaming has sent its status and its first bytes
 when that happens: your handler ends it on the error, and the client sees a

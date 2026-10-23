@@ -34,6 +34,30 @@ fn a_whole_read_of_a_changed_byte_fails_before_its_end() {
 
 // contract: BLOB-02
 #[test]
+fn a_whole_read_of_a_changed_byte_fails_again_when_read_again() {
+    let f = fixture();
+    let docs = f.files("docs");
+    docs.put("a", bytes(1 << 20)).unwrap();
+    flip(&f.objects()[0], 1000);
+    let mut stored = docs.get("a").unwrap().unwrap();
+    for _ in 0..2 {
+        let error = stored.read_all().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Corrupt, "{error}");
+    }
+    stored.seek(SeekFrom::Start(0)).unwrap();
+    let mut chunk = vec![0; 64 << 10];
+    loop {
+        match stored.read(&mut chunk) {
+            Ok(0) => panic!("a changed file read to its end"),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(stored.read(&mut chunk).is_err(), "a read tried again holds the last bytes back still");
+}
+
+// contract: BLOB-02
+#[test]
 fn a_range_is_not_checked() {
     let f = fixture();
     let docs = f.files("docs");
