@@ -164,13 +164,17 @@ fn run_to_end(prepared: &mut Statement<'_>, statement: &Sql) -> Result<()> {
 
 /// Watches the run for an insert whose rowid is the one the connection's last
 /// insert left: a chat's first message is row 1 of its table right after its
-/// chat was row 1 of another, and comparing rowids alone would answer 0.
+/// chat was row 1 of another, and comparing rowids alone would answer 0. The
+/// store's own tables take rows only from its triggers, never from the
+/// statement: a table's index notes an updated row's key as row 1 of a table
+/// emptied at every commit.
 fn inserted_again(connection: &Connection, before: i64) -> Result<Arc<AtomicBool>> {
     let seen = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&seen);
     connection
-        .update_hook(Some(move |action, _: &str, _: &str, rowid| {
-            if action == rusqlite::hooks::Action::SQLITE_INSERT && rowid == before {
+        .update_hook(Some(move |action, _: &str, table: &str, rowid| {
+            let own = table.starts_with("_tinystore_");
+            if action == rusqlite::hooks::Action::SQLITE_INSERT && rowid == before && !own {
                 flag.store(true, Ordering::Relaxed);
             }
         }))

@@ -267,6 +267,23 @@ fn exec_says_what_it_changed_and_the_rowid_of_its_insert() {
     assert_eq!(seen, Done { changes: 1, last_insert_rowid: 2 }, "row 2 of another table, as the last insert left");
 }
 
+#[cfg(feature = "search")]
+#[test]
+fn an_update_a_table_index_follows_reports_no_insert_whatever_rowid_its_trigger_takes() {
+    let f = fixture();
+    let tables = "create table articles (id integer primary key, title text not null);
+        create table users (id integer primary key, name text not null);";
+    let db = f.store.database("blog").migrations([("0001_blog.sql", tables)]).open().unwrap();
+    let _articles =
+        db.search_index::<IgnoredAny>("articles_search").table("articles").field("title", 1.0).open().unwrap();
+    db.exec(sql!("insert into articles (id, title) values (5, 'bread')")).unwrap();
+    let user = db.exec(sql!("insert into users (name) values ('Ann')")).unwrap();
+    assert_eq!(user, Done { changes: 1, last_insert_rowid: 1 });
+    // The index's trigger notes row 5 as row 1 of its own table, emptied at each commit.
+    let updated = db.exec(sql!("update articles set title = 'rye' where id = 5")).unwrap();
+    assert_eq!(updated, Done { changes: 1, last_insert_rowid: 0 }, "an update inserted nothing");
+}
+
 // contract: SQL-01
 #[test]
 fn a_write_with_returning_runs_on_the_writer_and_gives_its_rows_once_durable() {
