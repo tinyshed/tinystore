@@ -148,6 +148,66 @@ fn a_connection_whose_host_reads_nothing_stops_its_subscriptions_near_its_bound_
     assert_eq!(received + missed, published, "once read, the rest came, with what was missed");
 }
 
+/// A cancel that comes while a drain takes its batch from a busy channel's
+/// log: the batch goes before the stream's final frame, or not at all.
+// contract: WIRE-04
+#[test]
+fn a_subscription_cancelled_while_it_drains_sends_nothing_after_its_final_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut listener = Client::connect(dir.path());
+    listener.greet(Hello { protocol: 1, stream_credit: Some(64 << 20), ..Hello::default() }).unwrap();
+    let publishing = std::sync::atomic::AtomicBool::new(true);
+    let mut ends = Ends::default();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut publisher = Client::open(dir.path());
+            // batches of megabytes, so that a drain spends its time taking and encoding one
+            let value = format!("{:?}", "m".repeat(16 << 10));
+            while publishing.load(std::sync::atomic::Ordering::Relaxed) {
+                publish(&mut publisher, &[], &value).unwrap();
+            }
+        });
+        for stream in 1..=200 {
+            let subscribe = ChannelsSubscribe { name: "chat".to_owned(), ..ChannelsSubscribe::default() };
+            let request = Frame::new(Kind::Request, stream, subscribe.encode());
+            ends.read(&listener.pipe.send(&bytes(Frame { method: method::CHANNELS_SUBSCRIBE, ..request }.ending())));
+            ends.read(&listener.pipe.recv(Duration::from_millis(5)));
+            ends.read(&listener.pipe.send(&bytes(Frame::new(Kind::Cancel, stream, Vec::new()))));
+        }
+        publishing.store(false, std::sync::atomic::Ordering::Relaxed);
+    });
+    ends.read(&listener.pipe.recv(Duration::from_millis(300)));
+    assert_eq!(ends.ended.len(), 200, "every subscription ended");
+    assert!(ends.late.is_empty(), "frames after their stream's final one: {:?}", ends.late);
+}
+
+fn bytes(frame: Frame) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    frame.encode_into(&mut bytes);
+    bytes
+}
+
+/// The streams whose final frame came, and the frames that came after one.
+#[derive(Default)]
+struct Ends {
+    reader: crate::wire::frame::Reader,
+    ended: Vec<u32>,
+    late: Vec<(u32, Kind)>,
+}
+
+impl Ends {
+    fn read(&mut self, bytes: &[u8]) {
+        self.reader.push(bytes);
+        while let Some(frame) = self.reader.next(1 << 23).unwrap() {
+            if self.ended.contains(&frame.stream) {
+                self.late.push((frame.stream, frame.kind));
+            } else if frame.flags & crate::wire::frame::END != 0 {
+                self.ended.push(frame.stream);
+            }
+        }
+    }
+}
+
 /// Gives the session's workers a moment to send what they will.
 fn thread_settles() {
     std::thread::sleep(Duration::from_millis(200));

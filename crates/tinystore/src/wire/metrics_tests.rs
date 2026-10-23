@@ -295,6 +295,33 @@ fn a_clients_last_data_ends_its_instruments_with_the_last_answer() {
     assert_eq!(answered::<MetricsAck>(&last).unwrap().applied, 1);
 }
 
+/// The batches a cancel finds waiting are applied by a worker after it: the
+/// stream's final frame is the cancel's, and the number named again is
+/// another stream's, which the batches that waited leave alone.
+// contract: WIRE-04
+#[test]
+fn an_instruments_stream_cancelled_with_batches_waiting_ends_once_and_its_number_is_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let (stream, _) = instruments(&mut client, 0);
+    let held = crate::pipe::fixture::hold_every_worker(&store);
+    client.write(Frame::new(Kind::Data, stream, counted(1, 1.0, false).encode()));
+    client.write(Frame::new(Kind::Data, stream, Vec::new()).ending());
+    client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
+    let last = client.next_on(stream);
+    assert_eq!(answered::<MetricsAck>(&last).unwrap_err().code, "cancelled");
+
+    client.next_stream = stream - 1;
+    let again = client.open_stream(method::METRICS_INSTRUMENTS, &MetricsSession { id: vec![7; 16], after: 0 });
+    let head = client.next_on(again);
+    assert_eq!((head.kind, head.flags & frame::END), (Kind::Response, 0), "the number names a stream again");
+    drop(held);
+    assert!(client.silent_on(again, std::time::Duration::from_millis(300)), "the cancelled stream sent nothing more");
+    let acked = sent(&mut client, again, &counted(1, 1.0, false));
+    assert_eq!((acked.flags & frame::END, answered::<MetricsAck>(&acked).unwrap().applied), (0, 1));
+}
+
 // contract: MET-15
 #[test]
 fn a_text_an_exporter_serves_is_read_by_the_core_and_one_it_cannot_read_writes_nothing() {

@@ -159,6 +159,21 @@ impl Client {
     }
 }
 
+/// Holds every worker of a store until what this returns drops, so that what
+/// a session sends them waits behind.
+#[cfg(feature = "metrics")]
+pub(crate) fn hold_every_worker(store: &crate::Store) -> Vec<std::sync::mpsc::Sender<()>> {
+    let workers = crate::wire::workers::Workers::of(store).unwrap();
+    let held = (0..crate::wire::workers::MOST).map(|_| {
+        let (holding, held) = std::sync::mpsc::channel::<()>();
+        workers.run(Box::new(move || {
+            let _ = held.recv();
+        }));
+        holding
+    });
+    held.collect()
+}
+
 pub(crate) fn answered<A: Message>(frame: &Frame) -> Result<A, Failure> {
     match frame.flags & frame::ERROR {
         0 => Ok(A::decode(&frame.body).unwrap()),

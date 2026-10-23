@@ -76,7 +76,7 @@ impl Handles {
             return true;
         }
         if let Some(instruments) = lock(&self.instruments).remove(&stream) {
-            (instruments.link.finish)(Err(Failure::cancelled("the client cancelled its instruments")));
+            instruments.end(Err(Failure::cancelled("the client cancelled its instruments")));
             return true;
         }
         false
@@ -585,23 +585,32 @@ struct Waiting {
     batches: VecDeque<(Vec<u8>, bool)>,
     /// A worker applies them.
     running: bool,
+    /// The stream's final frame went: a batch applied after answers nothing.
+    ended: bool,
 }
 
 impl Instruments {
     /// Applies the waiting batches in turn, each answered as a DATA; the
     /// client's last ends the stream with the last answer, and a batch
-    /// refused ends it with why.
-    fn drain(&self, stream: u32, open: &Mutex<HashMap<u32, Arc<Instruments>>>) {
+    /// refused ends it with why. A cancel may end the stream while a batch
+    /// is applied: what goes out is decided under `waiting`, where the
+    /// cancel says the stream ended, so that nothing follows its final frame.
+    fn drain(self: &Arc<Self>, stream: u32, open: &Mutex<HashMap<u32, Arc<Instruments>>>) {
         loop {
             let (body, last) = {
                 let mut waiting = lock(&self.waiting);
-                let Some(next) = waiting.batches.pop_front() else {
+                let Some(next) = waiting.batches.pop_front().filter(|_| !waiting.ended) else {
                     waiting.running = false;
                     return;
                 };
                 next
             };
             let applied = self.apply(&body);
+            let mut waiting = lock(&self.waiting);
+            if waiting.ended {
+                waiting.running = false;
+                return;
+            }
             match (applied, last) {
                 (Ok(ack), false) => {
                     // Credit goes back once a batch is applied, as records and
@@ -610,11 +619,31 @@ impl Instruments {
                     (self.link.send)(ack);
                 }
                 (answered, _) => {
-                    lock(open).remove(&stream);
+                    (waiting.ended, waiting.running) = (true, false);
+                    drop(waiting);
+                    // the number may name another stream by now, whose instruments stay
+                    let mut open = lock(open);
+                    if open.get(&stream).is_some_and(|kept| Arc::ptr_eq(kept, self)) {
+                        open.remove(&stream);
+                    }
+                    drop(open);
                     return (self.link.finish)(answered);
                 }
             }
         }
+    }
+
+    /// Ends the stream with `last` unless it ended already, the batches
+    /// waiting dropped unapplied.
+    fn end(&self, last: Answered) {
+        {
+            let mut waiting = lock(&self.waiting);
+            if std::mem::replace(&mut waiting.ended, true) {
+                return;
+            }
+            waiting.batches.clear();
+        }
+        (self.link.finish)(last);
     }
 
     fn apply(&self, body: &[u8]) -> Answered {

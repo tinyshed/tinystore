@@ -31,7 +31,7 @@ mod search;
 mod session;
 #[cfg(feature = "sql")]
 mod sql;
-mod workers;
+pub(crate) mod workers;
 
 pub(crate) use session::Session;
 pub use session::Wake;

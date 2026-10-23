@@ -12,7 +12,7 @@ use crate::engine::{Engine, Host};
 /// Threads a store's connections run their calls on, at most this many: a
 /// write blocks its thread until its group commits, and the threads waiting
 /// together are the writes one commit can carry.
-pub(super) const MOST: usize = 16;
+pub(crate) const MOST: usize = 16;
 /// How long a thread that found no job looks for the next before it sleeps.
 /// Waking a thread that sleeps costs more than a point read, and under a
 /// hypervisor ten times more: a read through a worker took 52 microseconds

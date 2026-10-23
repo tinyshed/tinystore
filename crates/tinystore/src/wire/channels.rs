@@ -205,7 +205,13 @@ impl Subscribed {
                 value: String::from_utf8_lossy(&message.value).into_owned(),
             });
             let body = ChannelsBatch { missed: taken.missed, messages: messages.collect() }.encode();
-            lock(&self.draining).credit -= body.len() as u64;
+            // a cancel may have ended the stream since: the batch goes under
+            // the lock its end takes, before the final frame or not at all
+            let mut draining = lock(&self.draining);
+            if draining.ended {
+                return;
+            }
+            draining.credit -= body.len() as u64;
             (self.link.send)(body);
         }
     }
