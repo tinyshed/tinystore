@@ -54,12 +54,17 @@ impl Frame {
     }
 
     pub(crate) fn encode_into(&self, out: &mut Vec<u8>) {
+        self.encode_header_into(out);
+        out.extend_from_slice(&self.body);
+    }
+
+    /// Writes the frame's header alone, for a body that follows elsewhere.
+    pub(crate) fn encode_header_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&(self.body.len() as u32).to_le_bytes());
         out.push(self.kind as u8);
         out.push(self.flags);
         out.extend_from_slice(&self.method.to_le_bytes());
         out.extend_from_slice(&self.stream.to_le_bytes());
-        out.extend_from_slice(&self.body);
     }
 }
 

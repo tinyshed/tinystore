@@ -23,6 +23,7 @@ use super::kv::{self, Run};
 use super::locks;
 #[cfg(feature = "metrics")]
 use super::metrics;
+use super::output::Output;
 use super::protocol::method::{self, Access};
 use super::protocol::{Empty, Failure, GoAway, Hello, ServerClock, Welcome};
 #[cfg(feature = "records")]
@@ -55,9 +56,6 @@ const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
 const HELLO_MOST: usize = 1 << 16;
 /// The bytes of a HELLO's challenge, which a local server's proof answers.
 const CHALLENGE: usize = 16;
-/// The room a session keeps for what it owes between two reads of it: a
-/// result of megabytes read once does not stay a session's for good.
-const KEPT: usize = 1 << 20;
 /// What a connection owes its client below which the subscriptions that
 /// stopped for its output go on.
 #[cfg(feature = "channels")]
@@ -165,50 +163,6 @@ struct Input {
     ended: bool,
     /// Whether the bytes last taken held a crowd of requests.
     crowd: bool,
-}
-
-#[derive(Default)]
-struct Output {
-    bytes: Vec<u8>,
-    /// How many of the bytes a host that reads into its own has read: the
-    /// rest is what it is owed.
-    read: usize,
-    woken: bool,
-    ended: bool,
-    /// Whether a thread waits in `take` for bytes: queueing them wakes it,
-    /// and wakes nobody where the host is woken through its callback.
-    awaited: bool,
-}
-
-impl Output {
-    fn owes_nothing(&self) -> bool {
-        self.read == self.bytes.len()
-    }
-
-    /// Everything owed, as bytes of their own.
-    fn take_all(&mut self) -> Vec<u8> {
-        let mut bytes = std::mem::take(&mut self.bytes);
-        bytes.drain(..std::mem::take(&mut self.read));
-        bytes
-    }
-
-    /// Copies what is owed into `into`, as much as fits, and says how much.
-    /// Read to their end, the bytes start over in the room they had, unless
-    /// that is more than a session keeps.
-    fn take_into(&mut self, into: &mut [u8]) -> usize {
-        let owed = &self.bytes[self.read..];
-        let taken = owed.len().min(into.len());
-        into[..taken].copy_from_slice(&owed[..taken]);
-        self.read += taken;
-        if self.owes_nothing() {
-            self.read = 0;
-            self.bytes.clear();
-            if self.bytes.capacity() > KEPT {
-                self.bytes = Vec::new();
-            }
-        }
-        taken
-    }
 }
 
 impl Session {
@@ -376,8 +330,7 @@ impl Session {
         self.shared.lock_input().ended = true;
         let mut output = self.shared.lock_output();
         output.ended = true;
-        output.bytes.clear();
-        output.read = 0;
+        output.clear();
         drop(output);
         self.shared.ready.notify_all();
         let runs = std::mem::take(&mut *self.shared.lock_runs());
@@ -750,7 +703,7 @@ impl Shared {
         self.workers.run(Box::new(move || match guarded(|| blobs::read(&shared.blobs, stream, &body, &link)) {
             Ok(blobs::Reading::Whole(response)) => shared.answer(stream, Ok(response)),
             Ok(blobs::Reading::Begun(response, getting)) => {
-                shared.send(&[Frame::new(Kind::Response, stream, response)]);
+                shared.queue_moved(Frame::new(Kind::Response, stream, response), None);
                 getting.pump();
             }
             Err(failure) => shared.answer(stream, Err(failure)),
@@ -870,7 +823,7 @@ impl Shared {
         super::Link {
             send: Arc::new(move |body| {
                 if let Some(shared) = sending.upgrade() {
-                    shared.send(&[Frame::new(Kind::Data, stream, body)]);
+                    shared.queue_moved(Frame::new(Kind::Data, stream, body), None);
                 }
             }),
             finish: Arc::new(move |last| {
@@ -1319,8 +1272,7 @@ impl Shared {
     /// The bytes queued for the client and not yet taken by the host.
     #[cfg(feature = "channels")]
     fn owed(&self) -> usize {
-        let output = self.lock_output();
-        output.bytes.len() - output.read
+        self.lock_output().owed()
     }
 
     /// Runs `task` once the output drains; at once when it has already.
@@ -1333,7 +1285,7 @@ impl Shared {
     /// Sends a stream's last frame.
     fn send_last(&self, frame: Frame) {
         let stream = frame.stream;
-        self.queue(&[frame], Some(stream));
+        self.queue_moved(frame, Some(stream));
     }
 
     /// Takes a stream number into use, refusing one in use already or one
@@ -1425,9 +1377,28 @@ impl Shared {
         let dropped = output.ended && frames.iter().all(|frame| frame.kind != Kind::GoAway);
         if !dropped {
             for frame in frames {
-                frame.encode_into(&mut output.bytes);
+                output.copy(frame);
             }
         }
+        self.queued(output, dropped, frames, ended);
+    }
+
+    /// Queues one frame as `queue` does, a long body moved behind what is
+    /// owed rather than copied: a file's mebibyte is written once into the
+    /// message that carries it, and once more into the host's bytes.
+    fn queue_moved(&self, frame: Frame, ended: Option<u32>) {
+        debug_assert!(frame.kind != Kind::Credit, "a grant is counted where it is queued");
+        let mut output = self.lock_output();
+        let dropped = output.ended && frame.kind != Kind::GoAway;
+        if !dropped {
+            output.push(frame);
+        }
+        self.queued(output, dropped, &[], ended);
+    }
+
+    /// What follows the frames' queueing, under the output's lock: their
+    /// streams' grants and ends counted, and the host woken.
+    fn queued(&self, mut output: MutexGuard<'_, Output>, dropped: bool, frames: &[Frame], ended: Option<u32>) {
         let mut let_go = 0;
         {
             let mut open = self.lock_open();

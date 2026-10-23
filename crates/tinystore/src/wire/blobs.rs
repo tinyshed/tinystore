@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
-use super::codec::Message;
+use super::codec::{self, Map, Message};
 use super::protocol::{
     BlobsAt, BlobsDelete, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove,
     BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
@@ -131,10 +131,31 @@ fn get(handles: &Handles, asked: &BlobsAt, max_body: usize) -> Answered {
     let Some(mut file) = handles.at(asked.handle, &asked.folder)?.get(&asked.path)? else {
         return Ok(BlobsGot::default().encode());
     };
-    let info = file.info().clone();
+    let info = info_of(file.info().clone());
     // half a body, the rest room for what it carries; a larger file waits for its read
-    let bytes = if info.size <= (max_body / 2) as u64 { file.read_all()? } else { Vec::new() };
-    Ok(BlobsGot { info: Some(info_of(info)), bytes }.encode())
+    if info.size > (max_body / 2) as u64 {
+        return Ok(BlobsGot { info: Some(info), bytes: Vec::new() }.encode());
+    }
+    got_whole(info, &mut file)
+}
+
+/// A get's answer with all the file's bytes, read straight into the message
+/// that carries them: `BlobsGot { info, bytes }.encode()`, as the test beside
+/// it checks, without the file's bytes held twice. A mebibyte's answer copied
+/// from bytes of their own cost a fresh mebibyte and its copy (issue #10).
+fn got_whole(info: BlobsInfo, file: &mut StoredFile) -> Answered {
+    let size = usize::try_from(info.size).map_err(|_| Failure::internal("a file past this machine's memory"))?;
+    // as `BlobsGot::size` reserves: a map's head, two fields' numbers, a bin's head of five
+    let mut out = Vec::with_capacity(3 + 1 + info.size() + 1 + 5 + size);
+    let mut map = Map::open(&mut out);
+    map.field(&mut out, 1);
+    codec::write_message(&mut out, &info);
+    if size > 0 {
+        map.field(&mut out, 2);
+        codec::write_bin_in_place(&mut out, size, |bytes| file.read_whole(bytes))?;
+    }
+    map.close(&mut out);
+    Ok(out)
 }
 
 fn head(handles: &Handles, asked: &BlobsAt) -> Answered {
@@ -255,9 +276,9 @@ pub(crate) fn read(handles: &Handles, stream: u32, body: &[u8], link: &Link) -> 
     let left = asked.length.map_or(size - from, |length| length.min(size - from));
     file.seek(SeekFrom::Start(from)).map_err(|error| Error::io("blobs: seek a file", error))?;
     let piece = piece_bound(link);
-    let first = read_piece(&mut file, bound(piece, left))?;
-    let left = left - first.len() as u64;
-    let response = BlobsPiece { bytes: first }.encode();
+    let first = bound(piece, left);
+    let response = read_piece(&mut file, first)?;
+    let left = left - first as u64;
     if left == 0 {
         return Ok(Reading::Whole(response));
     }
@@ -285,20 +306,33 @@ fn bound(piece: usize, left: u64) -> usize {
     usize::try_from(left).map_or(piece, |left| left.min(piece))
 }
 
-/// Reads the next piece of a file, at most `bound` bytes: fewer only at its
-/// end, whose last read waits until the whole file's SHA-256 is checked.
-fn read_piece(file: &mut StoredFile, bound: usize) -> Result<Vec<u8>, Failure> {
-    let mut piece = vec![0; bound];
+/// The next `length` bytes of a file as a piece's message, read straight
+/// into it: `BlobsPiece { bytes }.encode()`, as the test beside it checks.
+/// The read's last bytes wait until the whole file's SHA-256 is checked.
+fn read_piece(file: &mut StoredFile, length: usize) -> Result<Vec<u8>, Failure> {
+    // as `BlobsPiece::size` reserves: a map's head, a field's number, a bin's head of five
+    let mut out = Vec::with_capacity(3 + 1 + 5 + length);
+    let mut map = Map::open(&mut out);
+    if length > 0 {
+        map.field(&mut out, 1);
+        codec::write_bin_in_place(&mut out, length, |bytes| fill(file, bytes))?;
+    }
+    map.close(&mut out);
+    Ok(out)
+}
+
+/// Fills `bytes` from where the file's next read begins; the file reads to
+/// its end, so that a read short of it is the store's fault.
+fn fill(file: &mut StoredFile, bytes: &mut [u8]) -> Result<(), Failure> {
     let mut filled = 0;
-    while filled < bound {
-        match file.read(&mut piece[filled..]) {
-            Ok(0) => break,
+    while filled < bytes.len() {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => return Err(Failure::internal("a read of a file ended before its piece")),
             Ok(read) => filled += read,
             Err(error) => return Err(Failure::from(read_error(error))),
         }
     }
-    piece.truncate(filled);
-    Ok(piece)
+    Ok(())
 }
 
 /// The store's error a read carried, or an I/O one.
@@ -367,14 +401,14 @@ impl Getting {
                     }
                 }
             };
-            let bytes = match read_piece(&mut file, bound(self.piece, left)) {
-                Ok(bytes) => bytes,
+            let length = bound(self.piece, left);
+            let body = match read_piece(&mut file, length) {
+                Ok(body) => body,
                 Err(failure) => return self.end(Err(failure)),
             };
-            let left = left - bytes.len() as u64;
-            let ended = left == 0 || bytes.is_empty();
-            if !bytes.is_empty() {
-                let body = BlobsPiece { bytes }.encode();
+            let left = left - length as u64;
+            let ended = left == 0 || length == 0;
+            if length > 0 {
                 // sent under the lock a cancel's end takes, as records' and
                 // metrics' are: a piece read while a cancel ended the read
                 // never goes after the stream's last frame

@@ -20,6 +20,8 @@ const DRAIN: Duration = Duration::from_secs(10);
 const HELLO_TIME: Duration = Duration::from_secs(5);
 /// How often draining looks whether the streams are done.
 const DRAIN_TICK: Duration = Duration::from_millis(10);
+/// The bytes a connection's writer takes from its pipe at once.
+const WRITE_ROOM: usize = 256 << 10;
 
 /// Serves one client until it leaves, breaks the protocol, or the server
 /// closes; then the streams running finish and what they answer leaves.
@@ -175,20 +177,34 @@ async fn drain(pipe: &Pipe) {
 /// Writes what the pipe owes each time it wakes, after what the reader's
 /// write left, until the connection is done.
 async fn write_frames<W: AsyncWrite + Unpin>(pipe: Arc<Pipe>, output: Arc<Output<W>>, done: Arc<AtomicBool>) {
-    loop {
+    // what the pipe owes is copied here, a room at a time, rather than into
+    // bytes of its own: a file's mebibyte is not a fresh mebibyte each time
+    let mut room = vec![0; WRITE_ROOM];
+    'woken: loop {
         output.ready.notified().await;
         // read before the frames are taken: every frame owed before the end
         // was said is taken by this pass, and none is left behind it
         let last = done.load(Ordering::Acquire) || pipe.finished();
         let mut writing = output.writing.lock().await;
-        let mut owed = std::mem::take(&mut writing.left);
-        owed.extend_from_slice(&pipe.recv(Duration::ZERO));
-        if !owed.is_empty() || writing.unflushed {
-            writing.unflushed = false;
-            // stdout holds what it is given until a newline, which frames lack
-            if writing.writer.write_all(&owed).await.is_err() || writing.writer.flush().await.is_err() {
+        let left = std::mem::take(&mut writing.left);
+        let mut wrote = std::mem::take(&mut writing.unflushed) || !left.is_empty();
+        if !left.is_empty() && writing.writer.write_all(&left).await.is_err() {
+            break;
+        }
+        loop {
+            // a room filled may have left more, which no wake announces
+            let taken = pipe.recv_into(Duration::ZERO, &mut room);
+            if taken > 0 && writing.writer.write_all(&room[..taken]).await.is_err() {
+                break 'woken;
+            }
+            wrote |= taken > 0;
+            if taken < room.len() {
                 break;
             }
+        }
+        // stdout holds what it is given until a newline, which frames lack
+        if wrote && writing.writer.flush().await.is_err() {
+            break;
         }
         drop(writing);
         if last {

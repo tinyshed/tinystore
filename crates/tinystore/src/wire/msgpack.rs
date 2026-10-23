@@ -234,8 +234,13 @@ pub(crate) fn write_str(out: &mut Vec<u8>, text: &str) {
 }
 
 pub(crate) fn write_bin(out: &mut Vec<u8>, bytes: &[u8]) {
-    write_head(out, bytes.len(), (0, 0), [0xc4, 0xc5, 0xc6]);
+    write_bin_head(out, bytes.len());
     out.extend_from_slice(bytes);
+}
+
+/// The head of a bin of `length` bytes, which come next.
+pub(crate) fn write_bin_head(out: &mut Vec<u8>, length: usize) {
+    write_head(out, length, (0, 0), [0xc4, 0xc5, 0xc6]);
 }
 
 pub(crate) fn write_array_head(out: &mut Vec<u8>, count: usize) {

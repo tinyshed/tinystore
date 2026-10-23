@@ -312,6 +312,21 @@ pub(crate) fn write_bin(out: &mut Vec<u8>, bytes: &impl AsRef<[u8]>) {
     msgpack::write_bin(out, bytes.as_ref());
 }
 
+/// Writes a bin of `length` bytes as `write_bin` does, its bytes written in
+/// place by `fill`: a file's bytes are read straight into the message that
+/// carries them, rather than into bytes of their own and then copied.
+#[cfg(feature = "blobs")]
+pub(crate) fn write_bin_in_place<E>(
+    out: &mut Vec<u8>,
+    length: usize,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), E>,
+) -> Result<(), E> {
+    msgpack::write_bin_head(out, length);
+    let start = out.len();
+    out.resize(start + length, 0);
+    fill(&mut out[start..])
+}
+
 pub(crate) fn write_row(out: &mut Vec<u8>, row: &Row) {
     match row {
         Row::Nil => msgpack::write_nil(out),

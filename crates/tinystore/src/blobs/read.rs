@@ -15,6 +15,9 @@ use crate::{Error, Result};
 
 /// Lookups a `get` makes while the path changes under it.
 const LOOKUPS: usize = 3;
+/// The bytes a whole read takes at once, each piece hashed while it is still
+/// in the processor's cache rather than once the whole file has passed.
+const PIECE: usize = 256 << 10;
 
 const SELECT_OPEN: &str = concat!(
     "select ",
@@ -108,7 +111,8 @@ impl StoredFile {
         }
         let sha256 = found.row.sha256.clone();
         let size = found.row.size;
-        let body = if found.inline == Some(true) {
+        let inline = found.inline == Some(true);
+        let body = if inline {
             let body = found.body.unwrap_or_default();
             if i64::try_from(body.len()).ok() != Some(size) || Sha256::digest(&body).as_slice() != sha256.as_slice() {
                 return Ok(Err(Error::corrupt(format!("the bytes of content {content} do not hash to its SHA-256"))));
@@ -127,6 +131,9 @@ impl StoredFile {
             Ok(info) => info,
             Err(error) => return Ok(Err(error)),
         };
+        // an inline file's bytes were hashed as they were found, and a read
+        // of them hashes nothing again
+        let hashed = if inline { info.size } else { 0 };
         Ok(Ok(StoredFile {
             info,
             body,
@@ -134,7 +141,7 @@ impl StoredFile {
             sha256,
             position: 0,
             hash: Sha256::new(),
-            hashed: 0,
+            hashed,
         }))
     }
 
@@ -145,10 +152,33 @@ impl StoredFile {
     /// The whole file from its first byte, checked; it holds every byte in
     /// memory, so a large file is read as a stream.
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
-        self.seek(SeekFrom::Start(0)).map_err(|error| Error::io("blobs: read a file", error))?;
-        let mut bytes = Vec::with_capacity(usize::try_from(self.info.size).unwrap_or(0));
-        self.read_to_end(&mut bytes).map_err(|error| self.error_of(error))?;
+        let size = usize::try_from(self.info.size).map_err(|_| {
+            Error::new(crate::ErrorKind::Limit, "a file past this machine's memory").within(&self.label)
+        })?;
+        let mut bytes = vec![0; size];
+        self.read_whole(&mut bytes)?;
         Ok(bytes)
+    }
+
+    /// Reads the whole file, checked, into `into`, which is as long as the
+    /// file: where its bytes leave, so that they are written once.
+    pub(crate) fn read_whole(&mut self, into: &mut [u8]) -> Result<()> {
+        if into.len() as u64 != self.info.size {
+            let why = format!("a file of {} bytes read into {}", self.info.size, into.len());
+            return Err(Error::internal(why).within(&self.label));
+        }
+        self.seek(SeekFrom::Start(0)).map_err(|error| Error::io("blobs: read a file", error))?;
+        for piece in into.chunks_mut(PIECE) {
+            let mut filled = 0;
+            while filled < piece.len() {
+                match self.read(&mut piece[filled..]) {
+                    Ok(0) => return Err(self.corrupt("its file ends before it does")),
+                    Ok(read) => filled += read,
+                    Err(error) => return Err(self.error_of(error)),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Reads at `offset` without moving where the next read begins, from

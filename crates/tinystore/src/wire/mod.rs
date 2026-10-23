@@ -21,6 +21,7 @@ mod message;
 #[cfg(feature = "metrics")]
 mod metrics;
 pub(crate) mod msgpack;
+mod output;
 #[rustfmt::skip]
 pub(crate) mod protocol;
 #[cfg(feature = "records")]

@@ -222,6 +222,47 @@ fn a_whole_read_of_a_changed_byte_ends_corrupt_before_its_last_piece() {
     assert_eq!(failed.code, "corrupt", "{}", failed.message);
 }
 
+// contract: BLOB-02
+#[test]
+fn a_get_of_a_changed_byte_is_corrupt_rather_than_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "docs");
+    let write = BlobsWrite { handle, path: "a".to_owned(), bytes: bytes(1 << 20), ..BlobsWrite::default() };
+    client.call::<BlobsWritten>(method::BLOBS_PUT, &write).unwrap();
+    let fan = std::fs::read_dir(dir.path().join("blobs/objects")).unwrap().next().unwrap().unwrap().path();
+    let file = std::fs::read_dir(fan).unwrap().next().unwrap().unwrap().path();
+    let mut changed = std::fs::read(&file).unwrap();
+    changed[(1 << 20) - 1] ^= 0x5a;
+    std::fs::write(&file, changed).unwrap();
+
+    let at = BlobsAt { handle, folder: Vec::new(), path: "a".to_owned() };
+    let failed = client.call::<BlobsGot>(method::BLOBS_GET, &at).unwrap_err();
+    assert_eq!(failed.code, "corrupt", "{}", failed.message);
+}
+
+#[test]
+fn a_get_and_a_read_write_their_bytes_in_place_as_their_messages_encode() {
+    use std::io::{Seek, SeekFrom};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::Store::open(dir.path(), crate::Options::default()).unwrap();
+    let docs = store.files("docs").open().unwrap();
+    // empty, inline, the first past inline, and a file of pieces
+    for size in [0, 1, 16 << 10, (16 << 10) + 1, 1 << 20] {
+        let body = bytes(size);
+        docs.put("a", &body).unwrap();
+        let mut file = docs.get("a").unwrap().unwrap();
+        let info = super::info_of(file.info().clone());
+        let got = super::got_whole(info.clone(), &mut file).unwrap();
+        assert_eq!(got, BlobsGot { info: Some(info), bytes: body.clone() }.encode(), "a get of {size} bytes");
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let piece = super::read_piece(&mut file, size).unwrap();
+        assert_eq!(piece, BlobsPiece { bytes: body }.encode(), "a piece of {size} bytes");
+    }
+    store.close().unwrap();
+}
+
 // contract: WIRE-04
 #[test]
 fn a_read_cancelled_mid_way_sends_nothing_after_its_last_frame() {
@@ -318,4 +359,78 @@ fn data_past_its_streams_credit_ends_the_connection() {
     let gone = gone_away(&mut client);
     assert_eq!(gone.code, "protocol");
     assert!(gone.message.contains("past its credit"), "{}", gone.message);
+}
+
+/// Gets of a mebibyte a second through a pipe, 1 and 16 in flight, with no
+/// host language: the core's side of issue #10's read. The host reads each
+/// frame into bytes it keeps from one to the next, as no SDK can, so that
+/// what is timed is the core's. Run by hand:
+/// cargo test --release -p tinystore --lib wire::blobs::tests::mebibyte_gets_in_flight -- --ignored --nocapture
+#[test]
+#[ignore = "a timing, not a check"]
+fn mebibyte_gets_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "attachments");
+    let body = bytes(1 << 20);
+    for n in 0..100 {
+        let write = BlobsWrite { handle, path: format!("{n}.bin"), bytes: body.clone(), ..BlobsWrite::default() };
+        client.call::<BlobsWritten>(method::BLOBS_PUT, &write).unwrap();
+    }
+    let get = |stream: u32, n: u32| {
+        let at = BlobsAt { handle, folder: Vec::new(), path: format!("{}.bin", n % 100) };
+        let mut bytes = Vec::new();
+        Frame { method: method::BLOBS_GET, ..Frame::new(Kind::Request, stream, at.encode()) }
+            .ending()
+            .encode_into(&mut bytes);
+        bytes
+    };
+    let mut frame = vec![0; 2 << 20];
+    for in_flight in [1_u32, 16] {
+        let mut passes = Vec::new();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let mut asked = 0;
+            for _ in 0..in_flight {
+                asked += 1;
+                client.pipe.push(&get(asked, asked * 13));
+            }
+            let mut answered = 0_u32;
+            while started.elapsed() < Duration::from_secs(2) || answered < asked {
+                let (kind, length) = next_frame(&client.pipe, &mut frame);
+                if kind != Kind::Response as u8 {
+                    continue;
+                }
+                assert!(length > 1 << 20, "a get answers the whole file");
+                answered += 1;
+                if started.elapsed() < Duration::from_secs(2) {
+                    asked += 1;
+                    client.pipe.push(&get(asked, asked * 13));
+                }
+            }
+            client.next_stream = asked;
+            passes.push(f64::from(answered) / started.elapsed().as_secs_f64());
+        }
+        passes.sort_by(f64::total_cmp);
+        println!("{in_flight} in flight: {:.0} gets/s, median of {passes:.0?}", passes[2]);
+    }
+}
+
+/// The next frame off the pipe, its header and then its body read into
+/// `into`, which grows to hold it; its kind and its body's length.
+fn next_frame(pipe: &crate::pipe::Pipe, into: &mut Vec<u8>) -> (u8, usize) {
+    fill(pipe, &mut into[..frame::HEADER]);
+    let length = u32::from_le_bytes(into[..4].try_into().unwrap()) as usize;
+    if into.len() < frame::HEADER + length {
+        into.resize(frame::HEADER + length, 0);
+    }
+    fill(pipe, &mut into[frame::HEADER..frame::HEADER + length]);
+    (into[4], length)
+}
+
+fn fill(pipe: &crate::pipe::Pipe, into: &mut [u8]) {
+    let mut filled = 0;
+    while filled < into.len() {
+        filled += pipe.recv_into(Duration::from_secs(10), &mut into[filled..]);
+    }
 }
