@@ -373,6 +373,23 @@ func TestAStoresHandlerNeverWaitsAFullBufferDropsAndCounts(t *testing.T) {
 	})
 }
 
+func TestAStoresHandlerKeepsABufferOfMoreTextThanOneRequestHolds(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		handler := records.NewHandler(store, "stacks", console.Off, records.Buffer(64))
+		log := slog.New(handler)
+		stack := strings.Repeat("x", 100<<10)
+		for range 24 {
+			log.Error("failed", "stack", stack)
+		}
+		ways.Must(0, handler.Flush(ctx))
+		stacks := ways.Must(records.OpenEvents(store, "stacks"))
+		if kept := ways.Must(stacks.Count(ctx, records.Query{})); kept != 24 || handler.Dropped() != 0 {
+			t.Fatalf("%d kept and %d dropped of 24 lines of 100 KiB", kept, handler.Dropped())
+		}
+	})
+}
+
 func TestAStoresHandlerKeepsItsLinesTheirFieldsAndTheContextOfWith(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

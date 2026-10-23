@@ -172,6 +172,15 @@ async def test_a_stores_logger_never_waits_a_full_buffer_drops_and_counts(store:
     assert kept + log.dropped == 6
 
 
+async def test_a_stores_logger_keeps_a_buffer_of_more_text_than_one_request_holds(store: tinystore.Store) -> None:
+    log = store.logger("stacks", console="off", buffer=64)
+    stack = "x" * (100 * 1024)
+    for _ in range(24):
+        log.error("failed", stack=stack)
+    await log.flush()
+    assert (await store.events("stacks").count(since="1h"), log.dropped) == (24, 0)
+
+
 async def test_a_stores_logger_keeps_its_lines_their_fields_and_the_context_of_bind(store: tinystore.Store) -> None:
     log = store.logger("worker", console="off")
     log.info("started", port=3000)

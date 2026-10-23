@@ -210,6 +210,16 @@ for (const way of ways) {
 			expect(kept + log.dropped).toBe(6)
 		})
 
+		test("a store's logger keeps a buffer of more text than one request holds", async () => {
+			const log = store.logger('stacks', { console: 'off', buffer: 64 })
+			const stack = 'x'.repeat(100 * 1024)
+			for (let n = 0; n < 24; n++) {
+				log.error('failed', { stack })
+			}
+			await log.flush()
+			expect([await store.events('stacks').count({ since: '1h' }), log.dropped]).toEqual([24, 0])
+		})
+
 		test("a store's logger keeps its lines, their fields and the context of with", async () => {
 			const log = store.logger('worker', { console: 'off' })
 			log.info('started', { port: 3000 })

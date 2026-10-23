@@ -46,6 +46,24 @@ describe("a logger's buffer", () => {
 		expect(sizes).toEqual([2, 4])
 	})
 
+	test('a buffer of more text than a request holds goes as several writes, none of them refused', async () => {
+		const sizes: number[] = []
+		const log = newLogger(
+			async lines => {
+				sizes.push(lines.length)
+			},
+			'long',
+			{ buffer: 64, console: 'off' },
+		)
+		const stack = 'x'.repeat(100 * 1024) // a stack trace's worth of text, as a failure logs it
+		for (let n = 0; n < 31; n++) {
+			log.error('failed', { stack })
+		}
+		await log.stop()
+		// five lines of 100 KiB and their framing fill a write of 512 KiB
+		expect([sizes, log.dropped]).toEqual([[5, 5, 5, 5, 5, 5, 1], 0])
+	})
+
 	test('a write that fails drops its lines and lets the next go', async () => {
 		const sizes: number[] = []
 		const log = newLogger(

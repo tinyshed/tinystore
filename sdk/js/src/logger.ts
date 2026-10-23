@@ -491,15 +491,54 @@ async function writeWaiting(
 ): Promise<void> {
 	let batch = shared.waiting.splice(0)
 	while (batch.length > 0) {
-		try {
-			await append(batch)
-			shared.failures?.succeeded()
-		} catch (err) {
-			shared.dropped += batch.length
-			shared.failures?.failed(err)
+		for (const piece of pieces(batch)) {
+			try {
+				await append(piece)
+				shared.failures?.succeeded()
+			} catch (err) {
+				shared.dropped += piece.length
+				shared.failures?.failed(err)
+			}
 		}
 		batch = shared.waiting.length >= shared.most / 2 ? shared.waiting.splice(0) : []
 	}
+}
+
+/**
+ * The text a write carries at most. A request's body holds 2 MiB, and a
+ * buffer of long lines, or one made larger, held more: the whole write was
+ * refused and every line in it dropped. Counted in UTF-16 units, three bytes
+ * each at worst, so a piece stays within the body however its text is spelt.
+ */
+const PIECE = 512 * 1024
+
+/** The lines in writes of at most PIECE of text each, in their order. */
+function pieces(lines: ConsoleLine[]): ConsoleLine[][] {
+	const out: ConsoleLine[][] = []
+	let piece: ConsoleLine[] = []
+	let size = 0
+	for (const line of lines) {
+		const weight = textOf(line)
+		if (piece.length > 0 && size + weight > PIECE) {
+			out.push(piece)
+			piece = []
+			size = 0
+		}
+		piece.push(line)
+		size += weight
+	}
+	if (piece.length > 0) {
+		out.push(piece)
+	}
+	return out
+}
+
+/** A line's text, with a little for its time, level and framing. */
+function textOf(line: ConsoleLine): number {
+	let size = 64 + (line.msg?.length ?? 0) + (line.event?.length ?? 0)
+	for (const part of line.attrs) size += part.length
+	for (const part of line.context) size += part.length
+	return size
 }
 
 /**

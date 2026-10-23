@@ -370,14 +370,15 @@ async def flush(shared: _Shared) -> None:
                 batch, shared.waiting = shared.waiting, []
             if not batch:
                 return
-            try:
-                await append(batch)
-                if shared.failures is not None:
-                    shared.failures.succeeded()
-            except Exception as err:
-                shared.dropped += len(batch)
-                if shared.failures is not None:
-                    shared.failures.failed(err)
+            for piece in _pieces(batch):
+                try:
+                    await append(piece)
+                    if shared.failures is not None:
+                        shared.failures.succeeded()
+                except Exception as err:
+                    shared.dropped += len(piece)
+                    if shared.failures is not None:
+                        shared.failures.failed(err)
             with shared.lock:
                 if len(shared.waiting) < shared.most // 2:
                     break
@@ -387,6 +388,32 @@ async def flush(shared: _Shared) -> None:
     finally:
         if shared.writing is asyncio.current_task():
             shared.writing = None
+
+
+_PIECE = 384 * 1024
+"""The text a write carries at most. A request's body holds 2 MiB, and a
+buffer of long lines, or one made larger, held more: the whole write was
+refused and every line in it dropped. Counted in characters, four bytes each
+at worst, so a piece stays within 1.5 MiB however its text is spelt."""
+
+
+def _pieces(lines: list[Line]) -> list[list[Line]]:
+    """The lines in writes of at most _PIECE of text each, in their order."""
+    out: list[list[Line]] = []
+    piece: list[Line] = []
+    size = 0
+    for line in lines:
+        weight = 64 + len(line.msg or "") + len(line.event or "")
+        weight += sum(len(key) + len(value) for key, value in line.attrs)
+        weight += sum(len(key) + len(value) for key, value in line.context)
+        if piece and size + weight > _PIECE:
+            out.append(piece)
+            piece, size = [], 0
+        piece.append(line)
+        size += weight
+    if piece:
+        out.append(piece)
+    return out
 
 
 def _say_dropped(shared: _Shared) -> None:

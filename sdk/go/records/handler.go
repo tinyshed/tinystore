@@ -172,14 +172,16 @@ func (k *keeper) flush(ctx context.Context) error {
 		if len(batch) == 0 {
 			return failed
 		}
-		if err := k.write(ctx, batch); err != nil {
-			failed = err
-			k.failures.Failed(err)
-			k.mu.Lock()
-			k.dropped += len(batch)
-			k.mu.Unlock()
-		} else {
-			k.failures.Succeeded()
+		for _, piece := range pieces(batch) {
+			if err := k.write(ctx, piece); err != nil {
+				failed = err
+				k.failures.Failed(err)
+				k.mu.Lock()
+				k.dropped += len(piece)
+				k.mu.Unlock()
+			} else {
+				k.failures.Succeeded()
+			}
 		}
 		k.mu.Lock()
 		more := len(k.waiting) >= k.most/2
@@ -192,6 +194,35 @@ func (k *keeper) flush(ctx context.Context) error {
 			return failed
 		}
 	}
+}
+
+// piece is the bytes of text a write carries at most. A request's body holds
+// 2 MiB, and a buffer of long lines, or one made larger, held more: the whole
+// write was refused and every line in it dropped.
+const piece = 1 << 20
+
+// pieces is the batch in writes of at most piece bytes of text each, in order.
+func pieces(batch []logline.Line) [][]logline.Line {
+	var out [][]logline.Line
+	start, size := 0, 0
+	for i, line := range batch {
+		weight := 64 + len(line.Name)
+		if line.Body != nil {
+			weight += len(*line.Body)
+		}
+		for _, field := range line.Attrs {
+			weight += len(field.Key) + len(field.Value)
+		}
+		for _, field := range line.Context {
+			weight += len(field.Key) + len(field.Value)
+		}
+		if i > start && size+weight > piece {
+			out = append(out, batch[start:i])
+			start, size = i, 0
+		}
+		size += weight
+	}
+	return append(out, batch[start:])
 }
 
 // write appends a batch of lines, each an event of the stream.
