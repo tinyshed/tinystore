@@ -57,13 +57,20 @@ because no extra thread runs it.
 |-----------------------|-----------------------------------------------------------------------|
 | up to 1,000 pages     | nothing: commits append to it                                         |
 | 1,000 pages or more   | a caller whose write was answered runs a checkpoint beside the writer |
-| 32,000 pages          | the writer checkpoints it before the next commit, as SQLite would     |
+| 32,000 pages          | the writer checkpoints it and starts it over before the next commit   |
 
 The log reaches 32,000 pages, about 128 MiB of 4 KiB pages, only while writes
-never pause long enough for a checkpoint to catch up. A file that a node
-copies to other nodes, and a node's copy of a file, keep their own
-checkpoints, because a checkpoint there must wait until the node has logged
-the pages.
+never pause long enough for a checkpoint to catch up, or while reads never
+stop. A read that began before the last commit keeps the checkpoint from
+copying that commit, so with reads always under way no checkpoint copies the
+whole log, and the log would grow for as long as the store runs. At 32,000
+pages the writer waits up to 100 ms for the reads that began before it copied
+the log, and then starts the log over. A read that takes longer than that
+makes the writer try again later, once the log has grown further.
+
+A file that a node copies to other nodes, and a node's copy of a file, keep
+their own checkpoints, because a checkpoint there must wait until the node
+has logged the pages. They start the log over at 32,000 pages in the same way.
 
 ## Every connection the same
 

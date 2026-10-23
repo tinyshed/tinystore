@@ -353,3 +353,136 @@ fn a_log_that_fails_to_close_keeps_the_file_a_logged_home() {
     assert_eq!(kept.handed(), handed + 1, "whose commits are still logged");
     file.close().unwrap();
 }
+
+/// Reads on four threads that never stop, each `read` holding its
+/// snapshot a moment, until the flag returned is cleared.
+fn reading_always(read: impl Fn() + Send + Sync + 'static) -> (Arc<AtomicBool>, Vec<std::thread::JoinHandle<()>>) {
+    let (reading, read) = (Arc::new(AtomicBool::new(true)), Arc::new(read));
+    let threads = (0..4)
+        .map(|_| {
+            let (reading, read) = (Arc::clone(&reading), Arc::clone(&read));
+            std::thread::spawn(move || {
+                while reading.load(Ordering::SeqCst) {
+                    read();
+                }
+            })
+        })
+        .collect();
+    (reading, threads)
+}
+
+/// A read of `t` whose first statement takes its snapshot, held longer than
+/// a commit takes to reach its log, so that one read or another always holds
+/// a snapshot of before the last commit when its checkpoint runs.
+fn a_moments_snapshot(connection: &Connection) -> Result<()> {
+    let one = "select count(*) from t where id = 1";
+    connection.query_row(one, [], |row| row.get::<_, i64>(0)).map_err(|error| sql_error("read", error))?;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    Ok(())
+}
+
+/// A file of 512-byte pages whose commits `kept` keeps, with a table `t`
+/// of rows about a page long.
+fn small_pages(path: &Path, kept: &Arc<Kept>) -> Arc<File> {
+    let config = Config { page_size: 512, durability: crate::sqlite::Durability::Os, ..Config::default() };
+    let observer: Arc<dyn Observe> = Arc::clone(kept) as Arc<dyn Observe>;
+    let file = File::open_observed(path, config, Some(observer)).unwrap();
+    let table = "create table t (id integer primary key, v blob not null)";
+    file.transaction(|tx| tx.execute_batch(table).map_err(|error| sql_error("t", error))).unwrap();
+    Arc::new(file)
+}
+
+/// Writes a thousand rows of `t` in one commit, as many times as take the
+/// WAL past where its writer restarts it.
+fn fill_past_the_bound(file: &File) {
+    for _ in 0..(HARD / 1000 + 16) {
+        file.write(0, |tx| {
+            for _ in 0..1000 {
+                tx.execute("insert into t (v) values (zeroblob(412))", []).map_err(|error| sql_error("fill", error))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+/// Writes a thousand rows of `t`, then writes each of them again in one
+/// commit, as many times as take the WAL past where its writer restarts it:
+/// commits that leave the file as long, which write no page 1.
+fn rewrite_past_the_bound(file: &File) {
+    file.write(0, |tx| {
+        for _ in 0..1000 {
+            tx.execute("insert into t (v) values (zeroblob(412))", []).map_err(|error| sql_error("fill", error))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    for _ in 0..(HARD / 1000 + 16) {
+        // bytes of their own, since a row written again as it was writes no page
+        let again = |tx: &crate::sqlite::Tx<'_>| tx.execute("update t set v = randomblob(412)", []).map(drop);
+        file.write(0, move |tx| again(tx).map_err(|error| sql_error("rewrite", error))).unwrap();
+    }
+}
+
+/// The generations of the WAL that `positions` stood in, and the longest
+/// it grew to.
+fn generations_and_longest(positions: &[Position]) -> (usize, u32) {
+    let generations: std::collections::HashSet<_> = positions.iter().map(|at| (at.checkpoints, at.salts)).collect();
+    (generations.len(), positions.iter().map(|at| at.frame).max().unwrap_or(0))
+}
+
+#[test]
+fn reads_that_never_stop_leave_a_logged_wal_no_longer_than_its_bound_and_lose_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test.db");
+    let kept = Arc::new(Kept::default());
+    let file = small_pages(&path, &kept);
+    let reader = Arc::clone(&file);
+    let (reading, readers) = reading_always(move || reader.read(a_moments_snapshot).unwrap());
+    fill_past_the_bound(&file);
+    reading.store(false, Ordering::SeqCst);
+    readers.into_iter().for_each(|reader| reader.join().unwrap());
+
+    let positions: Vec<Position> = kept.commits.lock().unwrap().iter().map(|commit| commit.position).collect();
+    let (generations, longest) = generations_and_longest(&positions);
+    assert!(longest < HARD + 10_000, "a WAL {longest} frames long, past {HARD} by more than a few tries");
+    assert!(generations > 1, "the WAL started over though reads never stopped");
+    assert!(kept.gaps.lock().unwrap().is_empty(), "the capture's own restarts leave no gap");
+    file.close().unwrap();
+    assert_eq!(kept.rebuilt(), the_file_after_close(&path));
+}
+
+#[test]
+fn reads_that_never_stop_leave_a_copys_wal_no_longer_than_its_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let kept = Arc::new(Kept::default());
+    let home = small_pages(&dir.path().join("home.db"), &kept);
+    rewrite_past_the_bound(&home);
+    home.close().unwrap();
+
+    let copy = dir.path().join("copy.db");
+    let applier = crate::sqlite::Applier::new(&copy, crate::sqlite::Durability::Os);
+    let readers = Arc::new(crate::sqlite::Readers::new(copy.clone(), Arc::new(Config::default())));
+    let (mut positions, mut reads) = (Vec::new(), None);
+    for (at, commit) in kept.commits.lock().unwrap().iter().enumerate() {
+        let pages: Vec<(u32, &[u8])> = commit.pages.iter().map(|(number, page)| (*number, page.as_slice())).collect();
+        positions.push(applier.apply(commit.page_size, commit.size, &pages).unwrap());
+        if applier.is_long() {
+            applier.checkpoint().unwrap();
+        }
+        // once the copy holds `t`
+        if at == 0 {
+            let readers = Arc::clone(&readers);
+            reads = Some(reading_always(move || readers.read(a_moments_snapshot).unwrap()));
+        }
+    }
+    let (reading, threads) = reads.unwrap();
+    reading.store(false, Ordering::SeqCst);
+    threads.into_iter().for_each(|reader| reader.join().unwrap());
+    applier.close();
+    readers.close();
+
+    let (generations, longest) = generations_and_longest(&positions);
+    assert!(longest < HARD + 10_000, "a copy's WAL {longest} frames long, past {HARD} by more than a few tries");
+    assert!(generations > 1, "the copy's WAL started over though reads never stopped");
+}

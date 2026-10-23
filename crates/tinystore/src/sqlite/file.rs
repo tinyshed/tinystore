@@ -129,7 +129,7 @@ impl File {
         let writer = connection::open(&path, &config, Role::Writer)?;
         let capture = observer
             .as_ref()
-            .map(|observer| Capture::open(&path, &writer, Arc::clone(observer), config.memory.clone()).map(Arc::new))
+            .map(|observer| Capture::open(&path, &writer, Arc::clone(observer), &config).map(Arc::new))
             .transpose()?;
         let checkpoints = Arc::new(match &capture {
             Some(_) => Checkpoints::none(&path, &config),
@@ -650,7 +650,7 @@ impl Switch {
         writer
             .query_row(TRUNCATE, [], |_| Ok(()))
             .map_err(|error| sql_error(format!("{describe}: the copy's last checkpoint"), error))?;
-        let capture = Capture::open(&self.path, &writer, Arc::clone(&observer), self.config.memory.clone())?;
+        let capture = Capture::open(&self.path, &writer, Arc::clone(&observer), &self.config)?;
         let mut writing = lock(&held);
         *writing = writer;
         observer.writer(Arc::downgrade(&held));

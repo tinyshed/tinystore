@@ -1,6 +1,7 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 
 use super::*;
 use crate::Result;
@@ -93,6 +94,50 @@ fn writes_that_no_checkpoint_catches_up_with_leave_the_wal_no_longer_than_its_bo
     drop(running);
     assert!(longest <= HARD + 1100, "a WAL {longest} frames long, past {HARD} and one write");
     assert_ne!(wal(&file).1, generation, "the writer checkpointed it, and the next write started it over");
+}
+
+/// Reads of `file` on four threads that never stop, each holding its
+/// snapshot longer than a commit takes, until the flag returned is cleared:
+/// one read or another always holds a snapshot of before the last commit.
+fn reading_always(file: &Arc<File>) -> (Arc<AtomicBool>, Vec<thread::JoinHandle<()>>) {
+    let reading = Arc::new(AtomicBool::new(true));
+    let threads = (0..4)
+        .map(|_| {
+            let (file, reading) = (Arc::clone(file), Arc::clone(&reading));
+            thread::spawn(move || {
+                while reading.load(Ordering::SeqCst) {
+                    let read = |connection: &Connection| -> Result<()> {
+                        // the read's first statement takes its snapshot
+                        let one = "select count(*) from t where id = 1";
+                        connection.query_row(one, [], |row| row.get::<_, i64>(0)).map_err(|e| sql_error("read", e))?;
+                        thread::sleep(Duration::from_millis(20));
+                        Ok(())
+                    };
+                    file.read(read).unwrap();
+                }
+            })
+        })
+        .collect();
+    (reading, threads)
+}
+
+#[test]
+fn reads_that_never_stop_leave_the_wal_no_longer_than_its_bound() {
+    let (_dir, file) = open(512);
+    // as a checkpoint that never ends would: no call runs one off the writer's turn
+    let running = file.checkpoints().connection.lock().unwrap();
+    let (reading, readers) = reading_always(&file);
+    let (mut longest, generation) = (0, wal(&file).1);
+    for _ in 0..(HARD / 1000 + 16) {
+        fill(&file, 1000).unwrap();
+        longest = longest.max(wal(&file).0);
+    }
+    reading.store(false, Ordering::SeqCst);
+    readers.into_iter().for_each(|reader| reader.join().unwrap());
+    drop(running);
+    // a loaded machine may keep a read past a restart's wait, and the next tries further on
+    assert!(longest < HARD + 10_000, "a WAL {longest} frames long, past {HARD} by more than a few tries");
+    assert_ne!(wal(&file).1, generation, "the writer started it over though reads never stopped");
 }
 
 #[test]

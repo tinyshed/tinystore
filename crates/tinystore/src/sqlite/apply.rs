@@ -21,6 +21,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rusqlite::Connection;
 
 use super::capture::{self, Position};
+use super::checkpoint::{HARD, restart, restart_again_at};
 use super::connection::{self, Role, execute, sql_error};
 use super::group::{BEGIN, ROLLBACK};
 use super::{Config, Durability};
@@ -50,6 +51,9 @@ struct Wal {
     checkpointed: u32,
     /// A checkpoint ran since: the next commit may begin a generation.
     restarted: bool,
+    /// The frames past [`HARD`] at which the next checkpoint restarts the
+    /// WAL, once a restart waited in vain for a read; 0 when none did.
+    restart_from: u32,
 }
 
 impl Applier {
@@ -89,7 +93,7 @@ impl Applier {
         let follows = !wal.restarted && wal.at != Position::default() && frame > wal.at.frame;
         let at = if follows { Position { frame, ..wal.at } } else { capture::wal_at(&self.path, frame)? };
         if !at.same_generation(&wal.at) {
-            wal.checkpointed = 0;
+            (wal.checkpointed, wal.restart_from) = (0, 0);
         }
         (wal.at, wal.restarted) = (at, false);
         Ok(at)
@@ -104,16 +108,31 @@ impl Applier {
 
     /// Checkpoints the WAL, once the copy synced the position that names
     /// where it ends.
+    ///
+    /// Past [`HARD`] it restarts the WAL, waiting a moment for the reads of
+    /// the copy begun before: reads that never stop, which a copy is for,
+    /// would keep it from starting over for good.
     pub(crate) fn checkpoint(&self) -> Result<()> {
         let held = self.lock();
         let Some(connection) = held.as_ref() else {
             return Ok(());
         };
-        connection
-            .query_row(CHECKPOINT, [], |_| Ok(()))
-            .map_err(|error| sql_error(self.path.display().to_string(), error))?;
+        let (frame, restart_from) = {
+            let wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
+            (wal.at.frame, wal.restart_from)
+        };
+        let restarting = frame >= HARD && frame >= restart_from;
+        let checkpointed = if restarting {
+            restart(connection, Config::default().busy_timeout).map(|(busy, _, _)| busy == 0)
+        } else {
+            connection.query_row(CHECKPOINT, [], |_| Ok(false))
+        };
+        let started_over = checkpointed.map_err(|error| sql_error(self.path.display().to_string(), error))?;
         let mut wal = self.wal.lock().unwrap_or_else(PoisonError::into_inner);
         (wal.checkpointed, wal.restarted) = (wal.at.frame, true);
+        if restarting {
+            wal.restart_from = if started_over { 0 } else { restart_again_at(frame) };
+        }
         Ok(())
     }
 

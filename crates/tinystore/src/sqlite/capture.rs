@@ -32,6 +32,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use rusqlite::Connection;
 use rusqlite::hooks::Wal;
 
+use super::Config;
+use super::checkpoint::{HARD, restart, restart_again_at};
 use super::connection::sql_error;
 use super::given::own;
 use crate::{Error, ErrorKind, Result};
@@ -169,6 +171,8 @@ pub(crate) struct Capture {
     wal: PathBuf,
     /// The store's memory, which a commit's frames are held under while read.
     memory: Option<Arc<crate::Memory>>,
+    /// The writer's own, which a restart of the WAL shortens a moment.
+    busy_timeout: std::time::Duration,
     state: Mutex<State>,
     broken: AtomicBool,
 }
@@ -184,6 +188,9 @@ struct State {
     /// capture's checkpoint or with no WAL at all: a WAL that starts over,
     /// whatever its generation, loses nothing.
     restart_expected: bool,
+    /// The frames past [`HARD`] at which the capture next restarts the WAL,
+    /// once a restart waited in vain for a read; 0 when none did.
+    restart_from: u32,
 }
 
 impl Capture {
@@ -193,12 +200,14 @@ impl Capture {
         path: &Path,
         writer: &Connection,
         observer: Arc<dyn Observe>,
-        memory: Option<Arc<crate::Memory>>,
+        config: &Config,
     ) -> Result<Capture> {
         writer.wal_hook(Some(remember_the_end));
-        let state = State { file: None, at: Position::default(), checkpointed: 0, restart_expected: true };
+        let state =
+            State { file: None, at: Position::default(), checkpointed: 0, restart_expected: true, restart_from: 0 };
         let (wal, broken) = (wal_of(path), AtomicBool::new(false));
-        let capture = Capture { observer, wal, memory, state: Mutex::new(state), broken };
+        let (memory, busy_timeout) = (config.memory.clone(), config.busy_timeout);
+        let capture = Capture { observer, wal, memory, busy_timeout, state: Mutex::new(state), broken };
         capture.recover(writer).map_err(|error| error.within(format!("{}: its WAL", path.display())))?;
         Ok(capture)
     }
@@ -255,7 +264,7 @@ impl Capture {
 
     fn hand(&self, end: u32) -> Result<()> {
         let mut state = self.lock();
-        let State { file, at, checkpointed, restart_expected } = &mut *state;
+        let State { file, at, checkpointed, restart_expected, restart_from } = &mut *state;
         let wal = open_once(file, &self.wal)?;
         let header = read_header(wal)?;
         let mut from = at.frame + 1;
@@ -264,7 +273,7 @@ impl Capture {
                 self.observer.gap(header.at(0))?;
             }
             from = 1;
-            *checkpointed = 0;
+            (*checkpointed, *restart_from) = (0, 0);
         }
         if end < from {
             return Ok(());
@@ -286,18 +295,34 @@ impl Capture {
     /// A log that fails to sync no longer holds what it was handed, so the
     /// file is `broken`; a checkpoint that fails after it leaves the commit
     /// logged and is tried again at the next commit.
+    ///
+    /// Past [`HARD`] it restarts the WAL, waiting a moment for the reads
+    /// begun before, which reads that never stop would keep from starting
+    /// over for good, as the checkpoints of a file no node logs do.
     fn checkpoint_when_long(&self, writer: &Connection, end: u32, broken: impl FnOnce(Error) -> Error) -> Result<()> {
-        if end < self.lock().checkpointed + CHECKPOINT_AT {
-            return Ok(());
-        }
+        let restart_from = {
+            let state = self.lock();
+            if end < state.checkpointed + CHECKPOINT_AT {
+                return Ok(());
+            }
+            state.restart_from
+        };
         self.observer.sync().map_err(broken)?;
-        let (busy, frames, copied): (i64, i64, i64) = writer
-            .query_row(CHECKPOINT, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .map_err(|error| sql_error("a checkpoint of a commit already logged", error))?;
+        let restarting = end >= HARD && end >= restart_from;
+        let checkpointed = if restarting {
+            restart(writer, self.busy_timeout)
+        } else {
+            writer.query_row(CHECKPOINT, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        };
+        let (busy, frames, copied): (i64, i64, i64) =
+            checkpointed.map_err(|error| sql_error("a checkpoint of a commit already logged", error))?;
         let mut state = self.lock();
         state.checkpointed = end;
         if busy == 0 && frames == copied {
             state.restart_expected = true;
+        }
+        if restarting {
+            state.restart_from = if busy == 0 { 0 } else { restart_again_at(end) };
         }
         Ok(())
     }
