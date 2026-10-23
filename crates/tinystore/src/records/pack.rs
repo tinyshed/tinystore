@@ -56,12 +56,14 @@ struct Head {
     since: i64,
 }
 
-/// What one pass of packing made, and of which streams.
+/// What one pass of packing made, and of which streams; and the first
+/// failure of a head, which the others did not wait on.
 #[derive(Default)]
 pub(super) struct Packing {
     pub(super) segments: u64,
     pub(super) events: u64,
     pub(super) streams: BTreeSet<i64>,
+    pub(super) failed: Option<Error>,
 }
 
 /// A segment made of events in the order of their times.
@@ -119,7 +121,8 @@ const SET_HEAD_SINCE: &str = "update head_state set since = ?3 where stream = ?1
 const DROP_HEAD_STATE: &str = "delete from head_state where stream = ?1 and late = ?2";
 
 impl Records {
-    /// Packs every head that is ready, a segment at a time.
+    /// Packs every head that is ready, a segment at a time. A head that
+    /// fails waits for the next pass, and the others are packed.
     pub(super) fn pack(&self, now: i64) -> Result<Packing> {
         let mut packing = Packing::default();
         // a head whose rows left to pack no longer read waits for their drop
@@ -132,7 +135,10 @@ impl Records {
                 break;
             }
             for head in ready {
-                let events = self.pack_one(head.stream, head.late)?;
+                let events = self.pack_one(head.stream, head.late).unwrap_or_else(|error| {
+                    packing.failed.get_or_insert(error);
+                    0
+                });
                 if events == 0 {
                     stuck.insert((head.stream, head.late));
                     continue;
@@ -194,10 +200,18 @@ impl Records {
         Ok(made.events)
     }
 
+    /// What a segment weighs at most: what packing or merging one holds,
+    /// four times that, fits the store's memory.
+    pub(super) fn segment_weight(&self) -> usize {
+        let fits = usize::try_from(self.memory.limit() / HELD).unwrap_or(usize::MAX);
+        SEGMENT_WEIGHT.min(fits)
+    }
+
     /// A head's oldest rows that read, a segment's worth and one row at
     /// least, with what each weighs and they all do.
     fn oldest_rows(&self, stream: i64, late: bool) -> Result<(HeadRows, usize)> {
         let failed = |error| sql_error("read the head rows to pack", error);
+        let most = self.segment_weight();
         self.file.read(|connection| {
             let mut select = connection.prepare_cached(HEAD_ROWS).map_err(failed)?;
             let mut rows = select.query(params![stream, late]).map_err(failed)?;
@@ -209,7 +223,7 @@ impl Records {
                 }
                 let (count, heavy): (i64, i64) = (row.get(1).map_err(failed)?, row.get(2).map_err(failed)?);
                 let (count, heavy) = (count.max(0) as usize, heavy.max(0) as usize);
-                if !taken.is_empty() && (events + count > SEGMENT_EVENTS || weight + heavy > SEGMENT_WEIGHT) {
+                if !taken.is_empty() && (events + count > SEGMENT_EVENTS || weight + heavy > most) {
                     break;
                 }
                 (events, weight) = (events + count, weight + heavy);

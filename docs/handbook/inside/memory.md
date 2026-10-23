@@ -51,6 +51,11 @@ The budget counts what the store's work holds: the rows of an answer, a block
 being decoded, an upload's buffers. It is not a limit on the process's
 resident memory, which also holds your program and SQLite's page caches.
 
+Background work fits inside the budget too. Packing a stream's events into a
+segment holds four times what the segment weighs, so under a budget smaller
+than 16 MiB records packs and merges smaller segments, a quarter of the budget
+each, instead of failing to pack them.
+
 ## What a limit error says
 
 A `limit` error names which bound it met, what the call wanted and what the

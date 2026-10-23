@@ -248,3 +248,47 @@ fn what_each_head_holds_is_kept_beside_it_as_its_rows_come_are_packed_and_expire
         [(1, false, 1000), (2, false, 1)]
     );
 }
+
+// contract: ERR-05
+#[test]
+fn a_store_of_little_memory_packs_its_heads_in_segments_that_fit_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = std::sync::Arc::new(crate::TestClock::new(std::time::UNIX_EPOCH + 1_800_000_000 * SECOND));
+    let options =
+        crate::Options { clock: Some(clock.clone()), background: false, memory: Some(8 << 20), ..Default::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    // three MiB of events in the first stream's head, where packing holds four times what it packs
+    let api = store.events("api").open().unwrap();
+    let line = "x".repeat(1000);
+    for _ in 0..3 {
+        api.append_all((0..1000).map(|_| NewEvent::new("big").message(&line))).unwrap();
+    }
+    store.events("web").open().unwrap().append("click", &()).unwrap();
+    clock.set(store.now() + HOUR).unwrap();
+    let done = maintain(&store).unwrap();
+    assert_eq!((done.packed, done.segments), (3001, 3), "two segments of api's, one of web's");
+    assert_eq!(api.list().limit(10_000).all().map(Result::unwrap).count(), 3000);
+}
+
+// contract: ERR-05
+#[test]
+fn a_head_packing_cannot_hold_waits_and_the_other_heads_are_packed() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = std::sync::Arc::new(crate::TestClock::new(std::time::UNIX_EPOCH + 1_800_000_000 * SECOND));
+    let options =
+        crate::Options { clock: Some(clock.clone()), background: false, memory: Some(512 << 10), ..Default::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    // one row of 200 KiB, which packing would hold four times
+    let line = "x".repeat(1000);
+    store.events("api").open().unwrap().append_all((0..200).map(|_| NewEvent::new("big").message(&line))).unwrap();
+    store.events("web").open().unwrap().append("click", &()).unwrap();
+    clock.set(store.now() + HOUR).unwrap();
+    let error = maintain(&store).unwrap_err();
+    assert_eq!(error.fact("limit"), Some(crate::memory::STORE_MEMORY), "{error}");
+    let web = store.events("web").open().unwrap();
+    assert_eq!(names(&web.list().page().unwrap().events), ["click"]);
+    let segments = Records::of(&store).unwrap().file.read(|connection| {
+        Ok(connection.query_row("select count(*) from segments", [], |row| row.get::<_, i64>(0)).unwrap())
+    });
+    assert_eq!(segments.unwrap(), 1, "web's head was packed");
+}

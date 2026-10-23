@@ -22,9 +22,7 @@ use super::block;
 use super::engine::{Records, execute};
 use super::event::Kept;
 use super::head::Codec;
-use super::pack::{
-    HELD, Made, PATIENCE, SEGMENT_EVENTS, SEGMENT_WEIGHT, insert_blocks, insert_keys, made_of, rows_of_blocks,
-};
+use super::pack::{HELD, Made, PATIENCE, SEGMENT_EVENTS, insert_blocks, insert_keys, made_of, rows_of_blocks};
 use super::repair::Part;
 use super::segment::Schema;
 use crate::sqlite::sql_error;
@@ -32,10 +30,10 @@ use crate::{Error, Result};
 
 /// How many segments one merge joins.
 const FAN_IN: usize = 4;
-/// A segment under both holds few enough events to merge: four of them fit
-/// a segment.
+/// A segment under it holds few enough events to merge, and under a
+/// segment's weight over `FAN_IN` weighs little enough: four of them fit a
+/// segment.
 const SMALL_EVENTS: usize = SEGMENT_EVENTS / FAN_IN;
-const SMALL_WEIGHT: usize = SEGMENT_WEIGHT / FAN_IN;
 
 /// A segment that holds its own events, few enough to merge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,9 +100,10 @@ impl Records {
     /// what a segment holds, and read.
     fn small(&self, stream: i64) -> Result<Vec<Small>> {
         let failed = |error| sql_error("find the segments to merge", error);
+        let small_weight = self.segment_weight() / FAN_IN;
         self.file.read(|connection| {
             let mut select = connection.prepare_cached(SMALL).map_err(failed)?;
-            let found = select.query_map(params![stream, SMALL_EVENTS as i64, SMALL_WEIGHT as i64], |row| {
+            let found = select.query_map(params![stream, SMALL_EVENTS as i64, small_weight as i64], |row| {
                 let (held, weight): (i64, i64) = (row.get(3)?, row.get(4)?);
                 let (held, weight) = (held.max(0) as usize, weight.max(0) as usize);
                 Ok(Small { id: row.get(0)?, first: row.get(1)?, last: row.get(2)?, held, weight })

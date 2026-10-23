@@ -86,6 +86,8 @@ impl Records {
         self.probe.count("tinystore_records_segments_packed_total", &[], packing.segments as f64);
         self.probe.count("tinystore_records_segments_merged_total", &[], merged as f64);
         self.probe.count("tinystore_records_expired_total", &[], expired as f64);
+        // a head that failed is said once the others were packed and merged
+        packing.failed.map_or(Ok(()), Err)?;
         Ok(Maintenance { expired, packed: packing.events, segments: packing.segments, merged })
     }
 
