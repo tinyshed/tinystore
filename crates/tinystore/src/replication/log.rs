@@ -275,11 +275,38 @@ struct Tail {
     unsynced: bool,
     /// A segment was made since the directory's last sync.
     named: bool,
+    /// An append failed partway and what it wrote could not be cut off: the
+    /// log takes no entry until it opens again and cuts it there.
+    torn: bool,
+    /// The next append writes this many of its bytes and fails, as a full
+    /// disk makes it.
+    #[cfg(test)]
+    tears_at: Option<usize>,
 }
 
 struct Segment {
     first: u64,
     bytes: u64,
+}
+
+impl Tail {
+    /// Appends an entry's bytes to the last segment.
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let file = self.appending.as_mut().expect("the last segment is open");
+        #[cfg(test)]
+        if let Some(torn) = self.tears_at.take() {
+            file.write_all(&bytes[..torn])?;
+            return Err(io::Error::new(io::ErrorKind::StorageFull, "the disk is full, as a test made it"));
+        }
+        file.write_all(bytes)
+    }
+}
+
+/// Cuts the segment at `path` back to its first `bytes`, durably.
+fn cut_to(path: &Path, bytes: u64) -> io::Result<()> {
+    // through a handle of its own: the appending one may not change a length
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(bytes).and_then(|()| file.sync_data())
 }
 
 impl Log {
@@ -295,6 +322,9 @@ impl Log {
             last: None,
             unsynced: false,
             named: false,
+            torn: false,
+            #[cfg(test)]
+            tears_at: None,
         };
         for first in segments_in(&dir)? {
             let path = segment_path(&dir, first);
@@ -619,13 +649,25 @@ impl Log {
     /// Appends an entry's bytes to the last segment, or to a new one when
     /// the last is full.
     fn write(&self, tail: &mut Tail, bytes: &[u8]) -> Result<()> {
+        if tail.torn {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                format!("log {}: an append failed partway: it takes entries again once it opens", self.dir.display()),
+            ));
+        }
         let full = tail.segments.back().is_none_or(|segment| segment.bytes >= self.bounds.segment);
         if full {
             self.start_segment(tail)?;
         }
-        let path = segment_path(&self.dir, tail.segments.back().expect("a segment to append to").first);
-        let file = tail.appending.as_mut().expect("the last segment is open");
-        file.write_all(bytes).map_err(|error| io_error(&path, error))?;
+        let segment = tail.segments.back().expect("a segment to append to");
+        let (path, whole) = (segment_path(&self.dir, segment.first), segment.bytes);
+        if let Err(error) = tail.append(bytes) {
+            // What it wrote of the entry is cut off, so that the entry sent
+            // again follows the last whole one: a reader takes a part
+            // followed by more for damage.
+            tail.torn = cut_to(&path, whole).is_err();
+            return Err(io_error(&path, error));
+        }
         tail.segments.back_mut().expect("the segment just written").bytes += bytes.len() as u64;
         tail.unsynced = true;
         Ok(())
@@ -668,6 +710,12 @@ impl Log {
     /// The last entry the log holds, 0 for none.
     pub(crate) fn last(&self) -> u64 {
         self.lock().next.saturating_sub(1)
+    }
+
+    /// Makes the next append write `at` of its bytes and fail.
+    #[cfg(test)]
+    pub(crate) fn tear_next_append(&self, at: usize) {
+        self.lock().tears_at = Some(at);
     }
 
     fn lock(&self) -> MutexGuard<'_, Tail> {

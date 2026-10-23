@@ -150,3 +150,48 @@ fn a_torn_tail_is_cut_and_damage_before_other_entries_is_corrupt() {
     assert_eq!(refused.kind(), crate::ErrorKind::Corrupt);
     assert_eq!(fs::read(&segment).unwrap(), damaged, "nothing after the damage was cut");
 }
+
+// An append a full disk cut short leaves part of an entry, which a reader
+// takes for damage once the entry sent again follows it.
+#[test]
+fn a_copy_s_append_that_fails_partway_leaves_a_log_that_reads_and_takes_the_entry_again() {
+    let home = tempfile::tempdir().unwrap();
+    let logs = home.path().join(DIR).join("test.db");
+    let observer: Arc<dyn crate::sqlite::Observe> =
+        Arc::new(Log::open(logs.clone(), Bounds::default(), Arc::default()).unwrap());
+    let file = File::open_observed(home.path().join("test.db"), Config::default(), Some(observer)).unwrap();
+    file.transaction(|tx| tx.execute_batch("create table t (v text)").map_err(|error| sql_error("create", error)))
+        .unwrap();
+    for i in 0..5 {
+        let value = format!("row {i}");
+        file.write(value.len(), move |tx| {
+            tx.execute("insert into t (v) values (?1)", [&value]).map(drop).map_err(|error| sql_error("insert", error))
+        })
+        .unwrap();
+    }
+    file.close().unwrap();
+    let segment = fs::read(segment_path(&logs, segments_in(&logs).unwrap()[0])).unwrap();
+    let mut entries = Vec::new();
+    let mut at = super::entry::MAGIC.len();
+    while let Some((_, used)) = super::entry::decode(&segment[at..]).unwrap() {
+        entries.push(segment[at..at + used].to_vec());
+        at += used;
+    }
+
+    let there = tempfile::tempdir().unwrap();
+    let kept = there.path().join(DIR).join("test.db");
+    let copy = Log::open(kept.clone(), Bounds::default(), Arc::default()).unwrap();
+    let keep = |bytes: &[u8]| copy.keep(&super::entry::decode(bytes).unwrap().unwrap().0, bytes);
+    let (last, before) = entries.split_last().unwrap();
+    before.iter().for_each(|bytes| keep(bytes).unwrap());
+    copy.tear_next_append(last.len() / 2);
+    assert_eq!(keep(last).unwrap_err().kind(), crate::ErrorKind::Io);
+    keep(last).unwrap();
+    let mut read = 0;
+    Log::read(&kept, |_| {
+        read += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(read, entries.len(), "every entry, each once");
+}
