@@ -458,7 +458,8 @@ impl Store {
 
     /// The store's encryption key: the one in the file its options named, or
     /// in `encryption.key` of its directory, which the store makes when it is
-    /// not there. For a bucket that holds nothing sealed yet.
+    /// not there and no engine open keeps a value sealed with a key. For a
+    /// bucket that holds nothing sealed yet.
     #[cfg(feature = "kv")]
     pub(crate) fn encryption_key(&self) -> Result<Arc<EncryptionKey>> {
         self.read_encryption_key(true)
@@ -483,11 +484,35 @@ impl Store {
         // the key there, as any other file
         let key = Arc::new(match &self.inner.encryption_key_file {
             Some(file) => EncryptionKey::read(file)?,
-            None if make && !self.inner.beside => EncryptionKey::read_or_make(&own)?,
+            None if make && !self.inner.beside => self.read_or_make_key(&own)?,
             None => EncryptionKey::read(&own)?,
         });
         *kept = Some(Arc::clone(&key));
         Ok(key)
+    }
+
+    /// The key of `own`, made when it is not there, unless an engine open
+    /// keeps a value sealed with a key: that key was lost, a backup left it
+    /// out or it was deleted, and a new one would seal what the lost one
+    /// cannot open once it is put back.
+    #[cfg(feature = "kv")]
+    fn read_or_make_key(&self, own: &Path) -> Result<EncryptionKey> {
+        if !own.exists() {
+            let engines = lock(&self.inner.engines).clone();
+            for engine in engines {
+                if let Some(id) = engine.sealed_with()? {
+                    return Err(Error::new(
+                        ErrorKind::Io,
+                        format!(
+                            "the encryption key {}: not there, and values sealed with the key {id} remain: \
+                             put the key back, since the store makes no other while they do",
+                            own.display()
+                        ),
+                    ));
+                }
+            }
+        }
+        EncryptionKey::read_or_make(own)
     }
 
     pub fn now(&self) -> SystemTime {

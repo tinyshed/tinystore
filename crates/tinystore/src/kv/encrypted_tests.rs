@@ -150,9 +150,12 @@ fn a_key_lost_is_not_replaced_while_a_bucket_holds_values_sealed_with_it() {
     assert_eq!(lost.kind(), ErrorKind::Io, "{lost}");
     assert!(lost.to_string().contains("and the store makes no other"), "{lost}");
     assert!(!key.exists(), "no key was made in its place");
-    // a bucket that holds nothing sealed has nothing to lose, and the store's key is made for it
-    store.bucket::<String>("tokens").encrypted().open().unwrap();
-    assert!(key.exists());
+    // a bucket that holds nothing sealed yet would seal under a new key what the old one cannot open
+    let empty = store.bucket::<String>("tokens").encrypted().open().unwrap_err();
+    assert_eq!(empty.kind(), ErrorKind::Io, "{empty}");
+    assert!(empty.to_string().contains("kv bucket tokens: the encryption key"), "{empty}");
+    assert!(empty.to_string().contains("put the key back"), "{empty}");
+    assert!(!key.exists(), "no key was made for a bucket with nothing sealed either");
     store.close().unwrap();
 
     fs::write(&key, kept).unwrap();
@@ -162,6 +165,27 @@ fn a_key_lost_is_not_replaced_while_a_bucket_holds_values_sealed_with_it() {
         Some(PASSWORD),
         "found again, the key opens them"
     );
+    let tokens = store.bucket::<String>("tokens").encrypted().open().unwrap();
+    tokens.set("t-1", &"a-token".to_owned()).unwrap();
+    assert_eq!(tokens.get("t-1").unwrap().as_deref(), Some("a-token"), "and seals under the one key");
+}
+
+// contract: SEC-04
+#[test]
+#[cfg(feature = "sql")]
+fn a_key_lost_is_not_replaced_for_a_databases_bucket_while_kv_db_holds_values_sealed_with_it() {
+    let f = fixture();
+    passwords(&f.store).set("source-42", &PASSWORD.to_owned()).unwrap();
+    f.store.close().unwrap();
+    let key = f.dir.path().join("encryption.key");
+    fs::remove_file(&key).unwrap();
+
+    let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    store.bucket::<String>("notes").open().unwrap();
+    let db = store.database("app").open().unwrap();
+    let lost = db.bucket::<String>("tokens").encrypted().open().unwrap_err();
+    assert_eq!(lost.kind(), ErrorKind::Io, "{lost}");
+    assert!(!key.exists(), "no key was made for the database's bucket");
 }
 
 #[test]

@@ -41,6 +41,13 @@ pub trait Engine: Send + Sync + 'static {
         let _ = file;
     }
 
+    /// The id of an encryption key that a value the engine keeps is sealed
+    /// with, if one is: the store makes no key in place of a lost one while a
+    /// value sealed with it remains.
+    fn sealed_with(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     /// Copies the engine's files into `into`, each at the path it has in the
     /// store's directory, as one moment of the engine while it keeps working.
     /// An engine whose file another lends copies nothing: the lender does.

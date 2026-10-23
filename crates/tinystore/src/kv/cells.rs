@@ -116,6 +116,7 @@ const SELECT_BUCKET: &str = "select id, role from _tinystore_kv_buckets where na
 const INSERT_BUCKET: &str = "insert into _tinystore_kv_buckets (name, role) values (?1, ?2) returning id";
 const SELECT_BUCKET_KEY: &str = "select key from _tinystore_kv_buckets where id = ?1";
 const KEEP_BUCKET_KEY: &str = "update _tinystore_kv_buckets set key = ?2 where id = ?1";
+const SELECT_A_KEY: &str = "select key from _tinystore_kv_buckets where key is not null limit 1";
 
 /// A live cell as a read finds it.
 #[derive(Debug)]
@@ -413,6 +414,14 @@ pub(crate) fn bucket_key(connection: &Connection, bucket: i64) -> Result<Option<
         .prepare_cached(SELECT_BUCKET_KEY)
         .and_then(|mut select| select.query_row([bucket], |row| row.get(0)))
         .map_err(|error| sql_error("its bucket's key", error))
+}
+
+/// The id of an encryption key some bucket's values are sealed with, if one is.
+pub(crate) fn a_bucket_key(connection: &Connection) -> Result<Option<String>> {
+    connection
+        .prepare_cached(SELECT_A_KEY)
+        .and_then(|mut select| select.query_row([], |row| row.get(0)).optional())
+        .map_err(|error| sql_error("its buckets' keys", error))
 }
 
 /// Keeps the id of the key a bucket's values are sealed with, or none once

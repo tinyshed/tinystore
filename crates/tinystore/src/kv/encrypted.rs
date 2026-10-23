@@ -13,15 +13,16 @@
 //!
 //! A bucket keeps the id of the key its values are sealed with, from its
 //! first write until it is cleared whole. So a key lost is never replaced
-//! unseen, and no value is written under another key among those it could not
-//! open:
+//! unseen, while any bucket open in the store keeps a value it sealed, and no
+//! value is written under another key among those it could not open:
 //!
-//! | The bucket's key | The store's key | Opening the bucket    | A read    | A write   |
-//! |------------------|-----------------|-----------------------|-----------|-----------|
-//! | none yet         | none yet        | makes the store's key | as usual  | as usual  |
-//! | `3fa9…`          | `3fa9…`         | as usual              | as usual  | as usual  |
-//! | `3fa9…`          | lost            | `Io`: no key is made  |           |           |
-//! | `3fa9…`          | `81c2…`         | opens, to be cleared  | `Invalid` | `Invalid` |
+//! | The bucket's key | The store's key            | Opening the bucket    | A read    | A write   |
+//! |------------------|----------------------------|-----------------------|-----------|-----------|
+//! | none yet         | none yet                   | makes the store's key | as usual  | as usual  |
+//! | none yet         | lost, another bucket's yet | `Io`: no key is made  |           |           |
+//! | `3fa9…`          | `3fa9…`                    | as usual              | as usual  | as usual  |
+//! | `3fa9…`          | lost                       | `Io`: no key is made  |           |           |
+//! | `3fa9…`          | `81c2…`                    | opens, to be cleared  | `Invalid` | `Invalid` |
 
 use std::sync::Arc;
 
