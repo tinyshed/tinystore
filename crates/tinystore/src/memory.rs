@@ -93,6 +93,10 @@ impl Memory {
 
     /// Takes `bytes` more for work that holds `held` already, now or not at all.
     fn take_now(&self, held: u64, bytes: u64, what: &str) -> Result<()> {
+        if bytes == 0 {
+            // nothing taken leaves every waiter its room: an empty page, a query matching no series
+            return Ok(());
+        }
         self.refuse_past_limit(held.saturating_add(bytes), what)?;
         let mut state = self.lock();
         let ahead = state.ahead(None);
@@ -104,8 +108,12 @@ impl Memory {
     }
 
     /// Takes `bytes`, waiting up to `patience` for other work to give them
-    /// back; waiters are served in the order they came.
+    /// back; waiters are served in the order they came, and a call that
+    /// takes nothing waits for none of them.
     pub fn reserve(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration) -> Result<Reservation> {
+        if bytes == 0 {
+            return Ok(self.nothing());
+        }
         self.refuse_past_limit(bytes, what)?;
         let deadline = Instant::now() + patience;
         let mut state = self.lock();
@@ -308,6 +316,28 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(large.join().unwrap().unwrap(), 80, "the merge waited its turn and got its bytes");
+    }
+
+    // contract: STORE-05
+    #[test]
+    fn a_reservation_of_nothing_waits_for_no_waiter_before_it() {
+        let memory = Memory::new(100);
+        let held = memory.try_reserve(60, "a dashboard read").unwrap();
+        let large = {
+            let memory = Arc::clone(&memory);
+            thread::spawn(move || memory.reserve(80, "a records merge", Duration::from_secs(30)).map(|r| r.bytes()))
+        };
+        while memory.lock().waiting.is_empty() {
+            thread::yield_now();
+        }
+        // a read whose page fetched nothing, a metrics query that matched no series
+        let empty = memory.try_reserve(0, "records: a read").map(|r| r.bytes());
+        let waited = memory.reserve(0, "metrics: a read", Duration::from_secs(1)).map(|r| r.bytes());
+        let grown = memory.nothing().grow(0, "its rows");
+        drop(held);
+        assert_eq!(large.join().unwrap().unwrap(), 80);
+        assert_eq!((empty.unwrap(), waited.unwrap()), (0, 0), "nothing taken passes the queue");
+        grown.unwrap();
     }
 
     #[test]
