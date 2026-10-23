@@ -59,10 +59,19 @@ pub struct Options {
     /// unless asked for.
     #[cfg(feature = "metrics")]
     pub self_metrics: Option<crate::metrics::SelfMetrics>,
+    /// The metrics series the store holds at most: a new series past them is
+    /// a `Limit` error, and a series kept no longer gives its place back.
+    /// 100,000 unless said; docs/guides/metrics/ingesting.md says what one costs.
+    #[cfg(feature = "metrics")]
+    pub max_series: u64,
 }
 
 /// The disk a store keeps free unless its options say otherwise.
 pub(crate) const KEEP_FREE: u64 = 1 << 30;
+
+/// The metrics series a store holds unless its options say otherwise.
+#[cfg(feature = "metrics")]
+pub(crate) const MAX_SERIES: u64 = 100_000;
 
 impl Default for Options {
     fn default() -> Self {
@@ -77,6 +86,8 @@ impl Default for Options {
             node: None,
             #[cfg(feature = "metrics")]
             self_metrics: None,
+            #[cfg(feature = "metrics")]
+            max_series: MAX_SERIES,
         }
     }
 }
@@ -94,7 +105,7 @@ impl fmt::Debug for Options {
         #[cfg(feature = "replication")]
         let f = f.field("node", &self.node);
         #[cfg(feature = "metrics")]
-        let f = f.field("self_metrics", &self.self_metrics);
+        let f = f.field("self_metrics", &self.self_metrics).field("max_series", &self.max_series);
         f.finish()
     }
 }
@@ -195,6 +206,8 @@ struct Inner {
     )]
     durability: Option<Durability>,
     keep_free: u64,
+    #[cfg(feature = "metrics")]
+    max_series: u64,
     #[cfg(feature = "kv")]
     encryption_key_file: Option<PathBuf>,
     /// The key, once a handle needed it: a store that seals nothing reads no
@@ -234,6 +247,10 @@ impl Store {
     }
 
     fn open_with(dir: PathBuf, options: Options, lock: Option<File>) -> Result<Store> {
+        #[cfg(feature = "metrics")]
+        if options.max_series == 0 {
+            return Err(Error::invalid(format!("store {}: a max_series of 0, which holds no series", dir.display())));
+        }
         let beside = lock.is_none();
         #[cfg(feature = "metrics")]
         let self_metrics = options.self_metrics.filter(|_| !beside);
@@ -251,6 +268,8 @@ impl Store {
             files: Mutex::new(Vec::new()),
             durability: options.durability,
             keep_free: options.keep_free,
+            #[cfg(feature = "metrics")]
+            max_series: options.max_series,
             #[cfg(feature = "kv")]
             encryption_key_file: options.encryption_key_file,
             #[cfg(feature = "kv")]
@@ -427,6 +446,12 @@ impl Store {
     /// The bytes of the disk the store keeps free, as its options said.
     pub fn keep_free(&self) -> u64 {
         self.inner.keep_free
+    }
+
+    /// The metrics series the store holds at most, as its options said.
+    #[cfg(feature = "metrics")]
+    pub fn max_series(&self) -> u64 {
+        self.inner.max_series
     }
 
     /// The store's encryption key: the one in the file its options named, or

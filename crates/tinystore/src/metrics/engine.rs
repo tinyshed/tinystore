@@ -45,6 +45,8 @@ pub(crate) struct Engine {
     pub(super) file: File,
     pub(super) memory: Arc<Memory>,
     clock: Arc<dyn Clock>,
+    /// The series the store holds at most, as its options said.
+    pub(super) max_series: i64,
     pub(super) names: Names,
     /// The zstd contexts calls borrow and give back.
     pub(super) codecs: Codecs,
@@ -133,6 +135,7 @@ impl Engine {
                 memory: Arc::clone(store.memory()),
                 totals: Arc::new(Totals::new(unix_millis(store.now()))),
                 clock: store.clock(),
+                max_series: i64::try_from(store.max_series()).unwrap_or(i64::MAX),
                 codecs: Codecs::default(),
                 maintaining: Mutex::default(),
                 pack_cursor: AtomicI64::new(0),

@@ -4,6 +4,7 @@
 //! tinystore serve --dir <dir> --local --log-file <dir>/server/serve.log [--idle 30000ms]   a sidecar
 //! tinystore serve --dir <dir> --stdio [--clock 2026-10-09T12:00:00.000Z]                 a private child
 //! tinystore serve <dir> [--durability os] [--keep-free 10GiB] [--self-metrics]           a person's server
+//! tinystore serve <dir> --max-series 1000000                                               a store of many series
 //! tinystore serve <dir> --encryption-key-file /run/secrets/tinystore.key                   its key kept apart
 //! tinystore serve <dir> --listen tls://0.0.0.0:7443 --tls-cert c.pem --tls-key k.pem --tokens tokens
 //! tinystore serve <dir> --node-listen 0.0.0.0:7444 [--node-config node.toml]               a node other nodes copy
@@ -52,6 +53,9 @@ pub(crate) struct Serve {
     /// Measures the store into its own metrics.db, `--self-metrics`, the
     /// machine left out with `--no-system-metrics`.
     pub(crate) self_metrics: Option<tinystore::metrics::SelfMetrics>,
+    /// The metrics series the store holds at most; the store's own 100,000
+    /// when `None`.
+    pub(crate) max_series: Option<u64>,
     /// The node the store is, when a node's flag says so.
     pub(crate) node: Option<Node>,
 }
@@ -131,7 +135,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     }
     let self_metrics =
         given.self_metrics.then_some(tinystore::metrics::SelfMetrics { system: !given.no_system_metrics });
-    let (keep_free, encryption_key_file) = (given.keep_free, given.encryption_key_file);
+    let (keep_free, encryption_key_file, max_series) = (given.keep_free, given.encryption_key_file, given.max_series);
     Ok(Serve {
         dir,
         transport,
@@ -145,6 +149,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         keep_free,
         encryption_key_file,
         self_metrics,
+        max_series,
         node,
     })
 }
@@ -169,6 +174,7 @@ struct Given {
     encryption_key_file: Option<PathBuf>,
     self_metrics: bool,
     no_system_metrics: bool,
+    max_series: Option<u64>,
     node: Node,
     node_config: Option<PathBuf>,
 }
@@ -198,6 +204,11 @@ impl Given {
                 }
                 "--self-metrics" => given.self_metrics = true,
                 "--no-system-metrics" => given.no_system_metrics = true,
+                "--max-series" => {
+                    let count = value("--max-series")?;
+                    let most = count.parse::<u64>().ok().filter(|most| *most > 0);
+                    given.max_series = Some(most.ok_or_else(|| format!("--max-series {count}: a count above 0"))?);
+                }
                 "--node-listen" => given.node.listen = Some(value("--node-listen")?),
                 "--from" => given.node.from.push(value("--from")?),
                 "--node-config" => given.node_config = Some(PathBuf::from(value("--node-config")?)),
@@ -381,6 +392,14 @@ mod tests {
         assert_eq!(serve(&args("d --durability os")).unwrap().durability, Some(Durability::Os));
         assert_eq!(serve(&args("--dir d --stdio --durability full")).unwrap().durability, Some(Durability::Full));
         assert_eq!(serve(&args("d --durability fast")).unwrap_err(), "--durability fast: full or os");
+    }
+
+    #[test]
+    fn the_series_a_store_holds_are_the_stores_own_unless_said() {
+        assert_eq!(serve(&args("d")).unwrap().max_series, None);
+        assert_eq!(serve(&args("d --max-series 1000000")).unwrap().max_series, Some(1_000_000));
+        assert_eq!(serve(&args("d --max-series 0")).unwrap_err(), "--max-series 0: a count above 0");
+        assert_eq!(serve(&args("d --max-series many")).unwrap_err(), "--max-series many: a count above 0");
     }
 
     #[test]

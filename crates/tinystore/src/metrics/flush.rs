@@ -144,6 +144,7 @@ impl Engine {
         let _held =
             self.memory.reserve((samples * SAMPLE_BYTES) as u64, "metrics: the instruments' write", PATIENCE)?;
         let zstd = self.codecs.take();
+        let write = Write { now, max_series: self.max_series };
         let (zstd, done) = self.file.write(samples * SAMPLE_BYTES, move |tx| {
             let mut zstd = zstd;
             for (name, description) in &described {
@@ -154,7 +155,7 @@ impl Engine {
             let mut outcomes = Vec::with_capacity(chunk.len());
             for job in chunk {
                 let outcome = match job {
-                    Ok(samples) => write_slot(tx, &mut zstd, &samples, now, &mut ready)?,
+                    Ok(samples) => write_slot(tx, &mut zstd, &samples, write, &mut ready)?,
                     Err(error) => Outcome::Refused(error),
                 };
                 outcomes.push(outcome);
@@ -168,14 +169,22 @@ impl Engine {
 
 use crate::memory::PATIENCE;
 
+/// One write of the instruments: its time, and the series the store holds at
+/// most, which a new series is counted against.
+#[derive(Clone, Copy)]
+struct Write {
+    now: i64,
+    max_series: i64,
+}
+
 /// Writes one slot's series in a savepoint: all of them, or none and the
 /// error that refused one. An error of the file rather than of the series
 /// fails the whole write.
-fn write_slot(tx: &Tx<'_>, zstd: &mut Zstd, samples: &[Sample], now: i64, ready: &mut bool) -> Result<Outcome> {
+fn write_slot(tx: &Tx<'_>, zstd: &mut Zstd, samples: &[Sample], write: Write, ready: &mut bool) -> Result<Outcome> {
     execute(tx, SAVEPOINT, params![], "start an instrument's write")?;
     let mut any_ready = false;
     let written = samples.iter().try_for_each(|sample| {
-        any_ready |= write_sample(tx, zstd, sample, now).map_err(|error| error.within(&sample.written.kept))?;
+        any_ready |= write_sample(tx, zstd, sample, write).map_err(|error| error.within(&sample.written.kept))?;
         Ok::<_, Error>(())
     });
     match written {
@@ -199,9 +208,10 @@ fn refuses_the_series(kind: ErrorKind) -> bool {
     matches!(kind, Invalid | NotFound | Conflict | TooOld | TooNew | Limit | Corrupt | Suspended)
 }
 
-/// Writes one series' sample at `now`, and the zero its run begins with
-/// before it, each placed after what the series already holds.
-fn write_sample(tx: &Tx<'_>, zstd: &mut Zstd, sample: &Sample, now: i64) -> Result<bool> {
+/// Writes one series' sample at the write's time, and the zero its run begins
+/// with before it, each placed after what the series already holds.
+fn write_sample(tx: &Tx<'_>, zstd: &mut Zstd, sample: &Sample, write: Write) -> Result<bool> {
+    let now = write.now;
     let cutoff = now.saturating_sub(sample.keep);
     let mut points = Vec::with_capacity(2);
     if let Some(zero) = sample.zero {
@@ -217,7 +227,7 @@ fn write_sample(tx: &Tx<'_>, zstd: &mut Zstd, sample: &Sample, now: i64) -> Resu
         keep: sample.keep,
         points,
     };
-    let (id, fresh) = registry::resolve(tx, &batch)?;
+    let (id, fresh) = registry::resolve(tx, &batch, write.max_series)?;
     let state = State::read(tx, id)?;
     if !fresh {
         place(&mut batch.points, state.max_seen);

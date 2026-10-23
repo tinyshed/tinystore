@@ -73,6 +73,9 @@ func InProcess(directory, library string, started Started) func(context.Context)
 		key, _ := filepath.Abs(started.EncryptionKeyFile)
 		options.EncryptionKeyFile = &key
 	}
+	if started.MaxSeries > 0 {
+		options.MaxSeries = &started.MaxSeries
+	}
 	encoded := wire.Encode(&options)
 	return func(ctx context.Context) (*Connection, error) {
 		path, err := FindLibrary(ctx, library)

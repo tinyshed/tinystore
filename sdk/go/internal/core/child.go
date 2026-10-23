@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,9 @@ type Started struct {
 	// too unless WithoutSystem.
 	SelfMetrics   bool
 	WithoutSystem bool
+	// MaxSeries is the metrics series the store holds at most, or 0 for the
+	// store's own 100,000.
+	MaxSeries uint64
 }
 
 // storeFlags are the flags of tinystore serve that say how the store opens.
@@ -42,6 +46,9 @@ func (s Started) storeFlags() []string {
 	}
 	if s.SelfMetrics && s.WithoutSystem {
 		flags = append(flags, "--no-system-metrics")
+	}
+	if s.MaxSeries > 0 {
+		flags = append(flags, "--max-series", strconv.FormatUint(s.MaxSeries, 10))
 	}
 	return flags
 }

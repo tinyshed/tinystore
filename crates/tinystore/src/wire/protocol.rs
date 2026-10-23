@@ -2038,6 +2038,8 @@ pub(crate) struct StoreOptions {
     pub(crate) self_metrics: bool,
     /// With selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's.
     pub(crate) without_system: bool,
+    /// The metrics series the store holds at most; 100,000 when absent.
+    pub(crate) max_series: Option<u64>,
 }
 
 impl Message for StoreOptions {
@@ -2062,6 +2064,7 @@ impl Message for StoreOptions {
                 12 => message.insecure = codec::bool(r, "insecure")?,
                 13 => message.self_metrics = codec::bool(r, "selfMetrics")?,
                 14 => message.without_system = codec::bool(r, "withoutSystem")?,
+                15 => message.max_series = Some(codec::uint(r, "maxSeries")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2126,6 +2129,10 @@ impl Message for StoreOptions {
             map.field(out, 14);
             codec::write_bool(out, &self.without_system);
         }
+        if let Some(max_series) = &self.max_series {
+            map.field(out, 15);
+            codec::write_uint(out, max_series);
+        }
         map.close(out);
     }
 
@@ -2145,6 +2152,7 @@ impl Message for StoreOptions {
             + 2
             + 2
             + 2
+            + self.max_series.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
@@ -2162,6 +2170,7 @@ impl Message for StoreOptions {
             && !self.insecure
             && !self.self_metrics
             && !self.without_system
+            && self.max_series.is_none()
     }
 }
 

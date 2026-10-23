@@ -6,6 +6,7 @@ import { Config, type ConfigOptions, type Layer, type Value } from './config.ts'
 import {
 	asking,
 	checkDurability,
+	checkMaxSeries,
 	type Durability,
 	embedded,
 	Link,
@@ -99,6 +100,11 @@ export interface OpenOptions {
 	 * unless asked for; a sidecar found running keeps its own.
 	 */
 	selfMetrics?: SelfMetrics
+	/**
+	 * The metrics series the store holds at most: a new series past them is
+	 * a LimitError. 100,000 unless given; a sidecar found running keeps its own.
+	 */
+	maxSeries?: number
 	/** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
 	binary?: string
 	/**
@@ -553,11 +559,13 @@ export async function openWith(
 	const clock = options.clock === undefined ? undefined : new Date(unixMs(options.clock))
 	const durability = options.durability
 	checkDurability(durability, 'open')
+	checkMaxSeries(options.maxSeries)
 	const started = {
 		durability,
 		encryptionKeyFile: options.encryptionKeyFile,
 		node: options.node,
 		selfMetrics: options.selfMetrics,
+		maxSeries: options.maxSeries,
 	}
 	const dial =
 		options.embedded === true

@@ -183,6 +183,14 @@ func Library(path string) Option
 
 Library is the core's library the store in this process loads: tinystore\_ffi.dll, libtinystore\_ffi.so or .dylib.
 
+### MaxSeries
+
+```go
+func MaxSeries(count int) Option
+```
+
+MaxSeries is the metrics series the store holds at most: a new series past them is a limit error. 100,000 unless given; a sidecar found running keeps its own.
+
 ### Private
 
 ```go

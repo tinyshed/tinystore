@@ -126,6 +126,7 @@ fn options_of(
         encryption_key_file: serve.encryption_key_file.clone(),
         node,
         self_metrics: serve.self_metrics,
+        max_series: serve.max_series.unwrap_or(Options::default().max_series),
         ..Options::default()
     }
 }

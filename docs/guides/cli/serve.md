@@ -69,6 +69,7 @@ its local socket.
 | `--encryption-key-file <file>` | the store's key, kept apart from its data                            |
 | `--self-metrics`               | measure the store into its own [metrics](../metrics/self-metrics.md) |
 | `--no-system-metrics`          | with `--self-metrics`, leave out the machine                         |
+| `--max-series <count>`         | the metrics series the store holds at most; 100,000 by default       |
 
 ## Output
 

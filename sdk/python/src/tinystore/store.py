@@ -23,6 +23,7 @@ from ._connection import (
     Started,
     asking,
     check_durability,
+    check_max_series,
     in_process,
     private_child,
     remote,
@@ -615,6 +616,7 @@ async def open(
     durability: Durability | None = None,
     encryption_key_file: str | os.PathLike[str] | None = None,
     self_metrics: bool | SelfMetrics = False,
+    max_series: int | None = None,
 ) -> Store:
     """Opens the store in a directory, and returns once it answers.
 
@@ -644,9 +646,13 @@ async def open(
       that start with ``tinystore_``: its commits and their waits, its files,
       its memory and the machine it runs on, which ``{"system": False}``
       leaves out. Off unless asked for; a sidecar found running keeps its own.
+    - ``max_series``: the metrics series the store holds at most, a new
+      series past them a LimitError; 100,000 unless given. A sidecar found
+      running keeps its own.
     """
     where = _directory(directory)
     check_durability(durability, "open")
+    check_max_series(max_series)
     if clock is not None and not private:
         raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private and embedded:
@@ -658,6 +664,7 @@ async def open(
         idle=None if idle is None else spelled(ms(idle, "a sidecar's idle")),
         self_metrics=self_metrics is not False,
         system_metrics=isinstance(self_metrics, bool) or self_metrics.get("system", True),
+        max_series=max_series,
     )
 
     def find() -> str:

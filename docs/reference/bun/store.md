@@ -30,6 +30,11 @@ interface OpenOptions {
      * unless asked for; a sidecar found running keeps its own.
      */
     selfMetrics?: SelfMetrics
+    /**
+     * The metrics series the store holds at most: a new series past them is
+     * a LimitError. 100,000 unless given; a sidecar found running keeps its own.
+     */
+    maxSeries?: number
     /** The tinystore binary: TINYSTORE_BIN, this platform's package, or PATH's when absent. */
     binary?: string
     /**

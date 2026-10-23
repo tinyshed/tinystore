@@ -42,6 +42,13 @@ import { Empty, methods, StoreOptions } from './wire/protocol.ts'
  */
 export type Durability = 'full' | 'os'
 
+/** Refuses a count of series no store can hold, before anything leaves. */
+export function checkMaxSeries(maxSeries: number | undefined): void {
+	if (maxSeries !== undefined && !(Number.isSafeInteger(maxSeries) && maxSeries > 0)) {
+		throw new InvalidError(`open: maxSeries ${maxSeries}: a whole count above 0`)
+	}
+}
+
 /** Refuses a durability that is neither word, before anything leaves. */
 export function checkDurability(durability: Durability | undefined, of: string): void {
 	if (durability !== undefined && durability !== 'full' && durability !== 'os') {
@@ -248,6 +255,8 @@ export interface Started {
 	node?: NodeOptions | undefined
 	/** measures the store into its own metrics, the machine too unless it says system: false */
 	selfMetrics?: SelfMetrics | undefined
+	/** the metrics series the store holds at most, when not the store's own 100,000 */
+	maxSeries?: number | undefined
 }
 
 /**
@@ -275,7 +284,11 @@ function storeFlags(started: Started, dir: string): string[] {
 		asked === undefined
 			? keyed
 			: [...keyed, '--self-metrics', ...(asked.system ? [] : ['--no-system-metrics'])]
-	return [...measured, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
+	const series =
+		started.maxSeries === undefined
+			? measured
+			: [...measured, '--max-series', String(started.maxSeries)]
+	return [...series, ...nodeFlags(started.node, join(dir, 'server', 'node.toml'))]
 }
 
 /**
@@ -579,6 +592,7 @@ export function embedded(
 		synchronousWith: node?.synchronousWith ?? [],
 		selfMetrics: selfMetricsOf(started.selfMetrics) !== undefined,
 		withoutSystem: selfMetricsOf(started.selfMetrics)?.system === false,
+		maxSeries: started.maxSeries,
 	})
 	return async () => {
 		let session: Session | undefined

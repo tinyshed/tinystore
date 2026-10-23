@@ -2761,6 +2761,8 @@ type StoreOptions struct {
 	SelfMetrics bool `wire:"13,selfMetrics"`
 	// with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
 	WithoutSystem bool `wire:"14,withoutSystem"`
+	// the metrics series the store holds at most; 100,000 when absent
+	MaxSeries *uint64 `wire:"15,maxSeries"`
 }
 
 func (m StoreOptions) Write(w *Writer) {
@@ -2845,6 +2847,11 @@ func (m StoreOptions) Write(w *Writer) {
 		w.Bool(m.WithoutSystem)
 		n++
 	}
+	if m.MaxSeries != nil {
+		w.Uint(15)
+		w.Uint(*m.MaxSeries)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -2904,6 +2911,9 @@ func (m *StoreOptions) Read(r *Reader) {
 			m.SelfMetrics = r.Bool()
 		case 14:
 			m.WithoutSystem = r.Bool()
+		case 15:
+			v := r.Uint()
+			m.MaxSeries = &v
 		default:
 			r.Skip()
 		}
@@ -2926,7 +2936,8 @@ func (m StoreOptions) IsZero() bool {
 		len(m.SynchronousWith) == 0 &&
 		!m.Insecure &&
 		!m.SelfMetrics &&
-		!m.WithoutSystem
+		!m.WithoutSystem &&
+		m.MaxSeries == nil
 }
 
 // GoAway is the schema's GoAway.

@@ -15,9 +15,6 @@ use super::series::Kind;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
-/// The series a store holds at most.
-pub(super) const MOST_SERIES: i64 = 100_000;
-
 const RESOLVE: &str = "select s.id, n.kind from series s join names n on n.id = s.name where s.identity = ?1";
 const SERIES_COUNT: &str = "select series_count from store_state where id = 1";
 const PAIR: &str = "select id from label_values where name = ?1 and value = ?2";
@@ -34,8 +31,9 @@ const NAME_KIND: &str = "select kind from names where id = ?1";
 const SET_KIND: &str = "update names set kind = ?2 where id = ?1";
 
 /// The id of the series of `batch`, and whether this write registered it,
-/// when the file had none yet; its kind must be its name's.
-pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<(i64, bool)> {
+/// when the file had none yet and held fewer than `max_series`; its kind must
+/// be its name's.
+pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch, max_series: i64) -> Result<(i64, bool)> {
     let found = tx
         .prepare_cached(RESOLVE)
         .and_then(|mut select| {
@@ -44,7 +42,7 @@ pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<(i64, bool)> {
                 .optional()
         })
         .map_err(|error| sql_error("find a series", error))?;
-    let Some((id, kind)) = found else { return register(tx, batch).map(|id| (id, true)) };
+    let Some((id, kind)) = found else { return register(tx, batch, max_series).map(|id| (id, true)) };
     if kind.as_deref() != Some(batch.kind.as_str()) {
         return Err(kind_refused(batch.kind, kind.as_deref()));
     }
@@ -54,13 +52,13 @@ pub(super) fn resolve(tx: &Tx<'_>, batch: &Batch) -> Result<(i64, bool)> {
 /// Registers a series: its name's kind, its dictionary pairs, the series,
 /// its postings, its name's labels and its state, and one series more
 /// against the bound.
-fn register(tx: &Tx<'_>, batch: &Batch) -> Result<i64> {
+fn register(tx: &Tx<'_>, batch: &Batch, max_series: i64) -> Result<i64> {
     let count: i64 = query_one(tx, SERIES_COUNT, params![], "read the count of series")?;
-    if count >= MOST_SERIES {
-        return Err(Error::limit(format!("a series past the {MOST_SERIES} a store holds"))
+    if count >= max_series {
+        return Err(Error::limit(format!("a series past the {max_series} a store holds, its max_series"))
             .naming("limit", "series in a store")
             .naming("wanted", (count + 1).to_string())
-            .naming("bound", MOST_SERIES.to_string()));
+            .naming("bound", max_series.to_string()));
     }
     settle_kind(tx, batch)?;
     let mut ids = Vec::with_capacity(batch.kept.pairs().len());

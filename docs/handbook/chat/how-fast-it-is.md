@@ -265,7 +265,7 @@ keeps one total. A send that a lost connection repeats is counted once.
 |--------------------------------------|------------------------------------------------------------|
 | a name's `keep`                      | 30 days unless set                                         |
 | an instrument's sets of labels       | 2,000 between two sends; more go to `__overflow`           |
-| series in a store                    | 100,000                                                    |
+| series in a store                    | 100,000 unless the store's `maxSeries` says                |
 | instruments' writes                  | every 15 seconds, at `flush` and when the store closes     |
 | a series no process sent for an hour | leaves memory; sent again, it starts a new run with a zero |
 | an aggregate                         | 100,000 buckets                                            |

@@ -13,6 +13,7 @@ import { type Connection, embedded, Link } from '../src/connection.ts'
 import {
 	exponentialBuckets,
 	InvalidError,
+	LimitError,
 	type MetricsQuery,
 	OutcomeUnknownError,
 	open,
@@ -462,6 +463,49 @@ for (const way of measuredWays) {
 		},
 	)
 }
+
+const boundedWays = [
+	{
+		name: 'the core in this process',
+		ready: library !== undefined,
+		open: (dir: string) => open(dir, { embedded: true, library, maxSeries: 2 }),
+	},
+	{
+		name: 'a private child',
+		ready: binary !== undefined && binary !== 'unused',
+		open: (dir: string) => open(dir, { private: true, maxSeries: 2 }),
+	},
+]
+
+for (const way of boundedWays) {
+	test.skipIf(!way.ready)(
+		`a store opened through ${way.name} holds the series maxSeries says`,
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), 'tinystore-series-'))
+			const store = await way.open(dir)
+			const host = (name: string) => ({
+				name: 'cpu',
+				kind: 'gauge' as const,
+				labels: { host: name },
+				times: [Date.now() - 1000],
+				values: [1],
+			})
+			await store.metrics.ingest([host('a'), host('b')])
+			const refused = await caught(store.metrics.ingest(host('c')))
+			expect(refused).toBeInstanceOf(LimitError)
+			expect((refused as Error).message).toContain('a series past the 2 a store holds')
+			await store.close()
+			await removed(dir)
+		},
+	)
+}
+
+test('a count of series no store can hold is refused before anything opens', async () => {
+	const refused = await caught(
+		open(mkdtempSync(join(tmpdir(), 'tinystore-series-')), { maxSeries: 0 }),
+	)
+	expect(refused).toBeInstanceOf(InvalidError)
+})
 
 test.skipIf(library === undefined)(
 	'a store opened without selfMetrics holds none of its own names',

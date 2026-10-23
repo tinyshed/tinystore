@@ -44,6 +44,7 @@ message store.Options {
   12 insecure: bool          # plain TCP on links beyond this machine, which anyone on the way reads
   13 selfMetrics: bool       # measures the store into its own metrics.db, under names that start with tinystore_
   14 withoutSystem: bool     # with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
+  15 maxSeries: uint?        # the metrics series the store holds at most; 100,000 when absent
 }
 
 # The last frame of a connection.

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::ErrorKind;
 use crate::metrics::fixture::{DAY, HOUR, MINUTE, SECOND, bits, fixture};
 use crate::metrics::{Kind, Series};
+use crate::{ErrorKind, Options, Store};
 
 // contract: MET-01
 #[test]
@@ -164,6 +164,64 @@ fn a_series_past_the_stores_bound_is_a_limit() {
         (ErrorKind::Limit, Some("series in a store"), Some("100000"))
     );
     f.metrics().ingest(&[Series::gauge("cpu").label("host", "a").sample(now, 2.0)]).unwrap();
+}
+
+// contract: ERR-05
+#[test]
+fn a_store_holds_the_series_its_options_say() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, max_series: 2, ..Options::default() }).unwrap();
+    let now = store.now();
+    let host = |name: &str| Series::gauge("cpu").label("host", name).sample(now, 1.0);
+    store.metrics().unwrap().ingest(&[host("a"), host("b")]).unwrap();
+    let error = store.metrics().unwrap().ingest(&[host("c")]).unwrap_err();
+    assert_eq!((error.kind(), error.fact("bound")), (ErrorKind::Limit, Some("2")));
+    store.close().unwrap();
+
+    let none = Store::open(dir.path(), Options { max_series: 0, ..Options::default() }).unwrap_err();
+    assert_eq!(none.kind(), ErrorKind::Invalid, "{none}");
+}
+
+/// What a series costs metrics.db before its samples pile up: as many series
+/// as `TINYSTORE_SERIES` says, 100,000 unless it does, of four labels and one
+/// sample each, written 2000 an ingest, then the file's pages by b-tree. Run by
+/// hand with `--release -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn what_a_series_costs_the_file() {
+    let count: u64 = std::env::var("TINYSTORE_SERIES").ok().and_then(|count| count.parse().ok()).unwrap_or(100_000);
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        Store::open(dir.path(), Options { background: false, max_series: count, ..Options::default() }).unwrap();
+    let now = store.now();
+    let started = std::time::Instant::now();
+    for first in (0..count).step_by(2000) {
+        let batch: Vec<Series> = (first..count.min(first + 2000))
+            .map(|n| {
+                let series =
+                    Series::gauge("node_metric").label("host", format!("site-{}", n / 2000)).label("id", n % 2000);
+                series.label("job", "node").label("dc", "fi").sample(now, 1.0)
+            })
+            .collect();
+        store.metrics().unwrap().ingest(&batch).unwrap();
+    }
+    let written = started.elapsed();
+    let engine = crate::metrics::engine::Engine::of(&store).unwrap();
+    let pages: Vec<(String, i64, i64)> = engine
+        .file
+        .read(|connection| {
+            let sql = "select name, sum(pgsize), sum(pgsize - unused) from dbstat group by name order by 2 desc";
+            let mut statement = connection.prepare(sql).unwrap();
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+            Ok(rows.map(Result::unwrap).collect())
+        })
+        .unwrap();
+    let total: i64 = pages.iter().map(|(_, bytes, _)| bytes).sum();
+    println!("{count} series written in {written:?}: {total} bytes of pages, {} a series", total / count as i64);
+    for (name, bytes, used) in pages.iter().take(12) {
+        println!("  {name:<32} {bytes:>12} bytes  {used:>12} used  {:>6} a series", bytes / count as i64);
+    }
+    store.close().unwrap();
 }
 
 #[test]

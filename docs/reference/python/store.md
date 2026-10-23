@@ -552,6 +552,7 @@ async def open(
     durability: Durability | None = None,
     encryption_key_file: str | os.PathLike[str] | None = None,
     self_metrics: bool | SelfMetrics = False,
+    max_series: int | None = None,
 ) -> Store: ...
 ```
 
@@ -583,6 +584,9 @@ cannot be served fails here.
   that start with ``tinystore_``: its commits and their waits, its files,
   its memory and the machine it runs on, which ``{"system": False}``
   leaves out. Off unless asked for; a sidecar found running keeps its own.
+- ``max_series``: the metrics series the store holds at most, a new
+  series past them a LimitError; 100,000 unless given. A sidecar found
+  running keeps its own.
 
 ## connect
 

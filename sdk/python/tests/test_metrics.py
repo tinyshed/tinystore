@@ -425,6 +425,31 @@ async def test_a_store_opened_with_self_metrics_measures_its_commits(
     await store.close()
 
 
+@pytest.mark.parametrize(
+    ("name", "ready", "embedded"),
+    [("the core in this process", CORE, True), ("a private child", SERVED, False)],
+)
+async def test_a_store_holds_the_series_max_series_says(
+    name: str, ready: bool, embedded: bool, directory: Path
+) -> None:
+    if not ready:
+        pytest.skip(f"{name}: not built here")
+    store = await tinystore.open(directory, max_series=2, embedded=embedded, private=not embedded)
+
+    def host(name: str) -> Series:
+        return Series(name="cpu", kind="gauge", labels={"host": name}, samples=[(now_ms() - 1000, 1)])
+
+    await store.metrics.ingest([host("a"), host("b")])
+    with pytest.raises(tinystore.LimitError, match="a series past the 2 a store holds"):
+        await store.metrics.ingest(host("c"))
+    await store.close()
+
+
+async def test_a_count_of_series_no_store_can_hold_is_refused_before_anything_opens(directory: Path) -> None:
+    with pytest.raises(tinystore.InvalidError):
+        await tinystore.open(directory, max_series=0)
+
+
 async def test_a_store_opened_without_self_metrics_holds_none_of_its_own_names(store: tinystore.Store) -> None:
     await store.bucket("sessions").set("a", "x")
     await store.metrics.flush()

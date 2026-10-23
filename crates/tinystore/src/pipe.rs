@@ -203,12 +203,14 @@ impl fmt::Debug for Pipe {
 }
 
 /// What a host's options ask of its store: its files' durability, the file
-/// of its encryption key, and the node it is.
+/// of its encryption key, its metrics, and the node it is.
 #[derive(Default)]
 struct Asked {
     durability: Option<Durability>,
     #[cfg(feature = "metrics")]
     self_metrics: Option<crate::metrics::SelfMetrics>,
+    #[cfg(feature = "metrics")]
+    max_series: Option<u64>,
     encryption_key_file: Option<PathBuf>,
     #[cfg(feature = "replication")]
     node: Option<crate::replication::Node>,
@@ -248,13 +250,15 @@ fn asked(options: &[u8]) -> Result<Asked> {
         insecure: asked.insecure,
     });
     #[cfg(not(feature = "metrics"))]
-    if asked.self_metrics {
-        return Err(Error::invalid("pipe: the store's own metrics, and the library was built without metrics"));
+    if asked.self_metrics || asked.max_series.is_some() {
+        return Err(Error::invalid("pipe: the store's metrics, and the library was built without metrics"));
     }
     Ok(Asked {
         durability: durability.transpose()?,
         #[cfg(feature = "metrics")]
         self_metrics: asked.self_metrics.then_some(crate::metrics::SelfMetrics { system: !asked.without_system }),
+        #[cfg(feature = "metrics")]
+        max_series: asked.max_series,
         encryption_key_file: asked.encryption_key_file.map(PathBuf::from),
         #[cfg(feature = "replication")]
         node,
@@ -289,6 +293,16 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         if asked.self_metrics.is_some() && !store.probe().listening() {
             return Err(Error::invalid("pipe: the store is open without its own metrics, and asked for them"));
         }
+        #[cfg(feature = "metrics")]
+        if let Some(max_series) = asked.max_series
+            && store.max_series() != max_series
+        {
+            let opened = store.max_series();
+            return Err(Error::invalid(format!(
+                "pipe: the store is open with max_series {opened}, and asked for {max_series}: open it with \
+                 {opened} or without max_series"
+            )));
+        }
         #[cfg(feature = "replication")]
         if asked.node.is_some() && store.node().is_none() {
             return Err(Error::invalid("pipe: the store is open as no node, and asked to be one"));
@@ -303,6 +317,8 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
         node: asked.node,
         #[cfg(feature = "metrics")]
         self_metrics: asked.self_metrics,
+        #[cfg(feature = "metrics")]
+        max_series: asked.max_series.unwrap_or(crate::store::MAX_SERIES),
         ..Options::default()
     };
     let store = Store::open(dir, options)?;

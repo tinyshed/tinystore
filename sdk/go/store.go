@@ -36,6 +36,8 @@ type options struct {
 	encryptionKeyFile string
 	selfMetrics       bool
 	withoutSystem     bool
+	maxSeries         int
+	maxSeriesSet      bool
 }
 
 // Private starts a server of this process's own, a child that lives and dies
@@ -106,6 +108,16 @@ type SelfMetricsOption func(*options)
 // process's memory and processor, and the system's.
 func WithoutSystem() SelfMetricsOption { return func(o *options) { o.withoutSystem = true } }
 
+// MaxSeries is the metrics series the store holds at most: a new series past
+// them is a limit error. 100,000 unless given; a sidecar found running keeps
+// its own.
+func MaxSeries(count int) Option {
+	return func(o *options) {
+		o.maxSeries = count
+		o.maxSeriesSet = true
+	}
+}
+
 // Open opens the store in a directory, and returns once it answers: through
 // the directory's sidecar, found through its SERVE file or started, unless
 // Private or Embedded says otherwise. A directory that cannot be served fails here.
@@ -126,7 +138,10 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.private && o.embedded {
 		return nil, core.Errorf(core.Invalid, "a store is private or embedded, not both")
 	}
-	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem}
+	if o.maxSeriesSet && o.maxSeries < 1 {
+		return nil, core.Errorf(core.Invalid, "open: MaxSeries %d: a count above 0", o.maxSeries)
+	}
+	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem, MaxSeries: uint64(max(o.maxSeries, 0))}
 	if o.idleSet {
 		ms, err := core.Millis(o.idle, "a sidecar's idle")
 		if err != nil {

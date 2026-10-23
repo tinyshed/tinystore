@@ -444,6 +444,23 @@ fn a_host_reading_into_its_own_bytes_gets_the_stream_in_order_and_a_wake_for_wha
 }
 
 #[test]
+fn a_pipes_store_holds_the_series_its_options_say_and_a_pipe_that_joins_it_asks_for_the_same_or_nothing() {
+    use crate::wire::protocol::StoreOptions;
+
+    let asking = |most: u64| StoreOptions { max_series: Some(most), ..StoreOptions::default() }.encode();
+    let dir = tempfile::tempdir().unwrap();
+    let first = Pipe::open(dir.path(), &asking(500_000), None).unwrap();
+    let (same, unasked) = (Pipe::open(dir.path(), &asking(500_000), None).unwrap(), Pipe::open(dir.path(), &[], None));
+    let refused = Pipe::open(dir.path(), &asking(7), None).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "pipe: the store is open with max_series 500000, and asked for 7: open it with 500000 or without max_series: \
+         invalid"
+    );
+    drop((first, same, unasked));
+}
+
+#[test]
 fn a_pipes_store_opens_as_its_options_say_and_a_pipe_that_joins_it_asks_for_the_same_or_nothing() {
     use crate::wire::protocol::StoreOptions;
 

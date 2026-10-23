@@ -1846,6 +1846,10 @@ def _write_store_options(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(14)
         w.bool(x)
         n += 1
+    if (x := v.get("max_series")) is not None:
+        w.uint(15)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1888,6 +1892,8 @@ def _read_store_options(r: Reader) -> dict[str, Any]:
                 read["self_metrics"] = r.bool()
             case 14:
                 read["without_system"] = r.bool()
+            case 15:
+                read["max_series"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -1928,6 +1934,8 @@ StoreOptions = Message(
         "self_metrics": (13, bool_),
         # with selfMetrics, leaves out the machine it runs on: its process's memory and processor, the system's
         "without_system": (14, bool_),
+        # the metrics series the store holds at most; 100,000 when absent
+        "max_series": (15, uint),
     },
     _write_store_options,
     _read_store_options,

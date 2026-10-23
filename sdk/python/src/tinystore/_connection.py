@@ -89,6 +89,14 @@ class Started:
     """measures the store into its own metrics"""
     system_metrics: bool = True
     """with self_metrics, the machine it runs on too"""
+    max_series: int | None = None
+    """the metrics series the store holds at most, when not the store's own 100,000"""
+
+
+def check_max_series(max_series: int | None) -> None:
+    """Refuses a count of series no store can hold, before anything leaves."""
+    if max_series is not None and (isinstance(max_series, bool) or max_series < 1):
+        raise InvalidError(f"open: max_series {max_series!r}: a whole count above 0")
 
 
 def check_durability(durability: str | None, of: str) -> None:
@@ -138,6 +146,8 @@ def _store_flags(started: Started) -> list[str]:
         flags.append("--self-metrics")
         if not started.system_metrics:
             flags.append("--no-system-metrics")
+    if started.max_series is not None:
+        flags += ["--max-series", str(started.max_series)]
     return flags
 
 
@@ -183,6 +193,7 @@ def in_process(
         encryption_key_file=None if key is None else str(Path(key).resolve()),
         self_metrics=started.self_metrics,
         without_system=started.self_metrics and not started.system_metrics,
+        max_series=started.max_series,
     )
 
     async def start() -> Connection:

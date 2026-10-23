@@ -395,6 +395,37 @@ func TestAStoreOpenedWithSelfMetricsMeasuresItsCommits(t *testing.T) {
 	}
 }
 
+func TestAStoreHoldsTheSeriesMaxSeriesSays(t *testing.T) {
+	ctx := context.Background()
+	library, binary := os.Getenv("TINYSTORE_LIBRARY"), os.Getenv("TINYSTORE_BIN")
+	bounded := []struct {
+		name  string
+		ready bool
+		opts  []tinystore.Option
+	}{
+		{"the core in this process", library != "", []tinystore.Option{tinystore.Library(library)}},
+		{"a private child", binary != "" && binary != "unused", []tinystore.Option{tinystore.Private(), tinystore.Binary(binary)}},
+	}
+	host := func(name string) metrics.Series {
+		samples := []metrics.Sample{{At: time.Now().Add(-time.Second), Value: 1}}
+		return metrics.Series{Name: "cpu", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": name}, Samples: samples}
+	}
+	for _, way := range bounded {
+		t.Run(way.name, func(t *testing.T) {
+			if !way.ready {
+				t.Skip("not built here")
+			}
+			defer ways.Recover(t)
+			store := ways.Must(tinystore.Open(ctx, t.TempDir(), append(way.opts, tinystore.MaxSeries(2))...))
+			defer store.Close()
+			ways.Must(0, metrics.Ingest(ctx, store, host("a"), host("b")))
+			is(t, metrics.Ingest(ctx, store, host("c")), tinystore.ErrLimit)
+		})
+	}
+	_, err := tinystore.Open(ctx, t.TempDir(), tinystore.MaxSeries(0))
+	is(t, err, tinystore.ErrInvalid)
+}
+
 func TestSelfMetricsMeasureTheMachineUnlessWithoutSystem(t *testing.T) {
 	ctx := context.Background()
 	library := os.Getenv("TINYSTORE_LIBRARY")

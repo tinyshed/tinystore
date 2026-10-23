@@ -390,6 +390,7 @@ pub struct Options {
     pub encryption_key_file: Option<PathBuf>,
     pub node: Option<Node>,
     pub self_metrics: Option<SelfMetrics>,
+    pub max_series: u64,
 }
 ```
 
@@ -448,6 +449,14 @@ pub fn keep_free(&self) -> u64
 ```
 
 The bytes of the disk the store keeps free, as its options said.
+
+### Store.max_series
+
+```rust
+pub fn max_series(&self) -> u64
+```
+
+The metrics series the store holds at most, as its options said.
 
 ### Store.now
 

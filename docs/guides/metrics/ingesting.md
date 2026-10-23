@@ -101,7 +101,44 @@ with its `le`, beside its `_sum` and `_count` counters.
 | one `ingest`      | 10,000 samples or 4 MiB                                 |
 | a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB |
 | a sample's time   | from `keep` ago to ten minutes ahead                    |
-| series in a store | 100,000                                                 |
+| series in a store | 100,000 unless `maxSeries` says                         |
+
+## How many series
+
+A store holds 100,000 series unless it is opened with more. A new series past
+them is a `limit` error, and a series kept no longer gives its place back. Fifty
+hosts of 2,000 series each fill the default, so a store that keeps what
+exporters send asks for more when it opens:
+
+```ts
+const store = await open('./data', { maxSeries: 1_000_000 })
+```
+
+```python
+store = await tinystore.open("./data", max_series=1_000_000)
+```
+
+```go
+store, err := tinystore.Open(ctx, "./data", tinystore.MaxSeries(1_000_000))
+```
+
+```rust
+let store = Store::open("./data", Options { max_series: 1_000_000, ..Options::default() })?;
+```
+
+```sh
+tinystore serve ./data --max-series 1000000
+```
+
+A series costs `metrics.db` about 283 bytes before its samples pile up: 56 its
+labels' postings, 53 its state, 51 its row, 46 the index of its identity, 40
+its first head, 35 the indexes by name and by work due. The store keeps
+nothing of it in memory. A million series of four labels, one sample each,
+took 283 MB of pages and 126 seconds to write 2,000 an ingest, where 100,000
+took 28 MB and 5.6 seconds: each new series costs more as the indexes grow.
+Measured on an AMD Ryzen 7 7700 under Windows 11, Rust 1.99, `--release`, with
+`TINYSTORE_SERIES=1000000 cargo test --release -p tinystore --lib --
+metrics::ingest::tests::what_a_series_costs_the_file --ignored --nocapture`.
 
 ## See also
 

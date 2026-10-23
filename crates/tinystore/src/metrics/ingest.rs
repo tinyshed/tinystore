@@ -89,11 +89,12 @@ impl Engine {
     /// block's worth.
     fn write(&self, batches: Vec<Batch>, bytes: usize) -> Result<bool> {
         let zstd = self.codecs.take();
+        let max_series = self.max_series;
         let (zstd, ready) = self.file.write(bytes, move |tx| {
             let mut zstd = zstd;
             let mut ready = false;
             for batch in &batches {
-                let written = write_series(tx, &mut zstd, batch);
+                let written = write_series(tx, &mut zstd, batch, max_series);
                 ready |= written.map_err(|error| error.within(format!("metrics {}", batch.kept)))?;
             }
             Ok((zstd, ready))
@@ -313,8 +314,8 @@ impl State {
 
 /// Writes one series' samples into its head, and says whether it now holds
 /// a block's worth.
-fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &Batch) -> Result<bool> {
-    let (id, _) = registry::resolve(tx, batch)?;
+fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &Batch, max_series: i64) -> Result<bool> {
+    let (id, _) = registry::resolve(tx, batch, max_series)?;
     let state = State::read(tx, id)?;
     store(tx, zstd, id, &state, batch)
 }
