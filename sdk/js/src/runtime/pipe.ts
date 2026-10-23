@@ -163,6 +163,12 @@ export function openPipe(
 		throw openFailure(dir, message)
 	}
 	connection = Number(opened[0]) as Pointer
+	// Bun's loop with no timer armed spins while it waits for a threadsafe
+	// callback from another thread: a write waiting for its sync burned a
+	// whole processor (research release-2026-10-23). A timer armed, however
+	// far off, lets the loop sleep until the core wakes it; it also keeps the
+	// process alive while the store is open, as a sidecar's socket does.
+	const sleeps = setInterval(() => {}, 2 ** 30)
 	return {
 		write: send,
 		close() {
@@ -171,6 +177,7 @@ export function openPipe(
 			}
 			const closing = connection
 			connection = null
+			clearInterval(sleeps)
 			lib.symbols.tinystore_close(closing)
 			wake.close()
 			events.end(new ClosedError('the store closed'))
