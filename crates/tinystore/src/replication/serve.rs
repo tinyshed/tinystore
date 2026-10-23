@@ -140,6 +140,9 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
         out.send(&Message::Refused { why: "the token is not this node's".to_owned() })?;
         return Ok(());
     }
+    // counted before the welcome's list is read, so that a file served once
+    // it was read and before its sender starts is told at once too
+    let listed = state.notify.served();
     out.send(&Message::Welcome { node: state.id.clone(), files: state.files_served()? })?;
     out.pack()?;
     frames.unpack_from_here()?;
@@ -149,7 +152,7 @@ fn serve_link(state: &Arc<State>, stream: TcpStream) -> Result<()> {
     let sending = (Arc::clone(state), Arc::clone(&out), Arc::clone(&asked));
     state.spawn("tinystore node: send", move || {
         let (state, out, asked) = sending;
-        if let Err(error) = send_files(&state, &out, &asked)
+        if let Err(error) = send_files(&state, &out, &asked, listed)
             && !state.stopping()
         {
             tracing::info!(target: "tinystore", %error, "a node stopped sending on a link");
@@ -392,10 +395,10 @@ struct Followed {
 }
 
 /// Sends each file followed: a snapshot where needed, then its entries as
-/// its log grows, a turn of each file at a time.
-fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>) -> Result<()> {
+/// its log grows, a turn of each file at a time. `listed` is how often the
+/// files served had changed when the link's welcome listed them.
+fn send_files(state: &Arc<State>, out: &Out, asked: &Mutex<Asked>, mut listed: u64) -> Result<()> {
     let mut followed: Vec<Followed> = Vec::new();
-    let mut listed = state.notify.served();
     loop {
         let seen = state.notify.seen();
         // a file this node began to serve is told at once, not at the next ask

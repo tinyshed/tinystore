@@ -31,8 +31,12 @@ fn serving(dir: &Path) -> (Store, String) {
     (store, address)
 }
 
+/// How long the suite lets work on another thread or node take to reach a
+/// point, on a machine as busy as a CI runner.
+const WITHIN: Duration = Duration::from_secs(30);
+
 fn eventually(what: &str, holds: impl FnMut() -> bool) {
-    crate::testing::holds_within(Duration::from_secs(30), what, holds);
+    crate::testing::holds_within(WITHIN, what, holds);
 }
 
 /// Where the home's log of `name` stands with no commit under way.
@@ -1257,19 +1261,74 @@ fn a_synchronous_home_waits_for_the_copy_it_chose_and_counts_the_commits_none_he
     home.close().unwrap();
 }
 
+/// A link to a node that never asks which files the node serves, as a node's
+/// own link does every few seconds: whatever it hears of them, the node told
+/// it unasked.
+struct Unasking {
+    reading: super::transport::Reading,
+    out: super::serve::Out,
+    frames: super::message::Frames,
+}
+
+impl Unasking {
+    /// Links to the node at `address` as a node in `dir` would, welcomed.
+    fn to(dir: &Path, address: &str) -> Unasking {
+        let state = State::new(dir, Node::default(), 0).unwrap();
+        let tcp = super::follow::connect(address).unwrap();
+        let (reading, writing) = super::transport::connect(&state, address, tcp).unwrap();
+        reading.set_timeout(Duration::from_millis(100)).unwrap();
+        let out = super::serve::Out::new(writing);
+        out.send(&state.hello(String::new())).unwrap();
+        let mut link = Unasking { reading, out, frames: super::message::Frames::default() };
+        assert!(link.hears(|message| matches!(message, super::message::Message::Welcome { .. })), "a welcome");
+        link.frames.unpack_from_here().unwrap();
+        link.out.pack().unwrap();
+        link
+    }
+
+    /// Reads what the node says until a message `wanted` takes comes, within
+    /// the suite's bound; whether one did.
+    fn hears(&mut self, mut wanted: impl FnMut(&super::message::Message) -> bool) -> bool {
+        let deadline = Instant::now() + WITHIN;
+        loop {
+            while let Some(message) = self.frames.next().unwrap() {
+                if wanted(&message) {
+                    return true;
+                }
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            match self.frames.fill(&mut self.reading) {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(error) if super::message::timed_out(&error) => {}
+                Err(error) => panic!("a link: {error}"),
+            }
+        }
+    }
+}
+
 #[test]
 fn a_file_a_home_makes_after_a_node_linked_reaches_the_node_with_no_wait_for_its_next_ask() {
-    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let (home, address) = serving(home_dir.path());
+    let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (home, address) = serving(dirs[0].path());
     home.bucket::<String>("sessions").open().unwrap().set("k", &"v".to_owned()).unwrap();
-    let copy = node_with(copy_dir.path(), Node { from: vec![address], ..Node::default() });
+    let copy = node_with(dirs[1].path(), Node { from: vec![address.clone()], ..Node::default() });
     copy.bucket::<String>("sessions").open().unwrap();
     caught_up(&home, &copy, &["kv.db"]);
+    // made just before the file, so that the file is born while the home starts sending on it
+    let mut unasking = Unasking::to(dirs[2].path(), &address);
 
-    let began = Instant::now();
     home.database("fresh").migrations(NOTES).open().unwrap();
+    let names_it = |message: &super::message::Message| match message {
+        super::message::Message::Listed { files } => files.iter().any(|file| file == "sql/fresh.db"),
+        _ => false,
+    };
+    // a link that never asks hears of it only if its home tells it at once
+    assert!(unasking.hears(names_it), "told at once, not at the next ask");
     eventually("the copy holds the new file", || copy.node().unwrap().copy("sql/fresh.db").is_some());
-    assert!(began.elapsed() < Duration::from_secs(3), "told at once, not at the next ask: {:?}", began.elapsed());
+    drop(unasking);
     copy.close().unwrap();
     home.close().unwrap();
 }
