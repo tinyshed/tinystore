@@ -46,7 +46,7 @@ let messages = store.channel::<Chat>("messages").open()?;
 let sub = messages
     .under(&room_id)
     .on_missed(|missed| reload())
-    .on_error(|error, _| report(error))
+    .on_error(|error| report(error))
     .subscribe(|m| show(&m.value))?;
 sub.stop();
 ```
@@ -58,7 +58,8 @@ sub.stop();
   released. Two channels promise no order between them.
 - A handler that throws goes to `onError` with the message, and the next
   message follows; the message is not delivered again (contract CHAN-04).
-  Without `onError`, the store's log says it, a line a minute.
+  Without `onError`, the store's log says it, a line a minute. In Rust, a
+  handler that panics goes to `on_error` with the error alone.
 - `stop()` answers once the running call has finished, and no call starts
   after it. Called from inside the subscription's own handler, it answers at
   once.
