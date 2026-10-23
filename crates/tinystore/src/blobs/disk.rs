@@ -25,6 +25,13 @@ const IDS_PER_DIR: u32 = 12;
 /// Tries of a rename a scanner holds on Windows.
 const RENAME_TRIES: u32 = 5;
 
+#[cfg(test)]
+thread_local! {
+    /// Whether a directory's sync fails on this thread, as a failing disk's
+    /// does: no file system fails one on demand.
+    pub(crate) static SYNC_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(crate) struct Disk {
     dir: PathBuf,
     /// Whether a file and its directory are synced before a commit names
@@ -93,10 +100,9 @@ impl Disk {
     }
 
     /// Moves an upload's file into `objects/`, where it is never written
-    /// again nor named otherwise, and makes its name durable before a commit
-    /// names it: its directory made and synced the first time, the rename
-    /// retried while a scanner holds the file on Windows, and the directory
-    /// synced with the uploads that finish beside it.
+    /// again nor named otherwise: its directory made and synced the first
+    /// time, and the rename retried while a scanner holds the file on Windows.
+    /// [`Disk::sync_placed`] makes its name durable before a commit names it.
     pub(crate) fn place(&self, id: i64) -> Result<()> {
         let fan = Disk::fan(id);
         self.make_fan(fan)?;
@@ -110,7 +116,13 @@ impl Disk {
                 Err(error) => return Err(Error::io(format!("blobs: publish {}", to.display()), error)),
             }
         }
-        self.sync_dir(self.fan_dir(fan))
+        Ok(())
+    }
+
+    /// Syncs the directory a placed file went to, with the uploads that
+    /// finish beside it.
+    pub(crate) fn sync_placed(&self, id: i64) -> Result<()> {
+        self.sync_dir(self.fan_dir(Disk::fan(id)))
     }
 
     /// Creates a directory of `objects/` the first time a file goes there,
@@ -135,6 +147,10 @@ impl Disk {
     fn sync_dir(&self, dir: PathBuf) -> Result<()> {
         if !self.durable {
             return Ok(());
+        }
+        #[cfg(test)]
+        if SYNC_FAILS.get() {
+            return Err(Error::io(format!("blobs: sync {}", dir.display()), io::Error::other("a disk that fails")));
         }
         let shared = Arc::clone(lock(&self.syncs).entry(dir.clone()).or_default());
         shared.run(|| sync_directory(&dir)).map_err(|error| Error::io(format!("blobs: sync {}", dir.display()), error))

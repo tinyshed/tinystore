@@ -182,7 +182,10 @@ impl Upload {
         }
         drop(file);
         self.files.blobs.disk.place(id)?;
+        // placed before its directory's sync, so that a sync that fails removes
+        // the file from objects/, where no walk at or below the settled mark goes
         self.placed = true;
+        self.files.blobs.disk.sync_placed(id)?;
         Ok(Content { id, size, sha256, place: Place::File })
     }
 

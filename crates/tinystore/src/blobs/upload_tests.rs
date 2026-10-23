@@ -1,5 +1,5 @@
 use super::*;
-use crate::blobs::fixture::{bytes, fixture};
+use crate::blobs::fixture::{bytes, fixture, fixture_with};
 
 // contract: BLOB-01
 #[test]
@@ -46,6 +46,22 @@ fn an_upload_aborted_or_dropped_leaves_nothing() {
     assert!(f.objects().is_empty());
     assert_eq!((docs.head("a").unwrap(), docs.head("b").unwrap()), (None, None));
     assert_eq!(f.rows("contents"), 0);
+}
+
+// contract: BLOB-01
+#[test]
+fn an_upload_whose_directory_would_not_sync_leaves_nothing() {
+    let f = fixture_with(Some(crate::Durability::Full));
+    let docs = f.files("docs");
+    docs.put("kept", bytes(1 << 20)).unwrap();
+    crate::blobs::disk::SYNC_FAILS.set(true);
+    let failed = docs.put("lost", bytes(1 << 20));
+    crate::blobs::disk::SYNC_FAILS.set(false);
+    let error = failed.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Io, "{error}");
+    assert_eq!(docs.head("lost").unwrap(), None);
+    assert!(f.uploads().is_empty());
+    assert_eq!(f.objects().len(), 1, "the bytes renamed into objects/ go with the upload");
 }
 
 // contract: BLOB-01
