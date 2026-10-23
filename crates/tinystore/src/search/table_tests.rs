@@ -190,6 +190,20 @@ fn a_search_in_a_transaction_that_rolls_back_leaves_later_searches_what_committe
     assert_eq!(ids(&articles.search("bread").run().unwrap()), ["1"], "the row the rollback kept, not the one deleted");
 }
 
+// contract: ERR-06
+#[test]
+fn a_drop_refused_inside_a_transaction_leaves_the_index_as_it_was() {
+    let f = fixture();
+    let articles = f.articles();
+    f.insert(1, "bread", "");
+    let refused = f.db.tx(|_| f.db.drop_search_index("articles_search")).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    assert_eq!(ids(&articles.search("bread").run().unwrap()), ["1"], "a handle searches as before");
+    f.insert(2, "rye", "");
+    assert_eq!(ids(&articles.search("rye").run().unwrap()), ["2"], "the triggers follow the table as before");
+    assert!(f.db.drop_search_index("articles_search").unwrap());
+}
+
 // contract: SRCH-07
 #[test]
 fn a_write_that_rolls_back_changes_neither_the_table_nor_its_index() {

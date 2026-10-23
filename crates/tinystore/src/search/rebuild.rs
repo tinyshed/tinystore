@@ -379,18 +379,27 @@ impl Search {
     /// is refused from then on, and opening the name again makes a new one.
     pub(crate) fn drop_index(&self, name: &str) -> Result<bool> {
         check_name(name)?;
-        let open = crate::sync::lock(&self.indexes).remove(name);
-        let _held = open.as_ref().map(|open| {
-            let held = open.change();
-            open.mark_dropped();
-            held
-        });
+        // Refused before the index is held: holding it, a change of it that
+        // waits for the writer this thread's transaction holds would wait too.
+        if self.file.held_here() {
+            return Err(Error::invalid(
+                "a drop from inside a transaction of its file would wait for the writer the transaction holds: \
+                 drop the index after it",
+            ));
+        }
+        let open = crate::sync::lock(&self.indexes).get(name).cloned();
+        // No set runs while the drop does, and the handles are refused only
+        // once it committed: a drop that fails leaves them as they were.
+        let held = open.as_ref().map(|open| open.change());
         let named = name.to_owned();
         let dropped = self.file.transaction(|tx| {
             table::unfollow(tx, &named)?;
             let marked = tx.prepare_cached(MARK_NAMED_DROPPING).and_then(|mut update| update.execute([&named]));
             marked.map_err(|error| sql_error("drop an index", error))
         })?;
+        let removed = crate::sync::lock(&self.indexes).remove(name);
+        open.iter().chain(removed.iter()).for_each(|open| open.mark_dropped());
+        drop(held);
         if dropped > 0 {
             tracing::info!(target: "tinystore", "search {name}: dropped; its rows go in the background");
             self.wake();
