@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -59,6 +64,106 @@ func TestASeriesComesBackBitForBit(t *testing.T) {
 		if len(newest) != 1 || !newest[0].At.Equal(times[3]) || newest[0].Labels["host"] != "web-1" {
 			t.Fatalf("latest %+v", newest)
 		}
+	})
+}
+
+// prometheusVectors is testdata/metrics/prometheus.json: texts an exporter
+// serves and the series each writes, which every language reads alike.
+type prometheusVectors struct {
+	At    int64  `json:"at"`
+	Keep  string `json:"keep"`
+	Cases []struct {
+		Name   string            `json:"name"`
+		Text   string            `json:"text"`
+		Labels map[string]string `json:"labels"`
+		Series []struct {
+			Name    string            `json:"name"`
+			Kind    string            `json:"kind"`
+			Labels  map[string]string `json:"labels"`
+			Samples [][2]any          `json:"samples"`
+		} `json:"series"`
+		Error *struct {
+			Kind string `json:"kind"`
+			Has  string `json:"has"`
+		} `json:"error"`
+	} `json:"cases"`
+}
+
+// seenSeries is a series as a vector compares it: its samples' times and their values' bits.
+type seenSeries struct {
+	name, kind, labels string
+	samples            string
+}
+
+func seenOf(name string, kind metrics.Kind, labels map[string]string, samples [][2]int64) seenSeries {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	spelled, _ := json.Marshal(labels)
+	written, _ := json.Marshal(samples)
+	return seenSeries{name, string(kind), string(spelled), string(written)}
+}
+
+// contract: MET-15
+func TestEveryTextOfTheVectorsWritesItsSeriesOrIsRefusedWhole(t *testing.T) {
+	text, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "metrics", "prometheus.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors prometheusVectors
+	ways.Must(0, json.Unmarshal(text, &vectors))
+	if vectors.Keep != "3650d" {
+		t.Fatalf("keep %q", vectors.Keep)
+	}
+	keep, at := 3650*24*time.Hour, time.UnixMilli(vectors.At)
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		for _, each := range vectors.Cases {
+			err := metrics.IngestPrometheus(ctx, store, []byte(each.Text), metrics.Labels(each.Labels), metrics.At(at), metrics.Keep(keep))
+			if each.Error != nil {
+				var refused *tinystore.Error
+				if !errors.As(err, &refused) || string(refused.Kind) != each.Error.Kind || !strings.Contains(refused.Message, each.Error.Has) {
+					t.Fatalf("%s: %v, want %s %q", each.Name, err, each.Error.Kind, each.Error.Has)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", each.Name, err)
+			}
+			var want, got []seenSeries
+			names := map[string]bool{}
+			for _, series := range each.Series {
+				samples := make([][2]int64, len(series.Samples))
+				for i, sample := range series.Samples {
+					// Go's NaN carries a payload of 1; the text's NaN is the quiet one every other language parses
+					bits := uint64(0x7ff8_0000_0000_0000)
+					if sample[1] != "NaN" {
+						bits = math.Float64bits(ways.Must(strconv.ParseFloat(sample[1].(string), 64)))
+					}
+					samples[i] = [2]int64{int64(sample[0].(float64)), int64(bits)}
+				}
+				want = append(want, seenOf(series.Name, metrics.Kind(series.Kind), series.Labels, samples))
+				names[series.Name] = true
+			}
+			for name := range names {
+				for _, series := range ways.Must(metrics.Read(ctx, store, metrics.Query{Name: name, Since: keep})) {
+					samples := make([][2]int64, len(series.Samples))
+					for i, sample := range series.Samples {
+						samples[i] = [2]int64{sample.At.UnixMilli(), int64(math.Float64bits(sample.Value))}
+					}
+					got = append(got, seenOf(series.Name, series.Kind, series.Labels, samples))
+				}
+			}
+			bySeries := func(list []seenSeries) func(i, j int) bool {
+				return func(i, j int) bool { return fmt.Sprint(list[i]) < fmt.Sprint(list[j]) }
+			}
+			sort.Slice(want, bySeries(want))
+			sort.Slice(got, bySeries(got))
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s:\n got %v\nwant %v", each.Name, got, want)
+			}
+		}
+		is(t, metrics.IngestPrometheus(ctx, store, []byte("up 1\n"), metrics.Help("no")), tinystore.ErrInvalid)
 	})
 }
 

@@ -71,6 +71,36 @@ func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
 	return err
 }
 
+// IngestPrometheus reads the text an exporter serves, in Prometheus' format
+// or OpenMetrics', and writes its series, every one or none: a counter as a
+// counter, a histogram's _bucket series as KindHistogram. It is told Labels
+// that go beside every series' own, At, the time of a sample the text gives
+// none, the store's clock unless given, and Keep, how long every name of the
+// text keeps its samples. A line it cannot read is an Invalid error naming
+// the line.
+//
+//	body, err := io.ReadAll(resp.Body)
+//	err = metrics.IngestPrometheus(ctx, store, body, metrics.Labels{"instance": "web-1"})
+func IngestPrometheus(ctx context.Context, store *tinystore.Store, text []byte, opts ...Option) error {
+	var t told
+	for _, opt := range opts {
+		opt.instrument(&t)
+	}
+	switch {
+	case t.refused != nil:
+		return core.Wrap(core.Invalid, t.refused, "metrics")
+	case t.unit != nil || t.help != nil || t.bounds != nil || t.exponential:
+		return core.Errorf(core.Invalid, "metrics: a text's ingest is told Labels, At and Keep alone")
+	}
+	message := wire.MetricsExposition{Text: text, Labels: t.labels, Keep: t.keep}
+	if t.at != nil {
+		at := t.at.UnixMilli()
+		message.At = &at
+	}
+	_, err := linkOf(store).Call(ctx, core.Writing, wire.MethodMetricsIngestPrometheus, wire.Encode(&message))
+	return err
+}
+
 func newSeries(given Series) (wire.MetricsNewSeries, error) {
 	out := wire.MetricsNewSeries{Name: given.Name, Kind: string(given.Kind), Labels: given.Labels}
 	times, values := given.Times, given.Values

@@ -116,6 +116,15 @@ message metrics.Ingest {
   1 series: [metrics.NewSeries]
 }
 
+# A text an exporter serves, in Prometheus' format or OpenMetrics', whose
+# series the store writes every one or none, each with labels beside its own.
+message metrics.Exposition {
+  1 text: bin           # UTF-8, read a line at a time, so that an error names its line
+  2 labels: {str}
+  3 at: time?           # of a sample the text gives no time; now unless given
+  4 keep: duration?     # how long each name of the text keeps its samples
+}
+
 # A page of names, of a name's labels or of a label's values.
 message metrics.PageAsked {
   1 name: str?          # the name whose labels, or whose label's values, it lists
@@ -246,17 +255,18 @@ message metrics.Ack {
   3 refused: [metrics.Refused]
 }
 
-read  0x0601 metrics.read(metrics.Query)               -> download metrics.Read until metrics.Read
-read  0x0602 metrics.latest(metrics.Query)             -> download metrics.Latest until metrics.Latest
-read  0x0603 metrics.aggregate(metrics.AggregateAsked) -> download metrics.Aggregates until metrics.Aggregates
-read  0x0604 metrics.explain(metrics.AggregateAsked)   -> metrics.Plan
-read  0x0605 metrics.names(metrics.PageAsked)          -> metrics.NamePage
-read  0x0606 metrics.labelNames(metrics.PageAsked)     -> metrics.TextPage
-read  0x0607 metrics.labelValues(metrics.PageAsked)    -> metrics.TextPage
-read  0x0608 metrics.description(metrics.NameAsked)    -> metrics.Description
-read  0x0609 metrics.damaged(Empty)                    -> metrics.Damages
-write 0x060a metrics.ingest(metrics.Ingest)            -> Empty
-write 0x060b metrics.describe(metrics.Description)     -> Empty
-write 0x060c metrics.delete(metrics.SeriesNamed)       -> metrics.Deleted
-write 0x060d metrics.flush(Empty)                      -> Empty
-write 0x060e metrics.instruments(metrics.Session)      -> exchange metrics.Ack for metrics.Batch
+read  0x0601 metrics.read(metrics.Query)                  -> download metrics.Read until metrics.Read
+read  0x0602 metrics.latest(metrics.Query)                -> download metrics.Latest until metrics.Latest
+read  0x0603 metrics.aggregate(metrics.AggregateAsked)    -> download metrics.Aggregates until metrics.Aggregates
+read  0x0604 metrics.explain(metrics.AggregateAsked)      -> metrics.Plan
+read  0x0605 metrics.names(metrics.PageAsked)             -> metrics.NamePage
+read  0x0606 metrics.labelNames(metrics.PageAsked)        -> metrics.TextPage
+read  0x0607 metrics.labelValues(metrics.PageAsked)       -> metrics.TextPage
+read  0x0608 metrics.description(metrics.NameAsked)       -> metrics.Description
+read  0x0609 metrics.damaged(Empty)                       -> metrics.Damages
+write 0x060a metrics.ingest(metrics.Ingest)               -> Empty
+write 0x060b metrics.describe(metrics.Description)        -> Empty
+write 0x060c metrics.delete(metrics.SeriesNamed)          -> metrics.Deleted
+write 0x060d metrics.flush(Empty)                         -> Empty
+write 0x060e metrics.instruments(metrics.Session)         -> exchange metrics.Ack for metrics.Batch
+write 0x060f metrics.ingestPrometheus(metrics.Exposition) -> Empty

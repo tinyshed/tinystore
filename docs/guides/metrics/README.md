@@ -69,7 +69,7 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 | [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
 | [Reading](reading.md)                      | `read`, `latest`, names, labels                            |
 | [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
-| [Ingesting](ingesting.md)                  | samples from elsewhere, `keep`                             |
+| [Ingesting](ingesting.md)                  | samples from elsewhere, `keep`, Prometheus exporters' text |
 | [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
 | [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store            |
 

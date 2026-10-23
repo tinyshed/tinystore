@@ -38,6 +38,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "metrics_text"
+path = "fuzz_targets/metrics_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "records_rows"
 path = "fuzz_targets/records_rows.rs"
 test = false

@@ -77,38 +77,39 @@ const (
 	// takes the ask out of its line.
 	MethodLocksHold = 0x0901
 	// A lease that ran out or was revoked is `lost`.
-	MethodLocksRenew         = 0x0902
-	MethodLocksRelease       = 0x0903
-	MethodMetricsRead        = 0x0601
-	MethodMetricsLatest      = 0x0602
-	MethodMetricsAggregate   = 0x0603
-	MethodMetricsExplain     = 0x0604
-	MethodMetricsNames       = 0x0605
-	MethodMetricsLabelNames  = 0x0606
-	MethodMetricsLabelValues = 0x0607
-	MethodMetricsDescription = 0x0608
-	MethodMetricsDamaged     = 0x0609
-	MethodMetricsIngest      = 0x060a
-	MethodMetricsDescribe    = 0x060b
-	MethodMetricsDelete      = 0x060c
-	MethodMetricsFlush       = 0x060d
-	MethodMetricsInstruments = 0x060e
-	MethodRecordsOpen        = 0x0501
-	MethodRecordsAppend      = 0x0502
-	MethodRecordsList        = 0x0503
-	MethodRecordsCount       = 0x0504
-	MethodRecordsTop         = 0x0505
-	MethodRecordsAggregate   = 0x0506
-	MethodRecordsStreams     = 0x0507
-	MethodRecordsFieldNames  = 0x0508
-	MethodRecordsPoll        = 0x0509
-	MethodRecordsTail        = 0x050a
-	MethodRecordsLines       = 0x050b
-	MethodRecordsDamaged     = 0x050c
-	MethodRecordsDrop        = 0x050d
-	MethodSearchOpen         = 0x0b01
-	MethodSearchSet          = 0x0b02
-	MethodSearchSetMany      = 0x0b03
+	MethodLocksRenew              = 0x0902
+	MethodLocksRelease            = 0x0903
+	MethodMetricsRead             = 0x0601
+	MethodMetricsLatest           = 0x0602
+	MethodMetricsAggregate        = 0x0603
+	MethodMetricsExplain          = 0x0604
+	MethodMetricsNames            = 0x0605
+	MethodMetricsLabelNames       = 0x0606
+	MethodMetricsLabelValues      = 0x0607
+	MethodMetricsDescription      = 0x0608
+	MethodMetricsDamaged          = 0x0609
+	MethodMetricsIngest           = 0x060a
+	MethodMetricsDescribe         = 0x060b
+	MethodMetricsDelete           = 0x060c
+	MethodMetricsFlush            = 0x060d
+	MethodMetricsInstruments      = 0x060e
+	MethodMetricsIngestPrometheus = 0x060f
+	MethodRecordsOpen             = 0x0501
+	MethodRecordsAppend           = 0x0502
+	MethodRecordsList             = 0x0503
+	MethodRecordsCount            = 0x0504
+	MethodRecordsTop              = 0x0505
+	MethodRecordsAggregate        = 0x0506
+	MethodRecordsStreams          = 0x0507
+	MethodRecordsFieldNames       = 0x0508
+	MethodRecordsPoll             = 0x0509
+	MethodRecordsTail             = 0x050a
+	MethodRecordsLines            = 0x050b
+	MethodRecordsDamaged          = 0x050c
+	MethodRecordsDrop             = 0x050d
+	MethodSearchOpen              = 0x0b01
+	MethodSearchSet               = 0x0b02
+	MethodSearchSetMany           = 0x0b03
 	// Answers whether the index held the document.
 	MethodSearchDelete = 0x0b04
 	MethodSearchGet    = 0x0b05
@@ -210,6 +211,7 @@ var methodNames = []struct {
 	{"metrics.delete", MethodMetricsDelete},
 	{"metrics.flush", MethodMetricsFlush},
 	{"metrics.instruments", MethodMetricsInstruments},
+	{"metrics.ingestPrometheus", MethodMetricsIngestPrometheus},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -445,6 +447,8 @@ func NewMessage(name string) Message {
 		return &MetricsNewSeries{}
 	case "metrics.Ingest":
 		return &MetricsIngest{}
+	case "metrics.Exposition":
+		return &MetricsExposition{}
 	case "metrics.PageAsked":
 		return &MetricsPageAsked{}
 	case "metrics.Name":
@@ -7219,6 +7223,88 @@ func (m *MetricsIngest) Read(r *Reader) {
 // IsZero says whether MetricsIngest writes as no field at all.
 func (m MetricsIngest) IsZero() bool {
 	return len(m.Series) == 0
+}
+
+// MetricsExposition is the schema's metrics.Exposition.
+//
+// A text an exporter serves, in Prometheus' format or OpenMetrics', whose
+// series the store writes every one or none, each with labels beside its own.
+type MetricsExposition struct {
+	// UTF-8, read a line at a time, so that an error names its line
+	Text   []byte            `wire:"1,text"`
+	Labels map[string]string `wire:"2,labels"`
+	// of a sample the text gives no time; now unless given
+	At *int64 `wire:"3,at"`
+	// how long each name of the text keeps its samples
+	Keep *uint64 `wire:"4,keep"`
+}
+
+func (m MetricsExposition) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Text) > 0 {
+		w.Uint(1)
+		w.Bin(m.Text)
+		n++
+	}
+	if len(m.Labels) > 0 {
+		w.Uint(2)
+		w.Map(len(m.Labels))
+		for _, name0 := range SortedNames(m.Labels) {
+			w.Str(name0)
+			w.Str(m.Labels[name0])
+		}
+		n++
+	}
+	if m.At != nil {
+		w.Uint(3)
+		w.Int(*m.At)
+		n++
+	}
+	if m.Keep != nil {
+		w.Uint(4)
+		w.Uint(*m.Keep)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsExposition) Read(r *Reader) {
+	*m = MetricsExposition{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Text = r.Bin()
+		case 2:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Labels = v
+		case 3:
+			v := r.Int()
+			m.At = &v
+		case 4:
+			v := r.Uint()
+			m.Keep = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsExposition writes as no field at all.
+func (m MetricsExposition) IsZero() bool {
+	return len(m.Text) == 0 &&
+		len(m.Labels) == 0 &&
+		m.At == nil &&
+		m.Keep == nil
 }
 
 // MetricsPageAsked is the schema's metrics.PageAsked.

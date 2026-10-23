@@ -13,7 +13,8 @@ import math
 import struct
 from array import array
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -24,8 +25,6 @@ from tinystore.metrics import Metrics, Series, exponential_buckets
 from ways import CORE, SERVED
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from tinystore._connection import Connection
 
 
@@ -54,6 +53,56 @@ async def test_a_series_comes_back_bit_for_bit_its_samples_as_two_columns(store:
     assert [(point.at, point.labels["host"]) for point in newest] == [
         (datetime.fromtimestamp((at + 3000) / 1000, UTC), "web-1")
     ]
+
+
+PROMETHEUS = json.loads(
+    (Path(__file__).parents[3] / "testdata" / "metrics" / "prometheus.json").read_text(encoding="utf-8")
+)
+"""Texts an exporter serves and the series each writes, which every language reads alike."""
+
+
+Seen = tuple[str, str, str, list[tuple[int, int]]]
+"""A series as a vector compares it: its samples' times and their values' bits."""
+
+
+def _bits(value: float) -> int:
+    return struct.unpack("<Q", struct.pack("<d", value))[0]
+
+
+def _seen(series: Series) -> Seen:
+    times, values = cast("array[int]", series.times), cast("array[float]", series.values)
+    bits: tuple[int, ...] = struct.unpack(f"<{len(values)}Q", values.tobytes())
+    return (series.name, series.kind, json.dumps(series.labels, sort_keys=True), list(zip(times, bits, strict=True)))
+
+
+# contract: MET-15
+async def test_every_text_of_the_vectors_writes_its_series_or_is_refused_whole(store: tinystore.Store) -> None:
+    for case in PROMETHEUS["cases"]:
+        ingested = store.metrics.ingest_prometheus(
+            case["text"], labels=case.get("labels"), at=PROMETHEUS["at"], keep=PROMETHEUS["keep"]
+        )
+        if "error" in case:
+            with pytest.raises(tinystore.TinystoreError) as refused:
+                await ingested
+            assert (case["name"], refused.value.code) == (case["name"], case["error"]["kind"])
+            assert case["error"]["has"] in refused.value.message
+            continue
+        await ingested
+        want = sorted(
+            (
+                one["name"],
+                one["kind"],
+                json.dumps(one["labels"], sort_keys=True),
+                [(at, _bits(float(value))) for at, value in one["samples"]],
+            )
+            for one in case["series"]
+        )
+        got: list[Seen] = []
+        for name in {one["name"] for one in case["series"]}:
+            got += [_seen(series) for series in await store.metrics.read(name=name, since=PROMETHEUS["keep"])]
+        assert (case["name"], sorted(got)) == (case["name"], want)
+    await store.metrics.ingest_prometheus(b"# TYPE bytes_given gauge\nbytes_given 1\n", keep="1d")
+    assert await last(store.metrics, "bytes_given") == {"{}": 1}
 
 
 # contract: MET-04

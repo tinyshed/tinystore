@@ -28,6 +28,7 @@ import {
 	MetricsDamages,
 	MetricsDeleted,
 	MetricsDescription,
+	MetricsExposition,
 	MetricsIngest,
 	MetricsLatest,
 	MetricsNameAsked,
@@ -99,6 +100,16 @@ export interface SeriesInput {
 	times?: readonly Time[] | Float64Array
 	values?: readonly number[] | Float64Array
 	/** how long the name's samples stay: its own, kept in the file; unless given, what it keeps already */
+	keep?: Duration | undefined
+}
+
+/** What an ingest of an exporter's text gives every series of it. */
+export interface PrometheusOptions {
+	/** labels every series gets beside its own, such as the instance scraped; one the text gives too is refused, naming its line */
+	labels?: Record<string, LabelValue> | undefined
+	/** the time of every sample the text gives none; the store's clock unless given */
+	at?: Time | undefined
+	/** how long every name of the text keeps its samples */
 	keep?: Duration | undefined
 }
 
@@ -282,6 +293,33 @@ export class Metrics {
 		const body = MetricsIngest.encode({ series: given.map(newSeries) })
 		await this.#link.run('write', connection =>
 			connection.session.call(methods['metrics.ingest'], body),
+		)
+	}
+
+	/**
+	 * Reads the text an exporter serves, in Prometheus' format or OpenMetrics', and writes its
+	 * series, every one or none: a counter as a counter, a histogram's _bucket series as
+	 * histogram. A line it cannot read is refused, naming the line.
+	 *
+	 *     const text = await (await fetch('http://web-1:9100/metrics')).text()
+	 *     await store.metrics.ingestPrometheus(text, { labels: { instance: 'web-1' } })
+	 */
+	async ingestPrometheus(
+		text: string | Uint8Array,
+		options: PrometheusOptions = {},
+	): Promise<void> {
+		const labels: Labels = {}
+		for (const [label, value] of Object.entries(options.labels ?? {})) {
+			labels[label] = String(value)
+		}
+		const body = MetricsExposition.encode({
+			text: typeof text === 'string' ? new TextEncoder().encode(text) : text,
+			labels,
+			at: options.at === undefined ? undefined : unixMs(options.at),
+			keep: options.keep === undefined ? undefined : ms(options.keep),
+		})
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.ingestPrometheus'], body),
 		)
 	}
 

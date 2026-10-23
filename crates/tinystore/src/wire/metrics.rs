@@ -16,10 +16,10 @@ use std::time::Duration;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsBucket,
-    MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds, MetricsGroup,
-    MetricsIngest, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsNewest,
-    MetricsPageAsked, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused, MetricsSeries, MetricsSeriesNamed,
-    MetricsSession, MetricsTextPage, method,
+    MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds,
+    MetricsExposition, MetricsGroup, MetricsIngest, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage,
+    MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused,
+    MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, method,
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
@@ -116,6 +116,7 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> 
         method::METRICS_DESCRIPTION => description(&metrics, &MetricsNameAsked::decode(body)?.name),
         method::METRICS_DAMAGED => damaged(&metrics, max_body),
         method::METRICS_INGEST => ingest(&metrics, MetricsIngest::decode(body)?),
+        method::METRICS_INGEST_PROMETHEUS => ingest_prometheus(&metrics, MetricsExposition::decode(body)?),
         method::METRICS_DESCRIBE => describe(&metrics, MetricsDescription::decode(body)?),
         method::METRICS_DELETE => delete(&metrics, MetricsSeriesNamed::decode(body)?),
         method::METRICS_FLUSH => metrics.flush().map(|()| Empty {}.encode()).map_err(Failure::from),
@@ -323,6 +324,22 @@ fn damaged(metrics: &Metrics, max_body: usize) -> Answered {
 fn ingest(metrics: &Metrics, ingest: MetricsIngest) -> Answered {
     let series: Vec<Series> = ingest.series.into_iter().map(series_of).collect::<Result<_, _>>()?;
     metrics.ingest(&series)?;
+    Ok(Empty {}.encode())
+}
+
+/// A text an exporter serves, read by the core's one parser for every SDK.
+fn ingest_prometheus(metrics: &Metrics, given: MetricsExposition) -> Answered {
+    let mut text = metrics.prometheus();
+    for (label, value) in given.labels {
+        text = text.label(label, value);
+    }
+    if let Some(at) = given.at {
+        text = text.at(from_unix_millis(at));
+    }
+    if let Some(keep) = given.keep {
+        text = text.keep(Duration::from_millis(keep));
+    }
+    text.ingest(&given.text)?;
     Ok(Empty {}.encode())
 }
 

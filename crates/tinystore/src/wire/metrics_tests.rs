@@ -7,8 +7,8 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange, MetricsCondition,
-    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsIngest, MetricsInstrument, MetricsLatest,
-    MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsQuery, MetricsRead,
+    MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsInstrument,
+    MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsQuery, MetricsRead,
     MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, method,
 };
 use crate::{Options, Store, unix_millis};
@@ -295,6 +295,42 @@ fn a_clients_last_data_ends_its_instruments_with_the_last_answer() {
     assert_eq!(answered::<MetricsAck>(&last).unwrap().applied, 1);
 }
 
+// contract: MET-15
+#[test]
+fn a_text_an_exporter_serves_is_read_by_the_core_and_one_it_cannot_read_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let at = now() - 60_000;
+    let text = b"# TYPE rpc_seconds histogram\nrpc_seconds_bucket{le=\"+Inf\"} 3\nrpc_seconds_count 3\nup -0\n";
+    let given = MetricsExposition {
+        text: text.to_vec(),
+        labels: labels(&[("instance", "web-1")]),
+        at: Some(at),
+        keep: Some(7 * 86_400_000),
+    };
+    client.call::<Empty>(method::METRICS_INGEST_PROMETHEUS, &given).unwrap();
+    let read = |client: &mut Client, name: &str| {
+        let parts: Vec<MetricsRead> = downloaded(client, method::METRICS_READ, &named(name));
+        parts.into_iter().flat_map(|part| part.series).collect::<Vec<_>>()
+    };
+    let bucket = &read(&mut client, "rpc_seconds_bucket")[0];
+    assert_eq!(bucket.kind, "histogram");
+    assert_eq!(bucket.labels, labels(&[("instance", "web-1"), ("le", "+Inf")]));
+    assert_eq!(
+        (bucket.times.clone(), read(&mut client, "rpc_seconds_count")[0].kind.as_str()),
+        (at.to_le_bytes().to_vec(), "counter")
+    );
+    assert_eq!(read(&mut client, "up")[0].values, (-0.0_f64).to_le_bytes(), "a value bit for bit");
+    let names: MetricsNamePage = client.call(method::METRICS_NAMES, &MetricsPageAsked::default()).unwrap();
+    assert!(names.names.iter().all(|name| name.keep == 7 * 86_400_000), "{:?}", names.names);
+    let broken = MetricsExposition { text: b"down 1\ndown{host=\"a} 2\n".to_vec(), ..MetricsExposition::default() };
+    let refused = client.call::<Empty>(method::METRICS_INGEST_PROMETHEUS, &broken).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.starts_with("metrics: line 2, "), "{}", refused.message);
+    assert!(read(&mut client, "down").is_empty(), "a refused text writes nothing");
+}
+
 #[test]
 fn a_read_connection_reads_metrics_and_neither_ingests_nor_counts() {
     let dir = tempfile::tempdir().unwrap();
@@ -302,6 +338,9 @@ fn a_read_connection_reads_metrics_and_neither_ingests_nor_counts() {
     let mut reader = Client::admitted(&store, Capability::Read);
     reader.call::<MetricsNamePage>(method::METRICS_NAMES, &MetricsPageAsked::default()).unwrap();
     let refused = reader.call::<Empty>(method::METRICS_INGEST, &MetricsIngest::default()).unwrap_err();
+    assert_eq!(refused.code, "permission");
+    let text = MetricsExposition { text: b"up 1\n".to_vec(), ..MetricsExposition::default() };
+    let refused = reader.call::<Empty>(method::METRICS_INGEST_PROMETHEUS, &text).unwrap_err();
     assert_eq!(refused.code, "permission");
     let stream = reader.start(method::METRICS_INSTRUMENTS, &MetricsSession { id: vec![1; 16], after: 0 });
     assert_eq!(answered::<MetricsAck>(&reader.next_on(stream)).unwrap_err().code, "permission");

@@ -31,6 +31,7 @@ from ._wire.protocol import (
     MetricsDamages,
     MetricsDeleted,
     MetricsDescription,
+    MetricsExposition,
     MetricsIngest,
     MetricsLatest,
     MetricsNameAsked,
@@ -291,6 +292,32 @@ class Metrics:
         given = [series] if isinstance(series, Series) else list(series)
         body = MetricsIngest.encode(series=[_new_series(each) for each in given])
         await self._link.run("write", lambda c: c.session.call(methods["metrics.ingest"], body))
+
+    async def ingest_prometheus(
+        self,
+        text: str | bytes,
+        *,
+        labels: Mapping[str, LabelValue] | None = None,
+        at: Time | None = None,
+        keep: Duration | None = None,
+    ) -> None:
+        """Reads the text an exporter serves, in Prometheus' format or OpenMetrics', and writes its series.
+
+        Every one or none: a counter as a counter, a histogram's _bucket series as histogram. ``labels``
+        go beside every series' own, ``at`` is the time of a sample the text gives none, the store's
+        clock unless given, and ``keep`` how long every name of the text keeps its samples. A line it
+        cannot read is an InvalidError naming the line::
+
+            text = httpx.get("http://web-1:9100/metrics").text
+            await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
+        """
+        body = MetricsExposition.encode(
+            text=text.encode() if isinstance(text, str) else bytes(text),
+            labels={label: label_text(label, value) for label, value in (labels or {}).items()},
+            at=None if at is None else _stamp("text", at),
+            keep=None if keep is None else ms(keep, "metrics: keep"),
+        )
+        await self._link.run("write", lambda c: c.session.call(methods["metrics.ingestPrometheus"], body))
 
     async def read(self, **query: Unpack[SeriesQuery]) -> list[Series]:
         """The samples of each series the query finds, in its range: whole, or a LimitError naming its bound."""

@@ -118,6 +118,7 @@ export const methods = {
 	'metrics.delete': 0x060c,
 	'metrics.flush': 0x060d,
 	'metrics.instruments': 0x060e,
+	'metrics.ingestPrometheus': 0x060f,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -6628,6 +6629,76 @@ export const MetricsIngest = message(
 			}
 			r.leave()
 			return { series: $series }
+		},
+	},
+)
+
+/**
+ * A text an exporter serves, in Prometheus' format or OpenMetrics', whose
+ * series the store writes every one or none, each with labels beside its own.
+ */
+export const MetricsExposition = message(
+	'metrics.Exposition',
+	{
+		/** UTF-8, read a line at a time, so that an error names its line */
+		text: [1, bin],
+		labels: [2, names(str)],
+		/** of a sample the text gives no time; now unless given */
+		at: [3, int],
+		/** how long each name of the text keeps its samples */
+		keep: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.text !== undefined) {
+				w.field(1)
+				w.bin(v.text)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(3)
+				w.int(v.at)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(4)
+				w.uint(v.keep)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $text: Uint8Array | undefined
+			let $labels: Record<string, string> | undefined
+			let $at: number | undefined
+			let $keep: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$text = r.bytes()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3:
+						$at = r.int()
+						break
+					case 4:
+						$keep = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { text: $text, labels: $labels, at: $at, keep: $keep }
 		},
 	},
 )

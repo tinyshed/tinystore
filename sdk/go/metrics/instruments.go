@@ -39,7 +39,7 @@ const (
 	formHistogram form = "histogram"
 )
 
-// Option is what an instrument is told.
+// Option is what an instrument, or IngestPrometheus, is told.
 type Option interface{ instrument(*told) }
 
 type told struct {
@@ -48,6 +48,7 @@ type told struct {
 	bounds      []float64
 	exponential bool
 	labels      Labels
+	at          *time.Time
 	refused     error
 }
 
@@ -84,7 +85,11 @@ func Buckets(bounds ...float64) Option {
 // within one interval, with no bound to choose.
 func Exponential() Option { return optionFunc(func(t *told) { t.exponential = true }) }
 
-// instrument gives a gauge function the set of labels it reads.
+// At is the time of every sample of IngestPrometheus' text that gives none.
+func At(at time.Time) Option { return optionFunc(func(t *told) { t.at = &at }) }
+
+// instrument gives a gauge function the set of labels it reads, and
+// IngestPrometheus those every series gets beside its own.
 func (l Labels) instrument(t *told) { t.labels = l }
 
 // ExponentialBuckets is upper bounds from start, each factor times the one
@@ -108,6 +113,8 @@ func toldOf(name string, f form, opts []Option) (told, error) {
 	switch {
 	case t.refused != nil:
 		return t, core.Wrap(core.Invalid, t.refused, "metrics %s", name)
+	case t.at != nil:
+		return t, core.Errorf(core.Invalid, "metrics %s: At is IngestPrometheus' alone", name)
 	case name == "" || len(name) > 4096:
 		return t, core.Errorf(core.Invalid, "metrics name %q: 1 to 4096 bytes of UTF-8", name)
 	case t.unit != nil && len(*t.unit) > 32:

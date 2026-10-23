@@ -608,6 +608,60 @@ pub struct SelfMetrics {
 
 What a store measures of itself, when it is opened with its own metrics.
 
+## Prometheus
+
+```rust
+pub struct Prometheus { /* private fields */ }
+```
+
+A text an exporter serves, in Prometheus' format or OpenMetrics', and the
+labels, the time and the keep its ingest gives every series of it. It is
+kept for each scrape of one target, `ingest` taking each scrape's text.
+
+```rust
+let stats = store.metrics()?;
+let web = stats.prometheus().label("instance", "web-1");
+web.ingest(&body)?;
+```
+
+### Prometheus.label
+
+```rust
+pub fn label(self, name: impl Into<String>, value: impl Display) -> Prometheus
+```
+
+A label every series of the text gets beside its own, such as the
+`instance` scraped; a text that gives it too is `invalid`, naming the
+line.
+
+### Prometheus.at
+
+```rust
+pub fn at(self, at: SystemTime) -> Prometheus
+```
+
+The time of every sample the text gives none: the store's clock at
+`ingest` unless given.
+
+### Prometheus.keep
+
+```rust
+pub fn keep(self, keep: Duration) -> Prometheus
+```
+
+How long every name of the text keeps its samples, as a series' own
+`keep`.
+
+### Prometheus.ingest
+
+```rust
+pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()>
+```
+
+Reads the text and writes its series, every one or none, as `ingest`
+does: a line it cannot read is `invalid`, naming the line, and a text
+past what one ingest carries is a `limit`.
+
 ## Condition
 
 ```rust
@@ -1071,6 +1125,15 @@ pub fn label_values(&self, name: impl Into<String>, label: impl Into<String>) ->
 ```
 
 The values a label of a name's series holds.
+
+### Metrics.prometheus
+
+```rust
+pub fn prometheus(&self) -> Prometheus
+```
+
+What ingests the text an exporter serves, in Prometheus' format or
+OpenMetrics': `stats.prometheus().label("instance", "web-1").ingest(&body)`.
 
 ### Metrics.recorder
 

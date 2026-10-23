@@ -1,0 +1,132 @@
+use std::time::{Duration, UNIX_EPOCH};
+
+use serde_json::Value as Json;
+
+use super::parse;
+use crate::ErrorKind;
+use crate::metrics::Series;
+use crate::metrics::fixture::{DAY, fixture};
+use crate::metrics::series::Labels;
+
+/// Texts and the series each writes, which every SDK reads too.
+const VECTORS: &str = include_str!("../../../../testdata/metrics/prometheus.json");
+
+/// A series as a test compares it: its name, kind, labels, and each sample's
+/// time and value's bits.
+type Seen = (String, &'static str, Labels, Vec<(i64, u64)>);
+
+fn seen(series: &Series) -> Seen {
+    let samples = series.samples().iter().map(|sample| (crate::unix_millis(sample.at), sample.value.to_bits()));
+    (series.name().to_owned(), series.kind().as_str(), series.labels().clone(), samples.collect())
+}
+
+/// A vector's series as the store holds them; a value is spelt as the text
+/// format spells it, `NaN`, `+Inf` and `-0` among them.
+fn wanted(series: &Json) -> Seen {
+    let labels = series["labels"].as_object().unwrap();
+    let labels = labels.iter().map(|(label, value)| (label.clone(), value.as_str().unwrap().to_owned())).collect();
+    let samples = series["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sample| (sample[0].as_i64().unwrap(), sample[1].as_str().unwrap().parse::<f64>().unwrap().to_bits()));
+    let kind = ["gauge", "counter", "histogram"].into_iter().find(|kind| *kind == series["kind"]).unwrap();
+    (series["name"].as_str().unwrap().to_owned(), kind, labels, samples.collect())
+}
+
+// contract: MET-15
+// contract: MET-01
+#[test]
+fn every_text_of_the_vectors_writes_its_series_or_is_refused_whole() {
+    let vectors: Json = serde_json::from_str(VECTORS).unwrap();
+    assert_eq!(vectors["keep"], "3650d");
+    let (f, keep) = (fixture(), 3650 * DAY);
+    let at = UNIX_EPOCH + Duration::from_millis(vectors["at"].as_u64().unwrap());
+    let mut written = 0;
+    for case in vectors["cases"].as_array().unwrap() {
+        let named = case["name"].as_str().unwrap();
+        let mut text = f.metrics().prometheus().at(at).keep(keep);
+        for (label, value) in case["labels"].as_object().into_iter().flatten() {
+            text = text.label(label, value.as_str().unwrap());
+        }
+        let ingested = text.ingest(case["text"].as_str().unwrap());
+        if let Some(refused) = case.get("error") {
+            let error = ingested.expect_err(named);
+            assert_eq!(error.kind().as_str(), refused["kind"], "{named}: {error}");
+            assert!(error.to_string().contains(refused["has"].as_str().unwrap()), "{named}: {error}");
+            continue;
+        }
+        ingested.unwrap_or_else(|error| panic!("{named}: {error}"));
+        let mut want: Vec<Seen> = case["series"].as_array().unwrap().iter().map(wanted).collect();
+        let mut names: Vec<String> = want.iter().map(|series| series.0.clone()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let mut got = Vec::new();
+        for name in names {
+            got.extend(f.metrics().query().name(name).since(keep).read().unwrap().iter().map(seen));
+        }
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "{named}");
+        written += want.len();
+    }
+    assert_eq!(f.rows("series"), written as i64, "a refused text writes no series");
+}
+
+#[test]
+fn a_line_that_is_not_utf8_is_refused_by_its_number() {
+    let error = parse(b"up 1\nup{host=\"\xff\"} 2\n", &Labels::new(), 0).unwrap_err();
+    assert_eq!((error.kind(), error.what()), (ErrorKind::Invalid, "metrics: line 2: not UTF-8"));
+}
+
+#[test]
+fn a_negative_nan_keeps_its_sign_and_a_byte_order_mark_is_read_past() {
+    let series = parse(b"\xef\xbb\xbfodd -NaN\n", &Labels::new(), 0).unwrap();
+    assert_eq!(series[0].samples()[0].value.to_bits(), 0xfff8_0000_0000_0000);
+}
+
+#[test]
+fn openmetrics_seconds_are_rounded_to_the_millisecond() {
+    let text = b"# TYPE late gauge\nlate 1 1789999990.789\nlate 2 1789999990.0016\n# EOF";
+    let series = parse(text, &Labels::new(), 0).unwrap();
+    let times: Vec<i64> = series.iter().map(|series| crate::unix_millis(series.samples()[0].at)).collect();
+    assert_eq!(times, [1_789_999_990_789, 1_789_999_990_002]);
+}
+
+#[test]
+fn what_follows_a_sample_is_its_time_and_an_exemplar_alone() {
+    let given = Labels::new();
+    assert!(parse(b"up 1 # {trace_id=\"a b\"} 0.5\n", &given, 7).is_ok());
+    let error = parse(b"up 1 2 3\n", &given, 0).unwrap_err();
+    assert!(error.what().ends_with("`up 1 2 3`: \"3\" after the sample's time"), "{error}");
+    let error = parse(b"up.time 1\n", &given, 0).unwrap_err();
+    assert!(error.to_string().contains("a space between the name and the value"), "{error}");
+    let error = parse(b"up\n", &given, 0).unwrap_err();
+    assert!(error.what().ends_with("a sample without its value"), "{error}");
+}
+
+#[test]
+fn an_error_quotes_the_start_of_a_long_line() {
+    let line = format!("up{{path=\"{}", "é".repeat(100));
+    let error = parse(line.as_bytes(), &Labels::new(), 0).unwrap_err();
+    let quoted = error.to_string().split('`').nth(1).unwrap().to_owned();
+    assert!(quoted.ends_with('…') && quoted.len() <= 64 + '…'.len_utf8(), "{quoted}");
+}
+
+#[test]
+fn a_text_past_what_one_ingest_carries_is_a_limit() {
+    let lines = |count: usize| (0..count).map(|index| format!("up{{shard=\"{index}\"}} 1\n")).collect::<String>();
+    assert_eq!(parse(lines(10_000).as_bytes(), &Labels::new(), 0).unwrap().len(), 10_000);
+    let error = parse(lines(10_001).as_bytes(), &Labels::new(), 0).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
+    assert!(error.to_string().starts_with("metrics: line 10001, "), "{error}");
+    assert_eq!(error.fact("limit"), Some("one ingest"));
+}
+
+#[test]
+fn a_text_without_samples_writes_nothing() {
+    let f = fixture();
+    f.metrics().prometheus().ingest("# HELP up Whether it is up.\n# TYPE up gauge\n# EOF\n").unwrap();
+    f.metrics().prometheus().ingest("").unwrap();
+    assert_eq!(f.rows("series"), 0);
+}

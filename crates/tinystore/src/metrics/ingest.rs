@@ -35,7 +35,7 @@ use crate::{Error, ErrorKind, Result, unix_millis};
 const MOST_SAMPLES: usize = 10_000;
 const MOST_BYTES: usize = 4 << 20;
 /// What a sample weighs against the call's bytes, a time and a value.
-const SAMPLE_BYTES: usize = 16;
+pub(super) const SAMPLE_BYTES: usize = 16;
 use crate::memory::PATIENCE;
 
 /// One series' samples of a call, checked, in the order of their times, a
@@ -119,15 +119,7 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
         let keep = given.keep.map(checked_keep).transpose().map_err(|error| error.within(named()))?;
         samples += given.samples.len();
         bytes += kept.bytes() + SAMPLE_BYTES * given.samples.len();
-        if samples > MOST_SAMPLES || bytes > MOST_BYTES {
-            return Err(Error::limit(format!(
-                "metrics: an ingest past {MOST_SAMPLES} samples or {} MiB: send it in parts",
-                MOST_BYTES >> 20
-            ))
-            .naming("limit", "one ingest")
-            .naming("wanted", samples.to_string())
-            .naming("bound", MOST_SAMPLES.to_string()));
-        }
+        within_one_ingest("an ingest", samples, bytes).map_err(|error| error.within("metrics"))?;
         let points = given.samples.iter().map(|sample| Point { at: unix_millis(sample.at), value: sample.value });
         let entry = gathered.entry(kept.identity()).or_insert_with(|| Gathered {
             kept: kept.clone(),
@@ -142,6 +134,20 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
         entry.points.extend(points);
     }
     Ok((gathered, bytes))
+}
+
+/// Refuses `what` past the samples or the bytes one ingest carries, a sample
+/// weighing its labels, its name among them, and `SAMPLE_BYTES`.
+pub(super) fn within_one_ingest(what: &str, samples: usize, bytes: usize) -> Result<()> {
+    if samples <= MOST_SAMPLES && bytes <= MOST_BYTES {
+        return Ok(());
+    }
+    let error =
+        Error::limit(format!("{what} past {MOST_SAMPLES} samples or {} MiB: send it in parts", MOST_BYTES >> 20));
+    Err(error
+        .naming("limit", "one ingest")
+        .naming("wanted", samples.to_string())
+        .naming("bound", MOST_SAMPLES.to_string()))
 }
 
 /// A series' labels, a histogram's bound among them written as JavaScript

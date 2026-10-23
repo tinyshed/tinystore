@@ -3,6 +3,7 @@
 `ingest` writes samples a program has from elsewhere: a sensor's readings, a
 host's CPU, a counter another system kept. Each series is a name, a kind and
 its labels, with samples of a time and a number, kept bit for bit.
+`ingestPrometheus` writes the text a Prometheus exporter serves.
 
 ```ts
 await store.metrics.ingest({
@@ -88,17 +89,83 @@ another keeps.
 
 ## From Prometheus
 
-Prometheus' text format is not read by the store yet. A program that scrapes
-an exporter parses the text with a library of its language and ingests each
-series, a counter as a counter and a gauge as a gauge, with a label of the
-host it scraped. A histogram's `_bucket` series go in as `histogram`, each
-with its `le`, beside its `_sum` and `_count` counters.
+`ingestPrometheus` reads the text that a Prometheus exporter serves, such as
+node_exporter's `/metrics`, and writes all of its series in one call. It
+reads Prometheus' text format and OpenMetrics. TinyStore doesn't fetch the
+text: your program scrapes the exporter and passes the body in.
+
+```ts
+const text = await (await fetch('http://web-1:9100/metrics')).text()
+await store.metrics.ingestPrometheus(text, { labels: { instance: 'web-1' } })
+```
+
+```python
+text = httpx.get("http://web-1:9100/metrics").text
+await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
+```
+
+```go
+resp, err := http.Get("http://web-1:9100/metrics")
+body, err := io.ReadAll(resp.Body)
+err = metrics.IngestPrometheus(ctx, store, body, metrics.Labels{"instance": "web-1"})
+```
+
+```rust
+let stats = store.metrics()?;
+let web = stats.prometheus().label("instance", "web-1");
+web.ingest(&body)?; // body: the text of http://web-1:9100/metrics, from any HTTP client
+```
+
+Each sample line becomes a series with one sample, of the kind that its
+`# TYPE` line gives it:
+
+| `# TYPE`                             | Series                                                                                  |
+|--------------------------------------|-----------------------------------------------------------------------------------------|
+| `counter`                            | a `counter` named as the sample, such as `node_cpu_seconds_total`                       |
+| `gauge`                              | a `gauge`                                                                               |
+| `histogram`                          | each `_bucket` series as `histogram` with its `le`, `_sum` and `_count` as counters     |
+| `summary`                            | a `gauge` per quantile with its `quantile` label, `_sum` and `_count` as counters       |
+| `untyped`, `unknown` or none         | a `gauge`                                                                               |
+| `info`, `stateset`, `gaugehistogram` | a `gauge` per sample line, such as `build_info` and each `_bucket` of a gauge histogram |
+
+- `labels` adds labels to every series: `label` in Rust, `metrics.Labels` in
+  Go. If the text already has one of them, the call fails with an invalid
+  error that names the line, because one value would hide the other. Pick a
+  label that the exporter doesn't use.
+- A sample without a timestamp gets `at` (`metrics.At` in Go), or the store's
+  clock when the call runs. Prometheus' timestamps are milliseconds. A text
+  whose last line is `# EOF` is read as OpenMetrics, whose timestamps are
+  seconds, rounded to the millisecond.
+- `keep` sets how long every name of the text keeps its samples, as `keep`
+  does on a series.
+- Values are kept bit for bit, `NaN`, `+Inf`, `-Inf` and `-0` included. A
+  label with an empty value is the same as no label, as in Prometheus.
+- `# HELP` and `# UNIT` lines and OpenMetrics' exemplars are not kept. Call
+  `describe` to give a name its help.
+- OpenMetrics' `_created` samples are left out, because a series doesn't keep
+  the time that its counter started. A counter's reset counts its new value
+  whole, so a restart still reads right. Only what a new counter held before
+  its first scrape isn't counted.
+
+The text is read whole before anything is written. If a line can't be read,
+the call fails with an invalid error (`InvalidError`, `ErrInvalid`) that names
+the line and quotes its start, and nothing is written:
+
+```text
+metrics: line 12, `node_load1{host="web-1} 0.42`: label host: a value without its closing quote
+```
+
+A series that the store refuses, such as one with a label that starts with
+`__`, names itself by its labels, as it does in `ingest`. One text is one
+`ingest`, so it holds 10,000 samples at most. Bun, Node, Python and Go send
+the text in one message, which holds 2 MiB.
 
 ## Limits
 
 | What              | Limit                                                   |
 |-------------------|---------------------------------------------------------|
 | one `ingest`      | 10,000 samples or 4 MiB                                 |
+| one text          | as one `ingest`, and 2 MiB from Bun, Node, Python or Go |
 | a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB |
 | a sample's time   | from `keep` ago to ten minutes ahead                    |
 | series in a store | 100,000 unless `maxSeries` says                         |

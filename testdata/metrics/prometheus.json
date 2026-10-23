@@ -1,0 +1,192 @@
+{
+  "about": "Prometheus' text format and OpenMetrics' read into series alike in every language. Each case is ingested with its labels, at for a sample the text gives no time and keep, into a store whose clock is within keep of at; every case's names are its own, so that one store takes them all. series is what the store then holds of each name, each sample [unix ms, value as the text format spells it], compared bit for bit, NaN as the quiet NaN 0x7ff8000000000000; error is the kind a case is refused with and words its message holds, and a refused text writes nothing.",
+  "at": 1790000000000,
+  "keep": "3650d",
+  "cases": [
+    {
+      "name": "a counter and a gauge with their labels, HELP read past",
+      "text": "# HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.\n# TYPE node_cpu_seconds_total counter\nnode_cpu_seconds_total{cpu=\"0\",mode=\"idle\"} 1.23456789e+06\nnode_cpu_seconds_total{cpu=\"0\",mode=\"user\"} 4567.89\n# HELP node_load1 1m load average.\n# TYPE node_load1 gauge\nnode_load1 0.42\n",
+      "series": [
+        {"name": "node_cpu_seconds_total", "kind": "counter", "labels": {"cpu": "0", "mode": "idle"}, "samples": [[1790000000000, "1.23456789e+06"]]},
+        {"name": "node_cpu_seconds_total", "kind": "counter", "labels": {"cpu": "0", "mode": "user"}, "samples": [[1790000000000, "4567.89"]]},
+        {"name": "node_load1", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "0.42"]]}
+      ]
+    },
+    {
+      "name": "a histogram's buckets as histogram with their le, its sum and count as counters",
+      "text": "# HELP http_request_duration_seconds A histogram of the request duration.\n# TYPE http_request_duration_seconds histogram\nhttp_request_duration_seconds_bucket{le=\"0.1\"} 240\nhttp_request_duration_seconds_bucket{le=\"0.5\"} 310\nhttp_request_duration_seconds_bucket{le=\"+Inf\"} 320\nhttp_request_duration_seconds_sum 41.7\nhttp_request_duration_seconds_count 320\n",
+      "series": [
+        {"name": "http_request_duration_seconds_bucket", "kind": "histogram", "labels": {"le": "0.1"}, "samples": [[1790000000000, "240"]]},
+        {"name": "http_request_duration_seconds_bucket", "kind": "histogram", "labels": {"le": "0.5"}, "samples": [[1790000000000, "310"]]},
+        {"name": "http_request_duration_seconds_bucket", "kind": "histogram", "labels": {"le": "+Inf"}, "samples": [[1790000000000, "320"]]},
+        {"name": "http_request_duration_seconds_sum", "kind": "counter", "labels": {}, "samples": [[1790000000000, "41.7"]]},
+        {"name": "http_request_duration_seconds_count", "kind": "counter", "labels": {}, "samples": [[1790000000000, "320"]]}
+      ]
+    },
+    {
+      "name": "a summary: a gauge per quantile, its sum and count as counters",
+      "text": "# TYPE rpc_duration_seconds summary\nrpc_duration_seconds{quantile=\"0.5\"} 0.012\nrpc_duration_seconds{quantile=\"0.99\"} 0.27\nrpc_duration_seconds_sum 1520.5\nrpc_duration_seconds_count 120000\n",
+      "series": [
+        {"name": "rpc_duration_seconds", "kind": "gauge", "labels": {"quantile": "0.5"}, "samples": [[1790000000000, "0.012"]]},
+        {"name": "rpc_duration_seconds", "kind": "gauge", "labels": {"quantile": "0.99"}, "samples": [[1790000000000, "0.27"]]},
+        {"name": "rpc_duration_seconds_sum", "kind": "counter", "labels": {}, "samples": [[1790000000000, "1520.5"]]},
+        {"name": "rpc_duration_seconds_count", "kind": "counter", "labels": {}, "samples": [[1790000000000, "120000"]]}
+      ]
+    },
+    {
+      "name": "untyped and a sample without a type are gauges",
+      "text": "# TYPE legacy_queue_depth untyped\nlegacy_queue_depth{queue=\"emails\"} 17\nprocess_open_fds 42\n",
+      "series": [
+        {"name": "legacy_queue_depth", "kind": "gauge", "labels": {"queue": "emails"}, "samples": [[1790000000000, "17"]]},
+        {"name": "process_open_fds", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "42"]]}
+      ]
+    },
+    {
+      "name": "a time in Prometheus' text is milliseconds",
+      "text": "# TYPE backup_last_success_timestamp_seconds gauge\nbackup_last_success_timestamp_seconds 1789999000 1789999990000\nbackup_files 512 1789999995000\n",
+      "series": [
+        {"name": "backup_last_success_timestamp_seconds", "kind": "gauge", "labels": {}, "samples": [[1789999990000, "1789999000"]]},
+        {"name": "backup_files", "kind": "gauge", "labels": {}, "samples": [[1789999995000, "512"]]}
+      ]
+    },
+    {
+      "name": "OpenMetrics: seconds, _total, _created left out, exemplars, info, stateset, gaugehistogram and unknown",
+      "text": "# TYPE om_requests counter\n# HELP om_requests Requests served.\nom_requests_total{path=\"/\"} 1027 1789999990.5 # {trace_id=\"KOO5S4vxi0o\"} 1 1789999990.1\nom_requests_created{path=\"/\"} 1789990000.0\n# TYPE om_latency_seconds histogram\n# UNIT om_latency_seconds seconds\nom_latency_seconds_bucket{le=\"1.0\"} 7 # {trace_id=\"oHg5SJYRHA0\"} 0.67\nom_latency_seconds_bucket{le=\"+Inf\"} 9\nom_latency_seconds_sum 4.5\nom_latency_seconds_count 9\nom_latency_seconds_created 1789990000.0\n# TYPE om_rpc_seconds summary\nom_rpc_seconds{quantile=\"0.9\"} 0.2\nom_rpc_seconds_sum 3.5\nom_rpc_seconds_count 17\nom_rpc_seconds_created 1789990000.0\n# TYPE om_build info\nom_build_info{version=\"1.2.3\"} 1\n# TYPE om_feature stateset\nom_feature{om_feature=\"a\"} 1\nom_feature{om_feature=\"b\"} 0\n# TYPE om_queue gaugehistogram\nom_queue_bucket{le=\"10.0\"} 3\nom_queue_bucket{le=\"+Inf\"} 5\nom_queue_gcount 5\nom_queue_gsum 21\n# TYPE om_mystery unknown\nom_mystery 3.5\n# EOF\n",
+      "series": [
+        {"name": "om_requests_total", "kind": "counter", "labels": {"path": "/"}, "samples": [[1789999990500, "1027"]]},
+        {"name": "om_latency_seconds_bucket", "kind": "histogram", "labels": {"le": "1"}, "samples": [[1790000000000, "7"]]},
+        {"name": "om_latency_seconds_bucket", "kind": "histogram", "labels": {"le": "+Inf"}, "samples": [[1790000000000, "9"]]},
+        {"name": "om_latency_seconds_sum", "kind": "counter", "labels": {}, "samples": [[1790000000000, "4.5"]]},
+        {"name": "om_latency_seconds_count", "kind": "counter", "labels": {}, "samples": [[1790000000000, "9"]]},
+        {"name": "om_rpc_seconds", "kind": "gauge", "labels": {"quantile": "0.9"}, "samples": [[1790000000000, "0.2"]]},
+        {"name": "om_rpc_seconds_sum", "kind": "counter", "labels": {}, "samples": [[1790000000000, "3.5"]]},
+        {"name": "om_rpc_seconds_count", "kind": "counter", "labels": {}, "samples": [[1790000000000, "17"]]},
+        {"name": "om_build_info", "kind": "gauge", "labels": {"version": "1.2.3"}, "samples": [[1790000000000, "1"]]},
+        {"name": "om_feature", "kind": "gauge", "labels": {"om_feature": "a"}, "samples": [[1790000000000, "1"]]},
+        {"name": "om_feature", "kind": "gauge", "labels": {"om_feature": "b"}, "samples": [[1790000000000, "0"]]},
+        {"name": "om_queue_bucket", "kind": "gauge", "labels": {"le": "10.0"}, "samples": [[1790000000000, "3"]]},
+        {"name": "om_queue_bucket", "kind": "gauge", "labels": {"le": "+Inf"}, "samples": [[1790000000000, "5"]]},
+        {"name": "om_queue_gcount", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "5"]]},
+        {"name": "om_queue_gsum", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "21"]]},
+        {"name": "om_mystery", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "3.5"]]}
+      ]
+    },
+    {
+      "name": "a _created gauge of Prometheus' text is a gauge of its own",
+      "text": "# TYPE py_jobs_total counter\npy_jobs_total 3\n# TYPE py_jobs_created gauge\npy_jobs_created 1.789e+09\n",
+      "series": [
+        {"name": "py_jobs_total", "kind": "counter", "labels": {}, "samples": [[1790000000000, "3"]]},
+        {"name": "py_jobs_created", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "1.789e+09"]]}
+      ]
+    },
+    {
+      "name": "a label's escapes read, any other backslash kept",
+      "text": "# TYPE disk_free_bytes gauge\ndisk_free_bytes{path=\"C:\\\\Program Files\",label=\"say \\\"hi\\\"\",note=\"two\\nlines\"} 1024\ndisk_free_bytes{path=\"D:\\data\",label=\"tab\\tkept\"} 2048\n",
+      "series": [
+        {"name": "disk_free_bytes", "kind": "gauge", "labels": {"path": "C:\\Program Files", "label": "say \"hi\"", "note": "two\nlines"}, "samples": [[1790000000000, "1024"]]},
+        {"name": "disk_free_bytes", "kind": "gauge", "labels": {"path": "D:\\data", "label": "tab\\tkept"}, "samples": [[1790000000000, "2048"]]}
+      ]
+    },
+    {
+      "name": "NaN, the infinities, -0 and the edges of a float, bit for bit",
+      "text": "# TYPE odd_values gauge\nodd_values{case=\"nan\"} NaN\nodd_values{case=\"inf\"} +Inf\nodd_values{case=\"-inf\"} -Inf\nodd_values{case=\"-0\"} -0\nodd_values{case=\"tiny\"} 5e-324\nodd_values{case=\"big\"} 1.7976931348623157e+308\n",
+      "series": [
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "nan"}, "samples": [[1790000000000, "NaN"]]},
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "inf"}, "samples": [[1790000000000, "+Inf"]]},
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "-inf"}, "samples": [[1790000000000, "-Inf"]]},
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "-0"}, "samples": [[1790000000000, "-0"]]},
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "tiny"}, "samples": [[1790000000000, "5e-324"]]},
+        {"name": "odd_values", "kind": "gauge", "labels": {"case": "big"}, "samples": [[1790000000000, "1.7976931348623157e+308"]]}
+      ]
+    },
+    {
+      "name": "blanks, tabs, CRLF, comments and a trailing comma; an empty label is no label",
+      "text": "# a comment that says nothing\r\n\r\n#   TYPE   spaced_gauge   gauge\r\n  spaced_gauge { a = \"1\" , b=\"\" ,}\t7  \r\n\r\n",
+      "series": [
+        {"name": "spaced_gauge", "kind": "gauge", "labels": {"a": "1"}, "samples": [[1790000000000, "7"]]}
+      ]
+    },
+    {
+      "name": "the call's labels beside each series' own",
+      "text": "# TYPE up_check gauge\nup_check{target=\"db\"} 1\nup_check 0\n",
+      "labels": {"instance": "web-1", "job": "node"},
+      "series": [
+        {"name": "up_check", "kind": "gauge", "labels": {"target": "db", "instance": "web-1", "job": "node"}, "samples": [[1790000000000, "1"]]},
+        {"name": "up_check", "kind": "gauge", "labels": {"instance": "web-1", "job": "node"}, "samples": [[1790000000000, "0"]]}
+      ]
+    },
+    {
+      "name": "a time given twice keeps the later value",
+      "text": "# TYPE twice_gauge gauge\ntwice_gauge 1\ntwice_gauge 2\n",
+      "series": [
+        {"name": "twice_gauge", "kind": "gauge", "labels": {}, "samples": [[1790000000000, "2"]]}
+      ]
+    },
+    {
+      "name": "a label's value without its closing quote",
+      "text": "# TYPE e_quote gauge\ne_quote{path=\"/a} 1\n",
+      "error": {"kind": "invalid", "has": "metrics: line 2, `e_quote{path=\"/a} 1`: label path: a value without its closing quote"}
+    },
+    {
+      "name": "a value that is not a number",
+      "text": "e_value 12,5\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `e_value 12,5`: a value \"12,5\": a number, +Inf, -Inf or NaN"}
+    },
+    {
+      "name": "a value past the largest float",
+      "text": "e_huge 1e400\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `e_huge 1e400`: a value \"1e400\": past the largest float"}
+    },
+    {
+      "name": "a second # TYPE of one name",
+      "text": "# TYPE e_twice gauge\n# TYPE e_twice counter\n",
+      "error": {"kind": "invalid", "has": "metrics: line 2, `# TYPE e_twice counter`: a second `# TYPE` of e_twice"}
+    },
+    {
+      "name": "a # TYPE after its samples",
+      "text": "e_late_type 1\n# TYPE e_late_type counter\n",
+      "error": {"kind": "invalid", "has": "metrics: line 2, `# TYPE e_late_type counter`: the `# TYPE` of e_late_type after its sample e_late_type"}
+    },
+    {
+      "name": "a type no format has",
+      "text": "# TYPE e_type countr\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `# TYPE e_type countr`: a type \"countr\""}
+    },
+    {
+      "name": "a line after # EOF",
+      "text": "e_before 1\n# EOF\ne_after 2\n",
+      "error": {"kind": "invalid", "has": "metrics: line 3, `e_after 2`: a line after `# EOF`, which ends the text"}
+    },
+    {
+      "name": "OpenMetrics' seconds in a text without # EOF",
+      "text": "e_seconds 1 1789999990.5\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `e_seconds 1 1789999990.5`: a time \"1789999990.5\": milliseconds, an integer"}
+    },
+    {
+      "name": "a histogram's sample named as the histogram",
+      "text": "# TYPE e_hist histogram\ne_hist 3\n",
+      "error": {"kind": "invalid", "has": "metrics: line 2, `e_hist 3`: e_hist is a histogram, whose samples are e_hist_bucket, e_hist_sum and e_hist_count"}
+    },
+    {
+      "name": "a label given twice",
+      "text": "e_dup{a=\"1\",a=\"2\"} 1\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `e_dup{a=\"1\",a=\"2\"} 1`: label a twice"}
+    },
+    {
+      "name": "a label the call gives too",
+      "text": "e_instance{instance=\"db-1\"} 1\n",
+      "labels": {"instance": "web-1"},
+      "error": {"kind": "invalid", "has": "metrics: line 1, `e_instance{instance=\"db-1\"} 1`: label instance, which the call gives every series"}
+    },
+    {
+      "name": "a label the store keeps for its own, refused by the store naming the series",
+      "text": "e_own{__secret=\"x\"} 1\n",
+      "error": {"kind": "invalid", "has": "metrics e_own{__secret=\"x\"}: label \"__secret\": a name beginning with __ is the store's own"}
+    },
+    {
+      "name": "a name that begins with a digit",
+      "text": "9lives 1\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `9lives 1`: a sample's line begins with its metric's name"}
+    }
+  ]
+}

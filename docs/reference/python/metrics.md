@@ -163,6 +163,28 @@ async def ingest(series: Series | Sequence[Series]) -> None: ...
 
 Writes series and their samples, every one or none: a refused series names itself.
 
+### Metrics.ingest_prometheus
+
+```python
+async def ingest_prometheus(
+    text: str | bytes,
+    *,
+    labels: Mapping[str, LabelValue] | None = None,
+    at: Time | None = None,
+    keep: Duration | None = None,
+) -> None: ...
+```
+
+Reads the text an exporter serves, in Prometheus' format or OpenMetrics', and writes its series.
+
+Every one or none: a counter as a counter, a histogram's _bucket series as histogram. ``labels``
+go beside every series' own, ``at`` is the time of a sample the text gives none, the store's
+clock unless given, and ``keep`` how long every name of the text keeps its samples. A line it
+cannot read is an InvalidError naming the line:
+
+    text = httpx.get("http://web-1:9100/metrics").text
+    await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
+
 ### Metrics.read
 
 ```python

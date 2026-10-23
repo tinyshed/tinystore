@@ -3121,6 +3121,35 @@
     },
     {
       "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "keep": {
+          "uint": "1500"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "text": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8401c40201ff0281a161a66c6162656c7303cf000001a0c4506c0004cd05dc",
+      "message": "metrics.Exposition",
+      "name": "metrics.Exposition with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Exposition",
+      "name": "metrics.Exposition with no field"
+    },
+    {
+      "fields": {
         "after": {
           "str": "after"
         },
@@ -5720,6 +5749,7 @@
     "metrics.explain": 1540,
     "metrics.flush": 1549,
     "metrics.ingest": 1546,
+    "metrics.ingestPrometheus": 1551,
     "metrics.instruments": 1550,
     "metrics.labelNames": 1542,
     "metrics.labelValues": 1543,

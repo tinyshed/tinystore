@@ -68,6 +68,21 @@ interface SeriesInput {
 
 A series to write: its samples as [time, value] pairs, or as times and values columns.
 
+## PrometheusOptions
+
+```ts
+interface PrometheusOptions {
+    /** labels every series gets beside its own, such as the instance scraped; one the text gives too is refused, naming its line */
+    labels?: Record<string, LabelValue> | undefined
+    /** the time of every sample the text gives none; the store's clock unless given */
+    at?: Time | undefined
+    /** how long every name of the text keeps its samples */
+    keep?: Duration | undefined
+}
+```
+
+What an ingest of an exporter's text gives every series of it.
+
 ## Series
 
 ```ts
@@ -293,6 +308,19 @@ ingest(series: SeriesInput | readonly SeriesInput[]): Promise<void>
 ```
 
 Writes series and their samples, every one or none: a refused series names itself.
+
+### Metrics.ingestPrometheus
+
+```ts
+ingestPrometheus(text: string | Uint8Array, options?: PrometheusOptions): Promise<void>
+```
+
+Reads the text an exporter serves, in Prometheus' format or OpenMetrics', and writes its
+series, every one or none: a counter as a counter, a histogram's _bucket series as
+histogram. A line it cannot read is refused, naming the line.
+
+    const text = await (await fetch('http://web-1:9100/metrics')).text()
+    await store.metrics.ingestPrometheus(text, { labels: { instance: 'web-1' } })
 
 ### Metrics.read
 

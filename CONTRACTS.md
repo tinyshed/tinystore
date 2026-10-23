@@ -177,6 +177,7 @@ These contracts are what does not.
 - **MET-12** A name's `keep` MUST be its own; retention MUST clip a read before a summary is chosen.
 - **MET-13** A series MUST be deletable whole, damaged or not, its neighbours untouched.
 - **MET-14** `self_metrics` MUST be off unless asked for, and a store opened without it holds none of its own names.
+- **MET-15** A text in Prometheus' format or OpenMetrics' MUST be written whole, each sample as the kind its family's type gives and its value bit for bit, or refused whole, naming the line it cannot read.
 
 ### Search
 

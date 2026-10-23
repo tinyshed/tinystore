@@ -102,6 +102,7 @@ methods: dict[str, int] = {
     "metrics.delete": 0x060C,
     "metrics.flush": 0x060D,
     "metrics.instruments": 0x060E,
+    "metrics.ingestPrometheus": 0x060F,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -5425,6 +5426,74 @@ MetricsIngest = Message(
 )
 
 
+def _write_metrics_exposition(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("text")) is not None:
+        w.uint(1)
+        w.bin(x)
+        n += 1
+    if (x := v.get("labels")) is not None:
+        w.uint(2)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
+    if (x := v.get("at")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    if (x := v.get("keep")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_exposition(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["text"] = r.bin()
+            case 2:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["labels"] = named0
+            case 3:
+                read["at"] = r.int()
+            case 4:
+                read["keep"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A text an exporter serves, in Prometheus' format or OpenMetrics', whose
+# series the store writes every one or none, each with labels beside its own.
+MetricsExposition = Message(
+    "metrics.Exposition",
+    {
+        # UTF-8, read a line at a time, so that an error names its line
+        "text": (1, bin_),
+        "labels": (2, names(str_)),
+        # of a sample the text gives no time; now unless given
+        "at": (3, int_),
+        # how long each name of the text keeps its samples
+        "keep": (4, uint),
+    },
+    _write_metrics_exposition,
+    _read_metrics_exposition,
+)
+
+
 def _write_metrics_page_asked(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -9727,6 +9796,7 @@ messages: dict[str, Message] = {
     "metrics.Exceeds": MetricsExceeds,
     "metrics.NewSeries": MetricsNewSeries,
     "metrics.Ingest": MetricsIngest,
+    "metrics.Exposition": MetricsExposition,
     "metrics.PageAsked": MetricsPageAsked,
     "metrics.Name": MetricsName,
     "metrics.NamePage": MetricsNamePage,

@@ -42,6 +42,17 @@ func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
 
 Ingest writes series and their samples, every one or none: a refused series names itself by its labels. It returns once they are written.
 
+## IngestPrometheus
+
+```go
+func IngestPrometheus(ctx context.Context, store *tinystore.Store, text []byte, opts ...Option) error
+```
+
+IngestPrometheus reads the text an exporter serves, in Prometheus' format or OpenMetrics', and writes its series, every one or none: a counter as a counter, a histogram's \_bucket series as KindHistogram. It is told Labels that go beside every series' own, At, the time of a sample the text gives none, the store's clock unless given, and Keep, how long every name of the text keeps its samples. A line it cannot read is an Invalid error naming the line.
+
+	body, err := io.ReadAll(resp.Body)
+	err = metrics.IngestPrometheus(ctx, store, body, metrics.Labels{"instance": "web-1"})
+
 ## OpenGaugeFunc
 
 ```go
@@ -419,7 +430,15 @@ type Option interface {
 }
 ```
 
-Option is what an instrument is told.
+Option is what an instrument, or IngestPrometheus, is told.
+
+### At
+
+```go
+func At(at time.Time) Option
+```
+
+At is the time of every sample of IngestPrometheus' text that gives none.
 
 ### Buckets
 

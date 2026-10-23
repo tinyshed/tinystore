@@ -4,19 +4,22 @@
 // removal, and instruments whose changes reach the store's totals once.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import { type Connection, embedded, Link } from '../src/connection.ts'
+import type { Code, TinystoreError } from '../src/errors.ts'
 import {
 	exponentialBuckets,
 	InvalidError,
+	type Labels,
 	LimitError,
 	type MetricsQuery,
 	OutcomeUnknownError,
 	open,
+	type Series,
 	type Store,
 	UnavailableError,
 	type ValueBucket,
@@ -25,7 +28,53 @@ import { binOf, Instruments } from '../src/instruments.ts'
 import { Metrics } from '../src/metrics.ts'
 import { bunRuntime } from '../src/runtime/bun.ts'
 import { nodeRuntime } from '../src/runtime/node.ts'
+import type { Duration } from '../src/time.ts'
 import { caught, removed, until, ways } from './ways.ts'
+
+/** Texts an exporter serves and the series each writes, which every language reads alike. */
+const prometheus = JSON.parse(
+	readFileSync(
+		join(import.meta.dirname, '..', '..', '..', 'testdata', 'metrics', 'prometheus.json'),
+		'utf8',
+	),
+) as {
+	at: number
+	keep: Duration
+	cases: {
+		name: string
+		text: string
+		labels?: Record<string, string>
+		series?: { name: string; kind: string; labels: Labels; samples: [number, string][] }[]
+		error?: { kind: string; has: string }
+	}[]
+}
+
+/** Labels in the order of their names, so that two sets compare as text. */
+function sorted(labels: Labels): Labels {
+	return Object.fromEntries(Object.entries(labels).sort(([a], [b]) => (a < b ? -1 : 1)))
+}
+
+/** A value's bits, as the vectors spell it and the text format does: NaN, +Inf and -0 among them. */
+function bitsOf(spelled: string): string {
+	const value = spelled === '+Inf' ? Infinity : spelled === '-Inf' ? -Infinity : Number(spelled)
+	const view = new DataView(new ArrayBuffer(8))
+	view.setFloat64(0, value, true)
+	return view.getBigUint64(0, true).toString(16)
+}
+
+/** A series as a vector compares it: its samples' times and their values' bits. */
+function seen(series: Series): string {
+	const view = new DataView(
+		series.values.buffer,
+		series.values.byteOffset,
+		series.values.byteLength,
+	)
+	const samples = Array.from(series.times, (at, i) => [
+		at,
+		view.getBigUint64(i * 8, true).toString(16),
+	])
+	return JSON.stringify([series.name, series.kind, series.labels, samples])
+}
 
 /** The last value of each series of a name, by the labels given. */
 async function last(store: Store, name: string): Promise<Record<string, number>> {
@@ -73,6 +122,34 @@ for (const way of ways) {
 			expect(newest.map(sample => [sample.at.getTime(), sample.labels.host])).toEqual([
 				[at + 3000, 'web-1'],
 			])
+		})
+
+		test('every text of testdata/metrics/prometheus.json writes its series or is refused whole', async () => {
+			for (const each of prometheus.cases) {
+				const options = { labels: each.labels, at: prometheus.at, keep: prometheus.keep }
+				const ingested = store.metrics.ingestPrometheus(each.text, options)
+				if (each.error !== undefined) {
+					const error = (await caught(ingested)) as TinystoreError
+					expect([each.name, error.code]).toEqual([each.name, each.error.kind as Code])
+					expect(error.message).toContain(each.error.has)
+					continue
+				}
+				await ingested
+				const series = each.series ?? []
+				const want = series.map(one => {
+					const samples = one.samples.map(([at, value]) => [at, bitsOf(value)])
+					return JSON.stringify([one.name, one.kind, sorted(one.labels), samples])
+				})
+				const got: string[] = []
+				for (const name of new Set(series.map(one => one.name))) {
+					const read = await store.metrics.read({ name, since: prometheus.keep })
+					got.push(...read.map(one => seen({ ...one, labels: sorted(one.labels) })))
+				}
+				expect([each.name, ...got.sort()]).toEqual([each.name, ...want.sort()])
+			}
+			const bytes = new TextEncoder().encode('# TYPE bytes_given gauge\nbytes_given 1\n')
+			await store.metrics.ingestPrometheus(bytes, { keep: '1d' })
+			expect(await last(store, 'bytes_given')).toEqual({ '{}': 1 })
 		})
 
 		test("an aggregate's buckets are exact by group, and a timer's percentile is its bounds", async () => {

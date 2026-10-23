@@ -1,16 +1,19 @@
 //! The bodies of metrics' fuzz targets, which `fuzz/` runs by hand on
 //! nightly through cargo-fuzz, and tests run on seeds on every platform CI
 //! runs on: what each decoder does with any bytes past the version and the
-//! checksum that guard them. Each gives what it read or fails `corrupt`, and
-//! none panics.
+//! checksum that guard them, and what the reader of an exporter's text does
+//! with any text. A decoder gives what it read or fails `corrupt`, the
+//! reader what it read or `invalid`, and none panics.
 
 use super::clock::{self, MOST_BLOCKS, Times};
 use super::codec::{self, Head, Point};
 use super::directory::{self, Group, Row};
 use super::head::{self, Extent};
+use super::prometheus;
+use super::series::{Labels, Series};
 use crate::compress::checksum::Crc32;
 use crate::metrics::codec::zstd;
-use crate::{ErrorKind, Result};
+use crate::{ErrorKind, Result, unix_millis};
 
 /// The series a head's checksum and a directory's are bound to.
 const SERIES: i64 = 7;
@@ -47,6 +50,48 @@ pub fn rows(bytes: &[u8]) {
     // a directory's count is its second byte, the body's first
     let count = usize::from(body.first().copied().unwrap_or(0)).min(MOST_BLOCKS);
     read(Group::decode(&mut zstd(), &row, vec![times(); count]));
+}
+
+/// Any bytes read as a text in Prometheus' format or OpenMetrics': its series
+/// read again the same from the text they spell, or the text refused,
+/// `invalid` or a `limit`, naming its line.
+pub fn exposition(bytes: &[u8]) {
+    let given = Labels::from([("instance".to_owned(), "web-1".to_owned())]);
+    let series = match prometheus::parse(bytes, &given, 1_790_000_000_000) {
+        Ok(series) => series,
+        Err(error) => {
+            assert!(matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit), "{error}");
+            assert!(error.what().starts_with("metrics: line "), "{error}");
+            return;
+        }
+    };
+    let spelled: String = series.iter().map(spelled).collect();
+    let again = prometheus::parse(spelled.as_bytes(), &Labels::new(), 0).expect("the text a reading spells reads");
+    assert_eq!(seen(&again), seen(&series), "{spelled}");
+}
+
+/// A series of one sample as Prometheus' text spells it, its time in
+/// milliseconds and its value's sign kept, a NaN's among them.
+fn spelled(series: &Series) -> String {
+    let escaped = |value: &str| value.replace('\\', r"\\").replace('"', r#"\""#).replace('\n', r"\n");
+    let labels: Vec<String> =
+        series.labels.iter().map(|(label, value)| format!("{label}=\"{}\"", escaped(value))).collect();
+    let sample = series.samples[0];
+    let value = match sample.value {
+        nan if nan.is_nan() && nan.is_sign_negative() => "-NaN".to_owned(),
+        value => format!("{value:?}"),
+    };
+    format!("{}{{{}}} {value} {}\n", series.name, labels.join(","), unix_millis(sample.at))
+}
+
+/// What a reading gives of each series but its kind, which a text spelt
+/// without its types does not say.
+fn seen(series: &[Series]) -> Vec<(&str, &Labels, i64, u64)> {
+    let sample = |series: &Series| series.samples[0];
+    series
+        .iter()
+        .map(|series| (series.name(), series.labels(), unix_millis(sample(series).at), sample(series).value.to_bits()))
+        .collect()
 }
 
 /// A head its first bytes give: its start, its end, its count and the bits
@@ -149,5 +194,17 @@ mod tests {
         broken(&seed, rows);
         rows(&[]);
         rows(&[0xff; 64]);
+    }
+
+    // contract: MET-15
+    #[test]
+    fn a_text_read_from_any_bytes_gives_the_series_it_spells_or_is_refused_naming_its_line() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../testdata/metrics/prometheus.json")).unwrap();
+        for case in vectors["cases"].as_array().unwrap() {
+            broken(case["text"].as_str().unwrap().as_bytes(), exposition);
+        }
+        exposition(b"\xff\xfe");
+        exposition(&[b'#'; 64]);
     }
 }

@@ -128,6 +128,7 @@ export {
 	type Percentile,
 	type PercentileBucket,
 	type Plan,
+	type PrometheusOptions,
 	type Query as MetricsQuery,
 	type Series,
 	type SeriesInput,
