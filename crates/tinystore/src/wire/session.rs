@@ -49,7 +49,7 @@ const MAX_BODY: u64 = 4 << 20;
 /// commit carries, so an event loop with many writes in flight fills commits.
 const IN_FLIGHT: u64 = 1024;
 /// Bytes of REQUEST and DATA bodies a client may send before credit comes back.
-const CONNECTION_CREDIT: u64 = 8 << 20;
+pub(super) const CONNECTION_CREDIT: u64 = 8 << 20;
 const STREAM_CREDIT: u64 = 2 << 20;
 /// What a client grants a stream when its HELLO does not say.
 const CLIENT_STREAM_CREDIT: u64 = 2 << 20;
@@ -1000,6 +1000,10 @@ impl Shared {
     /// what was answered is written; an item that is not one fails the stream.
     #[cfg(feature = "jobs")]
     fn work_data(self: &Arc<Self>, work: &jobs::Work, frame: &Frame) {
+        // The stream's grant waits for half its window, which nine workers
+        // sharing the connection's window may never reach: the connection
+        // gets its bytes back as soon as the item is read.
+        self.let_go_of(frame.stream, frame.body.len() as u64);
         if let Some(granted) = work.release(frame.body.len() as u64, STREAM_CREDIT) {
             self.send(&[Frame::new(Kind::Credit, frame.stream, granted.to_le_bytes().to_vec())]);
         }
@@ -1380,6 +1384,23 @@ impl Shared {
             opened.left.checked_sub(bytes).ok_or_else(|| format!("a DATA on stream {stream} past its credit"))?;
         opened.held += bytes;
         Ok(())
+    }
+
+    /// Gives the connection back `bytes` a stream holds of it, the stream's
+    /// own credit left as it is: what the server read and let go of before
+    /// it grants the stream more.
+    #[cfg(feature = "jobs")]
+    fn let_go_of(&self, stream: u32, bytes: u64) {
+        let released = match self.lock_open().get_mut(&stream) {
+            Some(opened) => {
+                let released = bytes.min(opened.held);
+                opened.held -= released;
+                released
+            }
+            None => return,
+        };
+        self.let_go(released);
+        self.grant_when_due();
     }
 
     /// Bytes the server let go of, which the next grant gives back.

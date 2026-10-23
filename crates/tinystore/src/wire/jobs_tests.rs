@@ -317,6 +317,37 @@ fn the_server_sends_a_worker_no_more_than_the_credit_its_client_granted() {
     assert!(more.id.is_some(), "a grant lets the next job go");
 }
 
+/// Nine workers on one connection, each sent less than the half of its
+/// stream's window that its own grant waits for: the connection's credit
+/// still comes back, or the client could send none of their answers more.
+#[test]
+fn what_a_client_answers_its_workers_gives_the_connections_credit_back_whatever_their_streams_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = queue(&mut client, "idle");
+    let streams: Vec<u32> = (0..9).map(|_| work(&mut client, handle, Some(1))).collect();
+    let progress = JobsAnswer { progress: Some(format!("\"{}\"", "x".repeat(4000))), ..how(0, "progress") };
+    let item = progress.encode().len() as u64;
+    let each = (870 << 10) / item;
+    let mut sent = 0;
+    for _ in 0..each {
+        for &stream in &streams {
+            answer(&mut client, stream, &progress);
+            sent += item;
+        }
+    }
+
+    let mut granted = 0;
+    while let Some(frame) = client.reader.next(1 << 22).unwrap() {
+        if (frame.kind, frame.stream) == (Kind::Credit, 0) {
+            granted += u64::from(u32::from_le_bytes(frame.body[..4].try_into().unwrap()));
+        }
+    }
+    let window = super::super::session::CONNECTION_CREDIT;
+    assert!(sent > window - (1 << 20), "the client sent near its window: {sent}");
+    assert!(window - sent + granted >= window / 2, "sent {sent}, and the connection granted {granted} back");
+}
+
 #[test]
 fn a_closing_server_hands_its_workers_no_job_more() {
     let dir = tempfile::tempdir().unwrap();
