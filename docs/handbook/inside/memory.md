@@ -55,11 +55,11 @@ resident memory, which also holds your program and SQLite's page caches.
 A `limit` error names which bound it met, what the call wanted and what the
 bound was:
 
-| The error's `limit`      | It means                                         | What to do                       |
-|--------------------------|--------------------------------------------------|----------------------------------|
-| `bytes of a call's rows` | one call's rows passed 64 MiB                    | read a page, or `each`           |
-| `store memory`           | one call alone wanted more than the whole budget | read a page, or raise the budget |
-| `store memory, now`      | the call did not fit beside what others hold now | try again, or do less at once    |
+| The error's `limit`      | It means                                                     | What to do                       |
+|--------------------------|--------------------------------------------------------------|----------------------------------|
+| `bytes of a call's rows` | one call's rows passed 64 MiB                                | read a page, or `each`           |
+| `store memory`           | one call alone wanted more than the whole budget             | read a page, or raise the budget |
+| `store memory, now`      | the call did not fit beside what others hold or wait for now | try again, or do less at once    |
 
 The last one is the only one that a retry can fix. The first two say the
 call is too big, and will be too big every time.

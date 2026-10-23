@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -25,13 +26,43 @@ pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(
 
 pub struct Memory {
     limit: u64,
-    used: Mutex<u64>,
+    held: Mutex<Held>,
     freed: Condvar,
+}
+
+/// What work holds, and the reservations that wait for room in the order
+/// they came. A reservation takes its bytes only while they leave the room
+/// every waiter before it waits for, so that small ones that keep coming
+/// never pass a large one: the large one is served once what was held before
+/// it comes back.
+#[derive(Default)]
+struct Held {
+    used: u64,
+    /// Each waiter's ticket and the bytes it waits for, the first come first.
+    waiting: VecDeque<(u64, u64)>,
+    next_ticket: u64,
+}
+
+impl Held {
+    /// The bytes the waiters before `ticket` wait for; every waiter's for a
+    /// reservation that does not wait.
+    fn ahead(&self, ticket: Option<u64>) -> u64 {
+        let before = |(waiter, _): &&(u64, u64)| ticket.is_none_or(|ticket| *waiter < ticket);
+        self.waiting.iter().take_while(before).fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
+    }
+
+    fn fits(&self, bytes: u64, ahead: u64, limit: u64) -> bool {
+        self.used.saturating_add(ahead).saturating_add(bytes) <= limit
+    }
+
+    fn leave(&mut self, ticket: u64) {
+        self.waiting.retain(|(waiter, _)| *waiter != ticket);
+    }
 }
 
 impl Memory {
     pub fn new(limit: u64) -> Arc<Self> {
-        Arc::new(Self { limit, used: Mutex::new(0), freed: Condvar::new() })
+        Arc::new(Self { limit, held: Mutex::default(), freed: Condvar::new() })
     }
 
     pub fn limit(&self) -> u64 {
@@ -39,7 +70,7 @@ impl Memory {
     }
 
     pub fn used(&self) -> u64 {
-        *self.lock()
+        self.lock().used
     }
 
     /// Whether the store was given a budget; without one, work reserves
@@ -48,7 +79,8 @@ impl Memory {
         self.limit != u64::MAX
     }
 
-    /// Takes `bytes` now, or fails with `Limit`.
+    /// Takes `bytes` now, or fails with `Limit`: so does a call that would
+    /// take the room a waiting reservation waits for.
     pub fn try_reserve(self: &Arc<Self>, bytes: u64, what: &str) -> Result<Reservation> {
         self.take_now(0, bytes, what)?;
         Ok(self.reservation(bytes))
@@ -62,28 +94,42 @@ impl Memory {
     /// Takes `bytes` more for work that holds `held` already, now or not at all.
     fn take_now(&self, held: u64, bytes: u64, what: &str) -> Result<()> {
         self.refuse_past_limit(held.saturating_add(bytes), what)?;
-        let mut used = self.lock();
-        if *used + bytes > self.limit {
-            return Err(self.exhausted(bytes, *used, what));
+        let mut state = self.lock();
+        let ahead = state.ahead(None);
+        if !state.fits(bytes, ahead, self.limit) {
+            return Err(self.exhausted(bytes, &state, ahead, what));
         }
-        *used += bytes;
+        state.used += bytes;
         Ok(())
     }
 
-    /// Takes `bytes`, waiting up to `patience` for other work to give them back.
+    /// Takes `bytes`, waiting up to `patience` for other work to give them
+    /// back; waiters are served in the order they came.
     pub fn reserve(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration) -> Result<Reservation> {
         self.refuse_past_limit(bytes, what)?;
         let deadline = Instant::now() + patience;
-        let mut used = self.lock();
-        while *used + bytes > self.limit {
+        let mut state = self.lock();
+        let ticket = state.next_ticket;
+        state.next_ticket += 1;
+        state.waiting.push_back((ticket, bytes));
+        loop {
+            let ahead = state.ahead(Some(ticket));
+            if state.fits(bytes, ahead, self.limit) {
+                state.leave(ticket);
+                state.used += bytes;
+                return Ok(self.reservation(bytes));
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(self.exhausted(bytes, *used, what));
+                state.leave(ticket);
+                let error = self.exhausted(bytes, &state, ahead, what);
+                drop(state);
+                // the waiters behind it wait for less room now
+                self.freed.notify_all();
+                return Err(error);
             }
-            used = self.freed.wait_timeout(used, left).unwrap_or_else(PoisonError::into_inner).0;
+            state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
         }
-        *used += bytes;
-        Ok(self.reservation(bytes))
     }
 
     /// Takes `bytes` for work that cannot be refused, as a commit already in
@@ -92,16 +138,16 @@ impl Memory {
     /// come back rather than the store believing them free.
     pub(crate) fn hold(self: &Arc<Self>, bytes: u64, patience: Duration) -> Reservation {
         let deadline = Instant::now() + patience;
-        let mut used = self.lock();
-        while used.saturating_add(bytes) > self.limit {
+        let mut state = self.lock();
+        while state.used.saturating_add(bytes) > self.limit {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
             }
-            used = self.freed.wait_timeout(used, left).unwrap_or_else(PoisonError::into_inner).0;
+            state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
         }
-        *used = used.saturating_add(bytes);
-        drop(used);
+        state.used = state.used.saturating_add(bytes);
+        drop(state);
         self.reservation(bytes)
     }
 
@@ -114,12 +160,19 @@ impl Memory {
         Err(self.named(error, STORE_MEMORY, bytes))
     }
 
-    fn exhausted(&self, bytes: u64, used: u64, what: &str) -> Error {
+    /// A call that does not fit beside what is held and what the waiters
+    /// before it, `ahead`, wait for.
+    fn exhausted(&self, bytes: u64, held: &Held, ahead: u64, what: &str) -> Error {
+        let used = held.used;
+        let waited = match ahead {
+            0 => String::new(),
+            ahead => format!(", and {ahead} bytes waited for by work that came before it"),
+        };
         let error = Error::limit(format!(
-            "{what}: {bytes} bytes do not fit in the store's memory, {used} of {} bytes in use",
+            "{what}: {bytes} bytes do not fit in the store's memory, {used} of {} bytes in use{waited}",
             self.limit
         ));
-        self.named(error, STORE_MEMORY_NOW, used.saturating_add(bytes))
+        self.named(error, STORE_MEMORY_NOW, used.saturating_add(ahead).saturating_add(bytes))
     }
 
     /// A limit of the store's memory with its facts, which every SDK reads.
@@ -132,14 +185,14 @@ impl Memory {
     }
 
     fn give_back(&self, bytes: u64) {
-        let mut used = self.lock();
-        *used -= bytes;
-        drop(used);
+        let mut state = self.lock();
+        state.used -= bytes;
+        drop(state);
         self.freed.notify_all();
     }
 
-    fn lock(&self) -> MutexGuard<'_, u64> {
-        self.used.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, Held> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -230,6 +283,38 @@ mod tests {
         drop(held);
         assert_eq!(waiter.join().unwrap().unwrap(), 60);
         assert_eq!(memory.used(), 0);
+    }
+
+    // contract: STORE-05
+    #[test]
+    fn a_large_waiter_is_served_before_the_small_reservations_that_come_after_it() {
+        let memory = Memory::new(100);
+        let mut held = std::collections::VecDeque::from([
+            memory.try_reserve(30, "a dashboard read").unwrap(),
+            memory.try_reserve(30, "a dashboard read").unwrap(),
+        ]);
+        let large = {
+            let memory = Arc::clone(&memory);
+            thread::spawn(move || memory.reserve(80, "a records merge", Duration::from_secs(3)).map(|r| r.bytes()))
+        };
+        thread::sleep(Duration::from_millis(50));
+        // small reads keep coming, each taking the room the last gave back
+        let mut turn = 0;
+        while !large.is_finished() {
+            let small = match turn % 3 {
+                0 => memory.try_reserve(30, "a dashboard read"),
+                1 => memory.reserve(30, "a dashboard read", Duration::from_millis(5)),
+                _ => {
+                    let mut grown = memory.nothing();
+                    grown.grow(30, "a dashboard read").map(|()| grown)
+                }
+            };
+            held.extend(small.ok());
+            held.pop_front();
+            turn += 1;
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(large.join().unwrap().unwrap(), 80, "the merge waited its turn and got its bytes");
     }
 
     #[test]
