@@ -392,7 +392,8 @@ nothing and pays nothing for it.
 pub fn try_reserve(self: &Arc<Self>, bytes: u64, what: &str) -> Result<Reservation>
 ```
 
-Takes `bytes` now, or fails with `Limit`.
+Takes `bytes` now, or fails with `Limit`: so does a call that would
+take the room a waiting reservation waits for.
 
 ### Memory.nothing
 
@@ -408,7 +409,9 @@ A reservation of nothing yet, which grows as its work holds more.
 pub fn reserve(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration) -> Result<Reservation>
 ```
 
-Takes `bytes`, waiting up to `patience` for other work to give them back.
+Takes `bytes`, waiting up to `patience` for other work to give them
+back; waiters are served in the order they came, and a call that
+takes nothing waits for none of them.
 
 ## Reservation
 
@@ -561,10 +564,12 @@ pub fn memory(&self) -> &Arc<Memory>
 pub fn close(&self) -> Result<()>
 ```
 
-Stops background work, waiting for the task under way, closes every
-engine, the last opened first, and lets go of the directory. The first
-engine that fails to close is the error; the others still close. A
-second call does nothing, and neither does the last clone's drop after.
+Stops background work, waiting for the task under way, then every
+handler the engines run, a queue's or a channel's, waiting for those
+running; then closes every engine, the last opened first, and lets go
+of the directory. The first engine that fails to close is the error;
+the others still close. A second call does nothing, and neither does
+the last clone's drop after.
 
 ### Store.tx
 
