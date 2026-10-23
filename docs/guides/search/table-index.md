@@ -194,6 +194,16 @@ dropped, err := search.Drop(ctx, db, "articles_search")
 db.drop_search_index("articles_search")?;
 ```
 
+A drop runs in a transaction of its own. Inside `db.tx` it fails with an
+invalid error and changes nothing, so drop the index after the transaction.
+
+If the table is dropped or renamed while its index exists, for example by a
+SQLite shell beside the store, the index can no longer read the table's rows.
+Writes to the rest of the database go on, and the store logs each row that it
+leaves out of the index. A write to the renamed table fails with an invalid
+error that names the index, so drop the index and open a new one on the new
+name.
+
 ## Why this design?
 
 **Why the index follows the table.** With a separate search service, the

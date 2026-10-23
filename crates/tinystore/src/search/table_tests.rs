@@ -266,6 +266,25 @@ fn a_write_from_beside_the_store_reaches_the_index_at_the_store_s_next_write() {
 
 // contract: SRCH-08
 #[test]
+fn keys_left_from_beside_the_store_for_a_table_it_then_renamed_hold_up_no_write_and_no_drop() {
+    let f = fixture();
+    let articles = f.articles();
+    f.insert(1, "bread", "");
+    f.beside().execute_batch("delete from articles where id = 1; alter table articles rename to posts;").unwrap();
+    f.db.exec(sql!("create table notes (id integer primary key, body text)")).unwrap();
+    f.db.exec(sql!("insert into notes (body) values ('after')")).unwrap();
+    let renamed = f.db.exec(sql!("insert into posts (id, title) values (2, 'rye')")).unwrap_err();
+    assert_eq!(renamed.kind(), ErrorKind::Invalid, "{renamed}");
+    assert!(renamed.to_string().contains("index articles_search"), "{renamed}");
+    assert!(f.db.drop_search_index("articles_search").unwrap());
+    let pending: i64 = f.db.scalar(sql!("select count(*) from _tinystore_search_pending")).unwrap();
+    assert_eq!(pending, 0, "the drop took its keys with it");
+    f.db.exec(sql!("insert into posts (id, title) values (2, 'rye')")).unwrap();
+    assert_eq!(articles.search("bread").run().unwrap_err().kind(), ErrorKind::Invalid);
+}
+
+// contract: SRCH-08
+#[test]
 fn a_row_written_while_no_process_had_its_index_open_reaches_it_at_its_next_open() {
     let f = fixture();
     drop(f.articles());

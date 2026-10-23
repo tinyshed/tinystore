@@ -26,7 +26,7 @@ use super::open::Current;
 use super::rebuild::read_current;
 use super::settings::{Settings, Table};
 use super::write::{self, Incoming, Prepared, execute};
-use crate::sqlite::{Left, Settle, Tx, sql_error};
+use crate::sqlite::{Left, Settle, Tx, given_sql_error, sql_error};
 use crate::{Error, ErrorKind, Result};
 
 const ANY_PENDING: &str = "select exists (select 1 from _tinystore_search_pending)";
@@ -464,7 +464,10 @@ fn read(connection: &Connection, settings: &Settings, key: &SqlValue) -> Result<
     let mut seen = HashSet::new();
     columns.retain(|column| seen.insert(*column));
     let sql = format!("select * from {} where {} = ?1", quoted(&table.name), quoted(&table.key));
-    let failed = |error| sql_error(format!("read table {}", table.name), error);
+    // A table or a key column gone is the program's schema, not the store's
+    // failure: `invalid`, which leaves out a row a process beside the store
+    // left, rather than failing every later write of the file.
+    let failed = |error| given_sql_error(format!("read table {}", table.name), error);
     let mut select = connection.prepare_cached(&sql).map_err(failed)?;
     // A kept statement compiled before a migration changed the table is
     // compiled again at its step, so its columns are named only after it.
