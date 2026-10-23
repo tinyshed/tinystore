@@ -481,20 +481,22 @@ fn write(c: &Connection, queue: &QueueState, lease: &Lease, how: &How, now: i64)
         return Ok(settled);
     }
     let held = held(c, queue, lease)?;
+    if let Some(settled) = superseded(c, queue, lease, (&held, how), now)? {
+        return Ok(settled);
+    }
     let ran = lease.last_run(now);
     match how {
         How::Done => done(c, queue, lease, &held, now),
         How::Retry { at, cause } => retry(c, queue, lease, &held, (*at, cause), now),
         How::Fail { cause } => fail(c, queue, lease, &held, cause, now),
         How::Snooze { at } => {
-            let due = earliest(*at, held.again);
-            let to = Moved { next: due, at: lease.at, attempt: held.attempt, error: held.error.clone(), ran };
+            let to = Moved { next: *at, at: lease.at, attempt: held.attempt, error: held.error.clone(), ran };
             move_job(c, queue, lease, &to)?;
-            Ok(Settled { due: Some(due), ..Settled::default() })
+            Ok(Settled { due: Some(*at), ..Settled::default() })
         }
         How::GiveBack => {
             let to = Moved {
-                next: earliest(lease.next, held.again),
+                next: lease.next,
                 at: lease.at,
                 attempt: held.attempt,
                 error: held.error.clone(),
@@ -504,6 +506,29 @@ fn write(c: &Connection, queue: &QueueState, lease: &Lease, how: &How, now: i64)
             Ok(Settled { due: Some(now), ..Settled::default() })
         }
         How::Extend { .. } => unreachable!("an extension returned above"),
+    }
+}
+
+/// Starts the run a set asked for while the job ran, where the run under way
+/// would otherwise go on: after a retry, a snooze or a give back. Going on, it
+/// would read the set's value, its steps answering with what they kept for
+/// the value before, and run at its own time rather than the set's. A done
+/// or a fail ends the run, and starts the set's by itself.
+fn superseded(
+    c: &Connection,
+    queue: &QueueState,
+    lease: &Lease,
+    (held, how): (&HeldRow, &How),
+    now: i64,
+) -> Result<Option<Settled>> {
+    let error = match how {
+        How::Retry { cause, .. } => Some(bounded(cause)),
+        How::Snooze { .. } | How::GiveBack => None,
+        How::Done | How::Fail { .. } | How::Extend { .. } => return Ok(None),
+    };
+    match (held.again, next_run(lease, held, now)) {
+        (Some(_), Some(next)) => run_again(c, queue, lease, (next, error), now).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -651,10 +676,6 @@ fn move_job(c: &Connection, queue: &QueueState, lease: &Lease, to: &Moved) -> Re
         Some(key) => rows::follow(c, queue.id, key, lease.next, to.next),
         None => Ok(()),
     }
-}
-
-fn earliest(due: i64, again: Option<i64>) -> i64 {
-    again.map_or(due, |again| again.min(due))
 }
 
 /// The wait after attempt `attempt` failed: the initial span, doubling, never

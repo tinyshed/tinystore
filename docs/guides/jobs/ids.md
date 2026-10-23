@@ -59,6 +59,13 @@ while `dedupe` keeps it once the job is done.
 `add`, `update` and `cancel` answer rather than throw: a message being sent
 says it is too late to edit, and the program shows that.
 
+A `set` of a running job waits for the run under way to end, whether it is
+done, fails, retries or snoozes, and then starts the job anew: with the set's
+value, at the time the set names or else at once, its attempts counted from
+one and the steps of the run before gone. A job that repeats and is set
+without a time is the exception: its run under way goes on through its
+retries, and the set's run is the repeat's next.
+
 ## Debounce and throttle
 
 ```ts

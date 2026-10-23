@@ -381,6 +381,60 @@ fn a_worker_its_program_let_go_of_still_stops_when_the_store_closes() {
     assert!(closing.elapsed() < Duration::from_secs(5), "{:?}", closing.elapsed());
 }
 
+// contract: JOB-06
+#[test]
+fn a_set_while_its_job_runs_starts_a_run_of_its_own_after_a_retry_or_a_snooze() {
+    let f = fixture();
+    let invoices = f.store.queue::<Push>("invoices").open().unwrap();
+    for id in ["retried", "snoozed"] {
+        invoices.id(id).add(&Push { user: 100 }).unwrap();
+        let claimed = invoices.claim().unwrap().unwrap();
+        let charged: i64 = claimed.run().step("charge", || -> Result<i64> { Ok(100) }).unwrap();
+        assert_eq!(charged, 100);
+        invoices.id(id).delay(HOUR).set(&Push { user: 120 }).unwrap();
+        let run = claimed.run();
+        let outcome = if id == "retried" { run.retry(MINUTE) } else { run.snooze(MINUTE) };
+        claimed.settle(outcome).unwrap();
+        let job = invoices.get(id).unwrap().unwrap();
+        assert_eq!((job.at, job.attempt, job.value.user), (f.now() + HOUR, 0, 120), "{id}: the set's run, at its time");
+
+        f.clock.advance(HOUR);
+        let claimed = invoices.claim().unwrap().unwrap();
+        let user = claimed.value.user;
+        let charged: i64 = claimed.run().step("charge", || -> Result<i64> { Ok(user) }).unwrap();
+        assert_eq!(charged, 120, "{id}: the run before kept no answer for the set's value");
+        claimed.settle(()).unwrap();
+    }
+}
+
+// contract: JOB-01
+#[test]
+fn a_set_of_a_job_a_stopping_worker_gives_back_waits_for_the_sets_time() {
+    let f = fixture();
+    let pushes = f.store.queue::<Push>("pushes").open().unwrap();
+    pushes.id("first").add(&Push { user: 1 }).unwrap();
+    pushes.id("second").add(&Push { user: 2 }).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let worker = pushes
+        .work(move |push: Push, _run| -> Result<()> {
+            started_tx.send(push.user).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(started_rx.recv().unwrap(), 1, "one handler, the second job held for it");
+    eventually(|| leases(&pushes) == 2);
+    pushes.id("second").delay(HOUR).set(&Push { user: 3 }).unwrap();
+    let stopping = thread::spawn(move || worker.stop());
+    eventually(|| leases(&pushes) == 1); // the second given back while the first's handler runs
+    release_tx.send(()).unwrap();
+    stopping.join().unwrap();
+    let second = pushes.get("second").unwrap().unwrap();
+    assert_eq!((second.state, second.at, second.value.user), (State::Scheduled, f.now() + HOUR, 3));
+}
+
 #[cfg(feature = "replication")]
 #[test]
 fn a_commit_a_copy_applied_leaves_the_queues_open_here_as_they_were() {
