@@ -8,12 +8,12 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use super::buffer::{BUFFER, Buffer};
 use super::engine::Records;
-use crate::console::{Console, Layer, Told, told_options};
-use crate::{Error, Result, Store};
+use crate::console::{Console, Layer, Line, Told, own_line, told_options};
+use crate::{Error, Result, Store, unix_nanos};
 
 /// What opens a logger: its stream, how it prints, the lines it holds.
 pub struct LoggerBuilder<'s> {
@@ -60,6 +60,7 @@ impl<'s> LoggerBuilder<'s> {
         let records = Records::of(self.store)?;
         let stream = records.open_stream(&self.stream, self.keep).map_err(|error| error.within(&shown))?;
         let console = Arc::new(Console::new(&self.stream, self.told));
+        say_unheard_warnings(&console);
         #[cfg(feature = "config")]
         let following = crate::log_config::follow(self.store, &console).map_err(|error| error.within(&shown))?;
         let buffer = Buffer::open(&records, stream, self.buffer, Some(Arc::clone(&console)))?;
@@ -67,6 +68,19 @@ impl<'s> LoggerBuilder<'s> {
         #[cfg(feature = "config")]
         let layer = layer.following(following);
         Ok(layer)
+    }
+}
+
+/// Prints what the store warned of before anyone listened, a slow SQLite
+/// build: the store opens, and its first connection with it, before the
+/// subscriber that holds this logger is set.
+fn say_unheard_warnings(console: &Console) {
+    for warning in crate::sqlite::unheard_warnings() {
+        console.say(&Line {
+            level: Some(4),
+            message: Some((*warning).to_owned()),
+            ..own_line(unix_nanos(SystemTime::now()))
+        });
     }
 }
 

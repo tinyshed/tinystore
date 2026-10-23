@@ -1,5 +1,6 @@
 use std::path::Path;
-use std::sync::Once;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::config::DbConfig;
 use rusqlite::limits::Limit;
@@ -45,29 +46,46 @@ fn keep_to_its_file(connection: &Connection) -> rusqlite::Result<()> {
     given::guard(connection)
 }
 
+const SHARED_PAGE_CACHE: &str = "SQLite was built with SQLITE_ENABLE_MEMORY_MANAGEMENT, so every connection \
+    shares one page cache behind one mutex and readers stop one another: point reads from 16 threads ran 7-9x \
+    slower (research rust-slice-2026-10-10); build with LIBSQLITE3_FLAGS=\"SQLITE_DQS=0 \
+    -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB -DHAVE_FDATASYNC=1\"";
+
+const OWN_MUTEXES: &str = "SQLite had started before the store opened and keeps its own mutexes, which park a \
+    thread at once: a few threads reading one file wait on each other; open the store before the program's own SQLite";
+
+/// The warnings of a slow build, once they were found, and whether they were
+/// logged before any subscriber listened.
+static SLOW_BUILD: OnceLock<(Vec<&'static str>, AtomicBool)> = OnceLock::new();
+
 /// Says once what the SQLite linked in costs readers, where it was built or
 /// started without what the workspace gives it: a program that builds the
 /// crate elsewhere finds out from its log, not from a profile.
 fn warn_of_a_slow_build() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
+    SLOW_BUILD.get_or_init(|| {
+        let mut warnings = Vec::new();
         if super::memory::shares_page_cache() {
-            tracing::warn!(
-                target: "tinystore",
-                "SQLite was built with SQLITE_ENABLE_MEMORY_MANAGEMENT, so every connection shares one page cache \
-                 behind one mutex and readers stop one another: build with \
-                 LIBSQLITE3_FLAGS=\"SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE_DBPAGE_VTAB \
-                 -DHAVE_FDATASYNC=1\""
-            );
+            warnings.push(SHARED_PAGE_CACHE);
         }
         if !super::mutexes_given() {
-            tracing::warn!(
-                target: "tinystore",
-                "SQLite had started before the store opened and keeps its own mutexes, which park a thread at once: \
-                 a few threads reading one file wait on each other; open the store before the program's own SQLite"
-            );
+            warnings.push(OWN_MUTEXES);
         }
+        for warning in &warnings {
+            tracing::warn!(target: "tinystore", "{warning}");
+        }
+        // The guides set the subscriber up after the store opens, with the
+        // store's logger in it: these went nowhere, and that logger says them.
+        (warnings, AtomicBool::new(!tracing::dispatcher::has_been_set()))
     });
+}
+
+/// The warnings of a slow build that no subscriber heard, once: what a
+/// store's logger prints first.
+pub(crate) fn unheard_warnings() -> &'static [&'static str] {
+    match SLOW_BUILD.get() {
+        Some((warnings, unheard)) if unheard.swap(false, Ordering::Relaxed) => warnings,
+        _ => &[],
+    }
 }
 
 fn flags(role: Role) -> OpenFlags {

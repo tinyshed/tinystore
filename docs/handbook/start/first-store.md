@@ -45,9 +45,9 @@ LIBSQLITE3_FLAGS = "SQLITE_DQS=0 -USQLITE_ENABLE_MEMORY_MANAGEMENT SQLITE_ENABLE
 | Rust         | the Rust toolchain itself | the crate, compiled into your program                     |
 
 Rust programs compile the core in, so a Rust program is the store. It builds
-SQLite too, with the flags in `.cargo/config.toml`: without them readers wait
-on one another, which the store logs once when it opens, and a synced commit
-on Linux takes 1.5x as long. The other
+SQLite too, with the flags in `.cargo/config.toml`: without them many readers
+at once wait on one another, which the store's logger warns of in its first
+lines, and a synced commit on Linux takes 1.5x as long. The other
 languages talk to the same core in a separate process by default, as
 [How the store runs](#how-the-store-runs) explains below.
 
