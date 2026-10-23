@@ -72,6 +72,50 @@ pub(crate) fn pass_on(store: &Store, file: &str, op: Vec<u8>) -> Result<Vec<u8>>
 /// Passes a write on, and says whether this node's copy held its commit within
 /// the wait.
 pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Vec<u8>, bool)> {
+    let node = toward_home(store, file)?;
+    // the home's error names what failed there already; this node's own says the file
+    let written = node.write_toward(file, op, ANSWER_WAIT).map_err(|error| error.within(file))?;
+    let answer = written.outcome.map_err(Refusal::into_error)?;
+    let mut held = true;
+    for (name, sequence) in &written.waits {
+        held &= wait_applied(node, name, *sequence);
+    }
+    Ok((answer, held))
+}
+
+/// Passes `op` on as `pass_on` does, and waits for nothing. A link must be up
+/// now, or it fails `unavailable` at once, and `answered` may then never be
+/// called. The home's answer goes to `answered` on the link's thread, none
+/// when the link broke before it came, and this node's copy may not hold the
+/// write yet.
+#[cfg(feature = "kv")]
+pub(crate) fn pass_on_then(
+    store: &Store,
+    file: &str,
+    op: Vec<u8>,
+    answered: impl FnOnce(Option<Result<Vec<u8>>>) + Send + 'static,
+) -> Result<()> {
+    let node = toward_home(store, file)?;
+    let answered = Box::new(move |written: Option<super::follow::Written>| {
+        answered(written.map(|written| written.outcome.map_err(Refusal::into_error)));
+    });
+    node.write_toward_then(file, op, answered).map_err(|error| error.within(file))
+}
+
+/// Passes many writes on at once as `pass_on_then` does, run in order at the
+/// home, which stops at the first that fails.
+#[cfg(feature = "kv")]
+pub(crate) fn pass_on_all_then(
+    store: &Store,
+    file: &str,
+    requests: &[Vec<u8>],
+    answered: impl FnOnce(Option<Result<Vec<u8>>>) + Send + 'static,
+) -> Result<()> {
+    pass_on_then(store, file, batch(requests), answered)
+}
+
+/// The node a write of the copy `file` passes on through.
+fn toward_home<'a>(store: &'a Store, file: &str) -> Result<&'a std::sync::Arc<State>> {
     if store.is_beside() {
         return Err(Error::invalid(format!(
             "{file}: the store is opened beside the process that holds it, and reads only"
@@ -86,14 +130,7 @@ pub(crate) fn pass_on_held(store: &Store, file: &str, op: Vec<u8>) -> Result<(Ve
             format!("{file} is a copy, and this node takes from no node its writes could go to"),
         ));
     }
-    // the home's error names what failed there already; this node's own says the file
-    let written = node.write_toward(file, op, ANSWER_WAIT).map_err(|error| error.within(file))?;
-    let answer = written.outcome.map_err(Refusal::into_error)?;
-    let mut held = true;
-    for (name, sequence) in &written.waits {
-        held &= wait_applied(node, name, *sequence);
-    }
-    Ok((answer, held))
+    Ok(node)
 }
 
 /// Asks the home to make the file `name`, which this node waits for and the

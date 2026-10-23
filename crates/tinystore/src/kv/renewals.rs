@@ -3,9 +3,11 @@
 //! A copy's reads ask its home for theirs, passed on together once a second.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::cells;
+#[cfg(feature = "replication")]
+use super::forward;
 use crate::Result;
 use crate::sqlite::File;
 use crate::sync::lock;
@@ -20,15 +22,28 @@ const BATCH: usize = 10_000;
 #[cfg(feature = "replication")]
 const PASSED: usize = 1024;
 
+/// How long a read on a copy in its key's last minute waits for the home to
+/// answer its renewal; past it the read returns, and the renewal goes on.
+#[cfg(feature = "replication")]
+const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug, Default)]
 pub(crate) struct Renewals {
     waiting: Mutex<HashMap<(i64, Vec<u8>), Renewal>>,
-    /// A copy's renewals, each with the request its home runs.
-    passing: Mutex<HashMap<Key, (Renewal, Vec<u8>)>>,
+    /// A copy's renewals, which the answers of those passed on put back when
+    /// they found no way home.
+    passing: Arc<Passing>,
 }
 
 /// A key by its bucket's id and its path.
 type Key = (i64, Vec<u8>);
+
+/// A copy's renewals by their key, each with the request its home runs.
+type Passing = Mutex<HashMap<Key, (Renewal, Vec<u8>)>>;
+
+/// Renewals taken out of `Passing` to pass home.
+#[cfg(feature = "replication")]
+type Passed = Vec<(Key, (Renewal, Vec<u8>))>;
 
 /// A renewal is bound to the cell its read saw, so that it never extends a key
 /// written again, renewed or deleted since.
@@ -94,39 +109,105 @@ impl Renewals {
         passing.insert(key, (renewal, request));
     }
 
-    /// Passes a copy's renewals to its home, which renews them as its own
-    /// reads do, and says how many it passed; the first failure is the error.
+    /// Passes to its home the renewals a copy kept, `PASSED` at most, and says
+    /// how many. It runs on the store's scheduler beside every engine's
+    /// periodic work, so it waits for nothing: the renewals leave over the
+    /// link up now, and the home's answer comes back on the link's thread.
     ///
-    /// A home out of reach keeps them for the next pass, unless a read has
-    /// asked again since; one its home ran already renews nothing a second
-    /// time, bound to what it saw. Those the home refused are let go, since
-    /// one it always refuses would hold every other back, and the key's next
-    /// read asks again.
+    /// Renewals that found no way home, with no link up or one that broke
+    /// before the answer, are kept for the next pass, unless a read asked
+    /// again since. A home that runs one twice renews nothing the second time,
+    /// bound to what its read saw. The home answers for all of them, renewing
+    /// what it can, so none holds back the others; a home that refuses them
+    /// whole, as one of a release that knows no renewal does, has them let go,
+    /// and each key's next read asks again.
     #[cfg(feature = "replication")]
     pub(crate) fn pass_home(&self, store: &crate::Store) -> Result<usize> {
-        let asked: Vec<_> = lock(&self.passing).drain().collect();
-        let (mut passed, mut first_failure) = (0, None);
-        for (index, batch) in asked.chunks(PASSED).enumerate() {
-            let requests: Vec<Vec<u8>> = batch.iter().map(|(_, (_, request))| request.clone()).collect();
-            match super::forward::pass_on_all(store, &requests) {
-                Ok(()) => passed += batch.len(),
-                Err(error) if error.kind() == crate::ErrorKind::Unavailable => {
-                    let mut passing = lock(&self.passing);
-                    for (key, kept) in &asked[index * PASSED..] {
-                        passing.entry(key.clone()).or_insert_with(|| kept.clone());
-                    }
-                    return Err(error);
+        let passed = self.take_passing();
+        if passed.is_empty() {
+            return Ok(0);
+        }
+        let count = passed.len();
+        let requests: Vec<Vec<u8>> = passed.iter().map(|(_, (_, request))| request.clone()).collect();
+        let (passing, kept) = (Arc::clone(&self.passing), passed.clone());
+        let sent = forward::pass_on_all_then(store, &requests, move |answer| {
+            if found_no_way_home(answer.as_ref()) {
+                keep_again(&passing, kept);
+            }
+        });
+        match sent {
+            Ok(()) => Ok(count),
+            Err(error) => {
+                if forward::no_way_home(&error) {
+                    keep_again(&self.passing, passed);
                 }
-                Err(error) => {
-                    first_failure.get_or_insert(error);
-                }
+                Err(error)
             }
         }
-        first_failure.map_or(Ok(passed), Err)
+    }
+
+    /// Passes to its home at once the renewal of a read in its key's last
+    /// minute, and says whether the home renewed it; none when no answer came
+    /// within `ANSWER_WAIT`, the renewal on its way. One that finds no way home
+    /// is kept for the next pass, with no wait for a link.
+    #[cfg(feature = "replication")]
+    pub(crate) fn pass_now(&self, store: &crate::Store, key: Key, renewal: Renewal, request: Vec<u8>) -> Option<bool> {
+        let (told, answer) = std::sync::mpsc::channel();
+        let (passing, kept) = (Arc::clone(&self.passing), vec![(key.clone(), (renewal, request.clone()))]);
+        let sent = forward::pass_on_then(store, request.clone(), move |answer| {
+            if found_no_way_home(answer.as_ref()) {
+                keep_again(&passing, kept);
+            }
+            let _ = told.send(answer.and_then(Result::ok).and_then(|bytes| forward::found(&bytes).ok()));
+        });
+        if let Err(error) = sent {
+            if forward::no_way_home(&error) {
+                keep_again(&self.passing, vec![(key, (renewal, request))]);
+            }
+            return None;
+        }
+        answer.recv_timeout(ANSWER_WAIT).ok().flatten()
+    }
+
+    #[cfg(feature = "replication")]
+    fn take_passing(&self) -> Passed {
+        let mut passing = lock(&self.passing);
+        let keys: Vec<Key> = passing.keys().take(PASSED).cloned().collect();
+        keys.into_iter().filter_map(|key| passing.remove_entry(&key)).collect()
+    }
+
+    /// How many renewals wait for the next flush, and for the next pass home.
+    #[cfg(all(test, feature = "replication", feature = "sql"))]
+    pub(crate) fn kept(&self) -> (usize, usize) {
+        (self.lock().len(), lock(&self.passing).len())
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<(i64, Vec<u8>), Renewal>> {
         self.waiting.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Whether a renewal passed on found no way home, which a later pass may:
+/// the link broke before the answer, or a node on the way reached no home.
+#[cfg(feature = "replication")]
+fn found_no_way_home<T>(answer: Option<&Result<T>>) -> bool {
+    match answer {
+        None => true,
+        Some(Err(error)) => forward::no_way_home(error),
+        Some(Ok(_)) => false,
+    }
+}
+
+/// Keeps renewals passed on for the next pass again, unless a read asked
+/// again since.
+#[cfg(feature = "replication")]
+fn keep_again(passing: &Passing, passed: Passed) {
+    let mut passing = lock(passing);
+    for (key, kept) in passed {
+        if passing.len() >= MOST_WAITING {
+            return;
+        }
+        passing.entry(key).or_insert(kept);
     }
 }
 

@@ -234,7 +234,20 @@ pub(crate) fn run(store: &Store, lenders: crate::replication::Lenders<'_>, bytes
         }
         _ => FILE.to_owned(),
     };
-    Ok((answer_bytes(&call_here(store, lenders, handle, &owners, &key, call)?), file))
+    let renews = matches!(call, Call::Renew(_));
+    let answer = match call_here(store, lenders, handle, &owners, &key, call) {
+        // the key's next read asks for its renewal again: one this node
+        // cannot run renews nothing rather than fail the batch it came in
+        Err(error) if renews && !no_way_home(&error) => Answer::Found(false),
+        answer => answer?,
+    };
+    Ok((answer_bytes(&answer), file))
+}
+
+/// Whether a call passed on failed for want of a way to its home, which a
+/// later try may find: no link reached it, or one broke before it answered.
+pub(crate) fn no_way_home(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::Unavailable | ErrorKind::OutcomeUnknown)
 }
 
 fn handle_in(at: &mut In<'_>) -> Result<Handle> {
@@ -553,9 +566,27 @@ pub(crate) fn pass_on(store: &Store, handle: &Handle, owners: &[String], key: &s
     crate::replication::pass_on(store, FILE, encode(handle, owners, key, call))
 }
 
-/// Passes calls `encode` made to the home of the copy, run there in order.
-pub(crate) fn pass_on_all(store: &Store, requests: &[Vec<u8>]) -> Result<()> {
-    crate::replication::pass_on_all(store, FILE, requests)
+/// Passes a call `encode` made to the home of the copy, and waits for
+/// nothing: `answered` is given the answer's bytes, none when the link broke
+/// first.
+pub(crate) fn pass_on_then(
+    store: &Store,
+    request: Vec<u8>,
+    answered: impl FnOnce(Option<Result<Vec<u8>>>) + Send + 'static,
+) -> Result<()> {
+    crate::replication::pass_on_then(store, FILE, request, answered)
+}
+
+/// Passes calls `encode` made to the home of the copy, run there in order,
+/// and waits for nothing: `answered` is given whether they ran.
+pub(crate) fn pass_on_all_then(
+    store: &Store,
+    requests: &[Vec<u8>],
+    answered: impl FnOnce(Option<Result<()>>) + Send + 'static,
+) -> Result<()> {
+    crate::replication::pass_on_all_then(store, FILE, requests, move |answer| {
+        answered(answer.map(|answer| answer.map(drop)));
+    })
 }
 
 fn raw_out<'a>(out: &'a mut Out, raw: &Raw) -> &'a mut Out {

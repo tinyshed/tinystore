@@ -649,6 +649,17 @@ impl State {
         }
     }
 
+    /// Passes a write of `file` on toward its home as `write_toward` does,
+    /// over a link up now, and hands its answer to `answered`.
+    #[cfg(feature = "kv")]
+    pub(crate) fn write_toward_then(&self, file: &str, op: Vec<u8>, answered: super::follow::Answered) -> Result<()> {
+        let direct = lock(&self.direct).values().find(|direct| direct.follows(file)).cloned();
+        match direct {
+            Some(direct) => direct.upstream.write_then(op, answered),
+            None => self.upstream.write_then(op, answered),
+        }
+    }
+
     /// The copies a direct link takes, each with the address it reaches, as
     /// their log directories keep them.
     fn files_taken_directly(&self) -> Result<Vec<(String, String)>> {

@@ -696,7 +696,10 @@ impl<V> Bucket<V> {
         };
         #[cfg(feature = "replication")]
         if self.is_copy() {
-            return self.renew_at_home(key, path, cell, renewal, now);
+            if self.renew_at_home(key, path, renewal, now) {
+                cell.expires = Some(renewal.until);
+            }
+            return cell;
         }
         let renewals = self.scope.kv.renewals();
         if renewal.seen - now >= RENEW_AT_ONCE {
@@ -765,37 +768,34 @@ impl<V> Bucket<V> {
     }
 
     /// Asks the home of the copy for a due renewal, as the home's own reads
-    /// renew a key: with the next pass of renewals, or before the read
-    /// returns when the key has less than a minute left. A store opened
-    /// beside the process that holds it passes nothing on, and renews nothing.
-    fn renew_at_home(&self, key: &str, path: Vec<u8>, mut cell: Cell, renewal: Renewal, now: i64) -> Cell {
-        let (Ok(store), Ok(branch)) = (self.scope.kv.store(), self.scope.branch()) else { return cell };
+    /// renew a key, and says whether the home renewed it before this returned:
+    /// with the next pass of renewals, or at once when the key has less than a
+    /// minute left. That waits for the home's answer, a few seconds at most,
+    /// and neither for a link nor for this copy to hold the renewal. A store
+    /// opened beside the process that holds it passes nothing on.
+    fn renew_at_home(&self, key: &str, path: Vec<u8>, renewal: Renewal, now: i64) -> bool {
+        let (Ok(store), Ok(branch)) = (self.scope.kv.store(), self.scope.branch()) else { return false };
         if store.is_beside() {
-            return cell;
+            return false;
         }
         let request = forward::encode(&self.handle(), branch.owners(), key, &forward::Call::Renew(renewal));
         let renewals = self.scope.kv.renewals();
         if renewal.seen - now >= RENEW_AT_ONCE {
             renewals.pass(self.scope.id, path, renewal, request);
-            return cell;
+            return false;
         }
-        let renewed = crate::replication::pass_on(&store, forward::FILE, request.clone());
-        match renewed.and_then(|answer| forward::found(&answer)) {
-            Ok(true) => cell.expires = Some(renewal.until),
-            Ok(false) => {}
-            Err(_) => renewals.pass(self.scope.id, path, renewal, request),
-        }
-        cell
+        renewals.pass_now(&store, (self.scope.id, path), renewal, request) == Some(true)
     }
 
     /// Renews `key` for a read on a copy, as this node's own reads do: with
     /// the next flush, or at once when it has less than a minute left; says
-    /// whether it renewed it now. A node that holds a copy passes it on.
+    /// whether it renewed it now. A node that holds a copy passes it on as its
+    /// own reads do.
     pub(crate) fn renew_as(&self, key: &str, renewal: Renewal) -> Result<bool> {
-        if self.is_copy() {
-            return forward::found(&self.pass_on(key, forward::Call::Renew(renewal))?);
-        }
         let (id, path) = (self.scope.id, self.scope.path(key)?);
+        if self.is_copy() {
+            return Ok(self.renew_at_home(key, path, renewal, self.scope.now()));
+        }
         if renewal.seen - self.scope.now() >= RENEW_AT_ONCE {
             self.scope.kv.renewals().ask(id, path, renewal);
             return Ok(false);

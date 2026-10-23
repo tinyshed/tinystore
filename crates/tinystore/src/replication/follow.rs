@@ -31,6 +31,10 @@ pub(crate) struct Written {
     pub(crate) waits: Vec<(String, u64)>,
 }
 
+/// What a write passed on is answered with, on the link's thread, so it must
+/// not wait: none when the link broke before the answer came.
+pub(crate) type Answered = Box<dyn FnOnce(Option<Written>) + Send>;
+
 /// The link to the node this one takes its files from, as the threads that
 /// pass writes on see it.
 #[derive(Default)]
@@ -38,7 +42,7 @@ pub(crate) struct Upstream {
     out: Mutex<Option<Arc<Out>>>,
     linked: Condvar,
     next_id: AtomicU64,
-    waiting: Mutex<HashMap<u64, Sender<Written>>>,
+    waiting: Mutex<HashMap<u64, Answered>>,
 }
 
 impl Upstream {
@@ -46,18 +50,41 @@ impl Upstream {
     /// for what it answers.
     pub(crate) fn write(&self, op: Vec<u8>, at_most: Duration) -> Result<Written> {
         let out = self.wait_for_link()?;
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (answer, answered): (Sender<Written>, Receiver<Written>) = mpsc::channel();
-        lock(&self.waiting).insert(id, answer);
+        let id = self.send(
+            &out,
+            op,
+            Box::new(move |written| {
+                if let Some(written) = written {
+                    let _ = answer.send(written);
+                }
+            }),
+        )?;
+        answered.recv_timeout(at_most).map_err(|_| {
+            lock(&self.waiting).remove(&id);
+            Error::new(ErrorKind::OutcomeUnknown, "the link to the home broke or went silent before the write answered")
+        })
+    }
+
+    /// Passes `op` on over the link up now, and hands what it answers to
+    /// `answered`: it waits neither for a link, failing `unavailable` at once
+    /// when none is up, nor for the answer.
+    #[cfg(feature = "kv")]
+    pub(crate) fn write_then(&self, op: Vec<u8>, answered: Answered) -> Result<()> {
+        let out = lock(&self.out).clone();
+        let out = out.ok_or_else(|| Error::new(ErrorKind::Unavailable, "no link reaches the home"))?;
+        self.send(&out, op, answered).map(drop)
+    }
+
+    fn send(&self, out: &Out, op: Vec<u8>, answered: Answered) -> Result<u64> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        lock(&self.waiting).insert(id, answered);
         if let Err(error) = out.send(&Message::Write { id, op }) {
             lock(&self.waiting).remove(&id);
             return Err(Error::new(ErrorKind::Unavailable, "the link to the home broke before the write left")
                 .with_source(error));
         }
-        answered.recv_timeout(at_most).map_err(|_| {
-            lock(&self.waiting).remove(&id);
-            Error::new(ErrorKind::OutcomeUnknown, "the link to the home broke or went silent before the write answered")
-        })
+        Ok(id)
     }
 
     fn wait_for_link(&self) -> Result<Arc<Out>> {
@@ -81,14 +108,18 @@ impl Upstream {
         self.linked.notify_all();
         if ended {
             // a write whose answer the broken link would have carried: its
-            // sender is dropped, and its caller hears the outcome unknown
-            lock(&self.waiting).clear();
+            // caller hears the outcome unknown
+            let unanswered: Vec<Answered> = lock(&self.waiting).drain().map(|(_, answered)| answered).collect();
+            for answered in unanswered {
+                answered(None);
+            }
         }
     }
 
     fn answered(&self, id: u64, written: Written) {
-        if let Some(answer) = lock(&self.waiting).remove(&id) {
-            let _ = answer.send(written);
+        let answered = lock(&self.waiting).remove(&id);
+        if let Some(answered) = answered {
+            answered(Some(written));
         }
     }
 

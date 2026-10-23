@@ -68,7 +68,15 @@ const page = await messages.where({ chat_id: chatId }).orderBy('id', 'desc').lis
 ```
 
 Every read, a key, a page of messages, a search, a log query, runs on the
-local copy. Nothing crosses the ocean.
+local copy. Nothing crosses the ocean, with one exception.
+
+A `get`, `entry` or `has` of an idle key that is due for renewal sends the
+renewal to the home (see [Expiry](../../guides/kv/expiry.md#idle-keys)). The
+copy sends it in the background, together with other renewals, once a
+second, so the read doesn't wait. If the key has less than a minute left, the
+read waits for the home's answer, for at most 5 seconds, so that the key
+doesn't expire. If no link reaches the home, the read doesn't wait at all,
+and the copy sends the renewal when the link is back.
 
 ## Writes go home
 
@@ -108,12 +116,13 @@ A write on a copy passes to its home and answers once the copy holds it
 (contract REPL-06). The program reads its own writes: a `get` right after a
 `set` sees it. The cost is one round trip to the home.
 
-| Write                         | Where it lands                                | Its cost                    |
-|-------------------------------|-----------------------------------------------|-----------------------------|
-| a read                        | the local copy                                | nothing                     |
-| a counter's `add`             | a local queue, sent to the home, counted once | nothing; it answers at once |
-| a set, an insert, a job's add | the home, then back as pages                  | one round trip to the home  |
-| a transaction                 | refused on a copy: run it at the home         | —                           |
+| Write                           | Where it lands                                | Its cost                                          |
+|---------------------------------|-----------------------------------------------|---------------------------------------------------|
+| a read                          | the local copy                                | nothing                                           |
+| a read's renewal of an idle key | the home, sent once a second                  | nothing; in the key's last minute, one round trip |
+| a counter's `add`               | a local queue, sent to the home, counted once | nothing; it answers at once                       |
+| a set, an insert, a job's add   | the home, then back as pages                  | one round trip to the home                        |
+| a transaction                   | refused on a copy: run it at the home         | —                                                 |
 
 A counter's add answers at once, because two adds give the same total in any
 order. The node keeps the add in a queue of its own and sends it to the home

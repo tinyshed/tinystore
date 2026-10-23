@@ -71,6 +71,8 @@ about once a day for 30 days, together with other writes a second later.
 `list` and `all` renew nothing, so a page that lists every session does not
 keep them alive. A read on a copy of the store's files sends its renewal to
 the copy's home, so a session read only on a copy stays alive too.
+[Copies](../../handbook/nodes/copies.md#reads-are-local) says what that
+costs.
 
 ## Limits and defaults
 
