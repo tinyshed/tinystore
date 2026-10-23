@@ -27,6 +27,7 @@ from tinystore._wire.protocol import (
     Welcome,
     methods,
 )
+from tinystore.channels import Channel
 from tinystore.errors import ClosedError, OutcomeUnknownError, UnavailableError
 from tinystore.kv import Bucket, Parts, bucket_open
 from tinystore.sql import open_database
@@ -240,3 +241,30 @@ async def test_a_call_cancelled_while_a_dial_runs_leaves_the_dial_to_the_next_ca
     assert dials == 1
     await link.close()
     assert connection.session.ended is not None
+
+
+async def test_a_subscription_stopped_while_it_subscribes_again_cancels_the_stream_it_then_gets() -> None:
+    peers = [Peer(), Peer()]
+    dials = iter(peers)
+
+    async def dial() -> Connection:
+        peer = next(dials)
+        connection = Connection(peer.session, Transport(lambda _: None, lambda: None))
+        await connection.handshake()
+        return connection
+
+    lost, then = peers
+    lost.welcome()
+    subscribing = asyncio.ensure_future(Channel[str](Link(dial), "chat", str).subscribe(lambda _: None))
+    [first] = requests(await lost.frames())
+    lost.session.receive(f.frame(f.RESPONSE, 0, 0, first.stream, Empty.encode()))
+    sub = await subscribing
+
+    lost.session.end(ClosedError("reset"))
+    then.welcome()
+    [again] = requests(await then.frames())
+    stopping = asyncio.ensure_future(sub.stop())
+    then.session.receive(f.frame(f.RESPONSE, 0, 0, again.stream, Empty.encode()))
+    await stopping
+    cancels = [h.stream for h, _ in await then.frames() if h.kind == f.CANCEL]
+    assert cancels == [again.stream]

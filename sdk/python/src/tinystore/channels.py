@@ -130,10 +130,11 @@ class Channel[T]:
                 if not first and _again(err):
                     continue
                 raise
-            if not first:
-                await told.missed(Missed("reconnect"))
-            first = False
+            unfollow = self._link.follow(stream)
             try:
+                if not first:
+                    await told.missed(Missed("reconnect"))
+                first = False
                 while True:
                     event = await stream.next()
                     if event.end:
@@ -149,6 +150,7 @@ class Channel[T]:
                     raise
             finally:
                 stream.cancel()
+                unfollow()
 
     def _asked(self, recursive: bool) -> bytes:
         return ChannelsSubscribe.encode(name=self.name, under=list(self.branch), recursive=recursive)
@@ -170,6 +172,7 @@ class Subscription:
         self._of = of
         self._told = told
         self._stream: Stream | None = None
+        self._unfollow: Callable[[], None] = lambda: None
         self._stopped = False
         self._done: asyncio.Task[None] | None = None
 
@@ -185,8 +188,18 @@ class Subscription:
 
     async def start(self, handler: Callable[[Message[Any]], object]) -> None:
         """Registers the subscription, then runs its handler in the background."""
-        self._stream = await _subscribed(self._link, self._asked)
+        self._take(await _subscribed(self._link, self._asked))
         self._done = asyncio.ensure_future(self._run(handler))
+        self._done.add_done_callback(self._ended)
+
+    def _take(self, stream: Stream) -> None:
+        """Makes a stream the subscription's, which the store's close cancels."""
+        self._unfollow()
+        self._stream = stream
+        self._unfollow = self._link.follow(stream)
+
+    def _ended(self, _: asyncio.Task[None]) -> None:
+        self._unfollow()
 
     async def _run(self, handler: Callable[[Message[Any]], object]) -> None:
         while True:
@@ -201,9 +214,14 @@ class Subscription:
                     self._told.ended(err, self._stopped)
                     return
             try:
-                self._stream = await _subscribed(self._link, self._asked)
+                made = await _subscribed(self._link, self._asked)
             except Exception as err:
                 self._told.ended(err, self._stopped)
+                return
+            self._take(made)
+            # a stop while it subscribed again cancelled the stream before this one
+            if self._stopped:
+                made.cancel()
                 return
             await self._told.missed(Missed("reconnect"))
 

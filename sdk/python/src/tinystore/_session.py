@@ -100,6 +100,7 @@ class Stream:
         self._failure: BaseException | None = None
         self._upload_credit = upload_credit
         self._credit_waiters: list[asyncio.Future[None]] = []
+        self._finishing: list[asyncio.Future[None]] = []
         self._granting = 0
 
     async def next(self) -> Event:
@@ -141,17 +142,26 @@ class Stream:
             self._session.post(f.credit(self.id, self._granting))
             self._granting = 0
 
-    def cancel(self) -> None:
+    def cancel(self, failure: BaseException | None = None) -> None:
         """Asks the server to stop.
 
         A stream whose REQUEST has not left never leaves; one that has keeps
-        its number until the server's final frame, which is dropped.
+        its number until the server's final frame, which is dropped. What
+        waits on it fails with failure.
         """
         if self.finished or self.cancelled:
             return
         self.cancelled = True
         self._session.cancel(self)
-        self.fail(CallCancelledError("the call was cancelled"))
+        self.fail(failure or CallCancelledError("the call was cancelled"))
+
+    async def finishing(self) -> None:
+        """Returns once the server's final frame came, or the connection ended."""
+        if self.finished:
+            return
+        waiter: asyncio.Future[None] = self._session.loop.create_future()
+        self._finishing.append(waiter)
+        await waiter
 
     def deliver(self, event: Event) -> None:
         if self.cancelled:
@@ -183,6 +193,10 @@ class Stream:
     def finish(self) -> None:
         self.finished = True
         self._wake()
+        for waiter in self._finishing:
+            if not waiter.done():
+                waiter.set_result(None)
+        self._finishing.clear()
 
     def _wake(self) -> None:
         for w in self._credit_waiters:

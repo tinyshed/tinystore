@@ -340,6 +340,8 @@ def _new_event(event: Event, place: int) -> dict[str, Any]:
 class _Reads:
     """What every read takes: a stream's handle, or every stream without one."""
 
+    _link: Link
+
     async def _ask(self, method: str, body: Callable[[int | None], bytes]) -> bytes:
         raise NotImplementedError
 
@@ -434,6 +436,7 @@ class _Reads:
         """
         asked = _query_of(query)
         stream = await self._opened("records.tail", lambda h: RecordsQuery.encode(asked, handle=h))
+        unfollow = self._link.follow(stream)
         try:
             while True:
                 event = await stream.next()
@@ -444,6 +447,7 @@ class _Reads:
                 yield TailBatch([_event_of(each) for each in batch.get("events", [])], batch.get("missed", 0))
         finally:
             stream.cancel()
+            unfollow()
 
 
 async def _stream_of(connection: Connection, method: int, body: bytes, end: bool) -> Stream:

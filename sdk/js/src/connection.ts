@@ -629,6 +629,7 @@ export type Idempotence = 'read' | 'write'
  */
 export class Link {
 	readonly #dial: Dialer
+	readonly #followers = new Set<Stream>()
 	#current: Promise<Connection> | undefined
 	#dialled: Connection | undefined
 	#closed = false
@@ -710,9 +711,38 @@ export class Link {
 		}
 	}
 
-	/** Closes the connection and every one to come. */
+	/**
+	 * Keeps a stream that follows the store until it closes, a subscription's,
+	 * a loop's, a tail's or a watch's, for close to cancel; it returns what
+	 * lets the stream go. Once the link is closed it cancels the stream at
+	 * once.
+	 */
+	follow(stream: Stream): () => void {
+		if (this.#closed) {
+			stream.cancel(new ClosedError('the store is closed'))
+			return () => {}
+		}
+		this.#followers.add(stream)
+		return () => this.#followers.delete(stream)
+	}
+
+	/**
+	 * Closes the connection and every one to come. Each stream that follows
+	 * the store is cancelled first, and its end waited for, a moment at most:
+	 * one the server still ran would keep a private child, or a sidecar's
+	 * connection, draining for ten seconds.
+	 */
 	async close(): Promise<void> {
 		this.#closed = true
+		const followers = [...this.#followers]
+		this.#followers.clear()
+		for (const stream of followers) {
+			stream.cancel(new ClosedError('the store is closed'))
+		}
+		await within(
+			followerWait,
+			followers.map(stream => stream.finishing()),
+		)
 		const current = this.#current
 		this.#current = undefined
 		this.#dialled = undefined
@@ -721,6 +751,22 @@ export class Link {
 			() => {},
 		)
 	}
+}
+
+/** How long a store's close waits for the server's end of a stream it cancelled. */
+const followerWait = 2_000
+
+/** Waits for every promise, `ms` at most. */
+async function within(ms: number, promises: Promise<unknown>[]): Promise<void> {
+	if (promises.length === 0) {
+		return
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const late = new Promise<void>(resolve => {
+		timer = setTimeout(resolve, ms)
+	})
+	await Promise.race([Promise.all(promises), late])
+	clearTimeout(timer)
 }
 
 /**

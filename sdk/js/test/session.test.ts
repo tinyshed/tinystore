@@ -6,6 +6,8 @@ import { createHmac } from 'node:crypto'
 import { createServer } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 
+import { Channel } from '../src/channels.ts'
+import { Connection, Link } from '../src/connection.ts'
 import {
 	CancelledError,
 	ClosedError,
@@ -393,6 +395,32 @@ describe('the end of a connection', () => {
 		}
 		expect(await long).toEqual(body)
 		expect(KvEntry.decode(await short).found).toBe(true)
+	})
+})
+
+describe('a subscription', () => {
+	test('stopped while it subscribes again cancels the stream it then gets', async () => {
+		const peers = [new Peer(), new Peer()]
+		let dials = 0
+		const link = new Link(() => {
+			const peer = peers[dials++]!
+			return Connection.overPipe(peer.session, { write: () => {}, close: () => {} })
+		})
+		const [lost, next] = peers as [Peer, Peer]
+		lost.welcome()
+		const subscribing = new Channel<string>(link, 'chat').subscribe(() => {})
+		const [first] = (await lost.frames()).filter(f => f.kind === Kind.request)
+		lost.answer(first!.stream, Empty.encode({}), 0)
+		const sub = await subscribing
+
+		lost.session.end(new Error('reset'))
+		next.welcome()
+		const [again] = (await next.frames()).filter(f => f.kind === Kind.request)
+		const stopping = sub.stop()
+		next.answer(again!.stream, Empty.encode({}), 0)
+		await stopping
+		const cancels = (await next.frames()).filter(f => f.kind === Kind.cancel)
+		expect(cancels.map(f => f.stream)).toEqual([again!.stream])
 	})
 })
 

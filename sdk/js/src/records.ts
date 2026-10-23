@@ -238,6 +238,9 @@ abstract class Reads {
 		body: (handle: number | undefined) => Uint8Array,
 	): Promise<Stream>
 
+	/** Keeps a stream that follows the store for its close to cancel; it returns what lets it go. */
+	protected abstract follow(stream: Stream): () => void
+
 	/** One page, from one moment of the file: `{ events, next }`. */
 	async list(query?: Query): Promise<Page> {
 		const asked = queryOf(query)
@@ -338,6 +341,7 @@ abstract class Reads {
 		const stream = await this.opened('records.tail', handle =>
 			RecordsQuery.encode({ ...asked, handle }),
 		)
+		const unfollow = this.follow(stream)
 		try {
 			for (;;) {
 				const event = await stream.next()
@@ -350,6 +354,7 @@ abstract class Reads {
 			}
 		} finally {
 			stream.cancel()
+			unfollow()
 		}
 	}
 }
@@ -452,6 +457,10 @@ export class Events extends Reads {
 		})
 	}
 
+	protected follow(stream: Stream): () => void {
+		return this.#link.follow(stream)
+	}
+
 	#call(
 		method: Method,
 		body: (handle: number) => Uint8Array,
@@ -549,6 +558,10 @@ export class AllEvents extends Reads {
 		return this.#link.run('read', connection =>
 			streamOf(connection, methods[method], body(undefined), true),
 		)
+	}
+
+	protected follow(stream: Stream): () => void {
+		return this.#link.follow(stream)
 	}
 }
 

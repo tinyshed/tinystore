@@ -513,6 +513,7 @@ async function* watchJob<T>(source: Source<T>, id: string): AsyncGenerator<Job<T
 	let last: Read<typeof JobsJob.fields> | undefined
 	for (;;) {
 		const stream = await source.link.run('read', connection => openWatch(connection, source, id))
+		const unfollow = source.link.follow(stream)
 		try {
 			for (;;) {
 				const event = await stream.next()
@@ -532,6 +533,7 @@ async function* watchJob<T>(source: Source<T>, id: string): AsyncGenerator<Job<T
 			}
 		} finally {
 			stream.cancel()
+			unfollow()
 		}
 	}
 }

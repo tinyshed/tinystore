@@ -494,9 +494,11 @@ export class Store implements AsyncDisposable {
 	/**
 	 * Stops every worker, each once its handlers under way have answered,
 	 * ingests the instruments' last values, hands over the loggers' lines and
-	 * cancels every config's stream, then closes the connection. A private child is waited for until it has
-	 * exited, so that the directory is free once this returns; the directory's
-	 * sidecar goes once it has been idle.
+	 * cancels every config's stream, then every subscription, `each` loop,
+	 * tail and watch, whose loops end `ClosedError`, and closes the
+	 * connection. A private child is waited for until it has exited, so that
+	 * the directory is free once this returns; the directory's sidecar goes
+	 * once it has been idle.
 	 */
 	async close(): Promise<void> {
 		this.#closing = true

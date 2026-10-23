@@ -121,10 +121,11 @@ export class Channel<T> {
 				}
 				throw err
 			}
-			if (!first) {
-				await told.missed({ reason: 'reconnect' })
-			}
+			const unfollow = this.#link.follow(stream)
 			try {
+				if (!first) {
+					await told.missed({ reason: 'reconnect' })
+				}
 				for (;;) {
 					const event = await stream.next()
 					if (event.end) {
@@ -145,6 +146,7 @@ export class Channel<T> {
 				}
 			} finally {
 				stream.cancel()
+				unfollow()
 			}
 		}
 	}
@@ -171,6 +173,7 @@ export class Subscription {
 	readonly #asked: Uint8Array
 	readonly #shown: string
 	#stream: Stream | undefined
+	#unfollow = () => {}
 	#stopped = false
 	#done: Promise<void> = Promise.resolve()
 
@@ -199,9 +202,16 @@ export class Subscription {
 		handler: (message: Message<unknown>) => unknown,
 		options: SubscribeOptions | undefined,
 	) {
-		this.#stream = await subscribed(this.#link, this.#asked)
+		this.#take(await subscribed(this.#link, this.#asked))
 		const told = new Told(this.#shown, options?.onMissed, options?.onError)
-		this.#done = this.#run(handler, told)
+		this.#done = this.#run(handler, told).finally(() => this.#unfollow())
+	}
+
+	/** Makes a stream the subscription's, which the store's close cancels. */
+	#take(stream: Stream): void {
+		this.#unfollow()
+		this.#stream = stream
+		this.#unfollow = this.#link.follow(stream)
 	}
 
 	async #run(handler: (message: Message<unknown>) => unknown, told: Told): Promise<void> {
@@ -222,7 +232,12 @@ export class Subscription {
 			if (!(made instanceof Stream)) {
 				return told.ended(made, this.#stopped)
 			}
-			this.#stream = made
+			this.#take(made)
+			// a stop while it subscribed again cancelled the stream before this one
+			if (this.#stopped) {
+				made.cancel()
+				return
+			}
 			await told.missed({ reason: 'reconnect' })
 		}
 	}

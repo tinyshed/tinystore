@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-import type { ChannelMessage, Missed, Store } from '../src/index.ts'
+import { type ChannelMessage, ClosedError, type Missed, type Store } from '../src/index.ts'
 import { caught, removed, until, ways } from './ways.ts'
 
 for (const way of ways) {
@@ -188,5 +188,53 @@ for (const way of ways) {
 		test('names are checked before anything is sent', () => {
 			expect(() => store.channel('Chat')).toThrow()
 		})
+	})
+}
+
+for (const way of ways) {
+	describe.skipIf(!way.ready)(`a store's close through ${way.name}`, () => {
+		test('ends its subscriptions, loops and tails at once, with nothing left for the server to drain', async () => {
+			const dir = mkdtempSync(join(tmpdir(), 'tinystore-followers-'))
+			const store = await way.open(dir)
+			const chat = store.channel<string>('chat')
+			const live = store.events('live')
+			let subscribed = 0
+			let looped = 0
+			let tailed = 0
+			await chat.subscribe(() => {
+				subscribed++
+			})
+			// what ended each loop, taken at once: a loop ends during the close
+			const looping = caught(
+				(async () => {
+					for await (const _ of chat.each()) {
+						looped++
+					}
+				})(),
+			)
+			const tailing = caught(
+				(async () => {
+					for await (const _ of live.tail()) {
+						tailed++
+					}
+				})(),
+			)
+			await until(async () => {
+				await chat.publish('ping')
+				await live.append('tick')
+				return subscribed > 0 && looped > 0 && tailed > 0
+			})
+
+			// a stream the server still ran would keep a private child, or a
+			// sidecar, draining it for ten seconds before it let go
+			const began = Date.now()
+			await store.close()
+			await way.leave(dir)
+			const took = Date.now() - began
+			expect(await looping).toBeInstanceOf(ClosedError)
+			expect(await tailing).toBeInstanceOf(ClosedError)
+			expect(took).toBeLessThan(5_000)
+			await removed(dir)
+		}, 30_000)
 	})
 }

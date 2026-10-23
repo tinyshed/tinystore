@@ -59,7 +59,8 @@ while let Some(batch) = tail.next_within(Duration::from_secs(30))? {
 - It is live, not complete. The store holds its last megabyte of events for
   its tails; a reader slower than the writers skips what left it, and the
   batch after says how many in `missed`.
-- It ends when its loop is left, and when the store closes.
+- It ends when its loop is left, and when the store closes. At the close a
+  loop in Bun, Node and Python fails `closed`; in Go it ends.
 
 ## Poll
 

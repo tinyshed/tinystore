@@ -423,9 +423,11 @@ close(): Promise<void>
 
 Stops every worker, each once its handlers under way have answered,
 ingests the instruments' last values, hands over the loggers' lines and
-cancels every config's stream, then closes the connection. A private child is waited for until it has
-exited, so that the directory is free once this returns; the directory's
-sidecar goes once it has been idle.
+cancels every config's stream, then every subscription, `each` loop,
+tail and watch, whose loops end `ClosedError`, and closes the
+connection. A private child is waited for until it has exited, so that
+the directory is free once this returns; the directory's sidecar goes
+once it has been idle.
 
 ### Store.[Symbol.asyncDispose]
 
@@ -517,13 +519,27 @@ run<T>(idempotence: Idempotence, attempt: (connection: Connection) => Promise<T>
 Runs a call on the link's connection. build makes its REQUEST's body for
 that connection, whose handles it may open; run sends it.
 
+### Link.follow
+
+```ts
+follow(stream: Stream): () => void
+```
+
+Keeps a stream that follows the store until it closes, a subscription's,
+a loop's, a tail's or a watch's, for close to cancel; it returns what
+lets the stream go. Once the link is closed it cancels the stream at
+once.
+
 ### Link.close
 
 ```ts
 close(): Promise<void>
 ```
 
-Closes the connection and every one to come.
+Closes the connection and every one to come. Each stream that follows
+the store is cancelled first, and its end waited for, a moment at most:
+one the server still ran would keep a private child, or a sidecar's
+connection, draining for ten seconds.
 
 ## Clock
 

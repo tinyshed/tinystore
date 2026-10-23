@@ -515,6 +515,7 @@ class Queue[T]:
         last: dict[str, Any] | None = None
         while True:
             stream = await source.link.run("read", lambda connection: _open_watch(connection, source, id))
+            unfollow = source.link.follow(stream)
             try:
                 while True:
                     event = await stream.next()
@@ -529,6 +530,7 @@ class Queue[T]:
                 continue
             finally:
                 stream.cancel()
+                unfollow()
 
     async def list(
         self,

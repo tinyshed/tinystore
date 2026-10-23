@@ -45,6 +45,8 @@ START_TIME = 15.0
 """How long a client waits for a sidecar to answer, its own or another's, before it gives up."""
 HELD_PAUSE = 0.1
 """The pause before a start that found the directory held starts again, doubling up to a second."""
+FOLLOWER_WAIT = 2.0
+"""How long a store's close waits for the server's end of a stream it cancelled."""
 
 
 class Connection:
@@ -467,6 +469,7 @@ class Link:
     def __init__(self, dialer: Callable[[], Awaitable[Connection]]) -> None:
         self._dialer = dialer
         self._current: asyncio.Future[Connection] | None = None
+        self._followers: set[Stream] = set()
         self._closed = False
 
     @property
@@ -513,9 +516,35 @@ class Link:
                 raise
         raise ClosedError("unreachable")
 
+    def follow(self, stream: Stream) -> Callable[[], None]:
+        """Keeps a stream that follows the store until it closes, for close to cancel.
+
+        A subscription's, a loop's, a tail's or a watch's: it returns what
+        lets the stream go. Once the link is closed it cancels the stream at
+        once.
+        """
+        if self._closed:
+            stream.cancel(ClosedError("the store is closed"))
+            return lambda: None
+        self._followers.add(stream)
+        return lambda: self._followers.discard(stream)
+
     async def close(self) -> None:
-        """Closes the connection and every one to come."""
+        """Closes the connection and every one to come.
+
+        Each stream that follows the store is cancelled first, and its end
+        waited for, a moment at most: one the server still ran would keep a
+        private child, or a sidecar's connection, draining for ten seconds.
+        """
         self._closed = True
+        followers, self._followers = self._followers, set()
+        for stream in followers:
+            stream.cancel(ClosedError("the store is closed"))
+        if followers:
+            ending = [asyncio.ensure_future(stream.finishing()) for stream in followers]
+            _, late = await asyncio.wait(ending, timeout=FOLLOWER_WAIT)
+            for each in late:
+                each.cancel()
         current, self._current = self._current, None
         if current is not None:
             try:

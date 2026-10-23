@@ -416,7 +416,13 @@ func (c *Channel[T]) run(ctx context.Context, sub *Subscription, asked []byte, t
 		}
 		sub.mu.Lock()
 		sub.stream = next
+		stopped = sub.stopped
 		sub.mu.Unlock()
+		// a stop while it subscribed again cancelled the stream before this one
+		if stopped {
+			next.CancelAndWait(2 * time.Second)
+			return
+		}
 		tell.missed(Missed{Reason: "reconnect"})
 	}
 }

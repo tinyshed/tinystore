@@ -65,6 +65,9 @@ sub.stop();
   once.
 - In Rust, dropping a `Subscription` does not stop it. It goes on listening
   until you call `stop()` or the store closes, as a queue's worker does.
+- The store's `close` stops every subscription and ends every `each` loop
+  before the connection closes. In Bun, Node and Python a loop fails
+  `closed`; in Go it ends.
 
 ## Branches
 

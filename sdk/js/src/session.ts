@@ -106,6 +106,7 @@ export class Stream {
 	#creditWaiters: Waiter<void>[] = []
 	#granting = 0
 	#cancelled = false
+	#finishing: (() => void)[] = []
 
 	constructor(session: Session, id: number, method: number, uploadCredit: number) {
 		this.#session = session
@@ -162,15 +163,23 @@ export class Stream {
 	/**
 	 * Asks the server to stop. A stream whose REQUEST has not left never
 	 * leaves; one that has keeps its number until the server's final frame,
-	 * which is dropped.
+	 * which is dropped. What waits on it fails with `failure`.
 	 */
-	cancel(): void {
+	cancel(failure: Error = new CancelledError('the call was cancelled')): void {
 		if (this.finished || this.#cancelled) {
 			return
 		}
 		this.#cancelled = true
 		this.#session.cancel(this)
-		this.fail(new CancelledError('the call was cancelled'))
+		this.fail(failure)
+	}
+
+	/** Resolves once the server's final frame came, or the connection ended. */
+	finishing(): Promise<void> {
+		if (this.finished) {
+			return Promise.resolve()
+		}
+		return new Promise(resolve => this.#finishing.push(resolve))
 	}
 
 	get cancelled(): boolean {
@@ -212,6 +221,9 @@ export class Stream {
 		this.finished = true
 		for (const w of this.#creditWaiters.splice(0)) {
 			w.resolve()
+		}
+		for (const finished of this.#finishing.splice(0)) {
+			finished()
 		}
 		this.#unwatch?.()
 		this.#unwatch = undefined

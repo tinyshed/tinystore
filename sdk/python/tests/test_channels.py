@@ -9,12 +9,17 @@ missed.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pytest
 
 import tinystore
-from ways import until
+from ways import Way, until
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass
@@ -172,3 +177,45 @@ async def test_a_slow_handler_falls_behind_and_is_told_how_many_it_missed(store:
 def test_names_are_checked_before_anything_is_sent(store: tinystore.Store) -> None:
     with pytest.raises(tinystore.InvalidError):
         store.channel("Chat")
+
+
+async def test_a_stores_close_ends_its_subscriptions_loops_and_tails_with_nothing_left_to_drain(
+    way: Way, directory: Path
+) -> None:
+    opened = await way.open(directory)
+    chat = opened.channel("chat", str)
+    live = opened.events("live")
+    seen = {"subscribed": 0, "looped": 0, "tailed": 0}
+
+    def subscribed(_: object) -> None:
+        seen["subscribed"] += 1
+
+    async def loop() -> None:
+        async for _ in chat.each():
+            seen["looped"] += 1
+
+    async def tail() -> None:
+        async for _ in live.tail():
+            seen["tailed"] += 1
+
+    await chat.subscribe(subscribed)
+    looping = asyncio.ensure_future(loop())
+    tailing = asyncio.ensure_future(tail())
+    deadline = time.monotonic() + 10
+    while min(seen.values()) == 0 and time.monotonic() < deadline:
+        await chat.publish("ping")
+        await live.append("tick")
+        await asyncio.sleep(0.02)
+    assert min(seen.values()) > 0
+
+    # a stream the server still ran would keep a private child, or a sidecar,
+    # draining it for ten seconds before it let go
+    began = time.monotonic()
+    await opened.close()
+    await way.leave(directory)
+    took = time.monotonic() - began
+    with pytest.raises(tinystore.ClosedError):
+        await looping
+    with pytest.raises(tinystore.ClosedError):
+        await tailing
+    assert took < 5

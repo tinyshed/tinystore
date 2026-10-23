@@ -583,8 +583,10 @@ class Store:
     async def close(self) -> None:
         """Stops every worker, each once its handlers under way have answered, then closes the connection.
 
-        A private child or the core in this process lets the directory go
-        before this returns; the directory's sidecar goes once it has been idle.
+        Before the connection closes it cancels every subscription, ``each``
+        loop, tail and watch, whose loops end with ClosedError. A private
+        child or the core in this process lets the directory go before this
+        returns; the directory's sidecar goes once it has been idle.
         """
         await asyncio.gather(*(worker.stop() for worker in list(self._workers)), return_exceptions=True)
         await self._instruments.stop()
