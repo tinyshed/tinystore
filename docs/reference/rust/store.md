@@ -569,7 +569,8 @@ handler the engines run, a queue's or a channel's, waiting for those
 running; then closes every engine, the last opened first, and lets go
 of the directory. The first engine that fails to close is the error;
 the others still close. A second call does nothing, and neither does
-the last clone's drop after.
+the last clone's drop after. From inside a transaction it is
+`Invalid`: it would wait for the writer the transaction holds.
 
 ### Store.tx
 
