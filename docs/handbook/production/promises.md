@@ -55,6 +55,7 @@ program relies on most, and ends with what TinyStore does not promise.
 | SEC-01  | a read token only reads                                                         |
 | SEC-02  | a remote connection shows its token; a local server proves itself to its client |
 | SEC-03  | an encrypted bucket's file shows no value                                       |
+| SEC-06  | no other user of the machine reads `SERVE` or connects to a local server        |
 | BAK-02  | a restore checks every byte, and leaves nothing when it fails                   |
 
 ## What TinyStore does not promise

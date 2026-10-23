@@ -21,6 +21,8 @@ mod logs;
 mod mcp;
 mod node;
 mod node_config;
+#[cfg(windows)]
+mod owner_only;
 mod remote;
 mod search;
 mod serve;

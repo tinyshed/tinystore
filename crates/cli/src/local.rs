@@ -1,11 +1,11 @@
 //! Where a local server listens and how its clients find it: `<dir>/server/`,
-//! which only the directory's owner may enter, holds `SERVE`, a hint naming
-//! the endpoint and the secret a client's challenge is proven with. `LOCK` is
-//! the truth; `SERVE` is written once the server listens and removed before
-//! it lets go.
+//! which only the user the server runs as may enter, holds `SERVE`, a hint
+//! naming the endpoint and the secret a client's challenge is proven with.
+//! `LOCK` is the truth; `SERVE` is written once the server listens and
+//! removed before it lets go.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -63,26 +63,52 @@ impl Serve {
     }
 }
 
-/// `<dir>/server/`, made the owner's alone where the platform lets a mode say
-/// so. On Windows its files inherit the directory's DACL, the user's profile
-/// keeping others out; a protected DACL of the owner's alone waits for the
-/// `unsafe` it takes.
+/// `<dir>/server/`, made the user's alone, whatever the store's directory
+/// lets others do: mode 0700, or on Windows a protected DACL of the user's,
+/// which what it holds inherits. A directory another user made first is
+/// refused, since its owner could let anyone in: on Unix its mode cannot be
+/// changed, and on Windows its owner is read and a link in its place refused.
 pub(crate) fn server_dir(store: &Path) -> io::Result<PathBuf> {
     let dir = store.join("server");
     fs::create_dir_all(&dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            io::Error::new(error.kind(), format!("{}: making it the user's alone: {error}", dir.display()))
+        })?;
     }
+    #[cfg(windows)]
+    crate::owner_only::protect_dir(&dir)?;
     Ok(dir)
 }
 
 /// Writes `SERVE` whole, through a temporary file renamed into place.
 pub(crate) fn publish(server: &Path, serve: &Serve) -> io::Result<()> {
     let written = server.join(format!("SERVE.{}.tmp", hex(&serve.instance[..4])));
-    fs::write(&written, serve.json())?;
+    let mut file = create_private(&written)?;
+    file.write_all(serve.json().as_bytes())?;
+    drop(file);
     patiently(|| fs::rename(&written, server.join("SERVE")))
+}
+
+/// A new file the user alone may open from the moment it is made: mode 0600,
+/// or on Windows a protected DACL of the user's. One a server that died left
+/// is removed first, since a file that is there keeps its permissions and is
+/// not made again.
+fn create_private(path: &Path) -> io::Result<fs::File> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?
+    };
+    #[cfg(windows)]
+    let file = crate::owner_only::create_new(path)?;
+    Ok(file)
 }
 
 /// Removes `SERVE`, if there is one: a server leaving, or one left behind,
@@ -140,6 +166,17 @@ pub(crate) fn pipe_name(store: &Path) -> String {
     format!("tinystore-{}", hash(store))
 }
 
+/// An instance of the store's pipe, `\\.\pipe\<short name>`, which refuses
+/// remote clients and admits the user alone. Named pipes share one namespace
+/// across every user, so the first instance fails when another process holds
+/// the name, and the server finds a squatter rather than its clients.
+#[cfg(windows)]
+pub(crate) fn pipe_instance(name: &str, first: bool) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
+    options.first_pipe_instance(first).reject_remote_clients(true);
+    crate::owner_only::create_pipe(&options, name)
+}
+
 /// Bytes as lowercase hex, two digits each.
 pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -180,5 +217,21 @@ mod tests {
         let published: serde_json::Value = serde_json::from_str(&serve.json()).unwrap();
         assert_eq!((published["protocol"].as_u64(), published["sidecar"].as_bool()), (Some(1), Some(true)));
         assert_eq!(published["secret"].as_str().unwrap().len(), 43, "32 bytes, unpadded");
+    }
+
+    // contract: SEC-06
+    #[cfg(unix)]
+    #[test]
+    fn server_and_serve_are_the_users_alone_whatever_the_store_lets_others_do() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let server = server_dir(dir.path()).unwrap();
+        fs::write(server.join(format!("SERVE.{}.tmp", hex(&[0; 4]))), "left by a server that died").unwrap();
+        let serve = Serve { instance: [0; 16], secret: [7; 32], endpoints: vec![], sidecar: false };
+        publish(&server, &serve).unwrap();
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&server), 0o700);
+        assert_eq!(mode(&server.join("SERVE")), 0o600);
     }
 }

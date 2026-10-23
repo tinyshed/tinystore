@@ -116,7 +116,7 @@ credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
 | 12  | durability        | str          | `full` or `os`, when the store was opened with one: how far its files' commits go before they return                                   |
 
 A client that found the server through `SERVE` sends no `REQUEST` before the
-proof checks, compared in constant time: only the store directory's owner can
+proof checks, compared in constant time: only the user the server runs as can
 read `SERVE`, so a process that took the endpoint of a server gone cannot
 answer, and a client whose proof fails reads `SERVE` again, as a stale one.
 `HELLO` carries nothing a stranger could use, since a local connection takes
@@ -139,13 +139,18 @@ belongs, with `limit` or `unavailable`.
 ## Finding a local server
 
 A store directory has at most one server, since its `LOCK` lets one process
-open it. That server publishes how to reach it in `<dir>/server/`, which on
-Linux and macOS only the directory's owner may enter, mode 0700. On Windows
-`server\` and its files take the permissions of the store's directory: a
-directory in the user's profile keeps other users out, and a store kept
-where other local users may read, as a folder at a drive's root may let
-them, shows them `SERVE`'s secret too. `SERVE` there is a hint; `LOCK` is the
-truth.
+open it. That server publishes how to reach it in `<dir>/server/`, which only
+the user the server runs as may enter, whatever the store's directory lets
+others do: mode 0700, and `SERVE` 0600, on Linux and macOS. On Windows, which
+lets anyone traverse a directory to a file whose path they know, `server\`
+and `SERVE` each have a protected DACL that grants that user every right and
+nobody else any, so that neither inherits the store directory's, and what
+else is made in `server\` inherits its DACL alone. `SERVE` is created with
+its DACL rather than given it after. An owner may change a DACL whatever it
+says, so a `server\` another user made first, as a folder at a drive's root
+lets every user, is refused, and so is a link in its place: the server does
+not start, and its error names the folder. On Linux and macOS such a folder
+refuses its new mode. `SERVE` there is a hint; `LOCK` is the truth.
 
 ```json
 {"protocol": 1, "server": "0.4.0", "pid": 4212, "instance": "q1q0l3yZ3JvYw8g7oM2sYA",
@@ -179,8 +184,8 @@ truth.
   `HELLO` with 16 random bytes as its challenge, and sends no `REQUEST` until
   `WELCOME`'s proof equals the HMAC-SHA256 of the challenge keyed with the
   secret, compared in constant time. An endpoint's name is anyone's to take
-  once its server is gone, a Windows pipe's above all, and only the
-  directory's owner can read the secret. A client whose proof fails reads
+  once its server is gone, a Windows pipe's above all, and only the user the
+  server runs as can read the secret. A client whose proof fails reads
   `SERVE` again, as a stale one.
 - **A reader delays a change and never fails it.** On Windows a client
   holding `SERVE` open refuses its rename or removal, and so may a scanner;
@@ -204,12 +209,14 @@ Where a local server listens:
   one. `<hash>` is the first eight bytes of the SHA-256 of the store's absolute
   path, in hex: eight, so that a socket under macOS's temporary directory
   still fits.
-- **A named pipe on Windows**, `pipe:tinystore-<hash>`, created as the first
-  instance of its name, which refuses remote clients, with the system's
-  default permissions for a pipe. No local endpoint takes a token: its
-  permission is the file system's, and a local connection is `admin`. So on
-  Windows the proof keeps a client from a pipe another user took only while
-  that user cannot read the store's directory.
+- **A named pipe on Windows**, `pipe:tinystore-<hash>`, which refuses remote
+  clients. Named pipes share one namespace across every user, so it is
+  created as the first instance of its name, and a process that took the name
+  first is found by the server rather than by its clients. Every instance has
+  a DACL that grants the user the server runs as alone, so that no other user
+  connects to it or makes an instance of its own. No local endpoint takes a
+  token: its permission is the file system's, and a local connection is
+  `admin`.
 
 A remote server's tokens file gives each token one capability: `admin`
 may do anything, `data` reads and writes, and `read` reads only. A `read`

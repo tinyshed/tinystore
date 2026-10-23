@@ -36,9 +36,24 @@ jiff = "0.2.38"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
 
+# the DACL that keeps a server's SERVE and pipe to its user: the release tokio
+# already builds, and no crate wraps a security descriptor safely
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "3.27"
 rcgen = "0.14.10"
+
+# a local user made and logged on, to prove it is refused
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_NetworkManagement_NetManagement"] }

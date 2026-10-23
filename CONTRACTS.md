@@ -229,6 +229,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **SEC-03** An encrypted bucket's file MUST show no value; a sealed value MUST open only at its own place under its own key, and a moved one MUST be `corrupt`.
 - **SEC-04** A store opened with another key MUST read and write nothing of an encrypted bucket until it is cleared; a key lost MUST NOT be replaced while values sealed with it remain.
 - **SEC-05** `status`, logs and errors MUST NOT print `SERVE`'s secret, a token or a config secret.
+- **SEC-06** On Linux, macOS and Windows alike, a local user other than the one a local server runs as, short of root or an administrator, MUST NOT read its `SERVE` nor connect to its socket or named pipe, whatever the store's directory lets other users do.
 
 ## 8. Backup and recovery
 

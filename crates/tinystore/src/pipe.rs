@@ -23,7 +23,7 @@ fn stores() -> MutexGuard<'static, HashMap<PathBuf, (Store, usize)>> {
 }
 
 /// Answers a HELLO's challenge: the HMAC-SHA256 of it, keyed with `SERVE`'s
-/// secret, which only the directory's owner can read.
+/// secret, which only the user the server runs as can read.
 pub type Prove = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 
 /// What `server.stop` does, called once its answer has left.

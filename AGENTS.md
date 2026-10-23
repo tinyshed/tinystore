@@ -154,10 +154,12 @@ runtime.
   batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
-- **`unsafe` lives in four places**: `sqlite::memory`, `sqlite::mutex`,
-  `space`, which asks the system for the disk's free space, and
-  `crates/ffi`. The
-  workspace denies `unsafe_code` everywhere else, and clippy's
+- **`unsafe` lives in five places**: `sqlite::memory`, `sqlite::mutex`,
+  `space`, which asks the system for the disk's free space, `crates/ffi`,
+  and the command line's `owner_only`, which gives what a Windows server
+  keeps to its user, `server\`, `SERVE` and the pipe, a DACL of that user's
+  alone. The workspace denies `unsafe_code` everywhere else, each of the
+  five allows it at its module's top, and clippy's
   `undocumented_unsafe_blocks` makes every block carry a `SAFETY:` comment
   saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for
@@ -171,7 +173,11 @@ runtime.
   yaml-rust2, without its encodings, for a config's files, fst and
   levenshtein_automata for a misspelt name's nearest words, sysinfo, with `system` alone, for the machine among a store's own metrics,
   unicode-normalization, unicode-segmentation and rust-stemmers, pinned, for
-  a search's words, and libc on Unix for the disk's free space.
+  a search's words, and libc on Unix for the disk's free space. The command
+  line adds windows-sys on Windows alone, the release tokio already builds,
+  for the DACL of a server's `SERVE` and pipe: no maintained crate wraps a
+  security descriptor safely, and tokio's pipe takes one only through
+  `unsafe`.
   Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the
   floor a user needs, raised only for a feature in use.

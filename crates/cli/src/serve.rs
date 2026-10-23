@@ -426,15 +426,8 @@ impl Listener {
     fn bind(store: &Path, _server: &Path) -> io::Result<(Listener, String)> {
         let short = local::pipe_name(store);
         let name = format!(r"\\.\pipe\{short}");
-        let first = Self::instance(&name, true)?;
+        let first = local::pipe_instance(&name, true)?;
         Ok((Listener { name, first: Mutex::new(Some(first)) }, format!("pipe:{short}")))
-    }
-
-    fn instance(name: &str, first: bool) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
-        tokio::net::windows::named_pipe::ServerOptions::new()
-            .first_pipe_instance(first)
-            .reject_remote_clients(true)
-            .create(name)
     }
 
     async fn accept_all(
@@ -471,7 +464,7 @@ impl Listener {
     /// milliseconds apart, before the server gives up its name.
     async fn next_instance(&self) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
         for pause in [1, 2, 4, 8, 16, 32] {
-            match Self::instance(&self.name, false) {
+            match local::pipe_instance(&self.name, false) {
                 Err(error) => {
                     tracing::debug!(target: "tinystore", %error, "a pipe instance was not made");
                     tokio::time::sleep(Duration::from_millis(pause)).await;
@@ -479,7 +472,7 @@ impl Listener {
                 made => return made,
             }
         }
-        Self::instance(&self.name, false)
+        local::pipe_instance(&self.name, false)
     }
 
     fn remove(&self) {}

@@ -103,11 +103,14 @@ looks for the owner:
    directory. That process takes `LOCK` and publishes a new `SERVE`, or finds
    `LOCK` held and exits, and the client tries again.
 
-On Linux and macOS the `server/` folder is readable by the directory's owner
-alone; on Windows it has the store directory's permissions, so keep a store
-where other users cannot read, as your profile is. A name such as a Windows
-pipe can be taken by anyone once its server is gone, so the proof, not the
-name, says that the server really serves this directory.
+Only the user the server runs as can open the `server/` folder and `SERVE`,
+or connect to the server's socket or pipe, even when the store's directory
+lets other users read: mode 0700 on Linux and macOS, and on Windows a DACL
+that grants that user alone and does not inherit the store directory's. If
+another user created the `server/` folder first, the server refuses to start
+and names the folder, since that user could still open it. A name such as a
+Windows pipe can be taken by anyone once its server is gone, so the proof,
+not the name, says that the server really serves this directory.
 
 The sidecar exits 30 seconds after its last client leaves. Four web processes
 and a cron script that open the same directory all join one sidecar.

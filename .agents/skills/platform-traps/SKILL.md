@@ -25,10 +25,26 @@ Each line cost a debugging session once. The fix named is the one in the code.
 ## Windows pipes, processes and consoles
 
 - **Named pipes share one namespace across every user.** The first instance
-  is made with `first_pipe_instance` (`crates/cli/src/serve.rs`), with the
-  system's default DACL, and a name a dead server left is anyone's: a client
-  proves its server cryptographically, the `SERVE` proof, whose secret is as
-  private as the store's directory, since `server\` inherits its ACL.
+  is made with `first_pipe_instance`, and every one with a DACL of the
+  user's alone (`pipe_instance` in `crates/cli/src/local.rs`): the system's
+  default lets every user connect to read. A name a dead server left is
+  anyone's: a client proves its server cryptographically, the `SERVE` proof.
+- **Anyone may traverse a directory to a file whose path they know, and a
+  new file inherits its directory's ACL**, which a store's directory at a
+  drive's root opens to every user. What stays the user's, `server\` and
+  `SERVE`, gets a protected DACL of its own (`crates/cli/src/owner_only.rs`),
+  set on `server\` each start, which reaches what is already in it too, and
+  given `SERVE` as `CreateFileW` makes it.
+- **An owner may change its object's DACL whatever the DACL says**, and a
+  drive's root lets every user make folders: a `server\` another user owns,
+  or a link in its place, is refused rather than protected, read through a
+  handle that holds it in place until its DACL is set.
+- **A test that another user is refused makes a local user**, which takes an
+  elevated run, as GitHub's Windows runner is; elsewhere it says it skipped.
+  A token of the user's own with its SID disabled stands in on every run, and
+  a file and a pipe every user may open show the refusal is the DACL's. What
+  that token makes is still the user's, so only the elevated test's user can
+  make a `server\` that another user owns.
 - **Closing stdin ends a read waiting on it only sometimes**: a pipe's close
   cancels it, a console's close waits for it. A private child is ended by
   closing its stdin, and killed when it does not leave.

@@ -14,9 +14,12 @@ tinystore stop ./data
 ## Local
 
 Without flags, programs on this machine find the server through
-`<dir>/server/SERVE`: a Unix socket, or a named pipe on Windows, and a proof
-that the file system lets only the directory's owner read. No token is needed:
-their permission is the file system's.
+`<dir>/server/SERVE`: a Unix socket, or a named pipe on Windows, and the
+secret of a proof. On every platform only the user the server runs as can
+read `SERVE` or connect, whoever else may read the store's directory. No token
+is needed: their permission is the file system's. If another user created
+`<dir>/server/` first, `serve` refuses to start and names the folder: remove
+it and start again.
 
 | Flag            | Does                                                                        |
 |-----------------|-----------------------------------------------------------------------------|
