@@ -84,6 +84,20 @@ fn backup_beside_a_holder_whose_key_is_kept_apart_says_it_leaves_the_key_out() {
     let without = tinystore(&[&"backup", &data, &zip, &"--encryption-key-file", &key]);
     assert!(without.status.success(), "{}", said(&without));
     assert!(said(&without).contains("which the backup leaves out"), "{}", said(&without));
+
+    // an operator who does not name the key file is told the same
+    let (plain, asked, restored) =
+        (dirs.path().join("plain.zip"), dirs.path().join("asked.zip"), dirs.path().join("restored"));
+    let unnamed = tinystore(&[&"backup", &data, &plain]);
+    assert!(unnamed.status.success(), "{}", said(&unnamed));
+    assert!(said(&unnamed).contains("which the backup leaves out"), "{}", said(&unnamed));
+    let include = tinystore(&[&"backup", &data, &asked, &"--include-encryption-key"]);
+    assert!(!include.status.success(), "a key asked for and not there: {}", said(&include));
+    assert!(said(&include).contains("values sealed with the key"), "{}", said(&include));
+    assert!(!asked.exists(), "no zip without the key it was asked to take");
+    let restore = tinystore(&[&"restore", &plain, &restored]);
+    assert!(restore.status.success(), "{}", said(&restore));
+    assert!(said(&restore).contains("put it back first"), "{}", said(&restore));
     held.close().unwrap();
 }
 

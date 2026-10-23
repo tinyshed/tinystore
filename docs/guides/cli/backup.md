@@ -29,8 +29,9 @@ backup that fails leaves no zip.
 
 A backup beside a running server reads the key only from the store's
 directory. If the server keeps its key apart with `--encryption-key-file`, the
-backup leaves that key out and says so. With `--include-encryption-key` it
-fails and writes no zip, so keep a copy of that key apart yourself:
+backup leaves that key out and says so, and so does a restore of it. With
+`--include-encryption-key` it fails and writes no zip, so keep a copy of that
+key apart yourself:
 
 ```text
 ● ./data  backed up to backups/2026-10-19.zip · 1 files, 52 KiB

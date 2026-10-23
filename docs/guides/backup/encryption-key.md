@@ -44,6 +44,11 @@ tinystore backup ./data backups/full.zip --include app.json --include-encryption
   store's directory, or encrypt it where you keep it.
 - `includeEncryptionKey` puts the key in the zip as it is. It does not
   encrypt the zip with it.
+- While values are sealed, `includeEncryptionKey` fails with `io`, and writes
+  no zip, when the key is not where the store reads it. That happens to
+  `tinystore backup` beside a server that keeps its key apart with
+  `--encryption-key-file`, since a backup beside a server reads the key from
+  the store's directory alone.
 
 ## Restoring without the key
 

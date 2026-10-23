@@ -65,6 +65,9 @@ pub(crate) use {
 };
 #[cfg(all(feature = "sql", feature = "wire"))]
 pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
+// What a backup reads of its snapshot, to say a key it leaves out.
+#[cfg(feature = "backup")]
+pub(crate) use encrypted::sealed_in;
 
 use crate::{Result, Store};
 

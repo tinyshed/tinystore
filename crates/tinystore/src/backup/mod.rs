@@ -38,7 +38,9 @@ use sha2::{Digest, Sha256};
 
 pub use restore::restore;
 
-use crate::{Error, Result, Store, unix_millis};
+#[cfg(feature = "kv")]
+use crate::kv::sealed_in;
+use crate::{Error, ErrorKind, Result, Store, unix_millis};
 use manifest::{Listed, MANIFEST, Manifest};
 
 /// What a backup holds.
@@ -89,7 +91,9 @@ impl BackupBuilder {
 
     /// Includes the store's encryption key, as it is, which a backup leaves
     /// out otherwise: the zip is not encrypted, so a backup with the key
-    /// opens every value it holds, and is kept as safely as the key.
+    /// opens every value it holds, and is kept as safely as the key. While
+    /// values are sealed, a key that is not where the store reads it fails
+    /// the backup, as beside a server that keeps its key apart.
     pub fn include_encryption_key(mut self) -> Self {
         self.include_encryption_key = true;
         self
@@ -118,16 +122,17 @@ impl BackupBuilder {
     pub fn write_to(self, out: impl Write) -> Result<Backup> {
         let taken = self.taken().map_err(|error| error.within("backup"))?;
         let snapshot = snapshot::take(&self.store).map_err(|error| error.within("backup"))?;
+        let key = self.key(&snapshot).map_err(|error| error.within("backup"))?;
         let mut zip = zip::Writer::new(out);
         let mut manifest = Manifest { created: unix_millis(self.store.clock().now()), ..Manifest::default() };
         for copied in &snapshot.files {
             let listed = add(&mut zip, &snapshot.dir.join(&copied.name), &copied.name, copied.engine)?;
             manifest.files.push(listed);
         }
-        for (name, from, engine) in taken.files {
+        for (name, from, engine) in taken.into_iter().chain(key.file) {
             manifest.files.push(add(&mut zip, &from, &name, engine)?);
         }
-        manifest.key_left_out = taken.key_left_out;
+        manifest.key_left_out = key.left_out;
         let text = manifest.to_json();
         zip.add(MANIFEST, text.len() as u64, text.as_bytes(), |_| {})
             .map_err(|error| Error::io("backup: its manifest", error))?;
@@ -135,9 +140,9 @@ impl BackupBuilder {
         Ok(manifest.summary())
     }
 
-    /// The files of the program's the backup takes, each checked, with the
-    /// key when asked for: their names in the backup and where they are.
-    fn taken(&self) -> Result<Taken> {
+    /// The files of the program's the backup takes, each checked: their names
+    /// in the backup, where they are and whose they are.
+    fn taken(&self) -> Result<Vec<Taken>> {
         let mut files = Vec::new();
         for name in &self.include {
             check_file(name)?;
@@ -146,20 +151,50 @@ impl BackupBuilder {
             }
             files.push((name.clone(), self.store.dir().join(name), "program"));
         }
-        let key = encryption_key_file(&self.store).filter(|file| file.exists());
-        let key_left_out = key.is_some() && !self.include_encryption_key;
-        if let Some(file) = key.filter(|_| self.include_encryption_key) {
-            files.push((KEY.to_owned(), file, "key"));
+        Ok(files)
+    }
+
+    /// The store's key when the backup takes it, and whether values of the
+    /// snapshot are sealed with a key it leaves out. What the snapshot seals
+    /// decides it, not a key file found: a store opened beside a server that
+    /// keeps its key apart finds none in its directory, and its buckets are
+    /// sealed all the same.
+    fn key(&self, snapshot: &snapshot::Snapshot) -> Result<Key> {
+        let sealed = sealed_in(&snapshot.dir)?;
+        if !self.include_encryption_key {
+            return Ok(Key { file: None, left_out: sealed.is_some() });
         }
-        Ok(Taken { files, key_left_out })
+        let file = encryption_key_file(&self.store).unwrap_or_default();
+        match sealed {
+            _ if file.exists() => Ok(Key { file: Some((KEY.to_owned(), file, "key")), left_out: false }),
+            None => Ok(Key { file: None, left_out: false }),
+            Some(id) => Err(Error::new(
+                ErrorKind::Io,
+                format!(
+                    "the store's encryption key {}: not there, and values sealed with the key {id} remain: \
+                     put the key there, or back up without it",
+                    file.display()
+                ),
+            )),
+        }
     }
 }
 
-/// The files of the program's a backup takes, and whether it leaves out a
-/// key that exists.
-struct Taken {
-    files: Vec<(String, PathBuf, &'static str)>,
-    key_left_out: bool,
+/// A file a backup takes beside the engines': its name in the zip, where it
+/// is, and whose it is, the program's or the key.
+type Taken = (String, PathBuf, &'static str);
+
+/// The store's key as a backup takes it, and whether values sealed with a
+/// key are left without it.
+struct Key {
+    file: Option<Taken>,
+    left_out: bool,
+}
+
+/// A build without kv seals nothing, and reads no bucket's key.
+#[cfg(not(feature = "kv"))]
+fn sealed_in(_snapshot: &Path) -> Result<Option<String>> {
+    Ok(None)
 }
 
 /// The name a backup gives the store's encryption key, and a restore puts

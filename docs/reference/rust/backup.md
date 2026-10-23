@@ -66,7 +66,9 @@ pub fn include_encryption_key(self) -> Self
 
 Includes the store's encryption key, as it is, which a backup leaves
 out otherwise: the zip is not encrypted, so a backup with the key
-opens every value it holds, and is kept as safely as the key.
+opens every value it holds, and is kept as safely as the key. While
+values are sealed, a key that is not where the store reads it fails
+the backup, as beside a server that keeps its key apart.
 
 ### BackupBuilder.write
 

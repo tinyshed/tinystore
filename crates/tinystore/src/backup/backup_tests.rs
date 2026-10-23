@@ -236,6 +236,39 @@ fn the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so() {
     assert_eq!(passwords.get("db").unwrap().as_deref(), Some("hunter2"));
 }
 
+// contract: BAK-03
+#[test]
+fn a_backup_beside_a_holder_that_keeps_its_key_apart_says_it_leaves_the_key_out() {
+    let f = fixture();
+    let key = f.zip.with_file_name("tinystore.key");
+    fs::write(&key, "0f".repeat(32)).unwrap();
+    let options = Options { encryption_key_file: Some(key), background: false, ..Options::default() };
+    let held = Store::open(&f.data, options).unwrap();
+    let db = held.database("app").open().unwrap();
+    db.bucket::<String>("passwords").encrypted().open().unwrap().set("db", &"hunter2".to_owned()).unwrap();
+
+    // beside its holder, the store reads a key in its directory alone, and finds none
+    let beside = Store::open_beside(&f.data).unwrap();
+    let asked = beside.backup().include_encryption_key().write(&f.zip).unwrap_err();
+    assert_eq!(asked.kind(), ErrorKind::Io, "{asked}");
+    assert!(asked.to_string().contains("values sealed with the key"), "{asked}");
+    assert!(!f.zip.exists(), "no zip without the key it was asked to take");
+    let without = beside.backup().write(&f.zip).unwrap();
+    assert!(without.key_left_out, "the backup says the values it holds open with a key it does not");
+    assert!(restore(&f.zip, &f.restored).unwrap().key_left_out, "and its restore says so too");
+    held.close().unwrap();
+}
+
+// contract: BAK-03
+#[test]
+fn a_backup_of_a_store_that_seals_nothing_misses_no_key() {
+    let f = fixture();
+    let store = f.open(&f.data);
+    store.bucket::<String>("tokens").encrypted().open().unwrap();
+    assert!(f.data.join(KEY).exists(), "the key is made for the encrypted bucket");
+    assert!(!store.backup().write(&f.zip).unwrap().key_left_out, "nothing it holds needs the key");
+}
+
 // contract: BAK-04
 #[test]
 fn a_closed_store_takes_no_backup() {

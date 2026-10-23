@@ -65,12 +65,12 @@ fn back_up(asked: Asked) -> Done {
         written.files,
         crate::files::bytes(written.bytes)
     );
-    if key_apart.is_some() {
-        println!("  the store seals values with its encryption key, which the backup leaves out: keep the key apart");
-    } else if written.key_left_out {
+    if written.key_left_out {
+        // beside its holder, a key kept apart is not the backup's to take
+        let or_include = if key_apart.is_some() { "" } else { ", or include it with --include-encryption-key" };
         println!(
-            "  the store seals values with its encryption key, which the backup leaves out: keep the key apart, or \
-             include it with --include-encryption-key"
+            "  the store seals values with its encryption key, which the backup leaves out: keep the key \
+             apart{or_include}"
         );
     }
     Ok(())
