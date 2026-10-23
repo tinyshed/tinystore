@@ -59,8 +59,8 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
   writer at most five seconds (contract SQL-07).
 - A broken constraint names itself: a unique key is `conflict`, anything else
   `invalid` (contract SQL-08).
-- A statement may not attach a file, begin a transaction or set a pragma
-  (contract SQL-02).
+- A statement may not attach a file, begin a transaction, set a pragma or
+  make a temporary table, view, trigger or index (contract SQL-02).
 - A query you cancel, or whose timeout passes, stops at once and gives its
   connection back (contract STORE-09).
 

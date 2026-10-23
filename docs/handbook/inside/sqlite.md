@@ -79,10 +79,16 @@ the sync mode:
 
 A program's statement never changes its connection. SQLite's authorizer sees
 each statement when it is compiled, and TinyStore refuses any that would:
-`attach` and `detach`, `begin`, `commit`, `rollback` and savepoints, and a
-`pragma` that sets a value (contract SQL-02). The writer is shared by every
-write of a commit and a reader by whoever reads next, so a `pragma
-foreign_keys = off` in one write would change the rules for its neighbours.
+`attach` and `detach`, `begin`, `commit`, `rollback` and savepoints, a
+`pragma` that sets a value, and a temporary table, view, trigger or index
+(contract SQL-02). The writer is shared by every write of a commit and a
+reader by whoever reads next, so a `pragma foreign_keys = off` in one write
+would change the rules for its neighbours. A temporary table stays on the
+writer, and SQLite finds it before the file's own table of the same name, so
+every later write to that name would go to memory and never reach the file.
+A statement also may not write `sqlite_dbpage`, the table of the file's raw
+pages that a node uses to copy files. A page written there would break the
+tables of the file for every reader and every copy.
 Pragmas that only read, such as `pragma table_info(messages)`, still work.
 
 ## Statements prepared once

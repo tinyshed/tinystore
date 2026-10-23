@@ -5,13 +5,18 @@
 //! it for them, so SQLite's authorizer, which sees every statement as it is
 //! compiled, refuses a given one that does:
 //!
-//! | The statement                              | What it would do                                 |
-//! |--------------------------------------------|--------------------------------------------------|
-//! | `attach`, `detach`                         | open another file, which stays on the connection |
-//! | `begin`, `commit`, `rollback`, a savepoint | end the transaction the writes beside it share   |
-//! | a `pragma` that sets                       | change a setting every connection opens with     |
+//! | The statement                              | What it would do                                            |
+//! |--------------------------------------------|-------------------------------------------------------------|
+//! | `attach`, `detach`                         | open another file, which stays on the connection            |
+//! | `begin`, `commit`, `rollback`, a savepoint | end the transaction the writes beside it share              |
+//! | a `pragma` that sets                       | change a setting every connection opens with                |
+//! | a temporary table, view, trigger or index  | stay on the connection, a table found before the file's own |
 //!
 //! A pragma that only reads runs: one without a value, and those of [`READS`].
+//!
+//! Nor may a given statement write `sqlite_dbpage`, the file's pages as they
+//! lie, which the build has for a node's copies: a page written there under
+//! SQLite's own b-trees leaves them broken for every reader and every copy.
 //!
 //! The authorizer sees a statement once, when it is compiled, and a compiled
 //! statement is kept by its text. The adapter's own `commit`, once kept, would
@@ -56,7 +61,14 @@ const READS: [&str; 10] = [
 const ATTACHES: &str = "a statement attaches no file: its connection is shared, and the file would stay on it";
 const ENDS: &str = "a statement neither begins nor ends a transaction: the one it runs in is shared with other writes";
 const SETS: &str = "a statement sets no pragma: its connection is shared, and the setting would stay on it";
+const TEMPORARY: &str = "a statement makes no temporary table, view, trigger or index: its connection is shared, and \
+    the object would stay on it, found before the file's own by every statement after it";
+const PAGES: &str = "a statement writes no page of its file through sqlite_dbpage: a page written there under \
+    SQLite's own b-trees would leave them broken";
 const UNNAMED: &str = "a statement does what SQLite gives no name to, as an attach of a file that is not a literal";
+
+/// The virtual table of a file's pages as they lie.
+const RAW_PAGES: &str = "sqlite_dbpage";
 const AS_OWN: &str = "a statement starts with no `/* tinystore */`, which the store's own statements do";
 
 thread_local! {
@@ -90,15 +102,43 @@ fn authorize(context: AuthContext<'_>) -> Authorization {
     if !GIVEN.get() {
         return Authorization::Allow;
     }
-    let Some(why) = refused(&context.action) else {
+    let Some(why) = refused(&context) else {
         return Authorization::Allow;
     };
     REFUSED.set(Some(why));
     Authorization::Deny
 }
 
-fn refused(action: &AuthAction<'_>) -> Option<&'static str> {
-    match action {
+fn refused(context: &AuthContext<'_>) -> Option<&'static str> {
+    // `temp` is the connection's own schema, which no file holds. Only what
+    // makes an object there is refused: an `alter table` reads it itself.
+    let in_temp = context.database_name.is_some_and(|name| name.eq_ignore_ascii_case("temp"));
+    match &context.action {
+        AuthAction::CreateTempTable { .. }
+        | AuthAction::CreateTempView { .. }
+        | AuthAction::CreateTempTrigger { .. }
+        | AuthAction::CreateTempIndex { .. } => Some(TEMPORARY),
+        // `create table temp.staging` is told as a table's, and `create
+        // trigger temp.audit … on main.orders` as main's, until its row goes
+        // into temp's schema: what goes into temp makes something there.
+        AuthAction::CreateTable { .. }
+        | AuthAction::CreateView { .. }
+        | AuthAction::CreateTrigger { .. }
+        | AuthAction::CreateIndex { .. }
+        | AuthAction::CreateVtable { .. }
+        | AuthAction::Insert { .. }
+            if in_temp =>
+        {
+            Some(TEMPORARY)
+        }
+        AuthAction::Insert { table_name }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::Delete { table_name }
+            if table_name.eq_ignore_ascii_case(RAW_PAGES) =>
+        {
+            Some(PAGES)
+        }
+        AuthAction::CreateVtable { module_name, .. } if module_name.eq_ignore_ascii_case(RAW_PAGES) => Some(PAGES),
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => Some(ATTACHES),
         AuthAction::Transaction { .. } | AuthAction::Savepoint { .. } => Some(ENDS),
         AuthAction::Pragma { pragma_name, pragma_value } => {
@@ -129,3 +169,7 @@ impl Drop for Running {
         GIVEN.set(self.before);
     }
 }
+
+#[cfg(test)]
+#[path = "given_tests.rs"]
+mod tests;

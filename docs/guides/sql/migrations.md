@@ -112,11 +112,12 @@ always on.
 A migration runs on the database's one writer, so it may not change that
 connection for everyone after it (contract SQL-02):
 
-| Refused                                 | Why                                                                  |
-|-----------------------------------------|----------------------------------------------------------------------|
-| `pragma foreign_keys = on`, any setting | it would stay set on the writer every write shares                   |
-| `begin`, `commit`, `savepoint`          | the migrations already run in one transaction                        |
-| `attach database`                       | a database is one file; two engines never share a commit by accident |
+| Refused                                 | Why                                                                                |
+|-----------------------------------------|------------------------------------------------------------------------------------|
+| `pragma foreign_keys = on`, any setting | it would stay set on the writer every write shares                                 |
+| `begin`, `commit`, `savepoint`          | the migrations already run in one transaction                                      |
+| `attach database`                       | a database is one file; two engines never share a commit by accident               |
+| `create temp table`, a temporary object | it would stay on the writer, and later writes to its name would never reach a file |
 
 A pragma that only reads, `pragma table_info(orders)`, is allowed.
 
