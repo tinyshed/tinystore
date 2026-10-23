@@ -121,7 +121,8 @@ loop {
 - `poll` gives every event once, a batch a call, from a cursor the program
   keeps: text. Without one it starts at the oldest event kept.
 - It returns at once: with no event past the cursor, an empty batch and the
-  cursor it was given. Run the loop from a [repeating
+  cursor it was given. A first poll that finds nothing gives the cursor where
+  the next packed events begin, so a loop can keep it. Run the loop from a [repeating
   job](../jobs/schedules.md), every minute.
 - Keep the cursor after the copy is safe: a crash between the two reads the
   batch again and loses none. Make the copy's insert idempotent.

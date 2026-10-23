@@ -136,6 +136,22 @@ fn a_poll_counts_the_events_keep_removed_while_they_waited_in_a_head() {
 
 // contract: REC-07
 #[test]
+fn a_first_poll_that_finds_nothing_counts_nothing_keep_removed_before_it() {
+    let fixture = fixture();
+    fixture.store.events("api").keep(2 * HOUR).open().unwrap();
+    segment(&fixture, "api", 0, 3);
+    fixture.pass(2 * HOUR);
+    assert_eq!(maintain(&fixture.store).unwrap().expired, 3);
+    let all = fixture.store.all_events().unwrap();
+    let first = all.poll(None).unwrap();
+    assert_eq!((first.events.len(), first.cursor.as_str(), first.expired), (0, "2:0", 0));
+    segment(&fixture, "api", 1, 2);
+    let next = all.poll(Some(&first.cursor)).unwrap();
+    assert_eq!((names(&next), next.expired), (spelled(&["1-0", "1-1"]), 0));
+}
+
+// contract: REC-07
+#[test]
 fn a_stream_that_keeps_less_than_an_hour_packs_its_events_before_keep_takes_them() {
     let fixture = fixture();
     let audit = fixture.store.events("audit").keep(30 * 60 * SECOND).open().unwrap();

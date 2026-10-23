@@ -425,7 +425,8 @@ pub fn poll(&self, cursor: Option<&str>) -> Result<PollBatch>
 
 Every packed event once, a batch a call, 1000 at most: from `cursor`,
 a batch's, or from the oldest event kept without one. With no event
-past the cursor, the batch is empty and its cursor the one given.
+past the cursor, the batch is empty and its cursor the one given;
+with no event at all, the cursor where the next packed ones begin.
 
 ### AllEvents.poll_limit
 

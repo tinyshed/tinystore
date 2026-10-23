@@ -47,7 +47,8 @@ pub struct PollBatch {
 impl AllEvents {
     /// Every packed event once, a batch a call, 1000 at most: from `cursor`,
     /// a batch's, or from the oldest event kept without one. With no event
-    /// past the cursor, the batch is empty and its cursor the one given.
+    /// past the cursor, the batch is empty and its cursor the one given;
+    /// with no event at all, the cursor where the next packed ones begin.
     pub fn poll(&self, cursor: Option<&str>) -> Result<PollBatch> {
         self.poll_limit(cursor, POLL_EVENTS)
     }
@@ -96,15 +97,29 @@ const SEGMENT_ROW: &str = "select body from segments where id = ?1";
 const BLOCKS: &str = "select id, count from blocks where segment = ?1 order by id";
 const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 const EXPIRED: &str = "select segment, events from expired where segment >= ?1 and segment < ?2";
+/// The id the next segment packed takes: ids only grow, and those of every
+/// segment removed stay taken.
+const NEXT_ID: &str = "select coalesce((select seq from sqlite_sequence where name = 'segments'), 0) + 1";
+
+/// What a poll's read of the file found: a batch, or no segment at the
+/// cursor or past it, and the id the next segment packed takes.
+enum Found {
+    Batch(Box<Fetched>),
+    Nothing { next: i64 },
+}
 
 impl Records {
     /// A batch: the first segment at the cursor or past it, read in one
     /// moment of the file, its events built after.
     fn poll(&self, from: Option<(i64, i64)>, limit: usize) -> Result<PollBatch> {
         let (segment, offset) = from.unwrap_or((0, 0));
-        let given = format!("{segment}:{offset}");
-        let Some(fetched) = self.fetch_batch((segment, offset), from.is_some(), limit)? else {
-            return Ok(PollBatch { events: Vec::new(), cursor: given, expired: 0 });
+        let fetched = match self.fetch_batch((segment, offset), from.is_some(), limit)? {
+            Found::Batch(fetched) => fetched,
+            // without a cursor, the next segment's: a poll from it counts only what keep removes after
+            Found::Nothing { next } => {
+                let cursor = if from.is_some() { format!("{segment}:{offset}") } else { format!("{next}:0") };
+                return Ok(PollBatch { events: Vec::new(), cursor, expired: 0 });
+            }
         };
         // the bodies fetched and the events built of them hold the store's memory, as a read's do
         let fetched_bytes = fetched.row.len() + fetched.blocks.iter().map(|(_, body)| body.len()).sum::<usize>();
@@ -130,7 +145,7 @@ impl Records {
         Ok(PollBatch { events, cursor, expired: fetched.expired })
     }
 
-    fn fetch_batch(&self, (segment, offset): (i64, i64), counted: bool, limit: usize) -> Result<Option<Fetched>> {
+    fn fetch_batch(&self, (segment, offset): (i64, i64), counted: bool, limit: usize) -> Result<Found> {
         let failed = |error| sql_error("read a poll's batch", error);
         self.file.read(|connection| {
             let next = connection.prepare_cached(NEXT_SEGMENT).and_then(|mut select| {
@@ -143,7 +158,9 @@ impl Records {
             let Some((id, stream, holder, start, count)): Option<(i64, i64, Option<i64>, i64, i64)> =
                 next.map_err(failed)?
             else {
-                return Ok(None);
+                let next =
+                    connection.prepare_cached(NEXT_ID).and_then(|mut select| select.query_row([], |row| row.get(0)));
+                return Ok(Found::Nothing { next: next.map_err(failed)? });
             };
             let expired = if counted { expired_between(connection, (segment, offset), id)? } else { 0 };
             let skip = if id == segment { offset.min(count) } else { 0 };
@@ -167,7 +184,18 @@ impl Records {
                 .prepare_cached(SEGMENT_ROW)
                 .and_then(|mut select| select.query_row([holder], |row| row.get(0)));
             let row = row.map_err(failed)?;
-            Ok(Some(Fetched { segment: id, holder, stream, from, to, skip, count, row, blocks, expired }))
+            Ok(Found::Batch(Box::new(Fetched {
+                segment: id,
+                holder,
+                stream,
+                from,
+                to,
+                skip,
+                count,
+                row,
+                blocks,
+                expired,
+            })))
         })
     }
 }
