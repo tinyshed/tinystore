@@ -828,6 +828,12 @@ impl State {
         }
         let log = Arc::new(log);
         lock(&self.logs).insert(name.to_owned(), Arc::downgrade(&log));
+        // A stop wakes the logs it finds; one opened as the node stops, by an
+        // engine's open the store's close raced, is kept before this looks,
+        // so that either the stop finds it or this sees the stop.
+        if self.stopping() {
+            log.stop_waiting();
+        }
         Ok(log)
     }
 

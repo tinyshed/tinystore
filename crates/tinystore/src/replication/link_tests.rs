@@ -1940,6 +1940,22 @@ fn a_node_that_stops_refuses_at_once_the_writes_waiting_for_a_lease() {
     assert!(waited < Duration::from_secs(2), "the write waited {waited:?} for a lease once the node stopped");
 }
 
+#[test]
+fn a_log_opened_as_its_node_stops_waits_for_no_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let nobody = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+    let home = node_with(dir.path(), Node { failover: Some(nobody), ..Node::default() });
+    let node = Arc::clone(home.node().unwrap());
+    // the store's close begins with it, and an engine's open it raced opens its file's log after
+    node.stop();
+    let began = Instant::now();
+    let refused = node.open_log("kv.db").unwrap().refuse().unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Unavailable, "{refused}");
+    let waited = began.elapsed();
+    assert!(waited < super::log::LEASE_WAIT, "a log opened as its node stops waited {waited:?} for a lease");
+    home.close().unwrap();
+}
+
 #[cfg(feature = "metrics")]
 #[test]
 fn a_synchronous_home_measures_its_waits_for_a_copy_and_how_far_behind_each_copy_is() {

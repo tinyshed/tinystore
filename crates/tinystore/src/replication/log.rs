@@ -257,7 +257,7 @@ pub(crate) struct Log {
 
 /// How long a judged home's write waits for a lease it holds not now: two
 /// turns of its renewals and their round trips.
-const LEASE_WAIT: Duration = Duration::from_secs(3);
+pub(super) const LEASE_WAIT: Duration = Duration::from_secs(3);
 
 /// The file in a home's log directory that keeps the later epoch it learned
 /// another node writes the file at: its writes are refused from then on, and
