@@ -75,9 +75,11 @@ func Idle(d time.Duration) Option {
 func Clock(start time.Time) Option { return func(o *options) { o.clock = start } }
 
 // Durability is how far a commit of the store's files goes before it
-// returns: "full", the default, is synced to the disk; "os" survives the
-// program's crash, and a power loss may take the last commits. It is the
-// store's, set by whoever opens it first: one found open with another is refused.
+// returns: "full" is synced to the disk; "os" survives the program's crash,
+// and a power loss may take the last commits. Unless given, kv, jobs, files,
+// search and every database are "full", and records and metrics "os"; given,
+// every file is. It is the store's, set by whoever opens it first: one found
+// open with another, or with none when this asks one, is refused.
 func Durability(level string) Option { return func(o *options) { o.durability = level } }
 
 // EncryptionKeyFile is the file of the store's encryption key, 64 hex digits,

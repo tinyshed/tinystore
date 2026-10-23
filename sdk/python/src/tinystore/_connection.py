@@ -34,9 +34,10 @@ Durability = Literal["full", "os"]
 """How far a commit goes before it returns.
 
 ``"full"`` is synced to the disk: it survives a crash of the operating system
-and a power loss, and is what every file is unless told. ``"os"`` is written
-to the operating system and synced a little later: it survives the
-program's crash, and a power loss may take the last commits, never the file.
+and a power loss, and is what kv, jobs, files, search and every database are
+unless told. ``"os"`` is written to the operating system and synced a little
+later: it survives the program's crash, and a power loss may take the last
+commits, never the file. Records and metrics are ``"os"`` unless told.
 """
 
 HANDSHAKE_TIME = 5.0

@@ -633,9 +633,11 @@ async def open(
     - ``clock``: runs a private server on a test's clock, starting at this
       time, which ``store.clock`` moves forward instead of a test waiting.
     - ``durability``: how far a commit of the store's files goes before it
-      returns, ``"full"`` unless given; ``"os"`` does not wait for the disk.
-      It is the store's, set by whoever opens it first: one found open with
-      another is refused.
+      returns. Unless given, kv, jobs, files, search and every database commit
+      ``"full"``, and records and metrics ``"os"``; given, every file commits
+      so. ``"os"`` does not wait for the disk. It is the store's, set by
+      whoever opens it first: one found open with another, or with none when
+      this asks one, is refused.
     - ``encryption_key_file``: the file of the store's encryption key, 64 hex
       digits, kept apart from the data; the store reads it and never makes it.
     - ``self_metrics``: measures the store into its own metrics, under names

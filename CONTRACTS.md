@@ -30,7 +30,7 @@ These contracts are what does not.
 
 ## 2. Durability and transactions
 
-- **DUR-01** A write that returned success MUST survive an abrupt exit of the process, at the durability the store or the database was opened with, `full` unless told.
+- **DUR-01** A write that returned success MUST survive an abrupt exit of the process, at the durability the store or the database was opened with: unless told, `full` for kv, jobs, files, search and every database, `os` for records and metrics.
 - **DUR-02** A transaction MUST commit all its changes or leave none observable; a call that fails inside it MUST leave it as it was before the call.
 - **DUR-03** Writes grouped into one commit MUST each fail alone: one refused write MUST NOT fail its neighbours.
 - **DUR-04** A write whose caller left before its turn MUST write nothing; one that has started MUST finish with its group.

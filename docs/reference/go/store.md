@@ -149,7 +149,7 @@ Clock runs a private server on a test's clock, starting at this time, which stor
 func Durability(level string) Option
 ```
 
-Durability is how far a commit of the store's files goes before it returns: "full", the default, is synced to the disk; "os" survives the program's crash, and a power loss may take the last commits. It is the store's, set by whoever opens it first: one found open with another is refused.
+Durability is how far a commit of the store's files goes before it returns: "full" is synced to the disk; "os" survives the program's crash, and a power loss may take the last commits. Unless given, kv, jobs, files, search and every database are "full", and records and metrics "os"; given, every file is. It is the store's, set by whoever opens it first: one found open with another, or with none when this asks one, is refused.
 
 ### Embedded
 

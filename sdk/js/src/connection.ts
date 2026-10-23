@@ -33,10 +33,12 @@ import { Empty, methods, StoreOptions } from './wire/protocol.ts'
  * one database:
  *
  *     'full'   synced to the disk: it survives a crash of the operating
- *              system and a power loss. What every file is unless told.
+ *              system and a power loss. What kv, jobs, files, search and
+ *              every database are unless told.
  *     'os'     written to the operating system, synced a little later: it
  *              survives the program's crash, and a power loss may take the
- *              last commits, never the file.
+ *              last commits, never the file. What records and metrics are
+ *              unless told.
  */
 export type Durability = 'full' | 'os'
 

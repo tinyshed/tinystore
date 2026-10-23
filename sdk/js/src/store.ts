@@ -113,12 +113,14 @@ export interface OpenOptions {
 	 */
 	clock?: Time
 	/**
-	 * How far a commit of the store's files goes before it returns: `'full'`
-	 * unless given. `'os'` does not wait for the disk, so a write returns in
-	 * microseconds, survives this program's crash, and may be lost with the
-	 * last others to a power loss. It is the store's, set by whoever opens it
-	 * first: a sidecar found running with another is refused. A database may
-	 * say its own, `store.database('audit', { durability: 'full' })`.
+	 * How far a commit of the store's files goes before it returns. Unless
+	 * given, kv, jobs, files, search and every database commit `'full'`, and
+	 * records and metrics `'os'`; given, every file commits so. `'os'` does
+	 * not wait for the disk, so a write returns in microseconds, survives this
+	 * program's crash, and may be lost with the last others to a power loss.
+	 * It is the store's, set by whoever opens it first: a sidecar found
+	 * running with another, or with none when this asks one, is refused. A
+	 * database may say its own, `store.database('audit', { durability: 'full' })`.
 	 */
 	durability?: Durability
 	/**
