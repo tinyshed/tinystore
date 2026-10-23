@@ -26,20 +26,20 @@ fn a_store_measured_counts_its_commits_and_its_own_writes_of_them_count_nothing(
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path(), true);
     let metrics = store.metrics().unwrap();
-    // an ingest of a new name commits it, then its samples
+    // an ingest of a new name commits it with its samples
     ingest_one(&metrics);
     metrics.flush().unwrap();
-    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(2.0));
-    assert_eq!(newest(&metrics, "tinystore_commit_writes_total", "metrics"), Some(2.0));
-    assert_eq!(newest(&metrics, "tinystore_commit_ms_count", "metrics"), Some(2.0));
-    assert_eq!(newest(&metrics, "tinystore_writer_wait_ms_count", "metrics"), Some(2.0));
+    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(1.0));
+    assert_eq!(newest(&metrics, "tinystore_commit_writes_total", "metrics"), Some(1.0));
+    assert_eq!(newest(&metrics, "tinystore_commit_ms_count", "metrics"), Some(1.0));
+    assert_eq!(newest(&metrics, "tinystore_writer_wait_ms_count", "metrics"), Some(1.0));
     // each flush wrote the totals: commits of metrics.db that nothing counts
     metrics.flush().unwrap();
     metrics.flush().unwrap();
-    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(2.0));
+    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(1.0));
     ingest_one(&metrics);
     metrics.flush().unwrap();
-    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(3.0));
+    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(2.0));
     assert!(newest(&metrics, "tinystore_file_bytes", "metrics").is_some_and(|bytes| bytes > 0.0));
     assert!(newest(&metrics, "tinystore_readers_open", "metrics").is_some());
     let used = metrics.query().name("tinystore_memory_used_bytes").since(HOUR).latest().unwrap();
@@ -81,8 +81,8 @@ fn what_the_store_measured_is_kept_through_its_close_and_counted_on_after() {
 
     let again = store(dir.path(), true);
     let metrics = again.metrics().unwrap();
-    // the close wrote the first run's totals, the name and the samples; the new run starts from a zero
-    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(2.0));
+    // the close wrote the first run's totals, the name with the samples; the new run starts from a zero
+    assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(1.0));
     ingest_one(&metrics);
     metrics.flush().unwrap();
     let read = metrics.query().name("tinystore_commits_total").filter("file", "metrics").since(HOUR).read().unwrap();

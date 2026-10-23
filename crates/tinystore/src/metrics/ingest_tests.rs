@@ -139,6 +139,28 @@ fn a_names_keep_is_its_own_and_another_while_the_store_is_open_is_refused() {
     );
 }
 
+// contract: MET-03
+#[test]
+fn an_ingest_refused_inside_its_write_makes_no_name_and_moves_no_keep() {
+    let f = fixture();
+    let written = f.gauge("cpu", 481, 15 * SECOND, |index| index as f64);
+    f.metrics().ingest(&[written]).unwrap();
+    crate::metrics::maintain(&f.store).unwrap();
+    let due = f.value("select due from series_state");
+    // within the hour the call keeps, behind what the series has packed
+    let late = Series::gauge("cpu").sample(f.now() - 30 * MINUTE, 1.0).keep(HOUR);
+    assert_eq!(f.metrics().ingest(&[late]).unwrap_err().kind(), ErrorKind::TooOld);
+    assert_eq!(f.value("select coalesce(keep, -1) from names where name = 'cpu'"), -1, "the keep it had");
+    assert_eq!(f.value("select due from series_state"), due);
+    f.metrics().ingest(&[Series::gauge("cpu").sample(f.now(), 1.0).keep(2 * HOUR)]).unwrap();
+    let full = |tx: &crate::sqlite::Tx<'_>| Ok(tx.execute("update store_state set series_count = 100000", []).unwrap());
+    f.engine().file.write(0, full).unwrap();
+    let fresh = Series::gauge("fresh").sample(f.now(), 1.0).keep(DAY);
+    assert_eq!(f.metrics().ingest(&[fresh]).unwrap_err().kind(), ErrorKind::Limit);
+    assert_eq!(f.value("select count(*) from names where name = 'fresh'"), 0, "no name of a refused call");
+    assert!(f.engine().names.get("fresh").is_none());
+}
+
 // contract: ERR-05, MET-07
 #[test]
 fn an_ingest_past_its_bound_is_a_limit() {

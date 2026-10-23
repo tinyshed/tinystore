@@ -7,13 +7,13 @@
 //! program never shortens what another keeps.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rusqlite::params;
 
 use super::labels::NAME;
-use crate::sqlite::{File, sql_error};
+use crate::sqlite::{File, Tx, sql_error};
 use crate::sync::lock;
 use crate::{Error, Result};
 
@@ -60,11 +60,78 @@ const MOVE_DUE: &str = "update series_state set due = due + ?2
 
 /// What a call of names changes in the file: names it makes, and keeps it
 /// moves.
-#[derive(Default)]
-struct Changes {
+#[derive(Clone, Debug, Default)]
+pub(super) struct Changes {
     made: Vec<(String, Option<i64>)>,
     /// A name, its id, its keep before and after, in milliseconds.
     kept: Vec<(String, i64, i64, i64)>,
+}
+
+impl Changes {
+    fn is_empty(&self) -> bool {
+        self.made.is_empty() && self.kept.is_empty()
+    }
+}
+
+/// A call's names between working out what they change and the write that
+/// carries it: an ingest writes the changes in its own savepoint, so that a
+/// call refused there makes no name and moves no keep. While it changes any,
+/// it holds the names, so that no other call settles them meanwhile.
+pub(super) struct Settling<'n> {
+    names: &'n Names,
+    held: Option<MutexGuard<'n, HashMap<String, Name>>>,
+    changes: Changes,
+    wanted: Vec<(String, Option<Duration>)>,
+}
+
+impl Settling<'_> {
+    /// What to write, for a write's work to carry.
+    pub(super) fn changes(&self) -> Changes {
+        self.changes.clone()
+    }
+
+    /// Each name the call gives as it is once its write commits; one it
+    /// makes has no id until then.
+    pub(super) fn names(&self) -> HashMap<String, Name> {
+        let Some(known) = &self.held else { return given(&lock(&self.names.known), &self.wanted) };
+        let mut view = given(known, &self.wanted);
+        let made = self.changes.made.iter().map(|(name, _)| (name.clone(), 0));
+        settle_in(&mut view, &self.changes, made.collect(), &self.wanted);
+        view
+    }
+
+    /// Takes in what the write that carried the changes made: the ids of
+    /// the names it made.
+    pub(super) fn settled(self, made: HashMap<String, i64>) {
+        if let Some(mut known) = self.held {
+            settle_in(&mut known, &self.changes, made, &self.wanted);
+        }
+    }
+}
+
+/// Each wanted name `known` holds.
+fn given(known: &HashMap<String, Name>, wanted: &[(String, Option<Duration>)]) -> HashMap<String, Name> {
+    wanted.iter().filter_map(|(name, _)| known.get(name).map(|held| (name.clone(), held.clone()))).collect()
+}
+
+/// Puts into `known` the names `changes` made, with their ids, and what each
+/// wanted name keeps.
+fn settle_in(
+    known: &mut HashMap<String, Name>,
+    changes: &Changes,
+    mut ids: HashMap<String, i64>,
+    wanted: &[(String, Option<Duration>)],
+) {
+    for (name, keep) in &changes.made {
+        let keep = keep.map(|millis| Duration::from_millis(millis.unsigned_abs()));
+        let id = ids.remove(name).unwrap_or_default();
+        known.insert(name.clone(), Name { id, keep, said: keep });
+    }
+    for (name, keep) in wanted {
+        if let (Some(keep), Some(held)) = (keep, known.get_mut(name)) {
+            (held.keep, held.said) = (Some(*keep), Some(*keep));
+        }
+    }
 }
 
 impl Names {
@@ -95,26 +162,34 @@ impl Names {
     }
 
     /// The names a call writes, each made the first time it is given and
-    /// given the keep the call says, which the file then keeps. A keep is
-    /// checked, and one name given once.
-    pub(super) fn settle(
-        &self,
-        file: &File,
-        wanted: &BTreeMap<&str, Option<Duration>>,
-    ) -> Result<HashMap<String, Name>> {
+    /// given the keep the call says, which the file then keeps, in a write
+    /// of their own. A keep is checked, and one name given once.
+    pub(super) fn settle(&self, file: &File, wanted: &BTreeMap<&str, Option<Duration>>) -> Result<()> {
+        let settling = self.settling(wanted)?;
+        let changes = settling.changes();
+        let made = if changes.is_empty() {
+            HashMap::new()
+        } else {
+            let bytes = changes.made.iter().map(|(name, _)| name.len()).sum();
+            file.write(bytes, move |tx| write_changes(tx, &changes))?
+        };
+        settling.settled(made);
+        Ok(())
+    }
+
+    /// What a call's names change, for a write to carry: a keep is checked,
+    /// and one name given once. A call that changes nothing in the file says
+    /// its keeps at once.
+    pub(super) fn settling(&self, wanted: &BTreeMap<&str, Option<Duration>>) -> Result<Settling<'_>> {
         let mut known = lock(&self.known);
         let changes = changes(&known, wanted)?;
-        let ids = write(file, &changes)?;
-        for ((name, keep), id) in changes.made.into_iter().zip(ids) {
-            let keep = keep.map(|millis| Duration::from_millis(millis.unsigned_abs()));
-            known.insert(name, Name { id, keep, said: keep });
+        let wanted: Vec<(String, Option<Duration>)> =
+            wanted.iter().map(|(name, keep)| ((*name).to_owned(), *keep)).collect();
+        if changes.is_empty() {
+            settle_in(&mut known, &changes, HashMap::new(), &wanted);
+            return Ok(Settling { names: self, held: None, changes, wanted });
         }
-        for (name, keep) in wanted {
-            if let (Some(keep), Some(held)) = (keep, known.get_mut(*name)) {
-                (held.keep, held.said) = (Some(*keep), Some(*keep));
-            }
-        }
-        Ok(wanted.keys().filter_map(|name| known.get(*name).map(|held| ((*name).to_owned(), held.clone()))).collect())
+        Ok(Settling { names: self, held: Some(known), changes, wanted })
     }
 
     /// What each name would keep once `settle` took `wanted`, written nowhere:
@@ -164,30 +239,23 @@ fn changes(known: &HashMap<String, Name>, wanted: &BTreeMap<&str, Option<Duratio
     Ok(changes)
 }
 
-/// Writes the names a call makes and the keeps it moves, in one write, and
-/// gives the ids of those made.
-fn write(file: &File, changes: &Changes) -> Result<Vec<i64>> {
-    if changes.made.is_empty() && changes.kept.is_empty() {
-        return Ok(Vec::new());
+/// Writes the names a call makes and the keeps it moves, and gives the ids
+/// of those made by their names.
+pub(super) fn write_changes(tx: &Tx<'_>, changes: &Changes) -> Result<HashMap<String, i64>> {
+    let failed = |error| sql_error("write a name", error);
+    let mut ids = HashMap::with_capacity(changes.made.len());
+    for (name, keep) in &changes.made {
+        let mut insert = tx.prepare_cached(INSERT_NAME).map_err(failed)?;
+        ids.insert(name.clone(), insert.query_row(params![name, keep], |row| row.get(0)).map_err(failed)?);
     }
-    let (made, kept) = (changes.made.clone(), changes.kept.clone());
-    let bytes = made.iter().map(|(name, _)| name.len()).sum();
-    file.write(bytes, move |tx| {
-        let failed = |error| sql_error("write a name", error);
-        let mut ids = Vec::with_capacity(made.len());
-        for (name, keep) in &made {
-            let mut insert = tx.prepare_cached(INSERT_NAME).map_err(failed)?;
-            ids.push(insert.query_row(params![name, keep], |row| row.get(0)).map_err(failed)?);
-        }
-        for (name, id, before, after) in &kept {
-            let moved = tx.prepare_cached(SET_KEEP).and_then(|mut set| set.execute(params![id, after]));
-            moved.map_err(|error| sql_error("write a name's keep", error))?;
-            let due = tx.prepare_cached(MOVE_DUE).and_then(|mut set| set.execute(params![name, after - before]));
-            due.map_err(|error| sql_error("move when a name's series expire", error))?;
-        }
-        debug_assert_eq!(NAME, "__name__", "MOVE_DUE finds a name's series by this label");
-        Ok(ids)
-    })
+    for (name, id, before, after) in &changes.kept {
+        let moved = tx.prepare_cached(SET_KEEP).and_then(|mut set| set.execute(params![id, after]));
+        moved.map_err(|error| sql_error("write a name's keep", error))?;
+        let due = tx.prepare_cached(MOVE_DUE).and_then(|mut set| set.execute(params![name, after - before]));
+        due.map_err(|error| sql_error("move when a name's series expire", error))?;
+    }
+    debug_assert_eq!(NAME, "__name__", "MOVE_DUE finds a name's series by this label");
+    Ok(ids)
 }
 
 /// A keep a call gave, in whole milliseconds, within its bounds.

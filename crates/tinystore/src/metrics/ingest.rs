@@ -1,13 +1,14 @@
 //! `ingest`: series and their samples, written whole or not at all.
 //!
 //! ```text
-//! check every series and gather its samples ─► settle the names ─► check each sample's time
-//!     ─► one grouped write: each series found or registered, its head rewritten
+//! check every series and gather its samples ─► what the names change ─► check each sample's time
+//!     ─► one grouped write: the names made and keeps moved, each series found or registered,
+//!        its head rewritten
 //! ```
 //!
-//! A call is one savepoint of the file's grouped commit: a series it
-//! registers, its pairs and postings, and every head it rewrites commit
-//! together, or nothing does. A refused series names itself by its labels, so
+//! A call is one savepoint of the file's grouped commit: a name it makes, a
+//! keep it moves, a series it registers, its pairs and postings, and every
+//! head it rewrites commit together, or nothing does. A refused series names itself by its labels, so
 //! that the call can be sent again without it.
 
 use std::borrow::Cow;
@@ -22,7 +23,7 @@ use super::engine::{AHEAD, Engine, execute};
 use super::head::{self, Extent};
 use super::labels::Kept;
 use super::ladder::{unit_end, unit_of};
-use super::names::{KEEP, Name, checked_keep, millis};
+use super::names::{Changes, KEEP, Name, checked_keep, millis, write_changes};
 use super::registry;
 use super::retention::expires;
 use super::series::{Kind, Labels, Series};
@@ -72,35 +73,42 @@ impl Engine {
         for series in gathered.values() {
             within_window(series, keeps.get(series.kept.name()).copied().unwrap_or(KEEP), now)?;
         }
-        let names = self.names.settle(&self.file, &wanted)?;
+        let settling = self.names.settling(&wanted)?;
+        let names = settling.names();
         let batches = gathered.into_values().map(|series| batch(series, &names, now)).collect::<Result<Vec<_>>>()?;
         if batches.is_empty() {
             return Ok(());
         }
         let samples: usize = series.iter().map(|series| series.samples().len()).sum();
-        if self.write(batches, bytes)? {
+        let (ready, made) = self.write(batches, settling.changes(), bytes)?;
+        settling.settled(made);
+        if ready {
             self.wake();
         }
         self.probe.count("tinystore_metrics_samples_total", &[], samples as f64);
         Ok(())
     }
 
-    /// The call's one write, and whether a series of it now holds a
-    /// block's worth.
-    fn write(&self, batches: Vec<Batch>, bytes: usize) -> Result<bool> {
+    /// The call's one write, its names' changes first, and whether a series
+    /// of it now holds a block's worth, with the ids of the names it made.
+    fn write(&self, mut batches: Vec<Batch>, names: Changes, bytes: usize) -> Result<(bool, HashMap<String, i64>)> {
         let zstd = self.codecs.take();
         let max_series = self.max_series;
-        let (zstd, ready) = self.file.write(bytes, move |tx| {
+        let (zstd, ready, made) = self.file.write(bytes, move |tx| {
             let mut zstd = zstd;
+            let made = write_changes(tx, &names)?;
             let mut ready = false;
-            for batch in &batches {
+            for batch in &mut batches {
+                if let Some(id) = made.get(batch.kept.name()) {
+                    batch.name = *id;
+                }
                 let written = write_series(tx, &mut zstd, batch, max_series);
                 ready |= written.map_err(|error| error.within(format!("metrics {}", batch.kept)))?;
             }
-            Ok((zstd, ready))
+            Ok((zstd, ready, made))
         })?;
         self.codecs.give_back(zstd);
-        Ok(ready)
+        Ok((ready, made))
     }
 }
 
