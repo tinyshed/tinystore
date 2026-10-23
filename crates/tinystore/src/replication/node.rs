@@ -1139,6 +1139,13 @@ impl State {
         }
     }
 
+    /// Until when this node holds its lease of `file`, by its own clock.
+    #[cfg(test)]
+    #[allow(dead_code, reason = "the link tests call it, and they build only with every engine")]
+    pub(crate) fn lease_of(&self, file: &str) -> Option<Instant> {
+        lock(&self.logs).get(file).and_then(Weak::upgrade).and_then(|log| log.leased_until())
+    }
+
     /// Every file with a directory in `log/`, by its name in the store's.
     fn files_logged(&self) -> Result<Vec<String>> {
         files_logged_in(&self.dir.join(DIR))

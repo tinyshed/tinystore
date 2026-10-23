@@ -70,7 +70,7 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
                     let Some(store) = store.upgrade() else {
                         return Ok(());
                     };
-                    let Some(sent) = asks.sent.answered() else {
+                    let Some(sent) = asks.unanswered.pop_front() else {
                         return Err(Error::invalid("a witness answered an ask this node did not make"));
                     };
                     asks.answered(state, &store, holders, sent);
@@ -85,7 +85,7 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
             tracing::debug!(target: "tinystore", asks = asked.len(), "a node asks its witness for its leases");
             if !asked.is_empty() {
                 out.send(&Message::Lease { node: state.id.clone(), address: state.address(), asks: asked })?;
-                asks.sent.sent(now);
+                asks.unanswered.push_back(now);
             }
         }
         match frames.fill(&mut reading) {
@@ -100,25 +100,11 @@ fn judged(state: &Arc<State>, store: &WeakStore, witness: &str) -> Result<()> {
 /// What a judged node knows of its asks of its witness.
 #[derive(Default)]
 struct Asks {
-    sent: Unanswered,
+    /// When each ask the witness has not answered yet left, oldest first: one
+    /// link carries them in order, and the witness answers each, in order.
+    unanswered: VecDeque<Instant>,
     /// What failed of each file's lease, said once until it is acted on again.
     failing: HashMap<String, String>,
-}
-
-/// When each ask the witness has not answered yet left, oldest first: one
-/// link carries them in order, and the witness answers each, in order.
-#[derive(Default)]
-struct Unanswered(VecDeque<Instant>);
-
-impl Unanswered {
-    fn sent(&mut self, at: Instant) {
-        self.0.push_back(at);
-    }
-
-    /// When the ask the witness answers now left.
-    fn answered(&mut self) -> Option<Instant> {
-        self.0.pop_front()
-    }
 }
 
 impl Asks {
@@ -212,22 +198,5 @@ impl State {
             asks.push(LeaseAsk { file, epoch: at.epoch, position: at.sequence, holding, synchronous });
         }
         asks
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Asks that never reached the witness, sent while the answer to one that
-    // did was on its way, renewed nothing: the lease counts from that one.
-    #[test]
-    fn a_lease_counts_from_the_ask_its_answer_answers() {
-        let first = Instant::now();
-        let (second, third) = (first + RENEW, first + 2 * RENEW);
-        let mut unanswered = Unanswered::default();
-        [first, second, third].into_iter().for_each(|at| unanswered.sent(at));
-        assert_eq!(unanswered.answered(), Some(first));
-        assert_eq!(unanswered.answered(), Some(second));
     }
 }

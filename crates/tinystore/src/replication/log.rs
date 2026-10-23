@@ -746,6 +746,12 @@ impl Log {
         self.lock().unsynced
     }
 
+    /// Until when a judged home holds its lease of the file, by its own clock.
+    #[cfg(test)]
+    pub(crate) fn leased_until(&self) -> Option<Instant> {
+        *self.lease.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Tail> {
         self.tail.lock().unwrap_or_else(PoisonError::into_inner)
     }

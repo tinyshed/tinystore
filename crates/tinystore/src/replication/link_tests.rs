@@ -2023,6 +2023,117 @@ fn a_judged_home_s_transaction_that_outlasts_its_lease_commits_nothing() {
     witness.close().unwrap();
 }
 
+/// The witness of a judged node, which a test speaks for an ask at a time.
+struct Witnessing {
+    reading: super::transport::Reading,
+    out: super::serve::Out,
+    frames: super::message::Frames,
+}
+
+/// A judged node's ask of its witness, and when the witness read it.
+struct NodeAsk {
+    read: Instant,
+    node: String,
+    address: String,
+    asks: Vec<super::message::LeaseAsk>,
+}
+
+impl Witnessing {
+    /// Takes the link of the node judged by a witness at `listener`, as a
+    /// witness in `dir` would, and welcomes it.
+    fn accepting(dir: &Path, listener: &std::net::TcpListener) -> Witnessing {
+        use super::message::Message;
+        let state = State::new(dir, Node::default(), 0).unwrap();
+        let (tcp, _) = listener.accept().unwrap();
+        let (mut reading, writing) = super::transport::accept(&state, tcp).unwrap();
+        reading.set_timeout(Duration::from_millis(100)).unwrap();
+        let out = super::serve::Out::new(writing);
+        let mut link = Witnessing { reading, out, frames: super::message::Frames::default() };
+        assert!(matches!(link.next(), Message::Hello { .. }), "a link begins with a hello");
+        link.out.send(&Message::Welcome { node: "witness".to_owned(), files: Vec::new() }).unwrap();
+        link.out.pack().unwrap();
+        link.frames.unpack_from_here().unwrap();
+        link
+    }
+
+    /// The next message the node sends, within the suite's bound.
+    fn next(&mut self) -> super::message::Message {
+        let deadline = Instant::now() + WITHIN;
+        loop {
+            if let Some(message) = self.frames.next().unwrap() {
+                return message;
+            }
+            assert!(Instant::now() < deadline, "the node said nothing");
+            match self.frames.fill(&mut self.reading) {
+                Ok(read) => assert!(read, "the node closed its link to its witness"),
+                Err(error) => assert!(super::message::timed_out(&error), "a link: {error}"),
+            }
+        }
+    }
+
+    /// The node's next ask.
+    fn ask(&mut self) -> NodeAsk {
+        loop {
+            if let super::message::Message::Lease { node, address, asks } = self.next() {
+                return NodeAsk { read: Instant::now(), node, address, asks };
+            }
+        }
+    }
+
+    /// Answers `asked` with the node holding each file it names.
+    fn grant(&self, asked: &NodeAsk) {
+        let holder = |ask: &super::message::LeaseAsk| super::witness::Holder {
+            node: asked.node.clone(),
+            address: asked.address.clone(),
+            epoch: ask.epoch,
+        };
+        let holders = asked
+            .asks
+            .iter()
+            .map(|ask| super::message::LeaseHolder { file: ask.file.clone(), holder: holder(ask) })
+            .collect();
+        self.out.send(&super::message::Message::Leased { holders }).unwrap();
+    }
+}
+
+// The asks that left after one the witness answered late, lost on their way
+// to it, renewed nothing: the lease counts from the ask the answer is to, so
+// that it ends before the witness's, which that ask renewed.
+#[test]
+fn a_judged_home_counts_its_lease_from_the_ask_its_witness_answered_not_from_a_later_one() {
+    let (home_dir, witness_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let failover = Some(listener.local_addr().unwrap().to_string());
+    let home = node_with(home_dir.path(), Node { failover, ..Node::default() });
+    // its first commit may wait for a lease, which this thread grants meanwhile
+    let opening = {
+        let home = home.clone();
+        std::thread::spawn(move || home.bucket::<String>("sessions").open())
+    };
+    let mut witness = Witnessing::accepting(witness_dir.path(), &listener);
+    loop {
+        let asked = witness.ask();
+        witness.grant(&asked);
+        if asked.asks.iter().any(|ask| ask.file == "kv.db") {
+            break;
+        }
+    }
+    // held open, so that its log keeps the lease
+    let sessions = opening.join().unwrap().unwrap();
+    let late = witness.ask();
+    for _ in 0..3 {
+        witness.ask();
+    }
+    let lease = || home.node().unwrap().lease_of("kv.db");
+    let before = lease();
+    witness.grant(&late);
+    eventually("the home takes the late answer", || lease() != before);
+    let lasts = super::witness::TTL - super::judge::MARGIN;
+    assert!(lease().unwrap() <= late.read + lasts, "the lease ends by the answered ask's, not a later one's");
+    drop(sessions);
+    home.close().unwrap();
+}
+
 // contract: REPL-08
 #[test]
 fn a_judged_node_that_cannot_reach_its_witness_writes_nothing_not_even_a_file_born_on_it() {
