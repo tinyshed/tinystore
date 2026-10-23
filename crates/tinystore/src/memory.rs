@@ -132,20 +132,13 @@ impl Memory {
         }
     }
 
-    /// Takes `bytes` for work that cannot be refused, as a commit already in
-    /// its file that its log must keep: it waits up to `patience` for room,
-    /// then takes them past the limit, so that other work waits until they
-    /// come back rather than the store believing them free.
-    pub(crate) fn hold(self: &Arc<Self>, bytes: u64, patience: Duration) -> Reservation {
-        let deadline = Instant::now() + patience;
+    /// Takes `bytes` at once for work that cannot be refused and holds a
+    /// file's writer, as a commit already in its file that its log must keep:
+    /// past the limit when there is no room, so that other work waits until
+    /// they come back rather than the store believing them free. It never
+    /// waits, since every write queued behind the writer would wait with it.
+    pub(crate) fn hold(self: &Arc<Self>, bytes: u64) -> Reservation {
         let mut state = self.lock();
-        while state.used.saturating_add(bytes) > self.limit {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
-        }
         state.used = state.used.saturating_add(bytes);
         drop(state);
         self.reservation(bytes)
@@ -351,11 +344,30 @@ mod tests {
         assert_eq!(memory.used(), 0);
     }
 
+    // contract: STORE-05
+    #[test]
+    #[cfg(all(feature = "kv", feature = "replication"))]
+    fn a_nodes_commit_holding_its_writer_does_not_wait_for_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = Some(crate::replication::Node::default());
+        let options = crate::Options { node, background: false, memory: Some(1 << 20), ..crate::Options::default() };
+        let store = crate::Store::open(dir.path(), options).unwrap();
+        let sessions = store.bucket::<String>("sessions").open().unwrap();
+        sessions.set("a", &"first".to_owned()).unwrap();
+        let reads = store.memory().try_reserve((1 << 20) - 1, "reads").unwrap();
+        let started = Instant::now();
+        sessions.set("b", &"second".to_owned()).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500), "it waited {:?}", started.elapsed());
+        drop(reads);
+        assert_eq!(store.memory().used(), 0, "the commit's frames came back");
+        store.close().unwrap();
+    }
+
     #[test]
     fn a_hold_that_finds_no_room_takes_its_bytes_past_the_limit_and_gives_them_back() {
         let memory = Memory::new(100);
         let other = memory.try_reserve(80, "other work").unwrap();
-        let held = memory.hold(50, Duration::from_millis(20));
+        let held = memory.hold(50);
         assert_eq!(memory.used(), 130, "a commit already in its file is never refused");
         assert!(memory.try_reserve(1, "more").is_err(), "other work waits until it comes back");
         drop((held, other));

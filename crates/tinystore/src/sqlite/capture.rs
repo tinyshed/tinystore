@@ -43,9 +43,6 @@ const FRAME_HEADER: usize = 24;
 /// What SQLite's own automatic checkpoint waits for.
 pub(super) const CHECKPOINT_AT: u32 = 1000;
 const CHECKPOINT: &str = own!("pragma wal_checkpoint(passive)");
-/// How long a commit's frames wait for room in the store's memory before they
-/// are held past its limit.
-const HOLD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(1);
 
 thread_local! {
     /// Where the WAL ends after the commit this thread just made, left by the
@@ -384,7 +381,7 @@ impl Capture {
     /// they are read; a commit already in its file is never refused for them.
     fn hold(&self, header: &Header, from: u32, end: u32) -> Option<crate::Reservation> {
         let bytes = u64::from(end.saturating_sub(from) + 1) * header.frame_size() as u64;
-        self.memory.as_ref().map(|memory| memory.hold(bytes, HOLD_PATIENCE))
+        self.memory.as_ref().map(|memory| memory.hold(bytes))
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
