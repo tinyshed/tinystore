@@ -65,6 +65,28 @@ fn backup_reads_beside_a_program_that_holds_the_directory() {
     assert_eq!(usage.status.code(), Some(2), "{}", said(&usage));
 }
 
+// contract: BAK-03
+#[test]
+fn backup_beside_a_holder_whose_key_is_kept_apart_says_it_leaves_the_key_out() {
+    let dirs = tempfile::tempdir().unwrap();
+    let (data, zip, key) =
+        (dirs.path().join("data"), dirs.path().join("backup.zip"), dirs.path().join("tinystore.key"));
+    std::fs::write(&key, "0f".repeat(32)).unwrap();
+    let held = Store::open(&data, Options { encryption_key_file: Some(key.clone()), ..Options::default() }).unwrap();
+    let passwords = held.bucket::<String>("passwords").encrypted().open().unwrap();
+    passwords.set("source-42", &"hunter2".to_owned()).unwrap();
+
+    let with_key = tinystore(&[&"backup", &data, &zip, &"--encryption-key-file", &key, &"--include-encryption-key"]);
+    assert!(!with_key.status.success(), "a key asked for and not taken: {}", said(&with_key));
+    assert!(said(&with_key).contains("takes no key from"), "{}", said(&with_key));
+    assert!(!zip.exists(), "no zip without the key it was asked to take");
+
+    let without = tinystore(&[&"backup", &data, &zip, &"--encryption-key-file", &key]);
+    assert!(without.status.success(), "{}", said(&without));
+    assert!(said(&without).contains("which the backup leaves out"), "{}", said(&without));
+    held.close().unwrap();
+}
+
 // contract: CLI-01
 #[test]
 fn backup_of_a_directory_that_is_not_there_makes_no_store() {

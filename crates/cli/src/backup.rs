@@ -31,13 +31,25 @@ fn back_up(asked: Asked) -> Done {
     };
     let zip = PathBuf::from(zip);
     let key_file = asked.value("--encryption-key-file").map(PathBuf::from);
-    let options = Options { background: false, encryption_key_file: key_file, ..Options::default() };
+    let options = Options { background: false, encryption_key_file: key_file.clone(), ..Options::default() };
     asked::existing(&dir)?;
     let store = match Store::open(&dir, options) {
         Ok(store) => store,
         Err(error) if error.kind() == ErrorKind::InUse => Store::open_beside(&dir)?,
         Err(error) => return Err(error.into()),
     };
+    // a store opened beside its holder reads its key in its directory alone
+    let key_apart = key_file.filter(|file| store.is_beside() && file.exists());
+    if let Some(file) = &key_apart
+        && asked.has("--include-encryption-key")
+    {
+        return Err(failed(format!(
+            "{}: a server or a program holds it, and a backup beside it takes no key from {}: keep that key \
+             apart, or back up without --include-encryption-key",
+            dir.display(),
+            file.display()
+        )));
+    }
     let mut backup = store.backup();
     for name in asked.values("--include") {
         backup = backup.include(&name);
@@ -53,7 +65,9 @@ fn back_up(asked: Asked) -> Done {
         written.files,
         crate::files::bytes(written.bytes)
     );
-    if written.key_left_out {
+    if key_apart.is_some() {
+        println!("  the store seals values with its encryption key, which the backup leaves out: keep the key apart");
+    } else if written.key_left_out {
         println!(
             "  the store seals values with its encryption key, which the backup leaves out: keep the key apart, or \
              include it with --include-encryption-key"

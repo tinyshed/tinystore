@@ -27,6 +27,16 @@ when none does. Each engine is copied as one moment of itself while it keeps
 working, and the zip is written beside its name and renamed once synced: a
 backup that fails leaves no zip.
 
+A backup beside a running server reads the key only from the store's
+directory. If the server keeps its key apart with `--encryption-key-file`, the
+backup leaves that key out and says so. With `--include-encryption-key` it
+fails and writes no zip, so keep a copy of that key apart yourself:
+
+```text
+● ./data  backed up to backups/2026-10-19.zip · 1 files, 52 KiB
+  the store seals values with its encryption key, which the backup leaves out: keep the key apart
+```
+
 ## restore
 
 It writes only into an empty or absent directory, holding its `LOCK`
