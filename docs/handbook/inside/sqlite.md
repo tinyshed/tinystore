@@ -39,6 +39,32 @@ checkpoint past the oldest open reader, so the size of the `-wal` file is the
 age of the oldest reader. A slow report that held its snapshot for a minute
 would make the log grow for a minute.
 
+## Checkpoints beside the writer
+
+A commit appends pages to the `-wal` file. A checkpoint copies them back into
+the database file, so that the log can start again from its beginning. SQLite
+runs its own checkpoint inside the commit that makes the log 1,000 pages long.
+That checkpoint syncs the disk twice, and every write queued behind the commit
+waits for it.
+
+TinyStore runs the checkpoint beside the writer instead. When a commit makes
+the log 1,000 pages long, the next caller that has its answer runs the
+checkpoint on a connection of its own, and the writer goes on with the next
+commit meanwhile. The same happens in a store opened without background work,
+because no extra thread runs it.
+
+| The `-wal` file holds | What happens                                                          |
+|-----------------------|-----------------------------------------------------------------------|
+| up to 1,000 pages     | nothing: commits append to it                                         |
+| 1,000 pages or more   | a caller whose write was answered runs a checkpoint beside the writer |
+| 32,000 pages          | the writer checkpoints it before the next commit, as SQLite would     |
+
+The log reaches 32,000 pages, about 128 MiB of 4 KiB pages, only while writes
+never pause long enough for a checkpoint to catch up. A file that a node
+copies to other nodes, and a node's copy of a file, keep their own
+checkpoints, because a checkpoint there must wait until the node has logged
+the pages.
+
 ## Every connection the same
 
 Every pragma is set on every connection when it opens: the journal mode, the
@@ -136,6 +162,14 @@ they get compression and still inherit crash safety from SQLite.
 Logs, metrics, jobs and sessions in one file would queue behind each other,
 and a burst of log lines would make a sign-in wait. Separate files give each
 engine its own writer and its own durability.
+
+**Why a checkpoint does not run on the writer's turn.** SQLite's own
+checkpoint holds the writer for two syncs of the disk. On a busy disk, a sync
+can take tens of milliseconds, so every write queued behind that commit waits
+that long, and with many writers in flight most of them see it. A checkpoint
+on another connection copies the same pages while commits go on. The writer
+still checkpoints the log itself at 32,000 pages, so the file stays bounded
+when writes never stop.
 
 **Why the store refuses statements instead of trusting the program.** The
 writer and the readers are shared, so a statement that changes its connection

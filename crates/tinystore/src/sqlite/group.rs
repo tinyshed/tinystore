@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 use rusqlite::Connection;
 
 use super::capture::{Capture, Logged, in_the_file, logged};
+use super::checkpoint::Checkpoints;
 use super::connection::{execute, sql_error};
 use super::given::own;
-use super::{Committed, GroupLimits, Left, Settlers, Tx};
+use super::{Committed, Config, GroupLimits, Left, Settlers, Tx};
 use crate::probe::FileProbe;
 use crate::{Error, ErrorKind, Result};
 
@@ -50,6 +51,9 @@ const ROLLBACK_TO: &str = own!("rollback to grouped");
 /// queue leads on, since nobody else would. So a host with one thread and many
 /// writes in flight, an event loop, fills a commit without a thread a write.
 ///
+/// A checkpoint a commit asked for runs on a caller's thread once it holds no
+/// turn: when its call returns, or when it queued a write behind a leader.
+///
 /// research's design/group-commit-contract.md is the contract.
 pub(crate) struct Group {
     queue: Mutex<Queue>,
@@ -58,6 +62,7 @@ pub(crate) struct Group {
     commits: AtomicU64,
     settlers: Arc<Settlers>,
     capture: Logged,
+    checkpoints: Arc<Checkpoints>,
     probe: Option<FileProbe>,
 }
 
@@ -106,9 +111,22 @@ struct Answer {
 }
 
 impl Group {
-    pub(crate) fn new(limits: GroupLimits, settlers: Arc<Settlers>, capture: Logged, probe: Option<FileProbe>) -> Self {
-        let queue = Mutex::new(Queue::default());
-        Self { queue, grew: Condvar::new(), limits, commits: AtomicU64::new(0), settlers, capture, probe }
+    pub(crate) fn new(
+        config: &Config,
+        settlers: Arc<Settlers>,
+        capture: Logged,
+        checkpoints: Arc<Checkpoints>,
+    ) -> Self {
+        Self {
+            queue: Mutex::new(Queue::default()),
+            grew: Condvar::new(),
+            limits: config.group,
+            commits: AtomicU64::new(0),
+            settlers,
+            capture,
+            checkpoints,
+            probe: config.probe.clone(),
+        }
     }
 
     #[cfg(test)]
@@ -133,7 +151,9 @@ impl Group {
         if leads || write.wait_for_turn() {
             self.lead(writer, Some(&write));
         }
-        write.take_answer()
+        let answer = write.take_answer();
+        self.checkpoints.run_due();
+        answer
     }
 
     /// Queues `work` and returns at once, `done` called with its answer once
@@ -144,8 +164,11 @@ impl Group {
         match self.enqueue(&write) {
             Ok(true) => self.lead(writer, None),
             Ok(false) => {}
-            Err(error) => write.answer(Err(error), Vec::new()),
+            Err(error) => return write.answer(Err(error), Vec::new()),
         }
+        // A leader on an event loop's writes leads on while they come, so the
+        // threads that queue them behind it run what its commits asked for.
+        self.checkpoints.run_due();
     }
 
     fn queued(&self) -> Option<Instant> {
@@ -196,9 +219,8 @@ impl Group {
             let capture = logged(&self.capture);
             // A panic past the writes' own savepoints, in a settler or a hook,
             // must still reach `hand_off`, or no thread leads again.
-            let committing = (&*self.settlers, capture.as_deref());
             let answers =
-                catch_unwind(AssertUnwindSafe(|| commit(&connection, &batch, committing, &waits, self.probe.as_ref())))
+                catch_unwind(AssertUnwindSafe(|| self.commit(&connection, &batch, capture.as_deref(), &waits)))
                     .unwrap_or_else(|_| {
                         if !connection.is_autocommit() {
                             let _ = execute(&connection, ROLLBACK);
@@ -390,78 +412,122 @@ fn waits(batch: &[Arc<Write>], started: Instant) -> Vec<Duration> {
     batch.iter().filter_map(|write| write.queued).map(|queued| started.saturating_duration_since(queued)).collect()
 }
 
-/// Runs a batch in one transaction, each write in a savepoint, and says how
-/// each one ended; what the writes left together settles once, after the
-/// last. What the writes that succeeded asked to run once they commit runs
-/// after the commit, in their order, the writer still held. A commit that
-/// holds measured writes, whose `waits` are given, is told to the probe.
-fn commit(
-    connection: &Connection,
-    batch: &[Arc<Write>],
-    (settlers, capture): (&Settlers, Option<&Capture>),
-    waits: &[Duration],
-    probe: Option<&FileProbe>,
-) -> Vec<Result<()>> {
-    if batch.is_empty() {
-        return Vec::new();
+/// What becomes of each write of a batch.
+type Answers = Vec<Result<()>>;
+
+impl Group {
+    /// Runs a batch in one transaction, each write in a savepoint, and says
+    /// how each one ended. What the writes that succeeded asked to run once
+    /// they commit runs after the commit, in their order, the writer still
+    /// held. A commit that holds measured writes, whose `waits` are given, is
+    /// told to the probe.
+    fn commit(
+        &self,
+        connection: &Connection,
+        batch: &[Arc<Write>],
+        capture: Option<&Capture>,
+        waits: &[Duration],
+    ) -> Answers {
+        if batch.is_empty() {
+            return Vec::new();
+        }
+        let committed = Committed::default();
+        let answers = match self.run_batch(connection, batch, capture, &committed) {
+            Ok(answers) => answers,
+            Err(every_one) => return every_one,
+        };
+        match capture {
+            Some(capture) => capture.arm(batch.iter().any(|write| write.for_a_caller)),
+            None => self.checkpoints.arm(),
+        }
+        let started = Instant::now();
+        let finished = execute(connection, COMMIT);
+        if let (Some(probe), true) = (&self.probe, finished.is_ok()) {
+            probe.committed(started.elapsed(), waits);
+        }
+        let Err(error) = finished else {
+            return answered(batch, answers, self.handed(connection, capture, &committed));
+        };
+        if !connection.is_autocommit() {
+            // The commit failed and left the transaction open: nothing of it stays.
+            let _ = execute(connection, ROLLBACK);
+        }
+        let failure = sql_error("a grouped commit", error);
+        let unknown = || Error::new(ErrorKind::OutcomeUnknown, "a grouped commit").with_source(failure.duplicate());
+        answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
     }
-    if let Some(Err(refused)) = capture.map(Capture::refuse_a_write) {
-        return batch.iter().map(|_| Err(refused.duplicate())).collect();
+
+    /// Begins the batch's transaction and runs its writes, then settles what
+    /// they left together, once, after the last: how each write ended, or as
+    /// an error every write's answer once the whole batch rolled back.
+    fn run_batch(
+        &self,
+        connection: &Connection,
+        batch: &[Arc<Write>],
+        capture: Option<&Capture>,
+        committed: &Committed,
+    ) -> std::result::Result<Answers, Answers> {
+        let every_one = |failure: Error| batch.iter().map(|_| Err(failure.duplicate())).collect::<Answers>();
+        if let Some(Err(refused)) = capture.map(Capture::refuse_a_write) {
+            return Err(every_one(refused));
+        }
+        execute(connection, BEGIN).map_err(|error| every_one(sql_error("a grouped commit: its transaction", error)))?;
+        let tx = Tx::new(connection, committed, &self.settlers);
+        if let Err(failure) = tx.settle(Left::Before) {
+            let _ = execute(connection, ROLLBACK);
+            return Err(every_one(failure));
+        }
+        let undone = Cell::new(true);
+        let answers: Answers = batch
+            .iter()
+            .map(|write| run(connection, write.take_work(), (committed, &self.settlers), &undone))
+            .collect();
+        // A failed write whose savepoint would not roll back is still in the
+        // transaction: committing would keep it, so the whole batch goes.
+        if !undone.get() {
+            let _ = execute(connection, ROLLBACK);
+            return Err(every_one(Error::internal(
+                "a grouped write's savepoint did not roll back; its batch rolled back",
+            )));
+        }
+        if let Err(failure) = tx.settle(Left::All) {
+            let _ = execute(connection, ROLLBACK);
+            return Err(answers.into_iter().map(|answer| answer.and_then(|()| Err(failure.duplicate()))).collect());
+        }
+        Ok(answers)
     }
-    if let Err(error) = execute(connection, BEGIN) {
-        let failure = sql_error("a grouped commit: its transaction", error);
-        return batch.iter().map(|_| Err(failure.duplicate())).collect();
-    }
-    let committed = Committed::default();
-    if let Err(failure) = Tx::new(connection, &committed, settlers).settle(Left::Before) {
-        let _ = execute(connection, ROLLBACK);
-        return batch.iter().map(|_| Err(failure.duplicate())).collect();
-    }
-    let undone = Cell::new(true);
-    let answers: Vec<Result<()>> =
-        batch.iter().map(|write| run(connection, write.take_work(), (&committed, settlers), &undone)).collect();
-    // A failed write whose savepoint would not roll back is still in the
-    // transaction: committing would keep it, so the whole batch goes.
-    if !undone.get() {
-        let _ = execute(connection, ROLLBACK);
-        let failure = Error::internal("a grouped write's savepoint did not roll back; its batch rolled back");
-        return batch.iter().map(|_| Err(failure.duplicate())).collect();
-    }
-    if let Err(failure) = Tx::new(connection, &committed, settlers).settle(Left::All) {
-        let _ = execute(connection, ROLLBACK);
-        return answers.into_iter().map(|answer| answer.and_then(|()| Err(failure.duplicate()))).collect();
-    }
-    if let Some(capture) = capture {
-        capture.arm(batch.iter().any(|write| write.for_a_caller));
-    }
-    let started = Instant::now();
-    let finished = execute(connection, COMMIT);
-    if let (Some(probe), true) = (probe, finished.is_ok()) {
-        probe.committed(started.elapsed(), waits);
-    }
-    let Err(error) = finished else {
-        let handed = capture.map_or(Ok(()), |capture| capture.committed(connection));
+
+    /// Hands a commit that is in the file to the capture, where the file has
+    /// one, or tells the file's checkpoints where it left the WAL, then runs
+    /// what its writes asked to run once it is there.
+    fn handed(&self, connection: &Connection, capture: Option<&Capture>, committed: &Committed) -> Result<()> {
+        let handed = match capture {
+            Some(capture) => capture.committed(connection),
+            None => {
+                self.checkpoints.committed(connection);
+                Ok(())
+            }
+        };
         if in_the_file(&handed) {
             committed.run();
         }
-        let Err(handed) = handed else {
-            return answers;
-        };
-        // the store's own writes take a commit no copy held as done, as they never waited for one
-        let unheld = handed.kind() == ErrorKind::CommittedLocally;
-        let answer_of = |(write, answer): (&Arc<Write>, Result<()>)| match answer {
-            Ok(()) if unheld && !write.for_a_caller => Ok(()),
-            answer => answer.and_then(|()| Err(handed.duplicate())),
-        };
-        return batch.iter().zip(answers).map(answer_of).collect();
-    };
-    if !connection.is_autocommit() {
-        // The commit failed and left the transaction open: nothing of it stays.
-        let _ = execute(connection, ROLLBACK);
+        handed
     }
-    let failure = sql_error("a grouped commit", error);
-    let unknown = || Error::new(ErrorKind::OutcomeUnknown, "a grouped commit").with_source(failure.duplicate());
-    answers.into_iter().map(|answer| answer.and_then(|()| Err(unknown()))).collect()
+}
+
+/// The answers of a batch whose commit is in the file, as the capture says
+/// it `handed` the commit on.
+fn answered(batch: &[Arc<Write>], answers: Answers, handed: Result<()>) -> Answers {
+    let Err(handed) = handed else {
+        return answers;
+    };
+    // the store's own writes take a commit no copy held as done, as they never waited for one
+    let unheld = handed.kind() == ErrorKind::CommittedLocally;
+    let answer_of = |(write, answer): (&Arc<Write>, Result<()>)| match answer {
+        Ok(()) if unheld && !write.for_a_caller => Ok(()),
+        answer => answer.and_then(|()| Err(handed.duplicate())),
+    };
+    batch.iter().zip(answers).map(answer_of).collect()
 }
 
 /// Runs one write in a savepoint, then settles what it left, keeping the

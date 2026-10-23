@@ -268,12 +268,21 @@ snapshot hands back stays consistent after it ends, so decoding, merging and
 building the answer happen outside it; otherwise a heavy query is itself a
 long reader, and the write-ahead log's size is the age of the oldest reader.
 
+**A checkpoint runs beside the writer, not on its turn.** SQLite's own runs
+inside the commit that leaves the WAL 1000 frames long, two syncs every queued
+write waits for. A file's writer keeps none: past 1000 frames the next caller
+through the file that holds no turn runs one, PASSIVE, on a connection of its
+own, and the writer checkpoints itself only at 32,000, which writes that never
+pause reach. A file a capture logs and a copy run their own, never these.
+
 **An engine kept in a file settles before its commits.** Every transaction
 of a file runs, before it commits, what an engine kept in it asked for: a
 table's index reads the rows whose keys its triggers left. It settles first
 what a process beside the store left, then each write's own inside that
-write's savepoint, so that a write the index cannot take fails alone. A
-settle runs on the writer, and waits for nothing that may wait for it.
+write's savepoint, so that a write the index cannot take fails alone, and
+last, once, what the writes left together, which no one of them can fail:
+kv's revision. A settle runs on the writer, and waits for nothing that may
+wait for it.
 
 **A statement's columns are named after its first step**: one kept by its
 text and compiled before a migration changed its table is compiled again

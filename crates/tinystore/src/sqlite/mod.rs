@@ -26,6 +26,7 @@
 
 mod apply;
 mod capture;
+mod checkpoint;
 mod config;
 mod connection;
 mod constraint;

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use rusqlite::Connection;
 
 use super::capture::{Capture, Logged, Observe, in_the_file, logged, own_work};
+use super::checkpoint::Checkpoints;
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
 use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
@@ -39,6 +40,7 @@ pub(crate) struct File {
     closed: AtomicBool,
     settlers: Arc<Settlers>,
     capture: Logged,
+    checkpoints: Arc<Checkpoints>,
     /// The file is a copy its home writes: what would write here runs on a
     /// reader, whose `query_only` refuses a write.
     copy: Arc<AtomicBool>,
@@ -78,6 +80,7 @@ impl File {
         // a copy's applier checkpoints its WAL, once its position is synced,
         // and its pages, page 1 among them, say how its home made it
         let file = Self::open_observed(path, Config { keep_wal: true, incremental_vacuum: false, ..config }, None)?;
+        file.checkpoints.stop();
         let writer = no_writer(&file.describe())?;
         Ok(Self { copy: Arc::new(AtomicBool::new(true)), writer: Arc::new(Mutex::new(writer)), ..file })
     }
@@ -127,6 +130,10 @@ impl File {
             .as_ref()
             .map(|observer| Capture::open(&path, &writer, Arc::clone(observer), config.memory.clone()).map(Arc::new))
             .transpose()?;
+        let checkpoints = Arc::new(match &capture {
+            Some(_) => Checkpoints::none(&path, &config),
+            None => Checkpoints::of(&path, &config, &writer),
+        });
         let writer = Arc::new(Mutex::new(writer));
         if let Some(observer) = &observer {
             observer.writer(Arc::downgrade(&writer));
@@ -138,13 +145,14 @@ impl File {
             probe.opened(path.clone(), Arc::downgrade(&readers));
         }
         Ok(Self {
-            group: Group::new(config.group, Arc::clone(&settlers), Arc::clone(&capture), config.probe.clone()),
+            group: Group::new(&config, Arc::clone(&settlers), Arc::clone(&capture), Arc::clone(&checkpoints)),
             readers,
             writer,
             path,
             closed: AtomicBool::new(false),
             settlers,
             capture,
+            checkpoints,
             copy: Arc::new(AtomicBool::new(false)),
             config,
             vacuum_failed: AtomicBool::new(false),
@@ -227,7 +235,10 @@ impl File {
         let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
         let connection = lock(&self.writer);
         let waited = queued.map(|queued| queued.elapsed());
-        self.transaction_on(&connection, waited, work)
+        let outcome = self.transaction_on(&connection, waited, work);
+        drop(connection);
+        self.checkpoints.run_due();
+        outcome
     }
 
     /// Runs what would write the file, on a copy, in one snapshot of a reader:
@@ -276,8 +287,9 @@ impl File {
     /// the probe.
     fn commit(&self, connection: &Connection, waited: Option<Duration>) -> Result<()> {
         let capture = logged(&self.capture);
-        if let Some(capture) = &capture {
-            capture.arm(!super::capture::is_own_work());
+        match &capture {
+            Some(capture) => capture.arm(!super::capture::is_own_work()),
+            None => self.checkpoints.arm(),
         }
         let started = Instant::now();
         let committed = execute(connection, COMMIT);
@@ -293,7 +305,10 @@ impl File {
         })?;
         match &capture {
             Some(capture) => capture.committed(connection).map_err(|error| error.within(self.describe())),
-            None => Ok(()),
+            None => {
+                self.checkpoints.committed(connection);
+                Ok(())
+            }
         }
     }
 
@@ -493,6 +508,17 @@ impl File {
         self.group.commits()
     }
 
+    #[cfg(test)]
+    pub(crate) fn checkpoints(&self) -> &Checkpoints {
+        &self.checkpoints
+    }
+
+    /// The writer, held as a commit holds it.
+    #[cfg(test)]
+    pub(crate) fn hold_writer(&self) -> MutexGuard<'_, Connection> {
+        lock(&self.writer)
+    }
+
     /// Refuses new work, answers the writes still queued, closes the readers
     /// and truncates the WAL. A commit under way finishes first.
     pub(crate) fn close(&self) -> Result<()> {
@@ -501,6 +527,7 @@ impl File {
         }
         self.group.close();
         self.readers.close();
+        self.checkpoints.stop();
         let connection = lock(&self.writer);
         if let Some(capture) = logged(&self.capture) {
             capture.close().map_err(|error| error.within(format!("{}: its log", self.describe())))?;
@@ -649,6 +676,9 @@ impl Begun<'_> {
         if in_the_file(&handed) {
             self.hooks.run();
         }
+        let file = self.file;
+        drop(self);
+        file.checkpoints.run_due();
         handed
     }
 }
