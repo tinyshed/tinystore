@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -30,6 +31,9 @@ pub(crate) struct Workers {
     closing: AtomicBool,
     linger: Duration,
     threads: Mutex<Vec<JoinHandle<()>>>,
+    /// The jobs waiting on each line, by its name, while one of its jobs
+    /// runs; a line that runs none has no entry.
+    lines: Mutex<HashMap<String, VecDeque<Job>>>,
 }
 
 #[derive(Default)]
@@ -75,7 +79,49 @@ impl Workers {
             closing: AtomicBool::new(false),
             linger,
             threads: Mutex::new(Vec::new()),
+            lines: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Runs `job` on a worker once the jobs queued on `line` before it have
+    /// ended: a line runs one job at a time, in their order, on one thread,
+    /// and the jobs waiting on it hold none.
+    ///
+    /// A database's transactions are a line. Each on a thread of its own
+    /// waited there for the file's writer: sixteen took every thread, and the
+    /// call the client of the one holding the writer made next, around the
+    /// transaction, waited behind them until its bound rolled it back. The
+    /// waiters also took the writer in no order: with slow commits, one
+    /// waited past its five seconds while those after it committed.
+    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only sql's transactions wait in a line"))]
+    pub(crate) fn run_in_line(self: &Arc<Self>, line: &str, job: Job) {
+        let mut lines = self.lock_lines();
+        if let Some(waiting) = lines.get_mut(line) {
+            return waiting.push_back(job);
+        }
+        lines.insert(line.to_owned(), VecDeque::new());
+        drop(lines);
+        let (workers, line) = (Arc::clone(self), line.to_owned());
+        self.run(Box::new(move || workers.run_line(&line, job)));
+    }
+
+    /// Runs `first`, then each job queued on `line` behind it, until none
+    /// waits. A job that panics ends alone, and the line goes on.
+    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only sql's transactions wait in a line"))]
+    fn run_line(&self, line: &str, first: Job) {
+        let mut next = Some(first);
+        while let Some(job) = next.take() {
+            let _ = catch_unwind(AssertUnwindSafe(job));
+            let mut lines = self.lock_lines();
+            next = lines.get_mut(line).and_then(VecDeque::pop_front);
+            if next.is_none() {
+                lines.remove(line);
+            }
+        }
+    }
+
+    fn lock_lines(&self) -> MutexGuard<'_, HashMap<String, VecDeque<Job>>> {
+        self.lines.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs `job` on a worker; a store that closed drops it unrun.
@@ -219,6 +265,8 @@ impl Engine for Workers {
         for worker in threads.into_iter().filter(|worker| worker.thread().id() != thread::current().id()) {
             let _ = worker.join();
         }
+        // a line whose first job came after the stop runs nothing more
+        self.lock_lines().clear();
         Ok(())
     }
 }

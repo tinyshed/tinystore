@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import {
 	ConflictError,
@@ -673,6 +674,31 @@ for (const way of ways) {
 			for (const call of around) {
 				await call()
 			}
+		})
+
+		test('transactions past the threads of the store wait their turn, and the one holding the writer goes on', async () => {
+			const other = await store.database('other')
+			let release = () => {}
+			const gate = new Promise<void>(resolve => {
+				release = resolve
+			})
+			const holding = app.tx(async tx => {
+				await tx.exec`insert into notes (id, author_id, title) values ('turn-0', 1, 'held')`
+				await gate
+				// another database's query runs on one of the store's threads, while the others wait for the writer
+				expect(await other.scalar<number>`select 1`).toBe(1)
+			})
+			const waiting = Array.from({ length: 40 }, (_, n) =>
+				app.tx(async tx => {
+					await tx.exec`insert into notes (id, author_id, title) values (${`turn-${n + 1}`}, 1, 'waited')`
+				}),
+			)
+			// time for every transaction to reach the store before the one holding the writer goes on
+			await sleep(100)
+			release()
+			await holding
+			await Promise.all(waiting)
+			expect(await app.scalar<number>`select count(*) from notes where id like 'turn-%'`).toBe(41)
 		})
 
 		test('a worker runs a job its transaction added, once the transaction commits', async () => {

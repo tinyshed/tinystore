@@ -176,6 +176,50 @@ func TestATransactionSeesItsOwnWritesCommitsAndRollsBackAnError(t *testing.T) {
 	})
 }
 
+func TestTransactionsPastTheThreadsOfTheStoreWaitTheirTurnAndTheOneHoldingTheWriterGoesOn(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		other := ways.Must(sqldb.Open(ctx, store, "other"))
+		gate := make(chan struct{})
+		holding := make(chan error, 1)
+		go func() {
+			holding <- db.Tx(ctx, func(tx *sqldb.Tx) error {
+				if _, err := tx.Exec(ctx, `insert into notes (id, author_id, title) values ('turn-0', 1, 'held')`); err != nil {
+					return err
+				}
+				<-gate
+				// another database's query runs on one of the store's threads, while the others wait for the writer
+				_, err := sqldb.Scalar[int64](ctx, other, `select 1`)
+				return err
+			})
+		}()
+		waiting := make(chan error, 40)
+		for n := 1; n <= 40; n++ {
+			go func() {
+				waiting <- db.Tx(ctx, func(tx *sqldb.Tx) error {
+					_, err := tx.Exec(ctx, `insert into notes (id, author_id, title) values (?, 1, 'waited')`, fmt.Sprintf("turn-%d", n))
+					return err
+				})
+			}()
+		}
+		// time for every transaction to reach the store before the one holding the writer goes on
+		time.Sleep(100 * time.Millisecond)
+		close(gate)
+		if err := <-holding; err != nil {
+			t.Fatalf("the transaction holding the writer: %v", err)
+		}
+		for range 40 {
+			if err := <-waiting; err != nil {
+				t.Fatalf("a transaction that waited its turn: %v", err)
+			}
+		}
+		if count := ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from notes where id like 'turn-%'`)); count != 41 {
+			t.Fatalf("%d transactions committed", count)
+		}
+	})
+}
+
 func TestAValueGoesAsSQLiteKeepsItAndOneItWouldChangeIsRefused(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

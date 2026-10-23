@@ -279,6 +279,116 @@ fn a_transaction_whose_client_stalls_or_cancels_is_rolled_back_by_the_server() {
     assert_eq!(client.pipe.streams(), 0);
 }
 
+/// Opens a transaction on `handle` that inserts the note `id` and commits,
+/// every call sent before any answer comes, as a client with many in flight
+/// sends them.
+fn insert_in_tx(client: &mut Client, handle: u64, id: &str) -> u32 {
+    let stream = client.open_stream(method::SQL_TX, &SqlTxOpen { handle });
+    let insert = SqlTxCall {
+        text: "insert into notes (id, title) values (?, 'waited')".to_owned(),
+        values: vec![text(id)],
+        want: "exec".to_owned(),
+        ..SqlTxCall::default()
+    };
+    client.write(Frame::new(Kind::Data, stream, insert.encode()));
+    client.write(Frame::new(Kind::Data, stream, SqlTxCall { commit: true, ..SqlTxCall::default() }.encode()).ending());
+    stream
+}
+
+/// Reads a transaction of [`insert_in_tx`] to its end: it inserted its note
+/// and committed.
+fn committed(client: &mut Client, stream: u32) {
+    let opened = client.next_on(stream);
+    assert_eq!((opened.kind, opened.flags), (Kind::Response, 0), "stream {stream} opened");
+    let inserted = client.next_on(stream);
+    let answer = SqlTxAnswer::decode(&inserted.body).unwrap();
+    assert_eq!(answer.done.map(|done| done.changes), Some(1), "stream {stream}: {:?}", answer.failure);
+    let last = client.next_on(stream);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END), "stream {stream}: {:?}", answered::<Empty>(&last));
+}
+
+/// A call a worker answers, while transactions wait for the writer: the
+/// database opened again, which writes nothing.
+fn open_again(client: &mut Client) {
+    let again = SqlOpen { name: "app".to_owned(), migrations: None, durability: None };
+    client.call::<Handle>(method::SQL_OPEN, &again).expect("a call on a worker is answered");
+}
+
+#[test]
+fn transactions_past_the_workers_wait_their_turn_on_no_thread_and_each_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client);
+
+    // one transaction holds the writer, its client still to say how it ends
+    let holding = begin(&mut client, handle);
+    call(&mut client, holding, "insert into notes (id, title) values ('held', 'a')", Vec::new(), "exec");
+    let waiting: Vec<u32> =
+        (0..3 * crate::wire::workers::MOST).map(|n| insert_in_tx(&mut client, handle, &format!("n{n}"))).collect();
+    // The client's next call runs on a worker, and the one holding the
+    // writer goes on only once it is answered: none of the threads may be
+    // waiting for the writer.
+    open_again(&mut client);
+    let last = end(&mut client, holding, true);
+    assert_eq!((last.kind, last.flags), (Kind::Data, frame::END), "{:?}", answered::<Empty>(&last));
+
+    for stream in waiting {
+        committed(&mut client, stream);
+    }
+    let rows = query(&mut client, handle, "select count(*) from notes", "scalar").rows;
+    assert_eq!(rows, [vec![Cell::Int(1 + 3 * crate::wire::workers::MOST as i64)]]);
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+#[test]
+fn transactions_of_every_connection_wait_for_a_writer_held_elsewhere_on_one_worker() {
+    use crate::pipe::{Connect, Pipe};
+    use crate::{Options, Store, sql};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let connect = || {
+        let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+        client.hello(1).unwrap();
+        client
+    };
+    let mut clients: Vec<Client> = (0..4).map(|_| connect()).collect();
+    let handles: Vec<u64> = clients.iter_mut().map(open).collect();
+    let held = store.database("app").migrations([("0001_notes.sql", NOTES)]).open().unwrap();
+
+    std::thread::scope(|scope| {
+        // made here, so that a failing assertion lets the holder go rather than wait for it
+        let (began, begun) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let held = &held;
+        let holding = scope.spawn(move || {
+            held.tx(|tx| -> crate::Result<()> {
+                tx.exec(sql!("insert into notes (id, title) values ('held', 'a')"))?;
+                began.send(()).unwrap();
+                let _ = released.recv();
+                Ok(())
+            })
+        });
+        begun.recv().unwrap();
+        let waiting: Vec<(usize, u32)> = (0..2 * crate::wire::workers::MOST)
+            .map(|n| {
+                let at = n % clients.len();
+                (at, insert_in_tx(&mut clients[at], handles[at], &format!("n{n}")))
+            })
+            .collect();
+        open_again(&mut connect());
+        release.send(()).unwrap();
+        holding.join().unwrap().unwrap();
+        for (at, stream) in waiting {
+            committed(&mut clients[at], stream);
+        }
+    });
+    let rows = query(&mut clients[0], handles[0], "select count(*) from notes", "scalar").rows;
+    assert_eq!(rows, [vec![Cell::Int(1 + 2 * crate::wire::workers::MOST as i64)]]);
+    drop(clients);
+    store.close().unwrap();
+}
+
 /// A call of kv or jobs inside a transaction: its method and its request.
 #[cfg(feature = "jobs")]
 fn nested(client: &mut Client, stream: u32, called: u16, request: &impl Message) -> SqlTxAnswer {

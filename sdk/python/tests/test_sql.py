@@ -19,6 +19,7 @@ from tinystore import sql
 from ways import until
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
 NOTES = """create table notes (
@@ -511,6 +512,34 @@ async def test_a_call_around_a_transaction_from_inside_it_is_refused_and_one_bes
 
 async def nothing(tx: tinystore.SqlTx) -> None:
     return None
+
+
+async def test_transactions_past_the_threads_of_the_store_wait_their_turn_and_the_one_holding_the_writer_goes_on(
+    store: tinystore.Store, app: tinystore.Database
+) -> None:
+    other = await store.database("other")
+    gate = asyncio.Event()
+
+    async def held(tx: tinystore.SqlTx) -> None:
+        await tx.exec("insert into notes (id, author_id, title) values ('turn-0', 1, 'held')")
+        await gate.wait()
+        # another database's query runs on one of the store's threads, while the others wait for the writer
+        assert await other.scalar(int, "select 1") == 1
+
+    def waited(n: int) -> Callable[[tinystore.SqlTx], Awaitable[None]]:
+        async def insert(tx: tinystore.SqlTx) -> None:
+            await tx.exec("insert into notes (id, author_id, title) values (?, 1, 'waited')", f"turn-{n}")
+
+        return insert
+
+    holding = asyncio.ensure_future(app.tx(held))
+    waiting = [asyncio.ensure_future(app.tx(waited(n))) for n in range(1, 41)]
+    # time for every transaction to reach the store before the one holding the writer goes on
+    await asyncio.sleep(0.1)
+    gate.set()
+    await holding
+    await asyncio.gather(*waiting)
+    assert await app.scalar(int, "select count(*) from notes where id like 'turn-%'") == 41
 
 
 async def test_a_worker_runs_a_job_its_transaction_added_once_the_transaction_commits(

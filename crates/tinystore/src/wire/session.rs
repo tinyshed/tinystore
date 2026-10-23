@@ -719,21 +719,23 @@ impl Shared {
         }));
     }
 
-    /// Opens a client's transaction: the stream's RESPONSE, then a worker
-    /// that holds the writer while the client's calls come as DATA.
+    /// Opens a client's transaction: the stream's RESPONSE, then, in its turn
+    /// on its database's line, a worker that holds the writer while the
+    /// client's calls come as DATA.
     #[cfg(feature = "sql")]
     fn transaction(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
         let link = self.sql_link(input, stream);
         match guarded(|| sql::transaction(&self.sql, stream, body, &link)) {
             Ok((txing, running)) => {
                 self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
-                let shared = Arc::clone(self);
-                self.workers.run(Box::new(move || {
+                let (shared, line) = (Arc::clone(self), running.line());
+                let turn = Box::new(move || {
                     let nested = |tx: &Transaction<'_>, method, body: &[u8], max_body| {
                         shared.call_in(tx, method, body, max_body)
                     };
                     txing.run(running, &shared.sql, stream, &nested);
-                }));
+                });
+                self.workers.run_in_line(&line, turn);
             }
             Err(failure) => self.answer(stream, Err(failure)),
         }

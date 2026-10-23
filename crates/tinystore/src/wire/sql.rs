@@ -522,8 +522,8 @@ pub(crate) struct Txing {
     granted: Condvar,
 }
 
-/// Opens a transaction a `sql.tx` asks for; its thread starts once the
-/// RESPONSE went out, through [`Txing::run`].
+/// Opens a transaction a `sql.tx` asks for; it runs once the RESPONSE went
+/// out, through [`Txing::run`], in its turn on its database's line.
 pub(crate) fn transaction(
     handles: &Handles,
     stream: u32,
@@ -544,6 +544,14 @@ pub(crate) struct Running {
     database: Database,
     received: Receiver<TxItem>,
     link: Link,
+}
+
+impl Running {
+    /// The line the transactions of its database take the writer in, one
+    /// at a time and in their order, across every connection to the store.
+    pub(crate) fn line(&self) -> String {
+        format!("sql {}", self.database.name())
+    }
 }
 
 /// How a transaction ended other than by its commit.
@@ -596,34 +604,44 @@ impl Txing {
     /// Runs the transaction: each call as it comes, its answer as a DATA,
     /// until the last commits or rolls back, the client leaves, or its bound
     /// passes; then the stream's last DATA says how it ended. A call of kv or
-    /// jobs goes to `nested`, which runs it in the transaction.
+    /// jobs goes to `nested`, which runs it in the transaction. One whose
+    /// client left while it waited for its turn takes no writer.
     pub(crate) fn run(self: &Arc<Self>, running: Running, handles: &Handles, stream: u32, nested: Nested<'_>) {
         let Running { database, received, link } = running;
-        let deadline = Instant::now() + TX_BOUND;
-        let ended = database.tx(|tx| -> Result<(), Ended> {
-            loop {
-                let left = deadline.saturating_duration_since(Instant::now());
-                let call = match received.recv_timeout(left) {
-                    Ok(TxItem::Call(call)) => call,
-                    Ok(TxItem::End { commit }) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
-                    Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
-                    Err(RecvTimeoutError::Disconnected) => {
-                        return Err(Ended::Failed(Error::new(
-                            ErrorKind::Cancelled,
-                            "the client left its transaction, which rolled back",
-                        )));
-                    }
-                };
-                let answer = answer(tx, call, link.max_body, nested);
-                self.send(&link, answer.encode(), deadline)?;
-            }
-        });
+        let ended = if lock(&self.calls).is_none() {
+            Err(Ended::Failed(left_its_transaction()))
+        } else {
+            database.tx(|tx| -> Result<(), Ended> { self.answer_calls(tx, &received, &link, nested) })
+        };
         lock(&handles.txs).remove(&stream);
         let last = match ended {
             Ok(()) | Err(Ended::RolledBack) => Ok(Empty {}.encode()),
             Err(Ended::Failed(error)) => Err(Failure::from(error)),
         };
         (link.finish)(last);
+    }
+
+    /// Answers the client's calls as they come, from when the transaction
+    /// holds the writer, until its last or its bound.
+    fn answer_calls(
+        &self,
+        tx: &Tx<'_>,
+        received: &Receiver<TxItem>,
+        link: &Link,
+        nested: Nested<'_>,
+    ) -> Result<(), Ended> {
+        let deadline = Instant::now() + TX_BOUND;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let call = match received.recv_timeout(left) {
+                Ok(TxItem::Call(call)) => call,
+                Ok(TxItem::End { commit }) => return if commit { Ok(()) } else { Err(Ended::RolledBack) },
+                Err(RecvTimeoutError::Timeout) => return Err(Ended::Failed(past_bound())),
+                Err(RecvTimeoutError::Disconnected) => return Err(Ended::Failed(left_its_transaction())),
+            };
+            let answer = answer(tx, call, link.max_body, nested);
+            self.send(link, answer.encode(), deadline)?;
+        }
     }
 
     /// Sends an answer once the client's credit takes it, waiting for a grant
@@ -646,6 +664,10 @@ impl Txing {
 
 fn past_bound() -> Error {
     Error::limit(format!("a transaction held the writer past its {TX_BOUND:?}, and rolled back"))
+}
+
+fn left_its_transaction() -> Error {
+    Error::new(ErrorKind::Cancelled, "the client left its transaction, which rolled back")
 }
 
 /// A call of kv or jobs inside a transaction: its method, its request, and
