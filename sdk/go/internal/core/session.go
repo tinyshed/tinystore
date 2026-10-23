@@ -326,32 +326,28 @@ func (s *Session) writer() {
 
 func (s *Session) cancel(st *Stream) {
 	if !st.sent {
-		s.dropQueued(st, true)
 		s.release(st)
 		return
 	}
 	s.post(frame(kindCancel, 0, 0, st.ID, nil))
 }
 
-func (s *Session) dropQueued(st *Stream, requests bool) {
-	kept := s.queue[:0]
-	for _, q := range s.queue {
-		if q.stream != st || (q.request && !requests) {
-			kept = append(kept, q)
-		}
-	}
-	s.queue = kept
-}
-
-// release takes a stream out of use, dropping what of it has not left: its
-// number may be named again at once.
+// release takes a stream out of use, dropping what of it has not left, its
+// REQUEST too: its number may be named again at once, and a REQUEST left
+// queued would leave on a number the session no longer knows.
 func (s *Session) release(st *Stream) {
 	st.finish()
 	st.signalCredit()
 	if s.streams[st.ID] == st {
 		delete(s.streams, st.ID)
 	}
-	s.dropQueued(st, false)
+	kept := s.queue[:0]
+	for _, q := range s.queue {
+		if q.stream != st {
+			kept = append(kept, q)
+		}
+	}
+	s.queue = kept
 	if len(s.waiting) > 0 {
 		close(s.waiting[0])
 		s.waiting = s.waiting[1:]

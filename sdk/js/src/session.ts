@@ -527,21 +527,21 @@ export class Session {
 
 	cancel(stream: Stream): void {
 		if (!stream.sent) {
-			this.#queue = this.#queue.filter(q => q.stream !== stream)
 			this.#release(stream)
 			return
 		}
 		this.post(frame(Kind.cancel, 0, 0, stream.id, new Uint8Array(0)))
 	}
 
-	// takes a stream out of use, dropping what of it has not left: its number
-	// may be named again at once
+	// takes a stream out of use, dropping what of it has not left, its
+	// REQUEST too: its number may be named again at once, and a REQUEST left
+	// queued would leave on a number the session no longer knows
 	#release(stream: Stream): void {
 		stream.finish()
 		if (this.#streams.get(stream.id) === stream) {
 			this.#streams.delete(stream.id)
 		}
-		this.#queue = this.#queue.filter(q => q.stream !== stream || q.request)
+		this.#queue = this.#queue.filter(q => q.stream !== stream)
 		this.#waitingToOpen.shift()?.resolve()
 	}
 

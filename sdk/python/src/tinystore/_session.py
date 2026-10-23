@@ -337,18 +337,18 @@ class Session:
 
     def cancel(self, stream: Stream) -> None:
         if not stream.sent:
-            self._queue = deque(q for q in self._queue if q.stream is not stream)
             self._release(stream)
             return
         self.post(f.frame(f.CANCEL, 0, 0, stream.id, b""))
 
     def _release(self, stream: Stream) -> None:
-        # takes a stream out of use, dropping what of it has not left: its
-        # number may be named again at once
+        # takes a stream out of use, dropping what of it has not left, its
+        # REQUEST too: its number may be named again at once, and a REQUEST
+        # left queued would leave on a number the session no longer knows
         stream.finish()
         if self._streams.get(stream.id) is stream:
             del self._streams[stream.id]
-        self._queue = deque(q for q in self._queue if q.stream is not stream or q.request)
+        self._queue = deque(q for q in self._queue if q.stream is not stream)
         while self._waiting_to_open:
             waiter = self._waiting_to_open.popleft()
             if not waiter.done():

@@ -297,6 +297,26 @@ describe('the end of a connection', () => {
 		expect(KvEntry.decode(await sent).found).toBe(true)
 	})
 
+	// contract: WIRE-07
+	test('a REQUEST a GOAWAY refused stays unsent when the credit comes back', async () => {
+		const peer = new Peer()
+		peer.welcome({ connectionCredit: 1 })
+		await peer.frames()
+		const sent = peer.session.call(0x0104, new Uint8Array([0x80]))
+		const unsent = peer.session.call(0x0104, new Uint8Array([0x80]))
+		const [request] = (await peer.frames()).filter(f => f.kind === Kind.request)
+		peer.session.receive(
+			frame(Kind.goaway, 0, 0, 0, GoAway.encode({ code: 'unavailable', message: 'closing' })),
+		)
+		expect(await caught(unsent)).toBeInstanceOf(UnavailableError)
+		// the server grants credit back as it finishes the streams it still runs
+		peer.session.receive(credit(0, 1))
+		expect((await peer.frames()).filter(f => f.kind === Kind.request)).toEqual([])
+		peer.answer(request!.stream, entry(true))
+		expect(KvEntry.decode(await sent).found).toBe(true)
+		expect(peer.session.ended).toBeUndefined()
+	})
+
 	test('a lost connection tells each stream whether its REQUEST had left', async () => {
 		const peer = new Peer()
 		peer.welcome({ connectionCredit: 1 })
