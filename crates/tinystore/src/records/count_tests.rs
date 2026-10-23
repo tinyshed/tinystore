@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use serde_json::json;
+use serde_json::{Map as JsonMap, json};
 
 use super::super::engine::KEEP;
 use super::super::events::Events;
@@ -155,6 +155,45 @@ fn field_names_are_the_keys_of_fields_and_contexts_sorted() {
     assert_eq!(api.list().since(MINUTE).field_names().unwrap(), ["host", "ms", "route", "user"]);
     let all = fixture.store.all_events().unwrap();
     assert_eq!(all.list().field_names_prefix("u").unwrap(), ["user"]);
+}
+
+#[test]
+fn field_names_are_the_first_keys_of_every_segment_and_head_in_their_order() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let event = |keys: &[&str]| {
+        NewEvent::new("e").fields(
+            &keys.iter().map(|key| ((*key).to_owned(), json!(1))).collect::<JsonMap<String, serde_json::Value>>(),
+        )
+    };
+    for keys in [["b1", "d1", "f1"], ["a2", "c2", "e2"], ["b3", "c3", "g3"]] {
+        api.append_all([event(&keys)]).unwrap();
+        fixture.pass(HOUR);
+        maintain(&fixture.store).unwrap();
+    }
+    api.append_all([event(&["a4", "h4"])]).unwrap();
+    assert_eq!(fixture.rows("segments"), 3);
+    assert_eq!(api.list().limit(4).field_names().unwrap(), ["a2", "a4", "b1", "b3"]);
+    assert_eq!(api.list().field_names_prefix("c").unwrap(), ["c2", "c3"]);
+    assert_eq!(api.list().limit(1).field_names_prefix("b").unwrap(), ["b1"]);
+    assert_eq!(api.list().field_names_prefix("h").unwrap(), ["h4"]);
+    assert!(api.list().field_names_prefix("z").unwrap().is_empty());
+}
+
+// contract: ERR-05
+#[test]
+fn field_names_hold_the_heads_they_read_of_the_stores_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crate::Options { memory: Some(1 << 20), background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let api = store.events("api").open().unwrap();
+    for _ in 0..11 {
+        api.append_all((0..100).map(|n| NewEvent::new("e").fields(&json!({ "n": n })))).unwrap();
+    }
+    // 1,100 events waiting, which a read holds a KiB each of while it parses them
+    let error = api.list().field_names().unwrap_err();
+    assert_eq!(error.fact("limit"), Some(crate::memory::STORE_MEMORY), "{error}");
+    assert_eq!(api.list().since(MINUTE).limit(1).field_names_prefix("n").unwrap_err().kind(), ErrorKind::Limit);
 }
 
 #[test]

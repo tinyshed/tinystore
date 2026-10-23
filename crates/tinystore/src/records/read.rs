@@ -478,12 +478,13 @@ const BLOCKS_NEWEST: &str = rows_of!("blocks", "segment", "last_at desc, id desc
 const HEAD_BODY: &str = "select body from heads where id = ?1";
 const BLOCK_BODY: &str = "select body from blocks where id = ?1";
 const SEGMENT_BODY: &str = "select body from segments where id = ?1";
-/// The keys of fields and of contexts, kinds 1 and 2, of the segments that
-/// reach into a range.
-const SEGMENT_KEYS: &str = "select distinct key from segment_keys where kind in (1, 2) and key >= ?3
-    and segment in (select id from segments where holder is null and last_at >= ?1 and first_at <= ?2
-    and (?4 is null or stream in (select value from json_each(?4))))";
-const HEAD_BODIES: &str = "select id, stream, body from heads where last_at >= ?1 and first_at <= ?2
+/// The segments that reach into a range, and of each its keys of fields or
+/// of contexts, kinds 1 and 2, from a prefix on in their order: a read takes
+/// as many of each as its limit, rather than every key of every segment.
+const SEGMENTS_WITHIN: &str = "select id from segments where holder is null and last_at >= ?1 and first_at <= ?2
+    and (?3 is null or stream in (select value from json_each(?3)))";
+const SEGMENT_KEYS: &str = "select key from segment_keys where segment = ?1 and kind = ?2 and key >= ?3 order by key";
+const HEAD_BODIES: &str = "select id, stream, count, body from heads where last_at >= ?1 and first_at <= ?2
     and (?3 is null or stream in (select value from json_each(?3)))";
 const HAS_KEY: &str = "select exists (select 1 from segment_keys where segment = ?1 and kind = ?2 and key = ?3)";
 const TRACES_BLOOM: &str = "select bloom from block_traces where block = ?1";
@@ -528,34 +529,41 @@ impl Records {
     }
 
     /// The keys a read's range holds: its packed segments' beside them, and
-    /// those of the events that wait, read from their rows after the file is.
+    /// those of the events that wait, read from their rows after the file is,
+    /// the rows and their events held of the store's memory as a page's are.
     fn field_names(&self, stream: Option<&Stream>, query: &Query, prefix: &str) -> Result<Vec<String>> {
         let Some(asked) = self.asked(stream, query)? else { return Ok(Vec::new()) };
         let failed = |error| sql_error("read the keys events hold", error);
-        let (mut keys, heads) = self.file.read(|connection| {
-            let mut segments = connection.prepare_cached(SEGMENT_KEYS).map_err(failed)?;
-            let keys = segments.query_map(params![asked.first, asked.last, prefix, asked.only], |row| row.get(0));
-            let keys: BTreeSet<String> = keys.and_then(Iterator::collect).map_err(failed)?;
+        let mut keys = FirstKeys { keys: BTreeSet::new(), most: asked.limit };
+        let heads = self.file.read(|connection| {
+            segments_keys(connection, &asked, prefix, &mut keys)?;
             let mut heads = connection.prepare_cached(HEAD_BODIES).map_err(failed)?;
             let bodies = heads.query_map(params![asked.first, asked.last, asked.only], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?, row.get(3)?))
             });
-            let bodies: Vec<(i64, i64, Vec<u8>)> = bodies.and_then(Iterator::collect).map_err(failed)?;
-            Ok((keys, bodies))
+            let bodies: Vec<(i64, i64, i64, Vec<u8>)> = bodies.and_then(Iterator::collect).map_err(failed)?;
+            Ok(bodies)
         })?;
+        let bytes: usize = heads.iter().map(|(_, _, _, body)| body.len()).sum();
+        let events: u64 = heads.iter().map(|(_, _, events, _)| events.unsigned_abs()).sum();
+        let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: field names", PATIENCE)?;
         let mut codec = Codec::default();
-        for (id, stream, body) in heads {
+        for (id, stream, _, body) in heads {
             // A head row that no longer reads is damage, listed as a read over it lists it.
             let shown = asked.streams.get(&stream).map_or_else(|| stream.to_string(), |(name, _)| name.to_string());
             let events = head::parse(&body, &mut codec)
                 .map_err(|error| self.met((Part::HeadRow, id), &shown, error))?
                 .into_iter()
                 .filter(|event| (asked.first..=asked.last).contains(&event.at));
-            keys.extend(events.flat_map(|event| {
-                event.fields.iter().chain(event.context.iter()).map(|(key, _)| key.to_owned()).collect::<Vec<_>>()
-            }));
+            for event in events {
+                for (key, _) in event.fields.iter().chain(event.context.iter()) {
+                    if key.starts_with(prefix) {
+                        keys.take(key);
+                    }
+                }
+            }
         }
-        Ok(keys.into_iter().filter(|key| key.starts_with(prefix)).take(asked.limit).collect())
+        Ok(keys.keys.into_iter().collect())
     }
 
     /// The range and the streams of a read; `None` when they hold nothing.
@@ -861,6 +869,50 @@ fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Pag
     }
     let next = next.map(written);
     Ok(Page { events: found.into_iter().map(|found| found.event.into_event(&found.stream)).collect(), next })
+}
+
+/// The first keys in their order of those taken, as many as a read's limit.
+struct FirstKeys {
+    keys: BTreeSet<String>,
+    most: usize,
+}
+
+impl FirstKeys {
+    /// Takes `key` among the first; false when it is past every key kept,
+    /// which are as many as the limit already.
+    fn take(&mut self, key: &str) -> bool {
+        if self.keys.len() == self.most && self.keys.last().is_some_and(|last| key >= last.as_str()) {
+            return false;
+        }
+        self.keys.insert(key.to_owned());
+        if self.keys.len() > self.most {
+            self.keys.pop_last();
+        }
+        true
+    }
+}
+
+/// Takes the keys of fields and of contexts that begin with `prefix` of each
+/// segment that reaches into a read's range, each kind's in their order until
+/// one does not begin with it or is past the first ones kept.
+fn segments_keys(connection: &Connection, asked: &Asked, prefix: &str, keys: &mut FirstKeys) -> Result<()> {
+    let failed = |error| sql_error("read the keys events hold", error);
+    let mut within = connection.prepare_cached(SEGMENTS_WITHIN).map_err(failed)?;
+    let segments = within.query_map(params![asked.first, asked.last, asked.only], |row| row.get::<_, i64>(0));
+    let segments: Vec<i64> = segments.and_then(Iterator::collect).map_err(failed)?;
+    let mut select = connection.prepare_cached(SEGMENT_KEYS).map_err(failed)?;
+    for segment in segments {
+        for kind in [FIELD_KEY, CONTEXT_KEY] {
+            let mut rows = select.query(params![segment, kind, prefix]).map_err(failed)?;
+            while let Some(row) = rows.next().map_err(failed)? {
+                let key: String = row.get(0).map_err(failed)?;
+                if !key.starts_with(prefix) || !keys.take(&key) {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
