@@ -490,6 +490,13 @@ impl Log {
         super::copy::remove_if_there(&dir.join(FENCED))
     }
 
+    /// Takes the fence the log's directory keeps now, which another thread may
+    /// have kept there since the log read it at its open.
+    pub(crate) fn fenced_as_kept(&self) -> Result<()> {
+        self.fenced.store(Self::fenced_in(&self.dir)?.unwrap_or(0), Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Refuses this log's file every write from now on: another node writes it
     /// at `epoch`, later than this log's.
     pub(crate) fn fence(&self, epoch: u64) -> Result<()> {

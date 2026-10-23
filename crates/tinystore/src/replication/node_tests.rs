@@ -160,6 +160,23 @@ fn a_log_whose_tail_a_crash_took_is_mended_from_the_wal_at_any_byte() {
     store.close().unwrap();
 }
 
+// A hand-over fences a file whose log no engine holds in its directory; an
+// open under way had read the directory already.
+// contract: REPL-08, REPL-10
+#[test]
+fn a_fence_kept_while_a_file_s_log_opens_refuses_its_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = node(dir.path());
+    let state = store.node().unwrap();
+    let opening = state.log_of("sql/app.db").unwrap();
+    state.fence("sql/app.db", 7).unwrap();
+    let log = state.kept_log("sql/app.db", opening).unwrap();
+    let refused = crate::sqlite::Observe::refuse(&*log).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Conflict, "{refused}");
+    drop(log);
+    store.close().unwrap();
+}
+
 // A connection of its own on a file is its last one: closed, SQLite would
 // checkpoint the commits its log lacks into it and delete the WAL that holds them.
 // contract: REPL-03

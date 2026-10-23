@@ -628,7 +628,9 @@ impl State {
             epoch,
             "another node writes a file this node wrote, at a later epoch: this node takes no more writes of it"
         );
-        match lock(&self.logs).get(name).and_then(Weak::upgrade) {
+        // the logs held while the fence is kept: see `kept_log`
+        let logs = lock(&self.logs);
+        match logs.get(name).and_then(Weak::upgrade) {
             Some(log) => log.fence(epoch),
             None => Log::fence_in(&self.log_dir(name), epoch),
         }
@@ -828,6 +830,18 @@ impl State {
 
     /// The log of the file `name` this node writes, opened for its writer.
     pub(crate) fn open_log(&self, name: &str) -> Result<Arc<dyn Observe>> {
+        let log = self.kept_log(name, self.log_of(name)?)?;
+        // A stop wakes the logs it finds; one opened as the node stops, by an
+        // engine's open the store's close raced, is kept before this looks,
+        // so that either the stop finds it or this sees the stop.
+        if self.stopping() {
+            log.stop_waiting();
+        }
+        Ok(log)
+    }
+
+    /// The log of `name` opened, as this node writes it.
+    pub(super) fn log_of(&self, name: &str) -> Result<Log> {
         let mut log = Log::open(self.log_dir(name), self.bounds, Arc::clone(&self.notify))?
             .followed(name, Arc::clone(&self.acks));
         // the catalog's home moves only by a person's hand, never by a lease
@@ -837,14 +851,19 @@ impl State {
         if self.options.synchronous || !self.options.synchronous_with.is_empty() {
             log = log.synchronous();
         }
+        Ok(log)
+    }
+
+    /// Keeps `log` among the logs open, with the fence its directory keeps
+    /// now: a fence of a log not kept yet goes to the directory alone, which
+    /// `fence` writes holding the logs as this reads it, so that the log
+    /// either is found there by the fence or reads it here.
+    pub(super) fn kept_log(&self, name: &str, log: Log) -> Result<Arc<Log>> {
         let log = Arc::new(log);
-        lock(&self.logs).insert(name.to_owned(), Arc::downgrade(&log));
-        // A stop wakes the logs it finds; one opened as the node stops, by an
-        // engine's open the store's close raced, is kept before this looks,
-        // so that either the stop finds it or this sees the stop.
-        if self.stopping() {
-            log.stop_waiting();
-        }
+        let mut logs = lock(&self.logs);
+        logs.insert(name.to_owned(), Arc::downgrade(&log));
+        log.fenced_as_kept()?;
+        drop(logs);
         Ok(log)
     }
 
