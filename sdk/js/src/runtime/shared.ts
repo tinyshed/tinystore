@@ -1,6 +1,7 @@
-// What Bun's runtime and Node's do alike: an endpoint read into an address, a
-// sidecar started through node:child_process, which both implement, and the
-// last lines of a child's stderr.
+// What Bun's runtime and Node's do alike: the loop's turns between the answers
+// of the core in this process, an endpoint read into an address, a sidecar
+// started through node:child_process, which both implement, and the last
+// lines of a child's stderr.
 
 import { spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
@@ -16,6 +17,45 @@ import type { Child } from '../runtime.ts'
 export function openFailure(dir: string, message: string): TinystoreError {
 	const failure = message.includes('in use') ? InUseError : ClosedError
 	return new failure(`cannot open ${dir}: ${message}`)
+}
+
+/** The writes in a row an event loop's one turn sends the core in this process. */
+const sendsATurn = 64
+
+/**
+ * Lets the event loop turn between answers the core in this process gives
+ * inside the write that asked. Each such answer resolves its promise in a
+ * microtask, so a loop of awaited reads would never let a timer or a socket
+ * run (research release-2026-10-23); every `sendsATurn` writes in one turn,
+ * the next waits for `setImmediate`, and those after it wait behind it.
+ */
+export function turning(send: (bytes: Uint8Array) => void): (bytes: Uint8Array) => void {
+	let sent = 0
+	let held: Uint8Array[] | undefined
+	const turned = (): void => {
+		sent = 0
+		const sending = held ?? []
+		held = undefined
+		for (const bytes of sending) {
+			write(bytes)
+		}
+	}
+	const write = (bytes: Uint8Array): void => {
+		if (held !== undefined) {
+			held.push(bytes)
+			return
+		}
+		if (sent === 0) {
+			setImmediate(turned)
+		}
+		sent++
+		if (sent > sendsATurn) {
+			held = [bytes]
+			return
+		}
+		send(bytes)
+	}
+	return write
 }
 
 /** Where an endpoint named in SERVE, or given to connect, is. */

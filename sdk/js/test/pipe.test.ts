@@ -40,6 +40,23 @@ test.skipIf(!library)('a value set through the core in this process reads back',
 	expect(await sessions.get('other')).toBeUndefined()
 })
 
+test.skipIf(!library)('a loop of awaited reads lets a timer run between them', async () => {
+	// the core answers a read inside the write that asked, so each await
+	// resolves in a microtask: without the loop's turns the timer never fires
+	const store = await embeddedStore()
+	const sessions = store.bucket<number>('sessions')
+	await sessions.set('a', 1)
+	let ticked = false
+	setTimeout(() => {
+		ticked = true
+	}, 0)
+	const until = performance.now() + 2000
+	while (!ticked && performance.now() < until) {
+		await sessions.get('a')
+	}
+	expect(ticked).toBe(true)
+})
+
 test.skipIf(!library)('many writes at once share the core and all land', async () => {
 	const store = await embeddedStore()
 	const counts = store.bucket<number>('counts')

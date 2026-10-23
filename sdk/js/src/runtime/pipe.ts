@@ -8,7 +8,7 @@ import { dlopen, FFIType, JSCallback, type Pointer, ptr } from 'bun:ffi'
 
 import { ClosedError } from '../errors.ts'
 import type { Transport } from '../runtime.ts'
-import { openFailure } from './shared.ts'
+import { openFailure, turning } from './shared.ts'
 
 const symbols = {
 	tinystore_open: {
@@ -170,7 +170,7 @@ export function openPipe(
 	// process alive while the store is open, as a sidecar's socket does.
 	const sleeps = setInterval(() => {}, 2 ** 30)
 	return {
-		write: send,
+		write: turning(send),
 		close() {
 			if (connection === null) {
 				return
