@@ -248,6 +248,10 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
   SQL-07).
 - Its reads see its own writes. A call that fails leaves the transaction as
   it was before that call, so the function may catch an error and go on.
+  The exception is a statement that rolls back the whole transaction, such
+  as `insert or rollback`, a column's `on conflict rollback`, or a trigger's
+  `raise(rollback)`. It ends the transaction. Every call after it fails
+  `invalid`, the commit fails too, and nothing of the transaction is written.
 - It runs once. TinyStore never runs it again on a conflict, because a
   function that called a payment API would charge twice.
 - It holds the writer: every other write to this file waits. Past five
@@ -267,7 +271,14 @@ let booked = db.tx(|tx| -> tinystore::Result<bool> {
 | `conflict`        | a unique or a primary key is taken                                                                             | read the row that holds it                                   |
 | `invalid`         | a foreign key, a `check`, a `not null`, a value of the wrong type; a syntax error, a table or column not there | fix the value or the statement; `constraint` says which rule |
 | `limit`           | a transaction past five seconds; `all` past 64 MiB of rows                                                     | do less; read with `each` or `list`                          |
+| `unavailable`     | another write in the same shared commit rolled the whole commit back                                           | run the same write again                                     |
 | `outcome unknown` | the commit's sync failed, or the connection ended before the answer                                            | read what you wrote before writing again                     |
+
+A statement that rolls back its whole transaction, such as `insert or
+rollback` on a taken key, also rolls back the commit that `exec` and `batch`
+share with other writes. It fails with its own error. The writes that ran
+before it in that commit fail `unavailable` and wrote nothing, so they can run
+again. The writes after it commit in the next transaction.
 
 A broken constraint names itself (contract SQL-08):
 

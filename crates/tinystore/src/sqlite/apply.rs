@@ -22,7 +22,7 @@ use rusqlite::Connection;
 
 use super::capture::{self, Position};
 use super::connection::{self, Role, execute, sql_error};
-use super::group::{BEGIN, COMMIT, ROLLBACK};
+use super::group::{BEGIN, ROLLBACK};
 use super::{Config, Durability};
 use crate::{Error, ErrorKind, Result};
 
@@ -66,7 +66,7 @@ impl Applier {
         execute(connection, BEGIN).map_err(|error| sql_error("a copy's commit: its transaction", error))?;
         let written = write(connection, page_size, size, pages);
         let committed =
-            written.and_then(|()| execute(connection, COMMIT).map_err(|error| sql_error("a copy's commit", error)));
+            written.and_then(|()| connection::commit(connection).map_err(|error| sql_error("a copy's commit", error)));
         if committed.is_err() && !connection.is_autocommit() {
             let _ = execute(connection, ROLLBACK);
         }

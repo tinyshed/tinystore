@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crate::Store;
 #[cfg(any(feature = "kv", feature = "jobs"))]
 use crate::sqlite::{Begun, Committed, Mark};
-use crate::sqlite::{File, Left, Tx as SqlTx, sql_error};
+use crate::sqlite::{File, Left, Tx as SqlTx, refuse_when_rolled_back, sql_error};
 use crate::{Error, Result};
 
 const SAVEPOINT: &str = "savepoint call";
@@ -155,6 +155,7 @@ impl Transaction<'_> {
         let (mut work, mut value) = (Some(work), None);
         self.writer.on(&mut |raw| {
             let work = work.take().ok_or_else(|| Error::internal("a transaction's call ran twice"))?;
+            refuse_when_rolled_back(raw)?;
             value = Some(in_savepoint(raw, || {
                 let value = work(raw)?;
                 raw.settle(Left::Here)?;
@@ -319,12 +320,18 @@ impl Writer for OfStore<'_> {
 }
 
 /// Runs `work` in a savepoint, kept when it succeeds and rolled back when it
-/// fails.
+/// fails. A call that ended the transaction, which SQLite then rolled back
+/// whole, fails with its own failure.
 fn in_savepoint<T>(raw: &SqlTx<'_>, work: impl FnOnce() -> Result<T>) -> Result<T> {
     let failed = |error| sql_error("a call's savepoint", error);
     raw.execute_batch(SAVEPOINT).map_err(failed)?;
     let mark = raw.committed().mark();
-    match work() {
+    let outcome = work();
+    if raw.is_autocommit() {
+        raw.committed().take_back(mark);
+        return outcome.and_then(|value| refuse_when_rolled_back(raw).map(|()| value));
+    }
+    match outcome {
         Ok(value) => raw.execute_batch(RELEASE).map_err(failed).map(|()| value),
         Err(error) => {
             raw.committed().take_back(mark);
@@ -392,3 +399,7 @@ pub(crate) mod sealed {
 
     impl<H: Sealed + ?Sized> Sealed for &H {}
 }
+
+#[cfg(test)]
+#[path = "transaction_tests.rs"]
+mod tests;

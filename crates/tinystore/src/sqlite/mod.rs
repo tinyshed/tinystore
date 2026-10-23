@@ -60,7 +60,7 @@ pub(crate) use connection::{
 pub(crate) use constraint::named as name_constraint;
 #[cfg(feature = "replication")]
 pub(crate) use file::Switch;
-pub(crate) use file::{Begun, File, Mark, a_copy_takes_no_transaction, in_a_transaction};
+pub(crate) use file::{Begun, File, Mark, a_copy_takes_no_transaction, in_a_transaction, refuse_when_rolled_back};
 pub(crate) use given::given;
 #[cfg(test)]
 pub(crate) use memory::used as memory_used;

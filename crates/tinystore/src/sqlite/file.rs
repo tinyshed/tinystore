@@ -11,7 +11,7 @@ use super::capture::{Capture, Logged, Observe, in_the_file, logged, own_work};
 use super::checkpoint::Checkpoints;
 use super::connection::{self, Role, execute, sql_error};
 use super::given::own;
-use super::group::{BEGIN, COMMIT, Done, Group, ROLLBACK, Work};
+use super::group::{BEGIN, Done, Group, ROLLBACK, Work};
 use super::migrate::{self, Migration};
 use super::readers::Readers;
 use super::{Committed, Config, Left, Settle, Settlers, Tx, vacuum};
@@ -272,6 +272,7 @@ impl File {
         let tx = Tx::new(connection, &committed, &self.settlers);
         tx.settle(Left::Before)?;
         let value = work(&tx)?;
+        refuse_when_rolled_back(connection).map_err(|error| error.within(self.describe()))?;
         tx.settle(Left::Here)?;
         tx.settle(Left::All)?;
         open.finished = true;
@@ -292,7 +293,7 @@ impl File {
             None => self.checkpoints.arm(),
         }
         let started = Instant::now();
-        let committed = execute(connection, COMMIT);
+        let committed = connection::commit(connection);
         if let (Some(probe), Some(waited), true) = (&self.config.probe, waited, committed.is_ok()) {
             probe.committed(started.elapsed(), &[waited]);
         }
@@ -675,6 +676,7 @@ impl Begun<'_> {
     /// Settles what the calls left, commits, then runs what they asked to
     /// run once it did, the writer still held.
     pub(crate) fn commit(mut self) -> Result<()> {
+        refuse_when_rolled_back(&self.connection).map_err(|error| error.within(self.file.describe()))?;
         self.tx().settle(Left::Here)?;
         self.tx().settle(Left::All)?;
         self.committed = true;
@@ -725,6 +727,20 @@ pub(crate) fn a_copy_takes_no_transaction(owner: &str) -> Error {
         ErrorKind::Unavailable,
         format!("{owner}: a transaction holds its file's writer, which a copy has not: run it at the file's home"),
     )
+}
+
+/// Refuses what would go on in a transaction that SQLite rolled back whole
+/// before its end, as it does for a statement's `or rollback`, a trigger's
+/// `raise(rollback)` or a disk that failed mid-statement: nothing of it is in
+/// the file, and a statement run now would commit by itself.
+pub(crate) fn refuse_when_rolled_back(connection: &Connection) -> Result<()> {
+    if !connection.is_autocommit() {
+        return Ok(());
+    }
+    Err(Error::invalid(
+        "a statement in the transaction rolled it back, as `or rollback` does: nothing of it is in the file, \
+         and it takes no more calls",
+    ))
 }
 
 /// Whether this thread holds any file's writer in a transaction, or is marked

@@ -9,7 +9,7 @@ use rusqlite::Connection;
 
 use super::capture::{Capture, Logged, in_the_file, logged};
 use super::checkpoint::Checkpoints;
-use super::connection::{execute, sql_error};
+use super::connection::{self, execute, sql_error};
 use super::given::own;
 use super::{Committed, Config, GroupLimits, Left, Settlers, Tx};
 use crate::probe::FileProbe;
@@ -214,13 +214,12 @@ impl Group {
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();
-            let waits = waits(&batch, started);
             // read while the writer is held, which a change of the file's home holds too
             let capture = logged(&self.capture);
             // A panic past the writes' own savepoints, in a settler or a hook,
             // must still reach `hand_off`, or no thread leads again.
             let answers =
-                catch_unwind(AssertUnwindSafe(|| self.commit(&connection, &batch, capture.as_deref(), &waits)))
+                catch_unwind(AssertUnwindSafe(|| self.commit(&connection, &batch, capture.as_deref(), started)))
                     .unwrap_or_else(|_| {
                         if !connection.is_autocommit() {
                             let _ = execute(&connection, ROLLBACK);
@@ -416,21 +415,40 @@ fn waits(batch: &[Arc<Write>], started: Instant) -> Vec<Duration> {
 type Answers = Vec<Result<()>>;
 
 impl Group {
-    /// Runs a batch in one transaction, each write in a savepoint, and says
-    /// how each one ended. What the writes that succeeded asked to run once
-    /// they commit runs after the commit, in their order, the writer still
-    /// held. A commit that holds measured writes, whose `waits` are given, is
-    /// told to the probe.
+    /// Runs a batch, gathered at `started`, and says how each write ended.
+    ///
+    /// The batch commits as one transaction, unless a write ends it: SQLite
+    /// then rolls the whole of it back, as it does for a statement's `or
+    /// rollback`, and the writes after that one, which have not run yet, go on
+    /// in the next transaction.
     fn commit(
+        &self,
+        connection: &Connection,
+        batch: &[Arc<Write>],
+        capture: Option<&Capture>,
+        started: Instant,
+    ) -> Answers {
+        let mut answers = Answers::with_capacity(batch.len());
+        while answers.len() < batch.len() {
+            let rest = &batch[answers.len()..];
+            answers.extend(self.commit_part(connection, rest, capture, &waits(rest, started)));
+        }
+        answers
+    }
+
+    /// Runs writes from the front of `batch` in one transaction, each write in
+    /// a savepoint, and says how each one that ran ended: every one, or those
+    /// up to the one that ended the transaction. What the writes that
+    /// succeeded asked to run once they commit runs after the commit, in their
+    /// order, the writer still held. A commit that holds measured writes,
+    /// whose `waits` are given, is told to the probe.
+    fn commit_part(
         &self,
         connection: &Connection,
         batch: &[Arc<Write>],
         capture: Option<&Capture>,
         waits: &[Duration],
     ) -> Answers {
-        if batch.is_empty() {
-            return Vec::new();
-        }
         let committed = Committed::default();
         let answers = match self.run_batch(connection, batch, capture, &committed) {
             Ok(answers) => answers,
@@ -441,7 +459,7 @@ impl Group {
             None => self.checkpoints.arm(),
         }
         let started = Instant::now();
-        let finished = execute(connection, COMMIT);
+        let finished = connection::commit(connection);
         if let (Some(probe), true) = (&self.probe, finished.is_ok()) {
             probe.committed(started.elapsed(), waits);
         }
@@ -458,8 +476,9 @@ impl Group {
     }
 
     /// Begins the batch's transaction and runs its writes, then settles what
-    /// they left together, once, after the last: how each write ended, or as
-    /// an error every write's answer once the whole batch rolled back.
+    /// they left together, once, after the last: how each write ended, or,
+    /// once the transaction rolled back, the answers of the writes that ran in
+    /// it, every one of the batch or those up to the one that ended it.
     fn run_batch(
         &self,
         connection: &Connection,
@@ -478,10 +497,14 @@ impl Group {
             return Err(every_one(failure));
         }
         let undone = Cell::new(true);
-        let answers: Answers = batch
-            .iter()
-            .map(|write| run(connection, write.take_work(), (committed, &self.settlers), &undone))
-            .collect();
+        let mut answers = Answers::with_capacity(batch.len());
+        for write in batch {
+            let answer = run(connection, write.take_work(), (committed, &self.settlers), &undone);
+            if connection.is_autocommit() {
+                return Err(ended_by(answers, answer));
+            }
+            answers.push(answer);
+        }
         // A failed write whose savepoint would not roll back is still in the
         // transaction: committing would keep it, so the whole batch goes.
         if !undone.get() {
@@ -490,7 +513,7 @@ impl Group {
                 "a grouped write's savepoint did not roll back; its batch rolled back",
             )));
         }
-        if let Err(failure) = tx.settle(Left::All) {
+        if let Err(failure) = tx.settle(Left::All).and_then(|()| still_open(connection)) {
             let _ = execute(connection, ROLLBACK);
             return Err(answers.into_iter().map(|answer| answer.and_then(|()| Err(failure.duplicate()))).collect());
         }
@@ -530,9 +553,34 @@ fn answered(batch: &[Arc<Write>], answers: Answers, handed: Result<()>) -> Answe
     batch.iter().zip(answers).map(answer_of).collect()
 }
 
+/// The answers of the writes of a transaction that the last of them, whose
+/// own answer is `ending`, ended: SQLite rolled it back whole. A write before
+/// it that had not failed alone may succeed again; the one that ended it
+/// fails, with its own failure when it has one.
+fn ended_by(before: Answers, ending: Result<()>) -> Answers {
+    let rolled_back = || {
+        let why =
+            "a write beside it in its commit ended the transaction, which rolled back whole: it may succeed again";
+        Error::new(ErrorKind::Unavailable, why)
+    };
+    let ending = ending.and_then(|()| Err(Error::internal("a grouped write ended its transaction and did not fail")));
+    let ending = ending.map_err(|error| error.within("it ended the transaction its commit shared with other writes"));
+    before.into_iter().map(|answer| answer.and_then(|()| Err(rolled_back()))).chain([ending]).collect()
+}
+
+/// Fails once SQLite rolled the transaction back whole, so that nothing more
+/// runs on the writer as though it had not.
+fn still_open(connection: &Connection) -> Result<()> {
+    if connection.is_autocommit() {
+        return Err(Error::internal("the transaction rolled back before its commit"));
+    }
+    Ok(())
+}
+
 /// Runs one write in a savepoint, then settles what it left, keeping the
 /// savepoint when both succeed and rolling it back when either fails or
-/// panics, its hooks with it.
+/// panics, its hooks with it. A write that ended the transaction leaves its
+/// batch to answer for it.
 fn run(
     connection: &Connection,
     work: Option<Work>,
@@ -545,8 +593,12 @@ fn run(
     execute(connection, SAVEPOINT).map_err(|error| sql_error("a grouped write: its savepoint", error))?;
     let mark = committed.mark();
     let tx = Tx::new(connection, committed, settlers);
-    let outcome = catch_unwind(AssertUnwindSafe(|| work(&tx).and_then(|()| tx.settle(Left::Here))))
-        .unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
+    let settled = || work(&tx).and_then(|()| still_open(connection)).and_then(|()| tx.settle(Left::Here));
+    let outcome =
+        catch_unwind(AssertUnwindSafe(settled)).unwrap_or_else(|_| Err(Error::internal("a grouped write panicked")));
+    if connection.is_autocommit() {
+        return outcome;
+    }
     if outcome.is_ok() {
         if let Err(error) = execute(connection, RELEASE) {
             undone.set(undone.get() && undo(connection));

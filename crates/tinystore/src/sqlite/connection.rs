@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,7 +36,35 @@ pub(crate) fn open(path: &Path, config: &Config, role: Role) -> Result<Connectio
         Role::Reader => configure_reader(&connection, config).map_err(|error| sql_error(what(), error))?,
     }
     keep_to_its_file(&connection).map_err(|error| sql_error(what(), error))?;
+    if role == Role::Writer {
+        commit_only_through_commit(&connection).map_err(|error| sql_error(what(), error))?;
+    }
     Ok(connection)
+}
+
+thread_local! {
+    /// This thread runs the adapter's own commit, [`commit`].
+    static COMMITTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Has `writer` refuse every commit but [`commit`]'s.
+///
+/// SQLite rolls a whole transaction back, its savepoints with it, for a
+/// statement's `or rollback`, a trigger's `raise(rollback)`, or a disk that
+/// failed mid-statement, and the connection is then in autocommit: each
+/// statement run after it would commit by itself, beside the writes that
+/// shared the transaction and were told it rolled back. With the hook such a
+/// statement fails instead, and writes nothing.
+fn commit_only_through_commit(writer: &Connection) -> rusqlite::Result<()> {
+    writer.commit_hook(Some(|| !COMMITTING.get()))
+}
+
+/// Commits the transaction open on `writer`.
+pub(crate) fn commit(writer: &Connection) -> rusqlite::Result<()> {
+    let before = COMMITTING.replace(true);
+    let committed = execute(writer, super::group::COMMIT);
+    COMMITTING.set(before);
+    committed
 }
 
 /// Leaves the connection its one file and its settings: no statement

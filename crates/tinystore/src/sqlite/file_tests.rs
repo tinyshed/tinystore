@@ -5,6 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::sqlite::group::COMMIT;
 use crate::sqlite::{Config, Durability, GroupLimits, Migration};
 
 /// A call a test makes on the file from a thread of its own.
@@ -61,6 +62,38 @@ fn queue_behind_the_writer<T: Send + 'static>(file: &Arc<File>, writes: Vec<Call
     wait_until(|| file.group.waiting() == count);
     drop(held);
     threads.into_iter().map(|thread| thread.join().unwrap()).collect()
+}
+
+/// Queues `writes` behind a held writer in their order, each one's thread
+/// started once the one before it waits, then lets the writer go and
+/// returns each one's answer.
+fn queue_in_order_behind_the_writer<T: Send + 'static>(file: &Arc<File>, writes: Vec<Call<T>>) -> Vec<Result<T>> {
+    let held = lock(&file.writer);
+    let mut threads = Vec::new();
+    for write in writes {
+        let writing = Arc::clone(file);
+        threads.push(thread::spawn(move || write(&writing)));
+        wait_until(|| file.group.waiting() == threads.len());
+    }
+    drop(held);
+    threads.into_iter().map(|thread| thread.join().unwrap()).collect()
+}
+
+/// A write that SQLite answers by rolling back the whole transaction it runs
+/// in when `value` is taken, as `insert or rollback` does.
+fn insert_or_roll_back(file: &File, value: &str) -> Result<()> {
+    let value = value.to_owned();
+    file.write(value.len(), move |tx| {
+        let insert = "insert or rollback into t (v) values (?1)";
+        tx.execute(insert, [&value]).map(drop).map_err(|error| sql_error("insert", error))
+    })
+}
+
+fn values(file: &File) -> Vec<String> {
+    let read = |connection: &rusqlite::Connection| -> rusqlite::Result<Vec<String>> {
+        connection.prepare("select v from t order by id")?.query_map([], |row| row.get(0))?.collect()
+    };
+    file.read(|connection| read(connection).map_err(|error| sql_error("values", error))).unwrap()
 }
 
 #[test]
@@ -157,6 +190,47 @@ fn a_failing_write_rolls_back_alone() {
     assert!(answers[0].is_ok() && answers[2].is_ok());
     assert_eq!(answers[1].as_ref().unwrap_err().kind(), ErrorKind::Conflict);
     assert_eq!(count(&file), 3);
+}
+
+// contract: DUR-03, DUR-05
+#[test]
+fn a_write_that_rolls_back_the_commit_it_shares_fails_and_the_writes_after_it_commit_in_the_next() {
+    let (_dir, file) = open(Config::default());
+    insert(&file, "taken").unwrap();
+    let answers = queue_in_order_behind_the_writer(
+        &file,
+        vec![
+            Box::new(|file| insert(file, "before").map(drop)),
+            Box::new(|file| insert_or_roll_back(file, "taken")),
+            Box::new(|file| insert(file, "after").map(drop)),
+        ],
+    );
+    let before = answers[0].as_ref().unwrap_err();
+    assert_eq!(before.kind(), ErrorKind::Unavailable, "rolled back beside it, the same write may succeed: {before}");
+    let ending = answers[1].as_ref().unwrap_err();
+    assert_eq!(ending.kind(), ErrorKind::Conflict, "the write keeps its own answer: {ending}");
+    assert!(answers[2].is_ok(), "the write after it commits in the next transaction: {:?}", answers[2]);
+    assert_eq!(values(&file), ["taken", "after"]);
+    insert(&file, "before").unwrap();
+}
+
+// contract: DUR-02
+#[test]
+fn a_transaction_a_statement_rolled_back_commits_nothing_of_what_runs_after() {
+    let (_dir, file) = open(Config::default());
+    insert(&file, "taken").unwrap();
+    let ended = file.transaction(|tx| -> Result<()> {
+        tx.execute("insert into t (v) values ('inside')", []).map_err(|error| sql_error("insert", error))?;
+        assert!(tx.execute("insert or rollback into t (v) values ('taken')", []).is_err());
+        // a function that catches the failure and goes on
+        let stray = tx.execute("insert into t (v) values ('stray')", []);
+        assert!(stray.is_err(), "a statement after the rollback does not commit by itself: {stray:?}");
+        Ok(())
+    });
+    let error = ended.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    assert_eq!(values(&file), ["taken"], "nothing of the transaction is in the file");
+    insert(&file, "next").unwrap();
 }
 
 #[test]
