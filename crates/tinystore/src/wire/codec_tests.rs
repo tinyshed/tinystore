@@ -123,6 +123,24 @@ fn a_map_of_more_than_fifteen_fields_writes_the_head_a_map_16_has() {
     assert_eq!(out, expected, "the fields moved up past a head of three bytes, what came before them kept");
 }
 
+/// An empty map is a byte and a valid item, and an item in memory takes a
+/// struct: a body of empty items is refused before it grows a hundredfold,
+/// while a list of one-byte values, as SQL's parameters are, still reads.
+#[cfg(all(feature = "records", feature = "sql"))]
+#[test]
+fn a_list_of_items_past_what_its_bytes_may_grow_into_is_limit_before_it_is_made() {
+    let events = 1_900_000;
+    let mut body = vec![0x82, 0x01, 0x01, 0x02, 0xdd];
+    body.extend_from_slice(&u32::try_from(events).unwrap().to_be_bytes());
+    body.resize(body.len() + events, 0x80);
+    let refused = protocol::RecordsAppend::decode(&body).unwrap_err();
+    assert_eq!(refused.code, "limit", "{}", refused.message);
+
+    let values = vec![Cell::Nil; 1_000_000];
+    let statement = protocol::SqlStatement { handle: 1, text: "select 1".to_owned(), values };
+    assert_eq!(protocol::SqlStatement::decode(&statement.encode()).unwrap(), statement);
+}
+
 #[test]
 fn a_message_reserves_what_it_writes_however_large_its_values() {
     fn reserved(message: &impl Message, name: &str) {

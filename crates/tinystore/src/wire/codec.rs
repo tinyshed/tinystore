@@ -271,6 +271,18 @@ pub(crate) fn cell(r: &mut Reader<'_>, name: &str) -> Result<Cell, Failure> {
     }
 }
 
+/// Takes the room `count` items of `each` bytes need in memory, or refuses
+/// the list `name` as `limit` before any of it is made: a body of empty
+/// items would otherwise grow a hundredfold as it is read.
+fn room(r: &mut Reader<'_>, name: &str, count: usize, each: usize) -> Result<(), Failure> {
+    let needed = count.saturating_mul(each);
+    if r.take_room(needed) {
+        return Ok(());
+    }
+    let refused = format!("{name}: {count} items, {needed} bytes in memory, past what a body of its size may take");
+    Err(Failure::from(crate::Error::limit(refused)))
+}
+
 pub(crate) fn list<T>(
     r: &mut Reader<'_>,
     name: &str,
@@ -280,6 +292,7 @@ pub(crate) fn list<T>(
         return Err(not(name, "an array"));
     };
     // the reader has checked the count against the bytes left, each item a byte at least
+    room(r, name, count, size_of::<T>())?;
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
         items.push(item(r, name)?);
@@ -295,6 +308,7 @@ pub(crate) fn names<T>(
     let Token::Map(count) = r.next()? else {
         return Err(not(name, "a map of names"));
     };
+    room(r, name, count, size_of::<(String, T)>())?;
     let mut named = BTreeMap::new();
     for _ in 0..count {
         let key = match r.next()? {

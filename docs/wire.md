@@ -331,7 +331,10 @@ value: a map from small unsigned integer keys to values, under these rules.
   field's default, and nil stands only where a field allows it.
 - **Bounds come before allocation.** A length or a count past the bytes left
   in the body is invalid, since every element takes at least a byte; nesting
-  deeper than 8 is invalid; a body is at most the agreed maximum.
+  deeper than 8 is invalid; a body is at most the agreed maximum. The server
+  holds a request's lists in at most 64 times the body's bytes, 64 KiB at
+  least: a list past it, as one of a million empty maps, is `limit` before
+  it is read.
 - **Time is an integer**: unix milliseconds, unless a field says nanoseconds.
   Records keep nanoseconds, past what a JavaScript number holds, so an SDK
   reads such a field as a `BigInt`:

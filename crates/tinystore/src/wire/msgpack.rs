@@ -53,11 +53,33 @@ pub(crate) enum Token<'a> {
 pub(crate) struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
+    /// What the lists read from the body may still take in memory.
+    room: usize,
 }
+
+/// The memory a body's lists may take, a multiple of its bytes. An empty map
+/// is a byte and a valid item, which a message holds in a struct of a
+/// hundred bytes and more; the densest list a client means, of one-byte SQL
+/// values, takes 32 bytes an item.
+const ROOM_PER_BYTE: usize = 64;
+/// The room of a short body, whose few items may each be a large struct.
+const LEAST_ROOM: usize = 64 << 10;
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(bytes: &'a [u8]) -> Reader<'a> {
-        Reader { bytes, at: 0 }
+        Reader { bytes, at: 0, room: bytes.len().saturating_mul(ROOM_PER_BYTE).max(LEAST_ROOM) }
+    }
+
+    /// Takes `bytes` of the room the body's lists have in memory; says
+    /// whether it had them, so that a list is refused before it is made.
+    pub(crate) fn take_room(&mut self, bytes: usize) -> bool {
+        match self.room.checked_sub(bytes) {
+            Some(left) => {
+                self.room = left;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Refuses bytes left after the one value a body is.
