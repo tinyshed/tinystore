@@ -16,7 +16,7 @@ program relies on most, and ends with what TinyStore does not promise.
 | DUR-05  | a write whose outcome cannot be known answers `outcome unknown`, never success     |
 | DUR-06  | a write is atomic within one file, and across two only when you joined them        |
 | DUR-08  | a reader sees one consistent snapshot, every commit whole                          |
-| DUR-09  | packing, merging and expiry never change an answer                                 |
+| DUR-09  | packing, merging and expiry never change an answer, except as NOT-12 says          |
 | KV-01   | a value comes back bit for bit, or fails `corrupt`, never a plausible wrong value  |
 | BLOB-01 | a file appears whole at its commit, or not at all                                  |
 | BLOB-02 | a whole read is checked against the file's SHA-256                                 |
@@ -72,6 +72,7 @@ program relies on most, and ends with what TinyStore does not promise.
 | NOT-09 | a log line that finds its buffer full is dropped and counted                                      |
 | NOT-10 | a vector search with `recall` may miss some of the exact best                                     |
 | NOT-11 | nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration |
+| NOT-12 | events of one time have no fixed order across streams, or in a stream when some came late         |
 
 A job runs at least once, not exactly once, and `once` runs a key at most
 once while its answer stands, not an effect exactly once. Both are said in

@@ -254,8 +254,8 @@ impl Records {
     /// `events` parted into those on time and the late, each in the order
     /// they came. An event is late when it comes more than ten seconds behind
     /// the newest its stream showed on time before it, earlier in this
-    /// append or waiting in its head, or behind the store's clock where that
-    /// is earlier; so a producer ahead of the clock makes no one late:
+    /// append or in `waiting`, or behind the store's clock where that is
+    /// earlier; so a producer ahead of the clock makes no one late:
     ///
     /// ```text
     /// clock 12:01, waiting until 12:00:40; append 12:00:35 12:00:41 11:50:02 12:00:45

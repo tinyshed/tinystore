@@ -419,8 +419,11 @@ fn full(events: u64, rows: usize, bytes: usize, limit: usize) -> bool {
     events >= limit as u64 || rows >= FETCH_ROWS || bytes >= FETCH_BYTES
 }
 
-/// Where a row of events is. A stream's blocks were written before what
-/// waits in its head, so of two events of one time the block's comes first.
+/// Where a row of events is. One head's blocks were packed from rows older
+/// than those still waiting in it, so of its events of one time the block's
+/// came first. A block keeps no event's arrival, so between a stream's late
+/// and on-time heads, and between streams, this is not the order they came
+/// in (REC-04).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
     Block,
@@ -798,9 +801,9 @@ pub(super) fn written((first, last): (i64, i64)) -> String {
 
 impl Records {
     /// The events of the fetched rows that the read keeps, in its order: by
-    /// their times, those of one time as they were written, or all of it
-    /// backwards. A row that no longer reads fails the read, named as a drop
-    /// names it.
+    /// their times, those of one time by where they lie as `Kind` says, or
+    /// all of it backwards. A row that no longer reads fails the read, named
+    /// as a drop names it.
     fn found(&self, asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
         let mut codec = Codec::default();
         let mut schemas: HashMap<i64, Schema> = HashMap::new();

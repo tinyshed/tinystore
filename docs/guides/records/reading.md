@@ -107,8 +107,9 @@ as, a number as a number.
 | `limit`      | the events of a page: 1,000, and 10,000 at most                   |
 | `after`      | a page's `next`, with the rest of the query as it was             |
 
-- Every condition given holds. Events come in the order of their times, those
-  of one time in the order they were written.
+- Every condition given holds. Events come in the order of their times.
+  [Events with the same time](#events-with-the-same-time) says how events
+  that share a time are ordered.
 - `where` finds a key at the top of `fields` or `context`, by the JSON its
   value was written as: `42` finds `42`, and neither `'42'` nor `42.0`.
 - `search` finds a phrase in the message, the name, and a value at any depth.
@@ -129,6 +130,69 @@ a `next`: a read stops at what one read may fetch rather than failing, a
 `search` over much text soonest. The last page is the one without a `next`.
 `since` is counted once: a page asked with `after` reads the range its first
 page had.
+
+## Events with the same time
+
+Events often share a time to the nanosecond. For example, all the events of
+one `append` that give no `at` take the time of the call:
+
+```ts
+await audit.append([{ name: 'cart.created' }, { name: 'item.added' }, { name: 'checkout' }])
+const page = await audit.list({ since: '1m' }) // cart.created, item.added, checkout
+```
+
+```python
+await audit.append([Event("cart.created"), Event("item.added"), Event("checkout")])
+page = await audit.list(since="1m")  # cart.created, item.added, checkout
+```
+
+```go
+err := audit.AppendMany(ctx, []records.Event{{Name: "cart.created"}, {Name: "item.added"}, {Name: "checkout"}})
+page, err := audit.List(ctx, records.Query{Since: time.Minute}) // cart.created, item.added, checkout
+```
+
+```rust
+audit.append_all([NewEvent::new("cart.created"), NewEvent::new("item.added"), NewEvent::new("checkout")])?;
+let page = audit.list().since(Duration::from_mins(1)).page()?; // cart.created, item.added, checkout
+```
+
+- Events of one stream that share a time come in the order they were
+  appended. This holds across appends, and before and after TinyStore packs
+  and merges them. With `newest`, they come in the reverse order.
+- Late events are the exception. TinyStore packs late events apart from the
+  others, as [How logs and metrics
+  pack](../../handbook/inside/how-logs-and-metrics-pack.md) explains. If some
+  events of one time were late and others were not, they may come in another
+  order than they were appended. The order may also change from one read to
+  the next. [Which events are late](#which-events-are-late) says when an
+  event is late.
+- Events of different streams that share a time come in no fixed order. Two
+  reads may give them in different orders, because TinyStore packs and merges
+  each stream by itself.
+- If your program needs a fixed order for these events, add a sequence number
+  to `fields` and sort by `at` and then by that number. A page never splits a
+  time, so sorting each page is enough.
+
+### Which events are late
+
+An event is late when its `at` is more than ten seconds behind the store's
+clock, and also more than ten seconds behind the newest on-time event that
+its stream had before it. These on-time events count as before it:
+
+- the events earlier in the same `append`
+- the events of the stream's earlier appends, until packing or a
+  [`drop`](repair.md) leaves none of the stream's on-time events waiting to
+  be packed. Packing that leaves some of them waiting doesn't reset this.
+
+When the store opens, the earlier events are the stream's on-time events that
+still wait to be packed, whatever appended them, and the ones already packed
+stop counting. The same happens when a node becomes the home of `records.db`.
+If an append runs at the same time as another append to its stream, or while
+TinyStore packs or drops events of the stream, either may count as the earlier
+one. Until the store opens again, an append that fails counts as none.
+
+So an event appended without `at` is never late, and neither is an event
+less than ten seconds behind the store's clock.
 
 ## Count, top and aggregate
 

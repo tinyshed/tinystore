@@ -8,7 +8,7 @@ keeps.
 
 | You want                                      | Use    | Order                      | Loses                                                |
 |-----------------------------------------------|--------|----------------------------|------------------------------------------------------|
-| what is written from now on, as it is written | `tail` | by time                    | what a slow reader falls behind, counted in `missed` |
+| what is written from now on, as it is written | `tail` | as written                 | what a slow reader falls behind, counted in `missed` |
 | every event once, from where you stopped      | `poll` | a stream's batch at a time | only what `keep` removed first, counted in `expired` |
 
 ## Tail
@@ -54,6 +54,9 @@ while let Some(batch) = tail.next_within(Duration::from_secs(30))? {
 
 - A tail gives the events written after the call that made it: an `append`'s
   at once, a logger's lines when its logger writes them, within a second.
+- It gives events in the order they were written, not by their times. The
+  [late events](reading.md#which-events-are-late) of one `append` may
+  come after its other events.
 - It takes a query's `streams`, `names`, `minLevel`, `traceId`, `where` and
   `search`, and no range, order or limit.
 - It is live, not complete. The store holds its last megabyte of events for

@@ -50,9 +50,11 @@ pub(crate) struct Records {
     pub(super) codec: Mutex<Codec>,
     /// Held by a pass of maintenance, so that two never pack the same rows.
     pub(super) maintaining: Mutex<()>,
-    /// The newest event waiting on time in each stream's head, by its id,
-    /// which tells whether the next event is late: read from the heads at
-    /// open, and forgotten once the head is packed empty.
+    /// The newest event each stream's head took on time, by the stream's id,
+    /// which tells whether the next event is late (REC-04): kept while
+    /// packing leaves rows in the head, forgotten once packing or a drop
+    /// empties it, and read from the rows that wait at open and, on a copy,
+    /// at each of its home's commits.
     pub(super) waiting: Mutex<HashMap<i64, i64>>,
     /// The events appended lately, held for the tails open.
     pub(super) recent: Recent,

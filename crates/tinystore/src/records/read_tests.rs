@@ -1,11 +1,11 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde_json::json;
 
 use super::super::fixture::{Fixture, SECOND, fixture, names};
 use super::*;
 use crate::ErrorKind;
-use crate::records::{Events, NewEvent, SpanId};
+use crate::records::{Events, NewEvent, SpanId, maintain};
 
 /// `count` events a second apart, named by their place, the last one now.
 fn timeline(fixture: &Fixture, events: &Events, count: u32) {
@@ -40,6 +40,66 @@ fn events_come_in_the_order_of_their_times_and_those_of_one_time_as_they_were_wr
     api.append_all([at("b2", 2), at("d", 0)]).unwrap();
     assert_eq!(names(&api.list().page().unwrap().events), ["a", "b1", "b2", "c", "d"]);
     assert_eq!(names(&api.list().newest().page().unwrap().events), ["d", "c", "b2", "b1", "a"]);
+}
+
+/// The names of one stream's events among a read's of every stream, in their order.
+fn of_stream<'e>(events: &'e [Event], stream: &str) -> Vec<&'e str> {
+    events.iter().filter(|event| event.stream == stream).map(|event| event.name.as_str()).collect()
+}
+
+// contract: REC-04
+#[test]
+fn a_streams_events_of_one_time_come_as_appended_while_late_ones_and_other_streams_pack_and_merge_beside() {
+    let fixture = fixture();
+    let (api, web) = (fixture.events("api"), fixture.events("web"));
+    let at = fixture.now();
+    // a minute behind the on-time event appended just before each, so each of them is late
+    let behind = at - Duration::from_mins(1);
+    // api's events with their times, as they were appended
+    let (mut appended, mut webs): (Vec<(SystemTime, String)>, Vec<String>) = (Vec::new(), Vec::new());
+    let read = |appended: &[(SystemTime, String)], webs: &[String], when: &str| {
+        let mut whole = appended.to_vec();
+        // stable, so that those of one time stay as they were appended
+        whole.sort_by_key(|(time, _)| *time);
+        let whole: Vec<String> = whole.into_iter().map(|(_, name)| name).collect();
+        let backwards: Vec<String> = whole.iter().rev().cloned().collect();
+        assert_eq!(names(&api.list().page().unwrap().events), whole, "{when}");
+        assert_eq!(names(&api.list().newest().page().unwrap().events), backwards, "{when}");
+        assert_eq!(pages(&api.list().limit(13)).concat(), whole, "pages, {when}");
+        let walked: Vec<String> = api.list().limit(13).all().map(|event| event.unwrap().name).collect();
+        assert_eq!(walked, whole, "all, {when}");
+        let every = fixture.store.all_events().unwrap().list().page().unwrap().events;
+        assert_eq!(of_stream(&every, "api"), whole, "every stream, {when}");
+        assert_eq!(of_stream(&every, "web"), webs, "every stream, {when}");
+    };
+    let late_rows = || fixture.rows("heads where late = 1");
+    let mut merged = 0;
+    // rounds forty minutes apart, so that a read finds events packed, merged and waiting
+    for round in 0..12 {
+        let [on, other, behind_it] = ["on", "web", "late"].map(|kind| format!("{kind}-{round}"));
+        let mut on_time = vec![(at, on)];
+        // once, one five seconds earlier: its segment, packed after others,
+        // begins before theirs and ends at their time
+        if round == 6 {
+            on_time.insert(0, (at - SECOND * 5, "early".to_owned()));
+        }
+        let late = late_rows();
+        api.append_all(on_time.iter().map(|(time, name)| NewEvent::new(name).at(*time))).unwrap();
+        web.append_all([NewEvent::new(&other).at(at)]).unwrap();
+        assert_eq!(late_rows(), late, "round {round}'s on-time events came late");
+        api.append_all([NewEvent::new(&behind_it).at(behind)]).unwrap();
+        assert_eq!(late_rows(), late + 1, "{behind_it} came on time");
+        appended.extend(on_time);
+        appended.push((behind, behind_it));
+        webs.push(other);
+        read(&appended, &webs, &format!("round {round}"));
+        fixture.pass(Duration::from_mins(40));
+        merged += maintain(&fixture.store).unwrap().merged;
+    }
+    fixture.pass(Duration::from_hours(1));
+    merged += maintain(&fixture.store).unwrap().merged;
+    assert_eq!((fixture.rows("heads"), merged > 0), (0, true), "{merged} merged");
+    read(&appended, &webs, "every event packed");
 }
 
 // contract: REC-05
