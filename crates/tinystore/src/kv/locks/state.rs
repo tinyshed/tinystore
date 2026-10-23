@@ -91,12 +91,12 @@ impl Line {
     }
 
     /// The earliest moment something of this key comes due: a lease revoked,
-    /// a waiter giving up, or a lease running out while someone waits behind
-    /// it. One nobody waits behind is found out when someone asks.
+    /// a waiter giving up, or a lease running out. One nobody waits behind
+    /// is due too, since a client gone never lets it go and its key may never
+    /// be asked again.
     fn next_due(&self) -> Option<i64> {
         let revoked = self.holders.iter().filter_map(|holder| holder.granted.revokes);
         let run_out = self.holders.iter().filter_map(|holder| holder.granted.expires);
-        let run_out = run_out.filter(|_| !self.waiters.is_empty());
         let given_up = self.waiters.iter().map(|waiter| waiter.gives_up_at);
         revoked.chain(run_out).chain(given_up).min()
     }
@@ -429,6 +429,12 @@ impl State {
     #[cfg(test)]
     pub(super) fn waiting(&self) -> usize {
         self.waiting.len()
+    }
+
+    /// The keys, leases, requests and waiters the state keeps.
+    #[cfg(all(test, feature = "wire"))]
+    pub(super) fn kept(&self) -> usize {
+        self.lines.len() + self.leases.len() + self.requests.len() + self.waiting.len()
     }
 
     /// Ends every lease and answers every waiter: the store closed.

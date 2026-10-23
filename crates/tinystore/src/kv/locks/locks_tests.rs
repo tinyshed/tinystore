@@ -369,6 +369,20 @@ fn a_request_asked_again_once_its_lease_ran_out_is_asked_afresh_and_the_key_is_h
     assert!(locks.release(&again.lease));
 }
 
+// contract: LOCK-05
+#[cfg(feature = "wire")]
+#[test]
+fn a_lease_of_a_client_gone_is_let_go_at_its_deadline_though_nobody_asks_its_key() {
+    let f = fixture();
+    let locks = locks(&f.store);
+    let (_, answer) = asked(&locks, remote("job-7f3a", 10 * SECOND, Duration::ZERO, Some([9; 16])));
+    let lease = granted(&answer);
+    f.clock.advance(10 * SECOND);
+    f.store.clock_moved();
+    holds_within(PATIENCE, "the lease ran out", || lease.watch.ending() == Ending::Lost);
+    assert_eq!(locks.kept(), 0, "nothing of it is kept");
+}
+
 // contract: LOCK-06
 #[cfg(feature = "wire")]
 #[test]

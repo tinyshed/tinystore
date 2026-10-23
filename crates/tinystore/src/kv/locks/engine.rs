@@ -115,6 +115,11 @@ impl Locks {
     pub(crate) fn waiting(&self) -> usize {
         lock(&self.inner.state).waiting()
     }
+
+    #[cfg(all(test, feature = "wire"))]
+    pub(crate) fn kept(&self) -> usize {
+        lock(&self.inner.state).kept()
+    }
 }
 
 impl Inner {
