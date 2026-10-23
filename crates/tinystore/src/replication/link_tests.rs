@@ -254,7 +254,10 @@ fn closed_within(stranger: &mut std::net::TcpStream, within: Duration) -> bool {
         if left.is_zero() {
             return false;
         }
-        stranger.set_read_timeout(Some(left)).unwrap();
+        // macOS refuses a timeout on a socket its peer has reset: EINVAL
+        if stranger.set_read_timeout(Some(left)).is_err() {
+            return true;
+        }
         match stranger.read(&mut sent) {
             Ok(0) => return true,
             Ok(_) => {}
