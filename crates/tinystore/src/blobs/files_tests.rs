@@ -114,6 +114,21 @@ fn a_file_expires_by_its_own_term_or_its_files_term() {
 }
 
 #[test]
+fn a_term_too_far_to_say_reads_as_the_last_second_of_9999_on_every_platform() {
+    let f = fixture();
+    let docs = f.files("docs");
+    let last = std::time::UNIX_EPOCH + std::time::Duration::from_secs(253_402_300_799);
+    let written = docs.key("kept.csv").ttl(std::time::Duration::MAX).put(b"for good").unwrap();
+    assert_eq!(written.expires, Some(last));
+    docs.put("report.csv", b"x").unwrap();
+    assert!(docs.expire("report.csv", std::time::Duration::MAX).unwrap());
+    assert_eq!(docs.head("report.csv").unwrap().unwrap().expires, Some(last));
+    assert_eq!(docs.get("report.csv").unwrap().unwrap().info().expires, Some(last));
+    let page = docs.list().page().unwrap();
+    assert_eq!(page.files.iter().map(|file| file.expires).collect::<Vec<_>>(), [Some(last), Some(last)]);
+}
+
+#[test]
 fn a_write_again_lives_its_term_again() {
     let f = fixture();
     let reports = f.store.files("reports").ttl(24 * HOUR).open().unwrap();

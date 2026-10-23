@@ -102,7 +102,8 @@ reports.expire("report.csv", Duration::from_hours(1))?;
   written again lives its day again.
 - An expired file is gone for readers at once: `get` and `head` give nothing.
   Its bytes are removed in the background, within a minute.
-- `expires` on a file says when it goes.
+- `expires` on a file says when it goes. A term that ends after the year
+  9999 reads as 9999-12-31 23:59:59 UTC, on every platform.
 
 A backup does not belong in files with a `ttl`.
 

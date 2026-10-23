@@ -353,8 +353,10 @@ impl Blobs {
         unix_millis(self.clock.now())
     }
 
+    /// A row's time; a term too far for Windows' clock, such as a ttl of
+    /// `Duration::MAX`, reads as the last second of 9999.
     pub(crate) fn time(millis: i64) -> SystemTime {
-        SystemTime::UNIX_EPOCH + Duration::from_millis(u64::try_from(millis).unwrap_or(0))
+        crate::clock::from_unix_millis(millis)
     }
 
     /// Removes the files of the contents a commit left without names. One that

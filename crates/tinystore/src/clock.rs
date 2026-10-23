@@ -81,7 +81,7 @@ pub fn unix_nanos(time: SystemTime) -> i64 {
 /// The time `millis` milliseconds after the Unix epoch; before it when negative.
 /// A time outside the years 1601 to 9999 is held at their edge: `SystemTime`
 /// panics past what the platform represents, and Windows' begins at 1601.
-#[cfg(any(feature = "kv", feature = "jobs", feature = "metrics"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "metrics"))]
 pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
     const LATEST: Duration = Duration::from_secs(253_402_300_799);
     const EARLIEST: Duration = Duration::from_secs(11_644_473_600);
