@@ -370,7 +370,7 @@ An error is the final frame of its stream, with ERROR set:
 | `corrupt`            | stored bytes no longer read                                                                                                         | no                          |
 | `too_old`, `too_new` | a time outside its engine's window                                                                                                  | no                          |
 | `suspended`          | a series in quarantine                                                                                                              | after its repair            |
-| `outcome_unknown`    | a commit whose result is unknown                                                                                                    | after reading what it wrote |
+| `outcome_unknown`    | a commit whose result is unknown, or a write that ran and whose answer, as the values a take removed, is past the agreed body       | after reading what it wrote |
 | `committed_locally`  | a synchronous commit its home made and no copy it waits for held in time: it stands, and losing that home's disk would lose it      | no                          |
 | `lost`               | a lease ran out or was revoked at its maxHold: another holder may have run beside it                                                | no                          |
 | `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                   | no                          |
@@ -907,9 +907,10 @@ jobs. A key change has no result. A read, a set-if-absent, a change in a view,
 or a bucket in another file is `invalid`. A failure's `what.call` counts
 key changes after the statements and jobs.
 
-A message past the agreed body is `limit`: a row a query downloads, or a
-batch's results, which travel in one message. A query holds its rows in the
-server's memory, 64 MiB of them at most, before the first leaves.
+A row a query downloads past the agreed body is `limit`. A batch's results
+travel in one message, and past the agreed body they are `outcome_unknown`,
+since the batch committed. A query holds its rows in the server's memory, 64
+MiB of them at most, before the first leaves.
 
 A data connection's statement, each of a batch's included, runs only once the
 check [server.md](https://github.com/tinyshed/research/blob/main/tinystore/design/server.md#what-a-connection-may-do) describes lets it, and

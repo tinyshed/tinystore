@@ -98,6 +98,13 @@ did, the function runs again, five times at most before `conflict`. So keep
 the function free of side effects outside the store: it may run more than
 once.
 
+The values a transaction's `take`s hand back come in one answer, at most the
+largest body the connection agreed, 2 MiB from every SDK. When they are more,
+the writes have already committed, so the transaction fails with
+`outcome unknown`, not `limit`: the keys are gone, and sending the
+transaction again would take nothing and repeat its other writes. Take large
+values one at a time, or read them before the transaction deletes them.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

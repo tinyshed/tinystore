@@ -557,6 +557,33 @@ fn a_read_connection_reads_and_writes_nothing() {
     assert_eq!(entry.value, Some(Row::Bin(b"kept".to_vec())));
 }
 
+/// A take commits before its answer is sized: one past the agreed body says
+/// the write ran, where `limit` would have the client send it again and find
+/// the key gone.
+#[test]
+fn a_write_whose_answer_is_past_the_agreed_body_is_outcome_unknown_and_stands() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    let mut client = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    let hello = Hello { protocol: 1, stream_credit: Some(64 << 10), ..Hello::default() };
+    assert_eq!(client.greet(hello).unwrap().max_body, 64 << 10);
+    let first = client.bucket("sessions");
+    let mut written = Client::over(Pipe::connect(&store, Connect::default()).unwrap());
+    written.hello(1).unwrap();
+    let handle = written.bucket("sessions");
+    let long =
+        KvCall { handle, key: "long".to_owned(), value: Some(Row::Bin(vec![7; 100 << 10])), ..KvCall::default() };
+    written.call::<KvWritten>(method::KV_SET, &long).unwrap();
+
+    let take = KvCall { handle: first, key: "long".to_owned(), ..KvCall::default() };
+    let failed = client.call::<KvEntry>(method::KV_TAKE, &take).unwrap_err();
+    assert_eq!(failed.code, "outcome_unknown", "{}", failed.message);
+    let has = client.call::<crate::wire::protocol::KvFound>(method::KV_HAS, &take).unwrap();
+    assert!(!has.found, "the take stands");
+    drop((client, written));
+    store.close().unwrap();
+}
+
 #[test]
 fn an_encrypted_bucket_opens_for_a_connection_that_writes_and_for_none_that_only_reads() {
     use crate::wire::protocol::KvBucketOpen;

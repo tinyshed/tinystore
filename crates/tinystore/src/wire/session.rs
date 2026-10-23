@@ -530,10 +530,11 @@ impl Shared {
             Route::Subscribe => self.subscribe(input, stream, &body),
             Route::Worker => {
                 let (shared, reading) = (Arc::clone(self), self.reading(stream, method));
+                let writes = method::access(method) == Some(Access::Write);
                 self.workers.run(Box::new(move || {
                     let answered =
                         shared.read_under(stream, reading, || guarded(|| shared.call(method, &body, max_body)));
-                    shared.answer(stream, answered);
+                    shared.answer(stream, if writes { shared.written_within_agreed(answered) } else { answered });
                 }));
             }
         }
@@ -545,7 +546,7 @@ impl Shared {
         let shared = Arc::clone(self);
         self.workers.run(Box::new(move || {
             let answering = Arc::clone(&shared);
-            let done = move |answered| answering.answer(stream, answered);
+            let done = move |answered| answering.answer(stream, answering.written_within_agreed(answered));
             let queued = guarded(|| {
                 match method >> 8 {
                     #[cfg(feature = "jobs")]
@@ -1439,6 +1440,28 @@ impl Shared {
             Ok(body) if body.len() > agreed => Err(Failure {
                 code: "limit".to_owned(),
                 message: format!("an answer of {} bytes, past the {agreed} a body holds", body.len()),
+                what: None,
+            }),
+            answered => answered,
+        }
+    }
+
+    /// A write's answer as it may go out. Past the agreed body it is
+    /// `outcome_unknown`, never `limit`: the write ran, what it took is gone,
+    /// and a client that sent it again, as it does a `limit`, would write
+    /// twice.
+    fn written_within_agreed(
+        &self,
+        answered: std::result::Result<Vec<u8>, Failure>,
+    ) -> std::result::Result<Vec<u8>, Failure> {
+        let agreed = self.agreed.load(Ordering::Acquire);
+        match answered {
+            Ok(body) if body.len() > agreed => Err(Failure {
+                code: "outcome_unknown".to_owned(),
+                message: format!(
+                    "the write ran, and its answer of {} bytes is past the {agreed} a body holds: read what it wrote",
+                    body.len()
+                ),
                 what: None,
             }),
             answered => answered,
