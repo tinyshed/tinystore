@@ -306,6 +306,41 @@ fn a_page_reads_after_the_last_row_of_the_one_before_and_only_its_own_query() {
 }
 
 #[test]
+fn pages_read_on_past_a_null_and_an_infinity_in_their_order() {
+    let f = fixture();
+    let orders = "create table orders (id integer primary key, shipped_at integer, total real)";
+    let db = f.store.database("shop").migrations([("0001_orders.sql", orders)]).open().unwrap();
+    db.batch([
+        sql!("insert into orders values (1, null, 1.0), (2, null, ?), (3, null, ?)", f64::INFINITY, f64::NEG_INFINITY),
+        sql!("insert into orders values (4, 10, 2.0), (5, 20, ?)", f64::INFINITY),
+    ])
+    .unwrap();
+    #[derive(Debug, Deserialize)]
+    struct Order {
+        id: i64,
+    }
+    let orders = db.table::<Order>("orders");
+    let paged = |query: super::Query<'_, Order>| {
+        let mut ids = Vec::new();
+        let mut after = None;
+        loop {
+            let page = query.list(2, after.as_deref()).unwrap();
+            ids.extend(page.rows.iter().map(|order| order.id));
+            match page.next {
+                Some(next) => after = Some(next),
+                None => return ids,
+            }
+        }
+    };
+    let ascending = orders.order_by("shipped_at", Direction::Asc).order_by("id", Direction::Asc);
+    assert_eq!(paged(ascending), [1, 2, 3, 4, 5], "a page that ends among the nulls, first in ascending order");
+    let descending = orders.order_by("shipped_at", Direction::Desc).order_by("id", Direction::Desc);
+    assert_eq!(paged(descending), [5, 4, 3, 2, 1], "the nulls last in descending order");
+    let by_total = orders.order_by("total", Direction::Asc).order_by("id", Direction::Asc);
+    assert_eq!(paged(by_total), [3, 1, 4, 2, 5], "a page that ends on an infinity");
+}
+
+#[test]
 fn a_join_reads_its_first_table_and_a_table_inside_a_transaction_rolls_back_with_it() {
     let f = fixture();
     let books = "create table authors (id integer primary key, name text not null, active integer not null) strict;

@@ -786,18 +786,31 @@ fn insert_of<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
     Ok(Sql::piece(text, values, false))
 }
 
-/// The condition that starts a page after a row's order values.
+/// The condition that starts a page after a row's order values. SQLite
+/// orders a null before every value, first in ascending order and last in
+/// descending, and a comparison with a null is never true: equal is `is`,
+/// and past a null is every value ascending and nothing descending.
 fn keyset(order: &[Order], after: &[Value]) -> Sql {
     let mut alternatives = Vec::with_capacity(order.len());
     let mut values = Vec::new();
     for (at, each) in order.iter().enumerate() {
+        let column = each.piece.text();
+        let value = after.get(at).cloned().unwrap_or(Value::Null);
+        let past = match (each.direction, value) {
+            (Direction::Asc, Value::Null) => (format!("{column} is not null"), None),
+            (Direction::Desc, Value::Null) => continue,
+            (Direction::Asc, value) => (format!("{column} > ?"), Some(value)),
+            (Direction::Desc, value) => (format!("({column} < ? or {column} is null)"), Some(value)),
+        };
         let mut terms: Vec<String> =
-            order[..at].iter().map(|earlier| format!("{} = ?", earlier.piece.text())).collect();
+            order[..at].iter().map(|earlier| format!("{} is ?", earlier.piece.text())).collect();
         values.extend(after[..at].iter().cloned());
-        let past = if each.direction == Direction::Asc { ">" } else { "<" };
-        terms.push(format!("{} {past} ?", each.piece.text()));
-        values.push(after.get(at).cloned().unwrap_or(Value::Null));
+        terms.push(past.0);
+        values.extend(past.1);
         alternatives.push(if terms.len() == 1 { terms.remove(0) } else { format!("({})", terms.join(" and ")) });
+    }
+    if alternatives.is_empty() {
+        return Sql::piece("0".to_owned(), Vec::new(), true);
     }
     Sql::piece(format!("({})", alternatives.join(" or ")), values, true)
 }
@@ -815,10 +828,13 @@ fn digest_of(statement: &Sql) -> String {
     format!("{hash:08x}")
 }
 
+/// A value as JSON, and back by [`value_of`]: an infinity, which JSON has no
+/// number for, as its text.
 fn json_of(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
         Value::Integer(n) => serde_json::Value::from(*n),
+        Value::Real(x) if !x.is_finite() => serde_json::json!({ "real": x.to_string() }),
         Value::Real(x) => serde_json::Value::from(*x),
         Value::Text(text) => serde_json::Value::from(text.as_str()),
         Value::Blob(bytes) => serde_json::json!({ "bytes": bytes }),
@@ -832,6 +848,9 @@ fn value_of(json: &serde_json::Value) -> Option<Value> {
             n.as_i64().map_or_else(|| Value::Real(n.as_f64().unwrap_or_default()), Value::Integer)
         }
         serde_json::Value::String(text) => Value::Text(text.clone()),
+        serde_json::Value::Object(object) if object.contains_key("real") => {
+            Value::Real(object.get("real")?.as_str()?.parse().ok()?)
+        }
         serde_json::Value::Object(object) => Value::Blob(serde_json::from_value(object.get("bytes")?.clone()).ok()?),
         _ => return None,
     })
