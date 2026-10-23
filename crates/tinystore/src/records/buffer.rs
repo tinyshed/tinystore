@@ -154,6 +154,10 @@ impl Buffer {
         written
     }
 
+    fn holds_lines(&self) -> bool {
+        !lock(&self.waiting).lines.is_empty()
+    }
+
     fn append(&self, lines: Vec<Line>) -> Result<()> {
         if lines.is_empty() {
             return Ok(());
@@ -286,7 +290,10 @@ impl Records {
             flushed = flushed.and(buffer.write_waiting(closing));
         }
         drop(buffers);
-        self.lock_held().buffers.retain(|buffer| Arc::strong_count(buffer) > 1);
+        // A logger or writer dropped while the flush wrote may have left its
+        // last lines after the flush took what waited: its buffer stays for
+        // the next flush. Held alone, it takes no line more, so this cannot race.
+        self.lock_held().buffers.retain(|buffer| Arc::strong_count(buffer) > 1 || buffer.holds_lines());
         flushed
     }
 
@@ -294,3 +301,7 @@ impl Records {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
+
+#[cfg(test)]
+#[path = "buffer_tests.rs"]
+mod tests;
