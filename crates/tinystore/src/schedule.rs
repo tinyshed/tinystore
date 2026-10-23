@@ -64,7 +64,8 @@ impl Wake {
         let mut state = shared.lock();
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == self.id) {
             if task.work.is_some() {
-                task.next = Instant::now();
+                // a task due already keeps its place among the due
+                task.next = task.next.min(Instant::now());
             } else {
                 task.woken = true;
             }
@@ -151,11 +152,19 @@ impl Shared {
         let mut state = self.lock();
         while !state.stopped {
             let now = Instant::now();
-            match state.tasks.iter().position(|task| task.work.is_some() && task.next <= now) {
+            match Self::due_longest(&state, now) {
                 Some(due) => state = self.run_task(state, due),
                 None => state = self.wait_for_next(state, now),
             }
         }
+    }
+
+    /// The task due the longest, the first added among equals: a task woken
+    /// while it ran is due again at once, and taken by its place it would
+    /// starve every task added after it, a counters' flush among them.
+    fn due_longest(state: &State, now: Instant) -> Option<usize> {
+        let due = state.tasks.iter().enumerate().filter(|(_, task)| task.work.is_some() && task.next <= now);
+        due.min_by_key(|(at, task)| (task.next, *at)).map(|(at, _)| at)
     }
 
     fn run_task<'a>(&'a self, mut state: MutexGuard<'a, State>, due: usize) -> MutexGuard<'a, State> {
@@ -291,6 +300,28 @@ mod tests {
         assert!(wait_until(|| finished.load(Ordering::SeqCst) == 2), "woken while it ran, it runs again");
         thread::sleep(Duration::from_millis(100));
         assert_eq!(started.load(Ordering::SeqCst), 2, "and then waits for its period");
+        scheduler.stop();
+    }
+
+    // contract: KV-08
+    #[test]
+    fn a_task_woken_while_it_runs_lets_the_tasks_due_longer_run_first() {
+        let scheduler = Scheduler::new(true, Arc::default());
+        let woken: Arc<Mutex<Option<Wake>>> = Arc::default();
+        let wakes = Arc::clone(&woken);
+        let busy: Work = Box::new(move || {
+            // a logger whose buffer refills while it flushes wakes it again each run
+            if let Some(wake) = &*wakes.lock().unwrap() {
+                wake.wake();
+            }
+            thread::sleep(Duration::from_millis(1));
+            Ok(())
+        });
+        *woken.lock().unwrap() = Some(scheduler.add("test: busy", Duration::from_secs(3600), busy).unwrap());
+        let (flushes, flush) = counting();
+        scheduler.add("test: flush", Duration::from_millis(10), flush).unwrap();
+        woken.lock().unwrap().as_ref().unwrap().wake();
+        assert!(wait_until(|| flushes.load(Ordering::SeqCst) >= 3), "a task woken on every run starves none");
         scheduler.stop();
     }
 
