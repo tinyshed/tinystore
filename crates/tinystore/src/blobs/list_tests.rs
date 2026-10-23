@@ -92,3 +92,31 @@ fn a_clear_past_its_bound_hides_every_file_at_once_and_maintenance_removes_them(
     assert_eq!(done.cleared, CLEAR_AT_ONCE + 1);
     assert_eq!((f.rows("files"), f.rows("cleared"), f.rows("bodies")), (1, 0, 1));
 }
+
+#[test]
+fn a_write_after_the_file_moved_under_the_engine_is_newer_than_every_clear_in_it() {
+    let f = fixture();
+    let user = f.files("media").folder("users").folder(42);
+    user.put("old.png", b"before the clear").unwrap();
+    // what a copy's engine meets as its home's commits arrive, before it
+    // takes over: the file's revision and a clear's mark far past its own
+    let set = user.set;
+    f.blobs()
+        .file
+        .write(0, move |tx| {
+            tx.execute("update meta set value = 90000 where name = 'revision'", [])
+                .and_then(|_| {
+                    tx.execute("insert into cleared (set_id, prefix, revision) values (?1, 'users/42/', 90000)", [set])
+                })
+                .map(drop)
+                .map_err(|error| crate::Error::internal(error.to_string()))
+        })
+        .unwrap();
+    assert_eq!(user.head("old.png").unwrap(), None, "hidden by the clear");
+    user.put("new.png", b"after the clear").unwrap();
+    assert!(user.head("new.png").unwrap().is_some(), "a file written after a clear is a new file");
+    assert_eq!(maintain(&f.store).unwrap().cleared, 1, "the clear removes the old file alone");
+    assert!(user.head("new.png").unwrap().is_some());
+    let f = f.reopen();
+    assert!(f.rows("meta where name = 'revision' and value > 90000") == 1, "the revision never moves back");
+}

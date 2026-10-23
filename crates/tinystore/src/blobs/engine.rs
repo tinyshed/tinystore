@@ -9,7 +9,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -43,7 +42,6 @@ pub(crate) struct Blobs {
     clock: Arc<dyn Clock>,
     /// The disk the store keeps free, which no file may take.
     keep_free: u64,
-    revision: AtomicI64,
     sets: Mutex<HashMap<String, i64>>,
     /// The store, for the writes a copy passes to its home.
     #[cfg(feature = "replication")]
@@ -148,9 +146,9 @@ const SELECT_NAMED: &str = "select id from contents where inline = 0 and names >
 #[cfg(feature = "replication")]
 const SELECT_AFTER: &str = "select id from contents where inline = 0 and id > ?1 order by id";
 
-const SELECT_MARKS: &str = "select (select value from meta where name = 'revision'),
-    (select value from meta where name = 'ids'), (select value from meta where name = 'settled')";
-const SET_REVISION: &str = "update meta set value = ?1 where name = 'revision'";
+const SELECT_MARKS: &str =
+    "select (select value from meta where name = 'ids'), (select value from meta where name = 'settled')";
+const NEXT_REVISION: &str = "update meta set value = value + 1 where name = 'revision' returning value";
 const SELECT_SET: &str = "select id from sets where name = ?1";
 const INSERT_SET: &str = "insert into sets (name) values (?1) on conflict (name) do nothing";
 
@@ -179,7 +177,6 @@ impl Blobs {
                 scrubbing: Mutex::new(None),
                 clock: store.clock(),
                 keep_free: store.keep_free(),
-                revision: AtomicI64::new(0),
                 sets: Mutex::new(HashMap::new()),
                 #[cfg(feature = "replication")]
                 store: store.downgrade(),
@@ -234,12 +231,11 @@ impl Blobs {
     /// id at or below the mark is committed or has none, so nothing else is
     /// walked.
     fn recover(&self) -> Result<()> {
-        let (revision, reserved, settled): (i64, i64, i64) = self.file.read(|connection| {
+        let (reserved, settled): (i64, i64) = self.file.read(|connection| {
             connection
-                .query_row(SELECT_MARKS, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .query_row(SELECT_MARKS, [], |row| Ok((row.get(0)?, row.get(1)?)))
                 .map_err(|error| sql_error("blobs: read the marks", error))
         })?;
-        self.revision.store(revision, Ordering::SeqCst);
         self.ids.start(reserved);
         // An upload left that will not go now, as one Windows still shares, is
         // swept later and keeps no store from opening.
@@ -318,13 +314,14 @@ impl Blobs {
         }
     }
 
-    /// The revision of one write, kept as the file's high-water mark in the
-    /// write's own transaction; a write rolled back leaves a gap, never a
-    /// repeat.
+    /// The revision of one write, taken from the file in the write's own
+    /// transaction rather than counted in memory: a copy's file moves under
+    /// its engine as its home's commits arrive, and a copy that takes over
+    /// writes past every revision its home wrote.
     pub(crate) fn next_revision(&self, tx: &Tx<'_>) -> Result<i64> {
-        let revision = self.revision.fetch_add(1, Ordering::SeqCst) + 1;
-        tx.execute(SET_REVISION, [revision]).map_err(|error| sql_error("blobs: the revision", error))?;
-        Ok(revision)
+        tx.prepare_cached(NEXT_REVISION)
+            .and_then(|mut next| next.query_row([], |row| row.get(0)))
+            .map_err(|error| sql_error("blobs: the revision", error))
     }
 
     /// The id of the set of files `name`, made the first time it is asked.
