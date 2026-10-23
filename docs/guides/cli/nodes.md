@@ -75,8 +75,10 @@ tinystore serve ./us --from eu.internal:7444 --node-listen 0.0.0.0:7444 --node-c
 ## witness
 
 A draft: a witness keeps each file's lease and no data, and gives the lease to
-the freshest copy when a home goes quiet. Nodes name it as `failover` in their
-config.
+the freshest copy when a home goes quiet: the copy with the latest epoch, then
+the one with the most entries. A copy that came back further on in an older
+epoch holds commits of an older home, not the last one's. Nodes name the
+witness as `failover` in their config.
 
 ```sh
 tinystore witness ./witness --listen 0.0.0.0:7445 --token-file token

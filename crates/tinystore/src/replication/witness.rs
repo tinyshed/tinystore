@@ -98,6 +98,8 @@ struct Claimant {
 #[derive(Clone)]
 struct Standing {
     address: String,
+    /// The epoch of the last entry the copy applied.
+    epoch: u64,
     position: u64,
     seen: Instant,
 }
@@ -258,7 +260,7 @@ fn renew(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
 /// lease ran out and the gathering passed, when it is the freshest copy
 /// standing. Whether it took it.
 fn stand(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
-    let standing = Standing { address: ask.address.to_owned(), position: ask.position, seen: now };
+    let standing = Standing { address: ask.address.to_owned(), epoch: ask.epoch, position: ask.position, seen: now };
     lease.standing.insert(ask.node.to_owned(), standing);
     lease.standing.retain(|_, standing| now.duration_since(standing.seen) < STANDING);
     let holder = &lease.kept.holder;
@@ -285,7 +287,9 @@ fn stand(lease: &mut Lease, ask: &Ask<'_>, now: Instant) -> bool {
 
 /// The copy that may take a lease that ran out: the freshest standing, or,
 /// for a synchronous home's, the freshest of the copies it waited for, once
-/// every one of them stands.
+/// every one of them stands. The freshest is of the latest epoch, then the
+/// furthest on: a copy further on in an older epoch holds an old home's
+/// commits that a later home never had, and lacks that home's.
 fn freshest(lease: &Lease) -> Option<String> {
     let waited = &lease.kept.synchronous;
     let names = |node: &str, standing: &Standing, name: &String| *name == node || *name == standing.address;
@@ -299,5 +303,35 @@ fn freshest(lease: &Lease) -> Option<String> {
     if !every_one_stands {
         return None;
     }
-    candidates.into_iter().max_by_key(|(_, standing)| standing.position).map(|(node, _)| node.clone())
+    let latest = |(_, standing): &(&String, &Standing)| (standing.epoch, standing.position);
+    candidates.into_iter().max_by_key(latest).map(|(node, _)| node.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asked<'a>(node: &'a str, epoch: u64, position: u64) -> Ask<'a> {
+        Ask { file: "kv.db", node, address: node, epoch, position, holding: false, synchronous: &[] }
+    }
+
+    // A copy back with the old home's chain stands further on than one that
+    // took the current home's commits: those commits are its home's newest.
+    #[test]
+    fn the_copy_of_the_latest_epoch_takes_a_lease_before_one_further_on_in_an_older() {
+        let ran_out = Instant::now();
+        let mut lease = Lease {
+            kept: Kept { holder: Holder { node: "home".into(), address: "home".into(), epoch: 2 }, ..Kept::default() },
+            expires: ran_out,
+            standing: HashMap::new(),
+            claimant: None,
+        };
+        let (old_chain, current) = (asked("came back", 1, 1500), asked("followed", 2, 1420));
+        let before = ran_out.checked_sub(Duration::from_secs(1)).unwrap();
+        assert!(!stand(&mut lease, &old_chain, before) && !stand(&mut lease, &current, before), "the home holds it");
+        let gathered = ran_out + GATHER + Duration::from_millis(100);
+        assert!(!stand(&mut lease, &old_chain, gathered), "the copy on an older epoch takes nothing");
+        assert!(stand(&mut lease, &current, gathered));
+        assert_eq!((lease.kept.holder.node.as_str(), lease.kept.holder.epoch), ("followed", 3));
+    }
 }
