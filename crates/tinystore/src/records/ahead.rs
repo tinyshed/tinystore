@@ -18,7 +18,9 @@
 //! held them: a page's worth of events comes back with little more beside
 //! it. What waits to be taken back holds none of the store's memory, as a
 //! page handed back holds none. The threads are the call's own and end
-//! with it.
+//! with it, and read under its cancellation tokens: a cancel stops their
+//! reads as it stops the call's own, rather than after every range handed
+//! out was read.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -27,6 +29,7 @@ use std::thread::Scope;
 use super::engine::{Records, Stream};
 use super::event::Event;
 use super::read::{Asked, Page, Query, written};
+use crate::cancel;
 use crate::{Error, Result};
 
 /// The ranges handed out at once for each thread that reads them, so that a
@@ -34,6 +37,12 @@ use crate::{Error, Result};
 const AHEAD: usize = 2;
 /// The ranges one read of the index cuts, for each handed out at once.
 const CUT: usize = 2;
+
+/// The ranges a thread read ahead under a token of its call, which a test
+/// looks at: whether a thread reads under them shows only in a cancel that
+/// lands while it reads.
+#[cfg(test)]
+static RANGES_UNDER_TOKENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Records {
     /// The pages that follow one another from where a read stands, as one,
@@ -52,7 +61,7 @@ impl Records {
             return Ok((page, wide));
         }
         let Some(asked) = self.asked(stream, query)? else { return Ok((Page { events: Vec::new(), next: None }, 1)) };
-        let (handed, mut cut) = (Handed::default(), Cut::new(&asked));
+        let (handed, mut cut, tokens) = (Handed::default(), Cut::new(&asked), cancel::captured());
         let events = std::thread::scope(|scope| {
             let _closed = handed.closing();
             let mut threads = Threads { scope, started: 0, most: self.threads() };
@@ -66,7 +75,7 @@ impl Records {
                     && let Some(range) = cut.hand(self, wide)?
                 {
                     handed.give(range);
-                    threads.start_for(cut.out, || self.take_ranges(&handed, stream, query))?;
+                    threads.start_for(cut.out, || tokens.run(None, || self.take_ranges(&handed, stream, query)))?;
                 }
                 if cut.out == 0 {
                     return Ok(events);
@@ -90,6 +99,10 @@ impl Records {
     /// Reads the ranges handed out, one after another, until none is left.
     fn take_ranges(&self, handed: &Handed, stream: Option<&Stream>, query: &Query) {
         while let Some((place, range)) = handed.take() {
+            #[cfg(test)]
+            if cancel::in_scope() {
+                RANGES_UNDER_TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             let mut reading = Reading { handed, place, read: None };
             reading.read = Some(self.read_range(stream, query, range));
         }

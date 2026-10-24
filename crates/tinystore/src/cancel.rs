@@ -223,19 +223,20 @@ impl Drop for Given {
 }
 
 /// The tokens of this thread's call, carried to the thread that runs a read
-/// of it: an awaited read runs on the store's pool, and a token the program
-/// put around the call that made its future must stop it there.
-#[cfg(feature = "async")]
+/// of it: an awaited read runs on the store's pool, and records reads pages
+/// ahead on threads of its own, and a token the program put around the call
+/// must stop the read there.
+#[cfg(any(feature = "async", feature = "records"))]
 #[derive(Clone, Default)]
 pub(crate) struct Captured(Vec<Arc<Inner>>);
 
 /// This thread's tokens, to enter again on another.
-#[cfg(feature = "async")]
+#[cfg(any(feature = "async", feature = "records"))]
 pub(crate) fn captured() -> Captured {
     Captured(SCOPE.with(|scope| scope.try_borrow().map(|scope| scope.clone()).unwrap_or_default()))
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "async", feature = "records"))]
 impl Captured {
     /// Runs `call` on this thread under the captured tokens, and `own`
     /// innermost: the token of the awaited call itself, which its future's
@@ -247,7 +248,7 @@ impl Captured {
     }
 }
 
-#[cfg(feature = "async")]
+#[cfg(any(feature = "async", feature = "records"))]
 impl fmt::Debug for Captured {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Captured({} tokens)", self.0.len())

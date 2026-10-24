@@ -174,6 +174,31 @@ fn ranges_read_at_once_wait_for_the_stores_memory_when_it_holds_one_page_of_them
     assert_eq!(store.memory().used(), 0);
 }
 
+// contract: STORE-09
+#[test]
+fn the_threads_that_read_ahead_read_under_the_cancellation_tokens_of_their_call() {
+    use std::sync::atomic::Ordering;
+
+    let fixture = fixture();
+    let api = fixture.events("api");
+    // a head row a second, each a page of one event: a range each
+    for n in 0..12 {
+        api.event("log").at(fixture.now() - SECOND * (12 - n)).append(&serde_json::json!({ "n": n })).unwrap();
+    }
+    let list = api.list().limit(1);
+    let before = super::RANGES_UNDER_TOKENS.load(Ordering::Relaxed);
+    let token = crate::CancellationToken::new();
+    let (page, _) = token.run(|| list.read_ahead(4)).unwrap();
+    assert!((1..=4).contains(&page.events.len()), "the ranges handed out are taken back: {page:?}");
+    // without the tokens, a cancel would stop them only once every range handed out was read
+    assert!(super::RANGES_UNDER_TOKENS.load(Ordering::Relaxed) > before, "a thread read a range outside the tokens");
+
+    let cancelled = crate::CancellationToken::new();
+    cancelled.cancel();
+    let refused = cancelled.run(|| list.read_ahead(4)).unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Cancelled);
+}
+
 /// The kinds of HDFS's lines, each after how many in a hundred lines are of
 /// it: `{block}` is a block's id, `{from}` and `{to}` hosts, `{n}` a number.
 const HDFS_LINES: [(u64, &str); 9] = [
