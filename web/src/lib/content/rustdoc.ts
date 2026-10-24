@@ -239,6 +239,11 @@ class Reader {
 		if (target === undefined || target.crate_id !== 0 || skip.has(use.name)) {
 			return []
 		}
+		// the async API's module re-exports the blocking module's values, which the page lists under their own path
+		const file = (target.span?.filename ?? '').replace(/\\/g, '/')
+		if (prefix.startsWith('aio::') && !file.includes('crates/tinystore/src/aio/')) {
+			return []
+		}
 		if ('module' in target.inner) {
 			return use.is_glob ? this.#items(target, prefix, skip, rootOnly) : []
 		}

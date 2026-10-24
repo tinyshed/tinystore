@@ -137,7 +137,7 @@ impl Tail {
     /// Calls `wake` each time events arrive and when the store closes, for a
     /// reader that waits on no thread of its own: it reads with
     /// `next_within` of no time.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn wake_with(&self, wake: Waker) {
         self.records.recent.held().wakers.push((self.number, wake));
     }

@@ -102,7 +102,28 @@ on the store's threads.
 
 The store's threads are a pool of at most sixteen. TinyStore starts them as
 calls need them, ends each one after a minute without work, and stops all of
-them when the store closes.
+them when the store closes. If all sixteen are busy when a commit needs a
+thread, the commit gets a thread of its own. This matters because the busy
+threads may be waiting for the memory that the commit gives back.
+
+## What dropping a future does
+
+A future that is never polled reads and writes nothing. After its first poll:
+
+- **A read stops.** Its SQLite statement is interrupted and its reader goes
+  back at once, as if a `CancellationToken` was cancelled (contract
+  STORE-09). This is what a web handler wants when its client goes away.
+  `tokio::time::timeout(duration, call)` stops a read this way when the time
+  runs out.
+- **A write commits.** Writes share a commit, and a commit cannot stop half
+  way, so a write that was polled commits whether or not anyone still awaits
+  it (contract DUR-11). Only its answer is lost. To know that a write
+  happened, await it.
+- **A transaction runs to its end**, as a write does.
+
+A `CancellationToken` still works around a call. Make the future inside
+`token.run(...)`, and its read stops when you call `token.cancel()`: it fails
+with a cancelled error (`ErrorKind::Cancelled`).
 
 ## Transactions
 
@@ -176,11 +197,23 @@ blocking twin. A call made after its store closed fails with a closed error
 (`ErrorKind::Closed`), and so does a call that was still waiting for the
 store's threads when the store closed.
 
+There is one way to time out a call: your runtime's timeout, such as
+`tokio::time::timeout`. When it drops the future, a read stops and a write
+still commits.
+
 `store.close().await` closes the store on a thread that the call starts. It
 waits for background work, for the handlers that run and for each engine's
 last writes, so your executor's thread waits for nothing. If you drop the
 last handle instead, the store closes on the thread that drops it, which may
 be your executor's thread. Await `close` instead.
+
+## Each engine's calls
+
+Each engine's guide shows its awaited calls in a section named Async Rust:
+
+| Engine  | Guide                                                |
+|---------|------------------------------------------------------|
+| Records | [Records](../../guides/records/README.md#async-rust) |
 
 ## Why this design?
 
@@ -196,6 +229,12 @@ writer until it commits. If its closure could await other tasks, every write
 to that file would wait for them, and one slow request would stall all the
 others. A blocking closure on the store's threads keeps the writer for the
 time the transaction's own reads and writes take.
+
+**Why a polled write commits.** Writes that arrive together share one commit
+and one sync of the disk. Once a write is queued, other writes may be
+committing with it, and taking it out would mean failing them too. So a
+dropped future only stops waiting for the answer. A read is different: it
+changes nothing, so stopping it is always safe.
 
 ## See also
 

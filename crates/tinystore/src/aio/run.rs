@@ -29,10 +29,11 @@
 //! nowhere: each wait `polled::may_wait` guards refuses a point read, which
 //! runs again on the pool, and fails a submit `Internal`. Some waits no check
 //! guards yet, and an engine keeps them out of a poll itself: a search's
-//! wait for its index to settle, a records tail's wait for what arrives, a
-//! blob's sync of its directory and its retries of a rename, a channel's
-//! receive, a job's watch and a worker's wait for jobs, and the waits of a
-//! home with synchronous copies, inside a commit.
+//! wait for its index to settle, a records tail's wait for what arrives, the
+//! codec records' appends compress with, a blob's sync of its directory and
+//! its retries of a rename, a channel's receive, a job's watch and a
+//! worker's wait for jobs, and the waits of a home with synchronous copies,
+//! inside a commit.
 
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -202,8 +203,9 @@ where
     }
 }
 
-/// What hands a commit's lead to `pool`, or, once the pool stopped as its
-/// store closes, to a thread of its own: never back to the polling thread.
+/// What hands a commit's lead to `pool`, or to a thread of its own when
+/// every thread of the pool is busy or once the pool stopped as its store
+/// closes: never back to the polling thread.
 pub(crate) fn lead_on(pool: &Arc<Pool>) -> Lead {
     let pool = Arc::clone(pool);
     Arc::new(move |job| pool.run_always(job))

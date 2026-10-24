@@ -53,12 +53,12 @@ const ROLLBACK_TO: &str = own!("rollback to grouped");
 ///
 /// A write submitted from an executor's thread, inside `polled::leading_on`,
 /// hands the lead it would take to the store's pool instead, or to a thread
-/// of its own once the pool stopped, so that no sync of the disk runs where
-/// futures are polled. Until a thread of the pool takes
-/// it, the next caller who can lead takes it first: a pool whose every thread
-/// waits for this file's writer would never run the lead they wait for. So
-/// does a caller that waits for such a write's commit, through
-/// [`lead_handed`](Group::lead_handed).
+/// of its own while every thread of the pool is busy or once the pool
+/// stopped, so that no sync of the disk runs where futures are polled. Until
+/// a thread takes it, the next caller who can lead takes it first: a pool
+/// whose every thread waits for this file's writer would never run the lead
+/// they wait for. So does a caller that waits for such a write's commit,
+/// through [`lead_handed`](Group::lead_handed).
 ///
 /// A checkpoint a commit asked for runs on a caller's thread once it holds no
 /// turn: when its call returns, or when it queued a write behind a leader.

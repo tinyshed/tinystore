@@ -1,6 +1,6 @@
 # Records API for Rust
 
-Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console`, generated from its source. The [Records guide](../../guides/records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
+Every public type, trait and function of the Records engine in `tinystore::records` and `tinystore::console` and `tinystore::aio::records`, generated from its source. The [Records guide](../../guides/records/README.md) explains how to use them, and the [Bun and Node](../bun/records.md), [Python](../python/records.md) and [Go](../go/records.md) pages list the same API.
 
 ## Store
 
@@ -43,6 +43,39 @@ pub fn all_events(&self) -> Result<AllEvents>
 ```
 
 Every stream's events, to read.
+
+## aio::Store
+
+```rust
+impl aio::Store
+```
+
+### aio::Store.logger
+
+```rust
+pub fn logger(&self, stream: &str) -> LoggerBuilder<'_>
+```
+
+A logger of the stream `stream`, as `crate::Store::logger` gives
+one: a `tracing` layer whose lines go to a buffer and never wait.
+
+### aio::Store.events
+
+```rust
+pub fn events(&self, stream: &str) -> EventsBuilder<'_>
+```
+
+The stream of events `stream`, made the first time it opens, as
+`crate::Store::events` opens it: its appends and reads awaited.
+
+### aio::Store.all_events
+
+```rust
+pub fn all_events(&self) -> Result<AllEvents>
+```
+
+Every stream's events, to read. The first opens the records engine,
+a plain call made once at start, since it may migrate records.db.
 
 ## Aggregate
 
@@ -1266,5 +1299,491 @@ pub enum Format {
 
 How a console prints a line. Without one, lines are pretty on a terminal
 and JSON otherwise.
+
+## aio::records::EventsBuilder
+
+```rust
+pub struct EventsBuilder<'s> { /* private fields */ }
+```
+
+What opens a stream of events: its name, and how long it keeps them.
+
+### aio::records::EventsBuilder.keep
+
+```rust
+pub fn keep(self, keep: Duration) -> Self
+```
+
+How long the stream keeps its events, as
+`crate::records::EventsBuilder::keep` says.
+
+### aio::records::EventsBuilder.open
+
+```rust
+pub fn open(self) -> Result<Events>
+```
+
+Opens the stream: a plain call, made once at start, which may migrate
+records.db and write the stream's row the first time.
+
+## aio::records::Events
+
+```rust
+pub struct Events { /* private fields */ }
+```
+
+A stream of events: its appends wait for its file without a thread, and
+its reads run on the store's pool.
+
+### aio::records::Events.blocking
+
+```rust
+pub fn blocking(&self) -> &Events
+```
+
+The same stream, for its blocking calls.
+
+### aio::records::Events.append
+
+```rust
+pub fn append(
+    &self,
+    name: &str,
+    fields: &impl Serialize,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes an event of `name` with `fields`, a struct or a map, at the
+store's time, its fields serialized when the call is made. It answers
+once the event is written, and a read finds it at once.
+
+### aio::records::Events.event
+
+```rust
+pub fn event(&self, name: &str) -> EventCall<'_>
+```
+
+An append of one event, what it carries beside its fields before its
+verb, as `crate::records::Events::event` has.
+
+### aio::records::Events.append_all
+
+```rust
+pub fn append_all(
+    &self,
+    events: impl IntoIterator<Item = NewEvent>,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes a list of events, all of them or none, in one commit.
+
+The events are checked in the future's first poll, at most 4 MiB an
+append, and queued at records.db's writer, whose commit runs on the
+store's pool. Up to 256 KiB, a head row's worth, they are cut into rows
+and compressed in that poll too; a heavier append, or one that comes
+while another compresses, is compressed on the pool. When the store's
+memory has no room for them yet, the append waits for it on no thread,
+and is compressed on the pool once the room comes. Once polled, the
+events commit and reach every tail open, whether or not anyone still
+awaits them.
+
+### aio::records::Events.list
+
+```rust
+pub fn list(&self) -> List
+```
+
+The stream's events, found by the conditions the answer adds.
+
+### aio::records::Events.lines
+
+```rust
+pub fn lines(&self) -> Result<Lines>
+```
+
+A writer of another program's output, as
+`crate::records::Events::lines` opens one: a write never waits, and
+a flush is awaited.
+
+## aio::records::EventCall
+
+```rust
+pub struct EventCall<'e> { /* private fields */ }
+```
+
+One event on its way into a stream.
+
+### aio::records::EventCall.at
+
+```rust
+pub fn at(self, at: SystemTime) -> Self
+```
+
+Its time, from as long ago as the stream keeps to ten minutes ahead
+of the store's clock.
+
+### aio::records::EventCall.level
+
+```rust
+pub fn level(self, level: Level) -> Self
+```
+
+### aio::records::EventCall.message
+
+```rust
+pub fn message(self, message: &str) -> Self
+```
+
+### aio::records::EventCall.context
+
+```rust
+pub fn context(self, context: &impl Serialize) -> Self
+```
+
+What it happened in: who asked, which request.
+
+### aio::records::EventCall.trace
+
+```rust
+pub fn trace(self, trace_id: TraceId, span_id: SpanId) -> Self
+```
+
+### aio::records::EventCall.append
+
+```rust
+pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes the event with `fields`, as `Events::append_all` writes one.
+
+## aio::records::AllEvents
+
+```rust
+pub struct AllEvents { /* private fields */ }
+```
+
+Every stream's events, to read.
+
+### aio::records::AllEvents.blocking
+
+```rust
+pub fn blocking(&self) -> &AllEvents
+```
+
+The same events, for their blocking calls.
+
+### aio::records::AllEvents.list
+
+```rust
+pub fn list(&self) -> List
+```
+
+The events of every stream, or of those `streams` names, found by
+the conditions the answer adds.
+
+### aio::records::AllEvents.streams
+
+```rust
+pub fn streams(&self) -> impl Future<Output = Result<Vec<StreamInfo>>> + Send + 'static
+```
+
+Every stream with events, by name, as
+`crate::records::AllEvents::streams` lists them.
+
+### aio::records::AllEvents.poll
+
+```rust
+pub fn poll(&self, cursor: Option<&str>) -> impl Future<Output = Result<PollBatch>> + Send + 'static
+```
+
+Every packed event once, a batch a call, 1000 at most, from `cursor`,
+as `crate::records::AllEvents::poll` gives them: an empty batch at
+once when nothing past the cursor is packed. A dropped poll leaves the
+cursor the program keeps as it was.
+
+### aio::records::AllEvents.poll_limit
+
+```rust
+pub fn poll_limit(
+    &self,
+    cursor: Option<&str>,
+    limit: usize,
+) -> impl Future<Output = Result<PollBatch>> + Send + 'static
+```
+
+As `poll`, `limit` events at most, 10,000 at the most.
+
+### aio::records::AllEvents.damaged
+
+```rust
+pub fn damaged(&self) -> impl Future<Output = Result<Vec<Damage>>> + Send + 'static
+```
+
+What reads, packing, merges and polls met that no longer reads, as
+`crate::records::AllEvents::damaged` lists it.
+
+### aio::records::AllEvents.drop
+
+```rust
+pub fn drop(&self, damage: &Damage) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Removes a head row or a segment that no longer reads, as
+`crate::records::AllEvents::drop` does, on the store's pool: it
+reads the part again under maintenance's lock, then writes its
+removal. Once polled it runs to its end, as a write does.
+
+## aio::records::List
+
+```rust
+pub struct List { /* private fields */ }
+```
+
+A read being asked: every condition narrows it, and an awaited call runs
+it on the store's pool.
+
+### aio::records::List.since
+
+```rust
+pub fn since(self, span: Duration) -> Self
+```
+
+The span before now the range covers; or `from` and `to`.
+
+### aio::records::List.from
+
+```rust
+pub fn from(self, at: SystemTime) -> Self
+```
+
+The range's start, which is in it.
+
+### aio::records::List.to
+
+```rust
+pub fn to(self, at: SystemTime) -> Self
+```
+
+The range's end, which is not in it.
+
+### aio::records::List.streams
+
+```rust
+pub fn streams<S: Into<String>>(self, streams: impl IntoIterator<Item = S>) -> Self
+```
+
+Any of these streams, for a read of every stream.
+
+### aio::records::List.names
+
+```rust
+pub fn names<S: Into<String>>(self, names: impl IntoIterator<Item = S>) -> Self
+```
+
+Any of these names: `["log"]` is the lines.
+
+### aio::records::List.min_level
+
+```rust
+pub fn min_level(self, level: Level) -> Self
+```
+
+This level and worse. An event without a level is not found.
+
+### aio::records::List.trace_id
+
+```rust
+pub fn trace_id(self, trace_id: TraceId) -> Self
+```
+
+### aio::records::List.filter
+
+```rust
+pub fn filter(self, key: &str, value: &impl Serialize) -> Self
+```
+
+`key` with this value, at the top of an event's fields or of its
+context, by the JSON the value is written as.
+
+### aio::records::List.search
+
+```rust
+pub fn search(self, text: &str) -> Self
+```
+
+This text as a phrase, its case ignored.
+
+### aio::records::List.newest
+
+```rust
+pub fn newest(self) -> Self
+```
+
+Newest first; oldest first without it.
+
+### aio::records::List.limit
+
+```rust
+pub fn limit(self, events: usize) -> Self
+```
+
+The events of a page: 1000, and 10,000 at most.
+
+### aio::records::List.after
+
+```rust
+pub fn after(self, next: &str) -> Self
+```
+
+A page's `next`, with the rest of the read as it was.
+
+### aio::records::List.page
+
+```rust
+pub fn page(&self) -> impl Future<Output = Result<Page>> + Send + 'static
+```
+
+One page, from one moment of the file, as
+`crate::records::List::page` reads it.
+
+### aio::records::List.field_names
+
+```rust
+pub fn field_names(&self) -> impl Future<Output = Result<Vec<String>>> + Send + 'static
+```
+
+The keys the events of the read's range hold, sorted, as
+`crate::records::List::field_names` gives them.
+
+### aio::records::List.field_names_prefix
+
+```rust
+pub fn field_names_prefix(
+    &self,
+    prefix: &str,
+) -> impl Future<Output = Result<Vec<String>>> + Send + 'static
+```
+
+The keys `field_names` gives that begin with `prefix`.
+
+### aio::records::List.count
+
+```rust
+pub fn count(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+How many events the read finds. It walks every page of the read on
+one thread of the store's pool, several at once while they hold few
+events; a drop stops the walk at the page it reads.
+
+### aio::records::List.top
+
+```rust
+pub fn top(&self, key: &str) -> impl Future<Output = Result<Vec<Top>>> + Send + 'static
+```
+
+The most frequent values of `key` and how many events hold each, as
+`crate::records::List::top` counts them, walking the read as
+`count` does.
+
+### aio::records::List.aggregate
+
+```rust
+pub fn aggregate(
+    &self,
+    aggregate: &Aggregate,
+) -> impl Future<Output = Result<Vec<Row>>> + Send + 'static
+```
+
+A row for each span and each value of the keys `by` names, as
+`crate::records::List::aggregate` makes them, walking the read as
+`count` does.
+
+### aio::records::List.tail
+
+```rust
+pub fn tail(&self) -> Result<Tail>
+```
+
+The events appended from now on that meet the read's conditions, a
+batch as they come, as `crate::records::List::tail` opens a tail:
+a plain call, which checks the read and opens the tail.
+
+### aio::records::List.all
+
+```rust
+pub fn all(self) -> All
+```
+
+Every event of the answer, as a stream: a page's worth at a time, read
+on the store's pool once the stream has given the last, never sooner.
+A cancellation token around this call stops its reads as one around a
+blocking read does.
+
+## aio::records::All
+
+```rust
+pub struct All { /* private fields */ }
+```
+
+Every event of an answer, a `Stream` that reads a page's worth on the
+store's pool each time it has given the last. Dropped while a page is
+read, that read stops as a dropped read does.
+
+## aio::records::Tail
+
+```rust
+pub struct Tail { /* private fields */ }
+```
+
+The events appended after a tail opened that meet its read, a `Stream`
+of batches that waits on no thread: each append that brings events wakes
+it from the thread that committed them, and the batch is taken in the
+poll, from the store's hold of its last megabyte of events. It ends when
+the store closes, and dropped, the tail closes.
+
+A wait with a bound is the runtime's: `tokio::time::timeout(d,
+tail.next())` ends the wait and keeps the tail open.
+
+## aio::records::Lines
+
+```rust
+pub struct Lines { /* private fields */ }
+```
+
+A writer of another program's lines into a stream: a write goes to its
+buffer and never waits, and a flush is awaited. Dropped, it hands over
+what it holds, a last line without its newline too, which the store
+writes within a second.
+
+It is no `std::io::Write`, whose flush would block the executor's thread.
+
+### aio::records::Lines.write
+
+```rust
+pub fn write(&mut self, bytes: &[u8]) -> Result<()>
+```
+
+Takes a piece of output: each line it ends becomes an event. It never
+waits, and fails only once the writer or its store closed.
+
+### aio::records::Lines.flush
+
+```rust
+pub fn flush(&mut self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes the events of every line ended so far, and answers once they
+are written; a line without its newline yet stays. It runs on the
+store's pool, and once polled runs to its end, as a write does.
+
+### aio::records::Lines.dropped
+
+```rust
+pub fn dropped(&self) -> u64
+```
+
+The lines dropped since the writer began: a full buffer, a line
+longer than an event holds, one the file refused.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

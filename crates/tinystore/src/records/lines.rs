@@ -86,10 +86,19 @@ impl Lines {
         self.writer.buffer.dropped()
     }
 
-    /// Takes a piece of output as a write does, for a client's writer.
-    #[cfg(feature = "wire")]
+    /// Takes a piece of output as a write does, for a client's writer and the
+    /// async API's.
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn take(&self, bytes: &[u8]) -> Result<()> {
         self.writer.write(bytes)
+    }
+
+    /// What `flush` does, to run on a thread that may wait: the async API's
+    /// flush runs it on the store's pool.
+    #[cfg(feature = "async")]
+    pub(crate) fn flushing(&self) -> impl FnOnce() -> Result<()> + Send + 'static {
+        let writer = Arc::clone(&self.writer);
+        move || writer.flush()
     }
 
     /// Hands over every line, a last one without its newline too, writes
@@ -113,9 +122,7 @@ impl io::Write for Lines {
     /// Writes the events of every line ended so far, and waits for them; a
     /// line without its newline yet stays.
     fn flush(&mut self) -> io::Result<()> {
-        let joining = self.writer.lock().pending.take();
-        self.writer.hand_over_now(joining);
-        self.writer.buffer.write_waiting(false).map_err(io::Error::other)
+        self.writer.flush().map_err(io::Error::other)
     }
 }
 
@@ -229,6 +236,14 @@ impl LineWriter {
     /// what waited before it asked its writers.
     fn hand_over_now(&self, events: impl IntoIterator<Item = Pending>) {
         events.into_iter().for_each(|event| self.buffer.keep_past_bound(self.event_of(event)));
+    }
+
+    /// Writes the events of every line ended so far, and waits for them; a
+    /// line without its newline yet stays.
+    fn flush(&self) -> Result<()> {
+        let joining = self.lock().pending.take();
+        self.hand_over_now(joining);
+        self.buffer.write_waiting(false)
     }
 
     /// Hands over an event that did not grow since the flush before.

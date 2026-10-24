@@ -21,7 +21,7 @@ mod engine;
 mod event;
 mod events;
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzzing;

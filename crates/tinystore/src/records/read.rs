@@ -329,6 +329,21 @@ pub struct All {
     wide: usize,
 }
 
+#[cfg(feature = "async")]
+impl All {
+    /// The events of the next page that holds any, as the iterator would give
+    /// them one by one: the async API's stream takes a page's worth in one
+    /// job of the store's pool. None once the answer has no more, and an
+    /// error once, as the iterator gives it.
+    pub(crate) fn page(&mut self) -> Option<Result<Vec<Event>>> {
+        let first = match self.next()? {
+            Ok(first) => first,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(Ok(std::iter::once(first).chain(self.page.by_ref()).collect()))
+    }
+}
+
 impl Iterator for All {
     type Item = Result<Event>;
 

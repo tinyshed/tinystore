@@ -32,10 +32,10 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
 /// Where a commit runs that a write submitted inside [`leading_on`] would
-/// lead: a thread of the store's pool, or one of its own once the pool
-/// stopped. A job dropped unrun, as only a system that starts no thread
-/// makes one, leads where it is dropped, since the writes queued behind the
-/// lead have no other leader.
+/// lead: a thread of the store's pool, or one of its own while every thread
+/// of the pool is busy or once the pool stopped. A job dropped unrun, as only
+/// a system that starts no thread makes one, leads where it is dropped, since
+/// the writes queued behind the lead have no other leader.
 pub(crate) type Lead = Arc<dyn Fn(Job) + Send + Sync>;
 
 #[cfg(feature = "async")]

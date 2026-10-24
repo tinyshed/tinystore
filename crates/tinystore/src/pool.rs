@@ -20,7 +20,8 @@ use crate::engine::{Engine, Host};
 
 /// Threads the pool runs at most: a write blocks its thread until its group
 /// commits, and the threads waiting together are the writes one commit can
-/// carry.
+/// carry. A job that must run, a commit's lead, finds as many again beside
+/// them when these are all busy (`Pool::run_always`).
 pub(crate) const MOST: usize = 16;
 /// How long a thread that found no job looks for the next before it sleeps.
 /// Waking a thread that sleeps costs more than a point read, and under a
@@ -33,8 +34,8 @@ const LINGER: Duration = Duration::from_micros(200);
 const RETIRE_AFTER: Duration = Duration::from_secs(60);
 /// The name of every thread of the pool.
 pub(crate) const THREAD: &str = "tinystore-pool";
-/// The name of the thread a job that must run starts of its own once the
-/// pool stopped.
+/// The name of the thread a job that must run starts of its own, while every
+/// thread of the pool is busy or once the pool stopped.
 #[cfg(feature = "async")]
 pub(crate) const ALONE: &str = "tinystore-alone";
 
@@ -85,6 +86,14 @@ struct Queue {
     /// job waiting, so a job they will take starts no thread more.
     coming: usize,
     stopped: bool,
+    /// Jobs that must run, given while every thread was busy, which the
+    /// threads started for them take in order: never a thread of the pool's
+    /// most, which may all wait for what one of these frees.
+    #[cfg(feature = "async")]
+    musts: VecDeque<Job>,
+    /// The threads started for them, at most [`MOST`].
+    #[cfg(feature = "async")]
+    alone: usize,
 }
 
 impl Pool {
@@ -180,24 +189,84 @@ impl Pool {
         drop(self.enqueue(job));
     }
 
-    /// Runs `job` on a thread of the pool, or on a thread of its own once the
-    /// store's pool stopped: for work that must run whoever waits for it, as
-    /// a commit's lead, which the writes queued behind it wait for, while its
-    /// store closes. Only a system that starts no thread drops it unrun.
+    /// Runs `job` on a thread of the pool, or, when it would wait there for a
+    /// job under way to end, on a thread started for it: for work that must
+    /// run whoever waits for it, as a commit's lead, which the writes queued
+    /// behind it wait for. Only a system that starts no thread drops it
+    /// unrun; once the pool stopped, as its store closes, it runs alone too.
+    ///
+    /// Every thread of the pool may wait for what such a job frees. Sixteen
+    /// records reads parked for the memory an awaited append holds until it
+    /// commits would wait their ten seconds of patience out, and fail
+    /// `Limit`, while the lead of that commit waited behind them in the
+    /// queue. A blocking append leads its own commit, and never waits so.
     #[cfg(feature = "async")]
     pub(crate) fn run_always(self: &Arc<Self>, job: Job) {
-        if let Some(job) = self.enqueue(job) {
+        let mut queue = self.lock();
+        if queue.stopped {
+            drop(queue);
             let _ = thread::Builder::new().name(ALONE.to_owned()).spawn(job);
+            return;
         }
+        if !queue.busy() {
+            return self.push(queue, job);
+        }
+        queue.musts.push_back(job);
+        // a thread started for them takes it once it ends the one it runs
+        if queue.alone == MOST {
+            return;
+        }
+        queue.alone += 1;
+        drop(queue);
+        self.start_alone();
+    }
+
+    /// Starts a thread that runs the jobs that must run until none is left,
+    /// joined at the close as the pool's are.
+    #[cfg(feature = "async")]
+    fn start_alone(self: &Arc<Self>) {
+        let pool = Arc::clone(self);
+        match thread::Builder::new().name(ALONE.to_owned()).spawn(move || pool.run_musts()) {
+            Ok(handle) => self.keep(handle),
+            // Dropped unrun once no thread is left for them: each lead then
+            // leads where it is dropped, here, since nobody else would.
+            Err(_) => {
+                let mut queue = self.lock();
+                queue.alone -= 1;
+                let unrun = if queue.alone == 0 { std::mem::take(&mut queue.musts) } else { VecDeque::new() };
+                drop(queue);
+                drop(unrun);
+            }
+        }
+    }
+
+    /// Runs the jobs that must run, in order, until none waits. A job that
+    /// panics ends alone, and the thread goes on.
+    #[cfg(feature = "async")]
+    fn run_musts(&self) {
+        let mut queue = self.lock();
+        while let Some(job) = queue.musts.pop_front() {
+            drop(queue);
+            let _ = catch_unwind(AssertUnwindSafe(job));
+            queue = self.lock();
+        }
+        queue.alone -= 1;
     }
 
     /// Queues `job` for a thread of the pool, or hands it back once the pool
     /// stopped.
     fn enqueue(self: &Arc<Self>, job: Job) -> Option<Job> {
-        let mut queue = self.lock();
+        let queue = self.lock();
         if queue.stopped {
             return Some(job);
         }
+        self.push(queue, job);
+        None
+    }
+
+    /// Queues `job` and gets a thread to it: the one that lingers, one
+    /// started, or one that sleeps, woken.
+    fn push(self: &Arc<Self>, mut queue: MutexGuard<'_, Queue>, job: Job) {
         queue.jobs.push_back(job);
         self.waiting.store(queue.jobs.len(), Ordering::Release);
         let taken = queue.lingering && queue.jobs.len() == 1;
@@ -205,27 +274,20 @@ impl Pool {
             queue.started += 1;
             queue.coming += 1;
             drop(queue);
-            self.start();
-            return None;
+            return self.start();
         }
         let wakes = queue.wakes_one();
         drop(queue);
         if wakes {
             self.ready.notify_one();
         }
-        None
     }
 
     fn start(self: &Arc<Self>) {
         let pool = Arc::clone(self);
         let spawned = thread::Builder::new().name(THREAD.to_owned()).spawn(move || pool.work());
         match spawned {
-            Ok(handle) => {
-                let mut threads = self.threads.lock().unwrap_or_else(PoisonError::into_inner);
-                // a thread that ended idle is joined here, or the list grows with every burst
-                threads.retain(|thread| !thread.is_finished());
-                threads.push(handle);
-            }
+            Ok(handle) => self.keep(handle),
             // the jobs queued wait for a thread already running, or for the next start
             Err(_) => {
                 let mut queue = self.lock();
@@ -233,6 +295,14 @@ impl Pool {
                 queue.coming -= 1;
             }
         }
+    }
+
+    /// Keeps a thread started for the close to join.
+    fn keep(&self, handle: JoinHandle<()>) {
+        let mut threads = self.threads.lock().unwrap_or_else(PoisonError::into_inner);
+        // a thread that ended idle is joined here, or the list grows with every burst
+        threads.retain(|thread| !thread.is_finished());
+        threads.push(handle);
     }
 
     fn work(self: &Arc<Self>) {
@@ -310,6 +380,15 @@ impl Queue {
     fn lingers_until(&self, linger: Duration) -> Option<Instant> {
         let until = self.emptied? + linger;
         (self.dense && !self.lingering && Instant::now() < until).then_some(until)
+    }
+
+    /// Whether a job queued now would wait for one under way to end: the pool
+    /// runs its most threads, and those that sleep, look for jobs or are on
+    /// their way take the jobs queued before it.
+    #[cfg(feature = "async")]
+    fn busy(&self) -> bool {
+        let free = self.idle + self.coming + usize::from(self.lingering);
+        self.started >= MOST && self.jobs.len() >= free
     }
 
     /// Whether to wake a thread: a job waits, a thread sleeps, and no thread
@@ -566,6 +645,70 @@ mod tests {
         };
         dropped.recv_timeout(Duration::from_secs(10)).expect("the close dropped the job under the lines' lock");
         closing.join().unwrap();
+    }
+
+    /// What a job waits for until another job frees it, ten seconds at most:
+    /// a read parked for the memory a commit gives back.
+    #[cfg(feature = "async")]
+    #[derive(Default)]
+    struct Freed {
+        free: Mutex<bool>,
+        changed: Condvar,
+    }
+
+    #[cfg(feature = "async")]
+    impl Freed {
+        fn free(&self) {
+            *self.free.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+
+        /// Says whether it was freed before the ten seconds were out.
+        fn wait(&self) -> bool {
+            let free = self.free.lock().unwrap();
+            let waited = self.changed.wait_timeout_while(free, Duration::from_secs(10), |free| !*free).unwrap();
+            !waited.1.timed_out()
+        }
+    }
+
+    // contract: STORE-10
+    #[cfg(feature = "async")]
+    #[test]
+    fn a_job_that_must_run_while_every_thread_waits_for_it_runs_on_a_thread_of_its_own() {
+        let pool = lingering(LINGER);
+        let (freed, (running, ran), (ended, waited)) = (Arc::new(Freed::default()), mpsc::channel(), mpsc::channel());
+        for _ in 0..MOST {
+            let (freed, running, ended) = (Arc::clone(&freed), running.clone(), ended.clone());
+            pool.run(Box::new(move || {
+                running.send(()).unwrap();
+                ended.send(freed.wait()).unwrap();
+            }));
+        }
+        for _ in 0..MOST {
+            ran.recv_timeout(Duration::from_secs(10)).expect("every thread of the pool runs a job");
+        }
+        assert!(pool.lock().busy());
+
+        // a commit's lead, which frees them all
+        let (named, name) = mpsc::channel();
+        let frees = Arc::clone(&freed);
+        pool.run_always(Box::new(move || {
+            named.send(thread::current().name().map(str::to_owned)).unwrap();
+            frees.free();
+        }));
+        let ran_on = name.recv_timeout(Duration::from_secs(5)).expect("the lead waited behind the jobs it frees");
+        assert_eq!(ran_on.as_deref(), Some(ALONE));
+        for _ in 0..MOST {
+            assert!(waited.recv_timeout(Duration::from_secs(10)).unwrap(), "a job waited its patience out");
+        }
+        wait_until("the thread started for the lead lived on", |queue| queue.alone == 0, &pool);
+
+        // with a thread of the pool free, a lead runs there
+        wait_until("no thread of the pool came back", |queue| !queue.busy(), &pool);
+        let (named, name) = mpsc::channel();
+        pool.run_always(Box::new(move || named.send(thread::current().name().map(str::to_owned)).unwrap()));
+        assert_eq!(name.recv_timeout(Duration::from_secs(10)).unwrap().as_deref(), Some(THREAD));
+        pool.close().unwrap();
     }
 
     #[test]

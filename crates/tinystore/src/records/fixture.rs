@@ -57,6 +57,22 @@ impl Fixture {
         Records::of(&self.store).unwrap()
     }
 
+    /// Holds the codec every append compresses with on a thread of its own,
+    /// as an append compressing its rows does, until the sender it returns
+    /// is dropped, or five seconds passed.
+    #[cfg(feature = "async")]
+    pub(crate) fn hold_codec(&self) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (records, (release, released), (holding, held)) =
+            (self.records(), std::sync::mpsc::channel::<()>(), std::sync::mpsc::channel());
+        let holder = std::thread::spawn(move || {
+            let _codec = records.codec.lock().unwrap();
+            holding.send(()).unwrap();
+            let _ = released.recv_timeout(Duration::from_secs(5));
+        });
+        held.recv().unwrap();
+        (release, holder)
+    }
+
     /// Rows of a table of records.db, counted on a reader.
     pub(crate) fn rows(&self, table: &str) -> i64 {
         let sql = format!("select count(*) from {table}");

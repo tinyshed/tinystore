@@ -54,8 +54,25 @@
 //! future, so an executor's thread never waits on the disk. The pool is the
 //! store's own threads, at most sixteen, started as calls need them, each
 //! ended after a minute without work and all of them stopped when the store
-//! closes. A future does nothing before its first poll: one made and dropped
-//! unpolled runs nothing.
+//! closes. A commit that finds all sixteen busy runs on a thread started for
+//! it, since they may all wait for what it frees: the memory its writes hold.
+//!
+//! # Dropping a future
+//!
+//! A future does nothing before its first poll: one made and dropped unpolled
+//! reads and writes nothing. After that:
+//!
+//! - **A read whose future is dropped stops**: its statement is interrupted
+//!   and its reader goes back at once, as a [`CancellationToken`]'s cancel
+//!   stops it. `tokio::time::timeout(d, call)` stops a read this way when it
+//!   expires, and a token around the call that makes a future,
+//!   `token.run(|| api.list().count())`, still stops it, `Cancelled`.
+//! - **A write that was polled commits** whether or not anyone still awaits
+//!   it, since a grouped commit cannot stop half-way: only its answer is lost.
+//!   To know that a write happened, await it.
+//! - A transaction that was polled runs to its end, as a write does.
+//!
+//! [`CancellationToken`]: crate::CancellationToken
 //!
 //! On a node that copies a file from its home, a write passed on to the home
 //! waits for its answer on a thread of its own rather than the pool's, and so
