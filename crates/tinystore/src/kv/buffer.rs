@@ -7,8 +7,8 @@
 //! memory does, so that memory holds what is busy and not every key ever seen.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use super::engine::{Kv, next_version};
 use super::path::is_under;
@@ -23,6 +23,13 @@ const MOST_HELD: usize = 100_000;
 
 /// Counters one commit of a flush writes.
 const BATCH: usize = 10_000;
+
+/// How long a step tried in an awaited call's poll tries again for memory
+/// another call holds, before it goes to the pool: long enough for another
+/// step, which changes one counter, and far shorter than a flush's scan of up
+/// to [`MOST_HELD`] counters or a clear's commit. A step descheduled while it
+/// holds memory holds it longer, and the poll goes to the pool then too.
+const TRIES_FOR: Duration = Duration::from_micros(20);
 
 pub(crate) struct Buffer {
     bucket: i64,
@@ -83,6 +90,14 @@ impl Buffer {
         self.lock().counters.len()
     }
 
+    /// Runs `call` while memory is held, as by a step whose thread was
+    /// descheduled meanwhile.
+    #[cfg(all(test, feature = "async"))]
+    pub(crate) fn while_held<T>(&self, call: impl FnOnce() -> T) -> T {
+        let _held = self.lock();
+        call()
+    }
+
     pub(crate) fn every(&self) -> Duration {
         self.every
     }
@@ -100,19 +115,21 @@ impl Buffer {
     ) -> Result<T> {
         loop {
             let evictions = {
-                let mut held = self.lock();
+                let mut held = self.lock_now()?;
                 if let Some(counter) = held.counters.get_mut(path) {
                     return counter.apply(now, change);
                 }
                 held.evictions
             };
             let loaded = self.load(kv, path, now)?;
-            let mut held = self.lock();
+            let mut held = self.lock_now()?;
             if held.evictions != evictions {
                 continue;
             }
             if !held.counters.contains_key(path) && held.counters.len() >= held.most {
                 drop(held);
+                // an awaited step in memory runs its flush on the pool, with the step again after it
+                crate::polled::may_wait(|| "kv: counters in memory flushed before a step".to_owned())?;
                 self.flush(kv)?;
                 continue;
             }
@@ -122,7 +139,7 @@ impl Buffer {
 
     /// The counter at `path` at `now`, from memory or else the file.
     pub(crate) fn get(&self, kv: &Kv, path: &[u8], now: i64) -> Result<Option<Live>> {
-        if let Some(counter) = self.lock().counters.get(path) {
+        if let Some(counter) = self.lock_now()?.counters.get(path) {
             return Ok(counter.live(now));
         }
         Ok(self.load(kv, path, now)?.live(now))
@@ -233,6 +250,28 @@ impl Buffer {
 
     fn lock(&self) -> MutexGuard<'_, Held> {
         lock(&self.held)
+    }
+
+    /// Memory, for a step or a read. In a point read tried in a poll, it is
+    /// tried again for [`TRIES_FOR`] at most while another call holds it,
+    /// then refused, to run again on the pool: the poll waits out another
+    /// step rather than hop, and leaves a flush's scan or a clear's commit to
+    /// the pool to wait out.
+    fn lock_now(&self) -> Result<MutexGuard<'_, Held>> {
+        if !crate::polled::waits_refused() {
+            return Ok(self.lock());
+        }
+        let given_up = Instant::now() + TRIES_FOR;
+        loop {
+            match self.held.try_lock() {
+                Ok(held) => return Ok(held),
+                Err(TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) if Instant::now() >= given_up => {
+                    return Err(crate::polled::refused(|| "kv: counters in memory another call holds".to_owned()));
+                }
+                Err(TryLockError::WouldBlock) => std::thread::yield_now(),
+            }
+        }
     }
 }
 

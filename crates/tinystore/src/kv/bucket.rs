@@ -323,6 +323,23 @@ impl<V: Value> Bucket<V> {
         })
     }
 
+    /// `take` with `options`, without waiting: `done` gets the value once the
+    /// commit ends. A value that no longer reads as `V` fails it, and stays.
+    #[cfg(feature = "async")]
+    pub(crate) fn take_then(
+        &self,
+        key: &str,
+        options: WriteOptions,
+        done: impl FnOnce(Result<Option<V>>) + Send + 'static,
+    ) {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            let decoded = |cell: Result<Option<Cell>>| cell?.map(|cell| decode::<V>(&cell.raw)).transpose();
+            return self.take_cell_then(key, options, move |cell| done(decoded(cell)));
+        }
+        self.scope.submit_made(key, 0, self.take_work(key, options), done);
+    }
+
     pub(crate) fn take_work(&self, key: &str, options: WriteOptions) -> Result<impl Work<Option<V>> + use<V>> {
         let take = self.take_cell_work(key, options)?;
         Ok(move |tx: &Tx<'_>, revision: &Revision| {
@@ -411,7 +428,7 @@ impl<V> Bucket<V> {
     }
 
     /// `clear` without waiting for its commit.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.is_copy() {
@@ -440,7 +457,7 @@ impl<V> Bucket<V> {
     }
 
     /// `put_raw` without waiting: `done` gets the stamp once the commit ends.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn put_raw_then(
         &self,
         key: &str,
@@ -521,7 +538,7 @@ impl<V> Bucket<V> {
     }
 
     /// `remove` without waiting: `done` hears once the commit ends.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn remove_then(
         &self,
         key: &str,
@@ -536,7 +553,7 @@ impl<V> Bucket<V> {
     }
 
     /// `expire_as` without waiting: `done` hears once the commit ends.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn expire_then(
         &self,
         key: &str,
@@ -565,8 +582,8 @@ impl<V> Bucket<V> {
     }
 
     /// `take_cell_work` without waiting: `done` gets the cell once the commit
-    /// ends.
-    #[cfg(feature = "wire")]
+    /// ends. The async API takes through it on a copy alone.
+    #[cfg(any(feature = "wire", all(feature = "async", feature = "replication")))]
     pub(crate) fn take_cell_then(
         &self,
         key: &str,
@@ -713,6 +730,8 @@ impl<V> Bucket<V> {
         match self.scope.write(key, 0, at_once) {
             Ok(true) => cell.expires = Some(renewal.until),
             Ok(false) => {}
+            // a point read refused its write here runs again on the pool, which renews the key
+            Err(_) if crate::polled::waits_refused() => {}
             Err(_) => renewals.ask(self.scope.id, path, renewal),
         }
         cell
@@ -919,7 +938,7 @@ impl<V> Bucket<V> {
 
     /// `pass_on` without waiting, on a thread of its own: `done` gets what
     /// `read` makes of the answer.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     fn pass_on_then<T: Send + 'static>(
         &self,
         key: &str,
@@ -927,9 +946,16 @@ impl<V> Bucket<V> {
         read: impl FnOnce(&[u8]) -> Result<T> + Send + 'static,
         done: impl FnOnce(Result<T>) + Send + 'static,
     ) {
-        let bucket = Bucket::<()> { encrypted: self.encrypted.clone(), ..Bucket::new(self.scope.clone(), self.expiry) };
-        let key = key.to_owned();
+        let (bucket, key) = (self.untyped(), key.to_owned());
         std::thread::spawn(move || done(bucket.pass_on(&key, call).and_then(|bytes| read(&bytes))));
+    }
+}
+
+impl<V> Bucket<V> {
+    /// The same bucket as rows, whose calls make no value of `V`.
+    #[cfg(any(all(feature = "wire", feature = "replication"), feature = "async"))]
+    pub(crate) fn untyped(&self) -> Bucket<()> {
+        Bucket { encrypted: self.encrypted.clone(), ..Bucket::new(self.scope.clone(), self.expiry) }
     }
 }
 

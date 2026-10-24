@@ -76,6 +76,37 @@ refused request may try again as `retryAt` (`retry_at`, `RetryAt`).
   but a window's last uses and the next one's first pass within seconds. One
   use at 0 s, four at 58 s and five at 61 s all pass: nine in three seconds.
 
+## Async Rust
+
+With the `async` feature, `aio`'s rate limits decide the same way, and you
+await each call. In Bun, Node and Python every call is already awaited, and
+in Go a call blocks its goroutine, so this section shows only Rust.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let api = store.rate_limit("api").rate(100, Duration::from_secs(1)).burst(20).open()?;
+
+let answer = api.allow(&user_id).await?; // decided in memory, in its first poll
+if !answer.ok {
+    return Ok(too_many_requests(answer.retry_at));
+}
+```
+
+A rate limit keeps its times in memory, so `allow`, `allow_n`, `peek` and
+`reset` answer in their future's first poll. When memory does not hold a key
+yet, the call reads it from `kv.db` first, on the store's threads if the read
+would wait. Once its future was polled, an `allow` or a `reset` takes effect
+even if you drop the future (contract DUR-11).
+
+On a node that copies `kv.db`, `allow`, `allow_n` and `reset` ask the file's
+home and wait for its answer on a thread that TinyStore starts for the call.
+`peek` reads the node's copy. Either way, the thread that polls the call
+never waits.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

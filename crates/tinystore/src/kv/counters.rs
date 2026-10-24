@@ -98,7 +98,7 @@ impl Counters {
         let key = key.text();
         #[cfg(feature = "replication")]
         if self.scope.kv.file().is_copy() {
-            if self.buffer.is_none() && self.scope.kv.lent_by().is_none() {
+            if self.queued_on_a_copy() {
                 return self.add_queued_here(&key, n);
             }
             return forward::sum(&self.pass_on(&key, &forward::Call::Add(n))?);
@@ -119,7 +119,7 @@ impl Counters {
     /// `add` without waiting for its commit: `done` gets the sum on the
     /// thread that commits it. Counters kept in memory answer before this
     /// returns.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn add_then(&self, key: &str, n: i64, done: impl FnOnce(Result<i64>) + Send + 'static) {
         if self.buffer.is_some() || self.on_a_copy() {
             return done(self.add(key, n));
@@ -128,7 +128,7 @@ impl Counters {
     }
 
     /// `delete` without waiting for its commit.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn delete_then(&self, key: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
         if self.buffer.is_some() || self.on_a_copy() {
             return done(self.delete(key));
@@ -187,14 +187,46 @@ impl Counters {
         cleared.map_err(|error| error.within(self.scope.shown_branch()))
     }
 
+    /// `clear` without waiting for its commit, for counters written each add
+    /// on the file's home. Counters kept in memory hold that memory across
+    /// their clear's commit, and a copy's clear blocks on its home: both are
+    /// answered before this returns.
+    #[cfg(feature = "async")]
+    pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
+        if self.buffer.is_some() || self.on_a_copy() {
+            return done(self.clear());
+        }
+        let work = match clear_work(&self.scope) {
+            Ok(work) => work,
+            Err(error) => return done(Err(error)),
+        };
+        let (revision, shown) = (self.scope.kv.revision(), self.scope.shown_branch());
+        let answered = move |cleared: Result<()>| done(cleared.map_err(|error| error.within(shown)));
+        self.scope.kv.file().submit(0, move |tx| work(tx, &revision), answered);
+    }
+
+    /// Whether the counters are kept in memory between flushes.
+    #[cfg(feature = "async")]
+    pub(crate) fn in_memory(&self) -> bool {
+        self.buffer.is_some()
+    }
+
     /// Whether the counters' file is a copy, whose writes block on their home
     /// rather than queue for a commit here.
-    #[cfg(feature = "wire")]
-    fn on_a_copy(&self) -> bool {
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn on_a_copy(&self) -> bool {
         #[cfg(feature = "replication")]
         return self.scope.kv.file().is_copy();
         #[cfg(not(feature = "replication"))]
         false
+    }
+
+    /// Whether an add on a copy is queued on this node and answered at once,
+    /// rather than passed on to the home and waited for: an add of counters
+    /// written each add, in the store's own kv.db.
+    #[cfg(any(feature = "replication", feature = "async"))]
+    pub(crate) fn queued_on_a_copy(&self) -> bool {
+        self.buffer.is_none() && self.scope.kv.lent_by().is_none()
     }
 
     /// An add on a copy, queued on this node and answered at once: the copy's

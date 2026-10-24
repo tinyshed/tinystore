@@ -56,8 +56,49 @@ views.add("/notes", 1)?;
   minutes after the first attempt it starts from 0 again. A lockout that
   should not reset on a clock's edge is a [rate limit](rate-limits.md).
 - A sum past what an int64 holds is `limit`, and changes nothing.
-- On a node that copies the file from its home, an add answers at once and is
-  counted once at the home, however often it is sent (contract REPL-12).
+- On a node that copies the file from its home, an add of counters without
+  `flushEvery` answers at once and is counted once at the home, however often
+  it is sent (contract REPL-12).
+
+## Async Rust
+
+With the `async` feature, `aio`'s counters add up the same way, and you
+await each call. In Bun, Node and Python every call is already awaited, and
+in Go a call blocks its goroutine, so this section shows only Rust.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let attempts = store.counters("login-attempts").ttl(Duration::from_mins(15)).open()?;
+let views = store.counters("page-views").flush_every(Duration::from_secs(1)).open()?;
+
+let n: i64 = attempts.add(&client_ip, 1).await?; // a durable write, shared with others
+views.add("/notes", 1).await?; // a number in memory: answered in its first poll
+```
+
+The builder decides where a call runs, never the call:
+
+| Counter       | `add` and `delete`                                                                   | `clear`                |
+|---------------|--------------------------------------------------------------------------------------|------------------------|
+| default       | queued at the writer of `kv.db` in the first poll                                    | queued at the writer   |
+| `flush_every` | in memory, in the first poll, or on the store's threads when memory must flush first | on the store's threads |
+
+`get` answers from memory, or reads `kv.db` in the first poll when a reader is
+idle. Once its future was polled, an `add` or a `delete` takes effect even if
+you drop the future, in memory or in `kv.db` (contract DUR-11).
+
+On a node that copies `kv.db` from its home:
+
+- An `add` of the default counters is queued on that node and answers at
+  once, with the copy's count and the adds still queued. The home counts it
+  once, however often it is sent (contract REPL-12).
+- `get` reads the node's copy.
+- An `add` with `flush_every`, and every `delete` and `clear`, passes on to
+  the home and waits for its answer. It waits on a thread that TinyStore
+  starts for the call, not on the store's threads.
 
 ## See also
 

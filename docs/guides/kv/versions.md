@@ -99,6 +99,35 @@ Two writes that only depend on themselves need no version: `create` writes
 only when the key is not there, and `take` reads and deletes in one write.
 For reads that decide several writes, use a [transaction](transactions.md).
 
+## Async Rust
+
+With the `async` feature, a key's call in `aio` takes the same options, and
+you await its last step. In Bun, Node and Python every call is already
+awaited, and in Go a call blocks its goroutine, so this section shows only
+Rust.
+
+```rust
+use tinystore::{ErrorKind, Options};
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let settings = store.bucket::<Settings>("settings").open()?;
+
+loop {
+    let entry = settings.entry("home").await?.expect("home");
+    let next = Settings { theme: "dark".into(), ..entry.value };
+    match settings.key("home").if_version(entry.version).set(&next).await {
+        Err(error) if error.kind() == ErrorKind::Conflict => continue, // someone else wrote: read again
+        other => break other?,
+    }
+}
+```
+
+`key`, `if_version`, `ttl` and `expires_at` are plain calls, and only the
+last step, `set`, `create`, `take`, `delete` or `expire`, is awaited. A ttl
+or a time on a `take` or a `delete` fails with an invalid error
+(`ErrorKind::Invalid`) before anything is written, as in blocking Rust.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

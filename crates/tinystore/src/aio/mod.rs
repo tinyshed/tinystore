@@ -19,10 +19,11 @@
 //! # }
 //! ```
 //!
-//! Built so far is the store: [`Store`] opens, crosses to and from the
-//! blocking [`crate::Store`], runs a transaction and closes. No engine's
-//! handle has awaited calls yet: a handle opened from [`Store::blocking`] is
-//! called inside [`Store::tx`], or on a thread that may block, as
+//! Built so far are the store and the KV engine's handles: [`Store`] opens,
+//! crosses to and from the blocking [`crate::Store`], runs a transaction and
+//! closes, and [`kv`]'s buckets, counters, rate limits, quotas and once are
+//! awaited. Another engine's handle opened from [`Store::blocking`] is called
+//! inside [`Store::tx`], or on a thread that may block, as
 //! `tokio::task::spawn_blocking` gives one. Opening a store or a handle stays
 //! a plain call, made once at start, since a first open may migrate a file.
 //!
@@ -35,17 +36,32 @@
 //!
 //! # Where the work runs
 //!
-//! | A call                    | Runs                                       | Its future dropped once polled |
-//! |---------------------------|--------------------------------------------|--------------------------------|
-//! | a transaction, `store.tx` | its closure, blocking, on the store's pool | runs to its end                |
-//! | the store's close         | on a thread the call starts                | closes all the same            |
+//! | A call       | Runs                                          | Its future dropped once polled        |
+//! |--------------|-----------------------------------------------|---------------------------------------|
+//! | a write      | queued at its file's writer in the first poll | commits all the same; its answer goes |
+//! | a point read | first poll if a reader is idle, else the pool | answered then, or stops as a read     |
+//! | a page       | on the store's pool                           | stops, and its reader goes back       |
+//! | a wait       | a waiter in the engine, on no thread          | leaves; nothing else changes          |
+//! | `store.tx`   | its closure, blocking, on the store's pool    | runs to its end                       |
+//! | `close`      | on a thread the call starts                   | closes all the same                   |
 //!
-//! Neither commits, syncs the disk or waits on the thread that polls its
+//! A write is a key's `set` or `take`, a point read a key's `get` or a
+//! counter, a page a bucket's `list`, and a wait a `once` run's for the run
+//! of its key under way: each engine's module says which of its calls are
+//! which.
+//!
+//! None commits, syncs the disk or waits on the thread that polls its
 //! future, so an executor's thread never waits on the disk. The pool is the
 //! store's own threads, at most sixteen, started as calls need them, each
 //! ended after a minute without work and all of them stopped when the store
 //! closes. A future does nothing before its first poll: one made and dropped
 //! unpolled runs nothing.
+//!
+//! On a node that copies a file from its home, a write passed on to the home
+//! waits for its answer on a thread of its own rather than the pool's, and so
+//! does a `once` run's claim of its key there, which the home answers once
+//! the run under way ends: a pool held by such waits would stall every other
+//! call.
 //!
 //! # A transaction's closure is blocking
 //!

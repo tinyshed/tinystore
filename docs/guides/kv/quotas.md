@@ -75,6 +75,36 @@ Each window's `used`, `limit`, `left` and `resetsAt` (`resets_at`,
 | windows per quota | one to eight              |
 | a window's rate   | as `'100/5h'`, `'300/7d'` |
 
+## Async Rust
+
+With the `async` feature, `aio`'s quotas count the same way, and you await
+each call. In Bun, Node and Python every call is already awaited, and in Go a
+call blocks its goroutine, so this section shows only Rust.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let messages = store
+    .quota("messages")
+    .window("session", 100, Duration::from_hours(5))
+    .window("weekly", 300, Duration::from_hours(24 * 7))
+    .open()?;
+
+let used = messages.allow(user_id).await?; // one durable write, in every window or none
+if !used.ok {
+    return Ok(too_many(used.retry_at, used.window("weekly")));
+}
+messages.refund(user_id).await?;
+```
+
+`allow`, `allow_n`, `refund`, `refund_n` and `reset` are writes. Each one is
+queued at the writer of `kv.db` in its future's first poll, and once polled it
+commits even if you drop the future. `peek` is a read, answered in the first
+poll when a reader is idle.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

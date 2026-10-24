@@ -78,6 +78,29 @@ A renewal is a write, so a client with a `read` token cannot open a bucket
 with `idle`: that open fails with `permission`. Its reads renew nothing, and
 a dashboard that reads sessions does not keep them alive either.
 
+## Async Rust
+
+With the `async` feature, `aio`'s buckets expire their keys the same way.
+In Bun, Node and Python every call is already awaited, and in Go a call
+blocks its goroutine, so this section shows only Rust.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let sessions = store.bucket::<Session>("sessions").idle(Duration::from_hours(24 * 30)).open()?;
+
+let session = sessions.get(digest(&token)).await?; // lives another 30 days from this read
+```
+
+A read of an idle key usually answers in its future's first poll. When the
+key has less than a minute left, the read renews it before it answers, as in
+blocking Rust (contract KV-07). That read runs on the store's threads,
+because the renewal is a write, and it never waits on the thread that polls
+it.
+
 ## Limits and defaults
 
 | What                  | Default                                 |

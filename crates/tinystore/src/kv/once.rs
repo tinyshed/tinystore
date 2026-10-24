@@ -6,7 +6,7 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use super::bucket::{Bucket, Expiry};
-#[cfg(any(feature = "wire", feature = "replication"))]
+#[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
 use super::bucket::{Put, WriteOptions};
 use super::path::Key;
 use super::scope::{Kind, Scope};
@@ -96,7 +96,7 @@ pub(crate) fn hand(answers: &Bucket<()>, key: &str, waiter: Waiter) -> Result<Ha
 
 /// A run of a key a client was handed; dropping it lets the runs waiting for
 /// the key go on, keeping nothing.
-#[cfg(any(feature = "wire", feature = "replication"))]
+#[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
 pub(crate) struct Handed {
     answers: Bucket<()>,
     key: String,
@@ -119,18 +119,86 @@ impl Handed {
     }
 }
 
-#[cfg(any(feature = "wire", feature = "replication"))]
+#[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
 impl Drop for Handed {
     fn drop(&mut self) {
         self.answers.scope.kv.runs().release(&self.running, self.unkept.take().map(|raw| *raw));
     }
 }
 
-#[cfg(any(feature = "wire", feature = "replication"))]
+#[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
 impl fmt::Debug for Handed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Handed({})", self.answers.scope.shown_key(&self.key))
     }
+}
+
+/// The run of an awaited call, whose function is a future the call polls:
+/// the async API's `Once::run` claims, keeps and lets go through these.
+#[cfg(feature = "async")]
+impl Handed {
+    /// Keeps `raw` under the run's key without waiting, and lets the key go
+    /// once its commit ended, so that no run of the key starts before the
+    /// answer is there to read: `done` hears then. An answer that could not
+    /// be kept goes to the runs that waited for this one, and the failure is
+    /// logged, as [`Once::run`]'s does.
+    pub(crate) fn keep_then(mut self, raw: Raw, done: impl FnOnce() + Send + 'static) {
+        let (answers, key) = (self.answers.clone(), self.key.clone());
+        answers.put_raw_then(&key, (raw.clone(), WriteOptions::default(), Put::Always), move |kept| {
+            if let Err(error) = kept {
+                not_kept(&error);
+                self.unkept = Some(Box::new(raw));
+            }
+            drop(self);
+            done();
+        });
+    }
+
+    /// Lets the key go, nothing kept, for an answer that does not encode.
+    pub(crate) fn not_kept(self, error: &Error) {
+        not_kept(error);
+    }
+
+    /// Runs `poll`, a poll of the run's function, with its key marked as run
+    /// on this thread now: a run of the key inside it, awaited or blocking,
+    /// is `Invalid`, as one inside a blocking run is, rather than wait for
+    /// itself. A task has no thread of its own, so the mark lasts one poll.
+    pub(crate) fn polling<T>(&self, poll: impl FnOnce() -> T) -> T {
+        let runs = std::ptr::from_ref(self.answers.scope.kv.runs()).addr();
+        POLLING.with(|polling| polling.borrow_mut().push((runs, self.running.clone())));
+        let _unmark = Unmark;
+        poll()
+    }
+}
+
+#[cfg(feature = "async")]
+thread_local! {
+    /// The keys whose awaited run's function this thread polls now, each by
+    /// the address of the runs that hold it: two stores may share a key.
+    static POLLING: std::cell::RefCell<Polled> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Keys polled now, each by the address of its runs.
+#[cfg(feature = "async")]
+type Polled = Vec<(usize, (i64, Vec<u8>))>;
+
+/// Takes a poll's mark off as the poll ends, a panic's unwinding included.
+#[cfg(feature = "async")]
+struct Unmark;
+
+#[cfg(feature = "async")]
+impl Drop for Unmark {
+    fn drop(&mut self) {
+        POLLING.with(|polling| polling.borrow_mut().pop());
+    }
+}
+
+/// What a run on a copy found at its home: the answer kept there, or the run
+/// handed to this node by its token, which its keep names.
+#[cfg(feature = "replication")]
+pub(crate) enum AtHome<V> {
+    Kept(V),
+    Yours(u64),
 }
 
 /// Functions run at most once a key, their answers kept: a charge, an import,
@@ -188,15 +256,34 @@ impl<V: Value> Once<V> {
         if let Some(answer) = self.answers.get(key)? {
             return Ok(answer);
         }
-        let token = match self.answers.once_claim(key)? {
-            super::forward::Claimed::Kept(raw) => return Ok(super::bucket::decode(&raw)?),
-            super::forward::Claimed::Yours(token) => token,
+        let token = match self.claim_at_home(key)? {
+            AtHome::Kept(answer) => return Ok(answer),
+            AtHome::Yours(token) => token,
         };
         let answer = work();
         let raw = match &answer {
             Ok(value) => Some(self.answers.encode(key, value)?),
             Err(_) => None,
         };
+        self.keep_at_home(key, token, raw);
+        answer
+    }
+
+    /// Claims `key` at the home of the copy these answers are kept in, and
+    /// waits for its answer.
+    #[cfg(feature = "replication")]
+    pub(crate) fn claim_at_home(&self, key: &str) -> Result<AtHome<V>> {
+        match self.answers.once_claim(key)? {
+            super::forward::Claimed::Kept(raw) => Ok(AtHome::Kept(super::bucket::decode(&raw)?)),
+            super::forward::Claimed::Yours(token) => Ok(AtHome::Yours(token)),
+        }
+    }
+
+    /// Keeps at the home what the run it handed over by `token` answered,
+    /// none when its function failed, and lets the key go there; a keep that
+    /// failed is logged, and the next run of the key runs again.
+    #[cfg(feature = "replication")]
+    pub(crate) fn keep_at_home(&self, key: &str, token: u64, raw: Option<Raw>) {
         if let Err(error) = self.answers.once_keep(key, token, raw) {
             tracing::warn!(
                 target: "tinystore",
@@ -204,7 +291,32 @@ impl<V: Value> Once<V> {
                 "a once answer was not kept at its home; the next run of its key runs again",
             );
         }
-        answer
+    }
+
+    /// The bucket that keeps the answers, for the async API's calls.
+    #[cfg(feature = "async")]
+    pub(crate) fn answers(&self) -> &Bucket<V> {
+        &self.answers
+    }
+
+    /// Claims `key` for an awaited run, which no thread holds: the run handed
+    /// over, or none while another run holds the key, `waiter` called once
+    /// that run ends. A run of a key whose function this thread runs or polls
+    /// now would wait for itself: that is `Invalid`.
+    #[cfg(feature = "async")]
+    pub(crate) fn claim_then(&self, key: &str, waiter: Waiter) -> Result<Option<Handed>> {
+        let running = (self.answers.scope.id, self.answers.scope.path(key)?);
+        let claimed = self.answers.scope.kv.runs().claim_or_wait(running.clone(), None, waiter);
+        if !claimed.map_err(|error| error.within(self.answers.scope.shown_key(key)))? {
+            return Ok(None);
+        }
+        Ok(Some(Handed { answers: self.answers.untyped(), key: key.to_owned(), running, unkept: None }))
+    }
+
+    /// The answer a run could not keep, as the runs that waited for it get it.
+    #[cfg(feature = "async")]
+    pub(crate) fn unkept(&self, raw: &Raw) -> Result<V> {
+        super::bucket::decode(raw)
     }
 
     /// The answer kept under `key`.
@@ -283,13 +395,16 @@ struct Run {
 impl Runs {
     /// Claims `key` for `thread` and says true, or keeps `waiter` for the end
     /// of the run that holds it and says false. A thread asking for a key its
-    /// own run holds would wait for itself: that is `Invalid`.
+    /// own run holds would wait for itself: that is `Invalid`, whether this
+    /// thread runs that run's function or polls it, for an awaited run.
     pub(crate) fn claim_or_wait(&self, key: (i64, Vec<u8>), thread: Option<ThreadId>, waiter: Waiter) -> Result<bool> {
+        let itself = || Error::invalid("a run of a key inside its own run would wait for itself");
+        if self.polled_here(&key) {
+            return Err(itself());
+        }
         let mut running = self.lock();
         match running.get_mut(&key) {
-            Some(run) if thread.is_some() && run.thread == thread => {
-                Err(Error::invalid("a run of a key inside its own run would wait for itself"))
-            }
+            Some(run) if run.thread == Some(thread::current().id()) => Err(itself()),
             Some(run) => {
                 run.waiters.push(waiter);
                 Ok(false)
@@ -309,6 +424,27 @@ impl Runs {
         for waiter in run.map(|run| run.waiters).unwrap_or_default() {
             waiter(unkept.clone());
         }
+    }
+
+    /// How many keys run now, and how many callers wait for them.
+    #[cfg(all(test, feature = "async"))]
+    pub(crate) fn under_way(&self) -> (usize, usize) {
+        let running = self.lock();
+        (running.len(), running.values().map(|run| run.waiters.len()).sum())
+    }
+
+    /// Whether this thread polls the function of `key`'s awaited run now.
+    #[cfg(feature = "async")]
+    fn polled_here(&self, key: &(i64, Vec<u8>)) -> bool {
+        let runs = std::ptr::from_ref(self).addr();
+        POLLING.with(|polling| polling.borrow().iter().any(|(held, polled)| *held == runs && polled == key))
+    }
+
+    /// Whether this thread polls an awaited run's function: never, in a
+    /// library built without the async API.
+    #[cfg(not(feature = "async"))]
+    fn polled_here(&self, _key: &(i64, Vec<u8>)) -> bool {
+        false
     }
 
     fn lock(&self) -> MutexGuard<'_, Running> {

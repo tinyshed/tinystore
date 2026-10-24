@@ -68,8 +68,8 @@ impl RateLimitBuilder {
 /// crash forgets at most the last second, which lets at most one burst more
 /// through. A key whose time has come is as one never seen.
 pub struct RateLimit {
-    scope: Scope,
-    buffer: Arc<Buffer>,
+    pub(crate) scope: Scope,
+    pub(crate) buffer: Arc<Buffer>,
     /// The nanoseconds one request takes of the rate.
     interval: i64,
     burst: i64,
@@ -138,6 +138,16 @@ impl RateLimit {
         let now = unix_millis(self.scope.kv.clock().now());
         let step = |live: Option<Live>| Ok((if live.is_some() { Change::Remove } else { Change::Leave }, ()));
         self.buffer.step(&self.scope.kv, &path, now, step).map_err(|error| error.within(self.scope.shown_key(&key)))
+    }
+
+    /// Whether the rate limit's file is a copy, whose `allow` and `reset` pass
+    /// on to its home and wait for its answer.
+    #[cfg(feature = "async")]
+    pub(crate) fn on_a_copy(&self) -> bool {
+        #[cfg(feature = "replication")]
+        return self.scope.kv.file().is_copy();
+        #[cfg(not(feature = "replication"))]
+        false
     }
 
     /// Passes a call on `key` to the home of the copy the rate limit's file is:

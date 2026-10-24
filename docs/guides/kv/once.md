@@ -86,6 +86,47 @@ payment provider too, so that its own deduplication covers that gap. A
 declined card that must not be charged again is an answer to keep, not an
 error to throw.
 
+## Async Rust
+
+With the `async` feature, `aio`'s `once` takes an async function: the closure
+gives a future, and `run` awaits it. In Bun, Node and Python every call is
+already awaited, and in Go a call blocks its goroutine, so this section shows
+only Rust.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let charges = store.once::<Receipt>("charges").keep(Duration::from_hours(24)).open()?;
+
+// stripe.charge is an async fn here: the closure gives its future, and run awaits it
+let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id)).await?;
+```
+
+A run that waits for the run under way holds no thread: the engine wakes it
+when that run ends, in this process or through its server. The runs of the
+blocking API and of `aio` wait for one another.
+
+On a node that copies `kv.db` from its home, a run claims its key at the
+home, which waits for the run under way there. Your run waits for the home's
+answer on a thread that TinyStore starts for the call, not on the store's
+threads, so many runs of a busy key don't stop your other calls.
+
+If you drop the future of a run:
+
+- while it waits for another run, it stops waiting, and nothing changes;
+- while its function runs, the key is let go and nothing is kept, so the next
+  `run` runs the function again (contract KV-11);
+- after its function answered, the answer is kept all the same, and the key is
+  let go after it is written.
+
+A run of a key inside its own run, awaited or blocking, fails with an invalid
+error (`ErrorKind::Invalid`) instead of waiting for itself. The future of
+`run` can borrow what its function uses. It is `'static`, as `tokio::spawn`
+needs, when the key, the closure and its future are.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

@@ -52,7 +52,7 @@ submodule is pinned to `v0.1.0-rc.5`.
 | pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules  | [one core](docs/handbook/inside/one-core.md)         |
 | server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it        | [cli](docs/guides/cli/README.md)                     |
 | SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server      | [one directory](docs/handbook/start/directory.md)    |
-| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`; no engine's handle has awaited calls yet     | [Rust with async](docs/handbook/start/rust-async.md) |
+| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, and KV's handles; other engines' to come     | [Rust with async](docs/handbook/start/rust-async.md) |
 | release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                 | the `release` skill                                  |
 
 From `v0.1.0` on, a store a release wrote opens in the next: an engine's

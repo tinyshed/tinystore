@@ -98,11 +98,16 @@ impl Pool {
     /// answers `Closed` through, where a handle is made without a `Result`.
     #[cfg(feature = "async")]
     pub(crate) fn of_or_stopped(store: &Store) -> Arc<Pool> {
-        Pool::of(store).unwrap_or_else(|_| {
-            let stopped = Pool::new(LINGER, RETIRE_AFTER);
-            stopped.lock().stopped = true;
-            Arc::new(stopped)
-        })
+        Pool::of(store).unwrap_or_else(|_| Pool::stopped())
+    }
+
+    /// A pool stopped already, which drops every job unrun: a handle's whose
+    /// store is gone.
+    #[cfg(feature = "async")]
+    pub(crate) fn stopped() -> Arc<Pool> {
+        let stopped = Pool::new(LINGER, RETIRE_AFTER);
+        stopped.lock().stopped = true;
+        Arc::new(stopped)
     }
 
     fn new(linger: Duration, retire_after: Duration) -> Pool {

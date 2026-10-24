@@ -65,6 +65,76 @@ let used = messages.allow(user_id)?;
 - `once` runs a key's function once while its answer is kept, and callers in
   any process wait for it (contract KV-11).
 
+## Async Rust
+
+With the `async` feature, `tinystore::aio` has the same buckets, counters,
+rate limits, quotas and `once`, and you await their calls. Only Rust has this
+choice: in Bun, Node and Python every call is already awaited, and in Go a
+call blocks its goroutine.
+
+```rust
+use std::time::Duration;
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let sessions = store.bucket::<Session>("sessions").idle(Duration::from_hours(24 * 30)).open()?;
+let codes = store.bucket::<i64>("sign-in-codes").ttl(Duration::from_mins(15)).open()?;
+
+sessions.under(user_id).set(digest(&token), &Session { user_id, device: "web".into() }).await?;
+let user_id = codes.take(digest(&code)).await?; // read and delete in one write
+sessions.under(user_id).clear().await?; // signed out everywhere
+```
+
+You open a handle from `aio::Store` with the same builder as in the blocking
+API. Opening is a plain call that you make once at start. Every call that
+reads, writes or waits is the blocking call with `.await`:
+
+| Blocking                               | Async                                        |
+|----------------------------------------|----------------------------------------------|
+| `sessions.set(&key, &session)?`        | `sessions.set(&key, &session).await?`        |
+| `sessions.get(&key)?`                  | `sessions.get(&key).await?`                  |
+| `codes.take(&code)?`                   | `codes.take(&code).await?`                   |
+| `sessions.key(&key).ttl(day).set(&s)?` | `sessions.key(&key).ttl(day).set(&s).await?` |
+| `targets.list(100, None)?`             | `targets.list(100, None).await?`             |
+| `for entry in sessions.all()`          | `while let Some(entry) = all.next().await`   |
+| `attempts.add(&ip, 1)?`                | `attempts.add(&ip, 1).await?`                |
+| `api.allow(&user_id)?`                 | `api.allow(&user_id).await?`                 |
+| `charges.run(&key, work)?`             | `charges.run(&key, work).await?`             |
+
+`under` and `key`, and the options of a key's call, touch no file, so they
+stay plain calls. The answers are the same types: `Entry`, `Page`, `Version`
+and `Allowance`. `all` is a `Stream`, so `next` comes from
+`futures::StreamExt` or `tokio_stream::StreamExt`, as
+[Branches](branches.md#async-rust) shows.
+
+TinyStore never commits, syncs the disk or waits on the thread that polls a
+future (contract STORE-10):
+
+| A call                                                                | Where it runs                                                        | If you drop its future after it was polled              |
+|-----------------------------------------------------------------------|----------------------------------------------------------------------|---------------------------------------------------------|
+| a write: `set`, `create`, `add`, `take`, `delete`, `clear`            | queued at the writer of `kv.db` in the first poll                    | it commits all the same                                 |
+| a key's read: `get`, `entry`, `has`, `peek`                           | in the first poll when a reader is idle, else on the store's threads | it was answered in that poll, or it stops like any read |
+| a step in memory: a rate limit's `allow`, an `add` with `flush_every` | in the first poll, else on the store's threads                       | it applies all the same                                 |
+| a page: `list`, each page of `all`                                    | on the store's threads                                               | it stops and gives its reader back                      |
+| a `once` run that waits for the run under way                         | a waiter in the engine, on no thread                                 | it stops waiting, and nothing else changes              |
+
+A write that you never poll writes nothing. Writes that you join in one task,
+for example with `tokio::try_join!`, are queued together and can share one
+commit. Each of them still fails alone.
+
+On a node that copies `kv.db` from its home, writes and steps in memory pass
+on to the home, and a `once` run claims its key there. Each of them waits for
+the home's answer on a thread that TinyStore starts for the call, not on the
+store's threads. An `add` of counters without `flush_every` is the exception:
+the node queues it and answers at once (contract REPL-12).
+
+`aio::kv::Bucket::from(bucket)` turns a blocking bucket into an async one, and
+`bucket.blocking()` gives the blocking bucket back: both are the same bucket.
+Counters, rate limits, quotas and `once` cross the same way. The
+[Rust with async](../../handbook/start/rust-async.md) chapter explains the
+store's side.
+
 ## In these guides
 
 | Page                              | Covers                                                   |

@@ -104,7 +104,16 @@ impl<'a, V: Value> KeyCall<'a, V> {
         }
     }
 
-    fn refuse_expiry(&self, verb: &str) -> Result<()> {
+    /// The bucket, the key and the options of a call the async API runs, by
+    /// its own last step.
+    #[cfg(feature = "async")]
+    pub(crate) fn into_parts(self) -> (&'a Bucket<V>, String, WriteOptions) {
+        (self.bucket, self.key, self.options)
+    }
+
+    /// Refuses a ttl or a time on a call that writes no value, a take or a
+    /// delete, before anything is queued.
+    pub(crate) fn refuse_expiry(&self, verb: &str) -> Result<()> {
         if self.options.expires.is_none() {
             return Ok(());
         }

@@ -160,7 +160,7 @@ impl Kv {
     }
 
     /// The store kv opened in, while it is open.
-    #[cfg(feature = "replication")]
+    #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed("the store"))
     }

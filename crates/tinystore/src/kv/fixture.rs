@@ -53,6 +53,51 @@ impl Fixture {
     pub(crate) fn commits(&self) -> u64 {
         Kv::of(&self.store).unwrap().file().commits()
     }
+
+    /// kv.db's writer, held on a thread of its own until what this returns is
+    /// dropped, ten seconds at most: a call that waited for it on the test's
+    /// thread hangs that long, not for ever.
+    #[cfg(feature = "async")]
+    pub(crate) fn hold_writer(&self) -> WriterHeld {
+        let kv = Kv::of(&self.store).unwrap();
+        let (release, held_until) = std::sync::mpsc::channel::<()>();
+        let (holding, held) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _writer = kv.file().hold_writer();
+            holding.send(()).unwrap();
+            let _ = held_until.recv_timeout(Duration::from_secs(10));
+        });
+        held.recv().unwrap();
+        WriterHeld { release: Some(release), holder: Some(holder) }
+    }
+}
+
+/// kv.db's writer held, let go as this is dropped.
+#[cfg(feature = "async")]
+pub(crate) struct WriterHeld {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "async")]
+impl Drop for WriterHeld {
+    fn drop(&mut self) {
+        drop(self.release.take());
+        if let Some(holder) = self.holder.take() {
+            holder.join().unwrap();
+        }
+    }
+}
+
+/// Waits until `holds`, failing the test after ten seconds, as long as a
+/// thread of the store's may take on a busy machine.
+#[cfg(feature = "async")]
+pub(crate) fn eventually(what: &str, mut holds: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !holds() {
+        assert!(std::time::Instant::now() < deadline, "{what}: not within ten seconds");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

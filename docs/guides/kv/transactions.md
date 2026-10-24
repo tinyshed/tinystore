@@ -105,6 +105,43 @@ the writes have already committed, so the transaction fails with
 transaction again would take nothing and repeat its other writes. Take large
 values one at a time, or read them before the transaction deletes them.
 
+## Async Rust
+
+With the `async` feature, `aio::Store::tx` runs the same transaction, and you
+await it. In Bun, Node and Python every call is already awaited, and in Go a
+call blocks its goroutine, so this section shows only Rust.
+
+```rust
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let stock = store.bucket::<i64>("stock").open()?;
+let orders = store.bucket::<Order>("orders").open()?;
+
+// the closure runs on the store's threads, so it owns what it uses
+let (stock, orders) = (stock.clone(), orders.clone());
+let placed = store
+    .tx(move |tx| -> Result<bool, ShopError> {
+        let left = tx.with(&stock).get(&sku)?.unwrap_or(0); // no .await inside: the writer is held
+        if left < 1 {
+            return Ok(false);
+        }
+        tx.with(&stock).set(&sku, &(left - 1))?;
+        tx.with(&orders).set(&order_id, &order)?;
+        Ok(true)
+    })
+    .await?;
+```
+
+The closure is blocking, and it runs on one of the store's threads, never on
+your executor's thread. `tx.with` takes an `aio` bucket or counters as it takes
+blocking ones, and the calls inside are the blocking ones. Once polled, the
+transaction runs to its end, even if you drop its future. An awaited call
+inside the closure, through a `block_on`, fails with an invalid error
+(`ErrorKind::Invalid`) instead of waiting for the writer that the
+transaction holds.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

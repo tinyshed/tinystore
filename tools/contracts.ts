@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 const root = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
 // Contracts no test keeps yet. One that gains a test leaves this list.
-const untested = new Set(['DUR-04', 'DUR-10', 'BLOB-09'])
+const untested = new Set(['DUR-10', 'BLOB-09'])
 
 function contracts(): Map<string, string> {
 	const found = new Map<string, string>()

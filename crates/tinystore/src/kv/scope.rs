@@ -155,7 +155,7 @@ impl Scope {
 
     /// Queues a write on the file's writer and returns; `done` gets its answer
     /// on the thread that commits it.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn submit<T: Send + 'static>(
         &self,
         key: &str,
@@ -170,7 +170,7 @@ impl Scope {
     }
 
     /// Submits the work a call made, or gives `done` why it made none.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn submit_made<T: Send + 'static>(
         &self,
         key: &str,
@@ -181,6 +181,17 @@ impl Scope {
         match work {
             Ok(work) => self.submit(key, bytes, work, done),
             Err(error) => done(Err(error)),
+        }
+    }
+
+    /// The pool of the store the handle's engine opened in, where its awaited
+    /// calls run what must not run on an executor's thread; a stopped one once
+    /// that store is gone, whose calls answer `Closed`.
+    #[cfg(feature = "async")]
+    pub(crate) fn pool(&self) -> Arc<crate::pool::Pool> {
+        match self.kv.store() {
+            Ok(store) => crate::pool::Pool::of_or_stopped(&store),
+            Err(_) => crate::pool::Pool::stopped(),
         }
     }
 

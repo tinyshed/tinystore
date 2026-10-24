@@ -26,7 +26,7 @@ mod counters;
 mod encrypted;
 mod engine;
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
 mod key_call;
@@ -57,12 +57,22 @@ pub use value::{Bytes, Value};
 #[cfg(feature = "wire")]
 pub(crate) use {
     batch::{Batch, Outcome, Place},
-    bucket::{Put, Stamp, WriteOptions},
     cells::Cell,
-    once::{Hand, Handed, Waiter, hand, rows as once_rows},
+    once::{Hand, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
-    value::Raw,
 };
+// A row's value, which the async API keeps at a copy's home for once.
+#[cfg(any(feature = "wire", all(feature = "async", feature = "replication")))]
+pub(crate) use value::Raw;
+// What the wire and the async API take of a write, and of a run of once.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) use {
+    bucket::{Put, Stamp, WriteOptions},
+    once::Handed,
+};
+// What a run of once on a copy found at its home, which the async API awaits.
+#[cfg(all(feature = "async", feature = "replication"))]
+pub(crate) use once::AtHome;
 #[cfg(all(feature = "sql", feature = "wire"))]
 pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
 // What a backup reads of its snapshot, to say a key it leaves out.

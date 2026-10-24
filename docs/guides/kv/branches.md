@@ -75,6 +75,34 @@ version and when it expires. Two keys of a bucket of targets, one set with a
 - Every call works on a branch: `get`, `set`, `take`, `create`, `expire`,
   `delete`, `entry`.
 
+## Async Rust
+
+With the `async` feature, `aio`'s buckets read pages the same way, and you
+await them. In Bun, Node and Python every call is already awaited, and in Go
+a call blocks its goroutine, so this section shows only Rust.
+
+```rust
+use futures::StreamExt; // or tokio_stream::StreamExt
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let sessions = store.bucket::<Session>("sessions").open()?;
+
+let page = sessions.under(user_id).list(100, None).await?;
+let mut all = sessions.under(user_id).all(); // a Stream of Result<Entry<Session>>
+while let Some(entry) = all.next().await {
+    let entry = entry?;
+    println!("{} until {:?}", entry.key, entry.expires_at);
+}
+```
+
+`list` and each page of `all` run on the store's threads, never on the thread
+that polls them. `all` reads the next page only when you have used up the one
+before, and it holds no snapshot between pages. If you drop the stream, the
+page it is reading stops, and it reads no more. When the store closes, the
+stream returns a closed error (`ErrorKind::Closed`) and then ends.
+
 ## See also
 
 - [KV](README.md): the engine's overview.

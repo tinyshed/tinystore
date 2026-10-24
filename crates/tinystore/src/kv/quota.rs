@@ -69,7 +69,7 @@ impl QuotaBuilder {
 /// quotas asked one after the other would leave the first counted when the
 /// second refused.
 pub struct Quota {
-    scope: Scope,
+    pub(crate) scope: Scope,
     windows: Arc<[Window]>,
     /// The smallest limit, past which a use never passes.
     least: u64,
@@ -112,7 +112,7 @@ impl Quota {
     }
 
     /// `allow_n` without waiting: `done` gets the allowance once its commit ends.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn allow_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<Allowance>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.scope.kv.file().is_copy() {
@@ -168,7 +168,7 @@ impl Quota {
     }
 
     /// `refund_n` without waiting for its commit.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn refund_n_then(&self, key: &str, n: u64, done: impl FnOnce(Result<()>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.scope.kv.file().is_copy() {
@@ -207,7 +207,7 @@ impl Quota {
     }
 
     /// `reset` without waiting for its commit.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn reset_then(&self, key: &str, done: impl FnOnce(Result<()>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.scope.kv.file().is_copy() {

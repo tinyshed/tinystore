@@ -551,6 +551,11 @@ class Types {
 		if (typeof bound.outlives === 'string') {
 			return bound.outlives
 		}
+		// what an `impl Trait` captures, `use<K, V>`: its parameters by name, a lifetime by its own
+		if (Array.isArray(bound.use)) {
+			const captured = (bound.use as Json[]).map(arg => arg.param ?? arg.lifetime ?? '_')
+			return `use<${captured.join(', ')}>`
+		}
 		if (bound.trait_bound === undefined) {
 			return '_'
 		}
