@@ -145,6 +145,7 @@ fn two_loggers_in_one_subscriber_each_print_a_spans_fields_once() {
     assert_eq!(second.untimed(), expected);
 }
 
+// contract: LOG-09
 #[test]
 fn a_secret_is_hidden_and_replace_changes_a_field_before_it_is() {
     let printed = Printed::default();

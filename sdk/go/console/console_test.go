@@ -112,6 +112,8 @@ func TestAURLsPasswordIsHiddenUnlessKept(t *testing.T) {
 }
 
 // ReplaceAttr sees each attribute with its groups, as slog's handlers call it
+//
+// contract: LOG-09
 func TestReplaceAttrChangesAndDropsAttributes(t *testing.T) {
 	var console bytes.Buffer
 	var seen []string

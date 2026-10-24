@@ -188,6 +188,44 @@ describe('a logger of the console alone', () => {
 		expect(written[0]).toContain('"big":12345678901234567890,"cycle":"[object Object]"')
 	})
 
+	// contract: LOG-09
+	test('leaves out a field given as undefined, in the fields, with() and the pairs, and keeps null', () => {
+		const json: string[] = []
+		const log = newLogger(undefined, 'app', { console: 'json' }, { write: t => json.push(t) })
+		log
+			.with({ requestId: undefined, user: 'ann' })
+			.info('model call', { passed: undefined, owner: null, n: 1 })
+		log.info('pairs', [
+			['k', undefined],
+			['n', 2],
+		])
+		const untimed = json.map(line => line.slice(line.indexOf(',"level"')))
+		expect(untimed).toEqual([
+			',"level":"INFO","stream":"app","msg":"model call","user":"ann","owner":null,"n":1}\n',
+			',"level":"INFO","stream":"app","msg":"pairs","n":2}\n',
+		])
+
+		const pretty: string[] = []
+		const look = { console: 'pretty', time: 'off' } as const
+		newLogger(undefined, 'app', look, { write: t => pretty.push(t) })
+			.with({ requestId: undefined })
+			.info('model call', { passed: undefined, n: 1 })
+		expect(pretty).toEqual(['INFO  app  model call  n=1\n'])
+	})
+
+	// contract: LOG-09
+	test('a replace that returns undefined leaves the field out, and a function keeps its text', () => {
+		const written: string[] = []
+		const replace = (key: string, value: unknown) => (key === 'body' ? undefined : value)
+		newLogger(undefined, 'api', { console: 'json', replace }, { write: t => written.push(t) }).info(
+			'request',
+			{ body: 'card=4242', route: '/pay', fn: () => 1 },
+		)
+		const line = JSON.parse(written[0] as string)
+		expect([line.body, line.route, line.fn]).toEqual([undefined, '/pay', '() => 1'])
+		expect(Object.hasOwn(line, 'body')).toBe(false)
+	})
+
 	test('needs no store', () => {
 		expect(logger('app', { console: 'off' }).dropped).toBe(0)
 	})

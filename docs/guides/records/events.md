@@ -61,7 +61,8 @@ clicks.append_all(batch)?; // NewEvent::new(name).fields(&props).at(time), all o
 
 A value comes back as it was spelled: `1.2300`, `-0`, the order of the keys
 come back byte for byte. In TypeScript an integer past 2⁵³ reads as a
-`bigint`.
+`bigint`, and a field whose value is `undefined` is left out, as
+`JSON.stringify` leaves it out. `null` stays `null`.
 
 `append` hides nothing: `redact` is a logger's. Leave out what may hold a
 secret before appending.

@@ -51,7 +51,11 @@ export interface LoggerOptions {
 	redact?: readonly string[]
 	/** leaves a URL's password in a value as it is, which is otherwise hidden */
 	keepUrlPasswords?: boolean
-	/** changes each field's value before it is hidden, kept and shown */
+	/**
+	 * changes each field's value before it is hidden, kept and shown, and
+	 * undefined leaves the field out: return the value it was given for a
+	 * field it leaves as it is
+	 */
 	replace?: (key: string, value: unknown) => unknown
 	/**
 	 * where LOG_LEVEL, LOG_CONSOLE_LEVEL, LOG_FORMAT and LOG_TIME are read,
@@ -613,8 +617,9 @@ function textOf(line: ConsoleLine): number {
 
 /**
  * Fields as key, JSON pairs, as a console writes them and the store keeps
- * them: an Error's value its stack, which JSON would write as {}, a secret's
- * value hidden at any depth, and a URL's password unless kept.
+ * them: a field whose value is undefined left out, as JSON.stringify leaves
+ * it out of an object, an Error's value its stack, which JSON would write as
+ * {}, a secret's value hidden at any depth, and a URL's password unless kept.
  */
 export function encodeFields(
 	fields: Fields,
@@ -627,6 +632,10 @@ export function encodeFields(
 	const flat: string[] = []
 	for (const [key, given] of pairs) {
 		const value = replace === undefined ? given : replace(key, given)
+		// before it is hidden, as Rust's replace drops a field: a secret given no value is no field
+		if (value === undefined) {
+			continue
+		}
 		const shown = value instanceof Error ? (value.stack ?? String(value)) : value
 		if (redact?.hides(key)) {
 			flat.push(key, redacted)

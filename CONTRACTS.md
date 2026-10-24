@@ -164,6 +164,7 @@ These contracts are what does not.
 - **LOG-06** Writing a log line MUST NOT log again.
 - **LOG-07** A store's logger MUST follow the config `log`, its level live for every logger of the store, Python's `log_handler` among them: the level kept, and the level printed too unless the code's `level` has a `console` part.
 - **LOG-08** A store's logger's `level` MUST set what it keeps and what it prints, one level both and `{ store, console }` each apart, a part left out as `level` left out: no `store` part keeps every level, and no `console` part prints what is kept. The `console` part MUST change only what is printed: every line at the `store` level MUST be kept with the same fields and context whatever the `console` part, and an event, which has no level, MUST be printed and kept.
+- **LOG-09** A field given no value, `undefined` in TypeScript or what a `replace` drops (`undefined` in TypeScript, `None` in Rust, an empty `slog.Attr` in Go), MUST be left out of the console line and of what is kept, in a logger's fields and context and in an appended event's, and `null` MUST stay `null`; Python's `None`, which a Python `replace` cannot drop a field with, and Go's `nil` are values and stay `null`, and a Rust field's `None` stays what `tracing` and serde make of it.
 
 ### Metrics
 

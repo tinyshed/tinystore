@@ -236,6 +236,32 @@ for (const way of ways) {
 			expect(log.dropped).toBe(0)
 		})
 
+		// contract: LOG-09, REC-01
+		test('a field given as undefined is left out of what is kept, and null stays null', async () => {
+			const kept = store.events('kept')
+			await kept.append(
+				'happened',
+				{ passed: undefined, owner: null, n: 1 },
+				{ context: { who: undefined, user: 'ann' } },
+			)
+			await kept.append('alone', { passed: undefined }, { context: { who: undefined } })
+			const log = store.logger('kept', { console: 'off' })
+			log.with({ requestId: undefined }).info('model call', { passed: undefined, n: 2 })
+			log.event('signup', { plan: undefined, n: 3 })
+			await log.flush()
+			const { events } = await store.events('kept').list()
+			// a line's time is the program's clock to the millisecond, so the names say which is which
+			const byName = Object.fromEntries(
+				events.map(event => [event.name, [event.fields, event.context]]),
+			)
+			expect(byName).toEqual({
+				happened: [{ owner: null, n: 1 }, { user: 'ann' }],
+				alone: [{}, {}],
+				log: [{ n: 2 }, {}],
+				signup: [{ n: 3 }, {}],
+			})
+		})
+
 		// contract: LOG-08
 		test("a store's logger with a console part prints less than it keeps", async () => {
 			const printed: string[] = []

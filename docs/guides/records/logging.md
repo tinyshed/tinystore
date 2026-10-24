@@ -64,6 +64,10 @@ A line is an event named `log` of the logger's stream:
 | `fields`  | what the call gave                                                |
 | `context` | what `with` gave (`bind` in Python, `With` in Go, a span in Rust) |
 
+A field whose value is `undefined` in TypeScript is left out of the line and
+of what is kept, as `JSON.stringify` and pino leave it out. `null` is kept as
+`null`, and so are Python's `None` and Go's `nil`.
+
 So `store.events('api')` reads the logger's lines beside any events appended
 to the same stream, and every read finds both. See [Reading](reading.md).
 
@@ -139,7 +143,10 @@ the store, at any depth:
 - A URL's password inside any value is hidden too, unless
   `keepUrlPasswords`.
 - `replace: (key, value) => value` runs on each field before it is hidden,
-  for what a name cannot catch.
+  for what a name cannot catch. A `replace` that returns `undefined` leaves
+  the field out (`None` in Rust, an empty `slog.Attr` in Go), so return
+  `value` for every field it doesn't change. In Python, `replace` can't leave
+  a field out: a `None` that it returns is kept as `null`.
 - A message's text is left as it is: put secrets in fields, never in the
   message, so `redact` can find them.
 
