@@ -47,10 +47,18 @@ const bases = new Set(['sqlite', 'engine', 'compress'])
 /** The sets a change of a root file or a base is linted with: no store, the smallest store, the wire alone. */
 const rootSets = ['console', 'kv', 'wire']
 
+/** The engines whose async calls have a module of their own in aio/, each linted beside its engine. */
+const aioEngines = new Set(['kv', 'config', 'locks', 'channels', 'jobs', 'sql', 'blobs', 'records', 'metrics', 'search'])
+
 /** The features a file of the library belongs to: its area, and kv's config and locks as their own. */
 function featuresOf(part: string[]): string[] {
 	if (part[0] === 'kv' && (part[1] === 'config' || part[1] === 'locks')) return [part[0], part[1]]
 	if (part[0] === 'metrics' && part[1] === 'system.rs') return [part[0], 'system']
+	// aio/ is linted with async's own set, and an engine's aio/kv.rs or aio/kv/ beside its engine
+	if (part[0] === 'aio') {
+		const engine = part[1].replace(/\.rs$/, '')
+		return [aioEngines.has(engine) ? `${engine},async` : 'async']
+	}
 	return [part[0]]
 }
 

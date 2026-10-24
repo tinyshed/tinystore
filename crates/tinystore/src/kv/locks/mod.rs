@@ -289,6 +289,7 @@ impl Opened {
 
     /// Asks for `place` and waits for the answer; none when it stayed busy.
     fn ask(&self, place: &Place, wait: Duration) -> Result<Option<Holding>> {
+        crate::polled::may_wait(|| format!("{place}: a hold"))?;
         refuse_where_a_hold_would_wait_for_itself(&self.locks, place)?;
         let mark = Mark::enter(&self.locks, place);
         let ask =

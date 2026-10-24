@@ -167,3 +167,18 @@ fn a_run_of_a_key_inside_its_own_run_fails_rather_than_waits() {
     assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
     assert_eq!(imports.run("file-1", || Ok::<_, Error>(2)).unwrap(), 2, "the outer run let its key go");
 }
+
+// contract: STORE-10
+#[cfg(feature = "async")]
+#[test]
+fn a_run_tried_in_a_point_read_is_refused_before_it_claims_its_key() {
+    let f = fixture();
+    let charges = f.store.once::<String>("charges").open().unwrap();
+    let runs = AtomicUsize::new(0);
+    let charge = counting(&runs);
+    assert!(charges.get("req-0").unwrap().is_none(), "a reader left idle: the refusal is the run's");
+    let tried = crate::polled::without_waiting(|| charges.run("req-7", &charge));
+    assert!(tried.is_none(), "a run may wait for another under way");
+    assert_eq!(runs.load(Ordering::SeqCst), 0, "nothing ran");
+    assert_eq!(charges.run("req-7", &charge).unwrap(), "receipt 1", "nor was its key claimed");
+}

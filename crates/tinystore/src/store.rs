@@ -177,6 +177,10 @@ struct Inner {
     lock: Mutex<Option<File>>,
     clock: Arc<dyn Clock>,
     memory: Arc<Memory>,
+    /// What ends the patience of the waits that hold no thread, as a
+    /// reservation of memory an awaited call waits for.
+    #[cfg(feature = "async")]
+    timer: Arc<crate::timer::Timer>,
     /// What the store measures of itself goes through, heard only when it
     /// was opened with `self_metrics`.
     probe: Arc<Probe>,
@@ -255,10 +259,18 @@ impl Store {
         #[cfg(feature = "metrics")]
         let self_metrics = options.self_metrics.filter(|_| !beside);
         let probe = Arc::new(Probe::default());
+        let limit = options.memory.unwrap_or(u64::MAX);
+        #[cfg(feature = "async")]
+        let timer = Arc::new(crate::timer::Timer::new());
         let inner = Inner {
             lock: Mutex::new(lock),
             clock: options.clock.unwrap_or_else(|| Arc::new(SystemClock)),
-            memory: Memory::new(options.memory.unwrap_or(u64::MAX)),
+            #[cfg(feature = "async")]
+            memory: Memory::on(limit, Arc::clone(&timer)),
+            #[cfg(not(feature = "async"))]
+            memory: Memory::new(limit),
+            #[cfg(feature = "async")]
+            timer,
             scheduler: Scheduler::new(options.background, Arc::clone(&probe)),
             probe,
             engines: Mutex::new(Vec::new()),
@@ -680,6 +692,9 @@ impl Inner {
         lock(&self.open).clear();
         #[cfg(any(feature = "kv", feature = "jobs"))]
         lock(&self.files).clear();
+        // a reservation still waiting for memory is answered closed
+        #[cfg(feature = "async")]
+        self.timer.stop();
         drop(lock(&self.lock).take());
         first_failure.map_or(Ok(()), |error| Err(error.within(self.describe())))
     }

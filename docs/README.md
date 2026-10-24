@@ -38,6 +38,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Why TinyStore](handbook/start/why.md)
 - [Your first store](handbook/start/first-store.md)
 - [One directory, many engines](handbook/start/directory.md)
+- [Rust with async](handbook/start/rust-async.md)
 - [The chat we build](handbook/start/chat.md)
 
 ### Building the chat

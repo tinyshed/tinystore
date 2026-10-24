@@ -644,6 +644,7 @@ impl State {
     /// Passes a write of `file` on toward its home: over the direct link that
     /// takes the file, or the link to `from`.
     pub(crate) fn write_toward(&self, file: &str, op: Vec<u8>, at_most: Duration) -> Result<Written> {
+        crate::polled::may_wait(|| format!("{file}: a write passed on to its home"))?;
         let direct = lock(&self.direct).values().find(|direct| direct.follows(file)).cloned();
         match direct {
             Some(direct) => direct.upstream.write(op, at_most),

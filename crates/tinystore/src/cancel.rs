@@ -222,6 +222,38 @@ impl Drop for Given {
     }
 }
 
+/// The tokens of this thread's call, carried to the thread that runs a read
+/// of it: an awaited read runs on the store's pool, and a token the program
+/// put around the call that made its future must stop it there.
+#[cfg(feature = "async")]
+#[derive(Clone, Default)]
+pub(crate) struct Captured(Vec<Arc<Inner>>);
+
+/// This thread's tokens, to enter again on another.
+#[cfg(feature = "async")]
+pub(crate) fn captured() -> Captured {
+    Captured(SCOPE.with(|scope| scope.try_borrow().map(|scope| scope.clone()).unwrap_or_default()))
+}
+
+#[cfg(feature = "async")]
+impl Captured {
+    /// Runs `call` on this thread under the captured tokens, and `own`
+    /// innermost: the token of the awaited call itself, which its future's
+    /// drop cancels.
+    pub(crate) fn run<T>(&self, own: Option<&CancellationToken>, call: impl FnOnce() -> T) -> T {
+        let tokens = self.0.iter().cloned().chain(own.map(|token| Arc::clone(&token.inner)));
+        let _scopes: Vec<Scope> = tokens.map(Scope::enter).collect();
+        call()
+    }
+}
+
+#[cfg(feature = "async")]
+impl fmt::Debug for Captured {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Captured({} tokens)", self.0.len())
+    }
+}
+
 /// Whether this thread's call runs under a token.
 pub(crate) fn in_scope() -> bool {
     SCOPE.with(|scope| scope.try_borrow().is_ok_and(|scope| !scope.is_empty()))

@@ -51,6 +51,13 @@ const ROLLBACK_TO: &str = own!("rollback to grouped");
 /// queue leads on, since nobody else would. So a host with one thread and many
 /// writes in flight, an event loop, fills a commit without a thread a write.
 ///
+/// A write submitted from an executor's thread, inside `polled::leading_on`,
+/// hands the lead it would take to the store's pool instead, or to a thread
+/// of its own once the pool stopped, so that no sync of the disk runs where
+/// futures are polled. Until a thread of the pool takes
+/// it, the next caller who can lead takes it first: a pool whose every thread
+/// waits for this file's writer would never run the lead they wait for.
+///
 /// A checkpoint a commit asked for runs on a caller's thread once it holds no
 /// turn: when its call returns, or when it queued a write behind a leader.
 ///
@@ -70,6 +77,8 @@ pub(crate) struct Group {
 struct Queue {
     waiting: VecDeque<Arc<Write>>,
     leading: bool,
+    /// The lead was handed to another thread that has not taken it yet.
+    handed: bool,
     closed: bool,
     /// How many writes a gathering leader waits for: the write that makes
     /// them wakes it, and no other, since a wake a write would cost each
@@ -147,7 +156,7 @@ impl Group {
     /// every write that ran in it with `OutcomeUnknown`.
     pub(crate) fn write(&self, writer: &Mutex<Connection>, bytes: usize, work: Work) -> Result<()> {
         let write = Arc::new(Write::new(bytes, work, self.queued()));
-        let leads = self.enqueue(&write)?;
+        let leads = self.enqueue(&write, false)?;
         if leads || write.wait_for_turn() {
             self.lead(writer, Some(&write));
         }
@@ -158,13 +167,18 @@ impl Group {
 
     /// Queues `work` and returns at once, `done` called with its answer once
     /// its commit ends. When no commit runs, this caller's thread commits the
-    /// queue first, as long as submitted writes keep arriving at its front.
-    pub(crate) fn submit(&self, writer: &Mutex<Connection>, bytes: usize, work: Work, done: Done) {
+    /// queue first, as long as submitted writes keep arriving at its front;
+    /// inside `polled::leading_on`, a thread of the pool does instead.
+    pub(crate) fn submit(self: &Arc<Self>, writer: &Arc<Mutex<Connection>>, bytes: usize, work: Work, done: Done) {
         let write = Arc::new(Write::submitted(bytes, work, done, self.queued()));
-        match self.enqueue(&write) {
-            Ok(true) => self.lead(writer, None),
-            Ok(false) => {}
-            Err(error) => return write.answer(Err(error), Vec::new()),
+        let elsewhere = crate::polled::lead();
+        match (self.enqueue(&write, elsewhere.is_some()), elsewhere) {
+            (Err(error), _) => return write.answer(Err(error), Vec::new()),
+            // the lead, and the checkpoints after it, run where the scope says
+            (Ok(true), Some(lead)) => return lead(Handed::job(Arc::clone(self), Arc::clone(writer))),
+            (Ok(false), Some(_)) => return,
+            (Ok(true), None) => self.lead(writer, None),
+            (Ok(false), None) => {}
         }
         // A leader on an event loop's writes leads on while they come, so the
         // threads that queue them behind it run what its commits asked for.
@@ -189,21 +203,34 @@ impl Group {
         self.grew.notify_all();
     }
 
-    /// Queues a write and says whether its caller leads.
-    fn enqueue(&self, write: &Arc<Write>) -> Result<bool> {
+    /// Queues a write and says whether its caller leads: one that will hand
+    /// the lead `elsewhere` marks it handed, and one that will not takes a
+    /// lead handed that no thread took yet.
+    fn enqueue(&self, write: &Arc<Write>, elsewhere: bool) -> Result<bool> {
         let mut queue = self.lock();
         if queue.closed {
             return Err(Error::closed("a grouped write"));
         }
         queue.waiting.push_back(Arc::clone(write));
         if queue.leading {
+            if queue.handed && !elsewhere {
+                queue.handed = false;
+                return Ok(true);
+            }
             if queue.gathering.is_some_and(|wanted| queue.waiting.len() >= wanted) {
                 self.grew.notify_all();
             }
             return Ok(false);
         }
         queue.leading = true;
+        queue.handed = elsewhere;
         Ok(true)
+    }
+
+    /// Takes the lead handed to another thread, unless a caller took it
+    /// first; says whether this thread leads.
+    fn take_handed(&self) -> bool {
+        std::mem::take(&mut self.lock().handed)
     }
 
     /// Commits batches until the write at the front has a caller of its own to
@@ -297,6 +324,32 @@ impl Group {
 
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A commit's lead handed to another thread. It leads wherever it ends: on
+/// the thread that runs it, or, dropped unrun where no thread could be
+/// started for it, on the thread that drops it, since the writes queued
+/// behind the lead have no other leader. A caller that took the lead first
+/// leaves it nothing to do.
+struct Handed {
+    group: Arc<Group>,
+    writer: Arc<Mutex<Connection>>,
+}
+
+impl Handed {
+    fn job(group: Arc<Group>, writer: Arc<Mutex<Connection>>) -> crate::polled::Job {
+        let handed = Handed { group, writer };
+        Box::new(move || drop(handed))
+    }
+}
+
+impl Drop for Handed {
+    fn drop(&mut self) {
+        if self.group.take_handed() {
+            self.group.lead(&self.writer, None);
+            self.group.checkpoints.run_due();
+        }
     }
 }
 

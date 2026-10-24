@@ -36,7 +36,7 @@ pub(crate) struct File {
     /// Shared with the file's log, which holds it to read where the file's
     /// commits stand while none is under way.
     writer: Arc<Mutex<Connection>>,
-    group: Group,
+    group: Arc<Group>,
     readers: Arc<Readers>,
     closed: AtomicBool,
     settlers: Arc<Settlers>,
@@ -146,7 +146,7 @@ impl File {
             probe.opened(path.clone(), Arc::downgrade(&readers));
         }
         Ok(Self {
-            group: Group::new(&config, Arc::clone(&settlers), Arc::clone(&capture), Arc::clone(&checkpoints)),
+            group: Arc::new(Group::new(&config, Arc::clone(&settlers), Arc::clone(&capture), Arc::clone(&checkpoints))),
             readers,
             writer,
             path,
@@ -185,6 +185,7 @@ impl File {
     {
         self.refuse_when_closed("a write")?;
         self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")?;
+        self.refuse_while_polled("a write")?;
         if self.is_copy() {
             return self.as_a_copy(write);
         }
@@ -199,20 +200,30 @@ impl File {
     /// write refused before it is queued is answered at once, on the caller's
     /// thread. For hosts whose one thread holds many writes in flight; `done`
     /// must not block, since the commits after it wait for it.
+    ///
+    /// When no commit runs, the caller's thread leads the queue's, as long as
+    /// submitted writes keep arriving at its front. Inside
+    /// `polled::leading_on`, as [`File::submit_on`] runs it, the lead goes to
+    /// the scope's pool instead, and so does a copy's read in a write's place.
+    /// A point read tried in a poll is refused it: run again on the pool, it
+    /// would submit it twice.
     pub(crate) fn submit<T, F, D>(&self, bytes: usize, write: F, done: D)
     where
         F: FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
         T: Send + 'static,
         D: FnOnce(Result<T>) + Send + 'static,
     {
-        let refused = self.refuse_when_closed("a write").and_then(|()| {
-            self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")
-        });
+        let refused = self
+            .refuse_when_closed("a write")
+            .and_then(|()| {
+                self.refuse_inside_a_transaction("a write", "would wait for the writer the transaction holds")
+            })
+            .and_then(|()| self.refuse_in_a_point_read("a write"));
         if let Err(error) = refused {
             return done(Err(error));
         }
         if self.is_copy() {
-            return done(self.as_a_copy(write));
+            return self.submit_as_a_copy(write, done);
         }
         let waiting = match self.wait_for_the_writer("a write") {
             Ok(waiting) => waiting,
@@ -227,6 +238,36 @@ impl File {
         drop(waiting);
     }
 
+    /// [`File::submit`], its commit led on `lead`, a thread of the store's
+    /// pool, should this thread lead it: for a write an awaited future makes,
+    /// whose poll must not sync the disk on the executor's thread.
+    #[cfg(feature = "async")]
+    #[allow(dead_code, reason = "the engines' async writes submit through it, or through aio's write")]
+    pub(crate) fn submit_on<T, F, D>(&self, lead: &crate::polled::Lead, bytes: usize, write: F, done: D)
+    where
+        F: FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+        D: FnOnce(Result<T>) + Send + 'static,
+    {
+        crate::polled::leading_on(lead, || self.submit(bytes, write, done));
+    }
+
+    /// Answers a write on a copy as `as_a_copy` does, on the scope's pool
+    /// inside `polled::leading_on`, since the read in its place may wait for
+    /// a reader.
+    fn submit_as_a_copy<T, F, D>(&self, write: F, done: D)
+    where
+        F: FnOnce(&Tx<'_>) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+        D: FnOnce(Result<T>) + Send + 'static,
+    {
+        let Some(lead) = crate::polled::lead() else {
+            return done(self.as_a_copy(write));
+        };
+        let (readers, describe) = (Arc::clone(&self.readers), self.describe());
+        lead(Box::new(move || done(on_a_copy(&readers, &describe, write))));
+    }
+
     /// Runs `work` in a transaction that holds the writer alone, for reads that
     /// decide what to write. It commits when `work` succeeds and rolls back
     /// when it fails or panics, and it pays its own sync.
@@ -236,6 +277,7 @@ impl File {
     pub(crate) fn transaction<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.refuse_when_closed("a transaction")?;
         self.refuse_inside_a_transaction("a transaction", "would wait for the writer the transaction holds")?;
+        self.refuse_while_polled("a transaction")?;
         if self.is_copy() {
             return self.as_a_copy(work);
         }
@@ -254,15 +296,7 @@ impl File {
     /// what only reads, as finding a name already made, answers, and what
     /// writes fails, its home's to do.
     fn as_a_copy<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
-        let mut outcome = None;
-        self.readers
-            .read(|connection| {
-                let (committed, no_settlers) = (Committed::default(), Settlers::default());
-                outcome = Some(work(&Tx::new(connection, &committed, &no_settlers)));
-                Ok(())
-            })
-            .map_err(|error| error.within(self.describe()))?;
-        outcome.expect("the read ran")
+        on_a_copy(&self.readers, &self.describe(), work)
     }
 
     /// `waited` is how long the transaction waited for the writer, when it
@@ -349,6 +383,7 @@ impl File {
     /// read for nothing: it is the proof that this thread said it is inside.
     pub(crate) fn begin(&self, _mark: &Mark) -> Result<Begun<'_>> {
         self.refuse_when_closed("a transaction")?;
+        self.refuse_while_polled("a transaction")?;
         if self.is_copy() {
             return Err(a_copy_takes_no_transaction(&self.describe()));
         }
@@ -417,6 +452,7 @@ impl File {
     /// opens again.
     fn vacuum(&self) -> Result<u64> {
         self.refuse_inside_a_transaction("a vacuum", "would wait for the writer the transaction holds")?;
+        self.refuse_while_polled("a vacuum")?;
         let waiting = self.wait_for_the_writer("a vacuum")?;
         let _writing = lock(&self.writer);
         drop(waiting);
@@ -484,6 +520,7 @@ impl File {
     pub(crate) fn migrate_checked(&self, history: &str, migrations: &[Migration]) -> Result<()> {
         self.refuse_when_closed("a migration")?;
         self.refuse_inside_a_transaction("a migration", "would wait for the writer the transaction holds")?;
+        self.refuse_while_polled("a migration")?;
         if self.is_copy() {
             return self.check_its_home_migrated(history, migrations);
         }
@@ -598,6 +635,23 @@ impl File {
         Ok(Waiting(Some((thread, file))))
     }
 
+    /// Refuses `what`, which takes the writer and waits for its commit, on the
+    /// thread that polls an awaited call: a point read runs again on the
+    /// store's pool, where the write may wait, and a write's submit fails.
+    fn refuse_while_polled(&self, what: &str) -> Result<()> {
+        crate::polled::may_wait(|| format!("{}: {what}", self.describe()))
+    }
+
+    /// Refuses `what`, a write submitted, in a point read an awaited call
+    /// tries in its poll, which may run again on the pool: there it is
+    /// submitted once.
+    fn refuse_in_a_point_read(&self, what: &str) -> Result<()> {
+        if crate::polled::waits_refused() {
+            return Err(crate::polled::refused(|| format!("{}: {what} in a point read", self.describe())));
+        }
+        Ok(())
+    }
+
     fn refuse_inside_a_transaction(&self, what: &str, why: &str) -> Result<()> {
         if !self.held_here() {
             return Ok(());
@@ -697,6 +751,24 @@ fn no_writer(describe: &str) -> Result<Connection> {
     let writer = Connection::open_in_memory().map_err(|error| sql_error(describe, error))?;
     writer.pragma_update(None, "query_only", true).map_err(|error| sql_error(describe, error))?;
     Ok(writer)
+}
+
+/// Runs what would write a copy's file in one snapshot of one of its
+/// `readers`, as [`File::as_a_copy`] says.
+fn on_a_copy<T, E: From<Error>>(
+    readers: &Readers,
+    describe: &str,
+    work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    let mut outcome = None;
+    readers
+        .read(|connection| {
+            let (committed, no_settlers) = (Committed::default(), Settlers::default());
+            outcome = Some(work(&Tx::new(connection, &committed, &no_settlers)));
+            Ok(())
+        })
+        .map_err(|error| error.within(describe))?;
+    outcome.expect("the read ran")
 }
 
 /// A transaction begun on a file by [`File::begin`].

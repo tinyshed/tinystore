@@ -150,8 +150,14 @@ impl Renewals {
     /// minute, and says whether the home renewed it; none when no answer came
     /// within `ANSWER_WAIT`, the renewal on its way. One that finds no way home
     /// is kept for the next pass, with no wait for a link.
+    ///
+    /// A point read tried in an awaited call's poll passes nothing: it is
+    /// refused, and its read runs again on the store's pool, which waits.
     #[cfg(feature = "replication")]
     pub(crate) fn pass_now(&self, store: &crate::Store, key: Key, renewal: Renewal, request: Vec<u8>) -> Option<bool> {
+        if crate::polled::may_wait(|| "kv: a renewal passed on to its home".to_owned()).is_err() {
+            return None;
+        }
         let (told, answer) = std::sync::mpsc::channel();
         let (passing, kept) = (Arc::clone(&self.passing), vec![(key.clone(), (renewal, request.clone()))]);
         let sent = forward::pass_on_then(store, request.clone(), move |answer| {

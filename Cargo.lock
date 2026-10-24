@@ -1424,6 +1424,7 @@ version = "0.0.0"
 dependencies = [
  "chacha20poly1305",
  "fst",
+ "futures-core",
  "jiff",
  "levenshtein_automata",
  "libc",
@@ -1437,6 +1438,7 @@ dependencies = [
  "sha2 0.11.0",
  "sysinfo",
  "tempfile",
+ "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",

@@ -425,3 +425,15 @@ fn a_cancelled_waiter_leaves_its_line() {
     granted(&next);
     assert!(gone.try_recv().is_err(), "a cancelled waiter is answered nothing");
 }
+
+// contract: STORE-10
+#[cfg(feature = "async")]
+#[test]
+fn a_hold_tried_in_a_point_read_is_refused_and_holds_nothing() {
+    let f = fixture();
+    let invoices = f.store.lock("invoices").open().unwrap();
+    let tried = crate::polled::without_waiting(|| invoices.try_hold("42", |_| Ok::<_, Error>("ran")));
+    assert!(tried.is_none(), "a lock's answer comes from its own thread");
+    assert_eq!(locks(&f.store).waiting(), 0);
+    assert_eq!(invoices.try_hold("42", |_| Ok::<_, Error>("held")).unwrap(), Some("held"), "nothing held the key");
+}

@@ -182,6 +182,11 @@ impl Readers {
     }
 
     fn take(&self) -> Result<Connection> {
+        if crate::polled::waits_refused() {
+            return self.take_idle();
+        }
+        // a write's submit reads nothing: a read with a reader idle may still run long
+        crate::polled::may_wait(|| format!("{}: a read", self.path.display()))?;
         let deadline = Instant::now() + self.config.reader_patience;
         let mut ticket = None;
         let mut pool = self.lock();
@@ -227,6 +232,25 @@ impl Readers {
             thread::park_timeout(timed_out.map_or(left, |timed_out| timed_out.min(left)));
             pool = self.lock();
         }
+    }
+
+    /// A reader for a point read tried in the poll of an awaited call: one
+    /// idle when no read waits in line for one, or the call is refused, to
+    /// run again on the pool. Opening a reader is a file's open and its
+    /// pragmas, which the pool does.
+    fn take_idle(&self) -> Result<Connection> {
+        let mut pool = self.lock();
+        if pool.closed {
+            return Err(Error::closed(format!("{}: a read", self.path.display())));
+        }
+        if pool.waiting.is_empty()
+            && !pool.paused
+            && let Some(idle) = pool.idle.pop()
+        {
+            return Ok(idle.connection);
+        }
+        drop(pool);
+        Err(crate::polled::refused(|| format!("{}: a read with no reader idle", self.path.display())))
     }
 
     fn open_one(&self) -> Result<Connection> {

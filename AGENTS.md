@@ -52,6 +52,7 @@ submodule is pinned to `v0.1.0-rc.5`.
 | pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules  | [one core](docs/handbook/inside/one-core.md)         |
 | server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it        | [cli](docs/guides/cli/README.md)                     |
 | SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server      | [one directory](docs/handbook/start/directory.md)    |
+| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`; no engine's handle has awaited calls yet     | [Rust with async](docs/handbook/start/rust-async.md) |
 | release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                 | the `release` skill                                  |
 
 From `v0.1.0` on, a store a release wrote opens in the next: an engine's
@@ -104,6 +105,7 @@ What has cost time before, so that it does not again:
 | `crates/tinystore/src/replication/` | replication: a node's log of each file's commits, its entries and segments, snapshots, links and the writes it passes on                                                                                                                                 |
 | `crates/tinystore/src/compress/`    | what records and metrics both pack with: varints, bits read a word at a time, rice codes, zstd, CRC-32                                                                                                                                                   |
 | `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                                                                                                                                   |
+| `crates/tinystore/src/aio/`         | the async API: `aio::Store`, `run`'s helpers an engine's awaited calls are built on, and a module an engine, hidden while it is empty                                                                                                                    |
 | `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                                                                                                                                 |
 | `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`; with `node`, Node's `tinystore.node`                                                                                                                |
 | `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                                                                                                                                  |
@@ -128,9 +130,11 @@ crate of its own exists only for a separate artifact: `crates/ffi`, whose
 feature `python` builds the Python SDK's extension module from the same pipe
 and `node` Node's addon, `crates/cli`, and `crates/protocol`, a tool that
 writes code and ships in nothing. Only `crates/cli` runs tokio; the library runs no async
-runtime.
+runtime, and its tests of `aio` take tokio as a dev-dependency.
 
-- **Each engine is a cargo feature**, `kv`, `config`, `locks`, `channels`, `jobs`, `sql`, `blobs`, `records`, `metrics` and `search` the defaults today, with `system`, the machine among the store's own metrics, which turns on `metrics`, and `backup`, `replication` and `replication-tls` beside them. A program links
+- **Each engine is a cargo feature**, `kv`, `config`, `locks`, `channels`, `jobs`, `sql`, `blobs`, `records`, `metrics` and `search` the defaults today, with `system`, the machine among the store's own metrics, which turns on `metrics`, and `backup`, `replication` and `replication-tls` beside them. `async`, the
+  Rust async API `tinystore::aio`, turns on `store`, and each engine's async
+  calls where that engine's feature is on; it brings no runtime. A program links
   the engines it opens and nothing else. Each turns on `store`, the store and
   the SQLite under it; `config` turns on kv, whose file keeps its changes,
   and `locks` kv too, whose file keeps their epoch;
@@ -141,7 +145,8 @@ runtime.
   and the pipe that the server, the FFI and every SDK speak, is a default
   feature that turns on kv, and a Rust program that calls the engines
   directly leaves it out. `just lint` builds the library with each engine,
-  the console and the wire alone, and every engine without the wire. An
+  the console and the wire alone, `async` alone and beside each engine,
+  and every engine with `async` and without the wire. An
   engine adds its calls to `Store` from its own module
   (`impl Store { pub fn bucket… }`): the store's own code names no engine.
 - **Engines never import each other.** They use the root, `engine`,
@@ -173,11 +178,12 @@ runtime.
   yaml-rust2, without its encodings, for a config's files, fst and
   levenshtein_automata for a misspelt name's nearest words, sysinfo, with `system` alone, for the machine among a store's own metrics,
   unicode-normalization, unicode-segmentation and rust-stemmers, pinned, for
-  a search's words, and libc on Unix for the disk's free space. The command
-  line adds windows-sys on Windows alone, the release tokio already builds,
-  for the DACL of a server's `SERVE` and pipe: no maintained crate wraps a
-  security descriptor safely, and tokio's pipe takes one only through
-  `unsafe`.
+  a search's words, libc on Unix for the disk's free space, and futures-core,
+  with `async` alone, for the `Stream` trait every runtime's stream helpers
+  take, a trait with no code to run. The command line adds windows-sys on
+  Windows alone, the release tokio already builds, for the DACL of a server's
+  `SERVE` and pipe: no maintained crate wraps a security descriptor safely,
+  and tokio's pipe takes one only through `unsafe`.
   Anything a measurement needs belongs in research, not here.
 - **The toolchain is pinned** in `rust-toolchain.toml`; `rust-version` is the
   floor a user needs, raised only for a feature in use.
@@ -218,8 +224,9 @@ weakly, so that it never keeps it open, and a handle that outlives its store
 is `Closed`.
 
 **Only the store starts threads that outlive a call**: the scheduler's thread,
-its pool, which the pipe's calls run on and whose idle threads end after a
-minute, the locks' timer, the threads channels run handlers on,
+its pool, which the pipe's calls and the async API's run on and whose idle
+threads end after a minute, its timer, which ends the patience of the waits
+that hold no thread, the locks' timer, the threads channels run handlers on,
 and the threads a queue's `work` asks for, which its worker's `stop` and the
 store's close stop. Engines register periodic work
 with `Host::every`; `background: false` stops all of it, for tests, which run

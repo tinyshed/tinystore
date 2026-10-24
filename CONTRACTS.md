@@ -28,19 +28,21 @@ These contracts are what does not.
 - **STORE-07** A program that links some engines MUST NOT pay for the others: an engine is a cargo feature, and a program that only logs links no store and no SQLite.
 - **STORE-08** A time an engine keeps MUST lie inside `[now − retention, now + skew]`, `now` read once a call from the store's clock; outside it MUST be `too_old` or `too_new`, naming the item.
 - **STORE-09** A read whose caller cancelled it, or whose timeout passed, MUST stop where it is, waiting or running, free at once what it held and fail `cancelled`; a cancel MUST NOT stop another caller's read, nor a write that runs.
+- **STORE-10** An awaited call MUST NOT commit, sync the disk or wait on the thread that polls its future, whatever it waits for: a reader, memory, a file's writer, a lock, a run under way, another node's answer. That work runs on the store's own threads, or waits on no thread at all.
 
 ## 2. Durability and transactions
 
 - **DUR-01** A write that returned success MUST survive an abrupt exit of the process, at the durability the store or the database was opened with: unless told, `full` for kv, jobs, files, search and every database, `os` for records and metrics.
 - **DUR-02** A transaction MUST commit all its changes or leave none observable; a call that fails inside it MUST leave it as it was before the call, unless that call ended the whole transaction, as a statement's `or rollback`, a trigger's `raise(rollback)` or a failing disk does: then the transaction MUST leave nothing observable, and every later call and its commit MUST fail `invalid`.
 - **DUR-03** Writes grouped into one commit MUST each fail alone: one refused write MUST NOT fail its neighbours, unless it ended the whole commit, as a statement's `or rollback`, a trigger's `raise(rollback)` or a failing disk does: it then fails with its own error, the writes before it in that commit that had not failed MUST fail `unavailable` and write nothing, and those after it MUST run in the next commit.
-- **DUR-04** A write whose caller left before its turn MUST write nothing; one that has started MUST finish with its group.
+- **DUR-04** A write whose caller left before its turn MUST write nothing; one that has started MUST finish with its group. An awaited write's turn is its future's first poll, so one dropped after it still commits (DUR-11).
 - **DUR-05** A write whose outcome cannot be established MUST answer `outcome_unknown`, never success and never an ordinary failure.
 - **DUR-06** Atomicity MUST hold within one file. A write across two files is not atomic, unless the program opened one engine inside another's file (`db.bucket`, `db.queue`, `db.search_index`), which then commits with that file's rows.
 - **DUR-07** A call on a file from inside that file's own transaction, on the same thread, MUST fail `invalid` rather than wait for itself or miss what the transaction wrote.
 - **DUR-08** A reader MUST see one consistent snapshot: every commit whole, and each item once, while packing, merging or expiry go on.
 - **DUR-09** Maintenance — packing, merging, purging, expiry — MUST NOT change an answer, beyond the order of events of one time that NOT-12 leaves open, and a crash between its steps MUST leave the last commit and go on from it.
 - **DUR-10** A long read or transaction MUST NOT fail a grouped write behind it.
+- **DUR-11** An awaited write whose future was polled MUST commit with its group whether or not its future is still awaited, and one whose future was dropped before its first poll MUST write nothing.
 
 ## 3. Errors and limits
 

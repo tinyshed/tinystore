@@ -96,6 +96,33 @@ fn reads_of_an_idle_key_on_a_copy_renew_it_at_its_home() {
     home.close().unwrap();
 }
 
+// contract: STORE-10
+#[cfg(feature = "async")]
+#[test]
+fn a_point_read_on_a_copy_in_its_keys_last_minute_waits_for_no_answer_from_home() {
+    let clock = Arc::new(TestClock::new(UNIX_EPOCH + Duration::from_secs(1_800_000_000)));
+    let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let home = node_on(home_dir.path(), Node { serve: Some("127.0.0.1:0".into()), ..Node::default() }, &clock);
+    let from = vec![home.node().unwrap().address()];
+    let copy = node_on(copy_dir.path(), Node { from, ..Node::default() }, &clock);
+    let at_home = home.bucket::<String>("sessions").idle(30 * DAY).open().unwrap();
+    at_home.set("token", &"signed in".to_owned()).unwrap();
+    let at_copy = copy.bucket::<String>("sessions").idle(30 * DAY).open().unwrap();
+    eventually("the copy holds the session", || at_copy.get("token").unwrap().is_some());
+    let point = || crate::polled::without_waiting(|| at_copy.get("token"));
+    assert!(point().is_some_and(|got| got.unwrap().is_some()), "a reader idle and no renewal due: read in the poll");
+
+    // a read in the key's last minute renews it at once, and waits for its home's answer up to five seconds
+    clock.advance(30 * DAY - 30 * SECOND);
+    assert!(point().is_none(), "refused in the poll, to run again where it may wait");
+    assert_eq!(Kv::of(&copy).unwrap().renewals().kept(), (0, 0), "nothing kept for a later pass either");
+    let expires = |at: &crate::kv::Bucket<String>| at.entry("token").unwrap().unwrap().expires_at;
+    assert_eq!(expires(&at_copy), Some(clock.now() + 30 * DAY), "the read run again renewed it");
+    drop((at_home, at_copy));
+    copy.close().unwrap();
+    home.close().unwrap();
+}
+
 // contract: KV-07
 #[test]
 fn a_copy_with_no_link_home_keeps_its_renewals_and_its_reads_wait_for_none() {

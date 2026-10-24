@@ -33,6 +33,10 @@ const LINGER: Duration = Duration::from_micros(200);
 const RETIRE_AFTER: Duration = Duration::from_secs(60);
 /// The name of every thread of the pool.
 pub(crate) const THREAD: &str = "tinystore-pool";
+/// The name of the thread a job that must run starts of its own once the
+/// pool stopped.
+#[cfg(feature = "async")]
+pub(crate) const ALONE: &str = "tinystore-alone";
 
 pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
@@ -87,6 +91,18 @@ impl Pool {
     /// The store's pool, which starts no thread before its first job.
     pub(crate) fn of(store: &Store) -> Result<Arc<Pool>> {
         store.engine(|_| Ok(Arc::new(Pool::new(LINGER, RETIRE_AFTER))))
+    }
+
+    /// The store's pool, or for a store that closed one stopped already,
+    /// which drops every job unrun: what an awaited call on a closed store
+    /// answers `Closed` through, where a handle is made without a `Result`.
+    #[cfg(feature = "async")]
+    pub(crate) fn of_or_stopped(store: &Store) -> Arc<Pool> {
+        Pool::of(store).unwrap_or_else(|_| {
+            let stopped = Pool::new(LINGER, RETIRE_AFTER);
+            stopped.lock().stopped = true;
+            Arc::new(stopped)
+        })
     }
 
     fn new(linger: Duration, retire_after: Duration) -> Pool {
@@ -156,10 +172,26 @@ impl Pool {
     /// here, outside the pool's lock, since what a job holds may answer its
     /// caller as it drops.
     pub(crate) fn run(self: &Arc<Self>, job: Job) {
+        drop(self.enqueue(job));
+    }
+
+    /// Runs `job` on a thread of the pool, or on a thread of its own once the
+    /// store's pool stopped: for work that must run whoever waits for it, as
+    /// a commit's lead, which the writes queued behind it wait for, while its
+    /// store closes. Only a system that starts no thread drops it unrun.
+    #[cfg(feature = "async")]
+    pub(crate) fn run_always(self: &Arc<Self>, job: Job) {
+        if let Some(job) = self.enqueue(job) {
+            let _ = thread::Builder::new().name(ALONE.to_owned()).spawn(job);
+        }
+    }
+
+    /// Queues `job` for a thread of the pool, or hands it back once the pool
+    /// stopped.
+    fn enqueue(self: &Arc<Self>, job: Job) -> Option<Job> {
         let mut queue = self.lock();
         if queue.stopped {
-            drop(queue);
-            return drop(job);
+            return Some(job);
         }
         queue.jobs.push_back(job);
         self.waiting.store(queue.jobs.len(), Ordering::Release);
@@ -168,13 +200,15 @@ impl Pool {
             queue.started += 1;
             queue.coming += 1;
             drop(queue);
-            return self.start();
+            self.start();
+            return None;
         }
         let wakes = queue.wakes_one();
         drop(queue);
         if wakes {
             self.ready.notify_one();
         }
+        None
     }
 
     fn start(self: &Arc<Self>) {

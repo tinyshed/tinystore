@@ -21,23 +21,62 @@ const formatVersion = 61
 // biome-ignore lint/suspicious/noExplicitAny: rustdoc's JSON is unstable and untyped, and formatVersion pins its shape
 type Json = any
 
-/** Where each engine's items are: the modules it owns and the directories its `Store` methods come from. */
-export const rustSources: Record<string, { modules: string[]; dirs: string[] }> = {
-	store: { modules: [''], dirs: ['store.rs', 'transaction.rs'] },
-	sql: { modules: ['sql'], dirs: ['sql/'] },
+/**
+ * Where each engine's items are: the modules it owns, the directories its
+ * `Store` methods come from, and the files its `aio::Store` methods come
+ * from. The async API's module of an engine, `aio::kv`, is listed on that
+ * engine's page, its names written with their path, `aio::kv::Bucket`, so
+ * that they read apart from the blocking `Bucket` beside them.
+ */
+export const rustSources: Record<string, { modules: string[]; dirs: string[]; aio: string[] }> = {
+	store: { modules: ['', 'aio'], dirs: ['store.rs', 'transaction.rs'], aio: ['aio/store.rs'] },
+	sql: { modules: ['sql', 'aio::sql'], dirs: ['sql/'], aio: ['aio/sql.rs', 'aio/sql/'] },
 	kv: {
-		modules: ['kv'],
+		modules: ['kv', 'aio::kv'],
 		dirs: ['kv/bucket.rs', 'kv/counters.rs', 'kv/once.rs', 'kv/quota.rs', 'kv/rate_limit.rs'],
+		aio: ['aio/kv.rs', 'aio/kv/'],
 	},
-	jobs: { modules: ['jobs'], dirs: ['jobs/'] },
-	blobs: { modules: ['blobs'], dirs: ['blobs/'] },
-	search: { modules: ['search'], dirs: ['search/'] },
-	channels: { modules: ['channels'], dirs: ['channels/'] },
-	locks: { modules: ['locks'], dirs: ['kv/locks/'] },
-	config: { modules: ['config'], dirs: ['kv/config/'] },
-	records: { modules: ['records', 'console'], dirs: ['records/', 'console/'] },
-	metrics: { modules: ['metrics'], dirs: ['metrics/'] },
-	backup: { modules: ['backup'], dirs: ['backup/'] },
+	jobs: { modules: ['jobs', 'aio::jobs'], dirs: ['jobs/'], aio: ['aio/jobs.rs', 'aio/jobs/'] },
+	blobs: {
+		modules: ['blobs', 'aio::blobs'],
+		dirs: ['blobs/'],
+		aio: ['aio/blobs.rs', 'aio/blobs/'],
+	},
+	search: {
+		modules: ['search', 'aio::search'],
+		dirs: ['search/'],
+		aio: ['aio/search.rs', 'aio/search/'],
+	},
+	channels: {
+		modules: ['channels', 'aio::channels'],
+		dirs: ['channels/'],
+		aio: ['aio/channels.rs', 'aio/channels/'],
+	},
+	locks: {
+		modules: ['locks', 'aio::locks'],
+		dirs: ['kv/locks/'],
+		aio: ['aio/locks.rs', 'aio/locks/'],
+	},
+	config: {
+		modules: ['config', 'aio::config'],
+		dirs: ['kv/config/'],
+		aio: ['aio/config.rs', 'aio/config/'],
+	},
+	records: {
+		modules: ['records', 'console', 'aio::records'],
+		dirs: ['records/', 'console/'],
+		aio: ['aio/records.rs', 'aio/records/'],
+	},
+	metrics: {
+		modules: ['metrics', 'aio::metrics'],
+		dirs: ['metrics/'],
+		aio: ['aio/metrics.rs', 'aio/metrics/'],
+	},
+	backup: {
+		modules: ['backup', 'aio::backup'],
+		dirs: ['backup/'],
+		aio: ['aio/backup.rs', 'aio/backup/'],
+	},
 }
 
 // modules another engine owns, or that no page shows: the runtime's own and replication's
@@ -101,17 +140,23 @@ export function rustItems(doc: Doc, engine: string): Item[] {
 	}
 	const reader = new Reader(doc)
 	const items = source.modules.flatMap(path => reader.module(path, engine))
-	const store = reader.storeMethods(source.dirs)
+	const stores = [
+		{ name: 'Store', members: reader.storeMethods('', source.dirs) },
+		{ name: 'aio::Store', members: reader.storeMethods('aio', source.aio) },
+	]
 	if (engine === 'store') {
-		const struct = items.find(item => item.name === 'Store')
-		if (struct !== undefined) {
-			struct.members = store
+		for (const { name, members } of stores) {
+			const struct = items.find(item => item.name === name)
+			if (struct !== undefined) {
+				struct.members = members
+			}
 		}
 		return items
 	}
-	return store.length === 0
-		? items
-		: [{ name: 'Store', code: 'impl Store', doc: '', members: store }, ...items]
+	const impls = stores
+		.filter(({ members }) => members.length > 0)
+		.map(({ name, members }) => ({ name, code: `impl ${name}`, doc: '', members }))
+	return [...impls, ...items]
 }
 
 class Reader {
@@ -123,20 +168,34 @@ class Reader {
 		this.#root = this.#entry(doc.root)
 	}
 
-	/** The public items of `tinystore::<path>`, a submodule's under its name: `memory::Budget`. */
+	/**
+	 * The public items of `tinystore::<path>`, a submodule's under its name:
+	 * `memory::Budget`. The root and `aio` list their own items alone, since
+	 * each engine's page lists its module, and the async API's names carry
+	 * their path. An engine's module of the async API that rustdoc did not
+	 * write, hidden until its engine's calls are built, lists nothing.
+	 */
 	module(path: string, engine: string): Item[] {
-		const module = path === '' ? this.#root : this.#child(this.#root, path)
+		const module = path === '' ? this.#root : this.#find(this.#root, path)
+		if (module === undefined && path.startsWith('aio::')) {
+			return []
+		}
+		if (module === undefined) {
+			throw new Error(`rustdoc wrote no public module tinystore::${path}`)
+		}
 		const skip = new Set([...(notInModule[engine] ?? []), ...(path === '' ? unlisted : [])])
-		return this.#items(module, '', skip, path === '')
+		const prefix = path === 'aio' || path.startsWith('aio::') ? `${path}::` : ''
+		return this.#items(module, prefix, skip, path === '' || path === 'aio')
 	}
 
-	/** `Store`'s inherent methods whose source is in one of `dirs`, under `src/`. */
-	storeMethods(dirs: string[]): Item[] {
-		const store = Object.values(this.#index).find(
-			entry => entry.crate_id === 0 && entry.name === 'Store' && 'struct' in entry.inner,
-		)
+	/** The inherent methods of `Store` in `tinystore::<path>` whose source is in one of `dirs`, under `src/`. */
+	storeMethods(path: string, dirs: string[]): Item[] {
+		const module = path === '' ? this.#root : this.#child(this.#root, path)
+		const store = (module.inner.module.items as number[])
+			.map(id => this.#throughUse(this.#entry(id)))
+			.find(entry => entry?.name === 'Store' && 'struct' in entry.inner)
 		if (store === undefined) {
-			throw new Error('rustdoc wrote no struct Store')
+			throw new Error(`rustdoc wrote no struct Store in tinystore${path === '' ? '' : `::${path}`}`)
 		}
 		const mine = (entry: Entry) => {
 			const file = (entry.span?.filename ?? '').replace(/\\/g, '/')
@@ -144,7 +203,7 @@ class Reader {
 			const local = at === -1 ? '' : file.slice(at + 'crates/tinystore/src/'.length)
 			return dirs.some(dir => (dir.endsWith('/') ? local.startsWith(dir) : local === dir))
 		}
-		return this.#methods(store, 'Store')
+		return this.#methods(store, path === '' ? 'Store' : `${path}::Store`)
 			.filter(({ entry }) => mine(entry))
 			.map(({ item }) => item)
 	}
@@ -340,6 +399,14 @@ class Reader {
 	}
 
 	#child(module: Entry, path: string): Entry {
+		const child = this.#find(module, path)
+		if (child === undefined) {
+			throw new Error(`rustdoc wrote no public module tinystore::${path}`)
+		}
+		return child
+	}
+
+	#find(module: Entry, path: string): Entry | undefined {
 		let current = module
 		for (const part of path.split('::')) {
 			const next = (current.inner.module.items as number[])
@@ -347,7 +414,7 @@ class Reader {
 				.map(entry => this.#throughUse(entry))
 				.find(entry => entry?.name === part && 'module' in entry.inner)
 			if (next === undefined) {
-				throw new Error(`rustdoc wrote no public module tinystore::${path}`)
+				return undefined
 			}
 			current = next
 		}

@@ -4,6 +4,8 @@
 //! The store gives every engine the clock it reads, the memory budget its work
 //! reserves from, the background work it runs and the errors they all share.
 
+#[cfg(feature = "async")]
+pub mod aio;
 #[cfg(feature = "backup")]
 pub mod backup;
 #[cfg(feature = "blobs")]
@@ -43,7 +45,9 @@ mod memory;
 pub mod metrics;
 #[cfg(feature = "wire")]
 pub mod pipe;
-#[cfg(feature = "wire")]
+#[cfg(feature = "store")]
+mod polled;
+#[cfg(any(feature = "wire", feature = "async"))]
 mod pool;
 #[cfg(feature = "store")]
 mod probe;
@@ -68,6 +72,8 @@ mod sync;
 #[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs")))]
 mod testing;
 mod text;
+#[cfg(feature = "async")]
+mod timer;
 #[cfg(any(feature = "kv", feature = "jobs", feature = "sql"))]
 mod transaction;
 #[cfg(feature = "typos")]

@@ -830,3 +830,94 @@ fn what_a_commits_writes_leave_together_settles_once_and_fails_only_those_that_h
     file.transaction(|tx| tx.execute("delete from t", []).map_err(|error| sql_error("delete", error))).unwrap();
     assert_eq!(settled(), 3, "a transaction of its own settles whole too");
 }
+
+/// Inserts `value` through `submit_on`, its commit led on `lead`, and says on
+/// which thread its answer came.
+#[cfg(feature = "async")]
+fn submit_on(file: &File, lead: &crate::polled::Lead, value: &str) -> mpsc::Receiver<(Result<i64>, Option<String>)> {
+    let (answered, answer) = mpsc::channel();
+    let (value, bytes) = (value.to_owned(), value.len());
+    let write = move |tx: &Tx<'_>| {
+        tx.execute("insert into t (v) values (?1)", [&value]).map_err(|error| sql_error("insert", error))?;
+        Ok(tx.last_insert_rowid())
+    };
+    let done = move |id| answered.send((id, thread::current().name().map(str::to_owned))).unwrap();
+    file.submit_on(lead, bytes, write, done);
+    answer
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn a_write_submitted_on_a_lead_returns_at_once_and_commits_on_the_leads_thread() {
+    let (_dir, file) = open(Config::default());
+    let lead: crate::polled::Lead = Arc::new(|job| {
+        thread::Builder::new().name("the-pool".to_owned()).spawn(job).unwrap();
+    });
+    // Held on a thread of its own, for a second at most: a caller that led the
+    // commit itself would wait for it, then answer, rather than hang the test.
+    let (release, held_until) = mpsc::channel::<()>();
+    let (holding, held) = mpsc::channel();
+    let holder = {
+        let file = Arc::clone(&file);
+        thread::spawn(move || {
+            let _writer = lock(&file.writer);
+            holding.send(()).unwrap();
+            let _ = held_until.recv_timeout(Duration::from_secs(1));
+        })
+    };
+    held.recv().unwrap();
+    let answer = submit_on(&file, &lead, "a");
+    assert!(answer.try_recv().is_err(), "the caller waited for nothing and led nothing");
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    let (id, thread) = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(id.is_ok(), "{id:?}");
+    assert_eq!(thread.as_deref(), Some("the-pool"));
+    assert_eq!(count(&file), 1);
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn a_lead_dropped_unrun_still_commits_the_writes_behind_it_where_it_is_dropped() {
+    let (_dir, file) = open(Config::default());
+    // The last resort of a lead no thread could be started for: the store's
+    // pool runs every lead, on a thread of its own once it stopped, and only
+    // a system that starts no thread drops one.
+    let lead: crate::polled::Lead = Arc::new(drop);
+    let answer = submit_on(&file, &lead, "a");
+    let (id, thread) = answer.try_recv().expect("answered before the submit returned");
+    assert!(id.is_ok(), "{id:?}");
+    assert_eq!(thread, thread::current().name().map(str::to_owned), "it committed where the lead was dropped");
+    assert_eq!(count(&file), 1);
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn a_blocking_write_takes_a_lead_no_thread_of_the_pool_took_yet() {
+    let (_dir, file) = open(Config::default());
+    // a pool whose every thread is busy, as with sixteen writes waiting for this file's writer
+    let kept: Arc<Mutex<Vec<crate::polled::Job>>> = Arc::default();
+    let lead: crate::polled::Lead = {
+        let kept = Arc::clone(&kept);
+        Arc::new(move |job| kept.lock().unwrap().push(job))
+    };
+    let answer = submit_on(&file, &lead, "a");
+    let (inserted, caller) = mpsc::channel();
+    {
+        let file = Arc::clone(&file);
+        let insert = move || inserted.send(insert(&file, "b")).unwrap();
+        thread::Builder::new().name("a-caller".to_owned()).spawn(insert).unwrap();
+    }
+    let led = caller.recv_timeout(Duration::from_secs(10)).expect("the caller waited for a lead the pool holds");
+    led.unwrap();
+    let (id, thread) = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(id.is_ok(), "{id:?}");
+    assert_eq!(thread.as_deref(), Some("a-caller"), "the caller committed the write queued before its own");
+
+    // the pool's thread comes at last, and finds nothing to lead
+    let jobs: Vec<_> = kept.lock().unwrap().drain(..).collect();
+    jobs.into_iter().for_each(|job| job());
+    assert_eq!(count(&file), 2);
+    insert(&file, "c").unwrap();
+    assert_eq!(count(&file), 3, "the group leads on as before");
+}

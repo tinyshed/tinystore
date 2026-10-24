@@ -3,6 +3,8 @@ use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "async")]
+use crate::timer::{self, Rang, Timer};
 use crate::{Error, Result};
 
 /// What a `Limit` of the store's memory names in its `limit` fact when one
@@ -28,6 +30,9 @@ pub struct Memory {
     limit: u64,
     held: Mutex<Held>,
     freed: Condvar,
+    /// What ends the patience of a reservation that waits on no thread.
+    #[cfg(feature = "async")]
+    timer: Arc<Timer>,
 }
 
 /// What work holds, and the reservations that wait for room in the order
@@ -35,12 +40,28 @@ pub struct Memory {
 /// every waiter before it waits for, so that small ones that keep coming
 /// never pass a large one: the large one is served once what was held before
 /// it comes back.
+///
+/// A waiter is a thread parked in [`Memory::reserve`], which takes its bytes
+/// itself once woken, or one that waits on no thread, [`Memory::reserve_then`],
+/// which whoever gives bytes back serves, in the same line.
 #[derive(Default)]
 struct Held {
     used: u64,
     /// Each waiter's ticket and the bytes it waits for, the first come first.
     waiting: VecDeque<(u64, u64)>,
     next_ticket: u64,
+    /// The waiters that wait on no thread, by ticket.
+    #[cfg(feature = "async")]
+    called: std::collections::HashMap<u64, Called>,
+}
+
+/// A reservation that waits on no thread: what answers it, and what ends its
+/// patience.
+#[cfg(feature = "async")]
+struct Called {
+    done: Box<dyn FnOnce(Result<Reservation>) + Send>,
+    what: String,
+    alarm: Option<timer::Set>,
 }
 
 impl Held {
@@ -62,7 +83,17 @@ impl Held {
 
 impl Memory {
     pub fn new(limit: u64) -> Arc<Self> {
+        #[cfg(feature = "async")]
+        return Memory::on(limit, Arc::new(Timer::new()));
+        #[cfg(not(feature = "async"))]
         Arc::new(Self { limit, held: Mutex::default(), freed: Condvar::new() })
+    }
+
+    /// The store's memory, the patience of its waiters ended on the store's
+    /// timer, which stops with the store.
+    #[cfg(feature = "async")]
+    pub(crate) fn on(limit: u64, timer: Arc<Timer>) -> Arc<Self> {
+        Arc::new(Self { limit, held: Mutex::default(), freed: Condvar::new(), timer })
     }
 
     pub fn limit(&self) -> u64 {
@@ -115,6 +146,13 @@ impl Memory {
             return Ok(self.nothing());
         }
         self.refuse_past_limit(bytes, what)?;
+        // a point read an awaited call tries in its poll waits on the pool instead
+        if crate::polled::waits_refused() {
+            let taken = self.take_now(0, bytes, what);
+            return taken.map(|()| self.reservation(bytes)).map_err(|_| crate::polled::refused(|| what.to_owned()));
+        }
+        // a write's submit reserves through the async API's waiter before it is made
+        crate::polled::may_wait(|| what.to_owned())?;
         let deadline = Instant::now() + patience;
         let mut state = self.lock();
         let ticket = state.next_ticket;
@@ -131,13 +169,135 @@ impl Memory {
             if left.is_zero() {
                 state.leave(ticket);
                 let error = self.exhausted(bytes, &state, ahead, what);
-                drop(state);
                 // the waiters behind it wait for less room now
-                self.freed.notify_all();
+                self.wake_behind(state);
                 return Err(error);
             }
             state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
         }
+    }
+
+    /// Takes `bytes` as [`Memory::reserve`] does, in the same line, but waits
+    /// on no thread: `done` is given the reservation once the bytes fit, or
+    /// `Limit` once `patience` passed, or `Closed` once the store closed. A
+    /// reservation that fits now is answered before this returns, here; one
+    /// that waits is answered on the thread that gave the bytes back, or on
+    /// the store's timer, so `done` must not block.
+    ///
+    /// What this returns takes the waiter out of line when it is dropped
+    /// unanswered, as an awaited call's future is.
+    #[cfg(feature = "async")]
+    pub(crate) fn reserve_then(
+        self: &Arc<Self>,
+        bytes: u64,
+        what: &str,
+        patience: Duration,
+        done: impl FnOnce(Result<Reservation>) + Send + 'static,
+    ) -> Waiting {
+        let answered = Waiting { memory: std::sync::Weak::new(), ticket: 0 };
+        if bytes == 0 {
+            done(Ok(self.nothing()));
+            return answered;
+        }
+        if let Err(refused) = self.refuse_past_limit(bytes, what) {
+            done(Err(refused));
+            return answered;
+        }
+        let mut state = self.lock();
+        let ahead = state.ahead(None);
+        if state.fits(bytes, ahead, self.limit) {
+            state.used += bytes;
+            drop(state);
+            done(Ok(self.reservation(bytes)));
+            return answered;
+        }
+        let ticket = state.next_ticket;
+        state.next_ticket += 1;
+        state.waiting.push_back((ticket, bytes));
+        state.called.insert(ticket, Called { done: Box::new(done), what: what.to_owned(), alarm: None });
+        drop(state);
+        let memory = Arc::downgrade(self);
+        let alarm = self.timer.at(Instant::now() + patience, move |rang| {
+            if let Some(memory) = memory.upgrade() {
+                memory.give_up(ticket, rang);
+            }
+        });
+        match self.lock().called.get_mut(&ticket) {
+            Some(called) => called.alarm = Some(alarm),
+            // served already, or rung already by a timer that stopped
+            None => drop(alarm.cancel()),
+        }
+        Waiting { memory: Arc::downgrade(self), ticket }
+    }
+
+    /// Ends the wait of the reservation `ticket` that waits on no thread:
+    /// `Limit`, its patience out, or `Closed`, its store's timer stopped.
+    #[cfg(feature = "async")]
+    fn give_up(self: &Arc<Self>, ticket: u64, rang: Rang) {
+        let mut state = self.lock();
+        let Some(called) = state.called.remove(&ticket) else { return };
+        let bytes = state.waiting.iter().find(|(waiter, _)| *waiter == ticket).map_or(0, |(_, bytes)| *bytes);
+        let ahead = state.ahead(Some(ticket));
+        state.leave(ticket);
+        let error = match rang {
+            Rang::Due => self.exhausted(bytes, &state, ahead, &called.what),
+            Rang::Stopped => Error::closed(format!("{}: the store closed while it waited for memory", called.what)),
+        };
+        self.wake_behind(state);
+        (called.done)(Err(error));
+    }
+
+    /// Takes the waiter `ticket` out of line unanswered, as its future is
+    /// dropped.
+    #[cfg(feature = "async")]
+    fn leave_unanswered(self: &Arc<Self>, ticket: u64) {
+        let mut state = self.lock();
+        let Some(called) = state.called.remove(&ticket) else { return };
+        state.leave(ticket);
+        self.wake_behind(state);
+        if let Some(alarm) = &called.alarm {
+            alarm.cancel();
+        }
+    }
+
+    /// Wakes the waiters, a waiter before them having left or taken its
+    /// bytes, or bytes having come back: each thread parked looks again, and
+    /// each waiter on no thread whose bytes now fit is served, here.
+    fn wake_behind(self: &Arc<Self>, state: MutexGuard<'_, Held>) {
+        #[cfg(feature = "async")]
+        let mut state = state;
+        #[cfg(feature = "async")]
+        let served = self.serve(&mut state);
+        drop(state);
+        self.freed.notify_all();
+        #[cfg(feature = "async")]
+        for (called, reservation) in served {
+            if let Some(alarm) = &called.alarm {
+                alarm.cancel();
+            }
+            (called.done)(Ok(reservation));
+        }
+    }
+
+    /// Takes the bytes of each waiter on no thread that fits now, in the
+    /// order the waiters came: one fits beside what is held and what every
+    /// waiter before it waits for, a thread parked or not.
+    #[cfg(feature = "async")]
+    fn serve(self: &Arc<Self>, state: &mut Held) -> Vec<(Called, Reservation)> {
+        let mut served = Vec::new();
+        let (mut ahead, mut at) = (0u64, 0);
+        while let Some(&(ticket, bytes)) = state.waiting.get(at) {
+            if state.called.contains_key(&ticket) && state.fits(bytes, ahead, self.limit) {
+                state.waiting.remove(at);
+                state.used += bytes;
+                let called = state.called.remove(&ticket).expect("a waiter on no thread is called");
+                served.push((called, self.reservation(bytes)));
+                continue;
+            }
+            ahead = ahead.saturating_add(bytes);
+            at += 1;
+        }
+        served
     }
 
     /// Takes `bytes` at once for work that cannot be refused and holds a
@@ -185,11 +345,10 @@ impl Memory {
         Reservation { memory: Arc::clone(self), bytes }
     }
 
-    fn give_back(&self, bytes: u64) {
+    fn give_back(self: &Arc<Self>, bytes: u64) {
         let mut state = self.lock();
         state.used -= bytes;
-        drop(state);
-        self.freed.notify_all();
+        self.wake_behind(state);
     }
 
     fn lock(&self) -> MutexGuard<'_, Held> {
@@ -200,6 +359,33 @@ impl Memory {
 impl fmt::Debug for Memory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Memory({} of {} bytes)", self.used(), self.limit)
+    }
+}
+
+/// A reservation [`Memory::reserve_then`] keeps waiting on no thread: dropped
+/// before it is answered, it leaves its line, and the waiters behind it wait
+/// for less.
+#[cfg(feature = "async")]
+#[must_use = "dropping it takes the waiter out of line"]
+pub(crate) struct Waiting {
+    /// Nothing for a reservation answered before it would wait.
+    memory: std::sync::Weak<Memory>,
+    ticket: u64,
+}
+
+#[cfg(feature = "async")]
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if let Some(memory) = self.memory.upgrade() {
+            memory.leave_unanswered(self.ticket);
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+impl fmt::Debug for Waiting {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Waiting({})", self.ticket)
     }
 }
 
@@ -391,6 +577,119 @@ mod tests {
         drop(reads);
         assert_eq!(store.memory().used(), 0, "the commit's frames came back");
         store.close().unwrap();
+    }
+
+    /// A reservation waiting on no thread, whose answer `answers` gets with
+    /// its name and the thread it came on.
+    #[cfg(feature = "async")]
+    type Answers = std::sync::mpsc::Sender<(&'static str, Result<u64>, Option<String>)>;
+
+    #[cfg(feature = "async")]
+    fn wait_for(
+        memory: &Arc<Memory>,
+        name: &'static str,
+        bytes: u64,
+        patience: Duration,
+        answers: &Answers,
+    ) -> Waiting {
+        let answers = answers.clone();
+        memory.reserve_then(bytes, name, patience, move |reserved| {
+            let here = thread::current().name().map(str::to_owned);
+            // the reservation goes as the answer is noted: a test holds no bytes past it
+            answers.send((name, reserved.map(|reservation| reservation.bytes()), here)).unwrap();
+        })
+    }
+
+    // contract: STORE-05
+    // contract: STORE-10
+    #[cfg(feature = "async")]
+    #[test]
+    fn waiters_on_no_thread_are_served_in_the_order_they_came_by_whoever_gives_bytes_back() {
+        let memory = Memory::new(100);
+        let (first, second) = (memory.try_reserve(60, "a read").unwrap(), memory.try_reserve(40, "a read").unwrap());
+        let (answers, answered) = std::sync::mpsc::channel();
+        let patience = Duration::from_secs(30);
+        let waiting = [
+            wait_for(&memory, "a merge", 60, patience, &answers),
+            wait_for(&memory, "an append", 30, patience, &answers),
+            wait_for(&memory, "a page", 10, patience, &answers),
+        ];
+        assert!(answered.try_recv().is_err(), "none fits, and none of them parked this thread");
+
+        // 40 free: the page's 10 would fit, but not past the merge before it
+        drop(second);
+        assert!(answered.try_recv().is_err(), "a small waiter does not pass a large one");
+        let giving = thread::Builder::new().name("a-reader".to_owned()).spawn(move || drop(first)).unwrap();
+        giving.join().unwrap();
+        let served: Vec<_> = answered.try_iter().collect();
+        let names: Vec<_> = served.iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(names, ["a merge", "an append", "a page"]);
+        assert!(served.iter().all(|(_, reserved, _)| reserved.is_ok()));
+        let on: Vec<_> = served.iter().map(|(_, _, on)| on.as_deref()).collect();
+        assert_eq!(on, [Some("a-reader"); 3], "served on the thread that gave the bytes back");
+        drop(waiting);
+        assert_eq!(memory.used(), 0);
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn a_waiter_on_no_thread_fails_limit_on_the_timer_once_its_patience_is_out() {
+        let memory = Memory::new(100);
+        let held = memory.try_reserve(100, "a read").unwrap();
+        let (answers, answered) = std::sync::mpsc::channel();
+        let _waiting = wait_for(&memory, "an upload", 50, Duration::from_millis(20), &answers);
+        let (name, reserved, on) = answered.recv_timeout(Duration::from_secs(10)).unwrap();
+        let error = reserved.unwrap_err();
+        assert_eq!((name, error.kind(), error.fact("limit")), ("an upload", ErrorKind::Limit, Some(STORE_MEMORY_NOW)));
+        assert_eq!(on.as_deref(), Some("tinystore-timer"));
+        // the line is empty again: a reservation that fits takes its bytes at once
+        drop(held);
+        memory.try_reserve(100, "a read").unwrap();
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn a_waiter_dropped_unanswered_leaves_the_line_and_the_one_behind_it_is_served() {
+        let memory = Memory::new(100);
+        let _held = memory.try_reserve(60, "a read").unwrap();
+        let (answers, answered) = std::sync::mpsc::channel();
+        let large = wait_for(&memory, "a merge", 80, Duration::from_secs(30), &answers);
+        let small = wait_for(&memory, "a page", 30, Duration::from_secs(30), &answers);
+        assert!(answered.try_recv().is_err(), "the page waits behind the merge");
+        drop(large);
+        let (name, reserved, _) = answered.try_recv().expect("the page was served as the merge left");
+        assert_eq!((name, reserved.unwrap()), ("a page", 30));
+        drop(small);
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn a_waiter_on_no_thread_fails_closed_when_its_stores_timer_stops() {
+        let timer = Arc::new(Timer::new());
+        let memory = Memory::on(100, Arc::clone(&timer));
+        let _held = memory.try_reserve(100, "a read").unwrap();
+        let (answers, answered) = std::sync::mpsc::channel();
+        let _waiting = wait_for(&memory, "an append", 10, Duration::from_secs(30), &answers);
+        timer.stop();
+        let (_, reserved, _) = answered.try_recv().expect("answered as the timer stopped");
+        assert_eq!(reserved.unwrap_err().kind(), ErrorKind::Closed);
+        let _late = wait_for(&memory, "an append", 10, Duration::from_secs(30), &answers);
+        let (_, reserved, _) = answered.try_recv().expect("one that would wait after the stop is answered at once");
+        assert_eq!(reserved.unwrap_err().kind(), ErrorKind::Closed);
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn a_reservation_that_fits_is_answered_before_reserve_then_returns() {
+        let memory = Memory::new(100);
+        let (answers, answered) = std::sync::mpsc::channel();
+        let _waiting = wait_for(&memory, "an append", 40, Duration::from_secs(30), &answers);
+        let (_, reserved, on) = answered.try_recv().unwrap();
+        assert_eq!(reserved.unwrap(), 40);
+        assert_eq!(on, thread::current().name().map(str::to_owned));
+        let too_large = wait_for(&memory, "an upload", 101, Duration::from_secs(30), &answers);
+        assert_eq!(answered.try_recv().unwrap().1.unwrap_err().fact("limit"), Some(STORE_MEMORY));
+        drop(too_large);
     }
 
     #[test]

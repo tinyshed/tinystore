@@ -220,6 +220,7 @@ impl<V: Value> Once<V> {
 
     /// Claims `key` for this caller, or waits for the run under way to end.
     fn claim(&self, key: &str) -> Result<Claim<'_>> {
+        crate::polled::may_wait(|| format!("{}: a run", self.answers.scope.shown_key(key)))?;
         let running = (self.answers.scope.id, self.answers.scope.path(key)?);
         let (ended, waiting) = mpsc::channel();
         let runs = self.answers.scope.kv.runs();

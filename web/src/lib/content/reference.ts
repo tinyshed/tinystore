@@ -167,7 +167,7 @@ function render(language: ApiLanguage, engine: ApiEngine, source: Sources, items
 	const lines = [
 		`# ${engine.title} API for ${apiLanguageNames[language]}`,
 		'',
-		`Every public ${noun(language)} of ${what(engine)} in ${packageOf(language, engine.slug, source)}, ` +
+		`Every public ${noun(language)} of ${what(engine)} in ${packageOf(language, engine.slug, source, items)}, ` +
 			`generated from its source. The [${engine.title} guide](../../${engine.guide}) explains how ` +
 			`to use them, and the ${others} pages list the same API.`,
 		'',
@@ -204,7 +204,8 @@ function noun(language: ApiLanguage): string {
 	return language === 'go' ? 'type, function and constant' : 'class, function and type'
 }
 
-function packageOf(language: ApiLanguage, engine: string, source: Sources): string {
+/** Where an engine's items are; in Rust its module of the async API only once it lists an item. */
+function packageOf(language: ApiLanguage, engine: string, source: Sources, items: Item[]): string {
 	if (language === 'go') {
 		const paths = [source.go, ...(source.goAlso ?? [])].map(
 			pkg => `\`${goModule}${pkg === '' ? '' : `/${pkg}`}\``,
@@ -212,8 +213,10 @@ function packageOf(language: ApiLanguage, engine: string, source: Sources): stri
 		return paths.join(' and ')
 	}
 	if (language === 'rust') {
+		const awaited = items.some(item => item.name.startsWith('aio::'))
 		return (
 			rustSources[engine]?.modules
+				.filter(module => awaited || !module.startsWith('aio'))
 				.map(module => `\`tinystore${module === '' ? '' : `::${module}`}\``)
 				.join(' and ') ?? '`tinystore`'
 		)
