@@ -60,8 +60,12 @@ func All() []Way {
 		{Name: "a sidecar", Ready: served, Home: same, Shared: true,
 			Open: func(t *testing.T, dir string) *tinystore.Store {
 				store := opened(t, dir, tinystore.Idle(time.Millisecond), tinystore.Binary(binary()))
+				// The sidecar takes SERVE away before it closes the store's files,
+				// and Windows refuses to remove a file it still holds: the test's
+				// own removal of dir would fail on a busy machine.
 				t.Cleanup(func() {
 					until(func() bool { _, err := os.Stat(filepath.Join(dir, "server", "SERVE")); return err != nil })
+					until(func() bool { return os.RemoveAll(dir) == nil })
 				})
 				return store
 			}},
