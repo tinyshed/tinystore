@@ -184,7 +184,6 @@ fn heads(fixture: &Fixture) -> Vec<(bool, i64)> {
     fixture.records().file.read(read).unwrap()
 }
 
-// contract: REC-04
 #[test]
 fn an_event_more_than_ten_seconds_behind_its_streams_newest_is_late() {
     let fixture = fixture();
@@ -205,7 +204,6 @@ fn an_event_more_than_ten_seconds_behind_its_streams_newest_is_late() {
     assert_eq!(heads(&fixture)[4..], [(false, 1), (true, 1)]);
 }
 
-// contract: REC-04
 #[test]
 fn an_event_appended_alone_can_be_late_and_a_producer_ahead_of_the_clock_makes_no_one_late() {
     let fixture = fixture();
@@ -236,7 +234,6 @@ fn late_events_are_packed_from_their_own_head() {
     assert_eq!(names(&web.list().page().unwrap().events), ["late", "waiting", "on time"]);
 }
 
-// contract: REC-04
 #[test]
 fn a_reopened_store_knows_what_its_heads_hold() {
     let fixture = fixture();
@@ -246,7 +243,6 @@ fn a_reopened_store_knows_what_its_heads_hold() {
     assert_eq!(heads(&fixture), [(false, 1), (true, 1)]);
 }
 
-// contract: REC-04
 #[test]
 fn a_head_packed_empty_forgets_the_newest_event_it_held() {
     let fixture = fixture();
@@ -260,7 +256,6 @@ fn a_head_packed_empty_forgets_the_newest_event_it_held() {
     assert_eq!(heads(&fixture), [(false, 1)]);
 }
 
-// contract: REC-04
 #[test]
 fn a_head_packed_in_part_keeps_its_newest_event_until_the_store_opens_again() {
     let fixture = fixture();

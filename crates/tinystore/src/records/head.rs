@@ -80,6 +80,14 @@ pub(super) struct Row {
     pub(super) body: Vec<u8>,
 }
 
+/// The arrival of the event at `place` in the head row `row`, which orders
+/// every event of records.db by when the store wrote it: row ids only grow,
+/// every stream and both heads take them in the order commits write rows,
+/// and a row holds `ROW_EVENTS` at most. Ids reach 2⁵³ before it overflows.
+pub(super) fn arrival(row: i64, place: usize) -> i64 {
+    row.wrapping_mul(ROW_EVENTS as i64).wrapping_add(place as i64)
+}
+
 /// The row of `events`, which are one row's worth and not none.
 pub(super) fn encode(events: &[Kept], codec: &mut Codec) -> Result<Row> {
     let (mut first, mut last, mut levels, mut weight) = (i64::MAX, i64::MIN, 0, 0);

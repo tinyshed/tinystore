@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 
+use super::super::event::Kept;
 use super::super::fixture::{DAY, Fixture, fixture, names};
 use super::super::maintain::{Maintenance, maintain};
 use super::super::pack::made_of;
@@ -10,9 +11,8 @@ use crate::records::NewEvent;
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
 
-/// A small segment whose blocks were written as its id says.
 fn small(id: i64, first: i64, last: i64, held: usize) -> Small {
-    Small { id, first, last, held, weight: held * 100, blocks: (10 * id, 10 * id + 9) }
+    Small { id, first, last, held, weight: held * 100 }
 }
 
 fn ids(run: Option<Vec<Small>>) -> Vec<i64> {
@@ -74,34 +74,70 @@ fn a_merge_leaves_overlapping_segments_out() {
     assert_eq!(ids(pick(segments)), [1, 3, 4, 5]);
     let three = vec![small(1, 100, 200, 30), small(2, 150, 160, 30), small(3, 155, 300, 30), small(4, 300, 400, 30)];
     assert_eq!(pick(three), None);
-    // one that begins where the one before ends, but whose blocks were written before its, would come after it
+    // one that begins where the one before ends is taken whichever was packed first
     let earlier = vec![small(1, 100, 100, 1), small(2, 95, 100, 2), small(3, 200, 210, 1), small(4, 300, 310, 1)];
-    assert_eq!(pick(earlier.clone()), None);
-    let fifth = earlier.into_iter().chain([small(5, 400, 410, 1)]).collect();
-    assert_eq!(ids(pick(fifth)), [2, 3, 4, 5]);
-    // a holder of lower id whose blocks a merge wrote after the next one's
-    let rewritten = Small { blocks: (60, 61), ..small(1, 100, 200, 3) };
-    let after = vec![rewritten, small(2, 200, 210, 1), small(3, 300, 310, 1), small(4, 400, 410, 1)];
-    assert_eq!(pick(after), None);
+    assert_eq!(ids(pick(earlier)), [2, 1, 3, 4]);
 }
 
 // contract: REC-04
 #[test]
-fn a_merge_keeps_events_of_one_time_in_the_order_reads_gave_them() {
+fn a_merge_after_a_member_packed_later_that_ends_at_its_time_keeps_the_order_they_were_appended() {
     let fixture = fixture();
     let api = fixture.events("api");
     let start = fixture.now();
     let at = |name: &str, millis: u64| NewEvent::new(name).at(start + Duration::from_millis(millis));
     let rounds = [vec![at("a", 100)], vec![at("e", 95), at("b", 100)], vec![at("c", 200)], vec![at("d", 300)]];
+    let mut merged = 0;
     for (round, events) in rounds.into_iter().enumerate() {
         api.append_all(events).unwrap();
         fixture.pass(HOUR);
-        maintain(&fixture.store).unwrap();
+        merged += maintain(&fixture.store).unwrap().merged;
         if round == 1 {
             assert_eq!(names(&api.list().page().unwrap().events), ["e", "a", "b"]);
         }
     }
+    // e and b's segment, then a's, which begins where it ends: b lies before a in the merged blocks
+    assert_eq!((merged, rows(&fixture)[0]), (3, (1, None, 2, 1, 5)));
     assert_eq!(names(&api.list().page().unwrap().events), ["e", "a", "b", "c", "d"]);
+}
+
+// contract: REC-04, REC-07
+#[test]
+fn a_late_segment_merges_after_one_that_ends_at_its_time_and_a_poll_past_it_finds_each_event_once() {
+    let fixture = fixture();
+    let (api, all) = (fixture.events("api"), fixture.store.all_events().unwrap());
+    let at = fixture.now() - Duration::from_mins(1);
+    let half = Duration::from_mins(30);
+    let append = |name: &str, time| api.append_all([NewEvent::new(name).at(time)]).unwrap();
+    append("z", at + Duration::from_secs(30));
+    fixture.pass(half);
+    // thirty seconds behind z, which waits on time: late, and in its late head for an hour
+    append("y", at);
+    fixture.pass(half);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1, "z alone");
+    // nothing waits on time now, so x comes on time at y's time
+    api.append_all([NewEvent::new("w").at(at - Duration::from_secs(5)), NewEvent::new("x").at(at)]).unwrap();
+    fixture.pass(half);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1, "y's late head");
+    fixture.pass(half);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1, "w and x");
+    let read = || names(&api.list().page().unwrap().events).into_iter().map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(read(), ["w", "y", "x", "z"]);
+    // a consumer polls z's segment and y's, and holds the cursor of w and x's
+    let polled = [all.poll(None).unwrap(), all.poll(Some("2:0")).unwrap()];
+    let polled: Vec<(&str, Vec<&str>)> =
+        polled.iter().map(|batch| (batch.cursor.as_str(), names(&batch.events))).collect();
+    assert_eq!(polled, [("2:0", vec!["z"]), ("3:0", vec!["y"])]);
+    append("v", at + Duration::from_secs(60));
+    fixture.pass(HOUR);
+    // w and x's segment, y's that begins where it ends, z's and v's, in the order of their times
+    assert_eq!(maintain(&fixture.store).unwrap().merged, 3);
+    assert_eq!(rows(&fixture)[..3], [(1, None, 3, 1, 5), (2, Some(1), 2, 1, 0), (3, Some(1), 0, 2, 0)]);
+    assert_eq!(read(), ["w", "y", "x", "z", "v"]);
+    let after = [all.poll(Some("3:0")).unwrap(), all.poll(Some("4:0")).unwrap()];
+    let after: Vec<(&str, Vec<&str>)> =
+        after.iter().map(|batch| (batch.cursor.as_str(), names(&batch.events))).collect();
+    assert_eq!(after, [("4:0", vec!["w", "x"]), ("5:0", vec!["v"])]);
 }
 
 /// Events of api to append, a round at a time: each a name and its time in
@@ -133,57 +169,37 @@ fn read_after(rounds: Rounds<'_>) -> (Vec<String>, u64) {
 
 // contract: REC-04
 #[test]
-fn a_member_waits_while_a_larger_segment_written_after_it_holds_one_of_its_times() {
+fn a_merge_written_after_a_larger_segment_that_holds_one_of_its_times_keeps_the_order_they_were_appended() {
     // x's segment, of the next size, is written after a's and holds its time
     let larger: &[(&str, u64)] = &[("x", 100), ("x2", 101), ("x3", 102), ("x4", 103)];
     let rounds = [&[("a", 100)][..], larger, &[("c", 200)], &[("d", 300)], &[("f", 400)]];
-    assert_eq!(read_after(&rounds), (["a", "x", "x2", "x3", "x4", "c", "d", "f"].map(String::from).to_vec(), 0));
+    assert_eq!(read_after(&rounds), (["a", "x", "x2", "x3", "x4", "c", "d", "f"].map(String::from).to_vec(), 3));
 }
 
 // contract: REC-04
 #[test]
-fn a_segment_a_merge_passed_over_for_overlapping_takes_the_place_of_the_member_whose_time_it_holds() {
+fn a_segment_a_merge_leaves_out_for_overlapping_keeps_its_place_among_events_of_one_time() {
     // x's segment begins before a's ends, so a merge in time order leaves it
-    // out; a's then waits, and x's merges with the others in a's place
+    // out, and a's merges with the others
     let rounds =
         [&[("a", 100), ("a2", 110)][..], &[("x", 100), ("x2", 105)], &[("c", 200)], &[("d", 300)], &[("f", 400)]];
     assert_eq!(read_after(&rounds), (["a", "x", "x2", "a2", "c", "d", "f"].map(String::from).to_vec(), 3));
 }
 
 #[test]
-fn a_member_waits_while_a_block_written_after_it_whose_times_meet_its_no_longer_reads() {
+fn a_merge_reads_its_members_alone_so_a_segment_beside_them_that_no_longer_reads_stops_nothing() {
     // x's segment, written after a's, spans a's time and holds none of it
     let larger: &[(&str, u64)] = &[("x", 99), ("x2", 101), ("x3", 102), ("x4", 103)];
     let rounds = [&[("a", 100)][..], larger, &[("c", 200)], &[("d", 300)]];
-    for broken in [false, true] {
-        let fixture = fixture();
-        let start = fixture.now();
-        pack_rounds(&fixture, start, &rounds);
-        if broken {
-            let broken =
-                |tx: &rusqlite::Connection| execute(tx, "update segments set body = x'00' where id = 2", [], "break");
-            fixture.records().file.write(0, move |tx| broken(tx).map(drop)).unwrap();
-        }
-        let merged = pack_rounds(&fixture, start, &[&[("f", 400)]]);
-        let damaged = fixture.store.all_events().unwrap().damaged().unwrap();
-        let damaged: Vec<String> = damaged.iter().map(ToString::to_string).collect();
-        let expected = if broken { (0, vec!["segment 2 of api".to_owned()]) } else { (3, Vec::new()) };
-        assert_eq!((merged, damaged), expected, "broken: {broken}");
-    }
-}
-
-#[test]
-fn the_blocks_beside_a_run_are_found_through_their_streams_segments() {
-    let plan = |connection: &rusqlite::Connection| {
-        let mut explain = connection.prepare(&format!("explain query plan {WRITTEN_AFTER}")).unwrap();
-        let details = explain.query_map(rusqlite::params![1, 0, 1, 0], |row| row.get::<_, String>(3)).unwrap();
-        Ok(details.map(Result::unwrap).collect::<Vec<_>>().join("; "))
-    };
-    let plan = fixture().records().file.read(plan).unwrap();
-    assert!(
-        plan.contains("USING INDEX segments_by_stream") && plan.contains("USING INDEX blocks_by_segment"),
-        "{plan}"
-    );
+    let fixture = fixture();
+    let start = fixture.now();
+    pack_rounds(&fixture, start, &rounds);
+    let broken = |tx: &rusqlite::Connection| execute(tx, "update segments set body = x'00' where id = 2", [], "break");
+    fixture.records().file.write(0, move |tx| broken(tx).map(drop)).unwrap();
+    assert_eq!(pack_rounds(&fixture, start, &[&[("f", 400)]]), 3);
+    assert!(fixture.store.all_events().unwrap().damaged().unwrap().is_empty());
+    let read = fixture.events("api").list().page().unwrap_err();
+    assert_eq!(read.kind(), crate::ErrorKind::Corrupt, "{read}");
 }
 
 // contract: DUR-08
@@ -255,7 +271,7 @@ fn a_merge_that_meets_a_changed_segment_leaves_everything_as_it_was() {
     let records = fixture.records();
     let mut codec = Codec::default();
     let events: Vec<Kept> = (0..8).map(|n| NewEvent::new("again").kept(1_800_000_000_000_000_000 + n)).collect();
-    let made = made_of(&events, &mut codec).unwrap();
+    let made = made_of(&events, &(0..8).collect::<Vec<_>>(), &mut codec).unwrap();
     // segment 2 is a place now, which a merge takes for a segment holding its own events
     let run = [small(1, 0, 1, 16), small(2, 2, 3, 4)];
     let failed = records.publish_merge(1, &run, &made).unwrap_err();
@@ -284,7 +300,7 @@ fn places_move_by_where_their_holders_events_begin_when_a_holder_is_not_the_earl
     let mut made = |count: i64| {
         let events: Vec<Kept> =
             (0..count).map(|n| NewEvent::new("merged").kept(1_800_000_000_000_000_000 + n)).collect();
-        made_of(&events, &mut codec).unwrap()
+        made_of(&events, &(0..count).collect::<Vec<_>>(), &mut codec).unwrap()
     };
     // segment 3 taken as earlier than 2, as a late segment is: 2 holds both, its own after 3's
     records.publish_merge(1, &[small(3, 0, 0, 6), small(2, 0, 0, 5)], &made(11)).unwrap();

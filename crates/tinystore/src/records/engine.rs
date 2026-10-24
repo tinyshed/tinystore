@@ -21,7 +21,10 @@ use crate::sqlite::{Config, File, Migration, sql_error};
 use crate::store::WeakStore;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
 
-const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+const MIGRATIONS: &[Migration] = &[
+    Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
+    Migration::of(2, "0002_arrivals.sql", include_str!("migrations/0002_arrivals.sql")),
+];
 
 /// records' file in the store's directory.
 const FILE: &str = "records.db";
@@ -51,7 +54,7 @@ pub(crate) struct Records {
     /// Held by a pass of maintenance, so that two never pack the same rows.
     pub(super) maintaining: Mutex<()>,
     /// The newest event each stream's head took on time, by the stream's id,
-    /// which tells whether the next event is late (REC-04): kept while
+    /// which tells whether the next event is late: kept while
     /// packing leaves rows in the head, forgotten once packing or a drop
     /// empties it, and read from the rows that wait at open and, on a copy,
     /// at each of its home's commits.

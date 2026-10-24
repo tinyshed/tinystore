@@ -24,13 +24,20 @@ arrive more than ten seconds late are packed apart, so they never force a
 packed segment to be rewritten. Small segments are later merged, four of a
 size at a time, keeping the places where each one began.
 
+Each block also keeps the order in which its events arrived: the head row
+each event was written in, and its place in that row. A read orders events
+that share a time by it, so they come back in the order they were appended,
+across streams, late events and merges, as [Events with the same
+time](../../guides/records/reading.md#events-with-the-same-time) shows.
+
 Inside a block, events are stored by column: one column per key of `fields`
-and `context`, plus the time, the level, the name and the message. Each
+and `context`, plus the time, the arrival, the level, the name and the message. Each
 column picks the smallest encoding that gives its values back exactly:
 
 | A column of          | Is kept as                                                        |
 |----------------------|-------------------------------------------------------------------|
 | times                | the steps between them, or one steady step, in as few bits as fit |
+| arrivals             | the first, then the steps between them, the most common one once  |
 | integers             | their steps, a dictionary, or the one value most rows share       |
 | repeated text        | a dictionary of the values and a small index per event            |
 | other text           | zstd, with the timestamps it spells cut out and kept as numbers   |

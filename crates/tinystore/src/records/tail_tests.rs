@@ -61,6 +61,29 @@ fn a_tail_slower_than_its_writers_says_how_many_left_before_it_read_them() {
     assert_eq!((names(&after), after.missed), (vec!["after"], 0));
 }
 
+// contract: REC-04, REC-08
+#[test]
+fn what_a_tail_gave_of_one_time_a_read_gives_in_its_order_once_it_is_packed() {
+    let fixture = fixture();
+    let all = fixture.store.all_events().unwrap();
+    let mut tail = all.list().tail().unwrap();
+    let at = fixture.now() - Duration::from_mins(1);
+    // web's late events, behind one twenty seconds after them, among api's on time
+    let appended = [("api", "a", at), ("web", "ahead", at + SECOND * 20), ("web", "b", at), ("api", "c", at)];
+    for (stream, name, time) in appended {
+        fixture.events(stream).append_all([NewEvent::new(name).at(time)]).unwrap();
+    }
+    let mut tailed = Vec::new();
+    while let Some(batch) = tail.next_within(Duration::ZERO).unwrap() {
+        tailed.extend(batch.events.into_iter().filter(|event| event.at == at).map(|event| event.name));
+    }
+    assert_eq!(tailed, ["a", "b", "c"]);
+    fixture.pass(Duration::from_hours(1));
+    crate::records::maintain(&fixture.store).unwrap();
+    let read = all.list().to(at + SECOND).page().unwrap().events;
+    assert_eq!(read.into_iter().map(|event| event.name).collect::<Vec<_>>(), tailed);
+}
+
 // contract: REC-08
 #[test]
 fn a_tail_ends_when_the_store_closes() {

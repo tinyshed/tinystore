@@ -63,13 +63,16 @@ pub(super) fn line_of(event: &Event) -> String {
 }
 
 /// Reads any bytes as a head row, a segment's row and a block of a segment
-/// of fields: each gives its events or fails `corrupt`, and none panics.
+/// of fields, of this version and of v0.1.0's: each gives its events or
+/// fails `corrupt`, and none panics.
 pub fn rows(bytes: &[u8]) {
     let mut codec = Codec::default();
     corrupt_or_read(head::parse(&sealed(head::VERSION, bytes), &mut codec));
     corrupt_or_read(Schema::parse(&sealed(segment::VERSION, bytes), &mut codec));
     let (schema, _) = Schema::of(&seeds());
-    corrupt_or_read(block::parse(&schema, &sealed(block::VERSION, bytes), &mut codec));
+    for version in [block::VERSION, block::VERSION_2] {
+        corrupt_or_read(block::parse(&schema, (1, &sealed(version, bytes)), &mut codec));
+    }
 }
 
 /// Bytes framed as every row is, their version first and their checksum
@@ -111,7 +114,8 @@ mod tests {
     // contract: ERR-04
     #[test]
     fn a_block_with_any_byte_changed_or_cut_gives_its_events_or_fails_corrupt() {
-        let made = made_of(&seeds(), &mut Codec::default()).unwrap();
+        let arrivals = [1025, 1026, 3072];
+        let made = made_of(&seeds(), &arrivals, &mut Codec::default()).unwrap();
         let body = &made.blocks[0].body;
         let inner = &body[1..body.len() - 4];
         for at in 0..inner.len() {
@@ -123,8 +127,9 @@ mod tests {
             rows(&inner[..at]);
         }
         let (schema, _) = Schema::of(&seeds());
-        let read = block::parse(&schema, &sealed(block::VERSION, inner), &mut Codec::default()).unwrap();
-        assert_eq!(read, seeds(), "sealed again, the block reads as it was made");
+        let read = block::parse(&schema, (1, &sealed(block::VERSION, inner)), &mut Codec::default()).unwrap();
+        let made: Vec<(i64, Kept)> = arrivals.into_iter().zip(seeds()).collect();
+        assert_eq!(read, made, "sealed again, the block reads as it was made");
     }
 
     #[test]

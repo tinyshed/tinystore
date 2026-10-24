@@ -1,5 +1,6 @@
 //! Packing: a head's rows, once they are a segment's worth or an hour old,
-//! become a segment, its events in the order of their times. A stream has
+//! become a segment, its events in the order of their times and those of one
+//! time in the order they arrived, each kept with its arrival. A stream has
 //! two heads, its events on time and its late ones, each packed by itself.
 //!
 //! ```text
@@ -177,18 +178,19 @@ impl Records {
     }
 
     /// Makes one segment of a head's oldest rows: read a segment's worth →
-    /// parse → order by time → make the segment → write it and remove the
-    /// rows, in one commit. A row that no longer reads is said once and left
-    /// for a drop. Says how many events it packed.
+    /// parse → order by time and arrival → make the segment → write it and
+    /// remove the rows, in one commit. A row that no longer reads is said
+    /// once and left for a drop. Says how many events it packed.
     fn pack_one(&self, stream: i64, late: bool) -> Result<usize> {
         let (rows, weight) = self.oldest_rows(stream, late)?;
         let _held = self.memory.reserve(weight as u64 * HELD, "records: packing a segment", PATIENCE)?;
         let mut codec = Codec::default();
-        let (mut events, mut packed, mut packed_weight) = (Vec::new(), Vec::new(), 0);
+        let (mut arrived, mut packed, mut packed_weight) = (Vec::new(), Vec::new(), 0);
         for (id, body, heavy) in rows {
             match head::parse(&body, &mut codec) {
                 Ok(parsed) => {
-                    events.extend(parsed);
+                    arrived
+                        .extend(parsed.into_iter().enumerate().map(|(place, event)| (head::arrival(id, place), event)));
                     packed.push(id);
                     packed_weight += heavy;
                 }
@@ -198,9 +200,9 @@ impl Records {
         if packed.is_empty() {
             return Ok(0);
         }
-        // stable: events of one time stay in the order they were written
-        events.sort_by_key(|event| event.at);
-        let made = made_of(&events, &mut codec)?;
+        arrived.sort_by_key(|(arrival, event)| (event.at, *arrival));
+        let (arrivals, events): (Vec<i64>, Vec<Kept>) = arrived.into_iter().unzip();
+        let made = made_of(&events, &arrivals, &mut codec)?;
         let emptied = self.publish((stream, late), (packed, packed_weight), &made)?;
         if emptied && !late {
             self.waiting.lock().unwrap_or_else(PoisonError::into_inner).remove(&stream);
@@ -325,12 +327,15 @@ fn ready(head: &Head, now: i64, wait: Duration) -> bool {
     head.events >= SEGMENT_EVENTS || head.weight >= SEGMENT_WEIGHT || now.saturating_sub(head.since) >= nanos(wait)
 }
 
-/// A segment of `events`, which are in the order of their times: what its
-/// blocks share, and the blocks.
-pub(super) fn made_of(events: &[Kept], codec: &mut Codec) -> Result<Made> {
+/// A segment of `events`, which are in the order of their times, each with
+/// its arrival in `arrivals`: what its blocks share, and the blocks.
+pub(super) fn made_of(events: &[Kept], arrivals: &[i64], codec: &mut Codec) -> Result<Made> {
     let (Some(first), Some(last)) = (events.first(), events.last()) else {
         return Err(Error::internal("records: a segment of no event"));
     };
+    if arrivals.len() != events.len() {
+        return Err(Error::internal("records: a segment whose events and arrivals differ in number"));
+    }
     let (schema, ids) = Schema::of(events);
     let mut made = Made {
         first: first.at,
@@ -346,7 +351,7 @@ pub(super) fn made_of(events: &[Kept], codec: &mut Codec) -> Result<Made> {
     for events in cut(events) {
         let to = from + events.len();
         let ids = [&ids.names[from..to], &ids.shapes[from..to], &ids.contexts[from..to]];
-        made.blocks.push(block::encode(&schema, events, ids, codec)?);
+        made.blocks.push(block::encode(&schema, (events, &arrivals[from..to]), ids, codec)?);
         made.blooms.push(blooms_of(events));
         from = to;
     }

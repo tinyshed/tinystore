@@ -25,6 +25,8 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+# files a release wrote, which every later one reads
+!testdata/records/*.db
 
 # Rust
 /target/

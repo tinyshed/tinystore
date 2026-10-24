@@ -86,9 +86,9 @@ struct Fetched {
     skip: i64,
     count: i64,
     /// The holder's row, and the bodies of its blocks that hold the batch,
-    /// each with where its events begin.
+    /// each with where its events begin and its id.
     row: Vec<u8>,
-    blocks: Vec<(i64, Vec<u8>)>,
+    blocks: Vec<(i64, i64, Vec<u8>)>,
     expired: u64,
 }
 
@@ -122,7 +122,7 @@ impl Records {
             }
         };
         // the bodies fetched and the events built of them hold the store's memory, as a read's do
-        let fetched_bytes = fetched.row.len() + fetched.blocks.iter().map(|(_, body)| body.len()).sum::<usize>();
+        let fetched_bytes = fetched.row.len() + fetched.blocks.iter().map(|(.., body)| body.len()).sum::<usize>();
         let events = (fetched.to - fetched.from).max(0) as u64;
         let _held =
             self.memory.reserve_for_read(fetched_bytes as u64 + events * EVENT_HELD, "records: a poll", PATIENCE)?;
@@ -131,11 +131,11 @@ impl Records {
         let within = |error: Error| self.met((Part::Segment, fetched.holder), &name, error);
         let schema = Schema::parse(&fetched.row, &mut codec).map_err(within)?;
         let mut events = Vec::with_capacity((fetched.to - fetched.from) as usize);
-        for (begins, body) in &fetched.blocks {
-            let parsed = block::parse(&schema, body, &mut codec).map_err(within)?;
+        for (begins, block, body) in &fetched.blocks {
+            let parsed = block::parse(&schema, (*block, body), &mut codec).map_err(within)?;
             let (low, high) =
                 ((fetched.from - begins).max(0) as usize, (fetched.to - begins).min(parsed.len() as i64) as usize);
-            events.extend(parsed.into_iter().take(high).skip(low).map(|event| event.into_event(&name)));
+            events.extend(parsed.into_iter().take(high).skip(low).map(|(_, event)| event.into_event(&name)));
         }
         let read = fetched.skip + events.len() as i64;
         let cursor = if read < fetched.count {
@@ -177,7 +177,7 @@ impl Records {
                     let body = connection
                         .prepare_cached(BLOCK_BODY)
                         .and_then(|mut select| select.query_row([block], |row| row.get(0)));
-                    blocks.push((begins, body.map_err(failed)?));
+                    blocks.push((begins, block, body.map_err(failed)?));
                 }
                 begins += events;
             }

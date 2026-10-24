@@ -251,7 +251,7 @@ impl Records {
     }
 
     /// Queues an append's rows at the file's writer: `held` goes back once
-    /// they commit, and what follows a commit runs on its thread.
+    /// they commit.
     fn submit_encoded(
         self: &Arc<Self>,
         encoded: Result<(HeadRows, Written)>,
@@ -262,14 +262,11 @@ impl Records {
             Ok(encoded) => encoded,
             Err(error) => return done(Err(error)),
         };
-        let committed = Arc::clone(self);
+        let records = Arc::clone(self);
         self.file.submit(
             rows.bytes(),
-            move |tx| rows.write(tx),
+            move |tx| rows.write(tx).map(|()| records.when_committed(tx, written)),
             move |appended| {
-                if appended.is_ok() {
-                    committed.written(written);
-                }
                 drop(held);
                 done(appended);
             },
@@ -349,7 +346,7 @@ const ADD_TO_HEAD: &str = "insert into head_state (stream, late, count, weight, 
 impl Records {
     /// Appends `events` to a stream, all of them or none: check each, then
     /// write them in one commit.
-    fn append(&self, stream: &Stream, events: Vec<NewEvent>) -> Result<()> {
+    fn append(self: &Arc<Self>, stream: &Stream, events: Vec<NewEvent>) -> Result<()> {
         let (checked, now) = self.check_append(stream, events)?;
         self.write_checked(stream, checked, now)
     }
@@ -375,7 +372,7 @@ impl Records {
     /// and the rest written an append's worth at a time. It gives how many
     /// were lost, those left out and what a failed write and the writes after
     /// it held, with the failure.
-    pub(super) fn append_held(&self, stream: &Stream, events: Vec<NewEvent>) -> (u64, Result<()>) {
+    pub(super) fn append_held(self: &Arc<Self>, stream: &Stream, events: Vec<NewEvent>) -> (u64, Result<()>) {
         let now = self.now();
         let window = window(stream, now);
         let (mut lost, mut pieces, mut piece, mut weight) = (0, Vec::new(), Vec::new(), 0);
@@ -405,15 +402,26 @@ impl Records {
 
     /// Writes events already checked in one commit: reserve → encode → write
     /// → hand them to the tails.
-    fn write_checked(&self, stream: &Stream, checked: Vec<Kept>, now: i64) -> Result<()> {
+    fn write_checked(self: &Arc<Self>, stream: &Stream, checked: Vec<Kept>, now: i64) -> Result<()> {
         if checked.is_empty() {
             return Ok(());
         }
         let _held = self.memory.reserve(weight_of(&checked), APPEND, PATIENCE)?;
         let (rows, written) = self.encode(stream, checked, now, &mut self.codec())?;
-        self.file.write(rows.bytes(), move |tx| rows.write(tx))?;
-        self.written(written);
-        Ok(())
+        let records = Arc::clone(self);
+        self.file.write(rows.bytes(), move |tx| rows.write(tx).map(|()| records.when_committed(tx, written)))
+    }
+
+    /// Asks the commit that writes an append's rows to follow it with
+    /// [`written`](Self::written), with the file's writer still held. The
+    /// rows of a commit's appends take their ids, and a read its order of
+    /// events of one time, in the order the commit wrote them; handed to the
+    /// tails as each append's answer comes back, an awaited append, answered
+    /// inside the commit, would pass a blocking one whose thread is woken
+    /// after it, and two blocking ones would race.
+    fn when_committed(self: &Arc<Self>, tx: &Tx<'_>, written: Written) {
+        let records = Arc::clone(self);
+        tx.after_commit(Box::new(move || records.written(written)));
     }
 
     /// The zstd context every append compresses its rows with, which one

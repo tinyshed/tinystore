@@ -586,6 +586,12 @@ impl File {
         self.group.commits()
     }
 
+    /// The grouped writes queued, the one a leader leads among them.
+    #[cfg(test)]
+    pub(crate) fn writes_waiting(&self) -> usize {
+        self.group.waiting()
+    }
+
     #[cfg(test)]
     pub(crate) fn checkpoints(&self) -> &Checkpoints {
         &self.checkpoints

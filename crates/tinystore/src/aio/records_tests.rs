@@ -322,6 +322,38 @@ async fn a_tail_wakes_for_what_is_appended_as_the_blocking_tail_gives_it_and_end
     assert!(ended, "the tail ends when the store closes");
 }
 
+// contract: REC-04
+// contract: REC-08
+#[test]
+fn a_tail_gives_events_of_one_time_in_a_reads_order_when_a_blocking_and_an_awaited_append_commit_together() {
+    // An awaited append is answered inside its commit, and a blocking one's
+    // thread wakes after that: handed to the tails at their answers, the
+    // awaited event came first, where every read gives the blocking one first.
+    let fixture = fixture();
+    let store = awaited(&fixture);
+    let (api, web) = (fixture.events("api"), store.events("web").open().unwrap());
+    let mut tail = fixture.store.all_events().unwrap().list().tail().unwrap();
+    let (at, records) = (fixture.now(), fixture.records());
+    let writer = records.file.hold_writer();
+    let blocking = std::thread::spawn(move || api.event("blocking").at(at).append(&()));
+    eventually("the blocking append queued", || records.file.writes_waiting() == 1);
+    let mut appending = pin!(web.event("awaited").at(at).append(&()));
+    assert!(polled_once(appending.as_mut()), "it queues behind the blocking one");
+    assert_eq!(records.file.writes_waiting(), 2, "both wait for one commit");
+    drop(writer);
+    blocking.join().unwrap().unwrap();
+    tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(appending).unwrap();
+
+    let mut tailed = Vec::new();
+    while tailed.len() < 2 {
+        let batch = tail.next_within(SECOND).unwrap().expect("a batch of what was appended");
+        tailed.extend(batch.events.into_iter().map(|event| event.name));
+    }
+    let read = fixture.store.all_events().unwrap().list().page().unwrap();
+    assert_eq!(names(&read.events), ["blocking", "awaited"], "the order their commit wrote them");
+    assert_eq!(tailed, ["blocking", "awaited"], "and the tail's");
+}
+
 /// What `future` gives, or a failure naming what never happened.
 async fn within_ten_seconds<F: Future>(what: &str, future: F) -> F::Output {
     tokio::time::timeout(Duration::from_secs(10), future).await.unwrap_or_else(|_| panic!("{what}: never"))

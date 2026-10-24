@@ -99,7 +99,7 @@ impl<'a> Tx<'a> {
     /// could hand B's over before A's. A rollback runs nothing, and a call
     /// whose savepoint rolled back takes back what it asked for. The hook
     /// must not block: every commit after it waits.
-    #[cfg(feature = "channels")]
+    #[cfg(any(feature = "channels", feature = "records"))]
     pub(crate) fn after_commit(&self, hook: Box<dyn FnOnce()>) {
         self.committed.push(hook);
     }
@@ -114,7 +114,7 @@ impl<'a> Tx<'a> {
 pub(crate) struct Committed(RefCell<Vec<Box<dyn FnOnce()>>>);
 
 impl Committed {
-    #[cfg(feature = "channels")]
+    #[cfg(any(feature = "channels", feature = "records"))]
     pub(crate) fn push(&self, hook: Box<dyn FnOnce()>) {
         self.0.borrow_mut().push(hook);
     }

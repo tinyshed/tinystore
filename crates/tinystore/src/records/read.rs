@@ -434,12 +434,8 @@ fn full(events: u64, rows: usize, bytes: usize, limit: usize) -> bool {
     events >= limit as u64 || rows >= FETCH_ROWS || bytes >= FETCH_BYTES
 }
 
-/// Where a row of events is. One head's blocks were packed from rows older
-/// than those still waiting in it, so of its events of one time the block's
-/// came first. A block keeps no event's arrival, so between a stream's late
-/// and on-time heads, and between streams, this is not the order they came
-/// in (REC-04).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// Where a row of events is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Block,
     Head,
@@ -465,10 +461,10 @@ struct Fetched {
     segments: HashMap<i64, Vec<u8>>,
 }
 
-/// An event a read found, with where it stood.
+/// An event a read found, with what orders it.
 struct Found {
     at: i64,
-    place: (Kind, i64, usize),
+    arrival: i64,
     stream: Arc<str>,
     event: Kept,
 }
@@ -817,9 +813,9 @@ pub(super) fn written((first, last): (i64, i64)) -> String {
 
 impl Records {
     /// The events of the fetched rows that the read keeps, in its order: by
-    /// their times, those of one time by where they lie as `Kind` says, or
-    /// all of it backwards. A row that no longer reads fails the read, named
-    /// as a drop names it.
+    /// their times, those of one time by their arrivals, or all of it
+    /// backwards. A row that no longer reads fails the read, named as a drop
+    /// names it.
     fn found(&self, asked: &Asked, query: &Query, fetched: Fetched, horizon: Option<i64>) -> Result<Vec<Found>> {
         let mut codec = Codec::default();
         let mut schemas: HashMap<i64, Schema> = HashMap::new();
@@ -843,25 +839,27 @@ impl Records {
             let Some((stream, kept)) = asked.streams.get(&row.stream) else { continue };
             let parsed = match (row.kind, schemas.get(&row.segment)) {
                 (Kind::Head, _) => head::parse(&body, &mut codec)
-                    .map(|events| events.into_iter().enumerate().collect())
-                    .map_err(|error| self.met((Part::HeadRow, row.id), stream, error)),
-                (Kind::Block, Some(schema)) => {
-                    block::parse_wanted(schema, &body, &mut codec, &wanted).map_err(|error| {
-                        self.met((Part::Segment, row.segment), stream, error.within(format!("block {}", row.id)))
+                    .map(|events| {
+                        let arrived = events.into_iter().enumerate();
+                        arrived.map(|(place, event)| (head::arrival(row.id, place), event)).collect()
                     })
-                }
+                    .map_err(|error| self.met((Part::HeadRow, row.id), stream, error)),
+                (Kind::Block, Some(schema)) => block::parse_wanted(schema, (row.id, &body), &mut codec, &wanted)
+                    .map_err(|error| {
+                        self.met((Part::Segment, row.segment), stream, error.within(format!("block {}", row.id)))
+                    }),
                 (Kind::Block, None) => Err(Error::internal(format!("records: block {} has no segment", row.id))),
             };
-            for (place, event) in parsed? {
+            for (arrival, event) in parsed? {
                 let at = event.at;
                 let in_range = at >= asked.first.max(*kept) && at <= asked.last;
                 let whole = horizon.is_none_or(|edge| if asked.newest { at > edge } else { at < edge });
                 if in_range && whole && query.keeps(&event) {
-                    found.push(Found { at, place: (row.kind, row.id, place), stream: Arc::clone(stream), event });
+                    found.push(Found { at, arrival, stream: Arc::clone(stream), event });
                 }
             }
         }
-        found.sort_by_key(|found| (found.at, found.place));
+        found.sort_by_key(|found| (found.at, found.arrival));
         if asked.newest {
             found.reverse();
         }

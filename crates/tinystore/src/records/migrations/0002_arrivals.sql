@@ -1,0 +1,5 @@
+-- From here on a block is of version 3, which keeps each event's arrival
+-- beside its time: the head row's id it was appended in × 1024 and its place
+-- in that row. No table changes, and a block of version 2 reads as before.
+-- The step is here so that a program before it refuses the file, rather
+-- than reading a block of version 3 as damage that a drop would remove.

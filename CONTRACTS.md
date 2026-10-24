@@ -40,7 +40,7 @@ These contracts are what does not.
 - **DUR-06** Atomicity MUST hold within one file. A write across two files is not atomic, unless the program opened one engine inside another's file (`db.bucket`, `db.queue`, `db.search_index`), which then commits with that file's rows.
 - **DUR-07** A call on a file from inside that file's own transaction, on the same thread, MUST fail `invalid` rather than wait for itself or miss what the transaction wrote.
 - **DUR-08** A reader MUST see one consistent snapshot: every commit whole, and each item once, while packing, merging or expiry go on.
-- **DUR-09** Maintenance — packing, merging, purging, expiry — MUST NOT change an answer, beyond the order of events of one time that NOT-12 leaves open, and a crash between its steps MUST leave the last commit and go on from it.
+- **DUR-09** Maintenance — packing, merging, purging, expiry — MUST NOT change an answer, and a crash between its steps MUST leave the last commit and go on from it.
 - **DUR-10** A long read or transaction MUST NOT fail a grouped write behind it.
 - **DUR-11** An awaited write whose future was polled MUST commit with its group whether or not its future is still awaited, and one whose future was dropped before its first poll MUST write nothing. A statement the database does not know writes, as one with `returning` is until it first runs, has its turn when its read finds that it writes: from then on it MUST commit as a polled write does.
 
@@ -145,7 +145,7 @@ These contracts are what does not.
 - **REC-01** An event MUST come back as it was written: each value as it was spelled, its fields, its time.
 - **REC-02** A list of events MUST be appended whole or not at all; a refused one names its place.
 - **REC-03** An appended event MUST be readable at once, before it is packed, and MUST survive an abrupt exit.
-- **REC-04** A read MUST return events in event time, each once, across packed segments and what waits. A stream's events of one time MUST come in the order they were appended, unless some of them were late and others not: those, and events of one time of different streams, MAY come in any order, and in another order from one read to the next (NOT-12). An event is late when it is more than ten seconds behind the store's clock and behind the newest on-time event of its stream before it: one earlier in its append, or one of an earlier append, until packing or a drop leaves none of the stream's on-time events waiting. When the store opens, or another node becomes the home of `records.db`, the events before it are the stream's on-time events that wait to be packed, whatever appended them; until then, an append that failed counts as none. An append that runs at once with another append, with packing or with a drop MAY count either way.
+- **REC-04** A read MUST return events in event time, those of one time in the order they were appended, within a stream and across streams, each once, across packed segments and what waits; events of one time that v0.1.0 packed keep the order v0.1.0 read them in (NOT-12).
 - **REC-05** A page MUST NOT split one timestamp nor lose one; a budget MUST end a page rather than fail it.
 - **REC-06** A count MUST find what a list finds; a sum of integers MUST be exact past 2⁶³.
 - **REC-07** A poll MUST give every packed event once from its cursor, across merges, and MUST say how many `keep` removed before it reached them.
@@ -259,4 +259,4 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **NOT-09** A log line that finds its buffer full is dropped and counted, never waited for.
 - **NOT-10** A search with `recall` may miss some of the exact best; without it a vector search is exact.
 - **NOT-11** Nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration.
-- **NOT-12** Records' events of one time keep no order across streams, nor within a stream when some were late and others not: a read may give them in any order, and two reads may give them differently (REC-04).
+- **NOT-12** Records' events of one time that v0.1.0 packed keep the order v0.1.0 read them in, which is not always the order they were appended: a stream's late events apart from its others, and the streams by the blocks their events lie in (REC-04).

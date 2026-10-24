@@ -5,6 +5,7 @@
 //! version | count | columns | each column's length | the columns | crc-32
 //!
 //! times      every event's
+//! arrivals   every event's, which orders those of one time as the store wrote them
 //! names      every event's, as its segment numbers them; none of a segment of one name
 //! shapes     every event's; none of a segment of one shape
 //! contexts   of the events that have one, as their segment numbers them
@@ -18,43 +19,65 @@
 //!
 //! A column is read with its segment's row and its own bytes, and with no
 //! other column: what a read does not ask for is not expanded.
+//!
+//! An event's arrival is its head row's id and its place in that row (see
+//! `head::arrival`). A packed segment's events of one time lie in arrival
+//! order, and a merged one's may not where one member ends and the next
+//! begins: a read orders them by it. Version 2, which v0.1.0 wrote, has no
+//! arrivals: its events take one made of where they lie, before every
+//! arrival a head row gives, so that they keep the order v0.1.0 read them in.
+//!
+//! ```text
+//! version 3  times 5 5 5   arrivals 1025 1027 2048    as head rows 1 and 2 held them
+//! version 2  times 5 5 5   block 9: 9 × 1024 + 0, + 1, + 2, less 2⁶²
+//! ```
 
 use std::collections::BTreeSet;
 
 use super::event::{Fields, Kept, Level, SpanId, TraceId};
-use super::head::{Codec, ROW_EVENTS, Row};
+use super::head::{self, Codec, ROW_EVENTS, Row};
 use super::ints::{put_ints, read_ints};
 use super::segment::{HAS_CONTEXT, HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE, Schema, Shape, WHOLE_FIELDS};
 use super::text::{Decoder, Keep, put_texts, read_texts, wants};
 use super::values::{put_values, read_values, values_equal};
 use crate::compress::checksum::crc32;
-use crate::compress::varint::{Reader, put_count};
+use crate::compress::varint::{Reader, put_count, put_int};
 use crate::{Error, Result};
 
 /// A block's first byte, which no head row has.
-pub(super) const VERSION: u8 = 2;
+pub(super) const VERSION: u8 = 3;
+/// v0.1.0's blocks, which have no arrivals and read forever.
+pub(super) const VERSION_2: u8 = 2;
 
 const TIMES: usize = 0;
-const NAMES: usize = 1;
-const SHAPES: usize = 2;
-const CONTEXTS: usize = 3;
-const LEVELS: usize = 4;
-const MESSAGES: usize = 5;
-const TRACES: usize = 6;
-const SPANS: usize = 7;
-const WHOLE: usize = 8;
+const ARRIVALS: usize = 1;
+const NAMES: usize = 2;
+const SHAPES: usize = 3;
+const CONTEXTS: usize = 4;
+const LEVELS: usize = 5;
+const MESSAGES: usize = 6;
+const TRACES: usize = 7;
+const SPANS: usize = 8;
+const WHOLE: usize = 9;
 /// The columns every block has before its keys'.
-const FIXED: usize = 9;
+const FIXED: usize = 10;
 
 /// The text a block's columns may expand to, all together.
 const BLOCK_TEXT: usize = 4 << 20;
 
-/// The block of `events`, which are in the order of their times; `ids` say
-/// which of the segment's names, shapes and contexts each has.
-pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: &mut Codec) -> Result<Row> {
+/// The block of `events`, which are in the order of their times, each with
+/// its arrival in `arrivals`; `ids` say which of the segment's names, shapes
+/// and contexts each has.
+pub(super) fn encode(
+    schema: &Schema,
+    (events, arrivals): (&[Kept], &[i64]),
+    ids: [&[i64]; 3],
+    codec: &mut Codec,
+) -> Result<Row> {
     let [names, shapes, contexts] = ids;
     let mut columns = vec![Vec::new(); FIXED + schema.columns];
     put_ints(&mut columns[TIMES], &events.iter().map(|event| event.at).collect::<Vec<_>>());
+    put_arrivals(&mut columns[ARRIVALS], arrivals);
     if schema.names.len() > 1 {
         put_ints(&mut columns[NAMES], names);
     }
@@ -98,11 +121,39 @@ pub(super) fn encode(schema: &Schema, events: &[Kept], ids: [&[i64]; 3], codec: 
     Ok(Row { first, last, levels, count: events.len(), weight, body })
 }
 
-/// Fields as the JSON of an object, each value as it was written.
-/// A block's columns, checked and not read yet.
+/// Arrivals as the first and the steps from each to the next. Events appended
+/// in the order of their times each arrive a place after the one before, or
+/// at the start of the next row, so that `put_ints` writes the step most of
+/// them share once and the few others apart:
+///
+/// ```text
+/// arrivals  1024 1025 … 2023 2048 2049 …    rows of 1000 events
+/// written   1024; steps of 1, and 25 at place 999
+/// ```
+fn put_arrivals(out: &mut Vec<u8>, arrivals: &[i64]) {
+    let Some(first) = arrivals.first() else { return };
+    put_int(out, *first);
+    put_ints(out, &arrivals.windows(2).map(|pair| pair[1].wrapping_sub(pair[0])).collect::<Vec<_>>());
+}
+
+/// `count` arrivals as `put_arrivals` wrote them.
+fn read_arrivals(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
+    let mut arrival = reader.int();
+    let mut arrivals = Vec::with_capacity(count);
+    arrivals.push(arrival);
+    for step in read_ints(reader, count.saturating_sub(1)) {
+        arrival = arrival.wrapping_add(step);
+        arrivals.push(arrival);
+    }
+    arrivals
+}
+
+/// A block's columns, checked and not read yet, those of version 2 with no
+/// arrivals.
 struct Opened<'b> {
     count: usize,
     columns: Vec<&'b [u8]>,
+    has_arrivals: bool,
 }
 
 impl<'b> Opened<'b> {
@@ -111,24 +162,42 @@ impl<'b> Opened<'b> {
         let Some((framed, sum)) = body.split_last_chunk::<4>() else {
             return Err(Error::corrupt("a block shorter than its checksum"));
         };
-        if framed.first() != Some(&VERSION) {
-            return Err(Error::corrupt("a block's version"));
-        }
+        let has_arrivals = match framed.first() {
+            Some(&VERSION) => true,
+            Some(&VERSION_2) => false,
+            _ => return Err(Error::corrupt("a block's version")),
+        };
         if crc32(framed) != u32::from_le_bytes(*sum) {
             return Err(Error::corrupt("a block's checksum"));
         }
+        let written = FIXED - usize::from(!has_arrivals) + schema.columns;
         let mut reader = Reader::new(&framed[1..]);
         let count = reader.count(ROW_EVENTS);
-        if reader.count(FIXED + schema.columns) != FIXED + schema.columns {
+        if reader.count(written) != written {
             reader.fail("a block whose columns are not its segment's");
         }
-        let lengths: Vec<usize> = (0..FIXED + schema.columns).map(|_| reader.count(framed.len())).collect();
-        let columns = lengths.into_iter().map(|length| reader.take(length)).collect();
+        let lengths: Vec<usize> = (0..written).map(|_| reader.count(framed.len())).collect();
+        let mut columns: Vec<&[u8]> = lengths.into_iter().map(|length| reader.take(length)).collect();
         reader.finish()?;
         if count == 0 {
             return Err(Error::corrupt("a block of no event"));
         }
-        Ok(Opened { count, columns })
+        if !has_arrivals {
+            columns.insert(ARRIVALS, &[]);
+        }
+        Ok(Opened { count, columns, has_arrivals })
+    }
+
+    /// Each event's arrival: the block's own, or one made of where it lies
+    /// in `block`, the block's id, for a block of version 2.
+    fn arrivals(&self, block: i64) -> Result<Vec<i64>> {
+        if !self.has_arrivals {
+            return Ok((0..self.count).map(|place| head::arrival(block, place).wrapping_sub(1 << 62)).collect());
+        }
+        let mut reader = Reader::new(self.columns[ARRIVALS]);
+        let read = read_arrivals(&mut reader, self.count);
+        reader.finish()?;
+        if read.len() == self.count { Ok(read) } else { Err(Error::corrupt("a block's arrivals")) }
     }
 
     fn ints(&self, column: usize, count: usize, what: &'static str) -> Result<Vec<i64>> {
@@ -191,26 +260,28 @@ impl<'b> Opened<'b> {
     }
 }
 
-/// A block's times in their order, no other column expanded.
-pub(super) fn times(schema: &Schema, body: &[u8]) -> Result<Vec<i64>> {
+/// The events of the block `block` in their order, each with its arrival.
+pub(super) fn parse(schema: &Schema, (block, body): (i64, &[u8]), codec: &mut Codec) -> Result<Vec<(i64, Kept)>> {
     let opened = Opened::of(schema, body)?;
-    opened.ints(TIMES, opened.count, "a block's times")
+    rebuild(schema, &opened, block, codec, None)
 }
 
-/// A block's events in the order of their times.
-pub(super) fn parse(schema: &Schema, body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
-    let opened = Opened::of(schema, body)?;
-    Ok(rebuild(schema, &opened, codec, None)?.into_iter().map(|(_, event)| event).collect())
-}
-
-/// The events of a block that `keep` keeps, every one without it, with their
-/// places: each column is read whole, and an event dropped is never built.
-fn rebuild(schema: &Schema, opened: &Opened<'_>, codec: &mut Codec, keep: Keep<'_>) -> Result<Vec<(usize, Kept)>> {
+/// The events of the block `block` that `keep` keeps, every one without it,
+/// each with its arrival: each column is read whole, and an event dropped is
+/// never built.
+fn rebuild(
+    schema: &Schema,
+    opened: &Opened<'_>,
+    block: i64,
+    codec: &mut Codec,
+    keep: Keep<'_>,
+) -> Result<Vec<(i64, Kept)>> {
+    let arrivals = opened.arrivals(block)?;
     let mut columns = Columns::read(schema, opened, codec, keep)?;
     let mut events = Vec::with_capacity(keep.map_or(opened.count, |keep| keep.iter().filter(|kept| **kept).count()));
-    for place in 0..opened.count {
+    for (place, arrival) in arrivals.into_iter().enumerate() {
         if keep.is_none_or(|keep| keep[place]) {
-            events.push((place, columns.event(place)?));
+            events.push((arrival, columns.event(place)?));
         } else {
             columns.pass(place)?;
         }
@@ -350,25 +421,25 @@ pub(super) struct Wanted<'q> {
     pub(super) filters: &'q [(String, String)],
 }
 
-/// The events of a block a read may keep, with their places. The times and
-/// the columns the read asks about are read first; when they leave no event,
-/// the block's other columns are never expanded:
+/// The events of the block `block` a read may keep, each with its arrival.
+/// The times and the columns the read asks about are read first; when they
+/// leave no event, the block's other columns are never expanded:
 ///
 /// ```text
 /// context host = "nowhere"   times, shapes, contexts → none left → no message or field read
 /// ```
 pub(super) fn parse_wanted(
     schema: &Schema,
-    body: &[u8],
+    (block, body): (i64, &[u8]),
     codec: &mut Codec,
     wanted: &Wanted<'_>,
-) -> Result<Vec<(usize, Kept)>> {
+) -> Result<Vec<(i64, Kept)>> {
     let opened = Opened::of(schema, body)?;
     let keep = kept(schema, &opened, codec, wanted)?;
     if !keep.contains(&true) {
         return Ok(Vec::new());
     }
-    rebuild(schema, &opened, codec, Some(&keep))
+    rebuild(schema, &opened, block, codec, Some(&keep))
 }
 
 /// Which of a block's events may meet what a read asks, by the columns it

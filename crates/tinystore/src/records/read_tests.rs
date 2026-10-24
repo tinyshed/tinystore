@@ -102,6 +102,73 @@ fn a_streams_events_of_one_time_come_as_appended_while_late_ones_and_other_strea
     read(&appended, &webs, "every event packed");
 }
 
+/// Each event as `stream/name`.
+fn shown(events: &[Event]) -> Vec<String> {
+    events.iter().map(|event| format!("{}/{}", event.stream, event.name)).collect()
+}
+
+/// What every way of reading gives, each event as `stream/name`: a page of
+/// every stream from either end, `all`, pages read ahead at once, and each
+/// stream's own page.
+fn read_every_way(fixture: &Fixture, expected: &[String], when: &str) {
+    let all = fixture.store.all_events().unwrap();
+    assert_eq!(shown(&all.list().page().unwrap().events), expected, "{when}");
+    let backwards: Vec<String> = expected.iter().rev().cloned().collect();
+    assert_eq!(shown(&all.list().newest().page().unwrap().events), backwards, "newest, {when}");
+    let walked: Vec<Event> = all.list().limit(100).all().map(Result::unwrap).collect();
+    assert_eq!(shown(&walked), expected, "all, {when}");
+    for wide in 2..=4 {
+        let (page, _) = all.list().limit(100).read_ahead(wide).unwrap();
+        assert_eq!(shown(&page.events), expected, "{wide} read ahead, {when}");
+    }
+    for stream in ["api", "web"] {
+        let own: Vec<&String> = expected.iter().filter(|name| name.starts_with(&format!("{stream}/"))).collect();
+        let read = shown(&fixture.events(stream).list().page().unwrap().events);
+        assert_eq!(read.iter().collect::<Vec<_>>(), own, "{stream}, {when}");
+    }
+}
+
+// contract: REC-04, DUR-09
+#[test]
+fn events_of_one_time_come_as_appended_across_streams_late_heads_packing_merges_and_a_reopen() {
+    let mut fixture = fixture();
+    // a minute behind the clock, so that an event at it behind one twenty seconds after it is late
+    let at = fixture.now() - Duration::from_mins(1);
+    let ahead = at + SECOND * 20;
+    let each_round = [
+        ("api", "on", at),
+        ("web", "web", at),
+        ("api", "ahead", ahead),
+        ("api", "behind", at),
+        ("web", "web-ahead", ahead),
+        ("web", "web-behind", at),
+        ("api", "last", at),
+    ];
+    // each event as `stream/name`, those at `at` and those at `ahead`, as they were appended
+    let (mut first, mut then): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let (mut late, mut merged) = (0, 0);
+    // rounds forty minutes apart, so that a read finds events packed, merged and waiting
+    for round in 0..10 {
+        for (stream, name, time) in &each_round {
+            fixture.events(stream).append_all([NewEvent::new(&format!("{name}-{round}")).at(*time)]).unwrap();
+            let appended = if *time == at { &mut first } else { &mut then };
+            appended.push(format!("{stream}/{name}-{round}"));
+        }
+        late = late.max(fixture.rows("heads where late = 1"));
+        read_every_way(&fixture, &[first.clone(), then.clone()].concat(), &format!("round {round}"));
+        fixture.pass(Duration::from_mins(40));
+        merged += maintain(&fixture.store).unwrap().merged;
+        if round == 5 {
+            fixture = fixture.reopen();
+        }
+    }
+    fixture.pass(Duration::from_hours(1));
+    merged += maintain(&fixture.store).unwrap().merged;
+    let places = fixture.rows("segments where holder is not null");
+    assert_eq!((fixture.rows("heads"), late > 0, merged > 0, places > 0), (0, true, true, true), "{late} {merged}");
+    read_every_way(&fixture, &[first, then].concat(), "every event packed");
+}
+
 // contract: REC-05
 #[test]
 fn pages_go_on_without_losing_or_repeating_an_event_from_either_end() {

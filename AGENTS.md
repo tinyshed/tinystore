@@ -248,10 +248,11 @@ the item.
 
 **Records has one logical model for logs and events, and a record's order is
 its event time.** A segment stores its records sorted by event time, equal
-times in the order reads gave them; a query merges segments by time, and a
-consumer follows segments in publication order. A packed record keeps no
-arrival, so equal times are in arrival order only within one stream's
-on-time or late head (REC-04).
+times in arrival order, and a block keeps each record's arrival; a merge joins
+segments one after another and sorts none, so that a consumer's place still
+names its range; a query orders by time and then arrival, and a consumer
+follows segments in publication order. What v0.1.0 packed has no arrival and
+reads as v0.1.0 read it (NOT-12).
 
 ## SQLite
 

@@ -156,24 +156,28 @@ audit.append_all([NewEvent::new("cart.created"), NewEvent::new("item.added"), Ne
 let page = audit.list().since(Duration::from_mins(1)).page()?; // cart.created, item.added, checkout
 ```
 
-- Events of one stream that share a time come in the order they were
-  appended. This holds across appends, and before and after TinyStore packs
-  and merges them. With `newest`, they come in the reverse order.
-- Late events are the exception. TinyStore packs late events apart from the
-  others, as [How logs and metrics
-  pack](../../handbook/inside/how-logs-and-metrics-pack.md) explains. If some
-  events of one time were late and others were not, they may come in another
-  order than they were appended. The order may also change from one read to
-  the next. [Which events are late](#which-events-are-late) says when an
-  event is late.
-- Events of different streams that share a time come in no fixed order. Two
-  reads may give them in different orders, because TinyStore packs and merges
-  each stream by itself.
-- If your program needs a fixed order for these events, add a sequence number
-  to `fields` and sort by `at` and then by that number. A page never splits a
-  time, so sorting each page is enough.
+- Events that share a time come in the order they were appended. This holds
+  across appends and across streams, for [late events](#which-events-are-late)
+  too, and before and after TinyStore packs and merges them. With `newest`,
+  they come in the reverse order.
+- Two appends that run at the same time come in the order the store wrote
+  them, and every read gives that same order.
+- A store that TinyStore v0.1.0 wrote is the exception. Events that v0.1.0
+  packed keep the order that v0.1.0 gave them, which is not always the order
+  they were appended. In one stream, a late event may come before or after the
+  stream's other events of its time. Events of different streams come in the
+  order of the blocks they were packed in. This order stays the same from one
+  read to the next. Events appended after you upgrade come after them, in the
+  order they were appended.
 
 ### Which events are late
+
+TinyStore packs late events apart from the others, so that they don't force
+it to rewrite what it packed, as [How logs and metrics
+pack](../../handbook/inside/how-logs-and-metrics-pack.md) explains. A read
+still gives them in the order they were appended. A
+[tail](tail-and-poll.md#tail) gives the late events of an `append` after its
+other events.
 
 An event is late when its `at` is more than ten seconds behind the store's
 clock, and also more than ten seconds behind the newest on-time event that

@@ -27,6 +27,16 @@ pub(crate) fn fixture() -> Fixture {
     Fixture { dir, store, clock }
 }
 
+/// A store on a copy of `records`, the bytes of a records.db, on a clock the
+/// test moves from `at`.
+pub(crate) fn fixture_of(records: &[u8], at: SystemTime) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("records.db"), records).unwrap();
+    let clock = Arc::new(TestClock::new(at));
+    let store = open(dir.path(), &clock);
+    Fixture { dir, store, clock }
+}
+
 fn open(dir: &Path, clock: &Arc<TestClock>) -> Store {
     Store::open(dir, Options { clock: Some(clock.clone()), background: false, ..Options::default() }).unwrap()
 }

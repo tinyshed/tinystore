@@ -103,7 +103,7 @@ fn a_reader_finds_each_event_once_while_heads_pack_and_segments_merge() {
     let all = fixture.store.all_events().unwrap();
     let (done, reads) = (AtomicBool::new(false), AtomicUsize::new(0));
     std::thread::scope(|scope| {
-        scope.spawn(|| {
+        let reader = scope.spawn(|| {
             while !done.load(Ordering::Acquire) {
                 let events = all.list().limit(1000).page().unwrap().events;
                 let names: BTreeSet<&str> = events.iter().map(|event| event.name.as_str()).collect();
@@ -112,6 +112,10 @@ fn a_reader_finds_each_event_once_while_heads_pack_and_segments_merge() {
                 reads.fetch_add(1, Ordering::Relaxed);
             }
         });
+        // the reader started before the first pack: a loaded machine may pack them all first
+        while reads.load(Ordering::Relaxed) == 0 && !reader.is_finished() {
+            std::thread::yield_now();
+        }
         let mut merged = 0;
         for round in 0..8 {
             api.append_all((0..50).map(|n| NewEvent::new(&format!("{round}-{n}")))).unwrap();

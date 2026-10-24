@@ -69,8 +69,8 @@ impl fmt::Display for Damage {
 /// what broke.
 pub(super) type Damaged = BTreeMap<(Part, i64), (String, String)>;
 
-/// A segment's row and what its events weigh, and its blocks' bodies.
-type SegmentBytes = ((Vec<u8>, i64), Vec<Vec<u8>>);
+/// A segment's row and what its events weigh, and its blocks' ids and bodies.
+type SegmentBytes = ((Vec<u8>, i64), Vec<(i64, Vec<u8>)>);
 
 const HEAD_TIMES: &str = "select first_at, last_at from heads where id = ?1";
 const SEGMENT_TIMES: &str = "select first_at, last_at from segments where id = ?1 and holder is null";
@@ -78,7 +78,7 @@ const HEAD_BODY: &str = "select body from heads where id = ?1";
 const HEAD_COUNTS: &str = "select stream, late, count, weight from heads where id = ?1";
 const DROP_HEAD_ROW: &str = "delete from heads where id = ?1";
 const SEGMENT_BODY: &str = "select body, weight from segments where id = ?1 and holder is null";
-const SEGMENT_BLOCKS: &str = "select body from blocks where segment = ?1 order by id";
+const SEGMENT_BLOCKS: &str = "select id, body from blocks where segment = ?1 order by id";
 /// What a segment dropped held, its places' among them, for the polls
 /// behind it, as expiry notes what it removes.
 const NOTE_DROPPED: &str = "insert or replace into expired (segment, events, at)
@@ -198,14 +198,16 @@ impl Records {
             let row = select.query_row([damage.id], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(failed)?;
             let Some(row) = row else { return Ok(None) };
             let mut blocks = connection.prepare_cached(SEGMENT_BLOCKS).map_err(failed)?;
-            let bodies = blocks.query_map([damage.id], |row| row.get(0)).and_then(Iterator::collect);
+            let bodies =
+                blocks.query_map([damage.id], |row| Ok((row.get(0)?, row.get(1)?))).and_then(Iterator::collect);
             Ok(Some((row, bodies.map_err(failed)?)))
         })?;
         let Some(((body, weight), blocks)) = read else { return Ok(false) };
         let _held = self.memory.reserve(weight.max(0) as u64 * HELD, "records: reading a segment to drop", PATIENCE)?;
         let schema = Schema::parse(&body, &mut codec);
-        let reads = schema
-            .and_then(|schema| blocks.iter().try_for_each(|block| block::parse(&schema, block, &mut codec).map(drop)));
+        let reads = schema.and_then(|schema| {
+            blocks.iter().try_for_each(|(id, body)| block::parse(&schema, (*id, body), &mut codec).map(drop))
+        });
         Ok(reads.is_ok())
     }
 
