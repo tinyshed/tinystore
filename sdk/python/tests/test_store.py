@@ -143,7 +143,8 @@ async def test_a_disk_that_refuses_an_embedded_store_is_the_wires_internal_error
     too_long = directory / ("a" * 300)
     with pytest.raises(tinystore.InternalError) as refused:
         await tinystore.open(too_long, embedded=True)
-    assert str(refused.value).startswith(f"cannot open {too_long}: store "), str(refused.value)
+    # the directory as the core is given it, resolved: macOS names /var through /private/var
+    assert str(refused.value).startswith(f"cannot open {too_long.resolve()}: store "), str(refused.value)
 
 
 async def _held_after_its_sidecar(directory: Path) -> tuple[tinystore.Store, tinystore.Store]:
