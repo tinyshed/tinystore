@@ -411,7 +411,8 @@ pub fn reserve(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration) -> 
 
 Takes `bytes`, waiting up to `patience` for other work to give them
 back; waiters are served in the order they came, and a call that
-takes nothing waits for none of them.
+takes nothing waits for none of them. A `crate::CancellationToken`
+around the call does not stop the wait: only reads stop.
 
 ## Reservation
 

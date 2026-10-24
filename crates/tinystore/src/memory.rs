@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::cancel::{self, Given};
 #[cfg(feature = "async")]
 use crate::timer::{self, Rang, Timer};
 use crate::{Error, Result};
@@ -23,7 +24,7 @@ pub(crate) const STORE_MEMORY_NOW: &str = "store memory, now";
 /// what work reserves; it is not a ceiling on the process's RSS.
 /// How long a call waits for other work to give the store's memory back
 /// before it fails `limit`.
-#[cfg(any(feature = "blobs", feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "blobs", feature = "records", feature = "metrics", feature = "async"))]
 pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub struct Memory {
@@ -76,6 +77,14 @@ impl Held {
         self.used.saturating_add(ahead).saturating_add(bytes) <= limit
     }
 
+    /// Puts a waiter for `bytes` at the end of the line, and gives its ticket.
+    fn queue(&mut self, bytes: u64) -> u64 {
+        let ticket = self.next_ticket;
+        self.next_ticket += 1;
+        self.waiting.push_back((ticket, bytes));
+        ticket
+    }
+
     fn leave(&mut self, ticket: u64) {
         self.waiting.retain(|(waiter, _)| *waiter != ticket);
     }
@@ -102,6 +111,12 @@ impl Memory {
 
     pub fn used(&self) -> u64 {
         self.lock().used
+    }
+
+    /// The reservations waiting for room, on a thread or not.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> usize {
+        self.lock().waiting.len()
     }
 
     /// Whether the store was given a budget; without one, work reserves
@@ -140,8 +155,27 @@ impl Memory {
 
     /// Takes `bytes`, waiting up to `patience` for other work to give them
     /// back; waiters are served in the order they came, and a call that
-    /// takes nothing waits for none of them.
+    /// takes nothing waits for none of them. A [`crate::CancellationToken`]
+    /// around the call does not stop the wait: only reads stop.
     pub fn reserve(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration) -> Result<Reservation> {
+        self.wait_for(bytes, what, patience, Waiter::Write)
+    }
+
+    /// Takes `bytes` for a read as [`Memory::reserve`] does, but a token of
+    /// this thread's call stops its wait: cancelled or past its timeout, the
+    /// read leaves the line at once, takes nothing and fails `Cancelled`, as
+    /// a read waiting for a reader does (STORE-09).
+    #[cfg(any(feature = "records", feature = "metrics"))]
+    pub(crate) fn reserve_for_read(
+        self: &Arc<Self>,
+        bytes: u64,
+        what: &str,
+        patience: Duration,
+    ) -> Result<Reservation> {
+        self.wait_for(bytes, what, patience, Waiter::Read)
+    }
+
+    fn wait_for(self: &Arc<Self>, bytes: u64, what: &str, patience: Duration, waiter: Waiter) -> Result<Reservation> {
         if bytes == 0 {
             return Ok(self.nothing());
         }
@@ -153,12 +187,17 @@ impl Memory {
         }
         // a write's submit reserves through the async API's waiter before it is made
         crate::polled::may_wait(|| what.to_owned())?;
+        // given before the lock and dropped after it: a cancel runs the wake under its token's lock
+        let _woken = self.woken_by_a_cancel(waiter);
         let deadline = Instant::now() + patience;
         let mut state = self.lock();
-        let ticket = state.next_ticket;
-        state.next_ticket += 1;
-        state.waiting.push_back((ticket, bytes));
+        let ticket = state.queue(bytes);
         loop {
+            if let Err(cancelled) = waiter.stopped(what) {
+                state.leave(ticket);
+                self.wake_behind(state);
+                return Err(cancelled);
+            }
             let ahead = state.ahead(Some(ticket));
             if state.fits(bytes, ahead, self.limit) {
                 state.leave(ticket);
@@ -173,8 +212,24 @@ impl Memory {
                 self.wake_behind(state);
                 return Err(error);
             }
-            state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
+            state = self.freed.wait_timeout(state, waiter.sleep(left)).unwrap_or_else(PoisonError::into_inner).0;
         }
+    }
+
+    /// Has a cancel of a token of this thread's call wake the threads that
+    /// wait here, so that a read among them looks at its tokens again; a
+    /// write gives none, since no token stops it. The wake takes the lock
+    /// first: a read between its look and its sleep holds it, so it sleeps
+    /// before the wake comes rather than miss it.
+    fn woken_by_a_cancel(self: &Arc<Self>, waiter: Waiter) -> Option<Given> {
+        if let Waiter::Write = waiter {
+            return None;
+        }
+        let memory = Arc::clone(self);
+        cancel::on_cancel(move || {
+            drop(memory.lock());
+            memory.freed.notify_all();
+        })
     }
 
     /// Takes `bytes` as [`Memory::reserve`] does, in the same line, but waits
@@ -211,9 +266,7 @@ impl Memory {
             done(Ok(self.reservation(bytes)));
             return answered;
         }
-        let ticket = state.next_ticket;
-        state.next_ticket += 1;
-        state.waiting.push_back((ticket, bytes));
+        let ticket = state.queue(bytes);
         state.called.insert(ticket, Called { done: Box::new(done), what: what.to_owned(), alarm: None });
         drop(state);
         let memory = Arc::downgrade(self);
@@ -362,6 +415,38 @@ impl fmt::Debug for Memory {
     }
 }
 
+/// What waits for memory on a thread: a read, which a token of its call
+/// stops, or a write, which runs to its end whatever token is around it.
+#[derive(Clone, Copy)]
+enum Waiter {
+    #[cfg_attr(
+        not(any(feature = "records", feature = "metrics")),
+        expect(dead_code, reason = "only the reads of records and metrics wait for memory")
+    )]
+    Read,
+    Write,
+}
+
+impl Waiter {
+    /// `Cancelled` once a read's token has stopped.
+    fn stopped(self, what: &str) -> Result<()> {
+        match self {
+            Waiter::Read => cancel::check(|| what.to_owned()),
+            Waiter::Write => Ok(()),
+        }
+    }
+
+    /// How long the thread sleeps before it looks again: a read wakes at its
+    /// tokens' timeout too, which no cancel announces.
+    fn sleep(self, left: Duration) -> Duration {
+        let timeout = match self {
+            Waiter::Read => cancel::deadline(),
+            Waiter::Write => None,
+        };
+        timeout.map_or(left, |at| at.saturating_duration_since(Instant::now()).min(left))
+    }
+}
+
 /// A reservation [`Memory::reserve_then`] keeps waiting on no thread: dropped
 /// before it is answered, it leaves its line, and the waiters behind it wait
 /// for less.
@@ -371,6 +456,15 @@ pub(crate) struct Waiting {
     /// Nothing for a reservation answered before it would wait.
     memory: std::sync::Weak<Memory>,
     ticket: u64,
+}
+
+#[cfg(feature = "async")]
+impl Waiting {
+    /// Keeps the waiter in line once this is dropped: a write whose future
+    /// was polled waits for its bytes whether or not anyone awaits it.
+    pub(crate) fn stay(mut self) {
+        self.memory = std::sync::Weak::new();
+    }
 }
 
 #[cfg(feature = "async")]
@@ -513,7 +607,7 @@ mod tests {
             let memory = Arc::clone(&memory);
             thread::spawn(move || memory.reserve(80, "a records merge", Duration::from_secs(30)).map(|r| r.bytes()))
         };
-        while memory.lock().waiting.is_empty() {
+        while memory.waiting() == 0 {
             thread::yield_now();
         }
         // a read whose page fetched nothing, a metrics query that matched no series
@@ -577,6 +671,63 @@ mod tests {
         drop(reads);
         assert_eq!(store.memory().used(), 0, "the commit's frames came back");
         store.close().unwrap();
+    }
+
+    /// Waits until `memory` has `waiters` in line, failing past ten seconds.
+    #[cfg(any(feature = "records", feature = "metrics"))]
+    fn until_waiting(memory: &Memory, waiters: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while memory.waiting() != waiters {
+            assert!(Instant::now() < deadline, "{} waiters, never {waiters}", memory.waiting());
+            thread::yield_now();
+        }
+    }
+
+    // contract: STORE-09
+    #[cfg(any(feature = "records", feature = "metrics"))]
+    #[test]
+    fn a_read_waiting_for_memory_leaves_the_line_once_its_token_stops_and_a_write_waits_on() {
+        let memory = Memory::new(100);
+        let held = memory.try_reserve(100, "a dashboard read").unwrap();
+        let read = |token: crate::CancellationToken| {
+            let memory = Arc::clone(&memory);
+            let patience = Duration::from_secs(30);
+            thread::spawn(move || {
+                token.run(|| memory.reserve_for_read(60, "metrics: a read", patience).map(|r| r.bytes()))
+            })
+        };
+
+        let token = crate::CancellationToken::new();
+        let (reading, started) = (read(token.clone()), Instant::now());
+        until_waiting(&memory, 1);
+        token.cancel();
+        let cancelled = reading.join().unwrap().unwrap_err();
+        assert_eq!(cancelled.kind(), ErrorKind::Cancelled, "{cancelled}");
+        assert!(started.elapsed() < Duration::from_secs(5), "it waited {:?}", started.elapsed());
+        assert_eq!(memory.waiting(), 0, "the read left the line");
+
+        // no cancel wakes a read whose token times out: it wakes at the token's deadline itself
+        let (timed, started) = (read(crate::CancellationToken::timeout(Duration::from_millis(50))), Instant::now());
+        let past = timed.join().unwrap().unwrap_err();
+        assert_eq!(past.kind(), ErrorKind::Cancelled, "{past}");
+        assert!(past.to_string().contains("past its timeout"), "{past}");
+        assert!(started.elapsed() < Duration::from_secs(5), "it waited {:?}", started.elapsed());
+        assert_eq!(memory.waiting(), 0);
+
+        // only reads stop: a write under a cancelled token waits on and takes its bytes
+        let token = crate::CancellationToken::new();
+        let writing = {
+            let (memory, token) = (Arc::clone(&memory), token.clone());
+            let patience = Duration::from_secs(30);
+            thread::spawn(move || token.run(|| memory.reserve(60, "metrics: an ingest", patience).map(|r| r.bytes())))
+        };
+        until_waiting(&memory, 1);
+        token.cancel();
+        thread::sleep(Duration::from_millis(50));
+        assert!(!writing.is_finished(), "a write is not stopped by its token");
+        drop(held);
+        assert_eq!(writing.join().unwrap().unwrap(), 60);
+        assert_eq!(memory.used(), 0);
     }
 
     /// A reservation waiting on no thread, whose answer `answers` gets with

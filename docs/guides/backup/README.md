@@ -48,6 +48,36 @@ New to backups? [Keeping it](../../handbook/chat/keeping-it.md) in the
 Handbook backs up every night with a schedule and restores on another
 machine.
 
+## Async Rust
+
+In Rust, the `async` feature adds `tinystore::aio::backup`, whose backup you
+await. This section shows only Rust, because Bun, Node and Python already
+await every call, and in Go a call blocks its goroutine.
+
+```rust
+use tinystore::Options;
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let backup = store.backup().include("secret.key").write("backups/chat-2026-10-19.zip").await?;
+let sent = store.backup().write_to(upload).await?; // upload: any Write + Send + 'static
+```
+
+| Blocking Rust                                                 | Async Rust                                           |
+|---------------------------------------------------------------|------------------------------------------------------|
+| `store.backup().write("backups/chat.zip")?`                   | `store.backup().write("backups/chat.zip").await?`    |
+| `store.backup().write_to(upload)?`                            | `store.backup().write_to(upload).await?`             |
+| `tinystore::backup::restore("backups/chat.zip", "restored")?` | the same blocking call: it runs before a store opens |
+
+The backup runs on the store's own threads, never on your executor's
+thread, and `write_to` writes `upload` on that thread. On a large store a
+backup takes minutes, and every engine keeps working meanwhile.
+
+Once its future is polled, a backup runs to its end, even if you drop the
+future. It then writes its zip whole, or, if it fails, leaves no zip and no
+snapshot (contract BAK-04). To know which, await it. `restore` stays a
+blocking call, because it runs before a store opens in its directory.
+
 ## Reference
 
 [Bun and Node](../../reference/bun/backup.md) ·

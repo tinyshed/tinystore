@@ -12,10 +12,14 @@
 //! | [`blocking`]          | blocking code on the store's pool, in a line or not  | runs to its end                 |
 //! | [`passed_on`]         | a call to a copy's home, on a thread of its own      | runs to its end                 |
 //! | [`passed_on_in_line`] | its turn in a line of the pool, then as `passed_on`  | runs to its end                 |
+//! | [`holding`]           | as `blocking`, its memory awaited on no thread       | runs to its end                 |
 //!
 //! Each does nothing before its first poll. A call clones its handle and
 //! owns its arguments, so that its future is `Send + 'static` and a program
-//! can spawn it.
+//! can spawn it. Each future captures its type parameters alone,
+//! `use<T, R>`, and never a borrow of an argument: a builder taken by
+//! value, as a list's `page(self)`, lets go of what it lends as the call
+//! returns.
 //!
 //! The pool's sixteen threads at most are shared by every awaited call,
 //! transaction and commit's lead, and by the pipe's connections, so a call
@@ -42,6 +46,7 @@ use std::time::Duration;
 
 use super::oneshot::{Answer, pending};
 use crate::cancel::{self, Captured};
+use crate::memory::PATIENCE;
 use crate::polled::{self, Lead};
 use crate::pool::Pool;
 use crate::{CancellationToken, Error, Memory, Reservation, Result};
@@ -57,7 +62,11 @@ use crate::{CancellationToken, Error, Memory, Reservation, Result};
 /// nor after a wait it was refused, whose error it passes up unchanged. The
 /// tokens around this call reach it in both places, as [`read`] says.
 #[allow(dead_code, reason = "the engines' async point reads are built on it")]
-pub(crate) fn point<T, R>(pool: &Arc<Pool>, what: String, read: R) -> impl Future<Output = Result<T>> + Send + 'static
+pub(crate) fn point<T, R>(
+    pool: &Arc<Pool>,
+    what: String,
+    read: R,
+) -> impl Future<Output = Result<T>> + Send + 'static + use<T, R>
 where
     R: Fn() -> Result<T> + Send + 'static,
     T: Send + 'static,
@@ -108,7 +117,11 @@ where
 /// it in its method's body, where the future is made, never inside an
 /// `async` block, which runs where it is polled.
 #[allow(dead_code, reason = "the engines' async reads are built on it")]
-pub(crate) fn read<T, R>(pool: &Arc<Pool>, what: String, read: R) -> impl Future<Output = Result<T>> + Send + 'static
+pub(crate) fn read<T, R>(
+    pool: &Arc<Pool>,
+    what: String,
+    read: R,
+) -> impl Future<Output = Result<T>> + Send + 'static + use<T, R>
 where
     R: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,
@@ -158,7 +171,7 @@ pub(crate) fn reserve(
     bytes: u64,
     what: String,
     patience: Duration,
-) -> impl Future<Output = Result<Reservation>> + Send + 'static {
+) -> impl Future<Output = Result<Reservation>> + Send + 'static + use<> {
     let memory = Arc::clone(memory);
     async move {
         let (answer, answered) = pending(what.clone());
@@ -190,7 +203,11 @@ pub(crate) fn reserve(
 /// })
 /// ```
 #[allow(dead_code, reason = "the engines' async writes are built on it")]
-pub(crate) fn write<T, S>(pool: &Arc<Pool>, what: String, submit: S) -> impl Future<Output = Result<T>> + Send + 'static
+pub(crate) fn write<T, S>(
+    pool: &Arc<Pool>,
+    what: String,
+    submit: S,
+) -> impl Future<Output = Result<T>> + Send + 'static + use<T, S>
 where
     S: FnOnce(Answer<T>) + Send + 'static,
     T: Send + 'static,
@@ -234,10 +251,7 @@ where
     async move {
         refuse_inside_a_transaction(&what)?;
         let (answer, answered) = pending(what);
-        let job = Box::new(move || match catch_unwind(AssertUnwindSafe(work)) {
-            Ok(outcome) => answer.send(outcome),
-            Err(payload) => answer.panicked(payload),
-        });
+        let job = Box::new(move || answer_with(answer, work));
         match line {
             Some(line) => pool.run_in_line(&line, job),
             None => pool.run(job),
@@ -333,6 +347,62 @@ fn pass_on_taken<T: Send + 'static>(
 #[allow(dead_code, reason = "the calls of kv and blobs passed on to a copy's home run on it")]
 pub(crate) fn own_thread(job: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     std::thread::Builder::new().name(PASSED_ON.to_owned()).spawn(job).map(drop)
+}
+
+/// Runs `prepare` on the store's pool once the future is first polled, then
+/// the work it gives with the bytes of the store's memory it asks for held:
+/// an ingest's checks, then its write. The work runs at once where the bytes
+/// fit, and otherwise waits for them as [`reserve`] does, in the memory's
+/// line, on no thread, handed back to the pool once they fit: a write that
+/// waits for memory never keeps a thread of the pool from the reads.
+///
+/// Once polled it runs to its end whether or not anyone still awaits it,
+/// its wait for memory included, so that a write that was polled commits
+/// (DUR-11). The wait fails `Limit` after the patience a blocking
+/// reservation has, and `Closed` once the store closed. A panic in either
+/// is resumed where the future is awaited.
+#[allow(dead_code, reason = "metrics' awaited ingest holds its memory through it")]
+pub(crate) fn holding<T, P, W>(
+    pool: &Arc<Pool>,
+    memory: &Arc<Memory>,
+    what: String,
+    prepare: P,
+) -> impl Future<Output = Result<T>> + Send + 'static + use<T, P, W>
+where
+    P: FnOnce() -> Result<(u64, W)> + Send + 'static,
+    W: FnOnce(Reservation) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (pool, memory) = (Arc::clone(pool), Arc::clone(memory));
+    async move {
+        refuse_inside_a_transaction(&what)?;
+        let (answer, answered) = pending(what.clone());
+        let handing = Arc::clone(&pool);
+        pool.run(Box::new(move || match catch_unwind(AssertUnwindSafe(prepare)) {
+            Ok(Ok((bytes, work))) => match memory.try_reserve(bytes, &what) {
+                Ok(held) => answer_with(answer, || work(held)),
+                Err(_) => {
+                    let served = move |reserved: Result<Reservation>| match reserved {
+                        Ok(held) => handing.run(Box::new(move || answer_with(answer, || work(held)))),
+                        Err(refused) => answer.send(Err(refused)),
+                    };
+                    memory.reserve_then(bytes, &what, PATIENCE, served).stay();
+                }
+            },
+            Ok(Err(refused)) => answer.send(Err(refused)),
+            Err(payload) => answer.panicked(payload),
+        }));
+        answered.await
+    }
+}
+
+/// Sends `answer` what `work` returns, or the panic it raised, which the
+/// future resumes.
+fn answer_with<T>(answer: Answer<T>, work: impl FnOnce() -> Result<T>) {
+    match catch_unwind(AssertUnwindSafe(work)) {
+        Ok(outcome) => answer.send(outcome),
+        Err(payload) => answer.panicked(payload),
+    }
 }
 
 /// Refuses a call that would hand its work to the pool from inside a

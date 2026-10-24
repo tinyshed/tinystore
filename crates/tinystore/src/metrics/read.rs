@@ -21,7 +21,7 @@ impl Engine {
         let mut budget = Budget::default();
         let taken = self.take(asked, Want::Samples, &mut budget)?;
         let weight = budget.bytes as u64 + budget.decoded as u64 * SAMPLE_HELD;
-        let _held = self.memory.reserve(weight, "metrics: a read", PATIENCE)?;
+        let _held = self.memory.reserve_for_read(weight, "metrics: a read", PATIENCE)?;
         let mut zstd = self.codecs.take();
         let answer = self.answer(&mut zstd, taken, &mut budget);
         self.codecs.give_back(zstd);

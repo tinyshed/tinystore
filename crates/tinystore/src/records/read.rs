@@ -516,7 +516,7 @@ impl Records {
         let (fetched, horizon) = self.fetch(&asked, query)?;
         let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
         let events: u64 = fetched.rows.iter().map(|(picked, _)| picked.events).sum();
-        let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
+        let _held = self.memory.reserve_for_read(bytes as u64 + events * EVENT_HELD, "records: a read", PATIENCE)?;
         let found = self.found(&asked, query, fetched, horizon)?;
         cut(found, &asked, horizon)
     }
@@ -564,7 +564,8 @@ impl Records {
         })?;
         let bytes: usize = heads.iter().map(|(_, _, _, body)| body.len()).sum();
         let events: u64 = heads.iter().map(|(_, _, events, _)| events.unsigned_abs()).sum();
-        let _held = self.memory.reserve(bytes as u64 + events * EVENT_HELD, "records: field names", PATIENCE)?;
+        let _held =
+            self.memory.reserve_for_read(bytes as u64 + events * EVENT_HELD, "records: field names", PATIENCE)?;
         let mut codec = Codec::default();
         for (id, stream, _, body) in heads {
             // A head row that no longer reads is damage, listed as a read over it lists it.

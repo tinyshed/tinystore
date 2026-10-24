@@ -198,9 +198,7 @@ class Reader {
 			throw new Error(`rustdoc wrote no struct Store in tinystore${path === '' ? '' : `::${path}`}`)
 		}
 		const mine = (entry: Entry) => {
-			const file = (entry.span?.filename ?? '').replace(/\\/g, '/')
-			const at = file.indexOf('crates/tinystore/src/')
-			const local = at === -1 ? '' : file.slice(at + 'crates/tinystore/src/'.length)
+			const local = sourceFile(entry)
 			return dirs.some(dir => (dir.endsWith('/') ? local.startsWith(dir) : local === dir))
 		}
 		return this.#methods(store, path === '' ? 'Store' : `${path}::Store`)
@@ -611,6 +609,13 @@ class Types {
 // `std::time::Duration` reads as `Duration`, as the code that uses it writes it
 function shortPath(path: string): string {
 	return path.split('::').at(-1) ?? path
+}
+
+// where an item is written under `crates/tinystore/src/`, `aio/metrics.rs`; nothing for another crate's
+function sourceFile(entry: Entry): string {
+	const file = (entry.span?.filename ?? '').replace(/\\/g, '/')
+	const at = file.indexOf('crates/tinystore/src/')
+	return at === -1 ? '' : file.slice(at + 'crates/tinystore/src/'.length)
 }
 
 // rustdoc runs a fence with no language, or with one of its own attributes, as Rust

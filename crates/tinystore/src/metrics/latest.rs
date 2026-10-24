@@ -30,7 +30,7 @@ impl Engine {
     pub(super) fn latest(&self, asked: &Asked) -> Result<Vec<Latest>> {
         let mut budget = Budget::default();
         let taken = self.take(asked, Want::Newest, &mut budget)?;
-        let _held = self.memory.reserve(budget.bytes as u64, "metrics: the newest samples", PATIENCE)?;
+        let _held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: the newest samples", PATIENCE)?;
         let mut zstd = self.codecs.take();
         let answer = self.newest_of_each(&mut zstd, &taken, &mut budget);
         self.codecs.give_back(zstd);

@@ -83,12 +83,36 @@ impl Prometheus {
     /// does: a line it cannot read is `invalid`, naming the line, and a text
     /// past what one ingest carries is a `limit`.
     pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()> {
+        self.metrics.ingest(&self.series(text.as_ref())?)
+    }
+
+    /// The text's series checked as `ingest` checks them, before their write
+    /// reserves the store's memory: an awaited ingest's, on the store's pool.
+    #[cfg(feature = "async")]
+    pub(crate) fn check(&self, text: &[u8]) -> Result<super::ingest::Checked> {
+        self.metrics.check(&self.series(text)?)
+    }
+
+    /// The same text with its time fixed now from the store's clock, unless
+    /// one was given: an awaited ingest takes it in its first poll, as a
+    /// query's `since` does, not where a thread of the pool parses the text.
+    #[cfg(feature = "async")]
+    pub(crate) fn timed(mut self) -> Prometheus {
+        if self.at.is_none() {
+            self.at = Some(crate::clock::from_unix_millis(self.metrics.engine.now()));
+        }
+        self
+    }
+
+    /// The series of each sample line, with the labels, the time and the keep
+    /// given.
+    fn series(&self, text: &[u8]) -> Result<Vec<Series>> {
         let at = self.at.map_or_else(|| self.metrics.engine.now(), unix_millis);
-        let mut series = parse(text.as_ref(), &self.labels, at)?;
+        let mut series = parse(text, &self.labels, at)?;
         if let Some(keep) = self.keep {
             series.iter_mut().for_each(|series| series.keep = Some(keep));
         }
-        self.metrics.ingest(&series)
+        Ok(series)
     }
 }
 

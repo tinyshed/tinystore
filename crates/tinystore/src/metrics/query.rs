@@ -126,6 +126,10 @@ impl<T: Into<String>> From<Prefix<T>> for Condition {
     }
 }
 
+/// A call of a query checked, to run: what `read`, `aggregate`, `latest` or
+/// `explain` gives once its query passed its checks.
+pub(crate) type Checked<T> = Box<dyn FnOnce() -> Result<T> + Send>;
+
 /// A query being asked: its name, conditions and range, and for an
 /// aggregate its buckets and groups.
 #[derive(Clone)]
@@ -255,8 +259,15 @@ impl Query {
     /// without one is left out. Past a bound of a read it is a `limit`
     /// error, naming the bound, never fewer series or samples.
     pub fn read(&self) -> Result<Vec<Series>> {
-        let read = self.plain("read").and_then(|()| self.asked()).and_then(|asked| self.engine.read(&asked));
-        read.map_err(|error| error.within("metrics"))
+        self.checked_read().and_then(|read| read())
+    }
+
+    /// `read` in its two steps: the query checked now, its `since` an
+    /// absolute start from the store's clock, and the read it gives, which
+    /// the async API runs on the store's pool.
+    pub(crate) fn checked_read(&self) -> Result<Checked<Vec<Series>>> {
+        let checked = self.plain("read").and_then(|()| self.asked());
+        self.once_checked(checked, |engine, asked| engine.read(&asked))
     }
 
     /// The buckets of each group of the series the query finds, each one
@@ -266,16 +277,26 @@ impl Query {
     /// or a counter below zero; past a bound it is a `limit` error, naming
     /// the bound, never fewer buckets.
     pub fn aggregate(&self, op: Op) -> Result<Vec<Aggregate>> {
-        let aggregate = self.shape(op).and_then(|shape| self.engine.aggregate(&self.asked()?, &shape));
-        aggregate.map_err(|error| error.within("metrics"))
+        self.checked_aggregate(op).and_then(|aggregate| aggregate())
+    }
+
+    /// `aggregate` in its two steps, as [`Query::checked_read`] is `read`.
+    pub(crate) fn checked_aggregate(&self, op: Op) -> Result<Checked<Vec<Aggregate>>> {
+        let checked = self.shape(op).and_then(|shape| Ok((self.asked()?, shape)));
+        self.once_checked(checked, |engine, (asked, shape)| engine.aggregate(&asked, &shape))
     }
 
     /// The newest sample of each series the query finds, when it has one in
     /// the range: a series that stopped writing leaves the answer rather
     /// than show its last value for ever.
     pub fn latest(&self) -> Result<Vec<Latest>> {
-        let latest = self.plain("latest").and_then(|()| self.asked()).and_then(|asked| self.engine.latest(&asked));
-        latest.map_err(|error| error.within("metrics"))
+        self.checked_latest().and_then(|latest| latest())
+    }
+
+    /// `latest` in its two steps, as [`Query::checked_read`] is `read`.
+    pub(crate) fn checked_latest(&self) -> Result<Checked<Vec<Latest>>> {
+        let checked = self.plain("latest").and_then(|()| self.asked());
+        self.once_checked(checked, |engine, asked| engine.latest(&asked))
     }
 
     /// What `read`, or `aggregate` when given its `op`, would spend of each
@@ -294,12 +315,29 @@ impl Query {
     /// # }
     /// ```
     pub fn explain(&self, op: impl Into<Option<Op>>) -> Result<Plan> {
-        let shape = match op.into() {
+        self.checked_explain(op.into()).and_then(|explain| explain())
+    }
+
+    /// `explain` in its two steps, as [`Query::checked_read`] is `read`.
+    pub(crate) fn checked_explain(&self, op: Option<Op>) -> Result<Checked<Plan>> {
+        let shape = match op {
             Some(op) => self.shape(op).map(Some),
             None => self.plain("a read").map(|()| None),
         };
-        let plan = shape.and_then(|shape| self.engine.explain(&self.asked()?, shape.as_ref()));
-        plan.map_err(|error| error.within("metrics"))
+        let checked = shape.and_then(|shape| Ok((self.asked()?, shape)));
+        self.once_checked(checked, |engine, (asked, shape)| engine.explain(&asked, shape.as_ref()))
+    }
+
+    /// What runs a query once `checked` passed, on the engine, its errors
+    /// and those of the check named as the engine's.
+    fn once_checked<C: Send + 'static, T: 'static>(
+        &self,
+        checked: Result<C>,
+        run: impl FnOnce(&Engine, C) -> Result<T> + Send + 'static,
+    ) -> Result<Checked<T>> {
+        let checked = checked.map_err(|error| error.within("metrics"))?;
+        let engine = Arc::clone(&self.engine);
+        Ok(Box::new(move || run(&engine, checked).map_err(|error| error.within("metrics"))))
     }
 
     /// An aggregate's buckets and groups, checked.

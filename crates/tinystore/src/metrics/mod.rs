@@ -37,7 +37,7 @@ mod engine;
 mod exact;
 mod explain;
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
 mod flush;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
@@ -130,9 +130,40 @@ impl Metrics {
         self.engine.ingest(series)
     }
 
+    /// An ingest's series checked and gathered, before the call reserves the
+    /// store's memory their write holds: an awaited ingest waits for those
+    /// bytes on no thread, then writes them with `ingest_checked`.
+    #[cfg(feature = "async")]
+    pub(crate) fn check(&self, series: &[Series]) -> Result<ingest::Checked> {
+        self.engine.check(series)
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn ingest_checked(&self, checked: ingest::Checked, held: crate::Reservation) -> Result<()> {
+        self.engine.ingest_checked(checked, held)
+    }
+
+    /// The store's memory, which an awaited ingest waits for on no thread.
+    #[cfg(feature = "async")]
+    pub(crate) fn memory(&self) -> &Arc<crate::Memory> {
+        &self.engine.memory
+    }
+
     /// A query of series by name and labels, over a range of time, which
     /// `read`, `aggregate`, `latest` or `explain` then runs.
     pub fn query(&self) -> Query {
         Query::of(Arc::clone(&self.engine))
+    }
+
+    /// The store these metrics are of, while a handle of it is held: an
+    /// async handle made from them runs its calls on that store's pool.
+    #[cfg(feature = "async")]
+    pub(crate) fn store(&self) -> Option<Store> {
+        self.engine.store.upgrade()
+    }
+
+    #[cfg(all(test, feature = "async"))]
+    pub(crate) fn file(&self) -> &crate::sqlite::File {
+        &self.engine.file
     }
 }

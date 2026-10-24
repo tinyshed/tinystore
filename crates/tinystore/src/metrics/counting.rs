@@ -34,7 +34,7 @@ impl Engine {
     pub(super) fn aggregate(&self, asked: &Asked, shape: &Shape) -> Result<Vec<Aggregate>> {
         let mut budget = Budget::default();
         let taken = self.take(asked, Want::Buckets(shape), &mut budget)?;
-        let mut held = self.memory.reserve(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
+        let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
         let mut zstd = self.codecs.take();
         let mut counting = Counting {
             engine: self,

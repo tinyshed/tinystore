@@ -23,6 +23,8 @@ use super::remote::Sessions;
 use super::totals::Totals;
 use crate::engine::{Claim, Host, Wake};
 use crate::sqlite::{Config, File, Migration, sql_error};
+#[cfg(feature = "async")]
+use crate::store::WeakStore;
 use crate::sync::lock;
 use crate::{Clock, Durability, Memory, Result, Store, unix_millis};
 
@@ -68,6 +70,10 @@ pub(crate) struct Engine {
     #[cfg(feature = "wire")]
     pub(super) sessions: Sessions,
     closed: AtomicBool,
+    /// The store, held weakly as an engine holds it: an async handle made
+    /// from a blocking one finds its store's pool through it.
+    #[cfg(feature = "async")]
+    pub(super) store: WeakStore,
     _claim: Claim,
 }
 
@@ -147,6 +153,8 @@ impl Engine {
                 #[cfg(feature = "wire")]
                 sessions: Sessions::default(),
                 closed: AtomicBool::new(false),
+                #[cfg(feature = "async")]
+                store: store.downgrade(),
                 _claim: claim,
             });
             // A copy's packing, expiry and instruments are its home's.

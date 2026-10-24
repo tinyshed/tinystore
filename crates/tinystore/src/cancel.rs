@@ -3,12 +3,12 @@
 //! [`CancellationToken::run`] puts its token in the scope of the thread that
 //! runs the call, and every read the call makes on that thread looks at it:
 //!
-//! | where the read is        | what stops it                                                    |
-//! |--------------------------|------------------------------------------------------------------|
-//! | before it takes a reader | the read looks at the tokens first                               |
-//! | waiting for a reader     | `cancel` wakes the thread, which leaves the queue                |
-//! | in a statement           | `cancel` interrupts the reader; a timeout, the progress handler  |
-//! | decoding what it read    | metrics looks between series, records before each page           |
+//! | where the read is              | what stops it                                                   |
+//! |--------------------------------|-----------------------------------------------------------------|
+//! | before it takes a reader       | the read looks at the tokens first                              |
+//! | waiting for a reader or memory | `cancel` wakes the thread, which leaves the line                |
+//! | in a statement                 | `cancel` interrupts the reader; a timeout, the progress handler |
+//! | decoding what it read          | metrics looks between series, records before each page          |
 //!
 //! A reader's progress handler reads the tokens of the thread that steps its
 //! statement, which is the thread whose call it is, every [`STEPS`] of

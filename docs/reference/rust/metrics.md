@@ -1,6 +1,6 @@
 # Metrics API for Rust
 
-Every public type, trait and function of the Metrics engine in `tinystore::metrics`, generated from its source. The [Metrics guide](../../guides/metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Go](../go/metrics.md) pages list the same API.
+Every public type, trait and function of the Metrics engine in `tinystore::metrics` and `tinystore::aio::metrics`, generated from its source. The [Metrics guide](../../guides/metrics/README.md) explains how to use them, and the [Bun and Node](../bun/metrics.md), [Python](../python/metrics.md) and [Go](../go/metrics.md) pages list the same API.
 
 ## Store
 
@@ -16,6 +16,21 @@ pub fn metrics(&self) -> Result<Metrics>
 
 The store's metrics: series written by `ingest`, read back by `query`.
 The engine opens with the first call.
+
+## aio::Store
+
+```rust
+impl aio::Store
+```
+
+### aio::Store.metrics
+
+```rust
+pub fn metrics(&self) -> Result<Metrics>
+```
+
+The store's metrics, as `crate::Store::metrics` gives them: a plain
+call, the first of which opens the engine and migrates `metrics.db`.
 
 ## Aggregate
 
@@ -1164,5 +1179,424 @@ pub fn query(&self) -> Query
 
 A query of series by name and labels, over a range of time, which
 `read`, `aggregate`, `latest` or `explain` then runs.
+
+## aio::metrics::Metrics
+
+```rust
+pub struct Metrics { /* private fields */ }
+```
+
+The store's metrics, their calls awaited: the same engine and series as
+`crate::metrics::Metrics`, a handle that clones cheaply.
+
+### aio::metrics::Metrics.blocking
+
+```rust
+pub fn blocking(&self) -> &Metrics
+```
+
+The same metrics, for their blocking calls.
+
+### aio::metrics::Metrics.ingest
+
+```rust
+pub fn ingest(&self, series: &[Series]) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes series and their samples, every one or none, as
+`crate::metrics::Metrics::ingest` does. The series are copied when
+the call is made, and checked on a thread of the store's pool; the
+store's memory their write holds is awaited on no thread, and the
+write runs blocking on a thread of the pool, which waits there for
+the commit.
+
+### aio::metrics::Metrics.query
+
+```rust
+pub fn query(&self) -> Query
+```
+
+A query of series by name and labels, over a range of time, which
+`read`, `aggregate`, `latest` or `explain` then runs.
+
+### aio::metrics::Metrics.prometheus
+
+```rust
+pub fn prometheus(&self) -> Prometheus
+```
+
+What ingests the text an exporter serves, in Prometheus' format or
+OpenMetrics': `stats.prometheus().label("instance", "web-1").ingest(&body)`.
+
+### aio::metrics::Metrics.names
+
+```rust
+pub fn names(&self) -> List<NamePage>
+```
+
+The names the store holds samples of, as
+`crate::metrics::Metrics::names` lists them.
+
+### aio::metrics::Metrics.label_names
+
+```rust
+pub fn label_names(&self, name: impl Into<String>) -> List<LabelPage>
+```
+
+A name's label names, but the store's own.
+
+### aio::metrics::Metrics.label_values
+
+```rust
+pub fn label_values(&self, name: impl Into<String>, label: impl Into<String>) -> List<ValuePage>
+```
+
+The values a label of a name's series holds.
+
+### aio::metrics::Metrics.describe
+
+```rust
+pub fn describe(
+    &self,
+    name: &str,
+    description: Description,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Sets a name's unit and help in place of what it had, as
+`crate::metrics::Metrics::describe` does, blocking on a thread of
+the store's pool, which waits there for the commit.
+
+### aio::metrics::Metrics.description
+
+```rust
+pub fn description(&self, name: &str) -> impl Future<Output = Result<Description>> + Send + 'static
+```
+
+What a name's unit and help are; both empty when nothing described
+it.
+
+### aio::metrics::Metrics.damaged
+
+```rust
+pub fn damaged(&self) -> impl Future<Output = Result<Vec<Damage>>> + Send + 'static
+```
+
+The series whose bytes no longer read, as
+`crate::metrics::Metrics::damaged` lists them.
+
+### aio::metrics::Metrics.delete
+
+```rust
+pub fn delete<K: AsRef<str>, V: AsRef<str>>(
+    &self,
+    name: &str,
+    labels: impl IntoIterator<Item = (K, V)>,
+) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Removes the one series of exactly this name and these labels with
+every sample it holds, as `crate::metrics::Metrics::delete` does,
+and says whether the store held it. It runs blocking on a thread of
+the store's pool, which waits there for maintenance's pass to end.
+
+### aio::metrics::Metrics.flush
+
+```rust
+pub fn flush(&self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Writes every instrument's total now, as the store does every 15
+seconds and when it closes, blocking on a thread of the store's pool:
+a gauge function reads its value there.
+
+### aio::metrics::Metrics.counter
+
+```rust
+pub fn counter(&self, name: impl Into<String>) -> Builder<Counter>
+```
+
+A total that only goes up, which the store keeps, as
+`crate::metrics::Metrics::counter` opens one: an instrument counts
+in memory, so its calls are plain.
+
+### aio::metrics::Metrics.gauge
+
+```rust
+pub fn gauge(&self, name: impl Into<String>) -> Builder<Gauge>
+```
+
+A value that goes up and down: a queue's length, a temperature.
+
+### aio::metrics::Metrics.gauge_func
+
+```rust
+pub fn gauge_func<R: Reading>(
+    &self,
+    name: impl Into<String>,
+    read: impl Fn() -> R + Send + Sync + 'static,
+) -> Builder<GaugeFunc>
+```
+
+A gauge whose value `read` gives at each write, on the thread that
+writes, the store's own: it must not block.
+
+### aio::metrics::Metrics.timer
+
+```rust
+pub fn timer(&self, name: impl Into<String>) -> Builder<Timer>
+```
+
+How many things took how long: their count, their sum and the
+longest, in milliseconds, and with `buckets` their spread.
+
+### aio::metrics::Metrics.histogram
+
+```rust
+pub fn histogram(&self, name: impl Into<String>) -> Builder<Histogram>
+```
+
+A timer of numbers that are not durations: a response's size.
+
+### aio::metrics::Metrics.recorder
+
+```rust
+pub fn recorder(&self) -> Recorder
+```
+
+A recorder for the `metrics` crate, whose macros then count into
+these metrics.
+
+## aio::metrics::Query
+
+```rust
+pub struct Query { /* private fields */ }
+```
+
+A query being asked, as `crate::metrics::Query` builds one: its name,
+conditions and range, and for an aggregate its buckets and groups.
+
+A call checks the query in its future's first poll, on the polling
+thread: `since` becomes an absolute start from the store's clock there,
+and a query that is invalid fails without taking a thread. The read then
+runs on the store's pool under a token that the future's drop cancels.
+
+### aio::metrics::Query.name
+
+```rust
+pub fn name(self, name: impl Into<String>) -> Self
+```
+
+The series of this name.
+
+### aio::metrics::Query.filter
+
+```rust
+pub fn filter(self, label: impl Into<String>, condition: impl Into<Condition>) -> Self
+```
+
+A label's value under a condition: a value, a list of them, a
+`Not` or a `Prefix`.
+
+### aio::metrics::Query.since
+
+```rust
+pub fn since(self, span: Duration) -> Self
+```
+
+The span before now the range covers; or `from` and `to`.
+
+### aio::metrics::Query.from
+
+```rust
+pub fn from(self, at: SystemTime) -> Self
+```
+
+The range's start, which is in it.
+
+### aio::metrics::Query.to
+
+```rust
+pub fn to(self, at: SystemTime) -> Self
+```
+
+The range's end, which is not in it; now unless given.
+
+### aio::metrics::Query.every
+
+```rust
+pub fn every(self, span: Duration) -> Self
+```
+
+An aggregate's buckets: spans this long, each beginning at a whole
+number of them since 1970 in UTC.
+
+### aio::metrics::Query.by
+
+```rust
+pub fn by(self, labels: &[&str]) -> Self
+```
+
+The labels an aggregate keeps: the series of a name that share them
+are one group.
+
+### aio::metrics::Query.without
+
+```rust
+pub fn without(self, labels: &[&str]) -> Self
+```
+
+The labels an aggregate leaves out, keeping every other.
+
+### aio::metrics::Query.estimate
+
+```rust
+pub fn estimate(self) -> Self
+```
+
+A timer's percentile also gives a point between the bounds of the
+bucket that holds the rank: an estimate, which no measurement gave.
+
+### aio::metrics::Query.read
+
+```rust
+pub fn read(&self) -> impl Future<Output = Result<Vec<Series>>> + Send + 'static
+```
+
+The samples of each series the query finds, in its range, as
+`crate::metrics::Query::read` gives them.
+
+### aio::metrics::Query.aggregate
+
+```rust
+pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<Vec<Aggregate>>> + Send + 'static
+```
+
+The buckets of each group of the series the query finds, each one
+exact value of `op`, rounded once, as
+`crate::metrics::Query::aggregate` gives them.
+
+### aio::metrics::Query.latest
+
+```rust
+pub fn latest(&self) -> impl Future<Output = Result<Vec<Latest>>> + Send + 'static
+```
+
+The newest sample of each series the query finds, when it has one in
+the range.
+
+### aio::metrics::Query.explain
+
+```rust
+pub fn explain(
+    &self,
+    op: impl Into<Option<Op>>,
+) -> impl Future<Output = Result<Plan>> + Send + 'static
+```
+
+What `read`, or `aggregate` when given its `op`, would spend of each
+bound of a query, and the bound it would stop at. It decodes no
+sample.
+
+## aio::metrics::List
+
+```rust
+pub struct List<P> { /* private fields */ }
+```
+
+A page of what a store holds, its options before its `page`, as
+`crate::metrics::List` builds one: 1000 unless `limit` says.
+
+### aio::metrics::List.prefix
+
+```rust
+pub fn prefix(self, prefix: impl Into<String>) -> Self
+```
+
+Only those that start with this text.
+
+### aio::metrics::List.after
+
+```rust
+pub fn after(self, next: impl Into<String>) -> Self
+```
+
+The page that starts past this one, as a page's `next` says it.
+
+### aio::metrics::List.limit
+
+```rust
+pub fn limit(self, most: usize) -> Self
+```
+
+How many a page holds at most, 1 to 10,000.
+
+### aio::metrics::List.page
+
+```rust
+pub fn page(self) -> impl Future<Output = Result<NamePage>> + Send + 'static
+```
+
+### aio::metrics::List.page
+
+```rust
+pub fn page(self) -> impl Future<Output = Result<LabelPage>> + Send + 'static
+```
+
+### aio::metrics::List.page
+
+```rust
+pub fn page(self) -> impl Future<Output = Result<ValuePage>> + Send + 'static
+```
+
+## aio::metrics::Prometheus
+
+```rust
+pub struct Prometheus { /* private fields */ }
+```
+
+A text an exporter serves, in Prometheus' format or OpenMetrics', and the
+labels, the time and the keep its ingest gives every series of it, as
+`crate::metrics::Prometheus` builds one.
+
+### aio::metrics::Prometheus.label
+
+```rust
+pub fn label(self, name: impl Into<String>, value: impl Display) -> Prometheus
+```
+
+A label every series of the text gets beside its own, such as the
+`instance` scraped.
+
+### aio::metrics::Prometheus.at
+
+```rust
+pub fn at(self, at: SystemTime) -> Prometheus
+```
+
+The time of every sample the text gives none: unless given, the
+store's clock at the first poll of `ingest`'s future.
+
+### aio::metrics::Prometheus.keep
+
+```rust
+pub fn keep(self, keep: Duration) -> Prometheus
+```
+
+How long every name of the text keeps its samples.
+
+### aio::metrics::Prometheus.ingest
+
+```rust
+pub fn ingest(&self, text: impl AsRef<[u8]>) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Reads the text and writes its series, every one or none, as
+`crate::metrics::Prometheus::ingest` does. The text is copied when
+the call is made, and the time of its samples that give none is read
+in the future's first poll. The text is then parsed on a thread of
+the store's pool, the memory its write holds is awaited on no thread,
+and the write runs blocking on the pool, which waits there for the
+commit.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

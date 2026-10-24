@@ -30,7 +30,7 @@ use super::series::{Kind, Labels, Series};
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
-use crate::{Error, ErrorKind, Result, unix_millis};
+use crate::{Error, ErrorKind, Reservation, Result, unix_millis};
 
 /// What one call carries at most: more is sent in several.
 const MOST_SAMPLES: usize = 10_000;
@@ -61,12 +61,43 @@ struct Gathered {
     points: Vec<Point>,
 }
 
+/// A call's series checked and gathered by their labels, its time read,
+/// before it reserves the store's memory their write holds: an awaited
+/// ingest waits for those bytes on no thread.
+pub(crate) struct Checked {
+    now: i64,
+    gathered: BTreeMap<[u8; 32], Gathered>,
+    samples: usize,
+    bytes: usize,
+}
+
+impl Checked {
+    /// What the write holds of the store's memory.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes as u64
+    }
+}
+
 impl Engine {
     /// Writes every series of the call or none of them.
     pub(super) fn ingest(&self, series: &[Series]) -> Result<()> {
+        let checked = self.check(series)?;
+        let held = self.memory.reserve(checked.bytes(), "metrics: an ingest", PATIENCE)?;
+        self.ingest_checked(checked, held)
+    }
+
+    /// The call's series checked within one ingest's bounds and gathered by
+    /// their labels, its `now` read once.
+    pub(super) fn check(&self, series: &[Series]) -> Result<Checked> {
         let now = self.now();
-        let (gathered, bytes) = gather(series)?;
-        let _held = self.memory.reserve(bytes as u64, "metrics: an ingest", PATIENCE)?;
+        let (gathered, samples, bytes) = gather(series)?;
+        Ok(Checked { now, gathered, samples, bytes })
+    }
+
+    /// Writes series checked, every one or none, `_held` the memory their
+    /// write holds until it ends.
+    pub(super) fn ingest_checked(&self, checked: Checked, _held: Reservation) -> Result<()> {
+        let Checked { now, gathered, samples, bytes } = checked;
         let wanted = wanted_names(&gathered)?;
         // A call refused for its times makes no name and moves no keep.
         let keeps = self.names.foreseen(&wanted);
@@ -79,7 +110,6 @@ impl Engine {
         if batches.is_empty() {
             return Ok(());
         }
-        let samples: usize = series.iter().map(|series| series.samples().len()).sum();
         let (ready, made) = self.write(batches, settling.changes(), bytes)?;
         settling.settled(made);
         if ready {
@@ -113,8 +143,9 @@ impl Engine {
 }
 
 /// Checks each series and gathers its samples by its labels, within the
-/// call's bounds: one series given in several parts is one.
-fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
+/// call's bounds: one series given in several parts is one. Gives the
+/// samples given and the bytes they weigh beside them.
+fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usize)> {
     let (mut gathered, mut samples, mut bytes) = (BTreeMap::new(), 0, 0);
     for given in series {
         let named = || format!("metrics {given}");
@@ -141,7 +172,7 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize)> {
         entry.keep = entry.keep.or(keep);
         entry.points.extend(points);
     }
-    Ok((gathered, bytes))
+    Ok((gathered, samples, bytes))
 }
 
 /// Refuses `what` past the samples or the bytes one ingest carries, a sample
