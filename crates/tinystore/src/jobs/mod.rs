@@ -59,17 +59,32 @@ pub use tx::TxQueue;
 pub use watch::Watch;
 pub use work::Worker;
 
-// What the wire takes of jobs: a client's worker, its watches, its steps.
-#[cfg(feature = "wire")]
+// What the wire and the async API take of jobs: a worker whose handlers run
+// elsewhere, a client's or a future's, its watches, its steps.
+#[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) use {
     claim::{How, Lease},
-    steps::{keep_encoded, kept},
-    watch::{Hears, Report, Seen, Subscription},
+    steps::kept,
+    watch::{Report, Seen, Subscription},
     work::{Answers, Ended, Hand, Remote, RemoteWork, read_value, start_remote},
 };
 
-// What a job's call writes: the wire's calls, and a database's batch.
-#[cfg(any(feature = "wire", feature = "sql"))]
+#[cfg(feature = "wire")]
+pub(crate) use {steps::keep_encoded, watch::Hears};
+
+// What the async API alone takes: a claim, a settlement and a step's keep
+// that answer through a completion.
+#[cfg(feature = "async")]
+pub(crate) use {
+    queue::{Settling, Took},
+    schedule::refuse_on_a_copy,
+    steps::{answer_of, cancelled_step, encoded, keep_then},
+    work::{answered, value_or_how},
+};
+
+// What a job's call writes: the wire's calls, the async API's, and a
+// database's batch.
+#[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 pub(crate) use queue::Change;
 
 #[cfg(test)]

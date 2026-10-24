@@ -490,28 +490,48 @@ where
     if lease.cancelled() {
         return None;
     }
-    let value = match read_value::<V>(jobs, lease) {
+    let value = match value_or_how::<V>(jobs, lease) {
         Ok(value) => value,
-        Err(error) if error.kind() == ErrorKind::Invalid => return Some(How::Fail { cause: error.to_string() }),
-        Err(error) => return Some(How::Retry { at: None, cause: error.to_string() }),
+        Err(how) => return Some(how),
     };
     if !lease.begin(jobs.now()) {
         return None;
     }
     queue.watchers.changed();
     let run = Run::new(Arc::clone(lease), Arc::clone(queue), Arc::clone(jobs));
-    let answered = catch_unwind(AssertUnwindSafe(|| handler(value, &run)));
+    let ran = catch_unwind(AssertUnwindSafe(|| handler(value, &run)));
+    answered(jobs, queue, lease, ran.map(|ran| ran.map(Into::into).map_err(|error| error.to_string())))
+}
+
+/// How a handler's answer settles its job, a panic's among them: none when a
+/// cancel took the job, whose handler's answer settles nothing.
+pub(crate) fn answered(
+    jobs: &Jobs,
+    queue: &QueueState,
+    lease: &Lease,
+    ran: std::thread::Result<std::result::Result<Outcome, String>>,
+) -> Option<How> {
     if lease.cancelled() {
         return None;
     }
-    Some(match answered {
-        Ok(Ok(outcome)) => outcome.into().how(jobs.now()),
-        Ok(Err(error)) => How::Retry { at: None, cause: error.to_string() },
+    Some(match ran {
+        Ok(Ok(outcome)) => outcome.how(jobs.now()),
+        Ok(Err(cause)) => How::Retry { at: None, cause },
         Err(panic) => {
             let message = panic_message(&*panic);
             queue.panics.observe(&queue.name, &message);
             How::Retry { at: None, cause: format!("the handler panicked: {message}") }
         }
+    })
+}
+
+/// A claimed job's value, or how to settle a job whose value cannot be read:
+/// failed for good when it no longer reads as the queue's type, retried when
+/// the read failed.
+pub(crate) fn value_or_how<V: DeserializeOwned>(jobs: &Jobs, lease: &Lease) -> std::result::Result<V, How> {
+    read_value::<V>(jobs, lease).map_err(|error| match error.kind() {
+        ErrorKind::Invalid => How::Fail { cause: error.to_string() },
+        _ => How::Retry { at: None, cause: error.to_string() },
     })
 }
 
@@ -653,14 +673,14 @@ where
     Ok(Worker { running })
 }
 
-/// Where the answers for the jobs a client's worker holds go: its loop's
-/// inbox. The client answers each job it was sent, and a cancel answers one
-/// it took, so that each is answered once.
+/// Where the answers for the jobs a client's worker holds go, or a worker's
+/// whose handlers an awaited future runs: its loop's inbox. Each job handed
+/// over is answered once, by its handler or by a cancel that took it.
 #[derive(Clone, Default)]
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) struct Answers(Arc<Inbox>);
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "async"))]
 impl Answers {
     /// How the job's run ended; none for one a cancel took, which settles
     /// nothing.
@@ -669,15 +689,15 @@ impl Answers {
     }
 }
 
-/// A worker whose handlers are a client's: its loop runs on a thread of the
-/// store's and hands its jobs to `hand`, and their answers come back through
-/// its [`Answers`].
-#[cfg(feature = "wire")]
+/// A worker whose handlers are a client's, or an awaited future's: its loop
+/// runs on a thread of the store's and hands its jobs to `hand`, and their
+/// answers come back through its [`Answers`].
+#[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) struct Remote {
     running: Arc<Running>,
 }
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "async"))]
 impl Remote {
     /// Takes no job more and returns: the loop gives back the jobs it holds
     /// and has not handed over, and writes the answers that still come.
@@ -688,20 +708,29 @@ impl Remote {
     /// Halts the worker and waits for its loop to write what was answered; a
     /// job handed and not yet answered holds the stop up to the queue's
     /// timeout and a grace.
+    #[cfg(feature = "wire")]
     pub(crate) fn stop(&self) {
         self.running.stop();
     }
+
+    /// Lets the engine forget a worker whose loop ended: its close has
+    /// nothing left to stop, and a program that runs `run_due` in a loop
+    /// would otherwise grow the engine's list of workers until it closes.
+    #[cfg(feature = "async")]
+    pub(crate) fn ended(&self) {
+        self.running.stopped.store(true, Ordering::SeqCst);
+    }
 }
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "async"))]
 impl fmt::Debug for Remote {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Remote")
     }
 }
 
-/// What a client's worker asks of its loop.
-#[cfg(feature = "wire")]
+/// What a client's worker, or an awaited one, asks of its loop.
+#[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) struct RemoteWork {
     /// The client's handlers.
     pub(crate) local: usize,
@@ -716,7 +745,7 @@ pub(crate) struct RemoteWork {
 /// finished, or why it stopped.
 pub(crate) type Ended = Box<dyn FnOnce(Result<usize>) + Send>;
 
-#[cfg(feature = "wire")]
+#[cfg(any(feature = "wire", feature = "async"))]
 pub(crate) fn start_remote(jobs: &Arc<Jobs>, queue: &Arc<QueueState>, work: RemoteWork) -> Result<Remote> {
     if jobs.closed() {
         return Err(Error::closed(queue.describe()));

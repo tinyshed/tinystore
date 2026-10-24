@@ -82,14 +82,7 @@ impl ScheduleBuilder {
         E: fmt::Display,
     {
         let mut schedule = self.open()?;
-        #[cfg(feature = "replication")]
-        if schedule.queue.jobs.file().is_copy() {
-            return Err(Error::new(
-                crate::ErrorKind::Unavailable,
-                "a copy runs no schedule: its home's workers run it, as its file is written there",
-            )
-            .within(schedule.queue.state.describe()));
-        }
+        refuse_on_a_copy(&schedule.queue)?;
         schedule.worker = Some(schedule.queue.work(move |(): (), run: &Run| handler(run))?);
         Ok(schedule)
     }
@@ -125,7 +118,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn queue(&self) -> &Queue<()> {
         &self.queue
     }
@@ -163,6 +156,23 @@ impl fmt::Debug for Schedule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.queue.state.describe())
     }
+}
+
+/// Refuses a worker of a schedule kept in a copy of jobs' file, whose home's
+/// workers run it.
+pub(crate) fn refuse_on_a_copy(queue: &Queue<()>) -> Result<()> {
+    #[cfg(feature = "replication")]
+    let copy = queue.jobs.file().is_copy();
+    #[cfg(not(feature = "replication"))]
+    let copy = false;
+    if copy {
+        return Err(Error::new(
+            crate::ErrorKind::Unavailable,
+            "a copy runs no schedule: its home's workers run it, as its file is written there",
+        )
+        .within(queue.state.describe()));
+    }
+    Ok(())
 }
 
 /// Makes the schedule's one job repeat as the code says: added at its next

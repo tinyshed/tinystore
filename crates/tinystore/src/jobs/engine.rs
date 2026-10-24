@@ -31,8 +31,9 @@ pub(crate) struct Jobs {
     /// The engine whose file jobs are kept in, when it is not jobs.db: `sql app`.
     lent_by: Option<String>,
     clock: Arc<dyn Clock>,
-    /// The store, for the writes a copy passes to its home.
-    #[cfg(feature = "replication")]
+    /// The store, for the writes a copy passes to its home, and the pool an
+    /// awaited handle made from a blocking one runs on.
+    #[cfg(any(feature = "replication", feature = "async"))]
     store: crate::store::WeakStore,
     queues: Mutex<HashMap<String, Arc<QueueState>>>,
     /// Kept here, so that a worker its program let go of still stops at close.
@@ -82,7 +83,7 @@ impl Jobs {
             file,
             lent_by,
             clock: store.clock(),
-            #[cfg(feature = "replication")]
+            #[cfg(any(feature = "replication", feature = "async"))]
             store: store.downgrade(),
             queues: Mutex::new(HashMap::new()),
             workers: Mutex::new(Vec::new()),
@@ -103,7 +104,7 @@ impl Jobs {
     }
 
     /// The store jobs opened in, while it is open.
-    #[cfg(feature = "replication")]
+    #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed("the store"))
     }

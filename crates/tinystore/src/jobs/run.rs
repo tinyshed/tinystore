@@ -119,10 +119,15 @@ impl Run {
     }
 
     pub(crate) fn describe(&self) -> String {
-        match &self.lease.key {
-            Some(key) => format!("{}: id {key:?}", self.queue.describe()),
-            None => self.queue.describe(),
-        }
+        described(&self.queue, &self.lease)
+    }
+}
+
+/// A run's job as its errors name it: its queue, and its id when it has one.
+pub(crate) fn described(queue: &QueueState, lease: &Lease) -> String {
+    match &lease.key {
+        Some(key) => format!("{}: id {key:?}", queue.describe()),
+        None => queue.describe(),
     }
 }
 

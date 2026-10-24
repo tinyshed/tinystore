@@ -582,7 +582,14 @@ impl Store {
         Arc::clone(&self.inner.clock)
     }
 
-    #[cfg(any(feature = "kv", feature = "sql", feature = "records", feature = "metrics", feature = "replication"))]
+    #[cfg(any(
+        feature = "kv",
+        feature = "sql",
+        feature = "records",
+        feature = "metrics",
+        feature = "replication",
+        all(feature = "jobs", feature = "async")
+    ))]
     pub(crate) fn downgrade(&self) -> WeakStore {
         WeakStore(Arc::downgrade(&self.inner))
     }

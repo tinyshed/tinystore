@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-#[cfg(any(feature = "wire", feature = "sql"))]
+#[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 use super::queue::Change;
 use super::queue::Queue;
 use super::repeat::Asked as Repeat;
@@ -120,6 +120,15 @@ where
     #[cfg(feature = "wire")]
     pub(crate) fn write_then(self, change: Change, value: &V, done: impl FnOnce(Result<bool>) + Send + 'static) {
         self.queue.write_then(change, self.asked, value, done);
+    }
+
+    /// The call's write checked and its value encoded now, queued later; see
+    /// [`Queue::writing`]. An awaited call is never made through a
+    /// transaction, whose calls are blocking.
+    #[cfg(feature = "async")]
+    pub(crate) fn writing(self, change: Change, value: &V) -> super::queue::Writing {
+        debug_assert!(self.tx.is_none(), "an awaited job's call is made outside a transaction");
+        self.queue.writing(change, self.asked, value)
     }
 
     /// The call's write for a batch of the file the queue is kept in; see

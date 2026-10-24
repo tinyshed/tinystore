@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::call::{Asked, JobCall};
-use super::claim::{self, Claiming};
+use super::claim::{self, Claiming, Lease};
 use super::engine::Jobs;
 use super::policy::{Concurrency, Policy};
 use super::read::{self, Filter, Job, Page};
@@ -148,8 +148,9 @@ impl<V> Queue<V>
 where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
-    /// The same queue, its values read as another type: the wire's raw JSON.
-    #[cfg(feature = "wire")]
+    /// The same queue, its values read as another type: the wire's raw JSON,
+    /// or none for an awaited worker, whose loop reads no value.
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn retyped<W>(&self) -> Queue<W> {
         Queue { jobs: Arc::clone(&self.jobs), state: Arc::clone(&self.state), _value: PhantomData }
     }
@@ -245,7 +246,7 @@ where
 
     /// `cancel` without waiting: the write is queued, and `done` is called
     /// with whether there was a job on the thread that commits it.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn cancel_then(&self, id: &str, done: impl FnOnce(Result<bool>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.jobs.file().is_copy() {
@@ -359,40 +360,49 @@ where
     /// within the queue's timeout goes back to the queue.
     pub fn claim(&self) -> Result<Option<Claimed<V>>> {
         loop {
-            let now = self.jobs.now();
-            let until = now.saturating_add(millis(self.state.policy.timeout));
-            let queue = Arc::clone(&self.state);
-            let claimed = self
-                .jobs
-                .file()
-                .write(0, move |tx| claim::claim(tx, Claiming { queue: &queue, now, until, limit: 1 }))
-                .map_err(|error| self.fail(None, error))?;
-            for _ in 0..claimed.failed {
-                self.state.failures.observe(&self.state.name, "its attempts ended without a settlement");
-            }
-            self.jobs.measure_claims(&self.state.name, &claimed.leases, now);
-            if let Some(lease) = claimed.leases.into_iter().next() {
-                let lease = Arc::new(lease);
-                self.state.hold(&lease);
-                let run = Run::new(Arc::clone(&lease), Arc::clone(&self.state), Arc::clone(&self.jobs));
-                let value = match work::read_value::<V>(&self.jobs, &lease) {
-                    Ok(value) => value,
-                    Err(error) if error.kind() == ErrorKind::Invalid => {
-                        Claimed { value: (), run }.settle(Outcome::fail_with(error.to_string()))?;
-                        continue;
-                    }
-                    Err(error) => return Err(self.fail(lease.key.as_deref(), error)),
-                };
-                if lease.begin(now) {
-                    self.state.watchers.changed();
-                    return Ok(Some(Claimed { value, run }));
+            let (now, write) = self.claim_one();
+            let claimed = self.jobs.file().write(0, write).map_err(|error| self.fail(None, error))?;
+            let lease = match took(&self.jobs, &self.state, claimed, now) {
+                Took::Job(lease) => lease,
+                Took::More => continue,
+                Took::Nothing => return Ok(None),
+            };
+            let run = Run::new(Arc::clone(&lease), Arc::clone(&self.state), Arc::clone(&self.jobs));
+            let value = match work::read_value::<V>(&self.jobs, &lease) {
+                Ok(value) => value,
+                Err(error) if error.kind() == ErrorKind::Invalid => {
+                    Claimed { value: (), run }.settle(Outcome::fail_with(error.to_string()))?;
+                    continue;
                 }
-                continue; // a cancel took it as it was claimed
+                Err(error) => return Err(self.fail(lease.key.as_deref(), error)),
+            };
+            if lease.begin(now) {
+                self.state.watchers.changed();
+                return Ok(Some(Claimed { value, run }));
             }
-            if claimed.abandoned.is_empty() && !claimed.more {
-                return Ok(None);
-            }
+            // a cancel took it as it was claimed
         }
+    }
+
+    /// The write of one claim of a job, and the time it claims at.
+    fn claim_one(&self) -> (i64, impl FnOnce(&SqlTx<'_>) -> Result<claim::Claimed> + Send + 'static + use<V>) {
+        let now = self.jobs.now();
+        let until = now.saturating_add(millis(self.state.policy.timeout));
+        let queue = Arc::clone(&self.state);
+        (now, move |tx: &SqlTx<'_>| claim::claim(tx, Claiming { queue: &queue, now, until, limit: 1 }))
+    }
+
+    /// One claim of `claim` without waiting: the write is queued, and `done`
+    /// is called on the thread that commits it with what it took, the lease
+    /// held in memory. A spilled value is the caller's to read after, since
+    /// the committing thread may lead the commit after this one.
+    #[cfg(feature = "async")]
+    pub(crate) fn claim_then(&self, done: impl FnOnce(Result<Took>) + Send + 'static) {
+        let (now, write) = self.claim_one();
+        let (jobs, state, named) = (Arc::clone(&self.jobs), Arc::clone(&self.state), self.named(None));
+        self.jobs.file().submit(0, write, move |claimed| {
+            done(claimed.map(|claimed| took(&jobs, &state, claimed, now)).map_err(|error| error.within(named)));
+        });
     }
 
     pub(crate) fn add_asked(&self, asked: Asked, value: &V, tx: Option<&Transaction<'_>>) -> Result<bool> {
@@ -440,12 +450,7 @@ where
         change: Change,
         call: Prepared,
     ) -> impl FnOnce(&SqlTx<'_>) -> Result<Option<i64>> + Send + 'static + use<V> {
-        let queue = Arc::clone(&self.state);
-        move |c| match change {
-            Change::Add => Ok(write::add(c, &queue, &call)?.then_some(call.at)),
-            Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
-            Change::Update => write::update(c, &queue, &call),
-        }
+        writes(Arc::clone(&self.state), change, call)
     }
 
     /// An add, a set or an update without waiting: the write is queued, and
@@ -460,30 +465,22 @@ where
         value: &V,
         done: impl FnOnce(Result<bool>) + Send + 'static,
     ) {
+        self.writing(change, asked, value).submit(done);
+    }
+
+    /// An add, a set or an update checked and its value encoded now, to queue
+    /// at the writer later with [`Writing::submit`].
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn writing(&self, change: Change, asked: Asked, value: &V) -> Writing {
         let named = self.named(asked.id());
+        let (jobs, state) = (Arc::clone(&self.jobs), Arc::clone(&self.state));
         #[cfg(feature = "replication")]
         if self.jobs.file().is_copy() {
-            let queue = self.clone();
-            let json = serde_json::to_value(value);
-            std::thread::spawn(move || {
-                let written = json
-                    .map_err(|error| Error::invalid(format!("a job that is no JSON: {error}")))
-                    .and_then(|json| queue.retyped::<serde_json::Value>().pass_on(change, &asked, &json));
-                done(written.map_err(|error| error.within(named)));
-            });
-            return;
+            let json =
+                serde_json::to_value(value).map_err(|error| Error::invalid(format!("a job that is no JSON: {error}")));
+            return Writing { jobs, state, change, named, ready: Ready::Passed(asked, json) };
         }
-        let call = match self.prepared(change, asked, value) {
-            Ok(call) => call,
-            Err(error) => return done(Err(error.within(named))),
-        };
-        let (state, bytes) = (Arc::clone(&self.state), call.value.len());
-        self.jobs.file().submit(bytes, self.change_of(change, call), move |due| {
-            if let Ok(Some(at)) = due {
-                state.wake(at);
-            }
-            done(due.map(|due| due.is_some()).map_err(|error| error.within(named)));
-        });
+        Writing { jobs, state, change, named, ready: Ready::Here(self.prepared(change, asked, value)) }
     }
 
     /// An add, a set or an update for a batch of the file the queue is kept
@@ -564,6 +561,101 @@ pub(crate) enum Change {
     Update,
 }
 
+/// The write of a change in `queue`, which gives the time the job is due at
+/// when it changed that.
+fn writes(
+    queue: Arc<QueueState>,
+    change: Change,
+    call: Prepared,
+) -> impl FnOnce(&SqlTx<'_>) -> Result<Option<i64>> + Send + 'static {
+    move |c| match change {
+        Change::Add => Ok(write::add(c, &queue, &call)?.then_some(call.at)),
+        Change::Set => write::set(c, &queue, &call).map(|set| Some(set.due)),
+        Change::Update => write::update(c, &queue, &call),
+    }
+}
+
+/// An add, a set or an update whose call was checked and whose value was
+/// encoded when it was made, queued at the writer by [`Writing::submit`]:
+/// the wire's call submits it at once, an awaited one at its future's first
+/// poll, which owns it meanwhile.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) struct Writing {
+    jobs: Arc<Jobs>,
+    state: Arc<QueueState>,
+    change: Change,
+    /// The queue and the id, as the write's error names them.
+    named: String,
+    ready: Ready,
+}
+
+#[cfg(any(feature = "wire", feature = "async"))]
+enum Ready {
+    /// The call checked and its value encoded, or why it was refused.
+    Here(Result<Prepared>),
+    /// On a copy of the queue's file: the call and its value as JSON, which
+    /// its home writes.
+    #[cfg(feature = "replication")]
+    Passed(Asked, Result<serde_json::Value>),
+}
+
+#[cfg(any(feature = "wire", feature = "async"))]
+impl Writing {
+    /// Queues the write, and calls `done` with whether it changed a job, on
+    /// the thread that commits it; a write refused before it is queued is
+    /// answered here. A copy passes it to its home on a thread of its own,
+    /// which waits for the home's answer.
+    pub(crate) fn submit(self, done: impl FnOnce(Result<bool>) + Send + 'static) {
+        let Writing { jobs, state, change, named, ready } = self;
+        let call = match ready {
+            Ready::Here(Ok(call)) => call,
+            Ready::Here(Err(error)) => return done(Err(error.within(named))),
+            #[cfg(feature = "replication")]
+            Ready::Passed(asked, json) => {
+                let queue = Queue::<serde_json::Value>::of_state(jobs, state);
+                std::thread::spawn(move || {
+                    let written = json.and_then(|json| queue.pass_on(change, &asked, &json));
+                    done(written.map_err(|error| error.within(named)));
+                });
+                return;
+            }
+        };
+        let bytes = call.value.len();
+        let write = writes(Arc::clone(&state), change, call);
+        jobs.file().submit(bytes, write, move |due| {
+            if let Ok(Some(at)) = due {
+                state.wake(at);
+            }
+            done(due.map(|due| due.is_some()).map_err(|error| error.within(named)));
+        });
+    }
+}
+
+/// What one claim of a job for a loop of the program's own took.
+pub(crate) enum Took {
+    /// A job, its lease held in memory, its value still to read.
+    Job(Arc<Lease>),
+    /// No job, but the claim ended jobs whose attempts were all spent, or
+    /// parked as many as it may: another claim may find one.
+    More,
+    Nothing,
+}
+
+/// Follows in memory what a claim's write took: the jobs it failed for good,
+/// how late it took them, and the lease it holds.
+fn took(jobs: &Jobs, state: &QueueState, claimed: claim::Claimed, now: i64) -> Took {
+    for _ in 0..claimed.failed {
+        state.failures.observe(&state.name, "its attempts ended without a settlement");
+    }
+    jobs.measure_claims(&state.name, &claimed.leases, now);
+    if let Some(lease) = claimed.leases.into_iter().next() {
+        let lease = Arc::new(lease);
+        state.hold(&lease);
+        return Took::Job(lease);
+    }
+    if claimed.abandoned.is_empty() && !claimed.more { Took::Nothing } else { Took::More }
+}
+
 /// What follows a cancel's write: a cancel that did not commit takes back what
 /// it told the job's watchers, and one that did stops the job's handler, when
 /// it runs here, and tells the watchers of the change.
@@ -642,14 +734,41 @@ impl<V> Claimed<V> {
     /// claim, a set or an update took since, or that a cancel took, is a
     /// `conflict`, and the settlement changes nothing.
     pub fn settle(self, outcome: impl Into<Outcome>) -> Result<()> {
-        let (lease, queue, jobs) = (&self.run.lease, &self.run.queue, &self.run.jobs);
-        let now = jobs.now();
-        let how = outcome.into().how(now);
-        let (settling, kept) = (Arc::clone(lease), Arc::clone(queue));
-        let measured = how.clone();
-        let settled = jobs.file().write(0, move |tx| claim::settle(tx, &kept, &settling, &how, now))?;
-        jobs.measure_settled(&queue.name, lease, &measured, &settled, now);
-        lease.apply(&settled, false);
+        let settling = Settling::of(&self.run, outcome.into());
+        let settled = self.run.jobs.file().write(0, settling.write())?;
+        settling.settled(&settled)
+    }
+}
+
+/// A claimed job's settlement: what its write changes in the file, then in
+/// memory once it committed.
+pub(crate) struct Settling {
+    lease: Arc<Lease>,
+    queue: Arc<QueueState>,
+    jobs: Arc<Jobs>,
+    how: claim::How,
+    now: i64,
+}
+
+impl Settling {
+    pub(crate) fn of(run: &Run, outcome: Outcome) -> Settling {
+        let now = run.jobs.now();
+        let (lease, queue, jobs) = (Arc::clone(&run.lease), Arc::clone(&run.queue), Arc::clone(&run.jobs));
+        Settling { lease, queue, jobs, how: outcome.how(now), now }
+    }
+
+    fn write(&self) -> impl FnOnce(&SqlTx<'_>) -> Result<claim::Settled> + Send + 'static {
+        let (lease, queue, how, now) = (Arc::clone(&self.lease), Arc::clone(&self.queue), self.how.clone(), self.now);
+        move |tx: &SqlTx<'_>| claim::settle(tx, &queue, &lease, &how, now)
+    }
+
+    /// Follows in memory what the written settlement changed: the lease let
+    /// go, the queue's watchers and workers woken. One whose lease another
+    /// claim, a change or a cancel took is a `conflict`.
+    fn settled(&self, settled: &claim::Settled) -> Result<()> {
+        let (lease, queue, now) = (&self.lease, &self.queue, self.now);
+        self.jobs.measure_settled(&queue.name, lease, &self.how, settled, now);
+        lease.apply(settled, false);
         queue.release(lease);
         queue.watchers.changed();
         if let Some(due) = settled.due {
@@ -665,9 +784,18 @@ impl<V> Claimed<V> {
             } else {
                 "the job's lease ended and another claim or a change took it"
             };
-            return Err(Error::new(ErrorKind::Conflict, why).within(self.run.describe()));
+            return Err(Error::new(ErrorKind::Conflict, why).within(super::run::described(queue, lease)));
         }
         Ok(())
+    }
+
+    /// The settlement without waiting: the write is queued, and `done` is
+    /// called on the thread that commits it once memory follows, so that a
+    /// caller gone before the answer still lets the job go.
+    #[cfg(feature = "async")]
+    pub(crate) fn submit(self, done: impl FnOnce(Result<()>) + Send + 'static) {
+        let (write, jobs) = (self.write(), Arc::clone(&self.jobs));
+        jobs.file().submit(0, write, move |settled| done(settled.and_then(|settled| self.settled(&settled))));
     }
 }
 

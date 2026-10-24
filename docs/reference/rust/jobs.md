@@ -1,6 +1,6 @@
 # Jobs API for Rust
 
-Every public type, trait and function of the Jobs engine in `tinystore::jobs`, generated from its source. The [Jobs guide](../../guides/jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
+Every public type, trait and function of the Jobs engine in `tinystore::jobs` and `tinystore::aio::jobs`, generated from its source. The [Jobs guide](../../guides/jobs/README.md) explains how to use them, and the [Bun and Node](../bun/jobs.md), [Python](../python/jobs.md) and [Go](../go/jobs.md) pages list the same API.
 
 ## Store
 
@@ -27,6 +27,33 @@ pub fn schedule(&self, name: &str) -> ScheduleBuilder
 
 A schedule: one repeating job under `name`, the code's own. Each time
 the program opens it, the code's repeat replaces the one kept.
+
+## aio::Store
+
+```rust
+impl aio::Store
+```
+
+### aio::Store.queue
+
+```rust
+pub fn queue<V>(&self, name: &str) -> QueueBuilder<V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+```
+
+A queue of jobs whose values are `V`, as JSON, in the store's jobs.db,
+as the blocking [`Store::queue`](crate::Store::queue) opens one: the
+same builder, its calls awaited.
+
+### aio::Store.schedule
+
+```rust
+pub fn schedule(&self, name: &str) -> ScheduleBuilder
+```
+
+A schedule: one repeating job under `name`, the code's own, as
+the blocking [`Store::schedule`](crate::Store::schedule) opens one.
 
 ## JobCall
 
@@ -959,5 +986,762 @@ pub fn stop(&self)
 
 Takes no job more and waits for the handlers under way, each bounded by
 its queue's timeout; the store's close stops every worker so.
+
+## aio::jobs::All
+
+```rust
+pub struct All<V> { /* private fields */ }
+```
+
+Every job a filter names, a page at a time: a `Stream` whose next page
+is read on the store's pool once the last one is used up. Dropped, it
+stops, and so does a page under way.
+
+## aio::jobs::Claimed
+
+```rust
+pub struct Claimed<V> {
+    pub value: V,
+}
+```
+
+A job a program claimed for a loop of its own: its value, its run, and
+the lease it settles.
+
+### aio::jobs::Claimed.run
+
+```rust
+pub fn run(&self) -> &Run
+```
+
+### aio::jobs::Claimed.settle
+
+```rust
+pub fn settle(
+    self,
+    outcome: impl Into<Outcome>,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Settles the job by `outcome`, as a handler's answer does: `()` for done,
+or one of the run's answers. Its write is queued at jobs.db's writer at
+the first poll, and the job is let go as it commits, whether or not the
+future is still awaited. A job whose lease ended and that another
+claim, a change or a cancel took since is a `conflict`.
+
+## aio::jobs::JobCall
+
+```rust
+pub struct JobCall<'a, V> { /* private fields */ }
+```
+
+A call on one job with what it asks beside its value, run by its last
+step, as `jobs::JobCall`: `later.id(&key).at(nine_am).add(&draft).await`.
+
+### aio::jobs::JobCall.id
+
+```rust
+pub fn id(self, id: impl AsRef<str>) -> Self
+```
+
+The job's id, 1 to 1024 bytes of text: what finds it again, and what
+adds it once however many times its caller asks.
+
+### aio::jobs::JobCall.at
+
+```rust
+pub fn at(self, time: SystemTime) -> Self
+```
+
+Runs the job at `time`; a time in the past runs it now.
+
+### aio::jobs::JobCall.delay
+
+```rust
+pub fn delay(self, span: Duration) -> Self
+```
+
+Runs the job `span` from now.
+
+### aio::jobs::JobCall.group
+
+```rust
+pub fn group(self, group: impl AsRef<str>) -> Self
+```
+
+The group whose running jobs the queue's concurrency bounds.
+
+### aio::jobs::JobCall.every
+
+```rust
+pub fn every(self, span: Duration) -> Self
+```
+
+Repeats the job every `span`; see `jobs::JobCall::every`.
+
+### aio::jobs::JobCall.cron
+
+```rust
+pub fn cron(self, expr: &str, zone: &str) -> Self
+```
+
+Repeats the job by a five-field cron expression on the wall clock of
+`zone`, an IANA name, `"UTC"` among them.
+
+### aio::jobs::JobCall.add
+
+```rust
+pub fn add(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Adds the job unless its id is taken, and says whether it added one;
+see `jobs::JobCall::add`. The call is checked and its value encoded
+now, and its write queued at the first poll: polled once, it commits
+whether or not it is still awaited.
+
+### aio::jobs::JobCall.set
+
+```rust
+pub fn set(self, value: &V) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Makes the id's job this value at this time, whatever it was; see
+`jobs::JobCall::set`.
+
+### aio::jobs::JobCall.update
+
+```rust
+pub fn update(self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Changes the id's job when it has not started, and says whether it did;
+see `jobs::JobCall::update`.
+
+### aio::jobs::JobCall.adding
+
+```rust
+pub fn adding(self, value: &V) -> Write
+```
+
+The job's add for a batch of the database the queue was opened from,
+as `jobs::JobCall::adding`: it checks the call and encodes its value,
+and the batch that carries it is awaited.
+
+## aio::jobs::Queue
+
+```rust
+pub struct Queue<V> { /* private fields */ }
+```
+
+Jobs of one type in the order of their time, as `jobs::Queue`, its
+calls that wait awaited. A handle is cheap to clone and to keep.
+
+### aio::jobs::Queue.blocking
+
+```rust
+pub fn blocking(&self) -> &Queue<V>
+```
+
+The same queue, for its blocking calls.
+
+### aio::jobs::Queue.add
+
+```rust
+pub fn add(&self, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Adds a job that runs as soon as a worker is free, and answers once it
+is on disk; adds from many callers share a commit. Its write is queued
+at jobs.db's writer at the first poll, so a future polled once commits
+whether or not it is still awaited.
+
+### aio::jobs::Queue.set
+
+```rust
+pub fn set(
+    &self,
+    id: impl AsRef<str>,
+    value: &V,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Makes the job under `id` this value, due now, whatever it was; see
+`JobCall::set`.
+
+### aio::jobs::Queue.update
+
+```rust
+pub fn update(
+    &self,
+    id: impl AsRef<str>,
+    value: &V,
+) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Gives the job under `id` this value when it has not started, and says
+whether it did; see `JobCall::update`.
+
+### aio::jobs::Queue.cancel
+
+```rust
+pub fn cancel(&self, id: impl AsRef<str>) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Takes the job under `id`, whatever its state, and says whether there
+was one. A running one's handler is told to stop: `run.stopped()` turns
+true, and what it returns settles nothing. A repeating job stops.
+
+### aio::jobs::Queue.get
+
+```rust
+pub fn get(
+    &self,
+    id: impl AsRef<str>,
+) -> impl Future<Output = Result<Option<Job<V>>>> + Send + 'static
+```
+
+Where the job under `id` is, as `jobs::Queue::get` says; none for an
+id with no job. It reads on the store's pool, since it counts up to
+10,000 jobs ahead of a waiting one.
+
+### aio::jobs::Queue.list
+
+```rust
+pub fn list(&self, filter: &Filter) -> impl Future<Output = Result<Page<V>>> + Send + 'static
+```
+
+A page of the queue's jobs, read on the store's pool; see `Filter`.
+
+### aio::jobs::Queue.all
+
+```rust
+pub fn all(&self, filter: Filter) -> All<V>
+```
+
+Every job `filter` names, a page at a time, each page read on the
+store's pool once the one before is used up and nothing held between
+pages; a job written during the walk may or may not be met.
+
+### aio::jobs::Queue.id
+
+```rust
+pub fn id(&self, id: impl AsRef<str>) -> JobCall<'_, V>
+```
+
+A call on the job with this id; see `JobCall`.
+
+### aio::jobs::Queue.at
+
+```rust
+pub fn at(&self, time: SystemTime) -> JobCall<'_, V>
+```
+
+### aio::jobs::Queue.delay
+
+```rust
+pub fn delay(&self, span: Duration) -> JobCall<'_, V>
+```
+
+### aio::jobs::Queue.group
+
+```rust
+pub fn group(&self, group: impl AsRef<str>) -> JobCall<'_, V>
+```
+
+### aio::jobs::Queue.claim
+
+```rust
+pub fn claim(&self) -> impl Future<Output = Result<Option<Claimed<V>>>> + Send + 'static
+```
+
+Takes the next due job for a loop of the program's own, which settles
+it with `Claimed::settle`; none when nothing is due, never waiting
+for a job. Its lease is a write at jobs.db's writer, and a value kept
+in a row of its own is read after the commit, in the poll when a
+reader is idle. Dropped once its write was queued, the job comes back
+when its lease, the queue's timeout, ends, the attempt counted.
+
+### aio::jobs::Queue.adding
+
+```rust
+pub fn adding(&self, value: &V) -> Write
+```
+
+A job's add for a batch of the database the queue was opened from; see
+`jobs::Queue::adding`. It checks the call and encodes its value, with
+no I/O, and the batch is awaited.
+
+### aio::jobs::Queue.watch
+
+```rust
+pub fn watch(&self, id: impl AsRef<str>) -> Watch<V>
+```
+
+The job under `id` as it is, then again each time its state, place,
+attempt, time, progress or error changes, as a `Stream`; it ends
+with the job: done, failed or cancelled, the last it yields. An id
+with no job yields nothing.
+
+Each commit of the queue wakes the watch, which reads its job again on
+the store's pool, one read at a time, and once more after a read when
+a change came meanwhile. Unlike the blocking watch it does not look
+again every minute: a job whose time comes is seen when a worker takes
+it. Dropped, it stops watching, and a read under way stops.
+
+### aio::jobs::Queue.work
+
+```rust
+pub fn work<F, W, R, E>(&self, handler: F) -> Worker
+where
+    F: Fn(V, Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+A worker that runs `handler` on each job as it falls due, as many at
+once as the queue's concurrency lets, one when it sets none: a future
+the program spawns, which starts nothing before its first poll and
+runs until `Worker::until`'s signal, its drop or the store's close;
+the page of `tinystore::aio::jobs` says what each does.
+
+The handler gets the job's value and its run by value. `Ok(())` is
+done; an answer of the run's says otherwise; an error retries the job
+after its backoff, its text kept as the job's error, and so does a
+panic.
+
+### aio::jobs::Queue.run_due
+
+```rust
+pub fn run_due<F, W, R, E>(
+    &self,
+    handler: F,
+) -> impl Future<Output = Result<usize>> + Send + 'static
+where
+    F: Fn(V, Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+Runs what is due when its future is first polled and what falls due
+meanwhile, then answers how many jobs ran; it never waits for a later
+job. Tests, scripts and commands use it. Its future is a worker's, and
+dropped it stops as a worker's drop does.
+
+### aio::jobs::Queue.concurrency
+
+```rust
+pub fn concurrency(&self, handlers: u32) -> Workers<'_, V>
+```
+
+A worker that runs at most `handlers` at once, under the queue's
+concurrency.
+
+## aio::jobs::QueueBuilder
+
+```rust
+pub struct QueueBuilder<V> { /* private fields */ }
+```
+
+A queue being opened, as `jobs::QueueBuilder`: its name, its type, and
+how it treats its jobs.
+
+### aio::jobs::QueueBuilder.attempts
+
+```rust
+pub fn attempts(self, attempts: u32) -> Self
+```
+
+Runs a job gets before it fails for good, the first counted: 10.
+
+### aio::jobs::QueueBuilder.backoff
+
+```rust
+pub fn backoff(self, initial: Duration, max: Duration) -> Self
+```
+
+The wait before a retry: `initial`, doubling each time up to `max`, a
+tenth longer or shorter by the job: 1 s to 1 h.
+
+### aio::jobs::QueueBuilder.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+How long one run may take before it is told to stop: a minute.
+
+### aio::jobs::QueueBuilder.concurrency
+
+```rust
+pub fn concurrency(self, concurrency: impl Into<Concurrency>) -> Self
+```
+
+Jobs running at once across every worker of the store, `8`, or in all
+and in each group, `Concurrency::total(8).group(2)`. Without it each
+worker runs one at a time.
+
+### aio::jobs::QueueBuilder.rate
+
+```rust
+pub fn rate(self, count: u32, per: Duration) -> Self
+```
+
+Jobs started in any span of `per`: 30 a second, as an API's limit asks.
+It counts starts, retries among them, and lives in memory.
+
+### aio::jobs::QueueBuilder.dedupe
+
+```rust
+pub fn dedupe(self, span: Duration) -> Self
+```
+
+How long a done job keeps its id taken, so that adding it again adds
+nothing: an id runs once.
+
+### aio::jobs::QueueBuilder.keep
+
+```rust
+pub fn keep(self, span: Duration) -> Self
+```
+
+How long a failed job stays, with its error, to be found and started
+again: a week.
+
+### aio::jobs::QueueBuilder.max_waiting
+
+```rust
+pub fn max_waiting(self, jobs: u64) -> Self
+```
+
+Jobs that may wait; an add past it is a `limit`: ten million.
+
+### aio::jobs::QueueBuilder.open
+
+```rust
+pub fn open(self) -> Result<Queue<V>>
+```
+
+Opens the queue, a plain call made once at start: the first open of
+the engine migrates jobs.db and gives back what a dead process held.
+
+## aio::jobs::Run
+
+```rust
+pub struct Run { /* private fields */ }
+```
+
+This call on a job, as `jobs::Run`: when it was due, which attempt it
+is, whether it was told to stop, and the answers a handler returns. A
+handler takes it by value, so that its future may move to another thread.
+
+### aio::jobs::Run.id
+
+```rust
+pub fn id(&self) -> Option<&str>
+```
+
+The id the job was added under; none for a job added without one.
+
+### aio::jobs::Run.at
+
+```rust
+pub fn at(&self) -> SystemTime
+```
+
+When the run was due, which is earlier than now when it started late.
+
+### aio::jobs::Run.attempt
+
+```rust
+pub fn attempt(&self) -> u32
+```
+
+This run's number among the job's attempts, the first being 1.
+
+### aio::jobs::Run.group
+
+```rust
+pub fn group(&self) -> Option<&str>
+```
+
+### aio::jobs::Run.stopped
+
+```rust
+pub fn stopped(&self) -> bool
+```
+
+Whether the run was told to stop: a cancel took its job, or it ran past
+its queue's timeout. A handler that checks it between pieces of work
+stops in time; what it did before stays done.
+
+### aio::jobs::Run.set_progress
+
+```rust
+pub fn set_progress(&self, progress: &impl Serialize) -> Result<()>
+```
+
+Shows how far the run got to `get` and `watch`: any JSON up to 4 KiB. It
+lives in memory, so it is a plain call.
+
+### aio::jobs::Run.step
+
+```rust
+pub async fn step<T, E, F, W>(&self, name: &str, work: F) -> Result<T, E>
+where
+    T: Serialize + DeserializeOwned,
+    E: From<Error>,
+    F: FnOnce() -> W,
+    W: Future<Output = Result<T, E>>,
+```
+
+Runs `work` once for the job under `name` and keeps what it answered,
+as `jobs::Run::step` does: the attempt after a retry, a lost worker
+or a restart gets the kept answer back without running `work` again.
+
+The kept answer is read in the first poll when one of jobs.db's
+readers is idle, else on the store's pool, and `work`'s future runs
+inside this one. Dropped before `work` answers, nothing is kept and the
+step runs again in the next attempt; dropped once its answer's keep was
+queued at the writer, the keep commits.
+
+### aio::jobs::Run.done
+
+```rust
+pub fn done(&self) -> Outcome
+```
+
+The answer that says the job is done, for a handler whose other
+branches answer `retry` or `fail`.
+
+### aio::jobs::Run.retry
+
+```rust
+pub fn retry(&self, when: impl Into<When>) -> Outcome
+```
+
+Runs the job again at `when`, the run counted as an attempt; past the
+queue's attempts it fails for good.
+
+### aio::jobs::Run.snooze
+
+```rust
+pub fn snooze(&self, when: impl Into<When>) -> Outcome
+```
+
+Runs the job again at `when`, the run not counted.
+
+### aio::jobs::Run.fail
+
+```rust
+pub fn fail(&self, reason: impl Display) -> Outcome
+```
+
+Fails the job for good now, `reason` kept as its error.
+
+## aio::jobs::Schedule
+
+```rust
+pub struct Schedule { /* private fields */ }
+```
+
+A repeat the code owns, as `jobs::Schedule`: one repeating job under the
+schedule's name. It holds no worker: the program spawns the one
+`Schedule::work` gives, which stops by `Worker::until` or a drop.
+
+### aio::jobs::Schedule.blocking
+
+```rust
+pub fn blocking(&self) -> &Schedule
+```
+
+The same schedule, for its blocking calls.
+
+### aio::jobs::Schedule.get
+
+```rust
+pub fn get(&self) -> impl Future<Output = Result<Option<Job<()>>>> + Send + 'static
+```
+
+When it runs next and how its last run went, read on the store's pool.
+
+### aio::jobs::Schedule.work
+
+```rust
+pub fn work<F, W, R, E>(&self, handler: F) -> Worker
+where
+    F: Fn(Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+The worker that runs `handler` at each time, as a queue's worker does
+and gets the run alone: it starts at its first poll. On a copy of
+jobs.db it ends there with `unavailable`, since the home's workers run
+the schedule.
+
+### aio::jobs::Schedule.run_due
+
+```rust
+pub fn run_due<F, W, R, E>(
+    &self,
+    handler: F,
+) -> impl Future<Output = Result<usize>> + Send + 'static
+where
+    F: Fn(Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+Runs what is due, as `Queue::run_due` does, and answers how many runs
+ran.
+
+### aio::jobs::Schedule.cancel
+
+```rust
+pub fn cancel(&self) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Removes the schedule's job, until the program opens it again; a write
+queued at jobs.db's writer at the first poll.
+
+## aio::jobs::ScheduleBuilder
+
+```rust
+pub struct ScheduleBuilder { /* private fields */ }
+```
+
+A schedule being opened, as `jobs::ScheduleBuilder`: its name and its
+repeat.
+
+### aio::jobs::ScheduleBuilder.every
+
+```rust
+pub fn every(self, span: Duration) -> Self
+```
+
+Runs every `span`, at the schedule's own phase within it.
+
+### aio::jobs::ScheduleBuilder.cron
+
+```rust
+pub fn cron(self, expr: &str, zone: &str) -> Self
+```
+
+Runs by a five-field cron expression on the wall clock of `zone`, an
+IANA name, `"UTC"` among them.
+
+### aio::jobs::ScheduleBuilder.attempts
+
+```rust
+pub fn attempts(self, attempts: u32) -> Self
+```
+
+Runs a run gets before it fails, the first counted: 10. A failed run
+retries, never past the next time, and the schedule goes on.
+
+### aio::jobs::ScheduleBuilder.backoff
+
+```rust
+pub fn backoff(self, initial: Duration, max: Duration) -> Self
+```
+
+### aio::jobs::ScheduleBuilder.timeout
+
+```rust
+pub fn timeout(self, timeout: Duration) -> Self
+```
+
+### aio::jobs::ScheduleBuilder.open
+
+```rust
+pub fn open(self) -> Result<Schedule>
+```
+
+Opens the schedule without running it, a plain call made once at
+start: it writes the code's repeat, as `jobs::ScheduleBuilder::open`.
+
+### aio::jobs::ScheduleBuilder.work
+
+```rust
+pub fn work<F, W, R, E>(self, handler: F) -> Result<Worker>
+where
+    F: Fn(Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+Opens the schedule and gives the worker that runs `handler` at each
+time, for a program that never reads the schedule: the program spawns
+it, as `Schedule::work`'s. A copy of jobs.db runs no schedule.
+
+## aio::jobs::Watch
+
+```rust
+pub struct Watch<V> { /* private fields */ }
+```
+
+A job watched: a `Stream` of the job as it is, then again each time it
+changes, until it ends.
+
+## aio::jobs::Worker
+
+```rust
+pub struct Worker { /* private fields */ }
+```
+
+A queue's worker: a future that runs its handlers, `Ok(())` once it
+stopped. It starts at its first poll; spawn it on the program's runtime.
+
+### aio::jobs::Worker.until
+
+```rust
+pub fn until(self, signal: impl Future + Send + 'static) -> Worker
+```
+
+Stops the worker gracefully once `signal` is ready, as
+`tokio::signal::ctrl_c()` is on a ctrl-c: it takes no job more, gives
+back uncounted the jobs it claimed and had not begun, waits for the
+handlers under way, each within the queue's timeout and a grace, and
+returns once their answers are written. Given several, the first that
+is ready stops it.
+
+## aio::jobs::Workers
+
+```rust
+pub struct Workers<'a, V> { /* private fields */ }
+```
+
+A worker being made: how many handlers it runs at once.
+
+### aio::jobs::Workers.work
+
+```rust
+pub fn work<F, W, R, E>(self, handler: F) -> Worker
+where
+    F: Fn(V, Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+The worker; see `Queue::work`.
+
+### aio::jobs::Workers.run_due
+
+```rust
+pub fn run_due<F, W, R, E>(self, handler: F) -> impl Future<Output = Result<usize>> + Send + 'static
+where
+    F: Fn(V, Run) -> W + Send + Sync + 'static,
+    W: Future<Output = Result<R, E>> + Send + 'static,
+    R: Into<Outcome> + 'static,
+    E: Display + 'static,
+```
+
+Runs what is due; see `Queue::run_due`.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->
