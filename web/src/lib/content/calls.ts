@@ -534,6 +534,8 @@ const derived = new Set([
 	'ok_or',
 	'as_deref',
 	'as_ref',
+	// an Iterator's, and a Stream's through `StreamExt`, which a loop takes each item with
+	'next',
 ])
 
 // a function a program calls by its name alone, `open('./data')`, and not a type

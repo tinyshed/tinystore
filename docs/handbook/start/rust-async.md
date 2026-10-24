@@ -128,6 +128,26 @@ Don't call `block_on` on an awaited call inside the closure. That call would
 wait for the writer the transaction holds, so it fails with an invalid error
 (`ErrorKind::Invalid`) instead.
 
+## Streams
+
+```rust
+use futures::StreamExt; // next() on a Stream
+
+let events = store.channel::<String>("chat-events").open()?;
+let mut each = events.under("chat-7").each()?; // listens from here
+while let Some(message) = each.next().await {
+    println!("{}", message?.value);
+}
+```
+
+This block uses the `store` of the first one. A loop over a channel's
+messages and a watch of a config are each a `Stream` of the `futures-core`
+crate. So `next()` from `futures::StreamExt` or `tokio_stream::StreamExt`
+reads them, and every item is a `Result`. A stream blocks no thread while it
+waits, because a publish or a change wakes it. The async API has no handler
+form: to handle messages in the background, spawn a task that reads the
+stream.
+
 ## Blocking and async in one program
 
 ```rust

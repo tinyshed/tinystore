@@ -384,7 +384,7 @@ impl State {
 
     /// Takes a waiter out of its line, its call cancelled or its connection
     /// gone; its reply is dropped unanswered.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(super) fn cancel(&mut self, id: u64) {
         let Some(place) = self.waiting.get(&id).cloned() else { return };
         let Some(line) = self.lines.get_mut(&place) else { return };

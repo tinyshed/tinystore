@@ -70,6 +70,54 @@ let tried = summaries.try_hold(chat_id, |lease| write_summary(chat_id, lease.fen
 New to Locks? [Live updates](../../handbook/chat/live-updates.md#one-summary-per-chat-at-a-time)
 in the Handbook writes one summary per chat at a time, with a fence in SQL.
 
+## Async Rust
+
+With the `async` feature, a Rust program opens the same locks and semaphores
+from `tinystore::aio::Store`, and a hold is awaited. This section shows only
+Rust, because in Bun, Node and Python every call is already awaited, and in
+Go a call blocks its goroutine, which costs little.
+
+```rust
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let summaries = store.lock("summaries").max_hold(Duration::from_secs(120)).open()?;
+
+// blocking: summaries.hold(chat_id, |lease| write_summary(chat_id, lease.fence()))?
+summaries.hold(chat_id, |lease| async move { write_summary(chat_id, lease.fence()).await }).await?;
+let tried = summaries.try_hold(chat_id, |lease| async move { write_summary(chat_id, lease.fence()).await }).await?;
+summaries
+    .key(chat_id)
+    .wait(Duration::from_secs(30))
+    .hold(|lease| async move { write_summary(chat_id, lease.fence()).await })
+    .await?;
+
+let uploads = store.semaphore("uploads").limit(3).open()?;
+uploads.hold(user_id, |_permit| async move { upload(user_id).await }).await?;
+```
+
+- The function you pass gets the lease by value and returns a future, which
+  runs while the key is held. The key goes to the next holder when that
+  future ends, fails or is dropped.
+- While the key is held by someone else, the hold waits in the key's line,
+  first come first served, and blocks no thread. If the key is still held
+  after `wait`, ten seconds unless you say, the hold fails with an in use
+  error (`ErrorKind::InUse`).
+- If you drop the hold's future while it waits, it leaves the line. So
+  `tokio::time::timeout(d, summaries.hold(…))` works beside `wait`.
+- If the lease ends while your future runs, because of `max_hold` or because
+  the store closed, `lease.lost()` returns true and the hold fails with a
+  lost error (`ErrorKind::Lost`), as in blocking Rust.
+- If you keep the lease after the hold, by returning it or by moving it into
+  a task, `lease.lost()` returns true once the hold ends. Another holder may
+  have the key by then.
+- A hold of a key inside its own hold is refused with an invalid error
+  (`ErrorKind::Invalid`), and so is a hold inside a transaction's closure.
+  A hold in a task that you spawn waits like any other holder.
+
+[Rust with async](../../handbook/start/rust-async.md) explains where the work
+runs and what dropping a future does.
+
 ## Reference
 
 [Bun and Node](../../reference/bun/locks.md) ·

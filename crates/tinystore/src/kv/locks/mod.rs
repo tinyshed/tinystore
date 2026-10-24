@@ -15,6 +15,8 @@
 //! # }
 //! ```
 
+#[cfg(feature = "async")]
+mod awaited;
 mod engine;
 mod lease;
 mod state;
@@ -25,6 +27,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+#[cfg(feature = "async")]
+pub(crate) use self::awaited::{Ends, Held};
 pub(crate) use self::engine::Locks;
 pub use self::lease::Fence;
 pub(crate) use self::lease::{Answer, Granted};
@@ -299,7 +303,7 @@ impl Opened {
         let answer = answer.recv().map_err(|_| Error::internal("a lock's answer was dropped").within(place))?;
         Ok(match answer? {
             Answer::Granted(granted) => {
-                Some(Holding { locks: Arc::downgrade(&self.locks), place: place.clone(), granted, _mark: mark })
+                Some(Holding { locks: Arc::downgrade(&self.locks), place: place.clone(), granted, _mark: Some(mark) })
             }
             Answer::Busy => None,
         })
@@ -344,13 +348,15 @@ pub(crate) fn remote_ask(store: &Store, remote: &Remote<'_>) -> Result<(Arc<Lock
     Ok((opened.locks, ask))
 }
 
-/// A key this thread holds; dropping it, a panic's unwinding included, lets
-/// the key go to the next in line.
+/// A key held; dropping it, a panic's unwinding included, lets the key go to
+/// the next in line. A blocking hold marks its thread for the whole hold; an
+/// awaited one, whose future may move between threads, marks the thread
+/// that polls it around each poll instead, and keeps no mark here.
 struct Holding {
     locks: Weak<Locks>,
     place: Place,
     granted: Granted,
-    _mark: Mark,
+    _mark: Option<Mark>,
 }
 
 impl Holding {
@@ -363,6 +369,12 @@ impl Holding {
     /// is dropped.
     fn run<T, E: From<Error>>(&self, work: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
         let value = work()?;
+        self.kept(value)
+    }
+
+    /// What a hold answers once its function answered `value`: the value,
+    /// unless the lease ended meanwhile.
+    fn kept<T, E: From<Error>>(&self, value: T) -> Result<T, E> {
         match self.granted.watch.ending() {
             Ending::Live => Ok(value),
             Ending::Lost => {
@@ -454,7 +466,11 @@ struct Mark(usize, Place);
 
 impl Mark {
     fn enter(locks: &Arc<Locks>, place: &Place) -> Mark {
-        let address = Arc::as_ptr(locks) as usize;
+        Mark::at(Arc::as_ptr(locks) as usize, place)
+    }
+
+    /// The mark of `place` of the locks at `address`.
+    fn at(address: usize, place: &Place) -> Mark {
         HOLDING.with(|holding| holding.borrow_mut().push((address, place.clone())));
         Mark(address, place.clone())
     }

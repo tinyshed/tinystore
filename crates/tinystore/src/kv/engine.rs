@@ -433,6 +433,12 @@ impl Engine for Kv {
         let renewed = if self.file.is_copy() { Ok(()) } else { self.renewals.flush(&self.file).map(drop) };
         let flushed = self.flush_buffers();
         let closed = if self.lent_by.is_none() { self.file.close() } else { Ok(()) };
+        // an awaited watch of a config ends once its store closed, rather than wait for ever
+        #[cfg(all(feature = "config", feature = "async"))]
+        {
+            let hubs: Vec<_> = lock(&self.configs).values().filter_map(Weak::upgrade).collect();
+            hubs.iter().for_each(|hub| hub.close());
+        }
         renewed.and(flushed).and(closed)
     }
 

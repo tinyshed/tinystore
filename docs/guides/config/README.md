@@ -80,6 +80,51 @@ println!("{}", config.explain());
 New to Config? [Settings](../../handbook/chat/settings.md) in the Handbook
 declares a chat's settings and turns its replies off live.
 
+## Async Rust
+
+With the `async` feature, a Rust program opens the same config from
+`tinystore::aio::Store`, and its changes and its watch are awaited. This
+section shows only Rust, because in Bun, Node and Python every call is
+already awaited, and in Go a call blocks its goroutine, which costs little.
+
+```rust
+use futures::StreamExt; // next() on a Stream
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let config = store.config("chat", Settings::default()).file(File::optional("chat.toml")).open()?;
+
+let max_tokens = *config.get().model.max_tokens; // not awaited: the settings are in memory
+config.update(|s| *s.model.max_tokens = 2048).await?; // blocking: config.update(...)?
+config.reset("model.max_tokens").await?; // blocking: config.reset(...)?
+
+let mut watching = config.watch(); // the settings now, then after each change
+while let Some(settings) = watching.next().await {
+    let settings = settings?; // a closed error once the store closes
+    println!("max_tokens is {}", *settings.model.max_tokens);
+}
+```
+
+- `get` and `explain` are plain calls, because they read memory.
+- `update`, `if_version(…).update`, `reset` and `reset_all` return futures.
+  Your closure and the config's `validate` run when the future is first
+  polled, on your executor's thread. The commit runs on the store's own
+  threads, and every handle sees the change before the future returns.
+- After the commit, the next poll hands the change to every handle. So every
+  handle's `validate` and the blocking watchers (`config.blocking().watch`)
+  run on your executor's thread, or on the store's threads if you dropped the
+  future. A retry after a conflict also runs your closure in a later poll.
+- Once its future is polled, a change commits even if you drop the future.
+  A future that you drop before its first poll changes nothing.
+- `watch()` returns a `Stream`, and it starts watching when you call it. If
+  your loop falls behind, it gets the newest settings, never every version
+  between. When the store closes, the stream returns a closed error
+  (`ErrorKind::Closed`) and then ends.
+- A watch with a callback is the blocking handle's: `config.blocking().watch(…)`.
+
+[Rust with async](../../handbook/start/rust-async.md) explains where the work
+runs and what dropping a future does.
+
 ## Reference
 
 [Bun and Node](../../reference/bun/config.md) ·

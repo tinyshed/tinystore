@@ -18,6 +18,8 @@ use super::declaration::{Declaration, Kind, Setting, unmarked};
 use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Line};
 use super::hub::{Change, Follower, Hub, Kept};
+#[cfg(feature = "async")]
+use super::hub::{Hook, Unpublished};
 use super::layers::{Base, Given, Layer, Source, set, shown_value};
 use super::marks::marked;
 use super::resolve::{Making, Resolved, Validate, View};
@@ -222,17 +224,24 @@ where
     /// Drops the change kept of the setting at `path`, or of every setting
     /// of the group at it, so that the layers give them again.
     pub fn reset(&self, path: &str) -> Result<()> {
-        let within = |error: Error| error.within(format!("config {}: reset {path}", self.inner.name));
+        if self.resets(path)? {
+            let within = |error: Error| error.within(format!("config {}: reset {path}", self.inner.name));
+            self.inner.hub.reset(path).map_err(within)?;
+        }
+        Ok(())
+    }
+
+    /// Whether a change is kept at `path` or under it, which a reset drops;
+    /// `invalid` when `path` names no setting and no change is kept there.
+    pub(crate) fn resets(&self, path: &str) -> Result<bool> {
         let kept = self.inner.hub.kept();
         let under = format!("{path}.");
         let has_kept = kept.changes.keys().any(|changed| changed == path || changed.starts_with(&under));
         if path.is_empty() || (!has_kept && self.inner.declaration.node(path).is_none()) {
-            return Err(within(Error::invalid("no such setting, and no change of it is kept")));
+            let unknown = Error::invalid("no such setting, and no change of it is kept");
+            return Err(unknown.within(format!("config {}: reset {path}", self.inner.name)));
         }
-        if has_kept {
-            self.inner.hub.reset(path).map_err(within)?;
-        }
-        Ok(())
+        Ok(has_kept)
     }
 
     /// Drops every change kept of the config.
@@ -285,18 +294,90 @@ where
     fn change(&self, if_version: Option<i64>, mut change: impl FnMut(&mut T)) -> Result<()> {
         let within = |error: Error| error.within(format!("config {}", self.inner.name));
         for _ in 0..ATTEMPTS {
-            let (version, tree) = self.inner.state();
-            let leaves = self.inner.leaves(&mut change).map_err(within)?;
-            if leaves.is_empty() {
-                return Ok(());
-            }
-            self.inner.candidate(&tree, &leaves).map_err(within)?;
-            match self.inner.hub.change(if_version.unwrap_or(version), leaves) {
+            let Some((expected, leaves)) = self.proposal(if_version, &mut change)? else { return Ok(()) };
+            match self.inner.hub.change(expected, leaves) {
                 Err(error) if error.kind() == ErrorKind::Conflict && if_version.is_none() => {}
                 done => return done.map(drop).map_err(within),
             }
         }
-        Err(within(Error::new(ErrorKind::Conflict, "other changes came first each time it was tried")))
+        Err(self.raced())
+    }
+
+    /// One try of a change: the live settings `change` changes, each checked
+    /// against every handle's declaration, the value they make checked by the
+    /// program's `validate`, and the version the change is made on; none when
+    /// `change` changes nothing.
+    pub(crate) fn proposal(&self, if_version: Option<i64>, change: impl FnOnce(&mut T)) -> Result<Option<Proposal>> {
+        let within = |error: Error| error.within(format!("config {}", self.inner.name));
+        let (version, tree) = self.inner.state();
+        let leaves = self.inner.leaves(change).map_err(within)?;
+        if leaves.is_empty() {
+            return Ok(None);
+        }
+        self.inner.candidate(&tree, &leaves).map_err(within)?;
+        Ok(Some((if_version.unwrap_or(version), leaves)))
+    }
+
+    /// What a change answers once others came first each of its tries.
+    pub(crate) fn raced(&self) -> Error {
+        let raced = Error::new(ErrorKind::Conflict, "other changes came first each time it was tried");
+        raced.within(format!("config {}", self.inner.name))
+    }
+}
+
+/// A change's settings with their values, and the version it is made on.
+pub(crate) type Proposal = (i64, Vec<(String, Value)>);
+
+/// What the async API's handle of a config awaits: each try of a change made
+/// on the polling thread by [`Config::proposal`], its commit submitted to
+/// kv.db's writer, and what it wrote handed back to be published there.
+#[cfg(feature = "async")]
+impl<T> Config<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    /// The tries a change makes while others race it, as `update`'s.
+    pub(crate) const ATTEMPTS: usize = ATTEMPTS;
+
+    /// Submits a try to kv.db's writer. `done` gets what it wrote, on the
+    /// thread that commits it, for the caller to publish; dropped unpublished,
+    /// it is published on `elsewhere`.
+    pub(crate) fn submit_change(
+        &self,
+        proposal: Proposal,
+        elsewhere: crate::polled::Lead,
+        done: impl FnOnce(Result<Unpublished>) + Send + 'static,
+    ) {
+        let shown = format!("config {}", self.inner.name);
+        let named = move |written: Result<_>| done(written.map_err(|error| error.within(shown)));
+        self.inner.hub.change_then(proposal, elsewhere, named);
+    }
+
+    /// Submits a reset of `path`, every change for an empty one, as
+    /// [`Config::submit_change`] submits a change.
+    pub(crate) fn submit_reset(
+        &self,
+        path: &str,
+        elsewhere: crate::polled::Lead,
+        done: impl FnOnce(Result<Unpublished>) + Send + 'static,
+    ) {
+        let shown = match path {
+            "" => format!("config {}", self.inner.name),
+            path => format!("config {}: reset {path}", self.inner.name),
+        };
+        let named = move |written: Result<_>| done(written.map_err(|error| error.within(shown)));
+        self.inner.hub.reset_then(path, elsewhere, named);
+    }
+
+    /// Calls `hook` once, when the store closes; false, and nothing called,
+    /// once it has closed.
+    pub(crate) fn on_close(&self, hook: Hook) -> bool {
+        self.inner.hub.on_close(hook)
+    }
+
+    /// The store the config was opened in, while it is open.
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.inner.hub.store()
     }
 }
 

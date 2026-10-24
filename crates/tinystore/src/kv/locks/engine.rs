@@ -100,7 +100,7 @@ impl Locks {
     }
 
     /// Takes a waiter out of its line; its reply is dropped unanswered.
-    #[cfg(feature = "wire")]
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn cancel(&self, waiter: u64) {
         self.inner.change(|state, _, _, _| state.cancel(waiter));
     }

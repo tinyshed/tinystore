@@ -1,6 +1,6 @@
 # Config API for Rust
 
-Every public type, trait and function of the Config engine in `tinystore::config`, generated from its source. The [Config guide](../../guides/config/README.md) explains how to use them, and the [Bun and Node](../bun/config.md), [Python](../python/config.md) and [Go](../go/config.md) pages list the same API.
+Every public type, trait and function of the Config engine in `tinystore::config` and `tinystore::aio::config`, generated from its source. The [Config guide](../../guides/config/README.md) explains how to use them, and the [Bun and Node](../bun/config.md), [Python](../python/config.md) and [Go](../go/config.md) pages list the same API.
 
 ## Store
 
@@ -20,6 +20,23 @@ The program's settings as one typed value. `declaration` is every
 setting with its default, a `serde` struct whose fields may be marked
 `Secret`, `Required` or `Live`; the layers the builder adds go over it
 in the order written.
+
+## aio::Store
+
+```rust
+impl aio::Store
+```
+
+### aio::Store.config
+
+```rust
+pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+```
+
+The program's settings as one typed value, declared as
+`crate::Store::config` declares them, its changes awaited.
 
 ## Env
 
@@ -363,5 +380,195 @@ ignoring it and saying so in the log.
 ```rust
 pub fn open(self) -> Result<Config<T>>
 ```
+
+## aio::config::ConfigBuilder
+
+```rust
+pub struct ConfigBuilder<T> { /* private fields */ }
+```
+
+A config being opened, as `crate::config::ConfigBuilder`: its
+declaration, then its layers in the order written.
+
+### aio::config::ConfigBuilder.file
+
+```rust
+pub fn file(self, file: impl Into<File>) -> Self
+```
+
+A file's settings over what came before, as
+`crate::config::ConfigBuilder::file`.
+
+### aio::config::ConfigBuilder.env
+
+```rust
+pub fn env(self, env: impl Into<Env>) -> Self
+```
+
+The environment's variables over what came before, as
+`crate::config::ConfigBuilder::env`.
+
+### aio::config::ConfigBuilder.validate
+
+```rust
+pub fn validate(self, validate: impl Fn(&T) -> Result<(), String> + Send + Sync + 'static) -> Self
+```
+
+The program's own check of the whole value, at open and before a
+change is kept. It runs on the thread that polls a change's future, or
+on the store's pool for a change whose future was dropped.
+
+### aio::config::ConfigBuilder.strict
+
+```rust
+pub fn strict(self) -> Self
+```
+
+Refuses to open while a kept change no longer fits.
+
+### aio::config::ConfigBuilder.open
+
+```rust
+pub fn open(self) -> Result<Config<T>>
+```
+
+Opens the config as the blocking builder does: a plain call, made once
+at start, which reads its files and the changes kv.db keeps.
+
+## aio::config::Config
+
+```rust
+pub struct Config<T> { /* private fields */ }
+```
+
+A program's settings as one typed value, as `crate::config::Config`:
+read from memory, its changes awaited.
+
+### aio::config::Config.get
+
+```rust
+pub fn get(&self) -> Snapshot<T>
+```
+
+The settings as they are now: a read of memory, not awaited.
+
+### aio::config::Config.update
+
+```rust
+pub fn update(
+    &self,
+    change: impl FnMut(&mut T) + Send + 'static,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Changes live settings as `crate::config::Config::update` does: kept
+in kv.db over every layer until they are reset, and seen by every
+handle of the config before the future answers. Another change made
+meanwhile stays: `change` runs again on the settings it made, eight
+tries at most.
+
+`change` and the config's `validate` run in a poll, on the thread that
+polls the future, and the commit on the store's pool. The poll after
+the commit hands the change to every handle, which runs each handle's
+`validate` and the blocking watchers on that thread too, or on the
+store's pool when the future was dropped before that poll. Once
+polled, the try submitted commits and reaches every handle whether or
+not the future is still awaited; a try after a conflict is made only
+while it is polled.
+
+### aio::config::Config.if_version
+
+```rust
+pub fn if_version(&self, version: i64) -> IfVersion<'_, T>
+```
+
+A change made only while the config's changes are still at `version`,
+as a snapshot shows it; another change made since is `conflict`.
+
+### aio::config::Config.reset
+
+```rust
+pub fn reset(&self, path: &str) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Drops the change kept of the setting at `path`, or of every setting of
+the group at it, so that the layers give them again. The path is
+checked in the first poll, and the commit runs on the store's pool, as
+`update`'s does.
+
+### aio::config::Config.reset_all
+
+```rust
+pub fn reset_all(&self) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Drops every change kept of the config, its commit on the store's pool.
+
+### aio::config::Config.watch
+
+```rust
+pub fn watch(&self) -> Watching<T>
+```
+
+The settings now, then the newest after each change, as a `Stream`
+that ends once the store closed, its last item `Err(Closed)`. The
+watch starts here, not at the first poll, and one that falls behind
+gets the newest, never every version between. It outlives the handle
+it was made from; dropped, it stops.
+
+### aio::config::Config.explain
+
+```rust
+pub fn explain(&self) -> Explained
+```
+
+Every setting with its value, the layer that gave it and the values it
+went over: a read of memory.
+
+### aio::config::Config.name
+
+```rust
+pub fn name(&self) -> &str
+```
+
+### aio::config::Config.blocking
+
+```rust
+pub fn blocking(&self) -> &Config<T>
+```
+
+The same config, for its blocking calls, a watch with a callback among
+them.
+
+## aio::config::IfVersion
+
+```rust
+pub struct IfVersion<'a, T> { /* private fields */ }
+```
+
+A change made only while the config is still at a version:
+`config.if_version(shown.version()).update(…)`.
+
+### aio::config::IfVersion.update
+
+```rust
+pub fn update(
+    self,
+    change: impl FnMut(&mut T) + Send + 'static,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+As `Config::update`, one try: `conflict` once the config moved
+since the version, and `change` is not run again.
+
+## aio::config::Watching
+
+```rust
+pub struct Watching<T> { /* private fields */ }
+```
+
+A watch of a config's settings: the settings when it was made, then the
+newest after each change, until the store closes, read as a `Stream`.
+It stops when dropped.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

@@ -284,15 +284,55 @@ impl<T: DeserializeOwned> Iterator for Each<T> {
 impl<T> Each<T> {
     /// Takes what the log holds, or waits until it holds something.
     fn take(&mut self) {
+        if !self.take_now() {
+            self.signal.wait();
+        }
+    }
+
+    /// Takes what the log holds now, and says whether it held anything.
+    fn take_now(&mut self) -> bool {
         let taken = self.log.take(self.reader, BATCH);
         if taken.missed == 0 && taken.messages.is_empty() {
-            self.signal.wait();
-            return;
+            return false;
         }
         if taken.missed > 0 {
             self.taken.push_back(Delivery::Missed(taken.missed));
         }
         self.taken.extend(taken.messages.into_iter().map(Delivery::Message));
+        true
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T: DeserializeOwned> Each<T> {
+    /// `next` for a stream an executor polls: the next message when one is
+    /// taken, the end once stopped or once the store closed, and otherwise
+    /// `waker` kept, which a publish, the stopper or the store's close wakes.
+    /// It never waits.
+    ///
+    /// The waker is kept before the log is read again and before the stop
+    /// and the close are looked at, since each wakes only the waker kept
+    /// then: a message, a stop or a close that comes after the look wakes
+    /// it, and one that came before is seen.
+    pub(crate) fn poll_next(&mut self, waker: &std::task::Waker) -> std::task::Poll<Option<Result<Message<T>>>> {
+        use std::task::Poll;
+        loop {
+            if self.signal.stopped() {
+                self.taken.clear();
+                return Poll::Ready(None);
+            }
+            match self.taken.pop_front() {
+                Some(Delivery::Missed(count)) => self.told.missed(Missed { count }),
+                Some(Delivery::Message(released)) => return Poll::Ready(Some(decoded(&self.told.shown, &released))),
+                None if self.hub.closed() => return Poll::Ready(None),
+                None => {
+                    self.signal.keep(waker);
+                    if !self.signal.stopped() && !self.hub.closed() && !self.take_now() {
+                        return Poll::Pending;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -313,18 +353,38 @@ impl Stopper {
     }
 }
 
-/// What an `each` sleeps on until its log holds something for it.
+/// What an `each` sleeps on until its log holds something for it, or what
+/// wakes the task that polls an awaited one.
 #[derive(Default)]
 struct Signal {
     woken: Mutex<bool>,
     changed: Condvar,
     stopped: AtomicBool,
+    /// The task that polled an awaited `each` last and found nothing.
+    #[cfg(feature = "async")]
+    waker: Mutex<Option<std::task::Waker>>,
 }
 
 impl Signal {
     fn wake(&self) {
         *self.woken.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.changed.notify_all();
+        #[cfg(feature = "async")]
+        {
+            let waker = self.waker.lock().unwrap_or_else(PoisonError::into_inner).take();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
+    }
+
+    /// Keeps the task that polls an awaited `each`, for the next wake.
+    #[cfg(feature = "async")]
+    fn keep(&self, waker: &std::task::Waker) {
+        let mut kept = self.waker.lock().unwrap_or_else(PoisonError::into_inner);
+        if !kept.as_ref().is_some_and(|kept| kept.will_wake(waker)) {
+            *kept = Some(waker.clone());
+        }
     }
 
     fn wait(&self) {

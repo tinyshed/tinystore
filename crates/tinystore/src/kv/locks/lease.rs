@@ -126,7 +126,8 @@ pub(crate) struct Granted {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ending {
     Live,
-    /// It ran out or was revoked: another holder may run beside this one.
+    /// It ran out or was revoked, or an awaited hold ended with its lease
+    /// kept: another holder may run beside this one.
     Lost,
     /// The store closed.
     Closed,

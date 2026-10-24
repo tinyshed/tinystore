@@ -66,6 +66,44 @@ sub.stop();
 New to Channels? [Live updates](../../handbook/chat/live-updates.md) in the
 Handbook tells every open tab about a new reply.
 
+## Async Rust
+
+With the `async` feature, a Rust program opens the same channels from
+`tinystore::aio::Store`, and a loop over a channel's messages is a `Stream`.
+This section shows only Rust, because in Bun, Node and Python every call is
+already awaited, and in Go a call blocks its goroutine, which costs little.
+
+```rust
+use futures::StreamExt; // next() on a Stream
+use tinystore::aio::Store;
+
+let store = Store::open("data", Options::default())?;
+let events = store.channel::<ChatEvent>("chat-events").open()?;
+
+let mut each = events.under(chat_id).on_missed(|_| reload()).each()?; // listens from here
+events.under(chat_id).publish(&ChatEvent { kind: "message".into(), id: 41 })?; // not awaited
+while let Some(m) = each.next().await {
+    send(m?.value); // blocking: for m in events.under(chat_id).each()? { … }
+}
+```
+
+- `publish` is a plain call. It puts the message in memory and never waits.
+- `each()` returns a `Stream`, and it listens from the moment you call it,
+  before its first poll. A program that publishes and must hear its own
+  message calls `each()` first.
+- The stream blocks no thread while it waits. A poll takes up to 64 messages
+  from the branch's log and decodes them on your executor's thread.
+- A message that does not read as the channel's type is an error item, and
+  the next message follows. The stream ends when its `stopper()` stops it or
+  when the store closes.
+- A handler is the blocking handle's: `events.blocking().subscribe(…)`. In
+  async code, spawn a task that reads the stream instead.
+- Inside an awaited `store.tx`, `tx.with(&events).publish(…)` hands the
+  message over after the commit, as in blocking Rust.
+
+[Rust with async](../../handbook/start/rust-async.md) explains where the work
+runs and what dropping a future does.
+
 ## Reference
 
 [Bun and Node](../../reference/bun/channels.md) ·
