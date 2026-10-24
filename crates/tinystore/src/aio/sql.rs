@@ -124,10 +124,14 @@ impl Database {
         self.db.name()
     }
 
-    /// The same database, for its blocking calls, and to open a bucket, a
-    /// queue or a table's index kept in its file.
+    /// The same database, for its blocking calls.
     pub fn blocking(&self) -> &sql::Database {
         &self.db
+    }
+
+    #[cfg(any(feature = "kv", feature = "jobs"))]
+    pub(crate) fn pool(&self) -> &Arc<Pool> {
+        &self.pool
     }
 
     /// The rows a statement gives, each read as a `T`, as

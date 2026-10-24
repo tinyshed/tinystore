@@ -12,20 +12,22 @@
 //! use tinystore::aio::Store;
 //!
 //! let store = Store::open("data", Options::default())?; // opening stays a plain call
-//! let stock = store.blocking().bucket::<i64>("stock").open()?;
+//! let stock = store.bucket::<i64>("stock").open()?; // and so does opening a handle
+//! stock.set("sku-1", &10).await?;
 //! let left = store.tx(move |tx| tx.with(&stock).get("sku-1")).await?; // the transaction is awaited
 //! store.close().await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! Built so far are the store and the KV engine's handles: [`Store`] opens,
-//! crosses to and from the blocking [`crate::Store`], runs a transaction and
-//! closes, and [`kv`]'s buckets, counters, rate limits, quotas and once are
-//! awaited. Another engine's handle opened from [`Store::blocking`] is called
-//! inside [`Store::tx`], or on a thread that may block, as
-//! `tokio::task::spawn_blocking` gives one. Opening a store or a handle stays
-//! a plain call, made once at start, since a first open may migrate a file.
+//! [`Store`] opens, crosses to and from the blocking [`crate::Store`], runs a
+//! transaction and closes, and every engine's handles open from it, each in a
+//! module of the engine's name with its blocking builder's options: [`kv`],
+//! [`config`], [`locks`], [`channels`], [`jobs`], [`sql`], [`blobs`],
+//! [`search`], [`records`], [`metrics`] and [`backup`]. A bucket, a queue or
+//! a table's index kept in a database opens from [`sql::Database`]. Opening
+//! a store or a handle stays a plain call, made once at start, since a first
+//! open may migrate a file.
 //!
 //! # One store, two APIs
 //!
@@ -36,19 +38,28 @@
 //!
 //! # Where the work runs
 //!
-//! | A call       | Runs                                          | Its future dropped once polled        |
-//! |--------------|-----------------------------------------------|---------------------------------------|
-//! | a write      | queued at its file's writer in the first poll | commits all the same; its answer goes |
-//! | a point read | first poll if a reader is idle, else the pool | answered then, or stops as a read     |
-//! | a page       | on the store's pool                           | stops, and its reader goes back       |
-//! | a wait       | a waiter in the engine, on no thread          | leaves; nothing else changes          |
-//! | `store.tx`   | its closure, blocking, on the store's pool    | runs to its end                       |
-//! | `close`      | on a thread the call starts                   | closes all the same                   |
+//! | A call            | Runs                                                 | Its future dropped once polled        |
+//! |-------------------|------------------------------------------------------|---------------------------------------|
+//! | a write           | queued at its file's writer in the first poll        | commits all the same; its answer goes |
+//! | a point read      | first poll if a reader is idle, else the pool        | answered then, or stops as a read     |
+//! | a page or a query | on the store's pool                                  | stops, and its reader goes back       |
+//! | a wait            | a waiter in the engine, on no thread                 | leaves; nothing else changes          |
+//! | a hold of a lock  | a waiter in its key's line, then its work            | leaves the line, or lets the key go   |
+//! | a stream          | woken by a change, or a page at a time               | stops                                 |
+//! | a worker          | its handlers in its future, claims on its own thread | the abort: see [`jobs`]               |
+//! | `store.tx`        | its closure, blocking, on the store's pool           | runs to its end                       |
+//! | `close`           | on a thread the call starts                          | closes all the same                   |
 //!
-//! A write is a key's `set` or `take`, a point read a key's `get` or a
-//! counter, a page a bucket's `list`, and a wait a `once` run's for the run
-//! of its key under way: each engine's module says which of its calls are
-//! which.
+//! A write is a key's `set`, a job's `add`, a statement's `exec` or an
+//! append; a point read a key's `get`, a file's `head` or an index's `get`;
+//! a page or a query a bucket's `list`, a database's `all` or a search; a
+//! wait a `once` run's for the run of its key under way or a tail's next
+//! batch; a stream a channel's messages, a config's or a queue's watch, or a
+//! walk over every key, job, file or record. An index's `ready` waits so too,
+//! and looks at the index's status on the pool each time the index wakes it.
+//! A metrics write and a backup run blocking on the pool, to their end, and a
+//! config's `get` and a channel's `publish` are plain calls, in memory. Each
+//! engine's module says which of its calls are which.
 //!
 //! None commits, syncs the disk or waits on the thread that polls its
 //! future, so an executor's thread never waits on the disk. The pool is the

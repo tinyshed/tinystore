@@ -158,12 +158,31 @@ for their turn without holding a thread. The five-second bound counts from
 the first poll, so the time a transaction waits for its turn counts too
 (contract SQL-07).
 
-A bucket, a queue or a table's search index kept in the database opens from
-`db.blocking()`, and its own calls are blocking for now. A bucket or a queue
-joins `db.tx` through `tx.with(&queue)` and `db.batch` through
-`queue.adding(&job)`, as in blocking Rust. To drop a table's search index,
-await `db.drop_search_index(name)`. The drop waits for its turn with the
-database's transactions, and once polled it runs to its end.
+### A bucket, a queue or an index in the database
+
+```rust
+let sessions = db.bucket::<Session>("sessions").open()?;
+let indexing = db.queue::<Index>("indexing").open()?;
+
+let (joining, leaving) = (sessions.clone(), token.clone()); // the closure owns what it uses
+db.tx(move |tx| -> tinystore::Result<()> {
+    tx.exec(sql!("update users set name = ? where id = ?", name, user_id))?;
+    tx.with(&joining).delete(&leaving)?; // blocking, as every call in a transaction
+    Ok(())
+})
+.await?;
+let bumped = sql!("update notes set version = version + 1 where id = ?", note);
+db.batch([bumped.into(), indexing.adding(&Index { note })]).await?; // one commit
+let session = sessions.get(&token).await?; // outside a transaction, awaited
+```
+
+A bucket, a queue or a table's search index opens from the async database
+with the same builder as in blocking Rust, and its calls are awaited. It
+lives in the database's file, so a bucket or a queue joins `db.tx` through
+`tx.with(&handle)` and `db.batch` through `queue.adding(&job)`, and commits
+with the rows or not at all (contract DUR-06). To drop a table's search
+index, await `db.drop_search_index(name)`. The drop waits for its turn with
+the database's transactions, and once polled it runs to its end.
 
 `Database::from(db)` and `db.blocking()` cross between the two APIs. Both
 are cheap copies of one database, never a second one.

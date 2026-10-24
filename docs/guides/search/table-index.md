@@ -214,14 +214,13 @@ name.
 This section is only about Rust. In Bun, Node and Python every call is
 already awaited, and in Go a call blocks its goroutine.
 
-With the `async` feature, open the index with the blocking builder and turn
-it into the async one with `TableIndexBuilder::from`. Its search, `status`
-and `ready` return futures:
+With the `async` feature, a database opened from `tinystore::aio::Store`
+opens its index with the same builder. Its search, `status` and `ready`
+return futures:
 
 ```rust
-use tinystore::aio::search::TableIndexBuilder;
-
-let articles = TableIndexBuilder::from(db.search_index::<Article>("articles_search"))
+let articles = db
+    .search_index::<Article>("articles_search")
     .table("articles")
     .field("title", 2.0)
     .field("body", 1.0)

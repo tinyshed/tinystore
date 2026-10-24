@@ -2,7 +2,8 @@
 //! opened from a database lives in its file, beside its tables, and commits
 //! with its rows in `db.tx`, and a queue's job in `db.batch` too; a table's
 //! index follows a table, changed in the commit that changes a row. This is
-//! the one place two engines meet, so that neither imports the other.
+//! the one place two engines meet, so that neither imports the other, and so
+//! the async API's database opens its own here.
 
 #[cfg(feature = "jobs")]
 use serde::Serialize;
@@ -118,8 +119,70 @@ impl Database {
     }
 }
 
+#[cfg(all(feature = "kv", feature = "async"))]
+impl crate::aio::sql::Database {
+    /// A bucket kept in this database's file, as [`Database::bucket`] opens
+    /// one, its calls awaited: its writes commit with the rows in
+    /// [`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
+    pub fn bucket<V: crate::kv::Value>(&self, name: &str) -> crate::aio::kv::BucketBuilder<V> {
+        crate::aio::kv::BucketBuilder::new(self.blocking().bucket(name), std::sync::Arc::clone(self.pool()))
+    }
+}
+
+#[cfg(all(feature = "jobs", feature = "async"))]
+impl crate::aio::sql::Database {
+    /// A queue kept in this database's file, as [`Database::queue`] opens
+    /// one, its calls awaited: its jobs commit with the rows in
+    /// [`tx`](crate::aio::sql::Database::tx) through `tx.with(&queue)`, and
+    /// in [`batch`](crate::aio::sql::Database::batch) through
+    /// [`adding`](crate::aio::jobs::Queue::adding).
+    pub fn queue<V>(&self, name: &str) -> crate::aio::jobs::QueueBuilder<V>
+    where
+        V: Serialize + DeserializeOwned + Send + 'static,
+    {
+        crate::aio::jobs::QueueBuilder::new(self.blocking().queue(name), std::sync::Arc::clone(self.pool()))
+    }
+}
+
+#[cfg(all(feature = "jobs", feature = "async"))]
+impl<V> crate::aio::jobs::Queue<V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+{
+    /// A job's add for a batch of the database the queue was opened from, as
+    /// [`Queue::adding`](crate::jobs::Queue::adding) makes one: it checks the
+    /// call and encodes its value, with no I/O, and the batch is awaited.
+    pub fn adding(&self, value: &V) -> crate::sql::Write {
+        self.blocking().adding(value)
+    }
+}
+
+#[cfg(all(feature = "jobs", feature = "async"))]
+impl<V> crate::aio::jobs::JobCall<'_, V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+{
+    /// The job's add for a batch of the database the queue was opened from,
+    /// with what the call asks beside its value; see
+    /// [`Queue::adding`](crate::jobs::Queue::adding).
+    pub fn adding(self, value: &V) -> crate::sql::Write {
+        self.into_blocking().adding(value)
+    }
+}
+
 #[cfg(all(feature = "search", feature = "async"))]
 impl crate::aio::sql::Database {
+    /// An index of a table of this database, as [`Database::search_index`]
+    /// opens one, its calls awaited. Its rows change with the table's, in
+    /// their commit; a search inside [`tx`](crate::aio::sql::Database::tx)
+    /// goes through `tx.with(&index)` and sees what the transaction wrote.
+    pub fn search_index<T: DeserializeOwned + Send + 'static>(
+        &self,
+        name: &str,
+    ) -> crate::aio::search::TableIndexBuilder<T> {
+        self.blocking().search_index(name).into()
+    }
+
     /// Drops the table's index `name` this database keeps, as
     /// [`Database::drop_search_index`] does. It runs in one transaction, so
     /// it waits in the database's line with its transactions, on no thread,

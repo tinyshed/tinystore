@@ -25,11 +25,15 @@ impl Store {
     /// A bucket of values of type `V` by key, in the store's kv.db, whose
     /// calls are awaited.
     pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V> {
-        BucketBuilder { builder: self.blocking().bucket(name), pool: Arc::clone(self.pool()) }
+        BucketBuilder::new(self.blocking().bucket(name), Arc::clone(self.pool()))
     }
 }
 
 impl<V: Value> BucketBuilder<V> {
+    pub(crate) fn new(builder: crate::kv::BucketBuilder<V>, pool: Arc<Pool>) -> Self {
+        BucketBuilder { builder, pool }
+    }
+
     /// Keys expire this long after they are written, unless a write says
     /// otherwise.
     pub fn ttl(self, ttl: Duration) -> Self {

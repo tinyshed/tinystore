@@ -546,17 +546,17 @@ struct Index {
 async fn a_batch_commits_a_queues_job_with_its_rows_or_neither() {
     let f = fixture();
     let db = f.app();
-    let indexing = db.blocking().queue::<Index>("indexing").open().unwrap();
+    let indexing = db.queue::<Index>("indexing").open().unwrap();
     db.batch([insert_note("n1", "Buy milk").into(), indexing.id("index-n1").adding(&Index { note: "n1".to_owned() })])
         .await
         .unwrap();
     assert_eq!(ids(&db), ["n1"]);
-    assert!(indexing.get("index-n1").unwrap().is_some(), "the job committed with the row");
+    assert!(indexing.get("index-n1").await.unwrap().is_some(), "the job committed with the row");
 
     let taken = insert_note("n1", "again").into();
     let failed = db.batch([indexing.id("index-n2").adding(&Index { note: "n2".to_owned() }), taken]).await;
     assert_eq!(failed.unwrap_err().kind(), ErrorKind::Conflict);
-    assert!(indexing.get("index-n2").unwrap().is_none(), "the job went back with the batch");
+    assert!(indexing.get("index-n2").await.unwrap().is_none(), "the job went back with the batch");
     f.store.close().await.unwrap();
 }
 
@@ -566,7 +566,7 @@ async fn a_batch_commits_a_queues_job_with_its_rows_or_neither() {
 async fn a_bucket_opened_from_the_database_commits_with_its_rows_in_an_awaited_transaction() {
     let f = fixture();
     let db = f.app();
-    let sessions = db.blocking().bucket::<String>("sessions").open().unwrap();
+    let sessions = db.bucket::<String>("sessions").open().unwrap();
     let joining = sessions.clone();
     db.tx(move |tx| -> crate::Result<()> {
         tx.exec(insert_note("n1", "Buy milk"))?;
@@ -574,7 +574,7 @@ async fn a_bucket_opened_from_the_database_commits_with_its_rows_in_an_awaited_t
     })
     .await
     .unwrap();
-    assert_eq!(sessions.get("t-1").unwrap().as_deref(), Some("ann"));
+    assert_eq!(sessions.get("t-1").await.unwrap().as_deref(), Some("ann"));
 
     let joining = sessions.clone();
     let failed = db
@@ -584,7 +584,7 @@ async fn a_bucket_opened_from_the_database_commits_with_its_rows_in_an_awaited_t
         })
         .await;
     assert_eq!(failed.unwrap_err().kind(), ErrorKind::Conflict);
-    assert_eq!(sessions.get("t-1").unwrap().as_deref(), Some("ann"), "the delete rolled back with the row");
+    assert_eq!(sessions.get("t-1").await.unwrap().as_deref(), Some("ann"), "the delete rolled back with the row");
     f.store.close().await.unwrap();
 }
 
@@ -594,13 +594,12 @@ async fn a_bucket_opened_from_the_database_commits_with_its_rows_in_an_awaited_t
 fn a_tables_index_drops_in_the_databases_line_and_runs_though_its_future_is_dropped_there() {
     let f = fixture();
     let db = f.app();
-    let index =
-        |name: &str| db.blocking().search_index::<Note>(name).table("notes").field("title", 1.0).open().unwrap();
+    let index = |name: &str| db.search_index::<Note>(name).table("notes").field("title", 1.0).open().unwrap();
     let (titles, kept) = (index("notes_search"), index("notes_kept"));
     let runtime = runtime();
     assert!(runtime.block_on(db.drop_search_index("notes_kept")).unwrap(), "there was one");
     assert!(!runtime.block_on(db.drop_search_index("notes_kept")).unwrap(), "and then none");
-    let refused = kept.search("milk").run().unwrap_err();
+    let refused = runtime.block_on(kept.search("milk").run()).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Invalid, "a handle of a dropped index is refused: {refused}");
 
     let mut context = Context::from_waker(Waker::noop());
@@ -616,7 +615,7 @@ fn a_tables_index_drops_in_the_databases_line_and_runs_though_its_future_is_drop
     runtime.block_on(first.as_mut()).unwrap();
     let after = runtime.block_on(db.drop_search_index("notes_search")).unwrap();
     assert!(!after, "the drop whose future went ran in its turn, before this one");
-    let refused = titles.search("milk").run().unwrap_err();
+    let refused = runtime.block_on(titles.search("milk").run()).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Invalid, "a handle of it is refused from then on: {refused}");
     f.store.blocking().close().unwrap();
 }

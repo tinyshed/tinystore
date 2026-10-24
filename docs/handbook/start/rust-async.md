@@ -3,10 +3,9 @@
 A Rust program can await TinyStore instead of blocking a thread on it. The
 `async` feature adds `tinystore::aio`, whose futures run on tokio,
 async-std, smol or any other executor, because TinyStore does not bring a
-runtime of its own. Today `aio` has the store and the KV engine: you read
-and write keys, count, limit and run `once` with `.await`, and you run a
-transaction and close the store the same way. The other engines' handles
-don't have awaited calls yet.
+runtime of its own. Every engine is there: each call that reads, writes or
+waits returns a future, and you run a transaction and close the store with
+`.await` too.
 
 > [!NOTE]
 > **Rust only**
@@ -49,32 +48,37 @@ async fn main() -> tinystore::Result<()> {
 ```
 
 `aio::Store` opens as `tinystore::Store` does. Opening is a plain call that
-you make once at start, because a first open may migrate a file. A KV
-handle opens from `aio::Store` with the same builder as in the blocking API,
-and you await its calls. The [KV guide](../../guides/kv/README.md#async-rust)
-lists them.
+you make once at start, because a first open may migrate a file. Every
+engine's handle opens from `aio::Store` with the same builder as in the
+blocking API, and you await its calls. A bucket, a queue or a table's search
+index kept in a database opens from the async database the same way. Each
+engine's guide lists its awaited calls, and [the table at the
+end](#each-engines-calls) links them.
 
-The other engines' handles open from `store.blocking()`, and their calls are
-still blocking. Make them inside `store.tx`, which runs them on the store's
-own threads, or on a thread that may block, such as one from
-`tokio::task::spawn_blocking`. Don't call them directly in an `async`
-function, because they would block your executor's thread.
-
-Every future is `Send + 'static`, so you can pass it to `tokio::spawn`.
-The one exception is `run` of `once`, whose future can borrow what its
-function uses: it is `'static` only when the key, the function and the
-function's future are. A future does nothing until it is first polled.
+Every future is `Send + 'static`, so you can pass it to `tokio::spawn`,
+except those that borrow what you give them. `run` of `once` is `'static`
+only when the key, the function and the function's future are, and a lock's
+or a semaphore's `hold` and `try_hold` only when their function owns what it
+uses. A job run's `step` borrows the run, and an upload's `write` and a
+file's `read_at` borrow their bytes: you await those in place. A future does
+nothing until it is first polled.
 
 ## Where the work runs
 
-| A call                                      | Where it runs                                                        | If its future is dropped after it was polled            |
-|---------------------------------------------|----------------------------------------------------------------------|---------------------------------------------------------|
-| a write: `bucket.set(...)`                  | queued at its file's writer in the first poll                        | it commits all the same                                 |
-| a point read: `bucket.get(...)`             | in the first poll when a reader is idle, else on the store's threads | it was answered in that poll, or it stops like any read |
-| a page: `bucket.list(...)`                  | on the store's threads                                               | it stops and gives its reader back                      |
-| a wait: a `once` run that waits for another | a waiter in the engine, on no thread                                 | it stops waiting, and nothing else changes              |
-| a transaction: `store.tx(...)`              | its closure, blocking, on the store's threads                        | it runs to its end                                      |
-| closing: `store.close()`                    | on a thread that the call starts                                     | the store closes all the same                           |
+| A call                                                           | Where it runs                                                                                        | If its future is dropped after it was polled            |
+|------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
+| a write: `bucket.set(...)`, `queue.add(...)`, `db.exec(...)`     | queued at its file's writer in the first poll, its commit on the store's threads                     | it commits all the same                                 |
+| a point read: `bucket.get(...)`, a file's `head`                 | in the first poll when a reader is idle, else on the store's threads                                 | it was answered in that poll, or it stops like any read |
+| a page or a query: `bucket.list(...)`, `db.all(...)`, a search   | on the store's threads                                                                               | it stops and gives its reader back                      |
+| a wait: a `once` run that waits for another, a tail's next batch | a waiter in the engine, on no thread                                                                 | it stops waiting, and nothing else changes              |
+| a wait for an index: `index.ready()`                             | a waiter the index wakes, and a look at its status on the store's threads each time and every 100 ms | it stops waiting, and the rebuild goes on               |
+| a hold: `lock.hold(...)`, `semaphore.hold(...)`                  | a place in the key's line that blocks no thread, then its function in the future                     | it leaves the line, or lets the key go                  |
+| a stream: `channel.each()`, `config.watch()`, `bucket.all()`     | woken by each message or change, or a page at a time on the store's threads                          | it stops                                                |
+| a worker: `queue.work(...)`                                      | its handlers inside its future, its claims on a thread of its own                                    | it stops at once, and the jobs it ran run again         |
+| a transaction: `store.tx(...)`, `db.tx(...)`                     | its closure, blocking, on the store's threads                                                        | it runs to its end                                      |
+| a metrics write or a backup: `stats.ingest(...)`                 | blocking, on the store's threads                                                                     | it runs to its end                                      |
+| a plain call: `config.get()`, `channel.publish(&message)`        | in memory, not awaited                                                                               | —                                                       |
+| closing: `store.close()`                                         | on a thread that the call starts                                                                     | the store closes all the same                           |
 
 No call commits, syncs the disk or waits on the thread that polls its
 future (contract STORE-10). So your executor's threads never wait for the
@@ -92,15 +96,8 @@ DUR-11). A write whose future you never poll writes nothing. A read whose
 future you drop stops where it is and gives its reader back (contract
 STORE-09), so `tokio::time::timeout` around a read stops it.
 
-A `set` makes the words of its documents in the first poll. When the
-documents add up to more than 4 KiB of JSON, for example in a `set_many` of
-many documents, it makes them on the store's threads instead. `ready` holds no thread while it
-waits. The index wakes it when its rebuild switches in or fails, and `ready`
-also checks the index's status on the store's threads every 100 ms. On a
-store opened without background work, `ready` runs the maintenance itself,
-on the store's threads.
-
-The store's threads are a pool of at most sixteen. TinyStore starts them as
+The store's threads are a pool of at most sixteen, and each running worker
+adds a thread of its own beside them for its claims. TinyStore starts them as
 calls need them, ends each one after a minute without work, and stops all of
 them when the store closes. If all sixteen are busy when a commit needs a
 thread, the commit gets a thread of its own. This matters because the busy
@@ -170,12 +167,15 @@ while let Some(message) = each.next().await {
 ```
 
 This block uses the `store` of the first one. A loop over a channel's
-messages and a watch of a config are each a `Stream` of the `futures-core`
-crate. So `next()` from `futures::StreamExt` or `tokio_stream::StreamExt`
-reads them, and every item is a `Result`. A stream blocks no thread while it
-waits, because a publish or a change wakes it. The async API has no handler
-form: to handle messages in the background, spawn a task that reads the
-stream.
+messages, a watch of a config or a queue, a walk over every key, job, file or
+record and a tail of records are each a `Stream` of the `futures-core`
+crate, and so is a file that Blobs' `get` returns, piece by piece. So
+`next()` from `futures::StreamExt` or `tokio_stream::StreamExt` reads them,
+and every item is a `Result`. A stream of messages or changes blocks no
+thread while it waits, because a publish or a change wakes it, and a walk
+reads one page at a time on the store's threads. A channel has no handler
+form in the async API: to handle its messages in the background, spawn a
+task that reads the stream.
 
 ## Blocking and async in one program
 
@@ -211,9 +211,19 @@ be your executor's thread. Await `close` instead.
 
 Each engine's guide shows its awaited calls in a section named Async Rust:
 
-| Engine  | Guide                                                |
-|---------|------------------------------------------------------|
-| Records | [Records](../../guides/records/README.md#async-rust) |
+| Engine   | Guide                                                  | What you await                              |
+|----------|--------------------------------------------------------|---------------------------------------------|
+| KV       | [KV](../../guides/kv/README.md#async-rust)             | keys, counters, rate limits, quotas, `once` |
+| Config   | [Config](../../guides/config/README.md#async-rust)     | a config's changes, its watch as a stream   |
+| Locks    | [Locks](../../guides/locks/README.md#async-rust)       | a lock's or a semaphore's hold              |
+| Channels | [Channels](../../guides/channels/README.md#async-rust) | a channel's messages as a stream            |
+| Jobs     | [Jobs](../../guides/jobs/README.md#async-rust)         | adds, claims, steps, schedules, a worker    |
+| SQL      | [SQL](../../guides/sql/README.md#async-rust)           | queries, writes, batches, transactions      |
+| Blobs    | [Blobs](../../guides/blobs/README.md#async-rust)       | files, uploads, a file's bytes as a stream  |
+| Search   | [Search](../../guides/search/README.md#async-rust)     | sets, searches, `ready`, a table's index    |
+| Records  | [Records](../../guides/records/README.md#async-rust)   | appends, reads, counts, a tail as a stream  |
+| Metrics  | [Metrics](../../guides/metrics/README.md#async-rust)   | ingest, queries, pages, descriptions        |
+| Backup   | [Backup](../../guides/backup/README.md#async-rust)     | a backup's write                            |
 
 ## Why this design?
 
@@ -242,5 +252,3 @@ changes nothing, so stopping it is always safe.
   ways to reach it.
 - [Store API for Rust](../../reference/rust/store.md): `aio::Store` and its
   calls.
-- [KV](../../guides/kv/README.md#async-rust): each KV call, blocking and
-  awaited.

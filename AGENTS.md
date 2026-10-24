@@ -52,7 +52,7 @@ submodule is pinned to `v0.1.0-rc.5`.
 | pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules  | [one core](docs/handbook/inside/one-core.md)         |
 | server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it        | [cli](docs/guides/cli/README.md)                     |
 | SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server      | [one directory](docs/handbook/start/directory.md)    |
-| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, and KV's handles; other engines' to come     | [Rust with async](docs/handbook/start/rust-async.md) |
+| async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, and every engine's handles, awaited          | [Rust with async](docs/handbook/start/rust-async.md) |
 | release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                 | the `release` skill                                  |
 
 From `v0.1.0` on, a store a release wrote opens in the next: an engine's
@@ -105,7 +105,7 @@ What has cost time before, so that it does not again:
 | `crates/tinystore/src/replication/` | replication: a node's log of each file's commits, its entries and segments, snapshots, links and the writes it passes on                                                                                                                                 |
 | `crates/tinystore/src/compress/`    | what records and metrics both pack with: varints, bits read a word at a time, rice codes, zstd, CRC-32                                                                                                                                                   |
 | `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                                                                                                                                   |
-| `crates/tinystore/src/aio/`         | the async API: `aio::Store`, `run`'s helpers an engine's awaited calls are built on, and a module an engine, hidden while it is empty                                                                                                                    |
+| `crates/tinystore/src/aio/`         | the async API: `aio::Store`, `run`'s helpers an engine's awaited calls are built on, and a module an engine                                                                                                                                              |
 | `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                                                                                                                                 |
 | `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`; with `node`, Node's `tinystore.node`                                                                                                                |
 | `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                                                                                                                                  |

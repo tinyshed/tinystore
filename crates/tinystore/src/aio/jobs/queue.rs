@@ -33,7 +33,7 @@ impl<V> QueueBuilder<V>
 where
     V: Serialize + DeserializeOwned + Send + 'static,
 {
-    pub(super) fn new(builder: jobs::QueueBuilder<V>, pool: Arc<Pool>) -> Self {
+    pub(crate) fn new(builder: jobs::QueueBuilder<V>, pool: Arc<Pool>) -> Self {
         QueueBuilder { builder, pool }
     }
 
@@ -115,8 +115,7 @@ impl<V> fmt::Debug for Queue<V> {
 }
 
 impl<V> From<jobs::Queue<V>> for Queue<V> {
-    /// The same queue, its calls awaited: a queue a database's file keeps is
-    /// opened so, `Queue::from(db.queue::<V>(name).open()?)`.
+    /// The same queue, its calls awaited.
     fn from(queue: jobs::Queue<V>) -> Queue<V> {
         let pool = super::pool_of(&queue);
         Queue { queue, pool }
@@ -338,12 +337,11 @@ where
         self.write(Change::Update, "an update", value)
     }
 
-    /// The job's add for a batch of the database the queue was opened from,
-    /// as [`jobs::JobCall::adding`]: it checks the call and encodes its value,
-    /// and the batch that carries it is awaited.
+    /// The blocking call, which the job's add for a database's batch is made
+    /// from.
     #[cfg(feature = "sql")]
-    pub fn adding(self, value: &V) -> crate::sql::Write {
-        self.call.adding(value)
+    pub(crate) fn into_blocking(self) -> jobs::JobCall<'a, V> {
+        self.call
     }
 
     fn write(self, change: Change, what: &str, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
@@ -352,19 +350,6 @@ where
         crate::aio::run::write(&self.queue.pool, what, move |answer| {
             writing.submit(move |written| answer.send(written))
         })
-    }
-}
-
-#[cfg(feature = "sql")]
-impl<V> Queue<V>
-where
-    V: Serialize + DeserializeOwned + Send + 'static,
-{
-    /// A job's add for a batch of the database the queue was opened from; see
-    /// [`jobs::Queue::adding`]. It checks the call and encodes its value, with
-    /// no I/O, and the batch is awaited.
-    pub fn adding(&self, value: &V) -> crate::sql::Write {
-        self.queue.adding(value)
     }
 }
 

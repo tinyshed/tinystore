@@ -1124,8 +1124,8 @@ pub fn adding(self, value: &V) -> Write
 ```
 
 The job's add for a batch of the database the queue was opened from,
-as `jobs::JobCall::adding`: it checks the call and encodes its value,
-and the batch that carries it is awaited.
+with what the call asks beside its value; see
+[`Queue::adding`](crate::jobs::Queue::adding).
 
 ## aio::jobs::Queue
 
@@ -1261,16 +1261,6 @@ in a row of its own is read after the commit, in the poll when a
 reader is idle. Dropped once its write was queued, the job comes back
 when its lease, the queue's timeout, ends, the attempt counted.
 
-### aio::jobs::Queue.adding
-
-```rust
-pub fn adding(&self, value: &V) -> Write
-```
-
-A job's add for a batch of the database the queue was opened from; see
-`jobs::Queue::adding`. It checks the call and encodes its value, with
-no I/O, and the batch is awaited.
-
 ### aio::jobs::Queue.watch
 
 ```rust
@@ -1337,6 +1327,16 @@ pub fn concurrency(&self, handlers: u32) -> Workers<'_, V>
 
 A worker that runs at most `handlers` at once, under the queue's
 concurrency.
+
+### aio::jobs::Queue.adding
+
+```rust
+pub fn adding(&self, value: &V) -> Write
+```
+
+A job's add for a batch of the database the queue was opened from, as
+[`Queue::adding`](crate::jobs::Queue::adding) makes one: it checks the
+call and encodes its value, with no I/O, and the batch is awaited.
 
 ## aio::jobs::QueueBuilder
 

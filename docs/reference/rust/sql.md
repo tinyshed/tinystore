@@ -821,8 +821,7 @@ pub fn name(&self) -> &str
 pub fn blocking(&self) -> &Database
 ```
 
-The same database, for its blocking calls, and to open a bucket, a
-queue or a table's index kept in its file.
+The same database, for its blocking calls.
 
 ### aio::sql::Database.all
 
@@ -937,6 +936,41 @@ pub fn table<T>(&self, name: &str) -> Table<T>
 A table of the database, typed where it opens, as
 `sql::Database::table` gives one: its inserts and upserts, and its
 queries, each awaited. It costs nothing until its first call.
+
+### aio::sql::Database.bucket
+
+```rust
+pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V>
+```
+
+A bucket kept in this database's file, as `Database::bucket` opens
+one, its calls awaited: its writes commit with the rows in
+[`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
+
+### aio::sql::Database.queue
+
+```rust
+pub fn queue<V>(&self, name: &str) -> QueueBuilder<V>
+where
+    V: Serialize + DeserializeOwned + Send + 'static,
+```
+
+A queue kept in this database's file, as `Database::queue` opens
+one, its calls awaited: its jobs commit with the rows in
+[`tx`](crate::aio::sql::Database::tx) through `tx.with(&queue)`, and
+in [`batch`](crate::aio::sql::Database::batch) through
+[`adding`](crate::aio::jobs::Queue::adding).
+
+### aio::sql::Database.search_index
+
+```rust
+pub fn search_index<T: DeserializeOwned + Send + 'static>(&self, name: &str) -> TableIndexBuilder<T>
+```
+
+An index of a table of this database, as `Database::search_index`
+opens one, its calls awaited. Its rows change with the table's, in
+their commit; a search inside [`tx`](crate::aio::sql::Database::tx)
+goes through `tx.with(&index)` and sees what the transaction wrote.
 
 ### aio::sql::Database.drop_search_index
 
