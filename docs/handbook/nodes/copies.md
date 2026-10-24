@@ -9,8 +9,9 @@ serves them to other nodes.
 
 > [!NOTE]
 > **Built, with draft names**
-> Nodes, copies and writes passed to a file's home are built. The names of
-> their options may change before `v0.1.0`.
+> Nodes, copies and writes passed to a file's home are built. Until `1.0`,
+> the names of their options may change in a minor release, and its notes say
+> which.
 
 ## One home per file
 
