@@ -286,7 +286,7 @@ impl<T: DeserializeOwned> TableIndex<T> {
         self.index.ready()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "async"))]
     pub(crate) fn inner(&self) -> &Index<T> {
         &self.index
     }

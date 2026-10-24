@@ -27,7 +27,7 @@ use super::upkeep::PACK_AT;
 use super::write::{self, Prepared};
 use crate::clock::Clock;
 use crate::engine::{Claim, Engine, Host, Wake};
-use crate::sqlite::{Config, File, Migration, sql_error};
+use crate::sqlite::{Config, File, Migration, Tx, sql_error};
 use crate::sync::lock;
 use crate::{Error, Memory, Result, Store};
 
@@ -37,6 +37,12 @@ const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_s
 pub(crate) const FILE: &str = "search.db";
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
+/// The bytes of JSON an awaited set makes the words of in its poll, on the
+/// executor's thread. Making them takes time in proportion to the bytes, so
+/// a larger set, a `set_many` of many documents above all, makes them on the
+/// store's pool.
+#[cfg(feature = "async")]
+const ANALYZED_IN_A_POLL: usize = 4 << 10;
 
 const WRITE_SETTINGS: &str = "update _tinystore_search_indexes set settings = ?2 where id = ?1";
 const COUNT_DOCUMENTS: &str = "select documents from _tinystore_search_indexes where id = ?1";
@@ -51,8 +57,9 @@ pub(crate) struct Search {
     pub(super) memory: Arc<Memory>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) indexes: Mutex<HashMap<String, Arc<OpenIndex>>>,
-    /// The store, for the writes a copy passes to its home.
-    #[cfg(feature = "replication")]
+    /// The store, for the writes a copy passes to its home, and the async
+    /// API's handles made from blocking ones.
+    #[cfg(any(feature = "replication", feature = "async"))]
     store: crate::store::WeakStore,
     /// Held by a pass of maintenance, so that two never pack the same head.
     maintaining: Mutex<()>,
@@ -146,7 +153,7 @@ impl Search {
             memory: Arc::clone(store.memory()),
             clock: store.clock(),
             indexes: Mutex::default(),
-            #[cfg(feature = "replication")]
+            #[cfg(any(feature = "replication", feature = "async"))]
             store: store.downgrade(),
             maintaining: Mutex::default(),
             wake: OnceLock::new(),
@@ -255,7 +262,7 @@ impl Search {
     }
 
     /// The store search opened in, while it is open.
-    #[cfg(feature = "replication")]
+    #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed("the store"))
     }
@@ -281,7 +288,7 @@ impl Search {
     /// rows and to a rebuild's beside them, and a rebuild begun where the
     /// change needs one that none under way gives; each said in the log.
     fn change(&self, open: &OpenIndex, wanted: &Wanted, reindex: bool) -> Result<()> {
-        let mut current = open.change();
+        let mut current = open.change(&self.file);
         let documents = self.file.read(|connection| count(connection, COUNT_DOCUMENTS, current.serving.id))?;
         let changed = current.serving.settings.change(wanted, documents)?;
         let why = rebuild_asked(&changed, wanted, reindex)?;
@@ -353,11 +360,63 @@ impl Search {
         let bytes = prepared.iter().map(Prepared::bytes).sum();
         self.file.write(bytes, move |tx| prepared.iter().try_for_each(|document| write::set(tx, document)))?;
         drop(current);
+        self.count_sets(open, count);
+        Ok(())
+    }
+
+    /// [`set`](Self::set) for an awaited set, which waits for nothing: the
+    /// rows held still from the documents' analysis to their commit by a
+    /// hold the commit drops on whichever thread it runs, and `done` called
+    /// there with the answer. Documents of more than [`ANALYZED_IN_A_POLL`]
+    /// bytes as JSON, `json`, are set on the store's pool instead, through
+    /// [`elsewhere`], and so are any where a change holds the rows, since the
+    /// set waits for it there.
+    #[cfg(feature = "async")]
+    pub(crate) fn set_then(
+        self: &Arc<Self>,
+        open: &Arc<OpenIndex>,
+        json: usize,
+        documents: impl FnOnce(&Data) -> Result<Vec<Prepared>> + Send + 'static,
+        done: impl FnOnce(Result<()>) + Send + 'static,
+    ) {
+        let held = if json <= ANALYZED_IN_A_POLL { open.try_hold_submitted() } else { None };
+        let Some(held) = held else {
+            let (search, open) = (Arc::clone(self), Arc::clone(open));
+            return elsewhere(move || done(search.set(&open, documents)));
+        };
+        if let Err(dropped) = open.refuse_dropped() {
+            return done(Err(dropped));
+        }
+        let prepared = match documents(&held.current().serving) {
+            Ok(prepared) => prepared,
+            Err(refused) => return done(Err(refused)),
+        };
+        let count = prepared.len() as u64;
+        if count == 0 {
+            return done(Ok(()));
+        }
+        let bytes = prepared.iter().map(Prepared::bytes).sum();
+        let search = Arc::clone(self);
+        let write = move |tx: &Tx<'_>| prepared.iter().try_for_each(|document| write::set(tx, document));
+        self.file.submit(bytes, write, move |written| {
+            let open = Arc::clone(held.open());
+            drop(held);
+            if written.is_ok() {
+                search.count_sets(&open, count);
+            }
+            done(written);
+        });
+        // a change waiting for the set may now take the lead that its submit handed to the pool
+        open.queued();
+    }
+
+    /// Counts `count` sets that wait in an index's head, waking maintenance
+    /// once enough of them wait to be packed.
+    fn count_sets(&self, open: &OpenIndex, count: u64) {
         let before = open.sets.fetch_add(count, Ordering::Relaxed);
         if before < PACK_AT && before + count >= PACK_AT {
             self.wake();
         }
-        Ok(())
     }
 
     /// Deletes the document `id` from the serving rows and a rebuild's beside
@@ -365,22 +424,40 @@ impl Search {
     pub(crate) fn delete(&self, open: &OpenIndex, id: String) -> Result<bool> {
         let current = open.hold();
         open.refuse_dropped()?;
-        let indexes: Vec<i64> = current.written().map(|data| data.id).collect();
-        let deleted = self.file.write(id.len(), move |tx| {
-            let mut deleted = Vec::with_capacity(indexes.len());
-            for index in indexes {
-                deleted.push(write::delete(tx, index, &id)?);
-            }
-            Ok(deleted.first().copied().unwrap_or(false))
-        });
+        let deleted = self.file.write(id.len(), deletes(&current, id));
         drop(current);
         deleted
+    }
+
+    /// [`delete`](Self::delete) for an awaited delete, which waits for
+    /// nothing, as [`set_then`](Self::set_then) sets.
+    #[cfg(feature = "async")]
+    pub(crate) fn delete_then(
+        self: &Arc<Self>,
+        open: &Arc<OpenIndex>,
+        id: String,
+        done: impl FnOnce(Result<bool>) + Send + 'static,
+    ) {
+        let Some(held) = open.try_hold_submitted() else {
+            let (search, open) = (Arc::clone(self), Arc::clone(open));
+            return elsewhere(move || done(search.delete(&open, id)));
+        };
+        if let Err(dropped) = open.refuse_dropped() {
+            return done(Err(dropped));
+        }
+        let bytes = id.len();
+        let write = deletes(held.current(), id);
+        self.file.submit(bytes, write, move |deleted| {
+            drop(held);
+            done(deleted);
+        });
+        open.queued();
     }
 
     /// The value of the document `id`, as JSON.
     pub(crate) fn get(&self, open: &OpenIndex, id: &str) -> Result<Option<Vec<u8>>> {
         open.refuse_dropped()?;
-        let index = open.id();
+        let index = open.serving_id()?;
         self.file.read(|connection| {
             let failed = |error| sql_error("read a document", error);
             let mut select = connection.prepare_cached(READ_VALUE).map_err(failed)?;
@@ -539,6 +616,30 @@ impl Search {
     }
 }
 
+/// The write of a delete of the document `id` from the rows `current` holds:
+/// says whether the serving rows held it.
+fn deletes(current: &Current, id: String) -> impl FnOnce(&Tx<'_>) -> Result<bool> + Send + 'static {
+    let indexes: Vec<i64> = current.written().map(|data| data.id).collect();
+    move |tx| {
+        let mut deleted = Vec::with_capacity(indexes.len());
+        for index in indexes {
+            deleted.push(write::delete(tx, index, &id)?);
+        }
+        Ok(deleted.first().copied().unwrap_or(false))
+    }
+}
+
+/// Runs `work`, which may wait, off the thread that polls an awaited write:
+/// on the store's pool inside the write's submit, as `File::submit` answers
+/// a copy's write there; here, outside one.
+#[cfg(feature = "async")]
+pub(crate) fn elsewhere(work: impl FnOnce() + Send + 'static) {
+    match crate::polled::lead() {
+        Some(lead) => lead(Box::new(work)),
+        None => work(),
+    }
+}
+
 /// Why a change needs an index read again, if it does: a change that needs
 /// it to serve what was asked, a field or a filter removed whose keys it
 /// drops, or `reindex`'s asking. An index rebuilt by hand refuses the first
@@ -566,6 +667,13 @@ impl Search {
     /// Writes search.db in a transaction of its own.
     pub(crate) fn file_write<T>(&self, write: impl FnOnce(&crate::sqlite::Tx<'_>) -> Result<T>) -> Result<T> {
         self.file.transaction(write)
+    }
+
+    /// Keeps every pass of maintenance waiting while it is held, so that a
+    /// test moves a rebuild on itself, with [`rebuild`](Self::rebuild).
+    #[cfg(feature = "async")]
+    pub(crate) fn hold_maintenance(&self) -> std::sync::MutexGuard<'_, ()> {
+        lock(&self.maintaining)
     }
 
     /// One step of packing an index's head, as maintenance takes them.

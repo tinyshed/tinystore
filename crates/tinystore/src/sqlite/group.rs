@@ -56,7 +56,9 @@ const ROLLBACK_TO: &str = own!("rollback to grouped");
 /// of its own once the pool stopped, so that no sync of the disk runs where
 /// futures are polled. Until a thread of the pool takes
 /// it, the next caller who can lead takes it first: a pool whose every thread
-/// waits for this file's writer would never run the lead they wait for.
+/// waits for this file's writer would never run the lead they wait for. So
+/// does a caller that waits for such a write's commit, through
+/// [`lead_handed`](Group::lead_handed).
 ///
 /// A checkpoint a commit asked for runs on a caller's thread once it holds no
 /// turn: when its call returns, or when it queued a write behind a leader.
@@ -233,6 +235,16 @@ impl Group {
         std::mem::take(&mut self.lock().handed)
     }
 
+    /// Leads here the commits whose lead was handed to another thread that
+    /// has not taken it yet, and runs the checkpoints they asked for; does
+    /// nothing where a thread took it, or none was handed.
+    pub(crate) fn lead_handed(&self, writer: &Mutex<Connection>) {
+        if self.take_handed() {
+            self.lead(writer, None);
+            self.checkpoints.run_due();
+        }
+    }
+
     /// Commits batches until the write at the front has a caller of its own to
     /// lead, or the queue is empty. `own` is the write of the caller that
     /// leads, when it has one.
@@ -346,10 +358,7 @@ impl Handed {
 
 impl Drop for Handed {
     fn drop(&mut self) {
-        if self.group.take_handed() {
-            self.group.lead(&self.writer, None);
-            self.group.checkpoints.run_due();
-        }
+        self.group.lead_handed(&self.writer);
     }
 }
 

@@ -11,6 +11,8 @@ use serde_json::Value;
 use super::analyzer;
 use super::engine::Search;
 use super::filter::{self, Condition};
+#[cfg(feature = "replication")]
+use super::forward::Passed;
 use super::open::{Data, OpenIndex, Status};
 use super::read::Query;
 use super::settings::{Settings, Wanted, check_hybrid};
@@ -35,7 +37,7 @@ const MOST_HITS: usize = 1000;
 const LIMIT: usize = 10;
 /// The documents a `set_many` takes at most, and their bytes as JSON, so
 /// that no import makes one commit and a write-ahead log of its size.
-const MOST_MANY: usize = 1000;
+pub(super) const MOST_MANY: usize = 1000;
 const MOST_MANY_BYTES: usize = 16 << 20;
 
 /// What [`Store::index`] opens: an index's settings, given where it opens.
@@ -271,7 +273,7 @@ impl<T: DeserializeOwned> Index<T> {
     }
 
     /// The hits of `query`, each with its document as its value.
-    fn found(&self, query: Query) -> Result<Found<T>> {
+    pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
         let answer = self.search.search(&self.open, query)?;
         let hits = answer.hits.into_iter().map(|(id, value, score)| {
             let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
@@ -330,20 +332,7 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
         if self.search.file.is_copy() {
             return self.pass_on_set(&documents).map_err(within);
         }
-        let all = |data: &Data| {
-            let mut prepared_all = Vec::with_capacity(documents.len());
-            let mut bytes = 0;
-            for (at, given) in documents.iter().enumerate() {
-                let place = |error: Error| error.within(format!("document {at}, id {:?}", given.id));
-                let document = prepared(data.id, given, &data.settings).map_err(place)?;
-                bytes += document.value.len();
-                if bytes > MOST_MANY_BYTES {
-                    return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
-                }
-                prepared_all.push(document);
-            }
-            Ok(prepared_all)
-        };
+        let all = |data: &Data| prepared_many(&documents, data);
         self.search.set(&self.open, all).map_err(within)
     }
 
@@ -363,14 +352,7 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     /// Passes a set of documents on a copy of search's file to its home.
     #[cfg(feature = "replication")]
     fn pass_on_set(&self, documents: &[Given<'_, T>]) -> Result<()> {
-        if self.search.lent_by.is_some() {
-            return Err(Error::new(
-                crate::ErrorKind::Unavailable,
-                "a copy passes no set of an index in a database's file to its home yet",
-            ));
-        }
-        let passed = documents.iter().map(super::forward::Passed::of).collect::<Result<Vec<_>>>()?;
-        super::forward::pass_on_set(&self.search.store()?, &self.open.name, &passed)
+        pass_on_documents(&self.search, &self.open.name, || documents.iter().map(Passed::of).collect())
     }
 
     /// The document `id`, or none.
@@ -449,6 +431,23 @@ impl<'v, K: Key, T> Document<'v, T> for (K, &'v T, Option<&'v [f32]>) {
     fn parts(self) -> (String, &'v T, Option<Option<&'v [f32]>>) {
         (self.0.text().into_owned(), self.1, Some(self.2))
     }
+}
+
+/// Passes a set of the documents `passed` makes, in the index `name`, to the
+/// home of the copy that `search`'s file is.
+#[cfg(feature = "replication")]
+pub(super) fn pass_on_documents(
+    search: &Search,
+    name: &str,
+    passed: impl FnOnce() -> Result<Vec<Passed>>,
+) -> Result<()> {
+    if search.lent_by.is_some() {
+        return Err(Error::new(
+            crate::ErrorKind::Unavailable,
+            "a copy passes no set of an index in a database's file to its home yet",
+        ));
+    }
+    super::forward::pass_on_set(&search.store()?, name, &passed()?)
 }
 
 /// A document as a call gave it: its id, its value, and what it said of its
@@ -575,8 +574,9 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     }
 
     /// The search's index and query, for a caller that reads its hits
-    /// itself: the wire reads a table's rows by their cells.
-    #[cfg(all(feature = "wire", feature = "sql"))]
+    /// itself or elsewhere: the wire reads a table's rows by their cells, and
+    /// an awaited search runs on the store's pool.
+    #[cfg(any(all(feature = "wire", feature = "sql"), feature = "async"))]
     pub(crate) fn asked(self) -> Result<(&'i Index<T>, Query)> {
         let name = &self.index.open.name;
         let query = self.query().map_err(|error| error.within(format!("index {name}")))?;
@@ -635,8 +635,44 @@ fn prepared<T: Serialize>(index: i64, given: &Given<'_, T>, settings: &Settings)
     Prepared::new(index, incoming, settings)
 }
 
+/// What a set_many takes of each document, given by reference or owned by an
+/// awaited call: its id, and the document ready to set in the rows `data`.
+pub(super) trait ToSet {
+    fn id(&self) -> &str;
+    fn prepared(self, data: &Data) -> Result<Prepared>;
+}
+
+impl<T: Serialize> ToSet for &Given<'_, T> {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn prepared(self, data: &Data) -> Result<Prepared> {
+        prepared(data.id, self, &data.settings)
+    }
+}
+
+/// Each of `documents` ready to set in the rows `data`, all of them within the
+/// bytes a set_many takes; a refused one is named by its place and its id.
+pub(super) fn prepared_many(documents: impl IntoIterator<Item = impl ToSet>, data: &Data) -> Result<Vec<Prepared>> {
+    let documents = documents.into_iter();
+    let mut prepared_all = Vec::with_capacity(documents.size_hint().0);
+    let mut bytes = 0;
+    for (at, document) in documents.enumerate() {
+        let id = document.id().to_owned();
+        let place = |error: Error| error.within(format!("document {at}, id {id:?}"));
+        let document = document.prepared(data).map_err(place)?;
+        bytes += document.value.len();
+        if bytes > MOST_MANY_BYTES {
+            return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
+        }
+        prepared_all.push(document);
+    }
+    Ok(prepared_all)
+}
+
 /// A document's value as JSON, and its bytes, within the bound.
-fn json<T: Serialize>(value: &T) -> Result<(Value, Vec<u8>)> {
+pub(super) fn json<T: Serialize>(value: &T) -> Result<(Value, Vec<u8>)> {
     let tree = serde_json::to_value(value).map_err(|error| Error::invalid(format!("a document: {error}")))?;
     let bytes = serde_json::to_vec(&tree).map_err(|error| Error::invalid(format!("a document: {error}")))?;
     if bytes.len() > MOST_DOCUMENT {
@@ -649,7 +685,7 @@ fn decode<T: DeserializeOwned>(value: &[u8]) -> Result<T> {
     serde_json::from_slice(value).map_err(|error| Error::invalid(format!("a document of another type: {error}")))
 }
 
-fn checked(id: &str) -> Result<&str> {
+pub(super) fn checked(id: &str) -> Result<&str> {
     if id.is_empty() {
         return Err(Error::invalid("an empty id"));
     }

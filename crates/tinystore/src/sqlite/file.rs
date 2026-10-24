@@ -252,6 +252,18 @@ impl File {
         crate::polled::leading_on(lead, || self.submit(bytes, write, done));
     }
 
+    /// Leads here the commit whose lead a write submitted in a poll handed to
+    /// the store's pool, if no thread of the pool took it yet: for a caller
+    /// that waits for that commit while every thread of the pool may wait
+    /// for the caller. A thread inside a transaction of the file leads
+    /// nothing, since it holds the writer the commit needs.
+    #[cfg(feature = "async")]
+    pub(crate) fn lead_handed(&self) {
+        if !self.held_here() {
+            self.group.lead_handed(&self.writer);
+        }
+    }
+
     /// Answers a write on a copy as `as_a_copy` does, on the scope's pool
     /// inside `polled::leading_on`, since the read in its place may wait for
     /// a reader.

@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
     feature = "sql",
     feature = "records",
     feature = "metrics",
-    feature = "replication"
+    feature = "replication",
+    all(feature = "search", feature = "async")
 ))]
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,7 +128,8 @@ pub struct Store {
     feature = "sql",
     feature = "records",
     feature = "metrics",
-    feature = "replication"
+    feature = "replication",
+    all(feature = "search", feature = "async")
 ))]
 pub(crate) struct WeakStore(
     #[cfg_attr(
@@ -151,7 +153,8 @@ pub(crate) struct WeakStore(
     feature = "sql",
     feature = "records",
     feature = "metrics",
-    feature = "replication"
+    feature = "replication",
+    all(feature = "search", feature = "async")
 ))]
 impl WeakStore {
     #[cfg_attr(
@@ -545,6 +548,13 @@ impl Store {
         &self.inner.memory
     }
 
+    /// What rings the deadlines of the waits that hold no thread, as an
+    /// awaited wait for an index to be ready looks again at its status.
+    #[cfg(all(feature = "async", feature = "search"))]
+    pub(crate) fn timer(&self) -> &Arc<crate::timer::Timer> {
+        &self.inner.timer
+    }
+
     /// What the store measures of itself goes through.
     #[allow(dead_code, reason = "each engine reports what it measures: a store of none of them reads it not")]
     pub(crate) fn probe(&self) -> &Arc<Probe> {
@@ -590,7 +600,8 @@ impl Store {
         feature = "records",
         feature = "metrics",
         feature = "replication",
-        all(feature = "jobs", feature = "async")
+        all(feature = "jobs", feature = "async"),
+        all(feature = "search", feature = "async")
     ))]
     pub(crate) fn downgrade(&self) -> WeakStore {
         WeakStore(Arc::downgrade(&self.inner))

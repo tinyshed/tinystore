@@ -209,6 +209,37 @@ leaves out of the index. A write to the renamed table fails with an invalid
 error that names the index, so drop the index and open a new one on the new
 name.
 
+## Async Rust
+
+This section is only about Rust. In Bun, Node and Python every call is
+already awaited, and in Go a call blocks its goroutine.
+
+With the `async` feature, open the index with the blocking builder and turn
+it into the async one with `TableIndexBuilder::from`. Its search, `status`
+and `ready` return futures:
+
+```rust
+use tinystore::aio::search::TableIndexBuilder;
+
+let articles = TableIndexBuilder::from(db.search_index::<Article>("articles_search"))
+    .table("articles")
+    .field("title", 2.0)
+    .field("body", 1.0)
+    .open()?;
+articles.ready().await?; // blocking: articles.ready()?
+let found = articles.search("хлеба").run().await?; // blocking: articles.search("хлеба").run()?
+```
+
+Each hit's row is read on the store's own threads, in the snapshot that its
+search read, so the row type must be `Send + 'static`. If you drop a search's
+future, the search stops and frees its reader at once. If you drop `ready`,
+it stops waiting, and the table's rows are still read in the background.
+
+Inside a transaction a search stays blocking, as every call in a transaction
+is. `tx.with(&articles)` takes the async handle and gives the same handle as
+in the blocking API, which sees what the transaction wrote. The [Search
+guide](README.md#async-rust) lists every awaited call of an index.
+
 ## Why this design?
 
 **Why the index follows the table.** With a separate search service, the

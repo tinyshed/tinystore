@@ -96,6 +96,89 @@ a bucket and an index commit apart, as [two
 files](../../handbook/start/directory.md#two-engines-in-one-file) do. See [A
 table's index](table-index.md).
 
+## Async Rust
+
+This section is only about Rust. In Bun, Node and Python every call is
+already awaited, and in Go a call blocks its goroutine, which costs little.
+
+With the `async` feature, `tinystore::aio::search` has the same indexes, and
+each call that reads, writes or waits returns a future. Open the index from
+an `aio::Store`, and add `.await`:
+
+```rust
+use tinystore::Options;
+use tinystore::aio::Store;
+use tinystore::aio::search::eq;
+
+let store = Store::open("data", Options::default())?;
+let articles = store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).filters(["author_id"]).open()?;
+
+articles.set("a-17", &bread).await?;
+articles.set_many([("a-18", &rye), ("a-19", &spelt)]).await?;
+let result = articles.search("хлеба").filter(eq("author_id", &42)).run().await?;
+let one = articles.get("a-17").await?; // Some(bread)
+let gone = articles.delete("a-17").await?; // true: there was one
+articles.ready().await?; // returns once a rebuild has switched in
+```
+
+Opening an index is still a plain call, because a program opens its handles
+once at start. The answers are the same types as in the blocking API:
+`Found`, `Hit`, `Status` and `Listed`, and the filters `eq`, `is_in`,
+`range`, `missing`, `or` and `and`.
+
+| Blocking                                   | Async                                                      |
+|--------------------------------------------|------------------------------------------------------------|
+| `articles.set("a-17", &bread)?`            | `articles.set("a-17", &bread).await?`                      |
+| `articles.id("d-1").vector(&v).set(&doc)?` | `articles.id("d-1").vector(&v).set(&doc).await?`           |
+| `articles.set_many(documents)?`            | `articles.set_many(documents).await?`                      |
+| `articles.get("a-17")?`                    | `articles.get("a-17").await?`                              |
+| `articles.delete("a-17")?`                 | `articles.delete("a-17").await?`                           |
+| `articles.search("хлеба").run()?`          | `articles.search("хлеба").run().await?`                    |
+| `articles.status()?`, `articles.ready()?`  | `articles.status().await?`, `articles.ready().await?`      |
+| `store.drop_index("articles")?`            | `store.drop_index("articles").await?`                      |
+| `tinystore::search::list(&store)?`         | `tinystore::aio::search::list(&store).await?`              |
+| `tinystore::search::maintain(&store)?`     | blocking: `tinystore::search::maintain(store.blocking())?` |
+
+### What a dropped future does
+
+- A `set`, `set_many` or `delete` that was polled once commits, even if you
+  drop its future (contract DUR-11). Only its answer is lost. A write whose
+  future is never polled writes nothing.
+- A search that you drop stops: its SQLite statement is interrupted and its
+  reader is freed at once (contract STORE-09). So a timeout around a search
+  stops it:
+
+  ```rust
+  let found = tokio::time::timeout(Duration::from_secs(2), articles.search(&text).run()).await;
+  ```
+
+- If you drop `ready`, it stops waiting. The rebuild goes on in the
+  background.
+
+### Where the work runs
+
+None of these calls commits, syncs the disk or waits on the thread that polls
+its future (contract STORE-10):
+
+- A set makes the document's JSON when you call it, and its words in the
+  future's first poll. When its documents add up to more than 4 KiB of JSON,
+  for example in a `set_many` of many documents, it makes the words on the
+  store's own threads instead. It commits on the store's own threads, and the next search sees it
+  once the future is ready.
+- `get` answers in the first poll when one of the file's readers is free,
+  and otherwise on the store's threads.
+- A search, `status` and `list` run on the store's threads, and each hit is
+  decoded there, so the document type must be `Send + 'static`. A search
+  refused for its text, its limit or its vector fails in the first poll.
+- `ready` holds no thread while it waits: the index wakes it when the rebuild
+  switches in or fails. It also checks the index's status on the store's
+  threads every 100 ms. On a store opened without background work, `ready`
+  runs the maintenance itself, on the store's threads.
+
+`Index::from(index)` and `index.blocking()` cross between the two APIs. Both
+give the same index, never a second one. A table's index has the same awaited
+search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
+
 ## In these guides
 
 | Page                                    | Covers                                              |

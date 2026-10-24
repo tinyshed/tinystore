@@ -92,6 +92,14 @@ DUR-11). A write whose future you never poll writes nothing. A read whose
 future you drop stops where it is and gives its reader back (contract
 STORE-09), so `tokio::time::timeout` around a read stops it.
 
+A `set` makes the words of its documents in the first poll. When the
+documents add up to more than 4 KiB of JSON, for example in a `set_many` of
+many documents, it makes them on the store's threads instead. `ready` holds no thread while it
+waits. The index wakes it when its rebuild switches in or fails, and `ready`
+also checks the index's status on the store's threads every 100 ms. On a
+store opened without background work, `ready` runs the maintenance itself,
+on the store's threads.
+
 The store's threads are a pool of at most sixteen. TinyStore starts them as
 calls need them, ends each one after a minute without work, and stops all of
 them when the store closes.

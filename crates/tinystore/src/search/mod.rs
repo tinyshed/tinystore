@@ -32,6 +32,8 @@
 //! reads only the clusters nearest its question.
 
 mod analyzer;
+#[cfg(feature = "async")]
+mod awaited;
 mod clusters;
 mod correct;
 mod document;
@@ -61,6 +63,8 @@ mod upkeep;
 mod vectors;
 mod write;
 
+#[cfg(feature = "async")]
+pub(crate) use awaited::Encoded;
 pub use engine::Maintenance;
 pub use filter::{Condition, and, eq, is_in, missing, or, range};
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};

@@ -23,12 +23,16 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::engine::{Search, check_name};
+#[cfg(feature = "async")]
+use super::open::Settled;
 use super::open::{Beside, Current, Data, OpenIndex, Status};
 use super::settings::{Settings, Wanted};
 use super::table;
 use super::vectors;
 use super::write::{self, Incoming, Prepared, execute};
 use crate::sqlite::{Tx, sql_error};
+#[cfg(feature = "async")]
+use crate::timer::Rang;
 use crate::{Error, ErrorKind, Result};
 
 const READ_SERVING: &str = "select id, settings from _tinystore_search_indexes
@@ -92,6 +96,10 @@ const DROP_STEPS: &[&str] = &[
 
 /// Documents a step of copying reads.
 const COPY_STEP: i64 = 256;
+/// How often a wait for an index to be ready reads its status again: not
+/// every change of it settles, a copy's, which its home's pages move, above
+/// all.
+const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_millis(100);
 /// Numbers an index gives before it may be numbered again, and the number
 /// past which it is in any case, long before 2³² ends them.
 const RENUMBER_FROM: i64 = if cfg!(test) { 64 } else { 4096 };
@@ -274,7 +282,7 @@ impl Search {
     /// documents copied and the rows renamed in one commit, and the old ones
     /// dropped in the background.
     fn switch(&self, open: &OpenIndex, beside: i64) -> Result<()> {
-        let mut current = open.change();
+        let mut current = open.change(&self.file);
         let Some(rebuilt) = current.beside.clone().filter(|b| b.data.id == beside && !b.failed) else { return Ok(()) };
         let (serving, name) = (current.serving.id, open.name.clone());
         let switched: Result<Option<String>> = self.file.transaction(|tx| {
@@ -309,7 +317,7 @@ impl Search {
     /// rows answer as before.
     fn fail(&self, open: &OpenIndex, beside: i64, error: &Error) -> Result<()> {
         let said = error.to_string();
-        let mut current = open.change();
+        let mut current = open.change(&self.file);
         self.file.transaction(|tx| execute(tx, WRITE_FAILED, (beside, &said), "write why a rebuild failed"))?;
         if let Some(failed) = current.beside.clone().filter(|b| b.data.id == beside) {
             *current = std::sync::Arc::new(Current {
@@ -337,7 +345,7 @@ impl Search {
         if !(next >= RENUMBER_ANYWAY || !manual && given >= RENUMBER_FROM && given > 2 * documents) {
             return Ok(());
         }
-        let mut held = open.change();
+        let mut held = open.change(&self.file);
         if held.beside.is_some() || held.serving.id != current.serving.id {
             return Ok(());
         }
@@ -369,14 +377,44 @@ impl Search {
     pub(crate) fn ready(&self, open: &OpenIndex) -> Result<()> {
         // Without background work nothing moves a rebuild on but this.
         let maintains_itself = !self.runs_in_background();
-        loop {
-            match self.status(open)? {
-                Status::Ready => return Ok(()),
-                Status::Failed { error } => return Err(Error::invalid(format!("its rebuild failed: {error}"))),
-                Status::Rebuilding { .. } if maintains_itself => drop(self.maintain(true)?),
-                Status::Rebuilding { .. } => open.wait_settled(std::time::Duration::from_millis(100)),
+        while !self.is_ready(open)? {
+            if maintains_itself {
+                self.maintain(true)?;
+            } else {
+                open.wait_settled(LOOK_AGAIN);
             }
         }
+        Ok(())
+    }
+
+    /// Whether the index serves the settings it was opened with, read once:
+    /// false while a rebuild or a table's first read goes on, and an error
+    /// naming why a rebuild failed.
+    pub(crate) fn is_ready(&self, open: &OpenIndex) -> Result<bool> {
+        match self.status(open)? {
+            Status::Ready => Ok(true),
+            Status::Failed { error } => Err(Error::invalid(format!("its rebuild failed: {error}"))),
+            Status::Rebuilding { .. } => Ok(false),
+        }
+    }
+
+    /// Calls `done` at the index's next settle, or once [`LOOK_AGAIN`] passed
+    /// on the store's timer, whichever comes first, for an awaited `ready`
+    /// that reads the status again then. A store that closed answers
+    /// `Closed`, as its timer stops.
+    #[cfg(feature = "async")]
+    pub(crate) fn settled_then(&self, open: &OpenIndex, done: impl FnOnce(Result<()>) + Send + 'static) {
+        let store = match self.store() {
+            Ok(store) => store,
+            Err(closed) => return done(Err(closed)),
+        };
+        let settled = Settled::new(done);
+        open.on_settle(settled.clone());
+        // The alarm is not taken back at a settle: it answers nothing then.
+        let _alarm = store.timer().at(std::time::Instant::now() + LOOK_AGAIN, move |rang| match rang {
+            Rang::Due => settled.answer(Ok(())),
+            Rang::Stopped => settled.answer(Err(Error::closed("the store closed while it waited"))),
+        });
     }
 
     /// Drops the index `name`, its rows and a rebuild's beside them, a step a
@@ -395,7 +433,7 @@ impl Search {
         let open = crate::sync::lock(&self.indexes).get(name).cloned();
         // No set runs while the drop does, and the handles are refused only
         // once it committed: a drop that fails leaves them as they were.
-        let held = open.as_ref().map(|open| open.change());
+        let held = open.as_ref().map(|open| open.change(&self.file));
         let named = name.to_owned();
         let marked = self.file.transaction(|tx| {
             table::unfollow(tx, &named)?;
