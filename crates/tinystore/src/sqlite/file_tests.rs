@@ -59,7 +59,7 @@ fn queue_behind_the_writer<T: Send + 'static>(file: &Arc<File>, writes: Vec<Call
             thread::spawn(move || write(&file))
         })
         .collect();
-    wait_until(|| file.group.waiting() == count);
+    wait_until(|| file.writes_waiting() == count);
     drop(held);
     threads.into_iter().map(|thread| thread.join().unwrap()).collect()
 }
@@ -73,7 +73,7 @@ fn queue_in_order_behind_the_writer<T: Send + 'static>(file: &Arc<File>, writes:
     for write in writes {
         let writing = Arc::clone(file);
         threads.push(thread::spawn(move || write(&writing)));
-        wait_until(|| file.group.waiting() == threads.len());
+        wait_until(|| file.writes_waiting() == threads.len());
     }
     drop(held);
     threads.into_iter().map(|thread| thread.join().unwrap()).collect()
