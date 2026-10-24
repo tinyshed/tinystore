@@ -16,8 +16,9 @@ use crate::{Error, Result};
 /// Lookups a `get` makes while the path changes under it.
 const LOOKUPS: usize = 3;
 /// The bytes a whole read takes at once, each piece hashed while it is still
-/// in the processor's cache rather than once the whole file has passed.
-const PIECE: usize = 256 << 10;
+/// in the processor's cache rather than once the whole file has passed; and
+/// a piece of an awaited file's stream.
+pub(crate) const PIECE: usize = 256 << 10;
 
 const SELECT_OPEN: &str = concat!(
     "select ",
@@ -80,6 +81,10 @@ impl StoredFile {
             let Some(found) = lookup(files, whole)? else { return Ok(None) };
             if failed == Some(found.content) {
                 return Err(Error::corrupt(format!("the file of content {} is missing", found.content)));
+            }
+            // an awaited get opens a file on the store's pool, never where its future is polled
+            if found.inline != Some(true) && crate::polled::waits_refused() {
+                return Err(crate::polled::refused(|| format!("{}: {whole:?}: open its file", files.describe())));
             }
             match StoredFile::of(files, whole, found) {
                 Err(Gone(content)) => failed = Some(content),
@@ -149,6 +154,38 @@ impl StoredFile {
         &self.info
     }
 
+    /// What its errors call it: `files avatars: "users/42/1.png"`.
+    #[cfg(feature = "async")]
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Whether its bytes are in memory, kept inline in blobs.db: a read of
+    /// them touches no disk.
+    #[cfg(feature = "async")]
+    pub(crate) fn is_inline(&self) -> bool {
+        matches!(self.body, Body::Inline(_))
+    }
+
+    /// Reads up to `most` bytes from `at`, as many as the file holds there,
+    /// and leaves the next read after them: checked from the first byte as a
+    /// read in order is, its last bytes held back until they match.
+    #[cfg(feature = "async")]
+    pub(crate) fn read_piece(&mut self, at: u64, most: usize) -> Result<Vec<u8>> {
+        self.seek(SeekFrom::Start(at)).map_err(|error| self.error_of(error))?;
+        let left = usize::try_from(self.info.size.saturating_sub(at)).unwrap_or(usize::MAX);
+        let mut piece = vec![0; most.min(left)];
+        let mut filled = 0;
+        while filled < piece.len() {
+            match self.read(&mut piece[filled..]) {
+                Ok(0) => return Err(self.corrupt("its file ends before it does")),
+                Ok(read) => filled += read,
+                Err(error) => return Err(self.error_of(error)),
+            }
+        }
+        Ok(piece)
+    }
+
     /// The whole file from its first byte, checked; it holds every byte in
     /// memory, so a large file is read as a stream.
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
@@ -161,7 +198,9 @@ impl StoredFile {
     }
 
     /// Reads the whole file, checked, into `into`, which is as long as the
-    /// file: where its bytes leave, so that they are written once.
+    /// file: where its bytes leave, so that they are written once. A token of
+    /// the call stops it between two pieces, as when an awaited read's future
+    /// is dropped (STORE-09).
     pub(crate) fn read_whole(&mut self, into: &mut [u8]) -> Result<()> {
         if into.len() as u64 != self.info.size {
             let why = format!("a file of {} bytes read into {}", self.info.size, into.len());
@@ -169,6 +208,7 @@ impl StoredFile {
         }
         self.seek(SeekFrom::Start(0)).map_err(|error| Error::io("blobs: read a file", error))?;
         for piece in into.chunks_mut(PIECE) {
+            crate::cancel::check(|| format!("{}: a whole read", self.label))?;
             let mut filled = 0;
             while filled < piece.len() {
                 match self.read(&mut piece[filled..]) {
@@ -265,16 +305,20 @@ impl Read for StoredFile {
 
 impl Seek for StoredFile {
     fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
-        let position = match to {
-            SeekFrom::Start(at) => Some(at),
-            SeekFrom::Current(by) => self.position.checked_add_signed(by),
-            SeekFrom::End(by) => self.info.size.checked_add_signed(by),
-        };
-        let position =
-            position.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a seek before the file's start"))?;
-        self.position = position;
-        Ok(position)
+        self.position = position_after(self.position, self.info.size, to)?;
+        Ok(self.position)
     }
+}
+
+/// Where a read begins once a reader at `position` of a file of `size` bytes
+/// seeks `to`: past the end is allowed, and reads nothing.
+pub(crate) fn position_after(position: u64, size: u64, to: SeekFrom) -> io::Result<u64> {
+    let after = match to {
+        SeekFrom::Start(at) => Some(at),
+        SeekFrom::Current(by) => position.checked_add_signed(by),
+        SeekFrom::End(by) => size.checked_add_signed(by),
+    };
+    after.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a seek before the file's start"))
 }
 
 fn lookup(files: &Files, whole: &str) -> Result<Option<Found>> {

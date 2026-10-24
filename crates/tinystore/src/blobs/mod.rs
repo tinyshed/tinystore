@@ -19,7 +19,7 @@ mod disk;
 mod engine;
 mod files;
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
 mod ids;
@@ -34,10 +34,14 @@ mod upload;
 #[cfg(feature = "replication")]
 pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing};
 pub use files::{FileCall, Files, FilesBuilder};
+#[cfg(feature = "async")]
+pub(crate) use files::{Freed, Options as CallOptions};
 pub use info::{FileInfo, Page, Usage};
 pub use list::{All, List, PAGE_FILES};
 pub use maintain::{Maintenance, maintain};
 pub use read::StoredFile;
+#[cfg(feature = "async")]
+pub(crate) use read::{PIECE, position_after};
 pub use upload::Upload;
 
 use crate::Store;

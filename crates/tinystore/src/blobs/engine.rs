@@ -46,6 +46,10 @@ pub(crate) struct Blobs {
     /// The store, for the writes a copy passes to its home.
     #[cfg(feature = "replication")]
     store: crate::store::WeakStore,
+    /// The store's pool, which an awaited call on files made from blocking
+    /// ones runs on: the pool holds no store, so this keeps none open.
+    #[cfg(feature = "async")]
+    pub(crate) pool: Arc<crate::pool::Pool>,
     _claim: Claim,
 }
 
@@ -157,6 +161,9 @@ impl Blobs {
     /// claimed and made, its file migrated, and what a process that died left
     /// removed before anything is written.
     pub(crate) fn of(store: &Store) -> Result<Arc<Blobs>> {
+        // found first: an engine's open holds the lock a second open waits for
+        #[cfg(feature = "async")]
+        let pool = crate::pool::Pool::of(store)?;
         store.engine(|store| {
             let claim = store.claim(DIR)?;
             let dir = claim.path().to_owned();
@@ -184,6 +191,8 @@ impl Blobs {
                 sets: Mutex::new(HashMap::new()),
                 #[cfg(feature = "replication")]
                 store: store.downgrade(),
+                #[cfg(feature = "async")]
+                pool,
                 _claim: claim,
             });
             // What a process that died left, and the maintenance after it,

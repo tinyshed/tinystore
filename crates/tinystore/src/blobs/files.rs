@@ -13,11 +13,13 @@ use super::info::{FileInfo, FileRow, OCTETS, file_columns, meta_text};
 use super::paths::Folder;
 use super::read::StoredFile;
 use super::upload::Upload;
-use crate::sqlite::sql_error;
+#[cfg(feature = "async")]
+use crate::memory::Waiting;
+use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Key, Result, Store};
 
-/// A content type's bytes at most.
 const SET_EXPIRES: &str = "update files set expires = ?3 where set_id = ?1 and path = ?2";
+/// A content type's bytes at most.
 const MAX_TYPE: usize = 256;
 /// Meta's names and values together, at most.
 const MAX_META: usize = 2 << 10;
@@ -163,8 +165,8 @@ impl Files {
     }
 
     /// A call on the path with `options` given whole, as a write another node
-    /// passed on asks it.
-    #[cfg(feature = "replication")]
+    /// passed on asks it, and as an awaited call makes it in its first poll.
+    #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn call(&self, path: &str, options: Options) -> FileCall<'_> {
         FileCall { files: self, path: path.to_owned(), options }
     }
@@ -240,6 +242,22 @@ impl Files {
         content: Content,
         condition: Condition,
     ) -> Result<Option<FileInfo>> {
+        let (bytes, publication) = self.publication(whole, options, content, condition);
+        let (info, freed) = self.blobs.file.write(bytes, publication)?;
+        self.blobs.remove_freed(&freed);
+        self.count_written(info.as_ref());
+        Ok(info)
+    }
+
+    /// What a publication of `content` at the path writes in its transaction,
+    /// and the bytes it adds to the commit.
+    pub(super) fn publication(
+        &self,
+        whole: &str,
+        options: &Options,
+        content: Content,
+        condition: Condition,
+    ) -> (usize, Writing<Option<FileInfo>>) {
         let blobs = Arc::clone(&self.blobs);
         let files = self.clone();
         let (path, content_type, meta, ttl) =
@@ -248,7 +266,7 @@ impl Files {
             Place::Inline(body) => body.len(),
             Place::File | Place::Shared => 0,
         };
-        let (info, freed) = self.blobs.file.write(bytes, move |tx| {
+        let publication = move |tx: &Tx<'_>| {
             let mut change = Change::new(tx, &blobs);
             let version =
                 Version { content, content_type, meta, modified: change.now, expires: files.expiry(ttl, change.now) };
@@ -256,29 +274,43 @@ impl Files {
                 return Ok((None, Vec::new()));
             }
             Ok((Some(version.info(&files.folder, &path)?), change.freed))
-        })?;
-        self.blobs.remove_freed(&freed);
-        if let Some(info) = &info {
+        };
+        (bytes, Box::new(publication))
+    }
+
+    pub(super) fn count_written(&self, info: Option<&FileInfo>) {
+        if let Some(info) = info {
             self.blobs.probe.count("tinystore_blobs_written_total", &[], 1.0);
             self.blobs.probe.count("tinystore_blobs_written_bytes_total", &[], info.size as f64);
         }
-        Ok(info)
+    }
+
+    /// Removes the files of the contents a write left without names, once it
+    /// committed: an unlink, which waits while a snapshot links files.
+    #[cfg(feature = "async")]
+    pub(crate) fn remove_freed(&self, freed: &[i64]) {
+        self.blobs.remove_freed(freed);
     }
 
     fn copy_to(&self, from: &str, to: &str, options: &Options, rename: bool) -> Result<FileInfo> {
-        if from == to {
-            return Err(Error::invalid("a copy or a rename onto its own path"));
-        }
+        refuse_onto_itself(from, to)?;
         #[cfg(feature = "replication")]
         if self.is_copy() {
             self.pass_on(&super::forward::Call::Copy { from, to, options, rename })?;
             return self.head_of(to)?.ok_or_else(|| Error::internal("a copy its home wrote that this copy lacks"));
         }
+        let (info, freed) = self.blobs.file.write(0, self.copying(from, to, options, rename))?;
+        self.blobs.remove_freed(&freed);
+        Ok(info)
+    }
+
+    /// What a copy or a rename writes in its transaction.
+    fn copying(&self, from: &str, to: &str, options: &Options, rename: bool) -> Writing<FileInfo> {
         let blobs = Arc::clone(&self.blobs);
         let files = self.clone();
         let (from, to, options) = (from.to_owned(), to.to_owned(), options.clone());
         let condition = Condition { if_match: options.if_match.clone(), when_there: WhenThere::Conflict };
-        let (info, freed) = self.blobs.file.write(0, move |tx| {
+        Box::new(move |tx| {
             let mut change = Change::new(tx, &blobs);
             let source =
                 change.current(files.set, &from)?.filter(|current| current.live(change.now)).ok_or_else(|| {
@@ -296,9 +328,7 @@ impl Files {
                 change.remove(files.set, &from)?;
             }
             Ok((version.info(&files.folder, &to)?, change.freed))
-        })?;
-        self.blobs.remove_freed(&freed);
-        Ok(info)
+        })
     }
 
     fn delete_at(&self, whole: &str, if_match: Option<String>) -> Result<()> {
@@ -308,18 +338,23 @@ impl Files {
                 .pass_on(&super::forward::Call::Delete { path: whole, if_match: if_match.as_deref() })
                 .map(drop);
         }
+        let ((), freed) = self.blobs.file.write(0, self.deleting(whole, if_match))?;
+        self.blobs.remove_freed(&freed);
+        Ok(())
+    }
+
+    /// What a delete writes in its transaction.
+    fn deleting(&self, whole: &str, if_match: Option<String>) -> Writing<()> {
         let blobs = Arc::clone(&self.blobs);
         let (set, path) = (self.set, whole.to_owned());
-        let freed = self.blobs.file.write(0, move |tx| {
+        Box::new(move |tx| {
             let mut change = Change::new(tx, &blobs);
             if let Some(etag) = &if_match {
                 super::change::holds_etag(etag, change.current(set, &path)?.as_ref(), change.now)?;
             }
             change.remove(set, &path)?;
-            Ok(change.freed)
-        })?;
-        self.blobs.remove_freed(&freed);
-        Ok(())
+            Ok(((), change.freed))
+        })
     }
 
     fn expire_after(&self, whole: &str, after: Duration) -> Result<bool> {
@@ -327,19 +362,61 @@ impl Files {
         if self.is_copy() {
             return self.pass_on(&super::forward::Call::Expire { path: whole, after });
         }
+        self.blobs.file.write(0, self.expiring(whole, after)).map(|(expired, _)| expired)
+    }
+
+    /// What an expiry writes in its transaction; it frees nothing.
+    fn expiring(&self, whole: &str, after: Duration) -> Writing<bool> {
         let blobs = Arc::clone(&self.blobs);
         let (set, path) = (self.set, whole.to_owned());
         let after = crate::clock::millis(after);
-        self.blobs.file.write(0, move |tx| {
+        Box::new(move |tx| {
             let change = Change::new(tx, &blobs);
             if !change.current(set, &path)?.is_some_and(|current| current.live(change.now)) {
-                return Ok(false);
+                return Ok((false, Vec::new()));
             }
             let expires = change.now.saturating_add(after);
             change.execute(SET_EXPIRES, params![set, path, expires])?;
-            Ok(true)
+            Ok((true, Vec::new()))
         })
     }
+
+    /// [`Files::expire`] for an awaited write, submitted: `done` is given its
+    /// answer once its commit ends, on the thread that answers the commit.
+    #[cfg(feature = "async")]
+    pub(crate) fn expire_then(&self, path: &str, after: Duration, done: impl Done<bool>) {
+        let whole = match self.whole(path) {
+            Ok(whole) => whole,
+            Err(error) => return done(Err(error)),
+        };
+        let expiring = self.expiring(&whole, after);
+        let files = self.clone();
+        self.blobs.file.submit(0, expiring, move |expired| done(expired.map_err(|error| files.fail(&whole, error))));
+    }
+}
+
+/// What a write submitted for an awaited call is given once its commit
+/// ends: its answer, and what it freed, whose files the caller removes off
+/// the thread that answers the commit, since the commits behind this one
+/// wait for that thread.
+#[cfg(feature = "async")]
+pub(crate) trait Done<T>: FnOnce(Result<(T, Freed)>) + Send + 'static {}
+
+#[cfg(feature = "async")]
+impl<T, F: FnOnce(Result<(T, Freed)>) + Send + 'static> Done<T> for F {}
+
+/// The contents a write left without names, whose files go once it commits.
+pub(crate) type Freed = Vec<i64>;
+
+/// What a write of blobs.db runs in its transaction: its answer, and what it
+/// freed.
+pub(super) type Writing<T> = Box<dyn FnOnce(&Tx<'_>) -> Result<(T, Freed)> + Send>;
+
+fn refuse_onto_itself(from: &str, to: &str) -> Result<()> {
+    if from == to {
+        return Err(Error::invalid("a copy or a rename onto its own path"));
+    }
+    Ok(())
 }
 
 /// A write's options, as a [`FileCall`] gathers them.
@@ -380,7 +457,7 @@ pub struct FileCall<'f> {
     options: Options,
 }
 
-impl FileCall<'_> {
+impl<'f> FileCall<'f> {
     pub fn content_type(mut self, content_type: impl Into<String>) -> Self {
         self.options.content_type = Some(content_type.into());
         self
@@ -427,8 +504,7 @@ impl FileCall<'_> {
 
     /// A file written a piece at a time, which appears at its `commit`.
     pub fn upload(self) -> Result<Upload> {
-        let whole = self.files.whole(&self.path)?;
-        self.options.check().map_err(|error| self.files.fail(&whole, error))?;
+        let whole = self.checked()?;
         Upload::start(self.files.clone(), whole, self.options)
     }
 
@@ -448,15 +524,87 @@ impl FileCall<'_> {
     }
 
     fn copied(self, from: &str, rename: bool) -> Result<FileInfo> {
-        let (source, target) = (self.files.whole(from)?, self.files.whole(&self.path)?);
-        self.options.check().map_err(|error| self.files.fail(&target, error))?;
+        let (source, target) = (self.files.whole(from)?, self.checked()?);
         self.files.copy_to(&source, &target, &self.options, rename).map_err(|error| self.files.fail(&target, error))
     }
 
+    /// The whole path, its options checked, as each verb that writes bytes or
+    /// a row checks them first.
+    fn checked(&self) -> Result<String> {
+        let whole = self.files.whole(&self.path)?;
+        self.options.check().map_err(|error| self.files.fail(&whole, error))?;
+        Ok(whole)
+    }
+
+    /// The files, the path and the options: what an awaited call owns until
+    /// its first poll makes the call again with [`Files::call`].
+    #[cfg(feature = "async")]
+    pub(crate) fn into_parts(self) -> (&'f Files, String, Options) {
+        (self.files, self.path, self.options)
+    }
+
+    /// [`FileCall::upload`] waiting on no thread for the memory an upload
+    /// holds: `done` is given the upload once that memory fits, on whichever
+    /// thread gives memory back, or here when it fits now, and a path or an
+    /// option that is not one here at once. What this returns takes the
+    /// waiter out of line when it is dropped unanswered.
+    #[cfg(feature = "async")]
+    pub(crate) fn upload_then(self, done: impl FnOnce(Result<Upload>) + Send + 'static) -> Option<Waiting> {
+        let whole = match self.checked() {
+            Ok(whole) => whole,
+            Err(error) => {
+                done(Err(error));
+                return None;
+            }
+        };
+        let (files, options) = (self.files.clone(), self.options);
+        Some(Upload::reserve_then(self.files, move |reserved| {
+            let reserved = reserved.map_err(|error| files.fail(&whole, error));
+            done(reserved.and_then(|reserved| Upload::reserved(files, whole, options, reserved)));
+        }))
+    }
+
+    /// [`FileCall::delete`] for an awaited write, submitted: `done` is given
+    /// its answer once its commit ends, on the thread that answers the commit.
+    #[cfg(feature = "async")]
+    pub(crate) fn delete_then(self, done: impl Done<()>) {
+        let whole = match self.files.whole(&self.path) {
+            Ok(whole) => whole,
+            Err(error) => return done(Err(error)),
+        };
+        let deleting = self.files.deleting(&whole, self.options.if_match);
+        let files = self.files.clone();
+        self.files
+            .blobs
+            .file
+            .submit(0, deleting, move |deleted| done(deleted.map_err(|error| files.fail(&whole, error))));
+    }
+
+    /// [`FileCall::copy_from`], or with `rename` [`FileCall::rename_from`],
+    /// for an awaited write, submitted as [`FileCall::delete_then`] is.
+    #[cfg(feature = "async")]
+    pub(crate) fn copied_then(self, from: &str, rename: bool, done: impl Done<FileInfo>) {
+        let wholes = self.files.whole(from).and_then(|source| Ok((source, self.checked()?)));
+        let (source, target) = match wholes {
+            Ok(wholes) => wholes,
+            Err(error) => return done(Err(error)),
+        };
+        if let Err(error) = refuse_onto_itself(&source, &target) {
+            return done(Err(self.files.fail(&target, error)));
+        }
+        let copying = self.files.copying(&source, &target, &self.options, rename);
+        let files = self.files.clone();
+        self.files
+            .blobs
+            .file
+            .submit(0, copying, move |copied| done(copied.map_err(|error| files.fail(&target, error))));
+    }
+
     /// Writes the whole file, or with `create` only where no file is; says
-    /// what it wrote, nothing when a create found a file. The wire's put, and
-    /// a put another node passed on.
-    #[cfg(any(feature = "wire", feature = "replication"))]
+    /// what it wrote, nothing when a create found a file. The wire's put, a
+    /// put another node passed on, and an awaited put of a large file, on the
+    /// store's pool.
+    #[cfg(any(feature = "wire", feature = "replication", feature = "async"))]
     pub(crate) fn written(self, bytes: &[u8], create: bool) -> Result<Option<FileInfo>> {
         let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
         let condition = Condition { if_match: self.options.if_match.clone(), when_there };
@@ -464,8 +612,7 @@ impl FileCall<'_> {
     }
 
     fn write_all(self, bytes: &[u8], condition: Condition) -> Result<Option<FileInfo>> {
-        let whole = self.files.whole(&self.path)?;
-        self.options.check().map_err(|error| self.files.fail(&whole, error))?;
+        let whole = self.checked()?;
         let mut upload = Upload::start(self.files.clone(), whole, self.options)?;
         upload.take(bytes)?;
         upload.finish(condition)

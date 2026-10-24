@@ -6,10 +6,12 @@ use std::sync::{Arc, LazyLock};
 use rusqlite::params;
 
 use super::change::{Change, hidden};
-use super::files::Files;
+#[cfg(feature = "async")]
+use super::files::Done;
+use super::files::{Files, Writing};
 use super::info::{FileInfo, FileRow, Page, Usage, file_columns};
 use super::paths::MAX_PATH;
-use crate::sqlite::sql_error;
+use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
 /// Files a page holds at most, and when a list does not say.
@@ -88,32 +90,49 @@ impl Files {
     /// Removes this folder and every folder in it, at once for every reader,
     /// however many files it holds. On the files themselves it empties them.
     pub fn clear(&self) -> Result<()> {
+        let (folder, clearing) = self.clearing()?;
+        let ((), freed) = self.blobs.file.write(0, clearing).map_err(|error| self.fail(&folder, error))?;
+        self.blobs.remove_freed(&freed);
+        Ok(())
+    }
+
+    /// [`Files::clear`] for an awaited write, submitted: `done` is given its
+    /// answer once its commit ends, on the thread that answers the commit.
+    #[cfg(feature = "async")]
+    pub(crate) fn clear_then(&self, done: impl Done<()>) {
+        let (folder, clearing) = match self.clearing() {
+            Ok(clearing) => clearing,
+            Err(error) => return done(Err(error)),
+        };
+        let files = self.clone();
+        self.blobs.file.submit(0, clearing, move |cleared| done(cleared.map_err(|error| files.fail(&folder, error))));
+    }
+
+    /// The folder as an error names it, and what its clear writes in its
+    /// transaction: the files deleted, or past [`CLEAR_AT_ONCE`] a mark that
+    /// hides them until maintenance deletes them.
+    fn clearing(&self) -> Result<(String, Writing<()>)> {
         let folder = self.whole_folder()?;
         let blobs = Arc::clone(&self.blobs);
         let (set, prefix) = (self.set, self.folder.prefix().to_owned());
         let (from, to) = self.bounds("").map_err(|error| self.fail(&folder, error))?;
         let bound = i64::try_from(CLEAR_AT_ONCE).unwrap_or(i64::MAX);
-        let freed = self
-            .blobs
-            .file
-            .write(0, move |tx| {
-                let mut change = Change::new(tx, &blobs);
-                let count: i64 = tx
-                    .prepare_cached(COUNT_UNDER)
-                    .and_then(|mut statement| statement.query_row(params![set, from, to, bound + 1], |row| row.get(0)))
-                    .map_err(|error| sql_error("blobs: count a folder", error))?;
-                if count <= bound {
-                    let contents = change.deleted(DELETE_UNDER, params![set, from, to])?;
-                    change.release_all(contents)?;
-                } else {
-                    let revision = change.next_revision()?;
-                    change.execute(MARK_CLEARED, params![set, prefix, revision])?;
-                }
-                Ok(change.freed)
-            })
-            .map_err(|error| self.fail(&folder, error))?;
-        self.blobs.remove_freed(&freed);
-        Ok(())
+        let clearing = move |tx: &Tx<'_>| {
+            let mut change = Change::new(tx, &blobs);
+            let count: i64 = tx
+                .prepare_cached(COUNT_UNDER)
+                .and_then(|mut statement| statement.query_row(params![set, from, to, bound + 1], |row| row.get(0)))
+                .map_err(|error| sql_error("blobs: count a folder", error))?;
+            if count <= bound {
+                let contents = change.deleted(DELETE_UNDER, params![set, from, to])?;
+                change.release_all(contents)?;
+            } else {
+                let revision = change.next_revision()?;
+                change.execute(MARK_CLEARED, params![set, prefix, revision])?;
+            }
+            Ok(((), change.freed))
+        };
+        Ok((folder, Box::new(clearing)))
     }
 
     /// The first path under this folder that starts with `prefix`, and the

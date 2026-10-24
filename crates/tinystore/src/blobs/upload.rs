@@ -8,6 +8,8 @@ use std::io::{self, Write};
 use sha2::{Digest, Sha256};
 
 use super::change::{Condition, Content, Place, WhenThere};
+#[cfg(feature = "async")]
+use super::files::Done;
 use super::files::{Files, Options};
 use super::info::FileInfo;
 use crate::{Error, ErrorKind, Reservation, Result};
@@ -26,6 +28,12 @@ const ROOM_EVERY: u64 = 64 << 20;
 
 use crate::memory::PATIENCE;
 
+/// The memory an upload holds from its start to its end: its bytes while
+/// they may stay inline.
+const MEMORY: u64 = INLINE as u64;
+/// What a refusal of that memory names.
+const WHAT: &str = "a file's upload";
+
 /// A file written a piece at a time, as [`Files::upload`] begins it: bytes go
 /// in with `write`, the file appears at `commit` and never before, and an
 /// upload dropped without it leaves nothing.
@@ -38,6 +46,8 @@ pub struct Upload {
     /// The file of `uploads/` the bytes go to past the inline size.
     file: Option<std::fs::File>,
     id: Option<i64>,
+    /// Whether its bytes went to a file of `uploads/`.
+    spilled: bool,
     /// Whether the file was renamed into `objects/`, before or after its commit.
     placed: bool,
     hash: Sha256,
@@ -59,8 +69,25 @@ impl std::fmt::Debug for Upload {
 
 impl Upload {
     pub(crate) fn start(files: Files, path: String, options: Options) -> Result<Upload> {
-        let reserved = files.blobs.memory.reserve(INLINE as u64, "a file's upload", PATIENCE);
+        let reserved = files.blobs.memory.reserve(MEMORY, WHAT, PATIENCE);
         let reserved = reserved.map_err(|error| files.fail(&path, error))?;
+        Upload::reserved(files, path, options, reserved)
+    }
+
+    /// Takes the memory an upload holds as [`Upload::start`] does, waiting on
+    /// no thread: `done` is given it once it fits, on whichever thread gives
+    /// memory back, or here when it fits now. What this returns takes the
+    /// waiter out of line when it is dropped unanswered.
+    #[cfg(feature = "async")]
+    pub(super) fn reserve_then(
+        files: &Files,
+        done: impl FnOnce(Result<Reservation>) + Send + 'static,
+    ) -> crate::memory::Waiting {
+        files.blobs.memory.reserve_then(MEMORY, WHAT, PATIENCE, done)
+    }
+
+    /// An upload that holds `reserved`, the memory it takes as it starts.
+    pub(crate) fn reserved(files: Files, path: String, options: Options, reserved: Reservation) -> Result<Upload> {
         let upload = Upload {
             files,
             path,
@@ -68,6 +95,7 @@ impl Upload {
             buffer: Vec::new(),
             file: None,
             id: None,
+            spilled: false,
             placed: false,
             hash: Sha256::new(),
             written: 0,
@@ -98,7 +126,7 @@ impl Upload {
             if self.files.is_copy() {
                 return self.gather(bytes);
             }
-            if self.file.is_none() && self.fits_inline() {
+            if self.file.is_none() && self.fits_inline_after(0) {
                 self.buffer.extend_from_slice(bytes);
                 return Ok(());
             }
@@ -114,20 +142,82 @@ impl Upload {
         })
     }
 
+    /// Whether taking `more` bytes keeps them in memory and touches no disk:
+    /// what an awaited upload takes in its poll, the rest on the store's pool.
+    #[cfg(feature = "async")]
+    pub(crate) fn stays_in_memory(&self, more: usize) -> bool {
+        self.ended || (!self.spilled && self.fits_inline_after(more as u64))
+    }
+
     /// Publishes the file, or with `create` only where no file is; says what
-    /// it wrote, nothing when a create found a file. The wire's last DATA.
-    #[cfg(feature = "wire")]
+    /// it wrote, nothing when a create found a file. The wire's last DATA,
+    /// and an awaited commit on the store's pool.
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn publish(mut self, create: bool) -> Result<Option<FileInfo>> {
-        let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
-        let condition = Condition { if_match: self.options.if_match.clone(), when_there };
+        let condition = self.condition(create);
         self.finish(condition)
     }
 
     /// Publishes the file whole, replacing what the path held, and returns
     /// it once it is on disk as the store's durability says.
     pub fn commit(mut self) -> Result<FileInfo> {
-        let condition = Condition { if_match: self.options.if_match.clone(), when_there: WhenThere::Replace };
+        let condition = self.condition(false);
         self.finish(condition)?.ok_or_else(|| Error::internal("a commit that wrote nothing"))
+    }
+
+    /// A content id for the upload's bytes, taken now, when they are inline
+    /// and the block reserved has one left: what lets an awaited commit
+    /// submit in its poll. None when the bytes need the disk, a copy's home or
+    /// the next block of ids, which are the store's pool's.
+    #[cfg(feature = "async")]
+    pub(crate) fn inline_id(&mut self) -> Option<i64> {
+        #[cfg(feature = "replication")]
+        if self.files.is_copy() {
+            return None;
+        }
+        if self.ended || self.spilled {
+            return None;
+        }
+        let id = self.files.blobs.ids.try_take()?;
+        self.id = Some(id);
+        Some(id)
+    }
+
+    /// Publishes the upload's inline bytes under the id [`Upload::inline_id`]
+    /// took, as [`Upload::publish`] does, submitted: `done` is given what it
+    /// wrote once its commit ends, on the thread that answers the commit. The
+    /// upload holds its memory until then, and lets its id go whatever the
+    /// outcome, since no file holds its bytes.
+    #[cfg(feature = "async")]
+    pub(crate) fn publish_inline_then(mut self, create: bool, done: impl Done<Option<FileInfo>>) {
+        let ready = self.id.ok_or_else(|| Error::internal("an inline publication without its id")).and_then(|id| {
+            self.check_size()?;
+            Ok((id, self.checksum()?))
+        });
+        let (id, (sha256, size)) = match ready {
+            Ok(ready) => ready,
+            Err(error) => {
+                self.end();
+                return done(Err(self.fail(error)));
+            }
+        };
+        self.ended = true;
+        let content = Content { id, size, sha256, place: Place::Inline(std::mem::take(&mut self.buffer)) };
+        let condition = self.condition(create);
+        let (bytes, publication) = self.files.publication(&self.path, &self.options, content, condition);
+        let blobs = std::sync::Arc::clone(&self.files.blobs);
+        blobs.file.submit(bytes, publication, move |published| {
+            self.files.blobs.ids.let_go(id);
+            if let Ok((info, _)) = &published {
+                self.files.count_written(info.as_ref());
+            }
+            done(published.map_err(|error| self.fail(error)));
+        });
+    }
+
+    fn condition(&self, create: bool) -> Condition {
+        let when_there = if create { WhenThere::Skip } else { WhenThere::Replace };
+        Condition { if_match: self.options.if_match.clone(), when_there }
     }
 
     /// Ends the upload and leaves nothing; dropping it does the same.
@@ -169,8 +259,7 @@ impl Upload {
     /// file synced and renamed into `objects/`, so that the commit names bytes
     /// whose name is durable.
     fn content(&mut self) -> Result<Content> {
-        let sha256 = self.hash.clone().finalize().to_vec();
-        let size = i64::try_from(self.written).map_err(|_| Error::limit("a file past 2⁶³ bytes"))?;
+        let (sha256, size) = self.checksum()?;
         let Some(file) = self.file.take() else {
             let id = self.files.blobs.take_id()?;
             self.id = Some(id);
@@ -187,6 +276,12 @@ impl Upload {
         self.placed = true;
         self.files.blobs.disk.sync_placed(id)?;
         Ok(Content { id, size, sha256, place: Place::File })
+    }
+
+    /// The SHA-256 of the bytes taken, and how many they are.
+    fn checksum(&self) -> Result<(Vec<u8>, i64)> {
+        let size = i64::try_from(self.written).map_err(|_| Error::limit("a file past 2⁶³ bytes"))?;
+        Ok((self.hash.clone().finalize().to_vec(), size))
     }
 
     /// Gathers a copy's bytes, which go to its home whole at the commit.
@@ -252,8 +347,11 @@ impl Upload {
         self.files.blobs.room(coming)
     }
 
-    fn fits_inline(&self) -> bool {
-        self.options.size.is_none_or(|declared| declared <= INLINE as u64) && self.written <= INLINE as u64
+    /// Whether the bytes taken and `more` stay inline, as the size declared
+    /// lets them.
+    fn fits_inline_after(&self, more: u64) -> bool {
+        let inline = INLINE as u64;
+        self.options.size.is_none_or(|declared| declared <= inline) && self.written.saturating_add(more) <= inline
     }
 
     /// Gives the upload its file: an id held, its name in `uploads/`, and the
@@ -261,6 +359,8 @@ impl Upload {
     fn spill(&mut self) -> Result<()> {
         let id = self.files.blobs.take_id()?;
         self.id = Some(id);
+        // before its creation, so that one that failed half way is removed as well
+        self.spilled = true;
         self.file = Some(self.files.blobs.disk.create_upload(id)?);
         let gathered = std::mem::take(&mut self.buffer);
         self.write_file(&gathered)
@@ -288,13 +388,18 @@ impl Upload {
 
     /// Removes the upload's bytes and lets its id go. A file of `objects/`
     /// that will not go keeps its id held, so that the settled mark stays
-    /// below it until maintenance or the next open removes it.
+    /// below it until maintenance or the next open removes it. Bytes that
+    /// stayed in memory touch no disk.
     fn remove_bytes(&mut self) {
         self.buffer = Vec::new();
         self.file = None;
         let Some(id) = self.id.take() else { return };
         let blobs = &self.files.blobs;
-        let removed = if self.placed { blobs.disk.remove_object(id) } else { blobs.disk.remove_upload(id) };
+        let removed = match (self.placed, self.spilled) {
+            (true, _) => blobs.disk.remove_object(id),
+            (false, true) => blobs.disk.remove_upload(id),
+            (false, false) => Ok(()),
+        };
         match removed {
             Ok(()) => blobs.ids.let_go(id),
             Err(_) if self.placed => blobs.ids.doubt(id),

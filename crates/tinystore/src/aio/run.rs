@@ -2,15 +2,16 @@
 //! built on, so that each says where its work runs and what its future's
 //! drop does in one word.
 //!
-//! | helper        | runs                                                 | its future dropped once polled  |
-//! |---------------|------------------------------------------------------|---------------------------------|
-//! | [`point`]     | in the first poll when a reader is idle, else pool   | answered in that poll, or stops |
-//! | [`step`]      | in the first poll, else on the pool                  | applied all the same            |
-//! | [`read`]      | on the store's pool, under a token of its own        | stops; its reader goes back     |
-//! | [`write`]     | a submit in the first poll, its commit on the pool   | commits; its answer is let go   |
-//! | [`reserve`]   | a waiter in the store's memory, on no thread         | leaves the line                 |
-//! | [`blocking`]  | blocking code on the store's pool, in a line or not  | runs to its end                 |
-//! | [`passed_on`] | a call to a copy's home, on a thread of its own      | runs to its end                 |
+//! | helper                | runs                                                 | its future dropped once polled  |
+//! |-----------------------|------------------------------------------------------|---------------------------------|
+//! | [`point`]             | in the first poll when a reader is idle, else pool   | answered in that poll, or stops |
+//! | [`step`]              | in the first poll, else on the pool                  | applied all the same            |
+//! | [`read`]              | on the store's pool, under a token of its own        | stops; its reader goes back     |
+//! | [`write`]             | a submit in the first poll, its commit on the pool   | commits; its answer is let go   |
+//! | [`reserve`]           | a waiter in the store's memory, on no thread         | leaves the line                 |
+//! | [`blocking`]          | blocking code on the store's pool, in a line or not  | runs to its end                 |
+//! | [`passed_on`]         | a call to a copy's home, on a thread of its own      | runs to its end                 |
+//! | [`passed_on_in_line`] | its turn in a line of the pool, then as `passed_on`  | runs to its end                 |
 //!
 //! Each does nothing before its first poll. A call clones its handle and
 //! owns its arguments, so that its future is `Send + 'static` and a program
@@ -251,7 +252,7 @@ const PASSED_ON: &str = "tinystore-passed-on";
 /// answers with what it returns. Once polled it runs to its end whether or
 /// not anyone still awaits it, as a write does. A panic in `call` is resumed
 /// where the future is awaited.
-#[allow(dead_code, reason = "kv's calls passed on to a copy's home run on it")]
+#[allow(dead_code, reason = "the calls of kv and blobs passed on to a copy's home run on it")]
 pub(crate) async fn passed_on<T, F>(what: String, call: F) -> Result<T>
 where
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -269,9 +270,65 @@ where
     answered.await
 }
 
+/// Takes what a call to a copy's home needs with `take`, in its turn in
+/// `line` of the store's pool, after the work the line held before it, then
+/// runs `call` with it as [`passed_on`] does, on a thread of its own: an
+/// upload's commit on a copy, whose pieces are written in its line and whose
+/// home's answer would hold a thread of the pool. What `take` took is the
+/// thread's, so that work the line holds after it finds it gone.
+#[cfg(feature = "blobs")]
+pub(crate) fn passed_on_in_line<A, T, Take, Call>(
+    pool: &Arc<Pool>,
+    line: String,
+    what: String,
+    (take, call): (Take, Call),
+) -> impl Future<Output = Result<T>> + Send + 'static + use<A, T, Take, Call>
+where
+    Take: FnOnce() -> Result<A> + Send + 'static,
+    Call: FnOnce(A) -> Result<T> + Send + 'static,
+    A: Send + 'static,
+    T: Send + 'static,
+{
+    let pool = Arc::clone(pool);
+    async move {
+        refuse_inside_a_transaction(&what)?;
+        let (answer, answered) = pending(what.clone());
+        let job = Box::new(move || match catch_unwind(AssertUnwindSafe(take)) {
+            Ok(Ok(taken)) => pass_on_taken(what, answer, move || call(taken)),
+            Ok(Err(error)) => answer.send(Err(error)),
+            Err(payload) => answer.panicked(payload),
+        });
+        pool.run_in_line(&line, job);
+        answered.await
+    }
+}
+
+/// Runs `call` on a thread of its own and answers with it, or answers why no
+/// thread started.
+#[cfg(feature = "blobs")]
+fn pass_on_taken<T: Send + 'static>(
+    what: String,
+    answer: Answer<T>,
+    call: impl FnOnce() -> Result<T> + Send + 'static,
+) {
+    let handed = Arc::new(std::sync::Mutex::new(Some(answer)));
+    let answering = Arc::clone(&handed);
+    let started = own_thread(move || {
+        if let Some(answer) = crate::sync::lock(&answering).take() {
+            answer_with(answer, call);
+        }
+    });
+    // a thread that never started dropped its job, and left the answer here
+    if let Err(error) = started
+        && let Some(answer) = crate::sync::lock(&handed).take()
+    {
+        answer.send(Err(Error::io(format!("{what}: a thread to wait for the home's answer on"), error)));
+    }
+}
+
 /// Starts `job` on a thread of its own, one of those that wait for a copy's
 /// home.
-#[allow(dead_code, reason = "kv's calls passed on to a copy's home run on it")]
+#[allow(dead_code, reason = "the calls of kv and blobs passed on to a copy's home run on it")]
 pub(crate) fn own_thread(job: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     std::thread::Builder::new().name(PASSED_ON.to_owned()).spawn(job).map(drop)
 }
