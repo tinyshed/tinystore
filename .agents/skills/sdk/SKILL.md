@@ -95,6 +95,21 @@ Linux whose loader is musl's (`platformPackage` in
 - A lost connection fails a write in flight `outcome_unknown`; a read goes
   again on the next connection, and every handle opens again with its first
   call there.
+- A dial is the link's, never a caller's: one dial at a time, with a cancel
+  of its own that only the link's close aborts, so that every caller waiting
+  then fails `ClosedError` "the store is closed". A caller's signal, task
+  cancel or context ends that caller's wait alone; `open` and `connect` then
+  close the link, their cancel error naming what the dial waited for in
+  every SDK (a call's names it in Bun and Node alone). Every wait in a dial
+  honours its cancel, the start loop's sleep, a child's start, the socket's
+  connect and the handshake; a probe of `SERVE` it cut short finds nothing,
+  so the start loop checks the cancel before each start, and a connection
+  the dial made after is closed. Bun and Node run the dial outside every
+  caller's `withSignal` (`withoutSignal`), Python as a task of its own in a
+  context of its own, Go under `context.WithoutCancel` and the link's own
+  cancel. Python waits on the dial and the WELCOME with `asyncio.wait`, not
+  `shield`: 3.14 logs the error of a shielded future whose waiter was
+  cancelled.
 - Errors are their kind's class and carry `what`, as the core named them.
 
 ## Values

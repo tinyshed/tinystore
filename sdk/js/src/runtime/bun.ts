@@ -8,7 +8,14 @@ import net from 'node:net'
 import manifest from '../../package.json' with { type: 'json' }
 import { ClosedError } from '../errors.ts'
 import type { PrivateChild, Runtime, TlsOptions, Transport, TransportEvents } from '../runtime.ts'
-import { address, exitedWith, platformPackage, spawnDetached, stderrKept } from './shared.ts'
+import {
+	address,
+	connecting,
+	exitedWith,
+	platformPackage,
+	spawnDetached,
+	stderrKept,
+} from './shared.ts'
 
 export const bunRuntime: Runtime = {
 	get client() {
@@ -37,18 +44,19 @@ async function connect(
 	endpoint: string,
 	events: TransportEvents,
 	tls?: TlsOptions,
+	signal?: AbortSignal,
 ): Promise<Transport> {
 	const at = address(endpoint)
 	switch (at.kind) {
 		case 'pipe':
-			return connectPipe(at.path, events)
+			return connectPipe(at.path, events, signal)
 		case 'unix': {
 			const path = at.path
-			return connectSocket(socket => Bun.connect({ unix: path, socket }), events)
+			return connectSocket(socket => Bun.connect({ unix: path, socket }), events, signal)
 		}
 		case 'tcp': {
 			const { host, port } = at
-			return connectSocket(socket => Bun.connect({ hostname: host, port, socket }), events)
+			return connectSocket(socket => Bun.connect({ hostname: host, port, socket }), events, signal)
 		}
 		case 'tls': {
 			const { host, port } = at
@@ -59,6 +67,7 @@ async function connect(
 			return connectSocket(
 				socket => Bun.connect({ hostname: host, port, tls: verify, socket }),
 				events,
+				signal,
 			)
 		}
 	}
@@ -76,11 +85,14 @@ interface Handlers {
 
 /**
  * A socket's write may take part of the bytes: the rest waits for its drain,
- * in order, so the session hands a whole frame over and forgets it.
+ * in order, so the session hands a whole frame over and forgets it. Bun's
+ * connect takes no signal: one that aborts first rejects at once, and the
+ * socket connected after is ended.
  */
 async function connectSocket(
 	dial: (handlers: Handlers) => Promise<Socket>,
 	events: TransportEvents,
+	signal?: AbortSignal,
 ): Promise<Transport> {
 	const waiting: Uint8Array[] = []
 	let ended = false
@@ -103,13 +115,14 @@ async function connectSocket(
 			return
 		}
 	}
-	socket = await dial({
+	const dialled = dial({
 		data: (_, data) => events.data(data),
 		drain: () => pump(),
 		end: () => end(new ClosedError('the server ended the connection')),
 		close: (_, err) => end(err ?? new ClosedError('the connection closed')),
 		error: (_, err) => end(err),
 	})
+	socket = await connecting(dialled, signal, late => late.end())
 	return {
 		write: bytes => {
 			waiting.push(bytes)
@@ -121,7 +134,11 @@ async function connectSocket(
 	}
 }
 
-function connectPipe(path: string, events: TransportEvents): Promise<Transport> {
+function connectPipe(
+	path: string,
+	events: TransportEvents,
+	signal?: AbortSignal,
+): Promise<Transport> {
 	return new Promise((resolve, reject) => {
 		const socket = net.createConnection(path)
 		let connected = false
@@ -132,12 +149,29 @@ function connectPipe(path: string, events: TransportEvents): Promise<Transport> 
 				events.end(err)
 			}
 		}
+		const abort = () => {
+			reject(signal?.reason)
+			socket.destroy()
+		}
+		if (signal?.aborted) {
+			abort()
+			return
+		}
+		signal?.addEventListener('abort', abort, { once: true })
 		socket.once('connect', () => {
 			connected = true
+			signal?.removeEventListener('abort', abort)
 			resolve({ write: bytes => socket.write(bytes), close: () => socket.end() })
 		})
 		socket.on('data', (data: Uint8Array) => events.data(data))
-		socket.on('error', err => (connected ? end(err) : reject(err)))
+		socket.on('error', err => {
+			if (connected) {
+				end(err)
+				return
+			}
+			signal?.removeEventListener('abort', abort)
+			reject(err)
+		})
 		socket.on('close', () => end(new ClosedError('the pipe closed')))
 	})
 }

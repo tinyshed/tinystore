@@ -5,8 +5,10 @@ package core_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/scripted"
@@ -48,5 +50,38 @@ func TestAWriteWhoseHandlesOpenLostTheConnectionGoesAgainOnTheNextSinceItNeverLe
 	defer mu.Unlock()
 	if dialled != 2 || sets != 1 {
 		t.Fatalf("%d connections dialled and %d writes made, not 2 and 1", dialled, sets)
+	}
+}
+
+// contract: WIRE-11
+func TestALinkClosedWhileItDialsStopsTheDialAndItsWaitersFailClosed(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan error, 1)
+	link := core.NewLink(func(ctx context.Context) (*core.Connection, error) {
+		close(started)
+		<-ctx.Done()
+		stopped <- ctx.Err()
+		return nil, ctx.Err()
+	})
+	waited := make(chan error, 1)
+	go func() {
+		_, err := link.Connection(context.Background())
+		waited <- err
+	}()
+	<-started
+	closed := make(chan struct{})
+	go func() {
+		link.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for a dial it should have stopped")
+	}
+	if err := <-stopped; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the dial ended with %v, not its cancel", err)
+	}
+	if err := <-waited; !errors.Is(err, core.ErrClosed) || err.Error() != "the store is closed" {
+		t.Fatalf("the call waiting got %v, want a closed error", err)
 	}
 }

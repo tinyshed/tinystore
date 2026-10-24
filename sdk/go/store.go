@@ -3,6 +3,7 @@ package tinystore
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -122,7 +123,9 @@ func MaxSeries(count int) Option {
 
 // Open opens the store in a directory, and returns once it answers: through
 // the directory's sidecar, found through its SERVE file or started, unless
-// Private or Embedded says otherwise. A directory that cannot be served fails here.
+// Private or Embedded says otherwise. A directory that cannot be served fails
+// here. Open returns at ctx's end, its error wrapping ctx.Err() and saying
+// what it waited for, and what it started for the store is let go.
 func Open(ctx context.Context, directory string, opts ...Option) (*Store, error) {
 	var o options
 	for _, opt := range opts {
@@ -168,7 +171,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.durability != "" {
 		dial = asking(dial, directory, o.durability)
 	}
-	return reach(ctx, core.NewLink(dial))
+	return reach(ctx, core.NewLink(dial), "open "+directory)
 }
 
 // asking dials as dial does, and refuses a store whose files commit another
@@ -205,20 +208,29 @@ func TLS(config *tls.Config) ConnectOption { return func(o *connectOptions) { o.
 
 // Connect connects to a remote server with a token. tls:// checks the
 // server's certificate before the token leaves; tcp:// sends the token in the
-// clear, for a network its operator trusts.
+// clear, for a network its operator trusts. Connect returns at ctx's end, as
+// Open does.
 func Connect(ctx context.Context, url, token string, opts ...ConnectOption) (*Store, error) {
 	var o connectOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
 	return reach(ctx, core.NewLink(func(ctx context.Context) (*core.Connection, error) {
+		core.Waiting(ctx, "the server has not answered")
 		return core.Dial(ctx, url, token, nil, o.tls)
-	}))
+	}), "connect "+url)
 }
 
-func reach(ctx context.Context, link *core.Link) (*Store, error) {
+// reach waits for the link's first connection. A caller who gives up, or a
+// dial that fails, closes the link, which stops the dial and closes what it
+// made; the caller's own cancel says what the dial waited for.
+func reach(ctx context.Context, link *core.Link, of string) (*Store, error) {
 	if _, err := link.Connection(ctx); err != nil {
+		waiting := link.Waiting()
 		link.Close()
+		if given := ctx.Err(); given != nil && errors.Is(err, given) {
+			return nil, core.Wrap(core.Cancelled, err, "%s: cancelled while %s", of, waiting)
+		}
 		return nil, err
 	}
 	s := &Store{core: core.NewStore(link)}

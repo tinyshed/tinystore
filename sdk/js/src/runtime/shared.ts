@@ -58,6 +58,47 @@ export function turning(send: (bytes: Uint8Array) => void): (bytes: Uint8Array) 
 	return write
 }
 
+/**
+ * What a connect gives once it has connected, unless the signal aborts
+ * first: the caller is then rejected with the signal's reason, and what
+ * connects after is let go, since nobody waits for it.
+ */
+export function connecting<T>(
+	made: Promise<T>,
+	signal: AbortSignal | undefined,
+	letGo: (late: T) => void,
+): Promise<T> {
+	if (signal === undefined) {
+		return made
+	}
+	return new Promise<T>((resolve, reject) => {
+		let aborted = false
+		const abort = () => {
+			aborted = true
+			reject(signal.reason)
+		}
+		if (signal.aborted) {
+			abort()
+		} else {
+			signal.addEventListener('abort', abort, { once: true })
+		}
+		made.then(
+			value => {
+				signal.removeEventListener('abort', abort)
+				if (aborted) {
+					letGo(value)
+				} else {
+					resolve(value)
+				}
+			},
+			(err: unknown) => {
+				signal.removeEventListener('abort', abort)
+				reject(err)
+			},
+		)
+	})
+}
+
 /** Where an endpoint named in SERVE, or given to connect, is. */
 export type Address =
 	| { kind: 'unix'; path: string }

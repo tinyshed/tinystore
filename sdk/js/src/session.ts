@@ -6,7 +6,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
-import { currentSignal } from './cancel.ts'
+import { checkSignal, currentSignal, unlessCancelled } from './cancel.ts'
 import {
 	CancelledError,
 	ClosedError,
@@ -356,19 +356,20 @@ export class Session {
 	/**
 	 * Opens a stream with its REQUEST. End says the REQUEST is the client's
 	 * whole side; an upload's DATA follows through the stream otherwise. It
-	 * waits while the streams in flight are all in use.
+	 * waits for the WELCOME, and while the streams in flight are all in use,
+	 * each wait until the caller's signal aborts.
 	 */
 	async open(method: number, body: Uint8Array, end: boolean): Promise<Stream> {
 		const signal = currentSignal()
-		signal?.throwIfAborted()
-		const agreed = await this.welcomed
+		checkSignal(signal)
+		const agreed = await unlessCancelled(this.welcomed, signal)
 		if (body.length > agreed.maxBody) {
 			throw new LimitError(
 				`a request of ${body.length} bytes, past the ${agreed.maxBody} a body holds`,
 			)
 		}
 		while (this.#streams.size >= agreed.inFlight && this.#usable() === undefined) {
-			await new Promise<void>((resolve, reject) => this.#waitingToOpen.push({ resolve, reject }))
+			await this.#streamFreed(signal)
 		}
 		const refused = this.#usable()
 		if (refused !== undefined) {
@@ -386,6 +387,38 @@ export class Session {
 			stream.watchSignal(signal)
 		}
 		return stream
+	}
+
+	/**
+	 * Waits for a stream to free; a caller whose signal aborts gives up its
+	 * place in the line, which the next caller then has.
+	 */
+	#streamFreed(signal: AbortSignal | undefined): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			const abort = () => {
+				const at = this.#waitingToOpen.indexOf(waiter)
+				if (at >= 0) {
+					this.#waitingToOpen.splice(at, 1)
+				}
+				reject(new CancelledError('the call was cancelled'))
+			}
+			const waiter: Waiter<void> = {
+				resolve: () => {
+					signal?.removeEventListener('abort', abort)
+					resolve()
+				},
+				reject: err => {
+					signal?.removeEventListener('abort', abort)
+					reject(err)
+				},
+			}
+			this.#waitingToOpen.push(waiter)
+			if (signal?.aborted) {
+				abort()
+				return
+			}
+			signal?.addEventListener('abort', abort, { once: true })
+		})
 	}
 
 	/** Why no stream may open now: the connection ended or is going away. */
@@ -452,7 +485,7 @@ export class Session {
 
 	/** A call: one REQUEST, and the RESPONSE that answers it. */
 	async call(method: number, body: Uint8Array, signal?: AbortSignal): Promise<Uint8Array> {
-		signal?.throwIfAborted()
+		checkSignal(signal)
 		const stream = await this.open(method, body, true)
 		const unwatch = watch(signal, stream)
 		try {

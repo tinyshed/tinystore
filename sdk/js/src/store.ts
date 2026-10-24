@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 
 import { type Backup, type BackupOptions, backup } from './backup.ts'
 import { type Files, type FilesOptions, openFiles } from './blobs.ts'
+import { currentSignal } from './cancel.ts'
 import { Channel } from './channels.ts'
 import { Clock } from './clock.ts'
 import { Config, type ConfigOptions, type Layer, type Value } from './config.ts'
@@ -542,7 +543,11 @@ const runtime: Runtime = typeof Bun === 'undefined' ? nodeRuntime : bunRuntime
 /**
  * Opens the store in a directory through its sidecar, found through SERVE or
  * started, or through a private child when asked. It returns once the server
- * has answered, so that a directory that cannot be served fails here.
+ * has answered, so that a directory that cannot be served fails here. Under
+ * withSignal it stops waiting once the signal aborts, CancelledError saying
+ * what it waited for, and keeps no connection:
+ *
+ *     const store = await withSignal(AbortSignal.timeout(2000), () => open('./data'))
  */
 export async function open(dir: string, options: OpenOptions = {}): Promise<Store> {
 	return openWith(runtime, dir, options)
@@ -579,19 +584,34 @@ export async function openWith(
 				? privateChild(runtime, dir, binary, clock, started)
 				: sidecar(runtime, dir, binary, { idle, ...started })
 	const link = new Link(asking(dial, dir, durability))
-	await link.connection()
+	await reached(link, `open ${dir}`)
 	return new Store(link)
 }
 
 /**
  * Connects to a remote server: tls:// checks the server's certificate before
  * the token leaves; tcp:// sends the token in the clear, for a network its
- * operator trusts.
+ * operator trusts. Under withSignal it stops waiting once the signal aborts,
+ * as open does.
  */
 export async function connect(url: string, options: ConnectOptions): Promise<Store> {
 	const link = new Link(remote(runtime, url, options.token, options.tls))
-	await link.connection()
+	await reached(link, `connect ${url}`)
 	return new Store(link)
+}
+
+/**
+ * Waits for the link's first connection under the caller's signal. A caller
+ * who gives up, or a dial that fails, closes the link, which stops the dial
+ * and closes what it made.
+ */
+async function reached(link: Link, of: string): Promise<void> {
+	try {
+		await link.connection(currentSignal(), of)
+	} catch (err) {
+		await link.close()
+		throw err
+	}
 }
 
 // two letters or more before a colon: an address, never a Windows drive

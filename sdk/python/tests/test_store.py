@@ -1,8 +1,15 @@
-"""A store opened each way: what its server says it is, the test's clock, and what open refuses."""
+"""A store opened each way: what its server says it is, the test's clock, what open refuses, and an open given up on."""
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import gc
+import json
+import secrets
+import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -10,7 +17,8 @@ import pytest
 
 import tinystore
 from tinystore._connection import start_failure
-from ways import CORE, SERVED, WAYS
+from tinystore._session import PROTOCOL
+from ways import BINARY, CORE, SERVED, WAYS
 
 LOCAL = [way for way in WAYS if way.name != "a remote server over TCP" and way.ready]
 """The ways a store opens from its directory: every one but a remote server's."""
@@ -136,3 +144,141 @@ async def test_a_disk_that_refuses_an_embedded_store_is_the_wires_internal_error
     with pytest.raises(tinystore.InternalError) as refused:
         await tinystore.open(too_long, embedded=True)
     assert str(refused.value).startswith(f"cannot open {too_long}: store "), str(refused.value)
+
+
+async def _held_after_its_sidecar(directory: Path) -> tuple[tinystore.Store, tinystore.Store]:
+    """A store whose sidecar was stopped and whose directory a private child holds: its next call dials, and waits."""
+    store = await tinystore.open(directory, idle="1s")
+    await store.bucket("notes", str).set("a", "kept")
+    assert BINARY is not None
+    stopped = subprocess.run([BINARY, "stop", str(directory)], capture_output=True, text=True, check=False)
+    assert stopped.returncode == 0, stopped.stderr
+    # the stopped sidecar lets go of the directory a moment after its SERVE goes
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            return store, await tinystore.open(directory, private=True)
+        except tinystore.TinystoreError:
+            if time.monotonic() > deadline:
+                raise
+            await asyncio.sleep(0.05)
+
+
+# contract: WIRE-11
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_an_open_cancelled_while_another_holds_the_directory_stops_at_once(directory: Path) -> None:
+    holder = await tinystore.open(directory, private=True)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError) as failed:
+        async with asyncio.timeout(1):
+            await tinystore.open(directory, idle="1s")
+    assert time.monotonic() - started < 1.5
+    cancelled = failed.value.__cause__
+    assert isinstance(cancelled, asyncio.CancelledError)
+    said = f"open {directory}: cancelled while another process holds the directory and no sidecar answers"
+    assert said in getattr(cancelled, "__notes__", []), cancelled
+    # every sidecar the open started found the directory held and left; none starts once it is free
+    await asyncio.sleep(1)
+    await holder.close()
+    await asyncio.sleep(1.5)
+    assert not (directory / "server" / "SERVE").exists()
+
+
+async def _silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """A server that takes a connection and never answers it."""
+    await reader.read()
+    writer.close()
+
+
+# contract: WIRE-11
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_an_open_cancelled_while_the_server_serve_names_says_nothing_starts_no_sidecar_after(
+    directory: Path,
+) -> None:
+    server = await asyncio.start_server(_silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    (directory / "server").mkdir()
+    serve = directory / "server" / "SERVE"
+    secret = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    published = json.dumps(
+        {
+            "protocol": PROTOCOL,
+            "endpoints": [f"tcp://127.0.0.1:{port}"],
+            "secret": secret,
+            "sidecar": True,
+            "instance": "silent",
+        }
+    )
+    serve.write_text(published)
+    with pytest.raises(TimeoutError) as failed:
+        async with asyncio.timeout(0.5):
+            await tinystore.open(directory, idle="1s")
+    said = f"open {directory}: cancelled while the sidecar starts"
+    assert said in getattr(failed.value.__cause__, "__notes__", []), failed.value.__cause__
+    # a sidecar started after the cancel opens its log and publishes itself well within this
+    await asyncio.sleep(1.5)
+    started = (directory / "server" / "serve.log").exists()
+    if started:
+        assert BINARY is not None
+        subprocess.run([BINARY, "stop", str(directory)], capture_output=True, check=False)
+    assert not started
+    assert serve.read_text() == published
+    server.close()
+    await server.wait_closed()
+
+
+# contract: WIRE-11
+async def test_a_connect_cancelled_in_its_handshake_leaves_the_loop_nothing_to_log() -> None:
+    loop = asyncio.get_running_loop()
+    logged: list[dict[str, object]] = []
+    loop.set_exception_handler(lambda _, context: logged.append(context))
+    server = await asyncio.start_server(_silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.5):
+                await tinystore.connect(f"tcp://127.0.0.1:{port}", token="unused")
+        await asyncio.sleep(0.1)
+        gc.collect()
+        assert logged == []
+    finally:
+        loop.set_exception_handler(None)
+        server.close()
+        await server.wait_closed()
+
+
+# contract: WIRE-11
+async def test_a_connect_cancelled_while_its_server_says_nothing_lets_the_socket_go() -> None:
+    ended = asyncio.Event()
+
+    async def silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        ended.set()
+        writer.close()
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.5):
+            await tinystore.connect(f"tcp://127.0.0.1:{port}", token="unused")
+    await asyncio.wait_for(ended.wait(), 1)
+    assert time.monotonic() - started < 1.5
+    server.close()
+    await server.wait_closed()
+
+
+# contract: WIRE-11
+@pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_a_store_closed_while_it_dials_returns_at_once_and_its_waiting_call_fails_closed(
+    directory: Path,
+) -> None:
+    store, holder = await _held_after_its_sidecar(directory)
+    waiting = asyncio.ensure_future(store.bucket("notes", str).get("a"))
+    await asyncio.sleep(0.3)
+    started = time.monotonic()
+    await store.close()
+    assert time.monotonic() - started < 1
+    with pytest.raises(tinystore.ClosedError, match="the store is closed"):
+        await waiting
+    await holder.close()

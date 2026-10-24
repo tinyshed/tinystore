@@ -39,20 +39,22 @@ function connect(
 	endpoint: string,
 	events: TransportEvents,
 	options?: TlsOptions,
+	signal?: AbortSignal,
 ): Promise<Transport> {
 	const at = address(endpoint)
 	switch (at.kind) {
 		case 'pipe':
 		case 'unix':
-			return connected(net.createConnection(at.path), 'connect', events)
+			return connected(net.createConnection(at.path), 'connect', events, signal)
 		case 'tcp':
 			return connected(
 				net.createConnection({ host: at.host, port: at.port, noDelay: true }),
 				'connect',
 				events,
+				signal,
 			)
 		case 'tls':
-			return connected(connectTLS(at.host, at.port, options), 'secureConnect', events)
+			return connected(connectTLS(at.host, at.port, options), 'secureConnect', events, signal)
 	}
 }
 
@@ -78,12 +80,13 @@ function connectTLS(host: string, port: number, options?: TlsOptions): tls.TLSSo
 /**
  * A transport once the socket is ready: a socket's write queues what the
  * kernel does not take yet, in order, so the session hands a whole frame over
- * and forgets it.
+ * and forgets it. A signal that aborts before then destroys the socket.
  */
 function connected(
 	socket: net.Socket,
 	ready: 'connect' | 'secureConnect',
 	events: TransportEvents,
+	signal?: AbortSignal,
 ): Promise<Transport> {
 	return new Promise((resolve, reject) => {
 		let open = false
@@ -94,12 +97,29 @@ function connected(
 				events.end(err)
 			}
 		}
+		const abort = () => {
+			reject(signal?.reason)
+			socket.destroy()
+		}
+		if (signal?.aborted) {
+			abort()
+			return
+		}
+		signal?.addEventListener('abort', abort, { once: true })
 		socket.once(ready, () => {
 			open = true
+			signal?.removeEventListener('abort', abort)
 			resolve({ write: bytes => void socket.write(bytes), close: () => void socket.end() })
 		})
 		socket.on('data', (data: Uint8Array) => events.data(data))
-		socket.on('error', err => (open ? end(err) : reject(err)))
+		socket.on('error', err => {
+			if (open) {
+				end(err)
+				return
+			}
+			signal?.removeEventListener('abort', abort)
+			reject(err)
+		})
 		socket.on('end', () => end(new ClosedError('the server ended the connection')))
 		socket.on('close', () => end(new ClosedError('the connection closed')))
 	})

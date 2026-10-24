@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import json
 import re
 import secrets
@@ -49,6 +50,16 @@ HELD_PAUSE = 0.1
 FOLLOWER_WAIT = 2.0
 """How long a store's close waits for the server's end of a stream it cancelled."""
 
+_WAITING: contextvars.ContextVar[Callable[[str], None]] = contextvars.ContextVar("tinystore dial waiting")
+"""Where the dial under way says what it waits for: its link's, set in the dial's own context."""
+
+
+def waiting(what: str) -> None:
+    """Says what the dial under way waits for, which a caller who gives up on it is told."""
+    said = _WAITING.get(None)
+    if said is not None:
+        said(what)
+
 
 class Connection:
     def __init__(
@@ -64,11 +75,22 @@ class Connection:
         """the handles this connection opened, by their open's method and body"""
 
     async def handshake(self) -> None:
+        """Waits for the WELCOME, the handshake's time at most, and ends the session if it does not come.
+
+        It waits on the WELCOME rather than shielding it: a dial cancelled
+        here ends the session itself, and Python 3.14 logs the error of a
+        shielded future whose waiter was cancelled.
+        """
+        welcomed = self.session.welcomed
         try:
-            await asyncio.wait_for(asyncio.shield(self.session.welcomed), HANDSHAKE_TIME)
-        except BaseException:
+            if not welcomed.done():
+                await asyncio.wait((welcomed,), timeout=HANDSHAKE_TIME)
+            if not welcomed.done():
+                raise ClosedError(f"no WELCOME within {HANDSHAKE_TIME:.0f} s")
+            welcomed.result()
+        except BaseException as err:
             self._transport.close()
-            self.session.end(ClosedError(f"no WELCOME within {HANDSHAKE_TIME:.0f} s"))
+            self.session.end(err if isinstance(err, Exception) else ClosedError("the handshake was cancelled"))
             raise
         self.session.on_end(lambda _: self._transport.close())
 
@@ -200,6 +222,7 @@ def in_process(
     )
 
     async def start() -> Connection:
+        waiting("the store opens")
         holder: list[Session] = []
         transport, closing = await open_pipe(
             library,
@@ -243,6 +266,7 @@ def sidecar(
 
     async def reach() -> Connection:
         nonlocal told
+        waiting("the sidecar starts")
         found = await _reach_serve(serve)
         stopped_instance: str | None = None
         if found is not None:
@@ -297,6 +321,7 @@ async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_ins
             if code == 3:
                 held = True
                 if again is None:
+                    waiting("another process holds the directory and no sidecar answers")
                     again = loop.time() + pause
                 if loop.time() >= again:
                     break
@@ -443,6 +468,7 @@ def private_child(
     clocked = [] if clock is None else ["--clock", clock.astimezone(UTC).isoformat().replace("+00:00", "Z")]
 
     async def start() -> Connection:
+        waiting("the private server starts")
         holder: list[Session] = []
         child = await _runtime.spawn_private(
             [binary(), "serve", "--dir", absolute, "--stdio", *clocked, *_store_flags(started)],
@@ -471,6 +497,8 @@ def private_child(
             # a child that already exited has nothing to kill
             with contextlib.suppress(ProcessLookupError):
                 child.process.kill()
+            if isinstance(err, asyncio.CancelledError):
+                raise
             said, tail = str(err), child.tail()
             # the error of a child that exited carries its stderr already
             if tail and tail not in said:
@@ -483,7 +511,12 @@ def private_child(
 
 def remote(url: str, token: str, tls: ssl.SSLContext | None) -> Callable[[], Awaitable[Connection]]:
     """A remote server: tls:// checks its certificate before the token leaves; tcp:// does not."""
-    return lambda: dial(url, token=token, tls=tls)
+
+    async def reach() -> Connection:
+        waiting("the server has not answered")
+        return await dial(url, token=token, tls=tls)
+
+    return reach
 
 
 Idempotence = Literal["read", "write"]
@@ -502,6 +535,8 @@ class Link:
         self._current: asyncio.Future[Connection] | None = None
         self._followers: set[Stream] = set()
         self._closed = False
+        self.waiting = "the store has not answered"
+        """what the dial under way waits for, which a caller who gives up on it is told"""
 
     @property
     def closed(self) -> bool:
@@ -514,7 +549,7 @@ class Link:
         current = self._current
         if current is not None:
             try:
-                found = await asyncio.shield(current)
+                found = await self._dialled(current)
                 if found.session.ended is None and not found.session.going_away:
                     return found
             except Exception:
@@ -522,16 +557,42 @@ class Link:
             if self._current is not current:
                 return await self.connection()
         # one dial at a time: every caller that found the same dead connection
-        # waits for the one new one
-        dialled = asyncio.ensure_future(self._dialer())
+        # waits for the one new one, which runs in a context of its own where
+        # it says what it waits for
+        context = contextvars.copy_context()
+        context.run(_WAITING.set, self._said)
+        self.waiting = "the store has not answered"
+        dialled = asyncio.get_running_loop().create_task(self._dial(), context=context)
         self._current = dialled
         dialled.add_done_callback(self._forget_failed)
-        return await asyncio.shield(dialled)
+        return await self._dialled(dialled)
+
+    async def _dial(self) -> Connection:
+        return await self._dialer()
+
+    def _said(self, what: str) -> None:
+        self.waiting = what
+
+    async def _dialled(self, dialled: asyncio.Future[Connection]) -> Connection:
+        """The dial's connection, which a caller who is cancelled stops waiting for.
+
+        A dial is the link's, never a caller's: only close cancels it, and
+        every caller still waiting then sees the close. It waits on the dial
+        rather than shielding it, since Python 3.14 logs the error of a
+        shielded dial whose caller gave up.
+        """
+        if not dialled.done():
+            await asyncio.wait((dialled,))
+        if dialled.cancelled():
+            raise ClosedError("the store is closed")
+        return dialled.result()
 
     def _forget_failed(self, dialled: asyncio.Future[Connection]) -> None:
         # Only a dial that failed is forgotten, so that the next call dials
-        # again. One whose caller was cancelled goes on, and its connection is
-        # the next call's and close's: forgotten, nothing would close it.
+        # again. A call whose task was cancelled stops waiting, and the dial
+        # goes on for the next call to take: forgotten, nothing would close
+        # its connection. Open and connect close the link instead, which
+        # cancels the dial and closes what it made.
         if (dialled.cancelled() or dialled.exception() is not None) and self._current is dialled:
             self._current = None
 
@@ -565,9 +626,16 @@ class Link:
 
         Each stream that follows the store is cancelled first, and its end
         waited for, a moment at most: one the server still ran would keep a
-        private child, or a sidecar's connection, draining for ten seconds.
+        private child, or a sidecar's connection, draining for ten seconds. A
+        dial under way is cancelled, and every call waiting on it fails
+        ClosedError.
         """
         self._closed = True
+        current, self._current = self._current, None
+        if current is not None:
+            # a dial under way stops at its next wait; one done keeps its
+            # connection, which closes last
+            current.cancel()
         followers, self._followers = self._followers, set()
         for stream in followers:
             stream.cancel(ClosedError("the store is closed"))
@@ -576,13 +644,10 @@ class Link:
             _, late = await asyncio.wait(ending, timeout=FOLLOWER_WAIT)
             for each in late:
                 each.cancel()
-        current, self._current = self._current, None
         if current is not None:
-            try:
-                connection = await current
-            except Exception:
-                return
-            await connection.close()
+            (dialled,) = await asyncio.gather(current, return_exceptions=True)
+            if isinstance(dialled, Connection):
+                await dialled.close()
 
 
 def goes_again(err: BaseException, idempotence: Idempotence) -> bool:

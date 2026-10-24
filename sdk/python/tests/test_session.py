@@ -243,6 +243,30 @@ async def test_a_call_cancelled_while_a_dial_runs_leaves_the_dial_to_the_next_ca
     assert connection.session.ended is not None
 
 
+# contract: WIRE-11
+async def test_a_link_closed_while_it_dials_stops_the_dial_and_every_call_waiting_fails_closed() -> None:
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def endless() -> Connection:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            stopped.set()
+            raise
+        raise AssertionError("a dial nothing ends ended")
+
+    link = Link(endless)
+    waiting = [asyncio.ensure_future(link.connection()) for _ in range(2)]
+    await started.wait()
+    await asyncio.wait_for(link.close(), 1)
+    assert stopped.is_set()
+    for each in waiting:
+        with pytest.raises(ClosedError, match="the store is closed"):
+            await each
+
+
 async def test_a_subscription_stopped_while_it_subscribes_again_cancels_the_stream_it_then_gets() -> None:
     peers = [Peer(), Peer()]
     dials = iter(peers)

@@ -86,6 +86,7 @@ func InProcess(directory, library string, started Started) func(context.Context)
 		if err != nil {
 			return nil, err
 		}
+		Waiting(ctx, "the store opens")
 		conn, err := lib.open([]byte(absolute), encoded)
 		if err != nil {
 			return nil, err

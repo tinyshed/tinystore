@@ -223,6 +223,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **WIRE-08** Every codec and every SDK MUST read the protocol's vectors as the same messages.
 - **WIRE-09** A private child MUST leave when its stdin ends; a sidecar MUST leave once idle with its `SERVE` and lock.
 - **WIRE-10** A read whose client cancels its stream or leaves MUST stop on the server as a cancelled read does, its stream ending `cancelled`.
+- **WIRE-11** An `open` or `connect` whose caller cancelled it, or whose timeout passed, MUST fail at once with that caller's own cancel, start no further server and keep no connection, so that a sidecar it started leaves once idle with no client, never sooner than the 15 seconds a client may wait for it; a store closed while it dials MUST fail its waiting calls `closed`.
 
 ## 7. Security
 

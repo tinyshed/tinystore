@@ -8,8 +8,9 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import manifest from '../package.json' with { type: 'json' }
-import { currentSignal } from './cancel.ts'
+import { checkSignal, currentSignal, unlessCancelled, withoutSignal } from './cancel.ts'
 import {
+	CancelledError,
 	ClosedError,
 	InvalidError,
 	OutcomeUnknownError,
@@ -66,8 +67,8 @@ export function asking(dial: Dialer, dir: string, durability: Durability | undef
 	if (durability === undefined) {
 		return dial
 	}
-	return async () => {
-		const connection = await dial()
+	return async dialling => {
+		const connection = await dial(dialling)
 		const opened = (await connection.session.welcomed).durability
 		if (opened !== durability) {
 			await connection.close()
@@ -107,8 +108,21 @@ export class Connection {
 		this.#closing = closing
 	}
 
-	/** Connects, shakes hands, and gives up after the handshake's time. */
-	static async dial(runtime: Runtime, endpoint: string, options: SessionOptions, tls?: TlsOptions) {
+	/**
+	 * Connects, shakes hands, and gives up after the handshake's time, or once
+	 * the signal aborts: before the socket connects, its connect is let go, and
+	 * after, the socket.
+	 */
+	static async dial(
+		runtime: Runtime,
+		endpoint: string,
+		options: SessionOptions,
+		tls?: TlsOptions,
+		signal?: AbortSignal,
+	) {
+		if (signal?.aborted) {
+			throw signal.reason
+		}
 		let session: Session | undefined
 		const early: Uint8Array[] = []
 		const transport = await runtime
@@ -120,10 +134,11 @@ export class Connection {
 					end: err => session?.end(err),
 				},
 				tls,
+				signal,
 			)
 			.catch((err: unknown) => {
 				// a socket that refuses fails as the platform says it; a caller sees one kind
-				if (err instanceof TinystoreError) {
+				if (err instanceof TinystoreError || signal?.aborted) {
 					throw err
 				}
 				throw new ClosedError(`cannot reach ${endpoint}: ${(err as Error).message}`)
@@ -133,14 +148,18 @@ export class Connection {
 			session.receive(bytes)
 		}
 		const connection = new Connection(session, transport)
-		await connection.#handshake()
+		await connection.#handshake(signal)
 		return connection
 	}
 
 	/** Shakes hands over a pipe to the core in this process. */
-	static async overPipe(session: Session, transport: Transport): Promise<Connection> {
+	static async overPipe(
+		session: Session,
+		transport: Transport,
+		signal?: AbortSignal,
+	): Promise<Connection> {
 		const connection = new Connection(session, transport)
-		await connection.#handshake()
+		await connection.#handshake(signal)
 		return connection
 	}
 
@@ -149,17 +168,27 @@ export class Connection {
 	 * the child's exit, since until then it holds the directory: its LOCK, and
 	 * on Windows every file it opened, which a removal fails on.
 	 */
-	static async overChild(child: PrivateChild, session: Session): Promise<Connection> {
+	static async overChild(
+		child: PrivateChild,
+		session: Session,
+		signal?: AbortSignal,
+	): Promise<Connection> {
 		const connection = new Connection(session, child.transport, () => child.exited)
-		await connection.#handshake()
+		await connection.#handshake(signal)
 		return connection
 	}
 
-	async #handshake(): Promise<void> {
+	// a signal that aborts ends the session with its reason, as the time does
+	async #handshake(signal?: AbortSignal): Promise<void> {
 		const timer = setTimeout(
 			() => this.session.end(new ClosedError(`no WELCOME within ${handshakeTime / 1000} s`)),
 			handshakeTime,
 		)
+		const abort = () => this.session.end(signal?.reason as Error)
+		if (signal?.aborted) {
+			abort()
+		}
+		signal?.addEventListener('abort', abort, { once: true })
 		try {
 			await this.session.welcomed
 		} catch (err) {
@@ -167,6 +196,7 @@ export class Connection {
 			throw err
 		} finally {
 			clearTimeout(timer)
+			signal?.removeEventListener('abort', abort)
 		}
 		this.session.onEnd(() => this.#transport.close())
 	}
@@ -179,8 +209,18 @@ export class Connection {
 	}
 }
 
+/**
+ * What a dial is given: a cancel of its own, which only its link's close
+ * aborts, never a caller's, and where it says what it waits for, which a
+ * caller who gives up on it is told.
+ */
+export interface Dialling {
+	readonly signal: AbortSignal
+	waiting(what: string): void
+}
+
 /** Where a link dials. */
-export type Dialer = () => Promise<Connection>
+export type Dialer = (dialling: Dialling) => Promise<Connection>
 
 /** SERVE, where a directory's sidecar says it listens. */
 interface Published {
@@ -220,15 +260,16 @@ export function sidecar(
 	const log = join(absolute, 'server', 'serve.log')
 	const idling = started.idle === undefined ? [] : ['--idle', `${started.idle}ms`]
 	let told = false
-	return async () => {
-		const found = await reachServe(runtime, serve)
+	return async dialling => {
+		dialling.waiting('the sidecar starts')
+		const found = await reachServe(runtime, serve, dialling.signal)
 		let stoppedInstance: string | undefined
 		if (found !== undefined) {
 			const server = (await found.connection.session.welcomed).server
 			if (!older(server)) {
 				return found.connection
 			}
-			if (found.sidecar && (await stopped(found.connection))) {
+			if (found.sidecar && (await stopped(found.connection, dialling.signal))) {
 				process.stderr.write(`${replacedSidecar(server, manifest.version, dir)}\n`)
 				stoppedInstance = found.instance
 			} else {
@@ -241,7 +282,7 @@ export function sidecar(
 		}
 		const flags = [...idling, ...storeFlags(started, absolute)]
 		const command = [binary(), 'serve', '--dir', absolute, '--local', '--log-file', log, ...flags]
-		return startSidecar(runtime, serve, log, command, stoppedInstance)
+		return startSidecar(runtime, serve, log, command, dialling, stoppedInstance)
 	}
 }
 
@@ -352,21 +393,27 @@ function nodeFlags(node: NodeOptions | undefined, config: string): string[] {
  * directory held, by a winner about to publish or by a sidecar still letting
  * go, and is started again after a pause; any other exit is an error. A
  * sidecar told to stop answers for a moment after it agreed, until SERVE
- * goes, so the one of the instance stopped is passed over.
+ * goes, so the one of the instance stopped is passed over. The dial's signal
+ * stops it at its next turn, before it starts another, and a sidecar already
+ * started is left to its idle time.
  */
 async function startSidecar(
 	runtime: Runtime,
 	serve: string,
 	log: string,
 	command: string[],
+	dialling: Dialling,
 	stoppedInstance?: string,
 ): Promise<Connection> {
 	const deadline = Date.now() + startTime
 	let held = false
 	for (let pause = heldPause; ; pause = Math.min(pause * 2, 1000)) {
+		// a probe of SERVE that the close cut short finds nothing, and says
+		// nothing of it: before the first start and between two, start none
+		dialling.signal.throwIfAborted()
 		const child = new Spawned(runtime, command, log)
 		try {
-			const reached = await child.served(serve, deadline, pause, stoppedInstance)
+			const reached = await child.served(serve, deadline, pause, stoppedInstance, dialling)
 			if (reached !== undefined) {
 				return reached
 			}
@@ -420,10 +467,15 @@ class Spawned {
 		deadline: number,
 		pause: number,
 		stoppedInstance: string | undefined,
+		dialling: Dialling,
 	): Promise<Connection | undefined> {
+		const signal = dialling.signal
 		let again: number | undefined
 		for (let wait = 5; Date.now() < deadline; wait = Math.min(wait * 2, 100)) {
-			const reached = await reachServe(this.#runtime, serve)
+			if (signal.aborted) {
+				throw signal.reason
+			}
+			const reached = await reachServe(this.#runtime, serve, signal)
 			if (reached !== undefined && reached.instance !== stoppedInstance) {
 				return reached.connection
 			}
@@ -439,12 +491,15 @@ class Spawned {
 				)
 			}
 			if (this.exited?.code === 3) {
-				again ??= Date.now() + pause
+				if (again === undefined) {
+					dialling.waiting('another process holds the directory and no sidecar answers')
+					again = Date.now() + pause
+				}
 				if (Date.now() >= again) {
 					return undefined
 				}
 			}
-			await sleep(wait)
+			await sleep(wait, signal)
 		}
 		return undefined
 	}
@@ -492,9 +547,9 @@ function sizeOf(path: string): number {
  * Asks a sidecar to stop as tinystore stop does, closing the connection once
  * it has answered; false when it refuses, and the connection stays open.
  */
-async function stopped(connection: Connection): Promise<boolean> {
+async function stopped(connection: Connection, signal: AbortSignal): Promise<boolean> {
 	try {
-		await connection.session.call(methods['server.stop'], Empty.encode({}))
+		await connection.session.call(methods['server.stop'], Empty.encode({}), signal)
 	} catch {
 		return false
 	}
@@ -573,6 +628,7 @@ function compareReleases(a: Release, b: Release): number {
 async function reachServe(
 	runtime: Runtime,
 	serve: string,
+	signal: AbortSignal,
 ): Promise<{ connection: Connection; sidecar: boolean; instance: string } | undefined> {
 	let published: Published
 	try {
@@ -590,19 +646,34 @@ async function reachServe(
 		return undefined
 	}
 	try {
-		const connection = await Connection.dial(runtime, endpoint, {
+		const asked = {
 			client: runtime.client,
 			secret: new Uint8Array(secret),
 			challenge: new Uint8Array(randomBytes(16)),
-		})
+		}
+		const connection = await Connection.dial(runtime, endpoint, asked, undefined, signal)
 		return { connection, sidecar: published.sidecar === true, instance: published.instance }
 	} catch {
 		return undefined
 	}
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms))
+/** A pause, which the signal ends early with its reason. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+	if (signal.aborted) {
+		return Promise.reject(signal.reason)
+	}
+	return new Promise((resolve, reject) => {
+		const abort = () => {
+			clearTimeout(timer)
+			reject(signal.reason)
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', abort)
+			resolve()
+		}, ms)
+		signal.addEventListener('abort', abort, { once: true })
+	})
 }
 
 /** A private child: tinystore serve --stdio, living and dying with this process. */
@@ -615,7 +686,8 @@ export function privateChild(
 ): Dialer {
 	// a test's clock starts where the first child's did, and a child started again starts it there
 	const clocked = clock === undefined ? [] : ['--clock', clock.toISOString()]
-	return async () => {
+	return async dialling => {
+		dialling.waiting('the private server starts')
 		let session: Session | undefined
 		const argv = [
 			binary(),
@@ -642,7 +714,7 @@ export function privateChild(
 			child.exited.finally(() => clearTimeout(killer))
 		})
 		try {
-			return await Connection.overChild(child, session)
+			return await Connection.overChild(child, session, dialling.signal)
 		} catch (err) {
 			child.kill()
 			throw new ClosedError(`the private server did not start: ${(err as Error).message}`)
@@ -685,7 +757,8 @@ export function embedded(
 		withoutSystem: selfMetricsOf(started.selfMetrics)?.system === false,
 		maxSeries: started.maxSeries,
 	})
-	return async () => {
+	return async dialling => {
+		dialling.waiting('the store opens')
 		let session: Session | undefined
 		const end = (err: Error) => session?.end(err)
 		const transport =
@@ -700,13 +773,16 @@ export function embedded(
 						end,
 					})
 		session = new Session(bytes => transport.write(bytes), { client: runtime.client })
-		return await Connection.overPipe(session, transport)
+		return await Connection.overPipe(session, transport, dialling.signal)
 	}
 }
 
 /** A remote server: tls:// checks its certificate before the token leaves; tcp:// does not. */
 export function remote(runtime: Runtime, url: string, token: string, tls?: TlsOptions): Dialer {
-	return () => Connection.dial(runtime, url, { client: runtime.client, token }, tls)
+	return dialling => {
+		dialling.waiting('the server has not answered')
+		return Connection.dial(runtime, url, { client: runtime.client, token }, tls, dialling.signal)
+	}
 }
 
 /** What a call may do when its connection is lost: go again, or say its outcome is unknown. */
@@ -723,14 +799,33 @@ export class Link {
 	readonly #followers = new Set<Stream>()
 	#current: Promise<Connection> | undefined
 	#dialled: Connection | undefined
+	/** the cancel of the dial under way, which only close aborts */
+	#dialling: AbortController | undefined
+	/** what the dial under way waits for, which a caller who gives up on it is told */
+	#waiting = 'the store has not answered'
 	#closed = false
 
 	constructor(dial: Dialer) {
 		this.#dial = dial
 	}
 
-	/** The connection a call goes on. */
-	connection(): Promise<Connection> {
+	/**
+	 * The connection a call goes on. A caller whose signal aborts stops
+	 * waiting at once, CancelledError naming what the dial waits for, and
+	 * the dial goes on for the others.
+	 */
+	connection(signal?: AbortSignal, of = 'a call'): Promise<Connection> {
+		if (this.#closed) {
+			return Promise.reject(new ClosedError('the store is closed'))
+		}
+		return unlessCancelled(
+			this.#connected(),
+			signal,
+			() => new CancelledError(`${of}: cancelled while ${this.#waiting}`),
+		)
+	}
+
+	#connected(): Promise<Connection> {
 		if (this.#closed) {
 			return Promise.reject(new ClosedError('the store is closed'))
 		}
@@ -759,9 +854,9 @@ export class Link {
 			return Promise.reject(new ClosedError('the store is closed'))
 		}
 		if (this.#current !== dead && this.#current !== undefined) {
-			return this.connection()
+			return this.#connected()
 		}
-		const dialled = this.#dial()
+		const dialled = this.#dialAnew()
 		this.#current = dialled
 		this.#dialled = undefined
 		dialled.then(
@@ -780,6 +875,45 @@ export class Link {
 	}
 
 	/**
+	 * A dial of the link's own, under a cancel that only close aborts: once
+	 * it has, the dial fails with the close's ClosedError whatever it was
+	 * doing, and a connection it made after is closed, since nobody takes it.
+	 */
+	#dialAnew(): Promise<Connection> {
+		const controller = new AbortController()
+		this.#dialling = controller
+		this.#waiting = 'the store has not answered'
+		const dialling: Dialling = {
+			signal: controller.signal,
+			waiting: what => {
+				if (this.#dialling === controller) {
+					this.#waiting = what
+				}
+			},
+		}
+		const settled = () => {
+			if (this.#dialling === controller) {
+				this.#dialling = undefined
+			}
+		}
+		// no caller's withSignal reaches a dial that all of them share
+		return withoutSignal(() => this.#dial(dialling)).then(
+			async connection => {
+				settled()
+				if (!controller.signal.aborted) {
+					return connection
+				}
+				await connection.close()
+				throw controller.signal.reason
+			},
+			(err: unknown) => {
+				settled()
+				throw controller.signal.aborted ? controller.signal.reason : err
+			},
+		)
+	}
+
+	/**
 	 * Runs a call on the link's connection. build makes its REQUEST's body for
 	 * that connection, whose handles it may open; run sends it.
 	 */
@@ -788,9 +922,10 @@ export class Link {
 		attempt: (connection: Connection) => Promise<T>,
 		signal?: AbortSignal,
 	): Promise<T> {
+		const given = signal ?? currentSignal()
 		for (let tries = 0; ; tries++) {
-			;(signal ?? currentSignal())?.throwIfAborted()
-			const connection = await this.connection()
+			checkSignal(given)
+			const connection = await this.connection(given)
 			try {
 				return await attempt(connection)
 			} catch (err) {
@@ -821,10 +956,12 @@ export class Link {
 	 * Closes the connection and every one to come. Each stream that follows
 	 * the store is cancelled first, and its end waited for, a moment at most:
 	 * one the server still ran would keep a private child, or a sidecar's
-	 * connection, draining for ten seconds.
+	 * connection, draining for ten seconds. A dial under way stops at its next
+	 * wait, and every call waiting on it fails ClosedError.
 	 */
 	async close(): Promise<void> {
 		this.#closed = true
+		this.#dialling?.abort(new ClosedError('the store is closed'))
 		const followers = [...this.#followers]
 		this.#followers.clear()
 		for (const stream of followers) {
@@ -897,7 +1034,7 @@ export async function download(
 	body: Uint8Array,
 	signal?: AbortSignal,
 ): Promise<Downloaded> {
-	signal?.throwIfAborted()
+	checkSignal(signal)
 	const stream = await connection.session.open(method, body, true)
 	const unwatch = watch(signal, stream)
 	try {

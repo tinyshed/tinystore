@@ -89,6 +89,9 @@ func fetched(ctx context.Context, r build) (string, error) {
 	if whole(dir) {
 		return dir, nil
 	}
+	// a first open given up stops the download: what it unpacked is staged
+	// beside dir and renamed into place only once whole, so nothing is kept
+	Waiting(ctx, "tinystore "+r.version+" downloads")
 	if err := download(ctx, base, r, dir); err != nil {
 		return "", fmt.Errorf("fetch tinystore %s for %s: %w", r.version, r.target, err)
 	}

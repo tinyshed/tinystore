@@ -91,72 +91,95 @@ func PrivateChild(directory string, binary func(context.Context) (string, error)
 		if err != nil {
 			return nil, err
 		}
+		Waiting(ctx, "the private server starts")
 		args := []string{"serve", "--dir", absolute, "--stdio"}
 		if clock != "" {
 			args = append(args, "--clock", clock)
 		}
-		args = append(args, started.storeFlags()...)
-		cmd := exec.Command(path, args...)
-		hideWindow(cmd)
-		stdin, err := cmd.StdinPipe()
+		child, err := startPrivate(path, append(args, started.storeFlags()...))
 		if err != nil {
 			return nil, err
 		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return nil, err
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			return nil, err
-		}
-		if err := cmd.Start(); err != nil {
-			return nil, notStarted("the private server", path, err)
-		}
-		tail := &lines{}
-		drained := make(chan struct{})
-		go func() {
-			// a pipe nobody drains stops the server once it fills
-			tail.drain(stderr)
-			close(drained)
-		}()
-		var writing sync.Mutex
-		session := NewSession(func(b []byte) error {
-			writing.Lock()
-			defer writing.Unlock()
-			_, err := stdin.Write(b)
-			return err
-		}, Hello{Client: Client})
-		exited := make(chan struct{})
-		go func() {
-			Read(stdout, session, func(error) error {
-				<-drained
-				_ = cmd.Wait()
-				close(exited)
-				return Errorf(Closed, "the private server exited with %d: %s", cmd.ProcessState.ExitCode(), tail.last(2000))
-			})
-		}()
-		closing := func() {
-			// a child told to leave by the end of its stdin drains and exits; one that does not is killed
-			_ = stdin.Close()
-			select {
-			case <-exited:
-			case <-time.After(10 * time.Second):
-				_ = cmd.Process.Kill()
-				<-exited
-			}
-		}
-		c := NewConnection(session, stdinTransport{stdin, &writing}, closing)
+		c := child.connection()
 		if err := c.Handshake(ctx); err != nil {
-			_ = cmd.Process.Kill()
-			// the error of a child that exited carries its stderr already
-			if said := tail.last(2000); said != "" && !strings.Contains(err.Error(), said) {
-				return nil, Wrap(Closed, err, "the private server did not start: %v: %s", err, said)
-			}
-			return nil, Wrap(Closed, err, "the private server did not start")
+			return nil, child.failed(err)
 		}
 		return c, nil
 	}
+}
+
+// private is a private child that has started, its stderr read to its end:
+// a pipe nobody drains stops the server once it fills.
+type private struct {
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  io.Reader
+	tail    *lines
+	drained chan struct{}
+}
+
+func startPrivate(path string, args []string) (*private, error) {
+	cmd := exec.Command(path, args...)
+	hideWindow(cmd)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, notStarted("the private server", path, err)
+	}
+	p := &private{cmd: cmd, stdin: stdin, stdout: stdout, tail: &lines{}, drained: make(chan struct{})}
+	go func() {
+		p.tail.drain(stderr)
+		close(p.drained)
+	}()
+	return p, nil
+}
+
+// connection is the session over the child's stdin and stdout. Its close
+// ends stdin, which tells the child to leave, and waits for its exit, since
+// until then it holds the directory.
+func (p *private) connection() *Connection {
+	transport := stdinTransport{p.stdin, &sync.Mutex{}}
+	session := NewSession(transport.Write, Hello{Client: Client})
+	exited := make(chan struct{})
+	go func() {
+		Read(p.stdout, session, func(error) error {
+			<-p.drained
+			_ = p.cmd.Wait()
+			close(exited)
+			return Errorf(Closed, "the private server exited with %d: %s", p.cmd.ProcessState.ExitCode(), p.tail.last(2000))
+		})
+	}()
+	closing := func() {
+		// a child told to leave by the end of its stdin drains and exits; one that does not is killed
+		_ = p.stdin.Close()
+		select {
+		case <-exited:
+		case <-time.After(10 * time.Second):
+			_ = p.cmd.Process.Kill()
+			<-exited
+		}
+	}
+	return NewConnection(session, transport, closing)
+}
+
+// failed kills a child whose handshake failed, and says why with what it
+// wrote to stderr once: the error of a child that exited carries it already.
+func (p *private) failed(err error) error {
+	_ = p.cmd.Process.Kill()
+	if said := p.tail.last(2000); said != "" && !strings.Contains(err.Error(), said) {
+		return Wrap(Closed, err, "the private server did not start: %v: %s", err, said)
+	}
+	return Wrap(Closed, err, "the private server did not start")
 }
 
 type stdinTransport struct {

@@ -101,7 +101,8 @@ looks for the owner:
    keyed with the secret. The client checks it before it sends any request.
 4. If any step fails, the SDK starts `tinystore serve --local` for the
    directory. That process takes `LOCK` and publishes a new `SERVE`, or finds
-   `LOCK` held and exits, and the client tries again.
+   `LOCK` held and exits, and the client tries again, for up to 15 seconds or
+   until the program cancels its `open`.
 
 Only the user the server runs as can open the `server/` folder and `SERVE`,
 or connect to the server's socket or pipe, even when the store's directory

@@ -186,6 +186,12 @@ refuses its new mode. `SERVE` there is a hint; `LOCK` is the truth.
   since that child started, since the log keeps every run's lines. Before
   anything starts, a client refuses a directory that is a file, or sits
   under one, `invalid`, in the core's words.
+- **A start the program gives up on.** The 15 seconds end sooner at the
+  program's own cancel of its `open`: the client stops the start where it
+  waits, starts no other server, and closes any connection it made after. A
+  sidecar it already started may still take `LOCK` once the directory is
+  free; with no client it leaves after its idle time, and never before the
+  15 seconds a client may wait for it.
 - **The proof.** A client that found its server through `SERVE` sends a
   `HELLO` with 16 random bytes as its challenge, and sends no `REQUEST` until
   `WELCOME`'s proof equals the HMAC-SHA256 of the challenge keyed with the

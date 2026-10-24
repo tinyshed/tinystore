@@ -256,7 +256,7 @@ Store is the store in a directory, as this process reaches it. Close it once: it
 func Connect(ctx context.Context, url, token string, opts ...ConnectOption) (*Store, error)
 ```
 
-Connect connects to a remote server with a token. tls:// checks the server's certificate before the token leaves; tcp:// sends the token in the clear, for a network its operator trusts.
+Connect connects to a remote server with a token. tls:// checks the server's certificate before the token leaves; tcp:// sends the token in the clear, for a network its operator trusts. Connect returns at ctx's end, as Open does.
 
 ### Open
 
@@ -264,7 +264,7 @@ Connect connects to a remote server with a token. tls:// checks the server's cer
 func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 ```
 
-Open opens the store in a directory, and returns once it answers: through the directory's sidecar, found through its SERVE file or started, unless Private or Embedded says otherwise. A directory that cannot be served fails here.
+Open opens the store in a directory, and returns once it answers: through the directory's sidecar, found through its SERVE file or started, unless Private or Embedded says otherwise. A directory that cannot be served fails here. Open returns at ctx's end, its error wrapping ctx.Err() and saying what it waited for, and what it started for the store is let go.
 
 ### Store.Clock
 

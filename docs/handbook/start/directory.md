@@ -47,6 +47,51 @@ cases, because all four reach the same core:
 | `connect`        | a `tinystore serve` on another machine      | programs that reach a store over the network, with a token   |
 | Rust             | inside your program                         | Rust programs, which call the engines directly with no bytes |
 
+## Give up on a store that does not open
+
+```ts
+import { open, withSignal } from '@tinyshed/tinystore'
+
+// the old process of a deploy may still hold ./data: wait two seconds at most
+const store = await withSignal(AbortSignal.timeout(2000), () => open('./data'))
+```
+
+```python
+async with asyncio.timeout(2):  # the old process of a deploy may still hold data
+    store = await tinystore.open("data")
+```
+
+```go
+// the old process of a deploy may still hold data: wait two seconds at most
+ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+defer cancel()
+store, err := tinystore.Open(ctx, "data")
+```
+
+```rust
+// Store::open never waits: a directory another process holds fails at once with ErrorKind::InUse.
+let store = Store::open("data", Options::default())?;
+```
+
+When another process holds the directory without a sidecar, for example a
+program that opened it `embedded`, `open` keeps starting a sidecar and waits
+for one to answer, for up to 15 seconds. Give `open` the cancel you give any
+call, and it stops waiting at once:
+
+| Language  | What `open` fails with                                                      |
+|-----------|-----------------------------------------------------------------------------|
+| Bun, Node | `CancelledError`                                                            |
+| Python    | `TimeoutError` from `asyncio.timeout`, or `CancelledError`                  |
+| Go        | an error that `errors.Is` `context.DeadlineExceeded`, or `context.Canceled` |
+
+The error says what `open` waited for: `open ./data: cancelled while another
+process holds the directory and no sidecar answers`. In Python this text is a
+note of the `CancelledError`. `connect` stops the same way. An `open` that
+gave up starts no more servers and keeps no connection. A sidecar that it
+already started can still take the directory once it is free. With no client,
+that sidecar exits after its idle time, and never sooner than 15 seconds
+after it started (contract WIRE-11).
+
 ## What is in the directory
 
 ```text

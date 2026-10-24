@@ -443,7 +443,11 @@ function open(dir: string, options?: OpenOptions): Promise<Store>
 
 Opens the store in a directory through its sidecar, found through SERVE or
 started, or through a private child when asked. It returns once the server
-has answered, so that a directory that cannot be served fails here.
+has answered, so that a directory that cannot be served fails here. Under
+withSignal it stops waiting once the signal aborts, CancelledError saying
+what it waited for, and keeps no connection:
+
+    const store = await withSignal(AbortSignal.timeout(2000), () => open('./data'))
 
 ## connect
 
@@ -453,7 +457,8 @@ function connect(url: string, options: ConnectOptions): Promise<Store>
 
 Connects to a remote server: tls:// checks the server's certificate before
 the token leaves; tcp:// sends the token in the clear, for a network its
-operator trusts.
+operator trusts. Under withSignal it stops waiting once the signal aborts,
+as open does.
 
 ## Durability
 
@@ -497,10 +502,12 @@ had is OutcomeUnknownError.
 ### Link.connection
 
 ```ts
-connection(): Promise<Connection>
+connection(signal?: AbortSignal, of?: string): Promise<Connection>
 ```
 
-The connection a call goes on.
+The connection a call goes on. A caller whose signal aborts stops
+waiting at once, CancelledError naming what the dial waits for, and
+the dial goes on for the others.
 
 ### Link.ready
 
@@ -539,7 +546,8 @@ close(): Promise<void>
 Closes the connection and every one to come. Each stream that follows
 the store is cancelled first, and its end waited for, a moment at most:
 one the server still ran would keep a private child, or a sidecar's
-connection, draining for ten seconds.
+connection, draining for ten seconds. A dial under way stops at its next
+wait, and every call waiting on it fails ClosedError.
 
 ## Clock
 
@@ -863,8 +871,9 @@ function withSignal<T>(signal: AbortSignal, fn: () => T): T
 ```
 
 Runs fn under a signal: every call it makes, a kv get, a statement, a
-scan, rejects once the signal aborts, its stream cancelled on the wire. A
-call given a signal of its own, as work and put take one, keeps that one.
+scan, open and connect too, rejects once the signal aborts, its stream
+cancelled on the wire, with CancelledError. A call given a signal of its
+own, as work and put take one, keeps that one.
 
 ```ts
 await withSignal(AbortSignal.timeout(2000), async () => {

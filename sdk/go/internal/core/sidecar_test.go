@@ -2,10 +2,12 @@ package core
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // standIn makes this test binary stand in for tinystore started as a
@@ -16,6 +18,9 @@ func TestMain(m *testing.M) {
 	switch os.Getenv(standIn) {
 	case "":
 		os.Exit(m.Run())
+	case "waits":
+		// a sidecar slow to start, which leaves soon after the test that started it
+		time.Sleep(1500 * time.Millisecond)
 	case "logs":
 		// one that fails once its log is open: it says why there alone
 		if at := slices.Index(os.Args, "--log-file"); at >= 0 && at+1 < len(os.Args) {
@@ -37,6 +42,24 @@ func standingIn(t *testing.T, as string) func(context.Context) (string, error) {
 		t.Fatal(err)
 	}
 	return func(context.Context) (string, error) { return stand, nil }
+}
+
+// contract: WIRE-11
+func TestASidecarWhoseReleaseWasFetchedSaysItStartsOnceItDoes(t *testing.T) {
+	stand := standingIn(t, "waits")
+	link := NewLink(Sidecar(t.TempDir(), func(ctx context.Context) (string, error) {
+		Waiting(ctx, "tinystore 0.1.0 downloads")
+		return stand(ctx)
+	}, Started{}))
+	defer link.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := link.Connection(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want the deadline", err)
+	}
+	if said := link.Waiting(); said != "the sidecar starts" {
+		t.Fatalf("a dial given up on while its sidecar starts waited while %q", said)
+	}
 }
 
 // contract: ERR-02

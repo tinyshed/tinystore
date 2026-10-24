@@ -111,12 +111,41 @@ type Link struct {
 	mu      sync.Mutex
 	current *dialling
 	closed  bool
+	// waiting is what the dial under way waits for, which a caller who gives
+	// up on it is told
+	waiting string
 }
 
 type dialling struct {
 	done       chan struct{}
 	connection *Connection
 	err        error
+	// cancel stops the dial, which only the link's close does: a dial is the
+	// link's, never one caller's
+	cancel context.CancelFunc
+}
+
+type waitingKey struct{}
+
+// Waiting says what the dial under ctx waits for, which a caller who gives
+// up on it is told: "another process holds the directory and no sidecar answers".
+func Waiting(ctx context.Context, what string) {
+	if said, ok := ctx.Value(waitingKey{}).(func(string)); ok {
+		said(what)
+	}
+}
+
+// Waiting is what the dial under way waits for, or the last one waited for.
+func (l *Link) Waiting() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.waiting
+}
+
+func (l *Link) said(what string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.waiting = what
 }
 
 // NewLink is a link that dials with dial.
@@ -143,12 +172,15 @@ func (l *Link) Connection(ctx context.Context) (*Connection, error) {
 		}
 		current := l.current
 		if current == nil {
-			current = &dialling{done: make(chan struct{})}
+			// the dial outlives a caller that gives up, so that the next finds
+			// it, and stops when the link closes
+			dial, cancel := context.WithCancel(context.WithValue(context.WithoutCancel(ctx), waitingKey{}, l.said))
+			current = &dialling{done: make(chan struct{}), cancel: cancel}
 			l.current = current
+			l.waiting = "the store has not answered"
 			l.mu.Unlock()
 			go func() {
-				// the dial outlives a caller that gives up, so that the next finds it
-				current.connection, current.err = l.dial(context.WithoutCancel(ctx))
+				current.connection, current.err = l.dial(dial)
 				close(current.done)
 			}()
 		} else {
@@ -163,10 +195,16 @@ func (l *Link) Connection(ctx context.Context) (*Connection, error) {
 			return current.connection, nil
 		}
 		l.mu.Lock()
+		closed := l.closed
 		if l.current == current {
 			l.current = nil
 		}
 		l.mu.Unlock()
+		// a dial the close stopped failed with its context's cancel, which
+		// is no caller's: what every caller waiting sees is the close
+		if closed {
+			return nil, Errorf(Closed, "the store is closed")
+		}
 		if current.err != nil {
 			return nil, current.err
 		}
@@ -218,7 +256,9 @@ func goesAgain(err error, idempotence Idempotence) (bool, error) {
 	return false, err
 }
 
-// Close closes the connection and every one to come.
+// Close closes the connection and every one to come. A dial under way stops
+// at its next wait, a sidecar's start, a socket's connect, a handshake or a
+// release's fetch, and what it made is closed.
 func (l *Link) Close() {
 	l.mu.Lock()
 	l.closed = true
@@ -228,6 +268,7 @@ func (l *Link) Close() {
 	if current == nil {
 		return
 	}
+	current.cancel()
 	<-current.done
 	if current.connection != nil {
 		current.connection.Close()

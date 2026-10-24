@@ -628,7 +628,9 @@ async def open(
     own, a child that lives and dies with it, for tests and scripts;
     ``embedded=True`` runs the core inside this process, through the module
     this platform's wheel carries or the ``library`` given. A directory that
-    cannot be served fails here.
+    cannot be served fails here. A cancel or a timeout around it, such as
+    ``asyncio.timeout``, stops it at once and keeps no connection; the
+    ``CancelledError`` carries a note of what it waited for.
 
     - ``binary``: the tinystore binary; TINYSTORE_BIN, this platform's wheel's
       or PATH's when absent.
@@ -680,7 +682,7 @@ async def open(
     else:
         dial = sidecar(where, find, started)
     link = Link(asking(dial, where, durability))
-    await link.connection()
+    await _reached(link, f"open {directory}")
     return Store(link)
 
 
@@ -689,10 +691,27 @@ async def connect(url: str, *, token: str, tls: ssl.SSLContext | None = None) ->
 
     ``tls://`` checks the server's certificate before the token leaves;
     ``tcp://`` sends the token in the clear, for a network its operator trusts.
+    A cancel or a timeout around it stops it as it stops ``open``.
     """
     link = Link(remote(url, token, tls))
-    await link.connection()
+    await _reached(link, f"connect {url}")
     return Store(link)
+
+
+async def _reached(link: Link, of: str) -> None:
+    """Waits for the link's first connection.
+
+    A caller who gives up, or a dial that fails, closes the link, which
+    cancels the dial and closes what it made; the caller's cancel carries a
+    note of what the dial waited for.
+    """
+    try:
+        await link.connection()
+    except BaseException as err:
+        if isinstance(err, asyncio.CancelledError):
+            err.add_note(f"{of}: cancelled while {link.waiting}")
+        await link.close()
+        raise
 
 
 _unfollowed = False

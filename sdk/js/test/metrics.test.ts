@@ -364,8 +364,8 @@ test.skipIf(library === undefined)(
 		const keeper = await open(dir, { embedded: true, library })
 		const dialled: Connection[] = []
 		const dial = embedded(runtime, dir, () => library ?? '')
-		const link = new Link(async () => {
-			const connection = await dial()
+		const link = new Link(async dialling => {
+			const connection = await dial(dialling)
 			dialled.push(connection)
 			return connection
 		})
@@ -397,11 +397,11 @@ test.skipIf(library === undefined)(
 		const dial = embedded(runtime, dir, () => library ?? '')
 		const dialled: Connection[] = []
 		let down = false
-		const link = new Link(async () => {
+		const link = new Link(async dialling => {
 			if (down) {
 				throw new UnavailableError('the store is down')
 			}
-			const connection = await dial()
+			const connection = await dial(dialling)
 			dialled.push(connection)
 			return connection
 		})
@@ -456,8 +456,8 @@ test.skipIf(library === undefined)(
 		// a connection that hears nothing: the store applies a batch whose answer never comes
 		let deaf = false
 		const dialled: Connection[] = []
-		const link = new Link(async () => {
-			const connection = await dial()
+		const link = new Link(async dialling => {
+			const connection = await dial(dialling)
 			const read = connection.session.read.bind(connection.session)
 			connection.session.read = (bytes, length) => (deaf ? length : read(bytes, length))
 			dialled.push(connection)

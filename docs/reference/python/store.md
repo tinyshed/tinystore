@@ -565,7 +565,9 @@ unless asked otherwise: ``private=True`` starts a server of this process's
 own, a child that lives and dies with it, for tests and scripts;
 ``embedded=True`` runs the core inside this process, through the module
 this platform's wheel carries or the ``library`` given. A directory that
-cannot be served fails here.
+cannot be served fails here. A cancel or a timeout around it, such as
+``asyncio.timeout``, stops it at once and keeps no connection; the
+``CancelledError`` carries a note of what it waited for.
 
 - ``binary``: the tinystore binary; TINYSTORE_BIN, this platform's wheel's
   or PATH's when absent.
@@ -605,6 +607,7 @@ Connects to a remote server.
 
 ``tls://`` checks the server's certificate before the token leaves;
 ``tcp://`` sends the token in the clear, for a network its operator trusts.
+A cancel or a timeout around it stops it as it stops ``open``.
 
 ## Clock
 

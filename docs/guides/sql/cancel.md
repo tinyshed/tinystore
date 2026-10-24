@@ -106,6 +106,13 @@ past its timeout of 2s: cancelled`.
   cancels it or disconnects (contract WIRE-10).
 - A cancel stops only the reads it was given. Another caller's query on the
   same connection never stops with it.
+- A call that waits for its connection, while the SDK starts a sidecar again
+  or reconnects to a server, stops waiting. A signal that had already aborted
+  when the call started gives `CancelledError` too.
+- `open` and `connect` take the same cancel. They stop waiting for a sidecar
+  or a server at once and keep no connection (contract WIRE-11). See [Give up
+  on a store that does not
+  open](../../handbook/start/directory.md#give-up-on-a-store-that-does-not-open).
 - A write does not stop. It commits or fails as it would have.
 - A query inside a transaction runs to its end. The transaction's own
   five-second bound stops it.

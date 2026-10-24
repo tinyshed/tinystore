@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // archived is a release's archive as tools/release.ts packs it: one top
@@ -114,6 +116,54 @@ func TestAnArchiveItsSumDoesNotNameIsRefusedAndNothingKept(t *testing.T) {
 	}
 	if whole(filepath.Join(os.Getenv("TINYSTORE_CACHE"), r.version, r.target)) {
 		t.Fatal("a refused archive was kept")
+	}
+}
+
+// contract: WIRE-11
+func TestAFetchAFirstOpenGaveUpOnStopsAndKeepsNothing(t *testing.T) {
+	r := build{"0.1.0-rc.6", "linux-x64"}
+	archive := archived(t, r, false)
+	name := archiveName(r)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/v" + r.version + "/SHA256SUMS":
+			_, _ = w.Write([]byte(sumOfBytes(archive) + "  " + name + "\n"))
+		case "/v" + r.version + "/" + name:
+			// an archive slow to come, as a first open on a slow network meets it
+			select {
+			case <-req.Context().Done():
+			case <-time.After(3 * time.Second):
+				_, _ = w.Write(archive)
+			}
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("TINYSTORE_RELEASES", server.URL)
+	cache := t.TempDir()
+	t.Setenv("TINYSTORE_CACHE", cache)
+	link := NewLink(func(ctx context.Context) (*Connection, error) {
+		if _, err := fetched(ctx, r); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("fetched, with no server to dial")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := link.Connection(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want the deadline", err)
+	}
+	link.Close()
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("the close waited %s for a fetch that nobody waits for", took)
+	}
+	if whole(filepath.Join(cache, r.version, r.target)) {
+		t.Fatal("a fetch cut short was kept")
+	}
+	if staged, _ := filepath.Glob(filepath.Join(cache, r.version, ".fetch-*")); len(staged) > 0 {
+		t.Fatalf("a fetch cut short left %v", staged)
 	}
 }
 

@@ -5,8 +5,9 @@
 
 import { expect, spyOn, test } from 'bun:test'
 
+import { withSignal } from '../src/cancel.ts'
 import { Connection, Link } from '../src/connection.ts'
-import { OutcomeUnknownError, ProtocolError } from '../src/errors.ts'
+import { CancelledError, ClosedError, OutcomeUnknownError, ProtocolError } from '../src/errors.ts'
 import { Bucket, bucketOpen, valuesOf } from '../src/kv.ts'
 import { Session } from '../src/session.ts'
 import { Flag, frame, headerSize, Kind, parseHeader } from '../src/wire/frame.ts'
@@ -179,6 +180,52 @@ test('a link closed while a dial fails dials no other', async () => {
 	await closing
 	await Promise.all([first, second])
 	expect(dials).toBe(1)
+})
+
+// contract: WIRE-11
+test("a dial runs under no caller's signal: one who gives up stops it for nobody", async () => {
+	const server = await served(echo)
+	let go: () => void = () => {}
+	const going = new Promise<void>(resolve => {
+		go = resolve
+	})
+	let dials = 0
+	const link = new Link(async () => {
+		dials++
+		await going
+		// a call the dial makes itself, as it does to stop a sidecar of an older release
+		await server.connection.session.call(methods['kv.bucket.open'], new Uint8Array())
+		return server.connection
+	})
+	const giving = new AbortController()
+	const gaveUp = caught(withSignal(giving.signal, () => link.connection(giving.signal)))
+	const waiting = link.connection()
+	giving.abort()
+	expect(await gaveUp).toBeInstanceOf(CancelledError)
+	go()
+	expect(await waiting).toBe(server.connection)
+	expect(dials).toBe(1)
+})
+
+// contract: WIRE-11
+test('a link closed while it dials stops the dial, and every call waiting fails ClosedError', async () => {
+	let stopped: unknown
+	const link = new Link(
+		dialling =>
+			new Promise<Connection>((_, reject) => {
+				dialling.signal.addEventListener('abort', () => {
+					stopped = dialling.signal.reason
+					reject(new Error('stopped'))
+				})
+			}),
+	)
+	const waiting = [caught(link.connection()), caught(link.connection())]
+	await link.close()
+	expect(stopped).toBeInstanceOf(ClosedError)
+	for (const failed of await Promise.all(waiting)) {
+		expect(failed).toBeInstanceOf(ClosedError)
+		expect((failed as Error).message).toBe('the store is closed')
+	}
 })
 
 test('an answer that is not its message fails its call alone', async () => {

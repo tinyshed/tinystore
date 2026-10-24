@@ -75,8 +75,16 @@ async def open_pipe(
     directory go.
     """
     core = load_core(library)
+    opening = asyncio.ensure_future(asyncio.to_thread(core.open, directory, options))
     try:
-        pipe: _Pipe = await asyncio.to_thread(core.open, directory, options)
+        # a wait, not a shield: 3.14 logs the error of a shielded open whose dial was cancelled
+        await asyncio.wait((opening,))
+    except asyncio.CancelledError:
+        # the thread opens the store all the same: what it opens is let go
+        opening.add_done_callback(_let_go)
+        raise
+    try:
+        pipe: _Pipe = opening.result()
     except ConnectionError as err:
         code, message = err.args if len(err.args) == 2 else ("closed", str(err))
         raise error_of(code, f"cannot open {directory}: {message}") from None
@@ -102,6 +110,12 @@ async def open_pipe(
         return asyncio.ensure_future(asyncio.to_thread(let_go))
 
     return Transport(pipe.send, close), closing
+
+
+def _let_go(opened: asyncio.Future[_Pipe]) -> None:
+    """Closes a pipe the core opened for a dial cancelled meanwhile."""
+    if not opened.cancelled() and opened.exception() is None:
+        opened.result().close()
 
 
 def _read(

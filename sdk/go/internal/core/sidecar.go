@@ -39,6 +39,7 @@ func Sidecar(directory string, binary func(context.Context) (string, error), sta
 	log := filepath.Join(absolute, "server", "serve.log")
 	told := false
 	return func(ctx context.Context) (*Connection, error) {
+		Waiting(ctx, "the sidecar starts")
 		found := reachServe(ctx, serve)
 		stopped := ""
 		if found != nil {
@@ -61,6 +62,8 @@ func Sidecar(directory string, binary func(context.Context) (string, error), sta
 		if err != nil {
 			return nil, err
 		}
+		// a release fetched for the start said it downloads, which it no longer does
+		Waiting(ctx, "the sidecar starts")
 		args := []string{"serve", "--dir", absolute, "--local", "--log-file", log}
 		if started.Idle != "" {
 			args = append(args, "--idle", started.Idle)
@@ -75,12 +78,18 @@ func Sidecar(directory string, binary func(context.Context) (string, error), sta
 // found the directory held, by a winner about to publish or by a sidecar
 // still letting go, and is started again after a pause; any other exit is an
 // error. A sidecar told to stop answers for a moment after it agreed, until
-// SERVE goes, so the one of the instance stopped is passed over.
+// SERVE goes, so the one of the instance stopped is passed over. The dial's
+// cancel stops it at its next turn, before it starts another.
 func startSidecar(ctx context.Context, serve, log, path string, args []string, stopped string) (*Connection, error) {
 	deadline := time.Now().Add(StartTime)
 	held := false
 	pause := heldPause
 	for {
+		// a probe of SERVE that the cancel cut short finds nothing, and says
+		// nothing of it: before the first start and between two, start none
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		child, err := spawnSidecar(path, args, log)
 		if err != nil {
 			return nil, err
@@ -169,6 +178,7 @@ func (s *spawned) awaitServe(ctx context.Context, serve, stopped string, deadlin
 		}
 		if code == 3 {
 			if again.IsZero() {
+				Waiting(ctx, "another process holds the directory and no sidecar answers")
 				again = time.Now().Add(pause)
 			}
 			if !time.Now().Before(again) {

@@ -55,8 +55,17 @@ export interface Runtime {
 	/** a name and version for the server's logs: tinystore-js on bun/1.4.2 */
 	readonly client: string
 	readonly windows: boolean
-	/** Connects to an endpoint: unix://path, pipe:name, tcp://host:port or tls://host:port. */
-	connect(endpoint: string, events: TransportEvents, tls?: TlsOptions): Promise<Transport>
+	/**
+	 * Connects to an endpoint: unix://path, pipe:name, tcp://host:port or
+	 * tls://host:port. A signal that aborts first rejects with its reason and
+	 * lets the socket go.
+	 */
+	connect(
+		endpoint: string,
+		events: TransportEvents,
+		tls?: TlsOptions,
+		signal?: AbortSignal,
+	): Promise<Transport>
 	/**
 	 * Starts a private server whose stdin and stdout carry the frames, once it
 	 * has started; it rejects with why it did not.
