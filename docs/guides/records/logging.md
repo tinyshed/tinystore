@@ -82,6 +82,11 @@ A Python program that already logs through `logging` keeps its calls:
 logging.getLogger("worker").addHandler(store.log_handler("worker"))  # a record's extra becomes its fields
 ```
 
+`log_handler` takes the options of `store.logger`, `level` among them, as one
+level or as `{"store": …, "console": …}`. It follows `LOG_LEVEL` and the
+config `log` as the logger does. Leave the handler's own `logging` level unset: it drops a
+record before the store's logger sees it, so neither of them could lower it.
+
 Go's handler passes `testing/slogtest`, so any `slog` code logs into the
 store unchanged.
 
@@ -140,20 +145,22 @@ the store, at any depth:
 
 ## Options
 
-| Option    | Unless given                        | Does                                                     |
-|-----------|-------------------------------------|----------------------------------------------------------|
-| `level`   | every level                         | the least level printed and kept                         |
-| `console` | `pretty` on a terminal, else `json` | how a line is printed; `off` prints none and keeps it    |
-| `redact`  | nothing hidden                      | the names of secrets                                     |
-| `source`  | none                                | adds the function, file and line of the call             |
-| `buffer`  | 1,024 lines                         | the lines held between writes                            |
-| `keep`    | the stream's                        | how long the stream keeps its events, 14 days unless set |
+| Option    | Unless given                        | Does                                                                                                         |
+|-----------|-------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `level`   | every level                         | the least level kept and printed, or `{ store, console }`; see [A quiet console](console.md#a-quiet-console) |
+| `console` | `pretty` on a terminal, else `json` | how a line is printed; `off` prints none and keeps it                                                        |
+| `redact`  | nothing hidden                      | the names of secrets                                                                                         |
+| `source`  | none                                | adds the function, file and line of the call                                                                 |
+| `buffer`  | 1,024 lines                         | the lines held between writes                                                                                |
+| `keep`    | the stream's                        | how long the stream keeps its events, 14 days unless set                                                     |
 
 How lines look on the console is [Console output](console.md).
 
 A store's logger reads its options through the config `log` too: a change of
 its level in any process sets it for every logger of the store, as
-[Live settings](../config/live.md) change any setting.
+[Live settings](../config/live.md) change any setting. That level is the one
+kept, and the one printed too unless `level` has a `console` part. The config
+`log` has no `console` part, because a console belongs to one process.
 
 ## Events from a logger
 

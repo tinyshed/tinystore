@@ -153,7 +153,7 @@ func TestASourceIsWhereTheLineWasLogged(t *testing.T) {
 
 // TestMain clears what a developer's shell may set, which would change the lines the tests compare.
 func TestMain(m *testing.M) {
-	for _, name := range []string{"LOG_LEVEL", "LOG_FORMAT", "LOG_TIME"} {
+	for _, name := range []string{"LOG_LEVEL", "LOG_CONSOLE_LEVEL", "LOG_FORMAT", "LOG_TIME"} {
 		_ = os.Unsetenv(name)
 	}
 	os.Exit(m.Run())
@@ -251,8 +251,29 @@ func TestALookupIsTheOnlyEnvironmentRead(t *testing.T) {
 	if strings.Count(console.String(), "\n") != 1 || !strings.Contains(console.String(), `"msg":"shown"`) {
 		t.Fatalf("the console has %q", console.String())
 	}
-	if want := []string{"APP_LOG_LEVEL", "APP_LOG_FORMAT", "APP_LOG_TIME"}; strings.Join(asked, " ") != strings.Join(want, " ") {
+	want := []string{"APP_LOG_LEVEL", "APP_LOG_CONSOLE_LEVEL", "APP_LOG_FORMAT", "APP_LOG_TIME"}
+	if strings.Join(asked, " ") != strings.Join(want, " ") {
 		t.Fatalf("asked for %q, want %q", asked, want)
+	}
+}
+
+// contract: LOG-05
+func TestLogConsoleLevelSetsWhatAHandlerOfTheConsoleAlonePrints(t *testing.T) {
+	lookup := func(name string) (string, bool) {
+		switch name {
+		case "LOG_CONSOLE_LEVEL":
+			return "warn", true
+		case "LOG_LEVEL":
+			return "debug", true
+		}
+		return "", false
+	}
+	var console bytes.Buffer
+	logger := slog.New(NewHandler("api", JSON, FromLookup("", lookup), writeTo{&console}))
+	logger.Info("hidden")
+	logger.Warn("shown")
+	if strings.Count(console.String(), "\n") != 1 || !strings.Contains(console.String(), `"msg":"shown"`) {
+		t.Fatalf("the console has %q", console.String())
 	}
 }
 

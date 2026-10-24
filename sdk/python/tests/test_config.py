@@ -374,6 +374,42 @@ async def test_a_stores_logger_takes_its_level_from_the_config_log_which_a_chang
     assert logging.WARNING > logging.DEBUG
 
 
+# contract: LOG-07
+async def test_a_handler_takes_its_level_from_the_config_log_as_the_stores_logger_does(
+    store: tinystore.Store,
+) -> None:
+    written = io.StringIO()
+    handler = store.log_handler("handled", level="warning", console="json", to=written, env=False)
+    worker = logging.getLogger("tinystore-test-config-handler")
+    worker.propagate = False
+    worker.setLevel(logging.DEBUG)
+    worker.addHandler(handler)
+    probes = 0
+
+    def probed() -> bool:
+        nonlocal probes
+        probes += 1
+        worker.debug(f"probe {probes}")
+        return f'"msg":"probe {probes}"' in written.getvalue()
+
+    try:
+        assert not probed()
+
+        @dataclass
+        class Log:
+            level: str = live("info")
+
+        settings = await store.config("log", [Log])
+        try:
+            await settings.update({"level": "debug"})
+            await until(probed)
+            assert f'"msg":"probe {probes}"' in written.getvalue()
+        finally:
+            await settings.reset("level")
+    finally:
+        worker.removeHandler(handler)
+
+
 @dataclass
 class Upstream:
     host: str

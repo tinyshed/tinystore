@@ -24,7 +24,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, TextIO
+from typing import TYPE_CHECKING, Any, Literal, TextIO, TypedDict
 
 from ._background import FailureLog, say_own
 from ._console import SECRETS, SOURCE_KEY, Console, ConsoleTime, Line, Printer, Redactor, encode_fields, redactor
@@ -41,6 +41,24 @@ secrets = SECRETS
 
 Level = Literal["trace", "debug", "info", "warn", "warning", "error"] | int
 """A level: its name, or logging's number for it, logging.INFO among them."""
+
+
+class Levels(TypedDict, total=False):
+    """The least levels a store's logger keeps and prints, each part left out as the option is.
+
+    No store keeps every level, and no console prints what is kept,
+    following the config log's changes of it::
+
+        level="info"                                   # keeps info+, prints info+
+        level={"store": "info", "console": "warning"}  # keeps info+, prints warning+
+        level={"console": "warning"}                   # keeps every level, prints warning+
+    """
+
+    store: Level
+    """the least level kept; LOG_LEVEL and the config log win over it"""
+    console: Level
+    """the least level printed; LOG_CONSOLE_LEVEL wins over it"""
+
 
 _LEVELS = {"trace": -8, "debug": -4, "info": 0, "warn": 4, "warning": 4, "error": 8}
 """slog's numbers, which the store keeps; trace below debug, so that a logger at trace takes every line."""
@@ -62,14 +80,14 @@ def level_number(level: Level, what: str = "a logger's level") -> int:
     return (level - logging.INFO) * 4 // 10
 
 
-def _read_env(prefix: str | None) -> dict[str, str]:
-    """LOG_LEVEL, LOG_FORMAT and LOG_TIME, after prefix's name, as the environment spells them."""
-    read: dict[str, str] = {}
-    for variable in ("LOG_LEVEL", "LOG_FORMAT", "LOG_TIME"):
+def _read_env(prefix: str | None) -> dict[str, tuple[str, str]]:
+    """LOG_LEVEL, LOG_CONSOLE_LEVEL, LOG_FORMAT and LOG_TIME, each its name after prefix and what it says."""
+    read: dict[str, tuple[str, str]] = {}
+    for variable in ("LOG_LEVEL", "LOG_CONSOLE_LEVEL", "LOG_FORMAT", "LOG_TIME"):
         name = f"{prefix}_{variable}" if prefix else variable
         text = os.environ.get(name, "").strip()
         if text:
-            read[name] = text
+            read[variable] = (name, text)
     return read
 
 
@@ -85,7 +103,10 @@ class _Shared:
     """None for a logger of the console alone"""
     stream: str
     most: int
-    least: int
+    kept: int
+    """the least level kept, which the config log changes while the logger runs"""
+    printed: int | None
+    """the least level printed, LOG_CONSOLE_LEVEL's or level's console part; None prints what is kept"""
     redact: Redactor | None
     replace: Callable[[str, Any], Any] | None
     source: bool
@@ -103,9 +124,10 @@ class _Shared:
 
 @dataclass(frozen=True, slots=True)
 class LoggerOptions:
-    """What a logger is told; each None takes its default, and LOG_LEVEL, LOG_FORMAT and LOG_TIME win over them."""
+    """What a logger is told; each None takes its default, and each of LOG_LEVEL and the rest wins over its own."""
 
-    level: Level | None = None
+    level: Level | Levels | None = None
+    """one level kept and printed, or a store's logger's two apart"""
     console: Console | None = None
     time: ConsoleTime | None = None
     hide_stream: bool = False
@@ -117,6 +139,70 @@ class LoggerOptions:
     env: str | bool = True
     """a prefix, "APP" reading APP_LOG_LEVEL and the rest; True the bare names, False none"""
     buffer: int = 1024
+
+
+@dataclass
+class _Settings:
+    """A logger's levels, console and time, as its options and then LOG_LEVEL and the rest give them."""
+
+    kept: int
+    printed: int | None
+    console: Console | None
+    shown: ConsoleTime | None
+    ignored: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
+    """each variable that said what none can mean, with what it said and what it may say"""
+    spelled: dict[str, str] = field(default_factory=dict[str, str])
+    """each variable read, as the config log spells it"""
+
+
+def _parts_of(level: Level | Levels | None) -> tuple[int | None, int | None]:
+    """A level's two parts as slog numbers them, the least kept and the least printed.
+
+    One level is the kept alone, which the console then follows.
+    """
+    if not isinstance(level, dict):
+        return None if level is None else level_number(level), None
+    unknown = sorted(set(level) - {"store", "console"})
+    if unknown:
+        raise InvalidError(f"a logger's level of {unknown[0]!r}: its parts are store and console")
+    store, shown = level.get("store"), level.get("console")
+    kept = None if store is None else level_number(store)
+    return kept, None if shown is None else level_number(shown, "a logger's console level")
+
+
+def _settings_of(options: LoggerOptions) -> _Settings:
+    """The options with each of LOG_LEVEL and the rest over its own; a console the code turned off stays off."""
+    kept, printed = _parts_of(options.level)
+    settings = _Settings(
+        kept=-(1 << 31) if kept is None else kept,
+        printed=printed,
+        console=options.console,
+        shown=options.time,
+    )
+    if options.env is False:
+        return settings
+    for variable, (name, text) in _read_env(None if options.env is True else options.env).items():
+        known = text.lower()
+        if variable in ("LOG_LEVEL", "LOG_CONSOLE_LEVEL") and known not in _LEVELS:
+            settings.ignored.append((name, text, "trace, debug, info, warn or error"))
+        elif variable == "LOG_LEVEL":
+            settings.kept = _LEVELS[known]
+            settings.spelled[name] = "warn" if known == "warning" else known
+        elif variable == "LOG_CONSOLE_LEVEL":
+            # one process's, which no setting of the config log holds
+            settings.printed = _LEVELS[known]
+        elif variable == "LOG_FORMAT":
+            if known not in ("pretty", "json", "off"):
+                settings.ignored.append((name, text, "pretty, json or off"))
+            elif settings.console != "off":
+                settings.console = known  # type: ignore[assignment]
+                settings.spelled[name] = known
+        elif known in ("clock", "full", "off"):
+            settings.shown = known  # type: ignore[assignment]
+            settings.spelled[name] = known
+        else:
+            settings.ignored.append((name, text, "clock, full or off"))
+    return settings
 
 
 def _shared_of(
@@ -131,29 +217,7 @@ def _shared_of(
         raise InvalidError(f"a time of {options.time!r}, not clock, full or off")
     if isinstance(options.buffer, bool) or not isinstance(options.buffer, int) or options.buffer < 1:  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidError(f"a logger's buffer of {options.buffer!r} lines")
-    least = -(1 << 31) if options.level is None else level_number(options.level)
-    console, shown, ignored = options.console, options.time, list[tuple[str, str, str]]()
-    spelled: dict[str, str] = {}
-    if options.env is not False:
-        for name, text in _read_env(None if options.env is True else options.env).items():
-            known = text.lower()
-            if name.endswith("LOG_LEVEL"):
-                if known in _LEVELS:
-                    least = _LEVELS[known]
-                    spelled[name] = "warn" if known == "warning" else known
-                else:
-                    ignored.append((name, text, "trace, debug, info, warn or error"))
-            elif name.endswith("LOG_FORMAT"):
-                if known not in ("pretty", "json", "off"):
-                    ignored.append((name, text, "pretty, json or off"))
-                elif console != "off":
-                    console = known  # type: ignore[assignment]
-                    spelled[name] = known
-            elif known in ("clock", "full", "off"):
-                shown = known  # type: ignore[assignment]
-                spelled[name] = known
-            else:
-                ignored.append((name, text, "clock, full or off"))
+    settings = _settings_of(options)
     try:
         loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
     except RuntimeError:
@@ -162,15 +226,16 @@ def _shared_of(
         append=append,
         stream=stream,
         most=options.buffer,
-        least=least,
+        kept=settings.kept,
+        printed=settings.printed,
         redact=redactor(options.redact, options.keep_url_passwords),
         replace=options.replace,
         source=options.source,
-        printer=Printer(console, shown, options.hide_stream, options.to),
+        printer=Printer(settings.console, settings.shown, options.hide_stream, options.to),
         loop=loop,
         failures=None if append is None else FailureLog(f"records flush {stream}"),
     )
-    for name, value, expected in ignored:
+    for name, value, expected in settings.ignored:
         if shared.printer.off or f"{name}={value}" in _said_ignored:
             continue
         _said_ignored.add(f"{name}={value}")
@@ -178,7 +243,7 @@ def _shared_of(
         shared.printer.print(
             Line(at=time.time_ns(), stream="tinystore", level=4, msg=f"{name} is ignored", attrs=attrs)
         )
-    return shared, spelled
+    return shared, settings.spelled
 
 
 def _shown(value: Any) -> Any:
@@ -254,8 +319,14 @@ class Logger:
         await flush(shared)
 
     def take_record(self, record: logging.LogRecord, formatter: logging.Formatter) -> None:
-        """Prints and keeps a logging record: its extra its fields, its logger's name in its context."""
+        """Prints and keeps a logging record as the logger's levels say.
+
+        Its extra are its fields, and its logger's name is in its context.
+        """
         shared = self._shared
+        level = (record.levelno - logging.INFO) * 4 // 10
+        if not _wanted(shared, level):
+            return
         attrs = [(k, v) for k, v in record.__dict__.items() if k not in _STANDARD and not k.startswith("_")]
         if record.exc_info:
             attrs.append(("error", formatter.formatException(record.exc_info)))
@@ -268,7 +339,7 @@ class Logger:
         line = Line(
             at=int(record.created * 1e9),
             stream=shared.stream,
-            level=(record.levelno - logging.INFO) * 4 // 10,
+            level=level,
             msg=record.getMessage(),
             context=[*self._context, *encode_fields([("logger", record.name)], shared.redact)],
             attrs=fields,
@@ -279,12 +350,19 @@ class Logger:
         self.take(line)
 
     def take(self, line: Line) -> None:
-        """Prints and keeps a line made elsewhere, a logging record's: from any thread, never waiting."""
-        self._shared.printer.print(line)
-        _queue(self._shared, line)
+        """Prints a line made elsewhere and keeps it, from any thread, never waiting.
+
+        It is printed from the level printed and kept from the level kept; an
+        event, which has no level, is printed and kept.
+        """
+        shared = self._shared
+        if line.level is None or _prints(shared, line.level):
+            shared.printer.print(line)
+        if line.level is None or _keeps(shared, line.level):
+            _queue(shared, line)
 
     def _log(self, level: int, message: str, fields: Mapping[str, Any]) -> None:
-        if level < self._shared.least:
+        if not _wanted(self._shared, level):
             return
         self._emit(level, None, message, fields)
 
@@ -306,6 +384,21 @@ class Logger:
         if traced is not None:
             line.trace_id, line.span_id = traced
         self.take(line)
+
+
+def _prints(shared: _Shared, level: int) -> bool:
+    """Whether a logger prints a line of level: it has a console, and the level is the level printed or above."""
+    return not shared.printer.off and level >= (shared.kept if shared.printed is None else shared.printed)
+
+
+def _keeps(shared: _Shared, level: int) -> bool:
+    """Whether a logger keeps a line of level: it is a store's, and the level is its level or above."""
+    return shared.append is not None and level >= shared.kept
+
+
+def _wanted(shared: _Shared, level: int) -> bool:
+    """Whether a line of level goes anywhere the logger has, so that one no place takes is never encoded."""
+    return _prints(shared, level) or _keeps(shared, level)
 
 
 def _queue(shared: _Shared, line: Line) -> None:
@@ -453,15 +546,16 @@ def new_store_logger(
 ) -> tuple[Logger, LogConfig]:
     """A store's logger of one stream, and what it declares its config log with."""
     shared, spelled = _shared_of(append, stream, options)
-    least = None if options.level is None else level_number(options.level)
+    least, _ = _parts_of(options.level)
     level = "trace" if least is None else next((n for n in _LEVEL_NAMES if _LEVELS[n] >= least), "error")
     pretty = Printer(None, None, False, options.to).pretty()
     shown = options.console or ("pretty" if pretty else "json")
     declaration = _log_declaration(level, shown, options.time or "clock")
 
     def take(name: str) -> None:
+        # the level kept, and printed too while the level has no console part
         if name in _LEVELS:
-            shared.least = _LEVELS[name]
+            shared.kept = _LEVELS[name]
 
     made = Logger(shared, [])
     if options.env is False:

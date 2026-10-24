@@ -1,7 +1,8 @@
-//! What the environment says of a logger's lines, which wins over its code,
-//! as in Go, Bun and Python: `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME`, after
-//! a prefix and its underscore when one is given. A console the code turned
-//! off stays off, and a value none of them can mean is ignored and said once.
+//! What the environment says of a logger's lines, each variable over its own
+//! option, as in Go, Bun and Python: `LOG_LEVEL`, `LOG_CONSOLE_LEVEL`,
+//! `LOG_FORMAT` and `LOG_TIME`, after a prefix and its underscore when one is
+//! given. A console the code turned off stays off, and a value none of them
+//! can mean is ignored and said once.
 //!
 //! And whether a console shows colours: a terminal, without `NO_COLOR` or a
 //! `TERM` of `dumb`; `FORCE_COLOR` other than 0 makes a pipe pretty and
@@ -31,6 +32,8 @@ impl Default for Environment {
 pub(crate) struct Said {
     /// slog's number of the least level kept.
     pub(crate) level: Option<i32>,
+    /// slog's number of the least level printed, `LOG_CONSOLE_LEVEL`'s.
+    pub(crate) printed: Option<i32>,
     pub(crate) format: Option<Format>,
     pub(crate) time: Option<Time>,
     /// Each variable that said what none can mean, with what it said and
@@ -57,10 +60,13 @@ impl Environment {
             }
             Some(text.to_lowercase())
         };
-        let level = read("LOG_LEVEL", "trace, debug, info, warn or error", |text| level(text).map(drop));
+        let a_level: fn(&str) -> Option<()> = |text| level(text).map(drop);
+        let level = read("LOG_LEVEL", "trace, debug, info, warn or error", a_level);
+        let printed = read("LOG_CONSOLE_LEVEL", "trace, debug, info, warn or error", a_level);
         let format = read("LOG_FORMAT", "pretty, json or off", |text| named(&FORMATS, text).map(drop));
         let time = read("LOG_TIME", "clock, full or off", |text| named(&TIMES, text).map(drop));
         said.level = level.as_deref().and_then(self::level);
+        said.printed = printed.as_deref().and_then(self::level);
         said.format = format.as_deref().and_then(|text| named(&FORMATS, text));
         said.time = time.as_deref().and_then(|text| named(&TIMES, text));
         said
@@ -69,7 +75,8 @@ impl Environment {
     /// What the environment said as the config `log` reads it: the
     /// variables' prefix, `LOG` or `APP_LOG`, and each variable that said
     /// what a logger can mean, spelled as the config spells it; the format
-    /// left out of a console the code turned off, which stays off.
+    /// left out of a console the code turned off, which stays off, and
+    /// `LOG_CONSOLE_LEVEL`, which is one process's and no setting of the config.
     #[cfg(all(feature = "records", feature = "config"))]
     pub(crate) fn as_config(&self, said: &Said, console_off: bool) -> (String, Vec<(String, String)>) {
         let format = said.format.filter(|_| !console_off);
@@ -187,16 +194,30 @@ mod tests {
     fn bare_and_prefixed(name: &str) -> Option<String> {
         match name {
             "LOG_LEVEL" => Some("error".to_owned()),
+            "LOG_CONSOLE_LEVEL" => Some("debug".to_owned()),
             "APP_LOG_FORMAT" => Some(" JSON ".to_owned()),
+            "APP_LOG_CONSOLE_LEVEL" => Some("Warning".to_owned()),
             _ => None,
         }
     }
 
+    // contract: LOG-05
     #[test]
     fn a_logger_that_named_its_prefix_reads_its_own_variables_and_not_the_bare_ones() {
         let app = Environment { prefix: "APP".to_owned(), lookup: bare_and_prefixed };
-        assert_eq!(app.said(), Said { format: Some(Format::Json), ..Said::default() });
+        assert_eq!(app.said(), Said { format: Some(Format::Json), printed: Some(4), ..Said::default() });
         let bare = Environment { prefix: String::new(), lookup: bare_and_prefixed };
-        assert_eq!(bare.said(), Said { level: Some(8), ..Said::default() });
+        assert_eq!(bare.said(), Said { level: Some(8), printed: Some(-4), ..Said::default() });
+    }
+
+    fn console_loud(name: &str) -> Option<String> {
+        (name == "LOG_CONSOLE_LEVEL").then(|| "loud".to_owned())
+    }
+
+    #[test]
+    fn a_log_console_level_none_can_mean_is_ignored_as_a_log_level_is() {
+        let said = Environment { prefix: String::new(), lookup: console_loud }.said();
+        let ignored = ("LOG_CONSOLE_LEVEL".to_owned(), "loud".to_owned(), "trace, debug, info, warn or error");
+        assert_eq!(said, Said { ignored: vec![ignored], ..Said::default() });
     }
 }

@@ -7,8 +7,17 @@
 //! tracing::info!(user = 42, "signed in")   →  11:02:11.123 INFO  api  signed in  user=42
 //! ```
 //!
-//! A logger's level is its own: a line under it is neither printed nor kept,
-//! and the subscriber's other layers still see it, as their own filters say.
+//! A logger's levels are its own: a line under the level it keeps is not
+//! kept, one under the level it prints not printed, and the subscriber's
+//! other layers still see both, as their own filters say. Each place a line
+//! goes takes the context of the spans its own level takes, so the console's
+//! never changes what is kept.
+//!
+//! ```text
+//! .level(Levels { store: Some(INFO), console: Some(DEBUG) }), in a debug span `step`
+//! tracing::debug!(…)   printed with step=1, not kept
+//! tracing::info!(…)    printed with step=1, kept without it
+//! ```
 
 use std::fmt;
 use std::io::{IsTerminal, Write};
@@ -58,10 +67,13 @@ pub(crate) trait Keep: Send + Sync {
     fn dropped(&self) -> u64;
 }
 
-/// What a logger is told: the least level, how and where its lines print,
-/// what it hides, and which variables of the environment it reads.
+/// What a logger is told: the least level kept and printed, how and where
+/// its lines print, what it hides, and which variables of the environment it
+/// reads.
 pub(crate) struct Told {
     pub(crate) level: Option<Level>,
+    /// The least level printed when it is not `level`: a store's logger's alone.
+    pub(crate) printed: Option<Level>,
     pub(crate) format: Option<Format>,
     pub(crate) time: Time,
     pub(crate) hide_stream: bool,
@@ -77,6 +89,7 @@ impl Default for Told {
     fn default() -> Told {
         Told {
             level: None,
+            printed: None,
             format: None,
             time: Time::Clock,
             hide_stream: false,
@@ -116,9 +129,12 @@ impl Printer {
 /// wanted, its fields changed and hidden, and where and how it prints.
 pub(crate) struct Console {
     stream: String,
-    /// slog's number of the least level printed and kept, which the config
-    /// `log` changes while the logger runs; trace takes every level.
-    least: AtomicI32,
+    /// slog's number of the least level kept, which the config `log` changes
+    /// while the logger runs; trace takes every level.
+    kept: AtomicI32,
+    /// slog's number of the least level printed, `LOG_CONSOLE_LEVEL`'s or the
+    /// code's; none prints what is kept, and follows its changes.
+    printed: Option<i32>,
     printer: Option<Printer>,
     redactor: Redactor,
     replace: Option<Replace>,
@@ -150,7 +166,8 @@ impl Console {
     /// variable that says what none can mean is said once.
     pub(crate) fn new(stream: &str, told: Told) -> Console {
         let said = told.env.as_ref().map(Environment::said).unwrap_or_default();
-        let least = said.level.or(told.level.map(number));
+        let kept = said.level.or(told.level.map(number));
+        let printed = said.printed.or(told.printed.map(number));
         // the environment never turns on a console the code turned off
         let format = if told.format == Some(Format::Off) { Some(Format::Off) } else { said.format.or(told.format) };
         // colours are the terminal's, whatever variables of its own a logger reads
@@ -173,7 +190,8 @@ impl Console {
         });
         let console = Console {
             stream: stream.to_owned(),
-            least: AtomicI32::new(least.unwrap_or(TRACE)),
+            kept: AtomicI32::new(kept.unwrap_or(TRACE)),
+            printed,
             printer,
             redactor: Redactor::new(&told.redact, told.keep_url_passwords),
             replace: told.replace,
@@ -182,9 +200,15 @@ impl Console {
             #[cfg(all(feature = "records", feature = "config"))]
             declared,
         };
-        for (name, value, expected) in said.ignored {
+        console.say_ignored(said.ignored);
+        console
+    }
+
+    /// Says each variable that said what none can mean, unless a logger said it before.
+    fn say_ignored(&self, ignored: Vec<(String, String, &'static str)>) {
+        for (name, value, expected) in ignored {
             if first_said(&name, &value) {
-                console.say(&Line {
+                self.say(&Line {
                     level: Some(4),
                     message: Some(format!("{name} is ignored")),
                     fields: vec![("value".to_owned(), quoted(&value)), ("expected".to_owned(), quoted(expected))],
@@ -192,7 +216,6 @@ impl Console {
                 });
             }
         }
-        console
     }
 
     /// Prints a line, whether it is kept or not.
@@ -202,22 +225,27 @@ impl Console {
         }
     }
 
-    /// slog's number of the least level wanted; none when every one is.
-    fn least(&self) -> Option<i32> {
-        let least = self.least.load(Ordering::Relaxed);
+    /// slog's number of the least level kept; none when every one is.
+    fn kept(&self) -> Option<i32> {
+        let least = self.kept.load(Ordering::Relaxed);
         (least > TRACE).then_some(least)
     }
 
-    fn wants(&self, level: i32) -> bool {
-        self.least().is_none_or(|least| level >= least)
+    /// slog's number of the least level printed; none when every one is.
+    fn printed(&self) -> Option<i32> {
+        match self.printed {
+            Some(least) => (least > TRACE).then_some(least),
+            None => self.kept(),
+        }
     }
 
-    /// Takes the level the config `log` gives, a name of `LEVELS`, for every
-    /// line logged after.
+    /// Takes the level the config `log` gives, a name of `LEVELS`, as the
+    /// least kept of every line logged after, and printed unless the logger
+    /// was given a level to print from.
     #[cfg(all(feature = "records", feature = "config"))]
     pub(crate) fn set_level(&self, name: &str) {
         if let Some(least) = super::env::level(name) {
-            self.least.store(least, Ordering::Relaxed);
+            self.kept.store(least, Ordering::Relaxed);
         }
     }
 
@@ -285,8 +313,19 @@ pub struct Layer {
 
 impl fmt::Debug for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Layer").field("stream", &self.console.stream).field("least", &self.console.least()).finish()
+        f.debug_struct("Layer")
+            .field("stream", &self.console.stream)
+            .field("kept", &self.console.kept())
+            .field("printed", &self.console.printed())
+            .finish()
     }
+}
+
+/// Where a line goes: printed, kept, both or neither.
+#[derive(Clone, Copy)]
+struct To {
+    print: bool,
+    keep: bool,
 }
 
 impl Layer {
@@ -331,47 +370,75 @@ impl Layer {
             self.console.refused.fetch_add(1, Ordering::Relaxed);
             return;
         };
-        let mut line = Line {
+        // an event has no level, and goes wherever the logger has a place
+        let to = To { print: self.console.printer.is_some(), keep: self.keep.is_some() };
+        if !to.print && !to.keep {
+            return;
+        }
+        let line = Line {
             at: self.now(),
             stream: self.console.stream.clone(),
             name: name.to_owned(),
             fields: pairs,
             ..Line::default()
         };
-        tracing::Span::current().with_subscriber(|(id, dispatch)| {
-            if let Some(span) = dispatch.downcast_ref::<Registry>().and_then(|registry| registry.span(id)) {
-                self.add_scope(&mut line, span.scope());
-            }
-        });
-        self.write(line, true);
+        let spans = |least| {
+            let current = tracing::Span::current().with_subscriber(|(id, dispatch)| {
+                let span = dispatch.downcast_ref::<Registry>()?.span(id)?;
+                Some(spanned(span.scope(), least))
+            });
+            current.flatten().unwrap_or_default()
+        };
+        self.write(line, to, spans);
     }
 
     fn now(&self) -> i64 {
         self.keep.as_ref().map_or_else(|| unix_nanos(SystemTime::now()), |keep| keep.now())
     }
 
-    /// The context and the trace of the spans a line was logged in, from the
-    /// outermost: a span under the logger's level gives none.
-    fn add_scope<'a, R: LookupSpan<'a>>(&self, line: &mut Line, scope: Scope<'a, R>) {
-        for span in scope.from_root() {
-            if !self.console.wants(number(*span.metadata().level())) {
-                continue;
-            }
-            if let Some(spanned) = span.extensions().get::<Spanned>() {
-                line.context.extend(spanned.fields.iter().cloned());
-                line.trace = spanned.trace.or(line.trace);
-                line.span = spanned.span.or(line.span);
-            }
+    /// Where a line of `level` goes: printed from the level printed, and
+    /// kept from the level kept unless it is the store's own.
+    fn to(&self, level: i32, own: bool) -> To {
+        let printed = self.console.printed();
+        // the store's own lines print from info up unless the logger was given a level to print from
+        let shown = if own && printed.is_none() { level >= INFO } else { printed.is_none_or(|least| level >= least) };
+        let kept = !own && self.console.kept().is_none_or(|least| level >= least);
+        To { print: shown && self.console.printer.is_some(), keep: kept && self.keep.is_some() }
+    }
+
+    /// Prints and keeps a line as `to` says, its fields changed and hidden,
+    /// and its context what `spans` gives of the spans each place's level
+    /// takes: a kept line never carries a span only the console takes.
+    fn write(&self, mut line: Line, to: To, spans: impl Fn(Option<i32>) -> Spanned) {
+        line.fields = self.console.fields(std::mem::take(&mut line.fields));
+        let (printed, kept) = (self.console.printed(), self.console.kept());
+        if to.print && to.keep && printed != kept {
+            let mut shown = line.clone();
+            self.add_scope(&mut shown, spans(printed));
+            self.console.say(&shown);
+            self.add_scope(&mut line, spans(kept));
+            self.keep(line);
+            return;
+        }
+        self.add_scope(&mut line, spans(if to.print { printed } else { kept }));
+        if to.print {
+            self.console.say(&line);
+        }
+        if to.keep {
+            self.keep(line);
         }
     }
 
-    /// Prints a line with its fields changed and hidden, and keeps it unless
-    /// it is the store's own.
-    fn write(&self, mut line: Line, kept: bool) {
-        line.context = self.console.fields(std::mem::take(&mut line.context));
-        line.fields = self.console.fields(std::mem::take(&mut line.fields));
-        self.console.say(&line);
-        if kept && let Some(keep) = &self.keep {
+    /// Gives a line its spans' context, changed and hidden, and their trace
+    /// where the line has none of its own.
+    fn add_scope(&self, line: &mut Line, spanned: Spanned) {
+        line.context = self.console.fields(spanned.fields);
+        line.trace = line.trace.or(spanned.trace);
+        line.span = line.span.or(spanned.span);
+    }
+
+    fn keep(&self, line: Line) {
+        if let Some(keep) = &self.keep {
             keep.keep(line);
         }
     }
@@ -403,6 +470,23 @@ struct Spanned {
     span: Option<[u8; 8]>,
 }
 
+/// The fields of the spans a line was logged in, from the outermost, and the
+/// innermost trace: a span under `least` gives none, and none takes every one.
+fn spanned<'a, R: LookupSpan<'a>>(scope: Scope<'a, R>, least: Option<i32>) -> Spanned {
+    let mut scoped = Spanned::default();
+    for span in scope.from_root() {
+        if least.is_some_and(|least| number(*span.metadata().level()) < least) {
+            continue;
+        }
+        if let Some(spanned) = span.extensions().get::<Spanned>() {
+            scoped.fields.extend(spanned.fields.iter().cloned());
+            scoped.trace = spanned.trace.or(scoped.trace);
+            scoped.span = spanned.span.or(scoped.span);
+        }
+    }
+    scoped
+}
+
 impl<S> tracing_subscriber::Layer<S> for Layer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -431,9 +515,8 @@ where
     fn on_event(&self, event: &Event<'_>, context: Context<'_, S>) {
         let metadata = event.metadata();
         let (level, own) = (number(*metadata.level()), metadata.target() == OWN);
-        // the store's own lines show from info up, or from the logger's level when it has one, as Go's
-        let shown = if own && self.console.least().is_none() { level >= INFO } else { self.console.wants(level) };
-        if !shown {
+        let to = self.to(level, own);
+        if !to.print && !to.keep {
             return;
         }
         let (mut called, mut message) = (Spanned::default(), None);
@@ -444,13 +527,10 @@ where
             name: LOG.to_owned(),
             level: Some(level),
             message: Some(message.unwrap_or_default()),
+            trace: called.trace,
+            span: called.span,
             ..Line::default()
         };
-        if let Some(scope) = context.event_scope(event) {
-            self.add_scope(&mut line, scope);
-        }
-        line.trace = called.trace.or(line.trace);
-        line.span = called.span.or(line.span);
         if self.console.source
             && let (Some(file), Some(number)) = (metadata.file(), metadata.line())
         {
@@ -459,7 +539,8 @@ where
             called.fields.push((SOURCE.to_owned(), spelled));
         }
         line.fields = called.fields;
-        self.write(line, !own);
+        let spans = |least| context.event_scope(event).map(|scope| spanned(scope, least)).unwrap_or_default();
+        self.write(line, to, spans);
     }
 }
 

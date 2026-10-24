@@ -47,7 +47,7 @@ pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};
 pub use lines::Lines;
-pub use logger::LoggerBuilder;
+pub use logger::{Levels, LoggerBuilder};
 pub use maintain::{Maintenance, maintain};
 pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};

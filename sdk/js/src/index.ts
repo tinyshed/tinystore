@@ -155,6 +155,7 @@ export type {
 	EventsOptions,
 	Fields,
 	Level,
+	Levels,
 	Lines,
 	NewEvent,
 	Page as EventsPage,

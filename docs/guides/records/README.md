@@ -57,16 +57,16 @@ let page = store.all_events()?.list().since(Duration::from_hours(1)).min_level(L
 
 ## In these guides
 
-| Page                                        | Covers                                                        |
-|---------------------------------------------|---------------------------------------------------------------|
-| [Logging](logging.md)                       | levels, `with`, `redact`, Go's `slog` and Rust's `tracing`    |
-| [Console output](console.md)                | pretty or JSON, `LOG_LEVEL`, `LOG_FORMAT`, a console alone    |
-| [Events](events.md)                         | `append`, names, fields, context, times                       |
-| [Reading](reading.md)                       | `list`, `all`, `where`, `search`, `count`, `top`, `aggregate` |
-| [Traces](traces.md)                         | one request's lines across streams                            |
-| [Tail and poll](tail-and-poll.md)           | live events, and every event once from a cursor               |
-| [Other programs' output](other-programs.md) | another process's lines as events                             |
-| [Repair](repair.md)                         | `damaged` and `drop`                                          |
+| Page                                        | Covers                                                                             |
+|---------------------------------------------|------------------------------------------------------------------------------------|
+| [Logging](logging.md)                       | levels, `with`, `redact`, Go's `slog` and Rust's `tracing`                         |
+| [Console output](console.md)                | pretty or JSON, a quiet console, `LOG_LEVEL`, `LOG_CONSOLE_LEVEL`, a console alone |
+| [Events](events.md)                         | `append`, names, fields, context, times                                            |
+| [Reading](reading.md)                       | `list`, `all`, `where`, `search`, `count`, `top`, `aggregate`                      |
+| [Traces](traces.md)                         | one request's lines across streams                                                 |
+| [Tail and poll](tail-and-poll.md)           | live events, and every event once from a cursor                                    |
+| [Other programs' output](other-programs.md) | another process's lines as events                                                  |
+| [Repair](repair.md)                         | `damaged` and `drop`                                                               |
 
 New to Records? [What it is doing](../../handbook/chat/what-it-is-doing.md)
 in the Handbook logs a chat's requests and reads them back.

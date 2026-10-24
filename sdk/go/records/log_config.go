@@ -16,7 +16,9 @@ import (
 // of its level reaches the handler of every process of the store at once.
 // The code's options are the declaration's defaults, and the variables it
 // read, LOG_LEVEL, LOG_FORMAT and LOG_TIME, go over them; only the level is
-// live. Records and the config meet here, as Rust's log_config does:
+// live. The level is the least kept, and the least printed unless the code's
+// Levels has a Console part, which is one process's and no setting here.
+// Records and the config meet here, as Rust's log_config does:
 //
 //	level   live, one of trace, debug, info, warn, error   the code's, or trace: every level
 //	format  one of pretty, json, off                       the code's, or what its console chose

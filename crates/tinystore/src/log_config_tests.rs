@@ -13,6 +13,7 @@ use super::follow;
 use crate::config::{Config, Live, Watching};
 use crate::console::fixture::Printed;
 use crate::console::{Console, Declared, Environment, Format, Layer, Told};
+use crate::records::Levels;
 use crate::{ErrorKind, Options, Store};
 
 /// The config `log` as a program that changes the level declares it.
@@ -92,6 +93,27 @@ fn a_stores_logger_follows_the_config_log_while_a_clone_of_it_lives() {
 
 // contract: LOG-07
 #[test]
+fn a_change_of_the_level_moves_what_is_kept_and_leaves_a_console_part_as_the_code_gave_it() {
+    let ((_dir, store), printed) = (store(), Printed::default());
+    let levels = Levels { store: Some(Level::ERROR), console: Some(Level::WARN) };
+    let built = store.logger("api").level(levels).console(Format::Json).no_env();
+    let log = built.to(printed.clone()).layer().unwrap();
+    let settings = store.config("log", Log { level: Live::new("info".to_owned()) }).open().unwrap();
+    settings.update(|log| *log.level = "debug".to_owned()).unwrap();
+    let subscriber = tracing_subscriber::registry().with(log.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::debug!("debug");
+        tracing::warn!("warn");
+    });
+    log.flush();
+    assert_eq!(messages(&printed), ["warn"]);
+    let kept = store.events("api").open().unwrap().list().page().unwrap().events;
+    let kept: Vec<Option<&str>> = kept.iter().map(|event| event.message.as_deref()).collect();
+    assert_eq!(kept, [Some("debug"), Some("warn")]);
+}
+
+// contract: LOG-07
+#[test]
 fn a_level_no_logger_means_is_refused_while_a_logger_has_the_config_open() {
     let ((_dir, store), printed) = (store(), Printed::default());
     let _following = follow(&store, &console(&printed, None, silent)).unwrap();
@@ -152,8 +174,13 @@ fn a_variable_no_logger_means_is_said_once_and_the_config_opens_without_it() {
     assert_eq!(explained(&following, "level").from, "the declaration");
 }
 
+/// The format, and `LOG_CONSOLE_LEVEL`, which the config `log` has no setting for.
 fn json_said(name: &str) -> Option<String> {
-    (name == "APP_LOG_FORMAT").then(|| "json".to_owned())
+    match name {
+        "APP_LOG_FORMAT" => Some("json".to_owned()),
+        "APP_LOG_CONSOLE_LEVEL" => Some("warn".to_owned()),
+        _ => None,
+    }
 }
 
 // contract: LOG-07

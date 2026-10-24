@@ -534,3 +534,179 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	return w.out.Write(p)
 }
+
+// printedMessages is the messages a JSON console printed, an event's name in place of one.
+func printedMessages(t *testing.T, printed []byte) []string {
+	t.Helper()
+	var messages []string
+	for _, line := range strings.Split(strings.TrimSuffix(string(printed), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var said struct{ Msg, Event string }
+		if err := json.Unmarshal([]byte(line), &said); err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		messages = append(messages, said.Msg+said.Event)
+	}
+	return messages
+}
+
+// keptMessages is the messages a stream kept, an event's name in place of one.
+func keptMessages(t *testing.T, store *tinystore.Store, stream string) []string {
+	t.Helper()
+	events := ways.Must(ways.Must(records.OpenEvents(store, stream)).List(context.Background(), records.Query{})).Events
+	var messages []string
+	for _, event := range events {
+		if event.Name == "log" {
+			messages = append(messages, event.Message)
+		} else {
+			messages = append(messages, event.Name)
+		}
+	}
+	return messages
+}
+
+func fourLevels(log *slog.Logger) {
+	log.Debug("debug")
+	log.Info("info")
+	log.Warn("warn")
+	log.Error("error")
+}
+
+// contract: LOG-08
+func TestOneLevelSetsBothWhatAStoresHandlerKeepsAndWhatItPrints(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		var out bytes.Buffer
+		handler := records.NewHandler(store, "both", console.Level(slog.LevelWarn), console.JSON, console.NoEnv,
+			console.To(&out))
+		fourLevels(slog.New(handler))
+		ways.Must(0, handler.Flush(context.Background()))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"warn", "error"}) {
+			t.Fatalf("printed %q", got)
+		}
+		if got := keptMessages(t, store, "both"); !reflect.DeepEqual(got, []string{"warn", "error"}) {
+			t.Fatalf("kept %q", got)
+		}
+	})
+}
+
+// contract: LOG-08
+func TestAConsolePartAloneKeepsEveryLevelAndPrintsFromItsOwn(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		var out bytes.Buffer
+		handler := records.NewHandler(store, "everything", records.Levels{Console: slog.LevelWarn}, console.JSON,
+			console.NoEnv, console.To(&out))
+		log := slog.New(handler)
+		log.Log(context.Background(), slog.Level(-8), "trace")
+		fourLevels(log)
+		ways.Must(0, handler.Flush(context.Background()))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"warn", "error"}) {
+			t.Fatalf("printed %q", got)
+		}
+		every := []string{"trace", "debug", "info", "warn", "error"}
+		if got := keptMessages(t, store, "everything"); !reflect.DeepEqual(got, every) {
+			t.Fatalf("kept %q", got)
+		}
+	})
+}
+
+// contract: LOG-08
+func TestAStoresHandlerWithAConsolePartPrintsLessThanItKeeps(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		var out bytes.Buffer
+		handler := records.NewHandler(store, "quiet", records.Levels{Store: slog.LevelInfo, Console: slog.LevelWarn},
+			console.JSON, console.NoEnv, console.To(&out))
+		fourLevels(slog.New(handler))
+		handler.Event("signup", "plan", "pro")
+		ways.Must(0, handler.Flush(context.Background()))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"warn", "error", "signup"}) {
+			t.Fatalf("printed %q", got)
+		}
+		kept := []string{"info", "warn", "error", "signup"}
+		if got := keptMessages(t, store, "quiet"); !reflect.DeepEqual(got, kept) {
+			t.Fatalf("kept %q", got)
+		}
+	})
+}
+
+// contract: LOG-08
+func TestAStoresHandlerMayPrintBelowWhatItKeepsAndIsEnabledWhereEitherTakesALine(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		var out bytes.Buffer
+		handler := records.NewHandler(store, "louder", records.Levels{Store: slog.LevelInfo, Console: slog.LevelDebug},
+			console.JSON, console.NoEnv, console.To(&out))
+		fourLevels(slog.New(handler))
+		ways.Must(0, handler.Flush(context.Background()))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"debug", "info", "warn", "error"}) {
+			t.Fatalf("printed %q", got)
+		}
+		if got := keptMessages(t, store, "louder"); !reflect.DeepEqual(got, []string{"info", "warn", "error"}) {
+			t.Fatalf("kept %q", got)
+		}
+		off := records.NewHandler(store, "louder", records.Levels{Store: slog.LevelWarn, Console: slog.LevelDebug},
+			console.Off, console.NoEnv)
+		if off.Enabled(context.Background(), slog.LevelDebug) || !off.Enabled(context.Background(), slog.LevelWarn) {
+			t.Fatal("a console turned off took part in what the handler takes")
+		}
+	})
+}
+
+// contract: LOG-05
+func TestEachVariableWinsOverItsOwnPartAndLeavesTheOtherAsTheCodeGaveIt(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		said := map[string]string{"LOG_CONSOLE_LEVEL": "error", "LOG_LEVEL": "debug"}
+		lookup := func(name string) (string, bool) { value, ok := said[name]; return value, ok }
+		var out bytes.Buffer
+		handler := records.NewHandler(store, "told", records.Levels{Store: slog.LevelWarn, Console: slog.LevelInfo},
+			console.JSON, console.FromLookup("", lookup), console.To(&out))
+		fourLevels(slog.New(handler))
+		ways.Must(0, handler.Flush(context.Background()))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"error"}) {
+			t.Fatalf("LOG_CONSOLE_LEVEL over the console part: printed %q", got)
+		}
+		if got := keptMessages(t, store, "told"); !reflect.DeepEqual(got, []string{"debug", "info", "warn", "error"}) {
+			t.Fatalf("LOG_LEVEL over the store part: kept %q", got)
+		}
+
+		delete(said, "LOG_CONSOLE_LEVEL")
+		out.Reset()
+		handler = records.NewHandler(store, "told", records.Levels{Console: slog.LevelWarn}, console.JSON,
+			console.FromLookup("", lookup), console.To(&out))
+		fourLevels(slog.New(handler))
+		if got := printedMessages(t, out.Bytes()); !reflect.DeepEqual(got, []string{"warn", "error"}) {
+			t.Fatalf("LOG_LEVEL moved the console part the code gave: printed %q", got)
+		}
+	})
+}
+
+// contract: LOG-07
+func TestAChangeOfTheConfigLogMovesWhatIsKeptAndLeavesAConsolePartAsTheCodeGaveIt(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		var written bytes.Buffer
+		var mu sync.Mutex
+		levels := records.Levels{Store: slog.LevelError, Console: slog.LevelWarn}
+		handler := records.NewHandler(store, "followed", levels, console.JSON, console.NoEnv,
+			console.To(lockedWriter{&written, &mu}))
+		log := slog.New(handler)
+		type Log struct {
+			Level string `json:"level" config:"live"`
+		}
+		settings := ways.Must(tinystore.OpenConfig(ctx, store, "log", Log{Level: "info"}))
+		ways.Must(0, settings.Update(ctx, func(l *Log) { l.Level = "debug" }))
+		ways.Until(t, func() bool { return handler.Enabled(ctx, slog.LevelDebug) })
+		log.Debug("kept, not printed")
+		ways.Must(0, handler.Flush(ctx))
+		mu.Lock()
+		printed := written.String()
+		mu.Unlock()
+		if printed != "" {
+			t.Fatalf("the config log moved the console part: printed %q", printed)
+		}
+		if got := keptMessages(t, store, "followed"); !reflect.DeepEqual(got, []string{"kept, not printed"}) {
+			t.Fatalf("kept %q", got)
+		}
+		ways.Must(0, settings.Reset(ctx, "level"))
+	})
+}

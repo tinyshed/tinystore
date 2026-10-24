@@ -296,7 +296,7 @@ page = await store.events().list(since="1h", min_level="warn")
 def logger(
     stream: str,
     *,
-    level: Level | None = None,
+    level: Level | Levels | None = None,
     console: Console | None = None,
     time: ConsoleTime | None = None,
     hide_stream: bool = False,
@@ -319,22 +319,29 @@ counted. The store's close hands over what it holds:
     log = store.logger("api", redact=tinystore.secrets)
     log.info("signed in", user=42)
 
+``level`` is the least level kept and printed, or each apart:
+``level={"store": "info", "console": "warning"}`` keeps every line
+from info and prints warnings and errors. LOG_LEVEL wins over the
+level kept, and LOG_CONSOLE_LEVEL over the level printed.
+
 ### Store.log_handler
 
 ```python
 def log_handler(
     stream: str,
-    level: int = logging.NOTSET,
+    level: Level | Levels | None = None,
     **options: Any,
 ) -> LogHandler: ...
 ```
 
 A handler for a program that logs through logging, its lines printed and kept as the store's logger's:
 
-logging.getLogger("worker").addHandler(store.log_handler("worker"))
+logging.getLogger("worker").addHandler(store.log_handler("worker", level={"console": "warning"}))
 
 A record's extra are its fields, its logger's name in its context.
-The options are the store's logger's.
+The level and the options are the store's logger's, so LOG_LEVEL and
+the config log reach the handler too. Leave the handler's own logging
+level unset: it drops a record before the logger sees it.
 
 ### Store.database
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,7 @@ import pytest
 
 import tinystore
 from tinystore._console import Line, encode_fields, hide_url_passwords, json_line, pretty_line, redactor, words
+from tinystore.logger import LoggerOptions, new_store_logger
 
 FILE = json.loads((Path(__file__).parents[3] / "testdata" / "console" / "console.json").read_text(encoding="utf-8"))
 VECTORS: list[dict[str, Any]] = FILE["lines"]
@@ -100,7 +103,113 @@ def test_the_environment_wins_over_the_code_and_never_turns_a_console_on(monkeyp
     assert quiet.getvalue() == ""
 
 
+async def _printed_and_kept(**told: Any) -> tuple[list[str], list[str]]:
+    """A store's logger over an append of its own, printing JSON: the messages it printed, and those it kept."""
+    out, kept = io.StringIO(), list[str]()
+
+    async def append(lines: list[Line]) -> None:
+        kept.extend(line.msg or "" for line in lines)
+
+    log, _ = new_store_logger(append, "api", LoggerOptions(console="json", to=out, **told))
+    log.debug("debug")
+    log.info("info")
+    log.warning("warning")
+    log.error("error")
+    await log.flush()
+    return [json.loads(line)["msg"] for line in out.getvalue().splitlines()], kept
+
+
+# contract: LOG-05
+async def test_each_variable_wins_over_its_own_part(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_CONSOLE_LEVEL", "error")
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    printed, kept = await _printed_and_kept(level={"store": "warning", "console": "info"})
+    assert (printed, kept) == (["error"], ["debug", "info", "warning", "error"])
+
+    monkeypatch.delenv("LOG_CONSOLE_LEVEL")
+    printed, kept = await _printed_and_kept(level={"console": "warning"})
+    assert (printed, kept) == (["warning", "error"], ["debug", "info", "warning", "error"])
+
+
+# contract: LOG-05
+async def test_a_prefix_reads_its_log_console_level_and_a_value_it_cannot_mean_is_said_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.setenv("LOG_CONSOLE_LEVEL", "error")
+    monkeypatch.setenv("APP_LOG_CONSOLE_LEVEL", "warn")
+    assert (await _printed_and_kept(env="APP"))[0] == ["warning", "error"]
+
+    value = f"quiet-{time.time_ns()}"
+    monkeypatch.setenv("LOG_CONSOLE_LEVEL", value)
+    first, _ = await _printed_and_kept()
+    assert first == ["LOG_CONSOLE_LEVEL is ignored", "debug", "info", "warning", "error"]
+    second, _ = await _printed_and_kept()
+    assert second == ["debug", "info", "warning", "error"]
+
+
+# contract: LOG-05
+def test_log_console_level_sets_what_a_logger_of_the_console_alone_prints(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_CONSOLE_LEVEL", "warning")
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    out = io.StringIO()
+    log = tinystore.logger("app", console="json", to=out)
+    log.info("hidden")
+    log.warning("shown")
+    assert [json.loads(line)["msg"] for line in out.getvalue().splitlines()] == ["shown"]
+
+
+# contract: LOG-08
+async def test_one_level_sets_both_what_is_kept_and_what_is_printed() -> None:
+    both = await _printed_and_kept(level="warning", env=False)
+    assert both == (["warning", "error"], ["warning", "error"])
+
+
+# contract: LOG-08
+async def test_a_console_part_alone_keeps_every_level_and_prints_from_its_own() -> None:
+    quiet = await _printed_and_kept(level={"console": "warning"}, env=False)
+    assert quiet == (["warning", "error"], ["debug", "info", "warning", "error"])
+
+
+# contract: LOG-08
+async def test_a_console_part_changes_only_what_is_printed() -> None:
+    quieter = await _printed_and_kept(level={"store": "info", "console": "warning"}, env=False)
+    assert quieter == (["warning", "error"], ["info", "warning", "error"])
+    louder = await _printed_and_kept(level={"store": "info", "console": "debug"}, env=False)
+    assert louder == (["debug", "info", "warning", "error"], ["info", "warning", "error"])
+
+
+def test_a_logger_follows_the_config_log_only_while_its_level_has_no_console_part() -> None:
+    out = io.StringIO()
+
+    async def append(_: list[Line]) -> None:
+        pass
+
+    told = LoggerOptions(level="error", console="json", to=out, env=False)
+    following, following_config = new_store_logger(append, "api", told)
+    store_part, store_part_config = new_store_logger(append, "api", dataclasses.replace(told, level={"store": "error"}))
+    apart = dataclasses.replace(told, level={"store": "error", "console": "warning"})
+    own, own_config = new_store_logger(append, "api", apart)
+    for config in (following_config, store_part_config, own_config):
+        config.take("debug")
+    following.debug("followed")
+    store_part.debug("a store part alone followed")
+    own.debug("own console part")
+    own.warning("warned")
+    printed = [json.loads(line)["msg"] for line in out.getvalue().splitlines()]
+    assert printed == ["followed", "a store part alone followed", "warned"]
+
+
 def test_a_level_a_format_or_a_time_it_cannot_read_is_refused() -> None:
     for wrong in ({"console": "loud"}, {"time": "noon"}, {"level": "chatty"}):
         with pytest.raises(tinystore.InvalidError):
             tinystore.logger("app", **wrong)  # type: ignore[arg-type]
+
+
+def test_a_level_whose_part_is_neither_store_nor_console_or_names_no_level_is_refused() -> None:
+    async def append(_: list[Line]) -> None:
+        pass
+
+    for wrong in ({"default": "info"}, {"console": "loud"}):
+        with pytest.raises(tinystore.InvalidError):
+            new_store_logger(append, "api", LoggerOptions(level=wrong, env=False))  # type: ignore[arg-type]

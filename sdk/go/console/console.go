@@ -71,9 +71,11 @@ func To(w io.Writer) Option {
 	return optionFunc(func(s *logline.Settings) { s.To = w })
 }
 
-// Level keeps lines from level up; without it every line is kept.
+// Level prints and keeps lines from level up; without it every line is. On a
+// store's handler it is records.Levels{Store: level}, which sets the level it
+// keeps and the level it prints apart.
 func Level(level slog.Leveler) Option {
-	return optionFunc(func(s *logline.Settings) { s.Level = level })
+	return optionFunc(func(s *logline.Settings) { s.Level, s.Printed = level, nil })
 }
 
 // Redact hides the values of fields whose keys name a secret, at any depth of
@@ -108,9 +110,10 @@ func ReplaceAttr(replace func(groups []string, attr slog.Attr) slog.Attr) Option
 	return optionFunc(func(s *logline.Settings) { s.Replace = replace })
 }
 
-// FromEnv reads prefix_LOG_LEVEL, prefix_LOG_FORMAT and prefix_LOG_TIME, which
-// win over the code. Without an environment option a handler reads LOG_LEVEL,
-// LOG_FORMAT and LOG_TIME, as FromEnv("") does.
+// FromEnv reads prefix_LOG_LEVEL, prefix_LOG_CONSOLE_LEVEL, prefix_LOG_FORMAT
+// and prefix_LOG_TIME, each of which wins over its own option. Without an
+// environment option a handler reads LOG_LEVEL and the rest, as FromEnv("")
+// does.
 func FromEnv(prefix string) Option {
 	return FromLookup(prefix, os.LookupEnv)
 }

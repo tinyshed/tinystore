@@ -6,8 +6,11 @@ import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { setTimeout as sleep } from 'node:timers/promises'
 
+import { env } from '../src/config.ts'
 import type { ConsoleLine } from '../src/console.ts'
-import { logger, newLogger } from '../src/logger.ts'
+import { InvalidError } from '../src/errors.ts'
+import { logger, newLogger, newStoreLogger } from '../src/logger.ts'
+import type { StoreLoggerOptions } from '../src/records.ts'
 
 /** An append that holds each write until let go, and keeps how many lines each carried. */
 function heldAppend() {
@@ -165,6 +168,179 @@ describe('LOG_LEVEL, LOG_FORMAT and LOG_TIME', () => {
 			expected: 'trace, debug, info, warn or error',
 		})
 		expect(second).toHaveLength(1)
+	})
+})
+
+/** A store's logger over an append of its own: the messages it printed, and those it kept. */
+async function printedAndKept(
+	options: Omit<StoreLoggerOptions, 'keep'>,
+	log: (logger: ReturnType<typeof newStoreLogger>[0]) => void,
+): Promise<{ printed: string[]; kept: string[] }> {
+	const printed: string[] = []
+	const kept: string[] = []
+	const to = { write: (text: string) => void printed.push(JSON.parse(text).msg) }
+	const append = async (lines: ConsoleLine[]) =>
+		void kept.push(...lines.map(line => line.msg ?? ''))
+	const [made] = newStoreLogger(append, 'api', { console: 'json', to, ...options })
+	log(made)
+	await made.stop()
+	return { printed, kept }
+}
+
+const fourLevels = (log: ReturnType<typeof newStoreLogger>[0]) => {
+	log.debug('debug')
+	log.info('info')
+	log.warn('warn')
+	log.error('error')
+}
+
+describe('LOG_CONSOLE_LEVEL', () => {
+	// contract: LOG-05
+	test("wins over level's console part, as LOG_LEVEL wins over its store part", async () => {
+		const from = { LOG_CONSOLE_LEVEL: 'error', LOG_LEVEL: 'debug' }
+		const options = {
+			level: { store: 'warn', console: 'info' },
+			env: env('', { from }),
+		} as const
+		expect(await printedAndKept(options, fourLevels)).toEqual({
+			printed: ['error'],
+			kept: ['debug', 'info', 'warn', 'error'],
+		})
+	})
+
+	// contract: LOG-05
+	test('LOG_LEVEL leaves a console part the code gave as it is', async () => {
+		const options = {
+			level: { console: 'warn' },
+			env: env('', { from: { LOG_LEVEL: 'debug' } }),
+		} as const
+		expect(await printedAndKept(options, fourLevels)).toEqual({
+			printed: ['warn', 'error'],
+			kept: ['debug', 'info', 'warn', 'error'],
+		})
+	})
+
+	// contract: LOG-05
+	test('a prefix reads APP_LOG_CONSOLE_LEVEL, and a value it cannot mean is ignored and said once', async () => {
+		const prefixed = {
+			env: env('APP', { from: { LOG_CONSOLE_LEVEL: 'error', APP_LOG_CONSOLE_LEVEL: 'warn' } }),
+		}
+		expect((await printedAndKept(prefixed, fourLevels)).printed).toEqual(['warn', 'error'])
+
+		const value = `quiet-${Date.now()}`
+		const said = { env: env('', { from: { LOG_CONSOLE_LEVEL: value } }) }
+		const first = await printedAndKept(said, fourLevels)
+		expect(first.printed).toEqual([
+			'LOG_CONSOLE_LEVEL is ignored',
+			'debug',
+			'info',
+			'warn',
+			'error',
+		])
+		expect((await printedAndKept(said, fourLevels)).printed).toEqual([
+			'debug',
+			'info',
+			'warn',
+			'error',
+		])
+	})
+
+	// contract: LOG-05
+	test('sets what a logger of the console alone prints', () => {
+		const printed: string[] = []
+		const to = { write: (text: string) => void printed.push(JSON.parse(text).msg) }
+		const from = { LOG_CONSOLE_LEVEL: 'warn', LOG_LEVEL: 'debug' }
+		fourLevels(logger('app', { console: 'json', to, env: env('', { from }) }))
+		expect(printed).toEqual(['warn', 'error'])
+	})
+})
+
+describe("a store's logger's level in two parts", () => {
+	// contract: LOG-08
+	test('one level sets both what is kept and what is printed', async () => {
+		expect(await printedAndKept({ level: 'warn', env: false }, fourLevels)).toEqual({
+			printed: ['warn', 'error'],
+			kept: ['warn', 'error'],
+		})
+	})
+
+	// contract: LOG-08
+	test('a console part alone keeps every level and prints from its own', async () => {
+		expect(await printedAndKept({ level: { console: 'warn' }, env: false }, fourLevels)).toEqual({
+			printed: ['warn', 'error'],
+			kept: ['debug', 'info', 'warn', 'error'],
+		})
+	})
+
+	// contract: LOG-08
+	test('prints from its console part and keeps from its store part, the two apart', async () => {
+		const quieter = { level: { store: 'info', console: 'warn' }, env: false } as const
+		expect(await printedAndKept(quieter, fourLevels)).toEqual({
+			printed: ['warn', 'error'],
+			kept: ['info', 'warn', 'error'],
+		})
+		const louder = { level: { store: 'info', console: 'debug' }, env: false } as const
+		expect(await printedAndKept(louder, fourLevels)).toEqual({
+			printed: ['debug', 'info', 'warn', 'error'],
+			kept: ['info', 'warn', 'error'],
+		})
+	})
+
+	test('refuses a part that is neither store nor console', () => {
+		const level = { default: 'info' } as unknown as { store: 'info' }
+		expect(() => newStoreLogger(async () => {}, 'api', { level, env: false })).toThrow(InvalidError)
+	})
+
+	// contract: LOG-08
+	test('prints and keeps an event, which has no level', async () => {
+		const options = { level: { store: 'error', console: 'error' }, env: false } as const
+		const printed: string[] = []
+		const kept: string[] = []
+		const to = { write: (text: string) => void printed.push(JSON.parse(text).event) }
+		const append = async (lines: ConsoleLine[]) =>
+			void kept.push(...lines.map(line => line.event ?? ''))
+		const [log] = newStoreLogger(append, 'api', { console: 'json', to, ...options })
+		log.event('signup', { plan: 'pro' })
+		await log.stop()
+		expect([printed, kept]).toEqual([['signup'], ['signup']])
+	})
+
+	test('follows the config log only while its level has no console part', async () => {
+		const printed: string[] = []
+		const to = { write: (text: string) => void printed.push(JSON.parse(text).msg) }
+		const append = async () => {}
+		const made = (level: StoreLoggerOptions['level']) =>
+			newStoreLogger(append, 'api', { console: 'json', to, level, env: false })
+		const [following, followingConfig] = made('error')
+		const [storePart, storePartConfig] = made({ store: 'error' })
+		const [own, ownConfig] = made({ store: 'error', console: 'warn' })
+		for (const config of [followingConfig, storePartConfig, ownConfig]) {
+			config.take('debug')
+		}
+		following.debug('followed')
+		storePart.debug('a store part alone followed')
+		own.debug('own console part')
+		own.warn('warned')
+		await Promise.all([following.stop(), storePart.stop(), own.stop()])
+		expect(printed).toEqual(['followed', 'a store part alone followed', 'warned'])
+	})
+
+	test('encodes no line that no destination it has takes', async () => {
+		let replaced = 0
+		const replace = (_: string, value: unknown) => {
+			replaced++
+			return value
+		}
+		const options = {
+			console: 'off',
+			level: { store: 'warn', console: 'debug' },
+			replace,
+			env: false,
+		} as const
+		const [log] = newStoreLogger(async () => {}, 'api', options)
+		log.debug('to no one', { user: 42 })
+		await log.stop()
+		expect(replaced).toBe(0)
 	})
 })
 

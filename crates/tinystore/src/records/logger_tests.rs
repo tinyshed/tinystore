@@ -183,3 +183,135 @@ fn a_logger_dropped_with_lines_waiting_loses_none_of_them() {
         [Some("held when its logger went")]
     );
 }
+
+/// The messages printed, in order; an event's name in place of a message.
+fn printed_messages(printed: &Printed) -> Vec<String> {
+    let said = |line: String| {
+        let line: serde_json::Value = serde_json::from_str(&line).unwrap();
+        line["msg"].as_str().or(line["event"].as_str()).unwrap().to_owned()
+    };
+    printed.lines().into_iter().map(said).collect()
+}
+
+/// The messages kept in `api`, in order; an event's name in place of a message.
+fn kept_messages(f: &Fixture) -> Vec<String> {
+    let events = f.events("api").list().page().unwrap().events;
+    events.into_iter().map(|event| event.message.unwrap_or(event.name)).collect()
+}
+
+/// Logs a line at debug, then one at each level above it.
+fn four_lines() {
+    tracing::debug!("debug");
+    tracing::info!("info");
+    tracing::warn!("warn");
+    tracing::error!("error");
+}
+
+/// The levels of a logger that keeps from `store` and prints from `console`.
+fn apart(store: tracing::Level, console: tracing::Level) -> Levels {
+    Levels { store: Some(store), console: Some(console) }
+}
+
+// contract: LOG-08
+#[test]
+fn a_single_level_sets_what_is_kept_and_what_is_printed() {
+    let (f, printed) = (fixture(), Printed::default());
+    let log = logger(&f, &printed).level(tracing::Level::WARN).layer().unwrap();
+    logged(&log, four_lines);
+    log.flush();
+    assert_eq!(printed_messages(&printed), ["warn", "error"]);
+    assert_eq!(kept_messages(&f), ["warn", "error"]);
+    assert_eq!(Levels::from(tracing::Level::WARN), Levels { store: Some(tracing::Level::WARN), console: None });
+}
+
+// contract: LOG-08
+#[test]
+fn a_console_part_alone_keeps_every_level_and_prints_from_its_own() {
+    let (f, printed) = (fixture(), Printed::default());
+    let levels = Levels { console: Some(tracing::Level::WARN), ..Levels::default() };
+    let log = logger(&f, &printed).level(levels).layer().unwrap();
+    logged(&log, || {
+        tracing::trace!("trace");
+        four_lines();
+    });
+    log.flush();
+    assert_eq!(printed_messages(&printed), ["warn", "error"]);
+    assert_eq!(kept_messages(&f), ["trace", "debug", "info", "warn", "error"]);
+}
+
+// contract: LOG-08
+#[test]
+fn a_console_part_changes_what_is_printed_and_never_what_is_kept() {
+    let (f, printed) = (fixture(), Printed::default());
+    let log = logger(&f, &printed).level(apart(tracing::Level::INFO, tracing::Level::WARN)).layer().unwrap();
+    logged(&log, four_lines);
+    log.event("signup", &json!({ "plan": "pro" }));
+    log.flush();
+    assert_eq!(printed_messages(&printed), ["warn", "error", "signup"], "an event has no level and prints");
+    assert_eq!(kept_messages(&f), ["info", "warn", "error", "signup"]);
+}
+
+// contract: LOG-08
+#[test]
+fn a_console_below_the_store_prints_more_and_the_kept_line_carries_only_the_spans_its_level_takes() {
+    let (f, printed) = (fixture(), Printed::default());
+    let log = logger(&f, &printed).level(apart(tracing::Level::INFO, tracing::Level::DEBUG)).layer().unwrap();
+    logged(&log, || {
+        let request = tracing::info_span!("request", request_id = 7);
+        let _in_request = request.enter();
+        let step = tracing::debug_span!("step", step = 1);
+        let _in_step = step.enter();
+        tracing::debug!("cache miss");
+        tracing::info!("signed in");
+    });
+    log.flush();
+    assert_eq!(
+        printed.untimed(),
+        [
+            r#"{"level":"DEBUG","stream":"api","msg":"cache miss","request_id":7,"step":1}"#,
+            r#"{"level":"INFO","stream":"api","msg":"signed in","request_id":7,"step":1}"#,
+        ]
+    );
+    let events = f.events("api").list().page().unwrap().events;
+    assert_eq!(kept_messages(&f), ["signed in"]);
+    assert_eq!((events[0].context.json("request_id"), events[0].context.json("step")), (Some("7"), None));
+}
+
+fn console_error_level_debug(name: &str) -> Option<String> {
+    match name {
+        "LOG_CONSOLE_LEVEL" => Some("error".to_owned()),
+        "LOG_LEVEL" => Some("debug".to_owned()),
+        _ => None,
+    }
+}
+
+fn level_debug(name: &str) -> Option<String> {
+    (name == "LOG_LEVEL").then(|| "debug".to_owned())
+}
+
+/// A logger of `api` as `logger` makes it, in an environment `lookup` answers for.
+fn logger_in<'s>(f: &'s Fixture, printed: &Printed, lookup: fn(&str) -> Option<String>) -> LoggerBuilder<'s> {
+    let mut built = logger(f, printed);
+    built.told.env = Some(crate::console::Environment { prefix: String::new(), lookup });
+    built
+}
+
+// contract: LOG-05
+#[test]
+fn each_variable_wins_over_its_own_part_and_leaves_the_other_as_the_code_gave_it() {
+    let (f, printed) = (fixture(), Printed::default());
+    let told = logger_in(&f, &printed, console_error_level_debug);
+    let log = told.level(apart(tracing::Level::WARN, tracing::Level::INFO)).layer().unwrap();
+    logged(&log, four_lines);
+    log.flush();
+    assert_eq!(printed_messages(&printed), ["error"], "LOG_CONSOLE_LEVEL over the console part");
+    assert_eq!(kept_messages(&f), ["debug", "info", "warn", "error"], "LOG_LEVEL over the store part");
+
+    let (f, printed) = (fixture(), Printed::default());
+    let levels = Levels { console: Some(tracing::Level::WARN), ..Levels::default() };
+    let log = logger_in(&f, &printed, level_debug).level(levels).layer().unwrap();
+    logged(&log, four_lines);
+    log.flush();
+    assert_eq!(printed_messages(&printed), ["warn", "error"], "LOG_LEVEL leaves the console part the code gave");
+    assert_eq!(kept_messages(&f), ["debug", "info", "warn", "error"]);
+}

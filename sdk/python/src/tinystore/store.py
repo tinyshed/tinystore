@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import re
 import stat
@@ -44,7 +43,7 @@ from .jobs import Backoff, Concurrency, Outcome, Queue, QueueOptions, Run, Sched
 from .kv import Bucket, Counters, Parts, bucket_open, counters_open
 from .limits import Quota, RateLimit, quota_open, rate_limit_open
 from .locks import Lock, Semaphore
-from .logger import Level, Logger, LoggerOptions, LogHandler, new_store_logger
+from .logger import Level, Levels, Logger, LoggerOptions, LogHandler, new_store_logger
 from .metrics import Metrics
 from .once import Once, once_open
 from .records import AllEvents, Events, open_events
@@ -325,7 +324,7 @@ class Store:
         self,
         stream: str,
         *,
-        level: Level | None = None,
+        level: Level | Levels | None = None,
         console: Console | None = None,
         time: ConsoleTime | None = None,
         hide_stream: bool = False,
@@ -345,9 +344,24 @@ class Store:
 
             log = store.logger("api", redact=tinystore.secrets)
             log.info("signed in", user=42)
+
+        ``level`` is the least level kept and printed, or each apart:
+        ``level={"store": "info", "console": "warning"}`` keeps every line
+        from info and prints warnings and errors. LOG_LEVEL wins over the
+        level kept, and LOG_CONSOLE_LEVEL over the level printed.
         """
         options = LoggerOptions(
-            level, console, time, hide_stream, to, redact, keep_url_passwords, replace, source, env, buffer
+            level=level,
+            console=console,
+            time=time,
+            hide_stream=hide_stream,
+            to=to,
+            redact=redact,
+            keep_url_passwords=keep_url_passwords,
+            replace=replace,
+            source=source,
+            env=env,
+            buffer=buffer,
         )
         events = open_events(self._link, stream, keep)
         made, log = new_store_logger(events.append_lines, stream, options)
@@ -369,15 +383,17 @@ class Store:
             return
         log.on_change(lambda value: take(value.level))
 
-    def log_handler(self, stream: str, level: int = logging.NOTSET, **options: Any) -> LogHandler:
+    def log_handler(self, stream: str, level: Level | Levels | None = None, **options: Any) -> LogHandler:
         """A handler for a program that logs through logging, its lines printed and kept as the store's logger's::
 
-        logging.getLogger("worker").addHandler(store.log_handler("worker"))
+        logging.getLogger("worker").addHandler(store.log_handler("worker", level={"console": "warning"}))
 
         A record's extra are its fields, its logger's name in its context.
-        The options are the store's logger's.
+        The level and the options are the store's logger's, so LOG_LEVEL and
+        the config log reach the handler too. Leave the handler's own logging
+        level unset: it drops a record before the logger sees it.
         """
-        return LogHandler(self.logger(stream, **options), level)
+        return LogHandler(self.logger(stream, level=level, **options))
 
     async def database(
         self, name: str, *, migrations: Migrations | None = None, durability: Durability | None = None

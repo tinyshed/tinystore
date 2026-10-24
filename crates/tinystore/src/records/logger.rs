@@ -15,6 +15,30 @@ use super::engine::Records;
 use crate::console::{Console, Layer, Line, Told, own_line, told_options};
 use crate::{Error, Result, Store, unix_nanos};
 
+/// The least levels a store's logger keeps and prints, each part left out as
+/// the option is: no `store` keeps every level, and no `console` prints what
+/// is kept, following the config `log`'s changes of it. One `tracing::Level`
+/// is the `store` part alone, so it sets both.
+///
+/// ```text
+/// Level::INFO                                                      info+ kept and printed
+/// Levels { store: Some(Level::INFO), console: Some(Level::WARN) }  info+ kept, warn+ printed
+/// Levels { console: Some(Level::WARN), ..Levels::default() }       all kept, warn+ printed
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Levels {
+    /// The least level kept; `LOG_LEVEL` and the config `log` win over it.
+    pub store: Option<tracing::Level>,
+    /// The least level printed; `LOG_CONSOLE_LEVEL` wins over it.
+    pub console: Option<tracing::Level>,
+}
+
+impl From<tracing::Level> for Levels {
+    fn from(level: tracing::Level) -> Levels {
+        Levels { store: Some(level), console: None }
+    }
+}
+
 /// What opens a logger: its stream, how it prints, the lines it holds.
 pub struct LoggerBuilder<'s> {
     store: &'s Store,
@@ -33,6 +57,30 @@ impl fmt::Debug for LoggerBuilder<'_> {
 impl<'s> LoggerBuilder<'s> {
     pub(crate) fn new(store: &'s Store, stream: &str) -> Self {
         LoggerBuilder { store, stream: stream.to_owned(), told: Told::default(), buffer: BUFFER, keep: None }
+    }
+
+    /// The least level kept and printed, every level without it, or each
+    /// apart as `Levels` says. `LOG_LEVEL` wins over the level kept, and
+    /// `LOG_CONSOLE_LEVEL` over the level printed.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// use tinystore::records::Levels;
+    /// use tracing::Level;
+    ///
+    /// let both = store.logger("api").level(Level::INFO).layer()?;
+    /// // every line from info kept, warnings and errors printed
+    /// let levels = Levels { store: Some(Level::INFO), console: Some(Level::WARN) };
+    /// let quiet = store.logger("jobs").level(levels).layer()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn level(mut self, level: impl Into<Levels>) -> Self {
+        let levels = level.into();
+        self.told.level = levels.store;
+        self.told.printed = levels.console;
+        self
     }
 
     told_options!();

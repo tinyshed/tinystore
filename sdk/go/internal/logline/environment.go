@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Environment is where a handler reads LOG_LEVEL, LOG_FORMAT and LOG_TIME,
-// which win over its options, as in Bun, Python and Rust; a console the code
-// turned off stays off.
+// Environment is where a handler reads LOG_LEVEL, LOG_CONSOLE_LEVEL,
+// LOG_FORMAT and LOG_TIME, each of which wins over its own option, as in Bun,
+// Python and Rust; a console the code turned off stays off.
 type Environment struct {
 	Prefix string
 	Lookup func(string) (string, bool) // nil reads nothing
@@ -21,9 +21,10 @@ var DefaultEnvironment = Environment{Lookup: os.LookupEnv}
 
 // the variables' names after a prefix and its underscore
 const (
-	envLevel  = "LOG_LEVEL"  // trace, debug, info, warn or error
-	envFormat = "LOG_FORMAT" // pretty, json or off
-	envTime   = "LOG_TIME"   // clock, full or off
+	envLevel        = "LOG_LEVEL"         // trace, debug, info, warn or error
+	envConsoleLevel = "LOG_CONSOLE_LEVEL" // the same, of what is printed alone
+	envFormat       = "LOG_FORMAT"        // pretty, json or off
+	envTime         = "LOG_TIME"          // clock, full or off
 )
 
 func (e Environment) name(variable string) string {
@@ -48,7 +49,8 @@ type Unread struct {
 }
 
 // over is s with the environment over it, what it gave as LOG_ spells it,
-// and what it could not read.
+// and what it could not read. LOG_CONSOLE_LEVEL is one process's, which no
+// setting of the config log holds, so LOG_ spells it nowhere.
 func (e Environment) over(s Settings) (Settings, map[string]string, []Unread) {
 	var ignored []Unread
 	spelled := map[string]string{}
@@ -58,6 +60,13 @@ func (e Environment) over(s Settings) (Settings, map[string]string, []Unread) {
 			spelled[e.name(envLevel)] = LevelName(level)
 		} else {
 			ignored = append(ignored, Unread{e.name(envLevel), text, "trace, debug, info, warn or error"})
+		}
+	}
+	if text, ok := e.value(envConsoleLevel); ok {
+		if level, read := ReadLevel(text); read {
+			s.Printed = level
+		} else {
+			ignored = append(ignored, Unread{e.name(envConsoleLevel), text, "trace, debug, info, warn or error"})
 		}
 	}
 	if text, ok := e.value(envFormat); ok {

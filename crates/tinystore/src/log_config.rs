@@ -2,8 +2,10 @@
 //! change of its level reaches the logger of every process of the store at
 //! once. The code's options are the declaration's defaults, and the
 //! variables the logger read, `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME`, go
-//! over them; only the level is live. Records and kv's config meet here, so
-//! that neither imports the other.
+//! over them; only the level is live. The level is the least kept, and the
+//! least printed unless the code's `level` has a `console` part, which is one
+//! process's and no setting here. Records and kv's config meet here, so that
+//! neither imports the other.
 //!
 //! ```text
 //! level   live, one of trace, debug, info, warn, error   the code's, or trace: every level

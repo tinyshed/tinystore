@@ -357,7 +357,7 @@ Handler is a slog.Handler of a store's: each line printed as console.NewHandler 
 func NewHandler(store *tinystore.Store, stream string, options ...console.Option) *Handler
 ```
 
-NewHandler is a store's handler of a stream, with console's options and Keep and Buffer. Its level follows the config log, which it opens in the background: a change of it reaches every handler of the store, in every process, until it is reset. A stream's name the store refuses panics, as a pattern regexp.MustCompile refuses does: it is the program's, not its input's.
+NewHandler is a store's handler of a stream, with console's options and Keep, Buffer and Levels. Its level, the least it keeps, and prints unless Levels gives a Console part, follows the config log, which it opens in the background: a change of it reaches every handler of the store, in every process, until it is reset. A stream's name the store refuses panics, as a pattern regexp.MustCompile refuses does: it is the program's, not its input's.
 
 ### Handler.Dropped
 
@@ -413,6 +413,26 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler
 
 ```go
 func (h *Handler) WithGroup(name string) slog.Handler
+```
+
+## Levels
+
+```go
+type Levels struct {
+	Store   slog.Leveler // the least level kept; LOG_LEVEL and the config log win over it
+	Console slog.Leveler // the least level printed; LOG_CONSOLE_LEVEL wins over it
+}
+```
+
+Levels are the least levels a store's handler keeps and prints, each part left out as the option is: a nil Store keeps every level, and a nil Console prints what is kept, following the config log's changes of it. console.Level(level) is Levels{Store: level}, and either replaces the other.
+
+	records.Levels{Store: slog.LevelInfo, Console: slog.LevelWarn}  keeps info+, prints warn+
+	records.Levels{Console: slog.LevelWarn}                         keeps every level, prints warn+
+
+### Levels.Apply
+
+```go
+func (l Levels) Apply(s *logline.Settings)
 ```
 
 ## Lines
@@ -673,7 +693,7 @@ Option changes a logger's lines: on the console, and in the store when the handl
 func FromEnv(prefix string) Option
 ```
 
-FromEnv reads prefix\_LOG\_LEVEL, prefix\_LOG\_FORMAT and prefix\_LOG\_TIME, which win over the code. Without an environment option a handler reads LOG\_LEVEL, LOG\_FORMAT and LOG\_TIME, as FromEnv("") does.
+FromEnv reads prefix\_LOG\_LEVEL, prefix\_LOG\_CONSOLE\_LEVEL, prefix\_LOG\_FORMAT and prefix\_LOG\_TIME, each of which wins over its own option. Without an environment option a handler reads LOG\_LEVEL and the rest, as FromEnv("") does.
 
 ### console.FromLookup
 
@@ -689,7 +709,7 @@ FromLookup reads the variables FromEnv names through lookup, the process's envir
 func Level(level slog.Leveler) Option
 ```
 
-Level keeps lines from level up; without it every line is kept.
+Level prints and keeps lines from level up; without it every line is. On a store's handler it is records.Levels{Store: level}, which sets the level it keeps and the level it prints apart.
 
 ### console.Redact
 

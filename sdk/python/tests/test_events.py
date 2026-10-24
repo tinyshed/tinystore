@@ -8,13 +8,19 @@ lines, and a store's logger keeping its lines.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 
 import tinystore
 from tinystore import Event
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
@@ -217,3 +223,65 @@ async def test_a_handler_gives_logging_the_stores_logger(store: tinystore.Store)
     assert events[0].fields == {"job": 7}
     assert events[0].context == {"logger": "tinystore-test-worker"}
     assert "card declined" in events[1].fields["error"]
+
+
+def _messages(out: io.StringIO) -> list[str]:
+    """The messages a JSON console printed, an event's name in place of one."""
+    return [(line.get("msg") or line["event"]) for line in map(json.loads, out.getvalue().splitlines())]
+
+
+# contract: LOG-08
+async def test_a_stores_logger_with_a_console_part_prints_less_than_it_keeps(store: tinystore.Store) -> None:
+    out = io.StringIO()
+    levels: tinystore.Levels = {"store": "info", "console": "warning"}
+    log = store.logger("quiet", level=levels, console="json", to=out, env=False)
+    log.debug("cache miss")
+    log.info("signed in")
+    log.warning("slow request")
+    log.event("signup", plan="pro")
+    await log.flush()
+    events = (await store.events("quiet").list()).events
+    assert _messages(out) == ["slow request", "signup"]
+    assert [event.message or event.name for event in events] == ["signed in", "slow request", "signup"]
+
+
+def _logged_through(handler: logging.Handler, log: Callable[[logging.Logger], None]) -> None:
+    """Logs through a logging logger of every level that hands its records to handler alone."""
+    worker = logging.getLogger("tinystore-test-handled")
+    worker.propagate = False
+    worker.setLevel(logging.DEBUG)
+    worker.addHandler(handler)
+    try:
+        log(worker)
+    finally:
+        worker.removeHandler(handler)
+
+
+def _three_levels(worker: logging.Logger) -> None:
+    worker.debug("cache miss")
+    worker.info("signed in")
+    worker.warning("slow request")
+
+
+# contract: LOG-08
+async def test_a_handler_takes_the_stores_loggers_level_in_two_parts(store: tinystore.Store) -> None:
+    out = io.StringIO()
+    levels: tinystore.Levels = {"store": "info", "console": "warning"}
+    handler = store.log_handler("handled", level=levels, console="json", to=out, env=False)
+    _logged_through(handler, _three_levels)
+    await handler.logger.flush()
+    events = (await store.events("handled").list()).events
+    assert _messages(out) == ["slow request"]
+    assert [event.message for event in events] == ["signed in", "slow request"]
+
+
+# contract: LOG-07
+async def test_a_handler_follows_log_level_as_the_stores_logger_does(
+    store: tinystore.Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_LEVEL", "warning")
+    handler = store.log_handler("leveled", console="off")
+    _logged_through(handler, _three_levels)
+    await handler.logger.flush()
+    events = (await store.events("leveled").list()).events
+    assert [event.message for event in events] == ["slow request"]

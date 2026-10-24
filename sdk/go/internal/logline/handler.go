@@ -17,11 +17,14 @@ import (
 // is the line's: the attributes of logger.With are its context, who is
 // speaking, and the call's are its fields; a group's keys are written
 // group.key, and a value is spelled as slog.JSONHandler spells it, an error as
-// its message. A line logged with a context that carries a trace takes it.
+// its message. A line logged with a context that carries a trace takes it. A
+// line is printed from the level printed and kept from the level kept, each
+// where the handler has a place for it.
 type Handler struct {
 	keeper    Keeper // nil for a handler of the console alone
 	stream    string
-	level     slog.Leveler // nil keeps every level
+	level     slog.Leveler // the least kept; nil keeps every level
+	printed   slog.Leveler // the least printed; nil prints what is kept
 	echo      *Echo        // nil writes no console line
 	redact    redactor
 	replace   func([]string, slog.Attr) slog.Attr
@@ -38,7 +41,7 @@ type Handler struct {
 // environment it could not read.
 func NewHandler(stream string, keeper Keeper, s Settings, ignored []Unread) *Handler {
 	h := &Handler{
-		keeper: keeper, stream: stream, level: s.Level, echo: newEcho(s),
+		keeper: keeper, stream: stream, level: s.Level, printed: s.Printed, echo: newEcho(s),
 		redact: newRedactor(s.Redact, s.KeepURLPasswords), replace: s.Replace, addSource: s.AddSource,
 	}
 	if h.echo != nil {
@@ -69,11 +72,26 @@ func newEcho(s Settings) *Echo {
 // Pretty says whether the handler's console lines are a person's.
 func (h *Handler) Pretty() bool { return h.echo != nil && h.echo.Pretty }
 
+// Enabled says whether a place the handler has takes a line of level, so that
+// slog builds no record that nothing would print or keep.
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {
-	if h.level != nil && level < h.level.Level() {
-		return false
+	return h.prints(level) || h.keeps(level)
+}
+
+// prints says whether a line of level is printed: the handler has a console,
+// and the level reaches the level printed, or the level kept without one.
+func (h *Handler) prints(level slog.Level) bool {
+	least := h.printed
+	if least == nil {
+		least = h.level
 	}
-	return h.echo != nil || h.keeper != nil
+	return h.echo != nil && (least == nil || level >= least.Level())
+}
+
+// keeps says whether a line of level is kept: the handler is a store's, and
+// the level reaches its level.
+func (h *Handler) keeps(level slog.Level) bool {
+	return h.keeper != nil && (h.level == nil || level >= h.level.Level())
 }
 
 func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
@@ -101,10 +119,15 @@ func (h *Handler) write(ctx context.Context, record slog.Record, name string, le
 		Context: h.context, Attrs: h.redact.fields(spelled(attrs, spell)),
 	}
 	line.TraceID, line.SpanID = TraceOf(ctx)
-	if h.echo != nil {
+	// an event has no level, and goes wherever the handler has a place
+	printed, kept := h.echo != nil, h.keeper != nil
+	if level != nil {
+		printed, kept = h.prints(*level), h.keeps(*level)
+	}
+	if printed {
 		h.print(line, attrs)
 	}
-	if h.keeper != nil {
+	if kept {
 		h.keeper.Keep(line)
 	}
 }

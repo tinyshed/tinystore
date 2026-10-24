@@ -42,7 +42,8 @@ type Handler struct {
 }
 
 // NewHandler is a store's handler of a stream, with console's options and
-// Keep and Buffer. Its level follows the config log, which it opens in the
+// Keep, Buffer and Levels. Its level, the least it keeps, and prints unless
+// Levels gives a Console part, follows the config log, which it opens in the
 // background: a change of it reaches every handler of the store, in every
 // process, until it is reset. A stream's name the store refuses panics, as a pattern
 // regexp.MustCompile refuses does: it is the program's, not its input's.
@@ -72,6 +73,20 @@ type buffer int
 func Buffer(lines int) console.Option { return buffer(lines) }
 
 func (b buffer) Apply(s *logline.Settings) { s.Buffer = int(b) }
+
+// Levels are the least levels a store's handler keeps and prints, each part
+// left out as the option is: a nil Store keeps every level, and a nil Console
+// prints what is kept, following the config log's changes of it.
+// console.Level(level) is Levels{Store: level}, and either replaces the other.
+//
+//	records.Levels{Store: slog.LevelInfo, Console: slog.LevelWarn}  keeps info+, prints warn+
+//	records.Levels{Console: slog.LevelWarn}                         keeps every level, prints warn+
+type Levels struct {
+	Store   slog.Leveler // the least level kept; LOG_LEVEL and the config log win over it
+	Console slog.Leveler // the least level printed; LOG_CONSOLE_LEVEL wins over it
+}
+
+func (l Levels) Apply(s *logline.Settings) { s.Level, s.Printed = l.Store, l.Console }
 
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.inner.Enabled(ctx, level)

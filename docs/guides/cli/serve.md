@@ -85,6 +85,11 @@ for a log collector.
 | `--log-file <file>` | JSON lines to a file as well         |
 | `--quiet`           | the banner, warnings and errors only |
 
+`LOG_LEVEL` sets the least level that the server logs, `info` unless set.
+`LOG_CONSOLE_LEVEL` sets the least level on stderr alone, and wins over
+`--quiet`. For example, `LOG_CONSOLE_LEVEL=error` with `--log-file` shows
+only errors on stderr and keeps every line from `info` in the file.
+
 ## In a container
 
 ```sh

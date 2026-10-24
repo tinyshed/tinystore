@@ -235,5 +235,24 @@ for (const way of ways) {
 			expect([events[1]?.fields, events[1]?.context]).toEqual([{ ms: 1200 }, { job: 7 }])
 			expect(log.dropped).toBe(0)
 		})
+
+		// contract: LOG-08
+		test("a store's logger with a console part prints less than it keeps", async () => {
+			const printed: string[] = []
+			const to = { write: (text: string) => void printed.push(JSON.parse(text).msg) }
+			const log = store.logger('quiet', {
+				level: { store: 'info', console: 'warn' },
+				console: 'json',
+				to,
+				env: false,
+			})
+			log.debug('cache miss')
+			log.info('signed in')
+			log.warn('slow request')
+			await log.flush()
+			const { events } = await store.events('quiet').list()
+			expect(printed).toEqual(['slow request'])
+			expect(events.map(event => event.message)).toEqual(['signed in', 'slow request'])
+		})
 	})
 }

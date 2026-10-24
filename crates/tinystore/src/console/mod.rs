@@ -9,16 +9,10 @@
 //! ```
 
 /// The options every logger takes, on the console alone and a store's: each
-/// sets what `Told` holds.
+/// sets what `Told` holds. Each builder has a `level` of its own, since a
+/// store's logger keeps and prints apart.
 macro_rules! told_options {
     () => {
-        /// The least level printed and kept; every level without it, and
-        /// `LOG_LEVEL` wins over it.
-        pub fn level(mut self, level: tracing::Level) -> Self {
-            self.told.level = Some(level);
-            self
-        }
-
         /// How lines print: pretty on a terminal and JSON otherwise without
         /// it, and `LOG_FORMAT` wins over it unless it is `Off`.
         pub fn console(mut self, format: $crate::console::Format) -> Self {
@@ -72,8 +66,9 @@ macro_rules! told_options {
             self
         }
 
-        /// Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME`
-        /// in place of `LOG_LEVEL` and the rest.
+        /// Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_CONSOLE_LEVEL`,
+        /// `PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME` in place of `LOG_LEVEL`
+        /// and the rest.
         pub fn env(mut self, prefix: &str) -> Self {
             self.told.env = Some($crate::console::Environment { prefix: prefix.to_owned(), ..Default::default() });
             self
@@ -139,6 +134,14 @@ impl std::fmt::Debug for LoggerBuilder {
 }
 
 impl LoggerBuilder {
+    /// The least level printed, every level without it. `LOG_LEVEL` wins
+    /// over it, and `LOG_CONSOLE_LEVEL` over both, since this logger only
+    /// prints.
+    pub fn level(mut self, level: tracing::Level) -> Self {
+        self.told.level = Some(level);
+        self
+    }
+
     told_options!();
 
     /// The layer that prints what `tracing` hands it.

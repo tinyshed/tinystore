@@ -53,7 +53,7 @@ from .jobs import (
 from .kv import Bucket, Counters, Entry, Page
 from .limits import Allowance, Quota, RateLimit, WindowUse
 from .locks import Holding, Lease, Lock, Permit, Semaphore
-from .logger import Logger, logger, secrets
+from .logger import Levels, Logger, logger, secrets
 from .metrics import (
     Aggregate,
     AggregateBucket,
@@ -142,6 +142,7 @@ __all__ = [
     "JobPage",
     "LastRun",
     "Lease",
+    "Levels",
     "LimitError",
     "Line",
     "Lines",

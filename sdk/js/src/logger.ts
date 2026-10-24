@@ -26,13 +26,13 @@ import {
 } from './console.ts'
 import { parseDotenv } from './dotenv.ts'
 import { InvalidError } from './errors.ts'
-import type { Fields, Level } from './records.ts'
+import type { Fields, Level, Levels } from './records.ts'
 import { currentTrace, type Trace } from './trace.ts'
 
 export interface LoggerOptions {
 	/** the lines held between writes; past it a line is dropped and counted: 1024 */
 	buffer?: number
-	/** the least level a line is kept at; every level when absent */
+	/** the least level a line is printed at, every level when absent */
 	level?: Level
 	/** how a line is written as it is logged: pretty on a terminal and JSON otherwise when absent */
 	console?: ConsoleFormat
@@ -54,9 +54,9 @@ export interface LoggerOptions {
 	/** changes each field's value before it is hidden, kept and shown */
 	replace?: (key: string, value: unknown) => unknown
 	/**
-	 * where LOG_LEVEL, LOG_FORMAT and LOG_TIME are read, which win over the
-	 * options: `env('APP')` reads APP_LOG_LEVEL and the rest, and false
-	 * reads nothing; the bare names when absent
+	 * where LOG_LEVEL, LOG_CONSOLE_LEVEL, LOG_FORMAT and LOG_TIME are read,
+	 * each of which wins over its option: `env('APP')` reads APP_LOG_LEVEL
+	 * and the rest, and false reads nothing; the bare names when absent
 	 */
 	env?: EnvLayer | false
 	/** adds where each line was logged: source={"function":…,"file":…,"line":…} */
@@ -82,7 +82,10 @@ interface Shared {
 	append: ((lines: ConsoleLine[]) => Promise<void>) | undefined
 	stream: string
 	most: number
-	least: number
+	/** the least level kept, which the config log changes while the logger runs */
+	kept: number
+	/** the least level printed, LOG_CONSOLE_LEVEL's or level's console part; undefined prints what is kept */
+	printed: number | undefined
 	redact: Redactor | undefined
 	replace: ((key: string, value: unknown) => unknown) | undefined
 	source: boolean
@@ -136,14 +139,41 @@ type LogDeclaration = {
 	time: Setting<string>
 }
 
+/** What a logger is told: a logger's options, a store's logger's level in its two parts. */
+type Told = Omit<LoggerOptions, 'level'> & { level?: Level | Levels | undefined }
+
+/** A logger's options as the environment leaves them: its level read apart, the least kept and the least printed. */
+type Read = Omit<LoggerOptions, 'level'> & { kept: Level | undefined; printed: Level | undefined }
+
+/**
+ * A level's two parts, the least kept and the least printed: one level is
+ * the kept alone, which the console then follows.
+ */
+function partsOf(
+	level: Level | Levels | undefined,
+): [kept: Level | undefined, printed: Level | undefined] {
+	if (typeof level !== 'object') {
+		return [level, undefined]
+	}
+	for (const part of Object.keys(level)) {
+		if (part !== 'store' && part !== 'console') {
+			throw new InvalidError(
+				`a logger's level of ${JSON.stringify(part)}: its parts are store and console`,
+			)
+		}
+	}
+	return [level.store, level.console]
+}
+
 /** A store's logger of one stream, and what it declares its config `log` with. */
 export function newStoreLogger(
 	append: (lines: ConsoleLine[]) => Promise<void>,
 	stream: string,
-	options: LoggerOptions = {},
+	options: Told = {},
 ): [Logger, LogConfig] {
 	const { shared, spelled } = sharedOf(append, stream, options, undefined)
-	const level = options.level === undefined ? 'trace' : nameOf(levelOf(options.level))
+	const [kept] = partsOf(options.level)
+	const level = kept === undefined ? 'trace' : nameOf(levelOf(kept))
 	const format = options.console ?? (prettyUntold(options, undefined) ? 'pretty' : 'json')
 	const time = options.time ?? 'clock'
 	const others = (all: readonly string[], one: string) => all.filter(name => name !== one)
@@ -153,9 +183,10 @@ export function newStoreLogger(
 		time: oneOf(time, others(times, time)),
 	}
 	const env = options.env ?? environmentOf('')
+	// the level kept, and printed too while the level has no console part
 	const take = (name: string) => {
 		if (Object.hasOwn(levels, name)) {
-			shared.least = levels[name as keyof typeof levels]
+			shared.kept = levels[name as keyof typeof levels]
 		}
 	}
 	if (env === false) {
@@ -179,7 +210,7 @@ function nameOf(least: number): string {
 function sharedOf(
 	append: ((lines: ConsoleLine[]) => Promise<void>) | undefined,
 	stream: string,
-	options: LoggerOptions,
+	options: Told,
 	out: (ConsoleOut & { utc?: boolean }) | undefined,
 ): { shared: Shared; spelled: Record<string, string> } {
 	if (stream === '') {
@@ -194,7 +225,8 @@ function sharedOf(
 		append,
 		stream,
 		most,
-		least: read.level === undefined ? Number.NEGATIVE_INFINITY : levelOf(read.level),
+		kept: read.kept === undefined ? Number.NEGATIVE_INFINITY : levelOf(read.kept),
+		printed: read.printed === undefined ? undefined : levelOf(read.printed),
 		redact: redactor(read.redact, read.keepUrlPasswords),
 		replace: read.replace,
 		source: read.source === true,
@@ -213,14 +245,16 @@ function sharedOf(
 type Unread = [name: string, value: string, expected: string]
 
 /**
- * LOG_LEVEL, LOG_FORMAT and LOG_TIME over the options, after the prefix env
- * names, as Go and Python read them; a console turned off stays off. Each
- * variable read is spelled as the config `log` reads it, by its name.
+ * LOG_LEVEL, LOG_CONSOLE_LEVEL, LOG_FORMAT and LOG_TIME over the options,
+ * each over its own, after the prefix env names, as Go and Python read them;
+ * a console turned off stays off. Each variable read is spelled as the
+ * config `log` reads it, by its name, but LOG_CONSOLE_LEVEL, which no
+ * setting of the config holds.
  */
-function fromEnvironment(
-	options: LoggerOptions,
-): [LoggerOptions, Unread[], Record<string, string>] {
-	const read = { ...options }
+function fromEnvironment(options: Told): [Read, Unread[], Record<string, string>] {
+	const { level: given, ...rest } = options
+	const [kept, printed] = partsOf(given)
+	const read: Read = { ...rest, kept, printed }
 	const ignored: Unread[] = []
 	const spelled: Record<string, string> = {}
 	const env = options.env ?? environmentOf('')
@@ -229,15 +263,14 @@ function fromEnvironment(
 	}
 	const variables = environment(env)
 	const name = (variable: string) => (env.prefix === '' ? variable : `${env.prefix}_${variable}`)
-	const level = variables(name('LOG_LEVEL'))
+	const level = levelIn(variables, name('LOG_LEVEL'), ignored)
 	if (level !== undefined) {
-		const known = level.toLowerCase() === 'warning' ? 'warn' : level.toLowerCase()
-		if (Object.hasOwn(levels, known)) {
-			read.level = levels[known as keyof typeof levels]
-			spelled[name('LOG_LEVEL')] = known
-		} else {
-			ignored.push([name('LOG_LEVEL'), level, 'trace, debug, info, warn or error'])
-		}
+		read.kept = levels[level]
+		spelled[name('LOG_LEVEL')] = level
+	}
+	const shown = levelIn(variables, name('LOG_CONSOLE_LEVEL'), ignored)
+	if (shown !== undefined) {
+		read.printed = levels[shown]
 	}
 	const format = variables(name('LOG_FORMAT'))
 	if (format !== undefined) {
@@ -260,6 +293,24 @@ function fromEnvironment(
 		}
 	}
 	return [read, ignored, spelled]
+}
+
+/** The level a variable names, the case ignored and warning read as warn; a value it cannot mean is ignored. */
+function levelIn(
+	variables: (name: string) => string | undefined,
+	name: string,
+	ignored: Unread[],
+): keyof typeof levels | undefined {
+	const text = variables(name)
+	if (text === undefined) {
+		return undefined
+	}
+	const known = text.toLowerCase() === 'warning' ? 'warn' : text.toLowerCase()
+	if (Object.hasOwn(levels, known)) {
+		return known as keyof typeof levels
+	}
+	ignored.push([name, text, 'trace, debug, info, warn or error'])
+	return undefined
 }
 
 /** The variables of env's files, the process's or `from`'s over them, a missing file skipped; an empty one is none. */
@@ -314,14 +365,17 @@ function forceColor(): boolean {
 }
 
 /** Whether a console told no format prints pretty lines: on a terminal, or where FORCE_COLOR asks. */
-function prettyUntold(options: LoggerOptions, out: ConsoleOut | undefined): boolean {
+function prettyUntold(options: Pick<LoggerOptions, 'to'>, out: ConsoleOut | undefined): boolean {
 	const stream: ConsoleOut = out ?? options.to ?? process.stderr
 	// FORCE_COLOR other than 0 says a person reads a pipe, as an IDE's run console is one
 	return stream.isTTY === true || (out === undefined && forceColor())
 }
 
 /** How a logger prints its lines, or undefined when it prints none. */
-function printer(options: LoggerOptions, out?: ConsoleOut & { utc?: boolean }): Shared['print'] {
+function printer(
+	options: Pick<LoggerOptions, 'console' | 'to' | 'time' | 'hideStream'>,
+	out?: ConsoleOut & { utc?: boolean },
+): Shared['print'] {
 	if (options.console === 'off') {
 		return undefined
 	}
@@ -436,12 +490,14 @@ export class Logger {
 	}
 
 	#log(level: number, message: string, attrs: Fields | undefined): void {
-		if (level < this.#shared.least) {
+		// a line that no place of the logger takes is never encoded
+		if (!prints(this.#shared, level) && !keeps(this.#shared, level)) {
 			return
 		}
 		this.#emit({ level, msg: message }, attrs)
 	}
 
+	/** Prints a line from the level printed and keeps it from the level kept; an event, which has none, both. */
 	#emit(what: Pick<ConsoleLine, 'level' | 'event' | 'msg'>, attrs: Fields | undefined): void {
 		const trace = traceOf(currentTrace())
 		const shared = this.#shared
@@ -454,8 +510,12 @@ export class Logger {
 			attrs: shared.source ? [...encoded, sourceKey, sourceOfCaller()] : encoded,
 			...trace,
 		}
-		this.#shared.print?.(line)
-		this.#queue(line)
+		if (what.level === undefined || prints(shared, what.level)) {
+			shared.print?.(line)
+		}
+		if (what.level === undefined || keeps(shared, what.level)) {
+			this.#queue(line)
+		}
 	}
 
 	#queue(line: ConsoleLine): void {
@@ -477,6 +537,16 @@ export class Logger {
 			void this.flush()
 		}
 	}
+}
+
+/** Whether a logger prints a line of level: it has a console, and the level is the level printed or above. */
+function prints(shared: Shared, level: number): boolean {
+	return shared.print !== undefined && level >= (shared.printed ?? shared.kept)
+}
+
+/** Whether a logger keeps a line of level: it is a store's, and the level is its level or above. */
+function keeps(shared: Shared, level: number): boolean {
+	return shared.append !== undefined && level >= shared.kept
 }
 
 /**

@@ -34,28 +34,101 @@ handler := records.NewHandler(store, "api", console.JSON, console.TimeFull, cons
 let log = store.logger("api").console(Format::Json).time(Time::Full).hide_stream().layer()?;
 ```
 
-| Option       | Values                                       | Unless given                        |
-|--------------|----------------------------------------------|-------------------------------------|
-| `console`    | `pretty`, `json`, `off`                      | `pretty` on a terminal, else `json` |
-| `time`       | `clock`, `full`, `off`: a pretty line's time | `clock`                             |
-| `hideStream` | leaves the stream out of a pretty line       | shown                               |
-| `to`         | where lines go                               | standard error                      |
-| `level`      | the least level printed and kept             | every level                         |
+| Option       | Values                                                    | Unless given                        |
+|--------------|-----------------------------------------------------------|-------------------------------------|
+| `console`    | `pretty`, `json`, `off`                                   | `pretty` on a terminal, else `json` |
+| `time`       | `clock`, `full`, `off`: a pretty line's time              | `clock`                             |
+| `hideStream` | leaves the stream out of a pretty line                    | shown                               |
+| `to`         | where lines go                                            | standard error                      |
+| `level`      | the least level kept and printed, or `{ store, console }` | every level                         |
 
 `console: 'off'` prints nothing and keeps every line: a server that ships its
 console elsewhere, or a test.
 
+## A quiet console
+
+A store's logger can print less than it keeps. Give `level` a level for
+each place: `store` is the least level kept, and `console` the least level
+printed. In this example the console shows warnings and errors, and the store
+keeps every line from `info`, so a query still finds what the terminal didn't
+show:
+
+```ts
+const log = store.logger('api', { level: { store: 'info', console: 'warn' } })
+```
+
+```python
+log = store.logger("api", level={"store": "info", "console": "warning"})
+```
+
+```go
+handler := records.NewHandler(store, "api", records.Levels{Store: slog.LevelInfo, Console: slog.LevelWarn})
+```
+
+```rust
+let levels = Levels { store: Some(Level::INFO), console: Some(Level::WARN) };
+let log = store.logger("api").level(levels).layer()?;
+```
+
+A part that you leave out works as if `level` weren't set for it. Without
+`store`, the store keeps every level:
+
+```ts
+const log = store.logger('api', { level: { console: 'warn' } }) // keeps every line, prints warnings and errors
+```
+
+```python
+log = store.logger("api", level={"console": "warning"})  # keeps every line, prints warnings and errors
+```
+
+```go
+handler := records.NewHandler(store, "api", records.Levels{Console: slog.LevelWarn}) // keeps every line, prints warnings and errors
+```
+
+```rust
+let levels = Levels { console: Some(Level::WARN), ..Levels::default() }; // keeps every line, prints warnings and errors
+let log = store.logger("api").level(levels).layer()?;
+```
+
+- One level, such as `level: 'info'`, sets both places. It is the same as
+  `{ store: 'info' }`.
+- Go spells the two parts `records.Levels`, whose `Store` and `Console` are
+  `slog.Leveler` values, so a part you leave out is `nil`. Rust spells them
+  `records::Levels`, whose fields are `Option<Level>`. In Go,
+  `console.Level(slog.LevelInfo)` is `records.Levels{Store: slog.LevelInfo}`.
+- The `console` part changes only what is printed. A line at the `store`
+  level or above is kept with the same fields and context, whatever the
+  `console` part is.
+- The two parts are independent. With `{ store: 'info', console: 'debug' }`,
+  the console prints debug lines that the store doesn't keep.
+- An event from `log.event` has no level, so it is printed and kept.
+- Without a `console` part, the console prints what the store keeps. When the
+  config `log` changes the level, the console follows it. A `console` part
+  set in the code, or `LOG_CONSOLE_LEVEL`, stays as it is.
+- A logger of the console alone takes one level, because it only prints.
+  `LOG_CONSOLE_LEVEL` still sets what it prints, as the next section shows.
+
 ## The environment wins
 
-So that a deployment changes how lines look without a build, the environment
-goes over the code:
+So that a deployment changes how lines look without a build, each variable
+goes over its own option in the code:
 
-| Variable     | Values                                    |
-|--------------|-------------------------------------------|
-| `LOG_LEVEL`  | `trace`, `debug`, `info`, `warn`, `error` |
-| `LOG_FORMAT` | `pretty`, `json`                          |
-| `LOG_TIME`   | `clock`, `full`, `off`                    |
+| Variable            | Values                                    | Wins over                     |
+|---------------------|-------------------------------------------|-------------------------------|
+| `LOG_LEVEL`         | `trace`, `debug`, `info`, `warn`, `error` | `level`, or its `store` part  |
+| `LOG_CONSOLE_LEVEL` | `trace`, `debug`, `info`, `warn`, `error` | the `console` part of `level` |
+| `LOG_FORMAT`        | `pretty`, `json`, `off`                   | `console`                     |
+| `LOG_TIME`          | `clock`, `full`, `off`                    | `time`                        |
 
+- `LOG_LEVEL=debug` changes what a store keeps. The console prints from it too,
+  unless `level` has a `console` part. A `console` part that the code gave
+  stays as it is.
+- `LOG_CONSOLE_LEVEL` changes only what is printed, and never what a store
+  keeps. It sets what every console prints: a store's logger, a logger of the
+  console alone, and the stderr of `tinystore serve`.
+- A logger of the console alone only prints, so `LOG_CONSOLE_LEVEL` wins over
+  its `level` and over `LOG_LEVEL`. For example, `LOG_CONSOLE_LEVEL=warn` with
+  `LOG_LEVEL=debug` prints warnings and errors.
 - `env: { prefix: 'APP' }` reads `APP_LOG_LEVEL` and the rest instead;
   `env: false` reads none.
 - The environment never turns on a console the code turned off.
@@ -68,7 +141,7 @@ Colours need a terminal, and neither `NO_COLOR` nor `TERM=dumb`.
 
 A program that wants the logger and no store, a CLI, a script, takes it from
 the package. The same calls, the same options but `buffer` and `keep`, the
-same lines, kept nowhere:
+same lines, kept nowhere. Its `level` is one level, because it only prints:
 
 ```ts
 import { logger, secrets } from '@tinyshed/tinystore'

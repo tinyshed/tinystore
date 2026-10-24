@@ -160,9 +160,10 @@ These contracts are what does not.
 - **LOG-02** A logger or writer dropped or closed MUST lose none of the lines it holds.
 - **LOG-03** A console line MUST be the same bytes in Rust, Bun, Python and Go.
 - **LOG-04** A redacted field MUST be kept nowhere; a secret MUST be hidden whatever its key's spelling, URL passwords included.
-- **LOG-05** `LOG_LEVEL`, `LOG_FORMAT` and `LOG_TIME` MUST win over the code and MUST NOT turn a console on; a value no one can mean is ignored and said once.
+- **LOG-05** Each of `LOG_LEVEL`, `LOG_CONSOLE_LEVEL`, `LOG_FORMAT` and `LOG_TIME` MUST win over its own option or part of one in the code, `LOG_LEVEL` over `level` or its `store` part and `LOG_CONSOLE_LEVEL` over its `console` part, and none MUST turn a console on; `LOG_LEVEL` MUST leave a `console` part the code gave as it is, and `LOG_CONSOLE_LEVEL` MUST change only what is printed, and so on a logger of the console alone, which only prints, it wins over `level` and `LOG_LEVEL` too; a value no one can mean is ignored and said once.
 - **LOG-06** Writing a log line MUST NOT log again.
-- **LOG-07** A store's logger MUST follow the config `log`, its level live for every logger of the store.
+- **LOG-07** A store's logger MUST follow the config `log`, its level live for every logger of the store, Python's `log_handler` among them: the level kept, and the level printed too unless the code's `level` has a `console` part.
+- **LOG-08** A store's logger's `level` MUST set what it keeps and what it prints, one level both and `{ store, console }` each apart, a part left out as `level` left out: no `store` part keeps every level, and no `console` part prints what is kept. The `console` part MUST change only what is printed: every line at the `store` level MUST be kept with the same fields and context whatever the `console` part, and an event, which has no level, MUST be printed and kept.
 
 ### Metrics
 

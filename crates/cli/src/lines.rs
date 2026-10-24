@@ -93,6 +93,24 @@ fn level_named(name: Option<&str>) -> LevelFilter {
     }
 }
 
+/// The least an event must be to reach stderr, where `logged` is the least
+/// logged at all: `LOG_CONSOLE_LEVEL`, else warnings for `--quiet`, else
+/// `logged`.
+pub(crate) fn stderr_level(quiet: bool, logged: LevelFilter) -> LevelFilter {
+    stderr_level_named(std::env::var("LOG_CONSOLE_LEVEL").ok().as_deref(), quiet, logged)
+}
+
+/// The level on stderr by its name, none or one unknown leaving it to
+/// `--quiet` and `logged`.
+fn stderr_level_named(name: Option<&str>, quiet: bool, logged: LevelFilter) -> LevelFilter {
+    let named = name.map(str::trim).filter(|name| !name.is_empty()).and_then(|name| name.parse().ok());
+    match named {
+        Some(level) => level,
+        None if quiet => logged.min(LevelFilter::WARN),
+        None => logged,
+    }
+}
+
 /// The events a person's terminal names by a word: an event's message, its
 /// word, and what follows it, each `{field}` its value and a part between
 /// ` · ` left out when a field it names is missing. A word of `""` is the
@@ -420,6 +438,16 @@ mod tests {
         assert_eq!(level_named(Some("loud")), LevelFilter::INFO);
         assert_eq!(level_named(Some("DEBUG")), LevelFilter::DEBUG);
         assert_eq!(level_named(Some(" warn ")), LevelFilter::WARN);
+    }
+
+    #[test]
+    fn stderr_shows_from_log_console_level_else_warnings_when_quiet_else_what_is_logged() {
+        let logged = LevelFilter::INFO;
+        assert_eq!(stderr_level_named(Some("debug"), true, logged), LevelFilter::DEBUG, "over --quiet");
+        assert_eq!(stderr_level_named(Some(" error "), false, logged), LevelFilter::ERROR);
+        assert_eq!(stderr_level_named(None, true, logged), LevelFilter::WARN);
+        assert_eq!(stderr_level_named(Some("loud"), true, LevelFilter::ERROR), LevelFilter::ERROR);
+        assert_eq!(stderr_level_named(Some(""), false, logged), LevelFilter::INFO, "not tracing's error");
     }
 
     #[test]

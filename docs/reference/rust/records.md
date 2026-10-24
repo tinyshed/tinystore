@@ -656,6 +656,26 @@ pub fn dropped(&self) -> u64
 The lines dropped since the writer began: a full buffer, a line
 longer than an event holds, one the file refused.
 
+## Levels
+
+```rust
+pub struct Levels {
+    pub store: Option<Level>,
+    pub console: Option<Level>,
+}
+```
+
+The least levels a store's logger keeps and prints, each part left out as
+the option is: no `store` keeps every level, and no `console` prints what
+is kept, following the config `log`'s changes of it. One `tracing::Level`
+is the `store` part alone, so it sets both.
+
+```text
+Level::INFO                                                      info+ kept and printed
+Levels { store: Some(Level::INFO), console: Some(Level::WARN) }  info+ kept, warn+ printed
+Levels { console: Some(Level::WARN), ..Levels::default() }       all kept, warn+ printed
+```
+
 ## LoggerBuilder
 
 ```rust
@@ -667,11 +687,22 @@ What opens a logger: its stream, how it prints, the lines it holds.
 ### LoggerBuilder.level
 
 ```rust
-pub fn level(self, level: Level) -> Self
+pub fn level(self, level: impl Into<Levels>) -> Self
 ```
 
-The least level printed and kept; every level without it, and
-`LOG_LEVEL` wins over it.
+The least level kept and printed, every level without it, or each
+apart as `Levels` says. `LOG_LEVEL` wins over the level kept, and
+`LOG_CONSOLE_LEVEL` over the level printed.
+
+```rust
+use tinystore::records::Levels;
+use tracing::Level;
+
+let both = store.logger("api").level(Level::INFO).layer()?;
+// every line from info kept, warnings and errors printed
+let levels = Levels { store: Some(Level::INFO), console: Some(Level::WARN) };
+let quiet = store.logger("jobs").level(levels).layer()?;
+```
 
 ### LoggerBuilder.console
 
@@ -748,8 +779,9 @@ Adds where each line was logged: `source={"function":…,"file":…,"line":42}`.
 pub fn env(self, prefix: &str) -> Self
 ```
 
-Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME`
-in place of `LOG_LEVEL` and the rest.
+Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_CONSOLE_LEVEL`,
+`PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME` in place of `LOG_LEVEL`
+and the rest.
 
 ### LoggerBuilder.no_env
 
@@ -1190,8 +1222,9 @@ What a logger of the console alone is told before its layer is made.
 pub fn level(self, level: Level) -> Self
 ```
 
-The least level printed and kept; every level without it, and
-`LOG_LEVEL` wins over it.
+The least level printed, every level without it. `LOG_LEVEL` wins
+over it, and `LOG_CONSOLE_LEVEL` over both, since this logger only
+prints.
 
 ### LoggerBuilder.console
 
@@ -1268,8 +1301,9 @@ Adds where each line was logged: `source={"function":…,"file":…,"line":42}`.
 pub fn env(self, prefix: &str) -> Self
 ```
 
-Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME`
-in place of `LOG_LEVEL` and the rest.
+Reads `PREFIX_LOG_LEVEL`, `PREFIX_LOG_CONSOLE_LEVEL`,
+`PREFIX_LOG_FORMAT` and `PREFIX_LOG_TIME` in place of `LOG_LEVEL`
+and the rest.
 
 ### LoggerBuilder.no_env
 

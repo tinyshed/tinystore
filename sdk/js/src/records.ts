@@ -726,10 +726,35 @@ function linesIn(bytes: Uint8Array): number {
 	return lines
 }
 
-/** What a store's logger is told: a logger's options, and how long its stream keeps. */
-export interface StoreLoggerOptions extends LoggerOptions {
+/** What a store's logger is told: a logger's options, how long its stream keeps, and the levels it keeps and prints. */
+export interface StoreLoggerOptions extends Omit<LoggerOptions, 'level'> {
 	/** how long the stream keeps its events, as store.events takes it */
 	keep?: Duration
+	/**
+	 * the least level kept and printed, every level when absent, or each
+	 * apart: `{ store: 'info', console: 'warn' }` keeps every line from info
+	 * and prints warnings and errors. LOG_LEVEL wins over the level kept, and
+	 * LOG_CONSOLE_LEVEL over the level printed
+	 */
+	level?: Level | Levels
+}
+
+/**
+ * The least levels a store's logger keeps and prints, each part left out as
+ * the option is: no store keeps every level, and no console prints what is
+ * kept, following the config `log`'s changes of it.
+ *
+ * ```ts
+ * { level: 'info' }                               // keeps info+, prints info+
+ * { level: { store: 'info', console: 'warn' } }   // keeps info+, prints warn+
+ * { level: { console: 'warn' } }                  // keeps every level, prints warn+
+ * ```
+ */
+export interface Levels {
+	/** the least level kept; LOG_LEVEL and the config `log` win over it */
+	store?: Level
+	/** the least level printed; LOG_CONSOLE_LEVEL wins over it */
+	console?: Level
 }
 
 /**

@@ -10,11 +10,14 @@ import (
 // Settings is what a handler is told: package console's options, and a store
 // handler's own from package records.
 type Settings struct {
-	Format           Format
-	Time             Time
-	HideStream       bool
-	To               io.Writer // standard error when nil
-	Level            slog.Leveler
+	Format     Format
+	Time       Time
+	HideStream bool
+	To         io.Writer // standard error when nil
+	Level      slog.Leveler
+	// Printed is the least level a store's handler prints, apart from
+	// Level, which it keeps from; nil prints what is kept.
+	Printed          slog.Leveler
 	Redact           []string
 	KeepURLPasswords bool
 	Replace          func(groups []string, attr slog.Attr) slog.Attr

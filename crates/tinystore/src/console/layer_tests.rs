@@ -215,6 +215,25 @@ fn the_environment_wins_over_the_code_and_never_turns_a_console_on() {
     assert!(printed.lines().is_empty());
 }
 
+fn console_warn_said(name: &str) -> Option<String> {
+    match name {
+        "LOG_CONSOLE_LEVEL" => Some("warn".to_owned()),
+        "LOG_LEVEL" => Some("debug".to_owned()),
+        _ => None,
+    }
+}
+
+// contract: LOG-05
+#[test]
+fn log_console_level_sets_what_a_logger_of_the_console_alone_prints() {
+    let printed = Printed::default();
+    logged(layer(told(&printed, console_warn_said)), || {
+        tracing::info!("hidden");
+        tracing::warn!("shown");
+    });
+    assert_eq!(printed.untimed(), [r#"{"level":"WARN","stream":"api","msg":"shown"}"#]);
+}
+
 fn loud_said(name: &str) -> Option<String> {
     (name == "APP_LOG_LEVEL").then(|| "loud-in-a-layer-test".to_owned())
 }

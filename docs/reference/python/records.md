@@ -277,6 +277,23 @@ secrets = SECRETS
 
 The names redact takes to hide the usual secrets: password, token, api key, connection string and the rest.
 
+## Levels
+
+```python
+class Levels(TypedDict, total=False):
+    store: Level  # the least level kept; LOG_LEVEL and the config log win over it
+    console: Level  # the least level printed; LOG_CONSOLE_LEVEL wins over it
+```
+
+The least levels a store's logger keeps and prints, each part left out as the option is.
+
+No store keeps every level, and no console prints what is kept,
+following the config log's changes of it:
+
+    level="info"                                   # keeps info+, prints info+
+    level={"store": "info", "console": "warning"}  # keeps info+, prints warning+
+    level={"console": "warning"}                   # keeps every level, prints warning+
+
 ## Logger
 
 ```python
@@ -377,7 +394,9 @@ Hands over what the logger holds and stops its timer, as the store's close does.
 def take_record(record: logging.LogRecord, formatter: logging.Formatter) -> None: ...
 ```
 
-Prints and keeps a logging record: its extra its fields, its logger's name in its context.
+Prints and keeps a logging record as the logger's levels say.
+
+Its extra are its fields, and its logger's name is in its context.
 
 ### Logger.take
 
@@ -385,7 +404,10 @@ Prints and keeps a logging record: its extra its fields, its logger's name in it
 def take(line: Line) -> None: ...
 ```
 
-Prints and keeps a line made elsewhere, a logging record's: from any thread, never waiting.
+Prints a line made elsewhere and keeps it, from any thread, never waiting.
+
+It is printed from the level printed and kept from the level kept; an
+event, which has no level, is printed and kept.
 
 ## logger
 
