@@ -106,6 +106,38 @@ The environment a config reads: ``env("APP")`` reads APP_ and each setting's pat
 - ``files``: .env files, whose variables count where the process has none.
 - ``from_``: these variables in place of the process's, as a test gives them.
 
+## Origin
+
+```python
+@dataclass(frozen=True, slots=True, repr=False)
+class Origin:
+    kind: Literal['declaration', 'layer', 'file', 'env', 'change']
+    place: int | None = None  # a layer's place in the list, the declaration 1
+    path: str | None = None  # a file's path
+    variable: str | None = None  # an env's variable
+    dotenv: str | None = None  # the .env file that set the variable
+    file: str | None = None  # the file a NAME_FILE variable named
+    version: int | None = None  # a change's version
+    at: datetime | None = None  # when a change was made, in UTC
+```
+
+Where a value came from: its kind, and only the fields that kind names, the others None.
+
+``str(origin)`` is the text a line's ``from_`` says: ``the declaration``, ``layer 2``,
+``app.yaml``, ``APP_PORT in .env``, ``a change, version 7, 2026-10-13 14:03:05 UTC``.
+A kind from a newer server is kept as it was sent, and its text is the kind.
+
+## Given
+
+```python
+@dataclass(frozen=True, slots=True)
+class Given:
+    value: str  # as JSON, a span spelled, a secret as ***
+    from_: Origin
+```
+
+A value a setting was given, and where it came from.
+
 ## Line
 
 ```python
@@ -115,6 +147,7 @@ class Line:
     value: str  # as JSON, a span spelled, a secret as ***
     from_: str  # the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change
     over: str  # the values it went over, newest first
+    given: tuple[Given, ...] = dataclasses.field(default=(), repr=False)  # Every value the setting was given, newest first: its own, then the ones it went over. from_ is str(given[0].from_). It is empty from a server before 0.1.1, and print(line) leaves it out.
 ```
 
 A setting's line of explain.
@@ -123,7 +156,6 @@ A setting's line of explain.
 
 ```python
 class Explained(list[Line]):
-    notes: list[str]
     notes: list[str]
 ```
 

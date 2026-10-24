@@ -65,11 +65,34 @@ what the program reads on every use.
 A kept change is the strongest layer on purpose: `live(100)` lets whoever
 runs the program, through an admin page of yours, outrank the
 code, the files and the environment. A deploy that sets `APP_LIMITS_RPS`
-does not undo it:
+does not undo it, as [`explain`](explain.md) shows in each language:
 
-```text
-path        value  from                                   over
-limits.rps  200    a change, 12 October 14:03, version 7  1000 APP_LIMITS_RPS, 100 the declaration
+```text for=bun
+┌───┬──────────────┬───────┬──────────────────────────────────────────────┬────────────────────────────────────────────────────┐
+│   │ path         │ value │ from                                         │ over                                               │
+├───┼──────────────┼───────┼──────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+│ 0 │ limits.burst │ 50    │ the declaration                              │                                                    │
+│ 1 │ limits.rps   │ 200   │ a change, version 1, 2026-10-24 09:34:52 UTC │ 1000 from APP_LIMITS_RPS, 100 from the declaration │
+│ 2 │ port         │ 8080  │ the declaration                              │                                                    │
+└───┴──────────────┴───────┴──────────────────────────────────────────────┴────────────────────────────────────────────────────┘
+```
+
+```text for=python
+Line(path='limits.burst', value='50', from_='the declaration', over='')
+Line(path='limits.rps', value='200', from_='a change, version 1, 2026-10-24 09:34:55 UTC', over='1000 from APP_LIMITS_RPS, 100 from the declaration')
+Line(path='port', value='8080', from_='the declaration', over='')
+```
+
+```text for=go
+limits.burst  50  the declaration
+limits.rps  200  a change, version 1, 2026-10-24 09:35:00 UTC  over 1000 from APP_LIMITS_RPS, 100 from the declaration
+port  8080  the declaration
+```
+
+```text for=rust
+limits.burst  50    the declaration
+limits.rps    200   a change, version 1, 2026-10-24 09:35:00 UTC  over 1000 from APP_LIMITS_RPS, 100 from the declaration
+port          8080  the declaration
 ```
 
 `reset` removes the change and lets the layers give the setting again.

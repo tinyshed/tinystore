@@ -11,7 +11,7 @@ from .backup import Backup
 from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
 from .channels import Channel, Message, Missed, Subscription, TxChannel
 from .clock import Clock
-from .config import Config, Explained, Items, Line, Range, Secret, env, file, live, secret
+from .config import Config, Explained, Given, Items, Line, Origin, Range, Secret, env, file, live, secret
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -127,6 +127,7 @@ __all__ = [
     "FilePage",
     "Files",
     "Gauge",
+    "Given",
     "Histogram",
     "Hit",
     "Holding",
@@ -155,6 +156,7 @@ __all__ = [
     "NamePage",
     "NotFoundError",
     "Once",
+    "Origin",
     "Outcome",
     "OutcomeUnknownError",
     "Page",

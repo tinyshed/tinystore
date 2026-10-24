@@ -102,14 +102,108 @@ func TestAConfigIsItsDeclarationThenEachLayerInTheOrderWritten(t *testing.T) {
 		for _, line := range config.Explain() {
 			lines[line.Path] = line
 		}
-		want := tinystore.Line{Path: "port", Value: "9000", From: "APP_PORT", Over: "8000 from " + yaml + ", 8080 from the declaration"}
-		if lines["port"] != want {
-			t.Fatalf("port %+v, want %+v", lines["port"], want)
+		port, over := lines["port"], "8000 from "+yaml+", 8080 from the declaration"
+		if port.Path != "port" || port.Value != "9000" || port.From != "APP_PORT" || port.Over != over {
+			t.Fatalf("port %+v", port)
 		}
 		if lines["db.url"].Value != "***" || lines["timeout"].Value != "30s" {
 			t.Fatalf("db.url %+v, timeout %+v", lines["db.url"], lines["timeout"])
 		}
 	})
+}
+
+// contract: CFG-09, CFG-06
+func TestExplainGivesEveryValueASettingWasGivenNewestFirstWithWhereEachCameFrom(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		yaml, dotenv := filepath.Join(dir, "given.yaml"), filepath.Join(dir, "given.env")
+		secret := filepath.Join(dir, "db-url")
+		ways.Must(0, os.WriteFile(yaml, []byte("port: 8000\n"), 0o600))
+		ways.Must(0, os.WriteFile(dotenv, []byte("APP_TIMEOUT=1m\n"), 0o600))
+		ways.Must(0, os.WriteFile(secret, []byte("postgres://user:password@host\n"), 0o600))
+		variables := map[string]string{"APP_PORT": "9000", "APP_DB_URL_FILE": secret}
+		config := ways.Must(tinystore.OpenConfig(ctx, store, "given", defaults,
+			tinystore.File(yaml),
+			tinystore.Env("APP", tinystore.DotEnv(dotenv), tinystore.EnvFrom(variables)),
+		))
+		before := time.Now()
+		ways.Must(0, config.Update(ctx, func(s *settings) { s.Limits.RPS = 200 }))
+		lines := map[string]tinystore.Line{}
+		for _, line := range config.Explain() {
+			lines[line.Path] = line
+		}
+		want := map[string][]tinystore.Given{
+			"port": {
+				{Value: "9000", From: envOrigin("APP_PORT", "", "")},
+				{Value: "8000", From: tinystore.Origin{Kind: tinystore.OriginFile, Path: yaml}},
+				declared("8080"),
+			},
+			"timeout": {{Value: "1m", From: envOrigin("APP_TIMEOUT", dotenv, "")}, declared("30s")},
+			"db.url":  {{Value: "***", From: envOrigin("APP_DB_URL_FILE", "", secret)}},
+		}
+		for path, given := range want {
+			if !reflect.DeepEqual(lines[path].Given, given) {
+				t.Fatalf("%s was given %+v, want %+v", path, lines[path].Given, given)
+			}
+		}
+		changed(t, lines["limits.rps"].Given, config.Version(), before)
+		givenAsText(t, config.Explain())
+		if text := fmt.Sprintf("%+v", lines["db.url"].Given); strings.Contains(text, "password") {
+			t.Fatalf("a secret printed as %s", text)
+		}
+	})
+}
+
+func declared(value string) tinystore.Given {
+	return tinystore.Given{Value: value, From: tinystore.Origin{Kind: tinystore.OriginDeclaration}}
+}
+
+func envOrigin(variable, dotenv, file string) tinystore.Origin {
+	return tinystore.Origin{Kind: tinystore.OriginEnv, Variable: variable, DotEnv: dotenv, File: file}
+}
+
+// changed checks that a change gave limits.rps 200 over the declaration's 100,
+// at the config's version and after before.
+func changed(t *testing.T, given []tinystore.Given, version int64, before time.Time) {
+	t.Helper()
+	if len(given) != 2 || given[0].Value != "200" || given[1] != declared("100") {
+		t.Fatalf("limits.rps was given %+v", given)
+	}
+	change := given[0].From
+	if change.Kind != tinystore.OriginChange || change.Version != version {
+		t.Fatalf("a change %+v, at version %d", change, version)
+	}
+	if change.At.Before(before.Add(-time.Second)) || change.At.After(time.Now().Add(time.Second)) {
+		t.Fatalf("a change at %v, made after %v", change.At, before)
+	}
+}
+
+// givenAsText checks that each line's From and Over are its Given as text.
+func givenAsText(t *testing.T, lines []tinystore.Line) {
+	t.Helper()
+	for _, line := range lines {
+		if len(line.Given) == 0 {
+			t.Fatalf("%s was given nothing", line.Path)
+		}
+		own, over := line.Given[0], line.Given[1:]
+		if own.Value != line.Value || own.From.String() != line.From {
+			t.Fatalf("%s: %+v, but the line says %q from %q", line.Path, own, line.Value, line.From)
+		}
+		said := make([]string, len(over))
+		for i, given := range over {
+			said[i] = given.Value + " from " + given.From.String()
+		}
+		if strings.Join(said, ", ") != line.Over {
+			t.Fatalf("%s went over %q, but the line says %q", line.Path, said, line.Over)
+		}
+	}
+}
+
+func TestAnOriginOfAKindFromANewerServerKeepsItsKindWhichIsAlsoItsText(t *testing.T) {
+	if text := (tinystore.Origin{Kind: "rule"}).String(); text != "rule" {
+		t.Fatalf("an origin of the kind rule says %q", text)
+	}
 }
 
 func TestARuleOfOneValueIsTheCoresAndARefusalNamesTheLayerThatGaveIt(t *testing.T) {

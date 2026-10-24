@@ -55,7 +55,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 pub use env::Env;
-pub use explain::{Explained, Line};
+pub use explain::{Explained, Given, Line, Origin};
 pub use files::File;
 pub use handle::{Config, IfVersion, Snapshot, Watching};
 pub(crate) use hub::Hub;

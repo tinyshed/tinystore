@@ -9,8 +9,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::declaration::{Declaration, Group, Item, Kind, Node};
+use super::explain::Origin;
 use super::hub::{Change, Kept};
-use super::layers::{Base, Given, Source, set};
+use super::layers::{Base, Stacked, set};
 use super::rules;
 
 /// A program's own check of its whole value, which says why it refuses one.
@@ -116,11 +117,11 @@ impl<T: DeserializeOwned> Making<'_, T> {
     /// What broke the value the layers make, each named by its layer: every
     /// value a layer gave is put back to its default, then given again alone.
     fn culprits(&self, base: &Base, tree: &Value, why: &str) -> Vec<String> {
-        let given: Vec<(&String, &Given, &Value)> = base
+        let given: Vec<(&String, &Stacked, &Value)> = base
             .stacks
             .iter()
             .filter_map(|(path, stack)| {
-                let last = stack.last().filter(|last| last.from != Source::Declaration)?;
+                let last = stack.last().filter(|last| last.from != Origin::Declaration)?;
                 let default = self.declaration.setting(path)?.default.as_ref()?;
                 Some((path, last, default))
             })
@@ -148,11 +149,11 @@ impl<T: DeserializeOwned> Making<'_, T> {
 }
 
 /// A problem as the layer whose value it is about says it.
-fn named(from: &Source, path: &str, why: &str) -> String {
+fn named(from: &Origin, path: &str, why: &str) -> String {
     match from {
-        Source::Variable { .. } => format!("{from}: {why}"),
-        Source::File(_) | Source::Object(_) => format!("{from}: {path}: {why}"),
-        Source::Declaration | Source::Change { .. } => format!("{path}: {why}"),
+        Origin::Env { .. } => format!("{from}: {why}"),
+        Origin::File { .. } | Origin::Layer { .. } => format!("{from}: {path}: {why}"),
+        Origin::Declaration | Origin::Change { .. } => format!("{path}: {why}"),
     }
 }
 

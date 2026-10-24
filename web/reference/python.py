@@ -121,13 +121,16 @@ def klass(node: ast.ClassDef) -> dict:
     lines = [head(node)]
     members: list[dict] = []
     body = node.body
+    annotated = {
+        child.target.id for child in body if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name)
+    }
     for at, child in enumerate(body):
         if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name) and public(child.target.id):
             lines.append("    " + field(child, body[at + 1] if at + 1 < len(body) else None))
         elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and public(child.name):
             add_method(members, node.name, child)
         elif isinstance(child, ast.FunctionDef) and child.name == "__init__":
-            lines.extend("    " + line for line in set_in_init(child))
+            lines.extend("    " + line for line in set_in_init(child, annotated))
     if len(lines) == 1:
         lines.append("    ...")
     return {
@@ -138,10 +141,11 @@ def klass(node: ast.ClassDef) -> dict:
     }
 
 
-def set_in_init(init: ast.FunctionDef) -> list[str]:
+def set_in_init(init: ast.FunctionDef, annotated: set[str]) -> list[str]:
     """The public attributes __init__ sets, as fields, each with the type it can be told by:
     `self.metrics = Metrics(link)`, `self.size = size` of a parameter's annotation,
-    `self.etag = info.etag` of a field of the parameter's class."""
+    `self.etag = info.etag` of a field of the parameter's class. One the class body annotates
+    is listed there already, as `notes: list[str]` above `self.notes = notes`."""
     params = {arg.arg: ast.unparse(arg.annotation) for arg in init.args.args + init.args.kwonlyargs if arg.annotation}
     lines = []
     body = init.body
@@ -149,6 +153,8 @@ def set_in_init(init: ast.FunctionDef) -> list[str]:
         if not isinstance(child, ast.Assign):
             continue
         target = child.targets[0]
+        if isinstance(target, ast.Attribute) and target.attr in annotated:
+            continue
         kind = type_of(child.value, params)
         if isinstance(target, ast.Attribute) and getattr(target.value, "id", "") == "self" and public(target.attr) and kind:
             line = f"{target.attr}: {kind}"

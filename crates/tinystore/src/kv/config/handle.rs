@@ -16,14 +16,15 @@ use super::ConfigBuilder;
 use super::declaration::{Declaration, Kind, Setting, unmarked};
 #[cfg(any(test, feature = "wire"))]
 use super::declaration::{Group, Node, joined, shown};
-use super::explain::{Explained, Line};
+use super::explain::{Explained, Given, Line, Origin};
 use super::hub::{Change, Follower, Hub, Kept};
 #[cfg(feature = "async")]
 use super::hub::{Hook, Unpublished};
-use super::layers::{Base, Given, Layer, Source, set, shown_value};
+use super::layers::{Base, Layer, Stacked, set, shown_value};
 use super::marks::marked;
 use super::resolve::{Making, Resolved, Validate, View};
 use super::rules::{self, described};
+use crate::clock::from_unix_millis;
 use crate::kv::engine::Kv;
 use crate::kv::scope::check_name;
 use crate::sync::lock;
@@ -509,8 +510,8 @@ where
         for (path, setting) in self.declaration.settings() {
             let mut stack = self.base.stacks.get(&path).cloned().unwrap_or_default();
             if let Some(change) = resolved.applied.get(&path) {
-                let from = Source::Change { version: change.version, at: change.at };
-                stack.push(Given { value: change.value.clone(), from });
+                let from = Origin::Change { version: change.version, at: from_unix_millis(change.at) };
+                stack.push(Stacked { value: change.value.clone(), from });
             }
             if let Some(line) = line(path, setting, stack) {
                 settings.push(line);
@@ -588,14 +589,17 @@ where
     }
 }
 
-/// A setting's line of `explain`, from its values oldest first.
-fn line(path: String, setting: &Setting, mut stack: Vec<Given>) -> Option<Line> {
-    let last = stack.pop()?;
+/// A setting's line of `explain`, from its values oldest first: each shown
+/// as `explain` shows a value, and its `from` and `over` that data as text.
+fn line(path: String, setting: &Setting, stack: Vec<Stacked>) -> Option<Line> {
     let shown = |value: &Value| {
         if setting.secret { "***".to_owned() } else { shown_value(value, setting.kind == Kind::Duration) }
     };
-    let over = stack.iter().rev().map(|given| format!("{} from {}", shown(&given.value), given.from)).collect();
-    Some(Line { path, value: shown(&last.value), from: last.from.to_string(), over })
+    let given: Vec<Given> =
+        stack.into_iter().rev().map(|stacked| Given { value: shown(&stacked.value), from: stacked.from }).collect();
+    let (own, over) = given.split_first()?;
+    let over = over.iter().map(|given| format!("{} from {}", given.value, given.from)).collect();
+    Some(Line { path, value: own.value.clone(), from: own.from.to_string(), over, given })
 }
 
 /// A value as the config keeps it: marks taken off, spans in milliseconds.

@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::kv::config::{Config, Sent};
+use crate::kv::config::{Config, Given, Origin, Sent};
 use crate::kv::fixture::{Fixture, fixture};
-use crate::{Error, ErrorKind};
+use crate::{Clock, Error, ErrorKind};
 
 /// A declaration as the Bun SDK writes one: every kind, rules and marks.
 fn declared() -> Value {
@@ -105,6 +105,53 @@ fn a_config_sent_reads_its_layers_as_sent_and_gives_its_value_as_data() {
     );
     assert_eq!(from("db.url"), "DATABASE_URL_FILE, /run/secrets/db");
     assert_eq!(explained.notes, ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]);
+}
+
+// contract: CFG-09
+#[test]
+fn explain_gives_a_layer_sent_by_its_place_and_each_value_it_went_over() {
+    let f = fixture();
+    let layers = json!([
+        { "object": { "level": "debug", "port": 8100 }, "place": 2 },
+        { "file": { "name": "app.yaml", "text": "port: 9000\n" } },
+        { "env": {
+            "prefix": "APP",
+            "vars": { "db.url": "DATABASE_URL" },
+            "variables": { "APP_PORT": "9100", "DATABASE_URL_FILE": "/run/secrets/db" },
+            "files": { "/run/secrets/db": "postgres://secret\n" },
+            "dotenv": [{ "name": ".env", "text": "APP_TIMEOUT=1m\n" }]
+        } }
+    ]);
+    let config = opened(&f, &layers).unwrap();
+    config.update_data(config.get().version(), &json!({ "limits": { "rps": 200 } })).unwrap();
+    let explained = config.explain();
+    let given = |path: &str| explained.settings.iter().find(|line| line.path == path).unwrap().given.clone();
+    let gave = |value: &str, from: Origin| Given { value: value.to_owned(), from };
+    let env = |variable: &str, dotenv: Option<&str>, file: Option<&str>| Origin::Env {
+        variable: variable.to_owned(),
+        dotenv: dotenv.map(str::to_owned),
+        file: file.map(str::to_owned),
+    };
+    assert_eq!(
+        given("port"),
+        [
+            gave("9100", env("APP_PORT", None, None)),
+            gave("9000", Origin::File { path: "app.yaml".to_owned() }),
+            gave("8100", Origin::Layer { place: 2 }),
+            gave("8080", Origin::Declaration),
+        ]
+    );
+    assert_eq!(
+        given("level"),
+        [gave(r#""debug""#, Origin::Layer { place: 2 }), gave(r#""info""#, Origin::Declaration)]
+    );
+    assert_eq!(
+        given("timeout"),
+        [gave("1m", env("APP_TIMEOUT", Some(".env"), None)), gave("30s", Origin::Declaration)]
+    );
+    assert_eq!(given("db.url"), [gave("***", env("DATABASE_URL_FILE", None, Some("/run/secrets/db")))]);
+    let change = Origin::Change { version: 1, at: f.clock.now() };
+    assert_eq!(given("limits.rps"), [gave("200", change), gave("100", Origin::Declaration)]);
 }
 
 #[test]

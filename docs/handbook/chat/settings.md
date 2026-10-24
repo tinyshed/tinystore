@@ -306,18 +306,51 @@ for _, line := range config.Explain() {
 println!("{}", config.explain());
 ```
 
-```text
+With `PORT=9000` and `CHAT_MODEL_API_KEY` set, and replies turned off, each
+language prints:
+
+```text for=bun
+┌───┬──────────────────┬────────────────────┬──────────────────────────────────────────────┬──────────────────────────────────────────┐
+│   │ path             │ value              │ from                                         │ over                                     │
+├───┼──────────────────┼────────────────────┼──────────────────────────────────────────────┼──────────────────────────────────────────┤
+│ 0 │ model.api_key    │ ***                │ CHAT_MODEL_API_KEY                           │                                          │
+│ 1 │ model.max_tokens │ 2048               │ chat.toml                                    │ 1024 from the declaration                │
+│ 2 │ model.name       │ "claude-haiku-5-5" │ chat.toml                                    │ "claude-sonnet-5-5" from the declaration │
+│ 3 │ port             │ 9000               │ PORT                                         │ 8080 from the declaration                │
+│ 4 │ replies.enabled  │ false              │ a change, version 1, 2026-10-24 09:34:52 UTC │ true from the declaration                │
+└───┴──────────────────┴────────────────────┴──────────────────────────────────────────────┴──────────────────────────────────────────┘
+```
+
+```text for=python
+Line(path='model.api_key', value='***', from_='CHAT_MODEL_API_KEY', over='')
+Line(path='model.max_tokens', value='2048', from_='chat.toml', over='1024 from the declaration')
+Line(path='model.name', value='"claude-haiku-5-5"', from_='chat.toml', over='"claude-sonnet-5-5" from the declaration')
+Line(path='port', value='9000', from_='PORT', over='8080 from the declaration')
+Line(path='replies.enabled', value='false', from_='a change, version 1, 2026-10-24 09:34:55 UTC', over='true from the declaration')
+```
+
+```text for=go
+model.api_key  ***  CHAT_MODEL_API_KEY
+model.max_tokens  2048  chat.toml  over 1024 from the declaration
+model.name  "claude-haiku-5-5"  chat.toml  over "claude-sonnet-5-5" from the declaration
+port  9000  PORT  over 8080 from the declaration
+replies.enabled  false  a change, version 1, 2026-10-24 09:35:00 UTC  over true from the declaration
+```
+
+```text for=rust
 model.api_key     ***                 CHAT_MODEL_API_KEY
 model.max_tokens  2048                chat.toml                                     over 1024 from the declaration
 model.name        "claude-haiku-5-5"  chat.toml                                     over "claude-sonnet-5-5" from the declaration
 port              9000                PORT                                          over 8080 from the declaration
-replies.enabled   false               a change, version 1, 2026-10-19 13:47:42 UTC  over true from the declaration
+replies.enabled   false               a change, version 1, 2026-10-24 09:35:00 UTC  over true from the declaration
 ```
 
 `explain` lists every setting, its value, the layer that gave it and the
 values it went over. After the settings it lists what was read and not used:
 an optional file that was missing, or a variable such as `CHAT_PROT=9000`
 that names no setting. A typo in a variable is said, never silently ignored.
+Each line's `given` holds the same as data, such as the version and the time
+of a change: see [Explain and validate](../../guides/config/explain.md#each-value-as-data).
 
 ## Why this design?
 

@@ -1715,78 +1715,124 @@ export const ConfigOpen = message(
 )
 
 /**
- * A setting's line of explain.
+ * Where a value came from: its kind, and only the fields that kind names.
  */
-export const ConfigLine = message(
-	'config.Line',
+export const ConfigOrigin = message(
+	'config.Origin',
 	{
-		path: [1, str],
-		/** as JSON, a span spelled, a secret as *** */
-		value: [2, str],
-		from: [3, str],
-		/** the values it went over, newest first */
-		over: [4, list(str)],
+		/** declaration, layer, file, env or change */
+		kind: [1, str],
+		/** a layer's place in the list, the declaration 1 */
+		place: [2, uint],
+		/** a file's path */
+		path: [3, str],
+		/** an env's variable */
+		variable: [4, str],
+		/** the .env file that set the variable */
+		dotenv: [5, str],
+		/** the file a NAME_FILE variable named */
+		file: [6, str],
+		/** a change's version */
+		version: [7, int],
+		/** when a change was made */
+		at: [8, int],
 	},
 	{
 		write(w, v) {
 			const head = w.openMap()
 			let n = 0
-			if (v.path !== undefined) {
+			if (v.kind !== undefined) {
 				w.field(1)
+				w.str(v.kind)
+				n++
+			}
+			if (v.place !== undefined) {
+				w.field(2)
+				w.uint(v.place)
+				n++
+			}
+			if (v.path !== undefined) {
+				w.field(3)
 				w.str(v.path)
 				n++
 			}
-			if (v.value !== undefined) {
-				w.field(2)
-				w.str(v.value)
-				n++
-			}
-			if (v.from !== undefined) {
-				w.field(3)
-				w.str(v.from)
-				n++
-			}
-			if (v.over !== undefined) {
+			if (v.variable !== undefined) {
 				w.field(4)
-				w.array(v.over.length)
-				for (const item0 of v.over) {
-					w.str(item0)
-				}
+				w.str(v.variable)
+				n++
+			}
+			if (v.dotenv !== undefined) {
+				w.field(5)
+				w.str(v.dotenv)
+				n++
+			}
+			if (v.file !== undefined) {
+				w.field(6)
+				w.str(v.file)
+				n++
+			}
+			if (v.version !== undefined) {
+				w.field(7)
+				w.int(v.version)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(8)
+				w.int(v.at)
 				n++
 			}
 			w.closeMap(head, n)
 		},
 		read(r) {
+			let $kind: string | undefined
+			let $place: number | undefined
 			let $path: string | undefined
-			let $value: string | undefined
-			let $from: string | undefined
-			let $over: string[] | undefined
+			let $variable: string | undefined
+			let $dotenv: string | undefined
+			let $file: string | undefined
+			let $version: number | undefined
+			let $at: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
-						$path = r.str()
+						$kind = r.str()
 						break
 					case 2:
-						$value = r.str()
+						$place = r.uint()
 						break
 					case 3:
-						$from = r.str()
+						$path = r.str()
 						break
-					case 4: {
-						const items0: string[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(r.str())
-						}
-						r.leave()
-						$over = items0
+					case 4:
+						$variable = r.str()
 						break
-					}
+					case 5:
+						$dotenv = r.str()
+						break
+					case 6:
+						$file = r.str()
+						break
+					case 7:
+						$version = r.int()
+						break
+					case 8:
+						$at = r.int()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { path: $path, value: $value, from: $from, over: $over }
+			return {
+				kind: $kind,
+				place: $place,
+				path: $path,
+				variable: $variable,
+				dotenv: $dotenv,
+				file: $file,
+				version: $version,
+				at: $at,
+			}
 		},
 	},
 )
@@ -11387,98 +11433,48 @@ export const ChannelsBatch = message(
 )
 
 /**
- * A config's value at a version of its changes, and where each setting's
- * value came from.
+ * A value a setting was given, and where it came from.
  */
-export const ConfigValue = message(
-	'config.Value',
+export const ConfigGiven = message(
+	'config.Given',
 	{
-		handle: [1, uint],
-		version: [2, int],
-		/** the settings, each span its milliseconds, each secret its text */
-		value: [3, str],
-		lines: [4, list(ConfigLine)],
-		/** what was read and not used, each with why */
-		notes: [5, list(str)],
+		/** as JSON, a span spelled, a secret as *** */
+		value: [1, str],
+		from: [2, ConfigOrigin],
 	},
 	{
 		write(w, v) {
 			const head = w.openMap()
 			let n = 0
-			if (v.handle !== undefined) {
-				w.field(1)
-				w.uint(v.handle)
-				n++
-			}
-			if (v.version !== undefined) {
-				w.field(2)
-				w.int(v.version)
-				n++
-			}
 			if (v.value !== undefined) {
-				w.field(3)
+				w.field(1)
 				w.str(v.value)
 				n++
 			}
-			if (v.lines !== undefined) {
-				w.field(4)
-				w.array(v.lines.length)
-				for (const item0 of v.lines) {
-					ConfigLine.write(w, item0)
-				}
-				n++
-			}
-			if (v.notes !== undefined) {
-				w.field(5)
-				w.array(v.notes.length)
-				for (const item0 of v.notes) {
-					w.str(item0)
-				}
+			if (v.from !== undefined) {
+				w.field(2)
+				ConfigOrigin.write(w, v.from)
 				n++
 			}
 			w.closeMap(head, n)
 		},
 		read(r) {
-			let $handle: number | undefined
-			let $version: number | undefined
 			let $value: string | undefined
-			let $lines: Read<typeof ConfigLine.fields>[] | undefined
-			let $notes: string[] | undefined
+			let $from: Read<typeof ConfigOrigin.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
-						$handle = r.uint()
-						break
-					case 2:
-						$version = r.int()
-						break
-					case 3:
 						$value = r.str()
 						break
-					case 4: {
-						const items0: Read<typeof ConfigLine.fields>[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(ConfigLine.read(r))
-						}
-						r.leave()
-						$lines = items0
+					case 2:
+						$from = ConfigOrigin.read(r)
 						break
-					}
-					case 5: {
-						const items0: string[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(r.str())
-						}
-						r.leave()
-						$notes = items0
-						break
-					}
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { handle: $handle, version: $version, value: $value, lines: $lines, notes: $notes }
+			return { value: $value, from: $from }
 		},
 	},
 )
@@ -11815,6 +11811,200 @@ export const SearchSetMany = message(
 			}
 			r.leave()
 			return { handle: $handle, documents: $documents }
+		},
+	},
+)
+
+/**
+ * A setting's line of explain.
+ */
+export const ConfigLine = message(
+	'config.Line',
+	{
+		path: [1, str],
+		/** as JSON, a span spelled, a secret as *** */
+		value: [2, str],
+		from: [3, str],
+		/** the values it went over, newest first */
+		over: [4, list(str)],
+		/** every value it was given, newest first: its own, then the ones it went over */
+		given: [5, list(ConfigGiven)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.path !== undefined) {
+				w.field(1)
+				w.str(v.path)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(3)
+				w.str(v.from)
+				n++
+			}
+			if (v.over !== undefined) {
+				w.field(4)
+				w.array(v.over.length)
+				for (const item0 of v.over) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.given !== undefined) {
+				w.field(5)
+				w.array(v.given.length)
+				for (const item0 of v.given) {
+					ConfigGiven.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $path: string | undefined
+			let $value: string | undefined
+			let $from: string | undefined
+			let $over: string[] | undefined
+			let $given: Read<typeof ConfigGiven.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$path = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$from = r.str()
+						break
+					case 4: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$over = items0
+						break
+					}
+					case 5: {
+						const items0: Read<typeof ConfigGiven.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(ConfigGiven.read(r))
+						}
+						r.leave()
+						$given = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { path: $path, value: $value, from: $from, over: $over, given: $given }
+		},
+	},
+)
+
+/**
+ * A config's value at a version of its changes, and where each setting's
+ * value came from.
+ */
+export const ConfigValue = message(
+	'config.Value',
+	{
+		handle: [1, uint],
+		version: [2, int],
+		/** the settings, each span its milliseconds, each secret its text */
+		value: [3, str],
+		lines: [4, list(ConfigLine)],
+		/** what was read and not used, each with why */
+		notes: [5, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.handle !== undefined) {
+				w.field(1)
+				w.uint(v.handle)
+				n++
+			}
+			if (v.version !== undefined) {
+				w.field(2)
+				w.int(v.version)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(3)
+				w.str(v.value)
+				n++
+			}
+			if (v.lines !== undefined) {
+				w.field(4)
+				w.array(v.lines.length)
+				for (const item0 of v.lines) {
+					ConfigLine.write(w, item0)
+				}
+				n++
+			}
+			if (v.notes !== undefined) {
+				w.field(5)
+				w.array(v.notes.length)
+				for (const item0 of v.notes) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $handle: number | undefined
+			let $version: number | undefined
+			let $value: string | undefined
+			let $lines: Read<typeof ConfigLine.fields>[] | undefined
+			let $notes: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$handle = r.uint()
+						break
+					case 2:
+						$version = r.int()
+						break
+					case 3:
+						$value = r.str()
+						break
+					case 4: {
+						const items0: Read<typeof ConfigLine.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(ConfigLine.read(r))
+						}
+						r.leave()
+						$lines = items0
+						break
+					}
+					case 5: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$notes = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { handle: $handle, version: $version, value: $value, lines: $lines, notes: $notes }
 		},
 	},
 )

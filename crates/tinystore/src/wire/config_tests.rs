@@ -4,7 +4,9 @@ use crate::pipe::Capability;
 use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
-use crate::wire::protocol::{ConfigOpen, ConfigReset, ConfigUpdate, ConfigValue, Empty, Handle, method};
+use crate::wire::protocol::{
+    ConfigGiven, ConfigOpen, ConfigOrigin, ConfigReset, ConfigUpdate, ConfigValue, Empty, Handle, method,
+};
 use crate::{Options, Store};
 
 fn declaration() -> String {
@@ -39,6 +41,55 @@ fn a_config_opened_over_the_wire_reads_the_layers_its_program_sent() {
     assert_eq!(client.call::<ConfigValue>(method::CONFIG_OPEN, &broken).unwrap_err().code, "invalid");
     let unknown = ConfigReset { handle: 99, path: String::new() };
     assert_eq!(client.call::<ConfigValue>(method::CONFIG_RESET, &unknown).unwrap_err().code, "invalid");
+}
+
+// contract: CFG-09
+#[test]
+fn a_line_on_the_wire_gives_every_value_with_only_the_fields_its_kind_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let layers = json!([
+        { "object": { "port": 8100 }, "place": 2 },
+        { "file": { "name": "app.yaml", "text": "port: 8200\n" } },
+        { "env": {
+            "prefix": "APP",
+            "variables": { "APP_PORT_FILE": "/run/secrets/port" },
+            "files": { "/run/secrets/port": "9000\n" },
+            "dotenv": [{ "name": ".env", "text": "APP_LIMITS_RPS=150\n" }]
+        } }
+    ]);
+    let opened = open(&mut client, &layers);
+    let changes = json!({ "limits": { "rps": 200 } }).to_string();
+    let update = ConfigUpdate { handle: opened.handle, version: opened.version, changes };
+    let changed: ConfigValue = client.call(method::CONFIG_UPDATE, &update).unwrap();
+    let given = |path: &str| changed.lines.iter().find(|line| line.path == path).unwrap().given.clone();
+    let origin = |kind: &str| ConfigOrigin { kind: kind.to_owned(), ..ConfigOrigin::default() };
+    let gave = |value: &str, from: ConfigOrigin| ConfigGiven { value: value.to_owned(), from };
+    let named = |variable: &str| Some(variable.to_owned());
+    assert_eq!(
+        given("port"),
+        [
+            gave(
+                "9000",
+                ConfigOrigin { variable: named("APP_PORT_FILE"), file: named("/run/secrets/port"), ..origin("env") }
+            ),
+            gave("8200", ConfigOrigin { path: named("app.yaml"), ..origin("file") }),
+            gave("8100", ConfigOrigin { place: Some(2), ..origin("layer") }),
+            gave("8080", origin("declaration")),
+        ]
+    );
+    let rps = given("limits.rps");
+    let at = rps[0].from.at.expect("a change says when it was made");
+    let now = crate::unix_millis(std::time::SystemTime::now());
+    assert!((now - 60_000..=now).contains(&at), "a change made at {at}, read at {now}");
+    assert_eq!(
+        rps,
+        [
+            gave("200", ConfigOrigin { version: Some(changed.version), at: Some(at), ..origin("change") }),
+            gave("150", ConfigOrigin { variable: named("APP_LIMITS_RPS"), dotenv: named(".env"), ..origin("env") }),
+            gave("100", origin("declaration")),
+        ]
+    );
 }
 
 // contract: CFG-04

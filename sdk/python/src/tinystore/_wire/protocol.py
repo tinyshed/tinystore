@@ -1427,64 +1427,94 @@ ConfigOpen = Message(
 )
 
 
-def _write_config_line(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_config_origin(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
-    if (x := v.get("path")) is not None:
+    if (x := v.get("kind")) is not None:
         w.uint(1)
         w.str(x)
         n += 1
-    if (x := v.get("value")) is not None:
+    if (x := v.get("place")) is not None:
         w.uint(2)
-        w.str(x)
+        w.uint(x)
         n += 1
-    if (x := v.get("from")) is not None:
+    if (x := v.get("path")) is not None:
         w.uint(3)
         w.str(x)
         n += 1
-    if (x := v.get("over")) is not None:
+    if (x := v.get("variable")) is not None:
         w.uint(4)
-        w.array(len(x))
-        for item0 in x:
-            w.str(item0)
+        w.str(x)
+        n += 1
+    if (x := v.get("dotenv")) is not None:
+        w.uint(5)
+        w.str(x)
+        n += 1
+    if (x := v.get("file")) is not None:
+        w.uint(6)
+        w.str(x)
+        n += 1
+    if (x := v.get("version")) is not None:
+        w.uint(7)
+        w.int(x)
+        n += 1
+    if (x := v.get("at")) is not None:
+        w.uint(8)
+        w.int(x)
         n += 1
     w.close_map(head, n)
 
 
-def _read_config_line(r: Reader) -> dict[str, Any]:
+def _read_config_origin(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
         match r.field(seen):
             case 1:
-                read["path"] = r.str()
+                read["kind"] = r.str()
             case 2:
-                read["value"] = r.str()
+                read["place"] = r.uint()
             case 3:
-                read["from"] = r.str()
+                read["path"] = r.str()
             case 4:
-                items0 = [r.str() for _ in range(r.array())]
-                r.leave()
-                read["over"] = items0
+                read["variable"] = r.str()
+            case 5:
+                read["dotenv"] = r.str()
+            case 6:
+                read["file"] = r.str()
+            case 7:
+                read["version"] = r.int()
+            case 8:
+                read["at"] = r.int()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# A setting's line of explain.
-ConfigLine = Message(
-    "config.Line",
+# Where a value came from: its kind, and only the fields that kind names.
+ConfigOrigin = Message(
+    "config.Origin",
     {
-        "path": (1, str_),
-        # as JSON, a span spelled, a secret as ***
-        "value": (2, str_),
-        "from": (3, str_),
-        # the values it went over, newest first
-        "over": (4, list_(str_)),
+        # declaration, layer, file, env or change
+        "kind": (1, str_),
+        # a layer's place in the list, the declaration 1
+        "place": (2, uint),
+        # a file's path
+        "path": (3, str_),
+        # an env's variable
+        "variable": (4, str_),
+        # the .env file that set the variable
+        "dotenv": (5, str_),
+        # the file a NAME_FILE variable named
+        "file": (6, str_),
+        # a change's version
+        "version": (7, int_),
+        # when a change was made
+        "at": (8, int_),
     },
-    _write_config_line,
-    _read_config_line,
+    _write_config_origin,
+    _read_config_origin,
 )
 
 
@@ -9381,76 +9411,45 @@ ChannelsBatch = Message(
 )
 
 
-def _write_config_value(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_config_given(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
-    if (x := v.get("handle")) is not None:
-        w.uint(1)
-        w.uint(x)
-        n += 1
-    if (x := v.get("version")) is not None:
-        w.uint(2)
-        w.int(x)
-        n += 1
     if (x := v.get("value")) is not None:
-        w.uint(3)
+        w.uint(1)
         w.str(x)
         n += 1
-    if (x := v.get("lines")) is not None:
-        w.uint(4)
-        w.array(len(x))
-        for item0 in x:
-            ConfigLine.write(w, item0)
-        n += 1
-    if (x := v.get("notes")) is not None:
-        w.uint(5)
-        w.array(len(x))
-        for item0 in x:
-            w.str(item0)
+    if (x := v.get("from")) is not None:
+        w.uint(2)
+        ConfigOrigin.write(w, x)
         n += 1
     w.close_map(head, n)
 
 
-def _read_config_value(r: Reader) -> dict[str, Any]:
+def _read_config_given(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
         match r.field(seen):
             case 1:
-                read["handle"] = r.uint()
-            case 2:
-                read["version"] = r.int()
-            case 3:
                 read["value"] = r.str()
-            case 4:
-                items0 = [ConfigLine.read(r) for _ in range(r.array())]
-                r.leave()
-                read["lines"] = items0
-            case 5:
-                items0 = [r.str() for _ in range(r.array())]
-                r.leave()
-                read["notes"] = items0
+            case 2:
+                read["from"] = ConfigOrigin.read(r)
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# A config's value at a version of its changes, and where each setting's
-# value came from.
-ConfigValue = Message(
-    "config.Value",
+# A value a setting was given, and where it came from.
+ConfigGiven = Message(
+    "config.Given",
     {
-        "handle": (1, uint),
-        "version": (2, int_),
-        # the settings, each span its milliseconds, each secret its text
-        "value": (3, str_),
-        "lines": (4, list_(ConfigLine)),
-        # what was read and not used, each with why
-        "notes": (5, list_(str_)),
+        # as JSON, a span spelled, a secret as ***
+        "value": (1, str_),
+        "from": (2, ConfigOrigin),
     },
-    _write_config_value,
-    _read_config_value,
+    _write_config_given,
+    _read_config_given,
 )
 
 
@@ -9703,6 +9702,152 @@ SearchSetMany = Message(
 )
 
 
+def _write_config_line(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("path")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("value")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("from")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    if (x := v.get("over")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("given")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            ConfigGiven.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_config_line(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["path"] = r.str()
+            case 2:
+                read["value"] = r.str()
+            case 3:
+                read["from"] = r.str()
+            case 4:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["over"] = items0
+            case 5:
+                items0 = [ConfigGiven.read(r) for _ in range(r.array())]
+                r.leave()
+                read["given"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A setting's line of explain.
+ConfigLine = Message(
+    "config.Line",
+    {
+        "path": (1, str_),
+        # as JSON, a span spelled, a secret as ***
+        "value": (2, str_),
+        "from": (3, str_),
+        # the values it went over, newest first
+        "over": (4, list_(str_)),
+        # every value it was given, newest first: its own, then the ones it went over
+        "given": (5, list_(ConfigGiven)),
+    },
+    _write_config_line,
+    _read_config_line,
+)
+
+
+def _write_config_value(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("handle")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("version")) is not None:
+        w.uint(2)
+        w.int(x)
+        n += 1
+    if (x := v.get("value")) is not None:
+        w.uint(3)
+        w.str(x)
+        n += 1
+    if (x := v.get("lines")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            ConfigLine.write(w, item0)
+        n += 1
+    if (x := v.get("notes")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_config_value(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["handle"] = r.uint()
+            case 2:
+                read["version"] = r.int()
+            case 3:
+                read["value"] = r.str()
+            case 4:
+                items0 = [ConfigLine.read(r) for _ in range(r.array())]
+                r.leave()
+                read["lines"] = items0
+            case 5:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["notes"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A config's value at a version of its changes, and where each setting's
+# value came from.
+ConfigValue = Message(
+    "config.Value",
+    {
+        "handle": (1, uint),
+        "version": (2, int_),
+        # the settings, each span its milliseconds, each secret its text
+        "value": (3, str_),
+        "lines": (4, list_(ConfigLine)),
+        # what was read and not used, each with why
+        "notes": (5, list_(str_)),
+    },
+    _write_config_value,
+    _read_config_value,
+)
+
+
 messages: dict[str, Message] = {
     "backup.Write": BackupWrite,
     "backup.Piece": BackupPiece,
@@ -9728,7 +9873,7 @@ messages: dict[str, Message] = {
     "channels.Subscribe": ChannelsSubscribe,
     "channels.Message": ChannelsMessage,
     "config.Open": ConfigOpen,
-    "config.Line": ConfigLine,
+    "config.Origin": ConfigOrigin,
     "config.Update": ConfigUpdate,
     "config.Reset": ConfigReset,
     "Hello": Hello,
@@ -9869,9 +10014,11 @@ messages: dict[str, Message] = {
     "sql.TxCall": SqlTxCall,
     "sql.TxAnswer": SqlTxAnswer,
     "channels.Batch": ChannelsBatch,
-    "config.Value": ConfigValue,
+    "config.Given": ConfigGiven,
     "metrics.Plan": MetricsPlan,
     "search.Open": SearchOpen,
     "search.SetMany": SearchSetMany,
+    "config.Line": ConfigLine,
+    "config.Value": ConfigValue,
 }
 """Every message by its name in the schema."""

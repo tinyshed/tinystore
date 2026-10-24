@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::*;
 use crate::kv::fixture::{Fixture, fixture};
-use crate::{Error, ErrorKind};
+use crate::{Clock, Error, ErrorKind};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -255,6 +255,57 @@ fn a_change_goes_over_every_layer_survives_a_restart_and_reset_gives_the_layers_
     config.update(|settings| *settings.limits.rps = 7).unwrap();
     config.reset_all().unwrap();
     assert_eq!(*config.get().limits.rps, 1000);
+}
+
+fn env_origin(variable: &str, dotenv: Option<&str>, file: Option<&str>) -> Origin {
+    Origin::Env { variable: variable.to_owned(), dotenv: dotenv.map(str::to_owned), file: file.map(str::to_owned) }
+}
+
+fn gave(value: &str, from: Origin) -> Given {
+    Given { value: value.to_owned(), from }
+}
+
+// contract: CFG-09, CFG-06
+#[test]
+fn explain_gives_every_value_a_setting_was_given_with_where_it_came_from_as_data() {
+    let f = fixture();
+    let shown = |path: &std::path::Path| path.display().to_string();
+    let yaml = shown(&file(&f, "app.yaml", "port: 8000\n"));
+    let dotenv = shown(&file(&f, ".env", "APP_TIMEOUT=1m\n"));
+    let secret = shown(&file(&f, "db", "postgres://user:password@host\n"));
+    let variables = [("APP_PORT", "9000"), ("APP_DB_URL_FILE", secret.as_str())];
+    let env = Env::prefix("APP").files([&dotenv]).from(variables);
+    let config = f.store.config("app", Settings::default()).file(yaml.as_str()).env(env).open().unwrap();
+    config.update(|settings| *settings.limits.rps = 200).unwrap();
+    let given = |path: &str| line(&config, path).given;
+    assert_eq!(
+        given("port"),
+        [
+            gave("9000", env_origin("APP_PORT", None, None)),
+            gave("8000", Origin::File { path: yaml.clone() }),
+            gave("8080", Origin::Declaration)
+        ]
+    );
+    assert_eq!(
+        given("timeout"),
+        [gave("1m", env_origin("APP_TIMEOUT", Some(&dotenv), None)), gave("30s", Origin::Declaration)]
+    );
+    assert_eq!(
+        given("db.url"),
+        [gave("***", env_origin("APP_DB_URL_FILE", None, Some(&secret))), gave("***", Origin::Declaration)],
+        "a secret is *** in what it was given too"
+    );
+    let change = Origin::Change { version: 1, at: f.clock.now() };
+    assert_eq!(given("limits.rps"), [gave("200", change), gave("100", Origin::Declaration)]);
+    assert_eq!(line(&config, "limits.rps").from, "a change, version 1, 2027-01-15 08:00:00 UTC");
+    let explained = config.explain();
+    assert!(!format!("{explained:?}").contains("password"), "{explained:?}");
+    for line in &explained.settings {
+        let (own, over) = line.given.split_first().unwrap();
+        assert_eq!((&own.value, own.from.to_string()), (&line.value, line.from.clone()), "{}", line.path);
+        let said: Vec<String> = over.iter().map(|given| format!("{} from {}", given.value, given.from)).collect();
+        assert_eq!(said, line.over, "{}", line.path);
+    }
 }
 
 // contract: CFG-04

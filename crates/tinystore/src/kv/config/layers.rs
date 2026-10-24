@@ -3,12 +3,12 @@
 //! is the setting's value and the others what it went over.
 
 use std::collections::BTreeMap;
-use std::fmt;
 
 use serde_json::{Map, Value};
 
 use super::declaration::Declaration;
-use super::env::{self, Env, Origin};
+use super::env::{self, Env};
+use super::explain::Origin;
 use super::files::{self, File};
 use super::rules::spelled;
 
@@ -28,59 +28,19 @@ pub(super) enum Layer {
     Env(Env),
 }
 
-/// Where a value came from, as `explain` names it.
+/// What one layer gave one setting: its value as the config keeps it, a
+/// secret's text included, which only `explain` turns into `***`.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Source {
-    Declaration,
-    /// An object in code, by its place in the list, the declaration first.
-    Object(usize),
-    File(String),
-    Variable {
-        name: String,
-        origin: Origin,
-    },
-    /// A change made while the program ran: the config's version that made
-    /// it, and when, in unix milliseconds.
-    Change {
-        version: i64,
-        at: i64,
-    },
-}
-
-impl fmt::Display for Source {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Source::Declaration => f.write_str("the declaration"),
-            Source::Object(place) => write!(f, "layer {place}"),
-            Source::File(name) => f.write_str(name),
-            Source::Variable { name, origin: Origin::Process } => f.write_str(name),
-            Source::Variable { name, origin: Origin::DotEnv(file) } => write!(f, "{name} in {file}"),
-            Source::Variable { name, origin: Origin::File(path) } => write!(f, "{name}, {path}"),
-            Source::Change { version, at } => write!(f, "a change, version {version}, {}", utc(*at)),
-        }
-    }
-}
-
-/// Unix milliseconds as a time in UTC: `2026-10-13 14:03:05 UTC`.
-fn utc(millis: i64) -> String {
-    let (days, seconds) = (millis.div_euclid(86_400_000), millis.rem_euclid(86_400_000) / 1000);
-    let (year, month, day) = crate::clock::civil_from_days(days);
-    let (hour, minute, second) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
-}
-
-/// What one layer gave one setting.
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct Given {
+pub(super) struct Stacked {
     pub(super) value: Value,
-    pub(super) from: Source,
+    pub(super) from: Origin,
 }
 
 /// What the layers gave, and what they read and did not use.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Base {
     /// Each setting's values by its path, oldest first.
-    pub(super) stacks: BTreeMap<String, Vec<Given>>,
+    pub(super) stacks: BTreeMap<String, Vec<Stacked>>,
     /// The optional files that were absent.
     pub(super) absent: Vec<String>,
     /// The variables with the prefix that name no setting.
@@ -94,7 +54,7 @@ impl Base {
         let mut base = Base::default();
         for (path, setting) in declaration.settings() {
             let defaults =
-                setting.default.iter().map(|value| Given { value: value.clone(), from: Source::Declaration });
+                setting.default.iter().map(|value| Stacked { value: value.clone(), from: Origin::Declaration });
             base.stacks.insert(path, defaults.collect());
         }
         let mut problems = Vec::new();
@@ -116,7 +76,7 @@ impl Base {
                     return Err(problems.into_iter().map(|problem| format!("layer {place}: {problem}")).collect());
                 }
                 for (path, value) in given {
-                    self.push(path, Given { value, from: Source::Object(*place) });
+                    self.push(path, Stacked { value, from: Origin::Layer { place: *place } });
                 }
             }
             Layer::File(file) => {
@@ -125,22 +85,22 @@ impl Base {
                     self.absent.push(file.shown());
                 }
                 for (path, value) in read.given {
-                    self.push(path, Given { value, from: Source::File(file.shown()) });
+                    self.push(path, Stacked { value, from: Origin::File { path: file.shown() } });
                 }
             }
             Layer::Env(env) => {
                 let read = env::read(env, declaration)?;
                 self.unused.extend(read.unused);
-                for (path, value, name, origin) in read.given {
-                    self.push(path, Given { value, from: Source::Variable { name, origin } });
+                for (path, value, from) in read.given {
+                    self.push(path, Stacked { value, from });
                 }
             }
         }
         Ok(())
     }
 
-    fn push(&mut self, path: String, given: Given) {
-        self.stacks.entry(path).or_default().push(given);
+    fn push(&mut self, path: String, stacked: Stacked) {
+        self.stacks.entry(path).or_default().push(stacked);
     }
 
     /// Every required setting no layer gave, or gave as empty text, named
@@ -149,7 +109,7 @@ impl Base {
     fn missing(&self, declaration: &Declaration, layers: &[Layer]) -> Vec<String> {
         let mut missing = Vec::new();
         for (path, setting) in declaration.settings() {
-            let value = self.stacks.get(&path).and_then(|stack| stack.last()).map(|given| &given.value);
+            let value = self.stacks.get(&path).and_then(|stack| stack.last()).map(|stacked| &stacked.value);
             if setting.required && value.is_none_or(|value| value == "") {
                 missing.push(format!("{path} is required: {}", givers(&path, layers)));
             }
@@ -161,8 +121,8 @@ impl Base {
     pub(super) fn tree(&self) -> Value {
         let mut tree = Value::Object(Map::new());
         for (path, stack) in &self.stacks {
-            if let Some(given) = stack.last() {
-                set(&mut tree, path, given.value.clone());
+            if let Some(stacked) = stack.last() {
+                set(&mut tree, path, stacked.value.clone());
             }
         }
         tree

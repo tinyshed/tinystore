@@ -1611,6 +1611,8 @@ pub(crate) struct ConfigLine {
     pub(crate) from: String,
     /// The values it went over, newest first.
     pub(crate) over: Vec<String>,
+    /// Every value it was given, newest first: its own, then the ones it went over.
+    pub(crate) given: Vec<ConfigGiven>,
 }
 
 #[cfg(feature = "config")]
@@ -1626,6 +1628,7 @@ impl Message for ConfigLine {
                 2 => message.value = codec::str(r, "value")?,
                 3 => message.from = codec::str(r, "from")?,
                 4 => message.over = codec::list(r, "over", codec::str)?,
+                5 => message.given = codec::list(r, "given", codec::message::<ConfigGiven>)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -1650,6 +1653,10 @@ impl Message for ConfigLine {
             map.field(out, 4);
             codec::write_list(out, &self.over, codec::write_str);
         }
+        if !self.given.is_empty() {
+            map.field(out, 5);
+            codec::write_list(out, &self.given, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -1659,6 +1666,7 @@ impl Message for ConfigLine {
             + 1 + 5 + self.value.len()
             + 1 + 5 + self.from.len()
             + 1 + codec::list_size(&self.over, |item| 5 + item.len())
+            + 1 + codec::list_size(&self.given, codec::message_size)
     }
 
     fn is_zero(&self) -> bool {
@@ -1666,6 +1674,164 @@ impl Message for ConfigLine {
             && self.value.is_empty()
             && self.from.is_empty()
             && self.over.is_empty()
+            && self.given.is_empty()
+    }
+}
+
+/// A value a setting was given, and where it came from.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigGiven {
+    /// As JSON, a span spelled, a secret as ***.
+    pub(crate) value: String,
+    pub(crate) from: ConfigOrigin,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigGiven {
+    const NAME: &'static str = "config.Given";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.value = codec::str(r, "value")?,
+                2 => message.from = ConfigOrigin::read(r)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.value.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.value);
+        }
+        if !self.from.is_zero() {
+            map.field(out, 2);
+            codec::write_message(out, &self.from);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.value.len()
+            + 1 + self.from.size()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.value.is_empty()
+            && self.from.is_zero()
+    }
+}
+
+/// Where a value came from: its kind, and only the fields that kind names.
+#[cfg(feature = "config")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ConfigOrigin {
+    /// Declaration, layer, file, env or change.
+    pub(crate) kind: String,
+    /// A layer's place in the list, the declaration 1.
+    pub(crate) place: Option<u64>,
+    /// A file's path.
+    pub(crate) path: Option<String>,
+    /// An env's variable.
+    pub(crate) variable: Option<String>,
+    /// The .env file that set the variable.
+    pub(crate) dotenv: Option<String>,
+    /// The file a NAME_FILE variable named.
+    pub(crate) file: Option<String>,
+    /// A change's version.
+    pub(crate) version: Option<i64>,
+    /// When a change was made. Unix milliseconds.
+    pub(crate) at: Option<i64>,
+}
+
+#[cfg(feature = "config")]
+impl Message for ConfigOrigin {
+    const NAME: &'static str = "config.Origin";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.kind = codec::str(r, "kind")?,
+                2 => message.place = Some(codec::uint(r, "place")?),
+                3 => message.path = Some(codec::str(r, "path")?),
+                4 => message.variable = Some(codec::str(r, "variable")?),
+                5 => message.dotenv = Some(codec::str(r, "dotenv")?),
+                6 => message.file = Some(codec::str(r, "file")?),
+                7 => message.version = Some(codec::int(r, "version")?),
+                8 => message.at = Some(codec::int(r, "at")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.kind.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.kind);
+        }
+        if let Some(place) = &self.place {
+            map.field(out, 2);
+            codec::write_uint(out, place);
+        }
+        if let Some(path) = &self.path {
+            map.field(out, 3);
+            codec::write_str(out, path);
+        }
+        if let Some(variable) = &self.variable {
+            map.field(out, 4);
+            codec::write_str(out, variable);
+        }
+        if let Some(dotenv) = &self.dotenv {
+            map.field(out, 5);
+            codec::write_str(out, dotenv);
+        }
+        if let Some(file) = &self.file {
+            map.field(out, 6);
+            codec::write_str(out, file);
+        }
+        if let Some(version) = &self.version {
+            map.field(out, 7);
+            codec::write_int(out, version);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 8);
+            codec::write_int(out, at);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.kind.len()
+            + self.place.map_or(0, |_| 10)
+            + self.path.as_ref().map_or(0, |path| 1 + 5 + path.len())
+            + self.variable.as_ref().map_or(0, |variable| 1 + 5 + variable.len())
+            + self.dotenv.as_ref().map_or(0, |dotenv| 1 + 5 + dotenv.len())
+            + self.file.as_ref().map_or(0, |file| 1 + 5 + file.len())
+            + self.version.map_or(0, |_| 10)
+            + self.at.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.kind.is_empty()
+            && self.place.is_none()
+            && self.path.is_none()
+            && self.variable.is_none()
+            && self.dotenv.is_none()
+            && self.file.is_none()
+            && self.version.is_none()
+            && self.at.is_none()
     }
 }
 
@@ -11616,6 +11782,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "config.Value" => ConfigValue::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]
         "config.Line" => ConfigLine::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Given" => ConfigGiven::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "config")]
+        "config.Origin" => ConfigOrigin::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]
         "config.Update" => ConfigUpdate::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "config")]

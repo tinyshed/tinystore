@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::declaration::{Declaration, Setting, did_you_mean, meant};
+use super::explain::Origin;
 use super::rules;
 
 /// The longest text a config takes from a variable.
@@ -97,22 +98,12 @@ impl From<&str> for Env {
     }
 }
 
-/// Where a variable's text came from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Origin {
-    /// The process's environment, or what `from` gave.
-    Process,
-    DotEnv(String),
-    /// The file `NAME_FILE` names.
-    File(String),
-}
-
 /// What the environment gave: each setting's value by its path, with the
 /// variable and where its text came from, and the variables with the prefix
 /// that name no setting.
 #[derive(Debug, Default)]
 pub(super) struct Read {
-    pub(super) given: Vec<(String, Value, String, Origin)>,
+    pub(super) given: Vec<(String, Value, Origin)>,
     pub(super) unused: Vec<Unused>,
 }
 
@@ -144,12 +135,9 @@ pub(super) fn read(env: &Env, declaration: &Declaration) -> Result<Read, Vec<Str
     let mut read = Read::default();
     let mut problems = Vec::new();
     for (path, (name, setting)) in &names {
-        match variable(env, &variables, name) {
+        match variable(env, &variables, name, setting) {
             Ok(None) => {}
-            Ok(Some((text, origin, shown))) => match parsed(setting, &text) {
-                Ok(value) => read.given.push((path.clone(), value, shown, origin)),
-                Err(why) => problems.push(format!("{shown}: {why}")),
-            },
+            Ok(Some((value, from))) => read.given.push((path.clone(), value, from)),
             Err(problem) => problems.push(problem),
         }
     }
@@ -267,14 +255,26 @@ fn variables(env: &Env) -> Result<Variables, Vec<String>> {
     Ok(variables)
 }
 
-/// A variable's text, where it came from and how `explain` names it; none
-/// when neither `NAME` nor `NAME_FILE` is set, and both set is refused.
-fn variable(env: &Env, variables: &Variables, name: &str) -> Result<Option<(String, Origin, String)>, String> {
+/// A variable's value as its setting keeps it, and where its text came from;
+/// none when neither `NAME` nor `NAME_FILE` is set, and both set is refused.
+/// A text that does not read is refused, named by the variable that gave it.
+fn variable(
+    env: &Env,
+    variables: &Variables,
+    name: &str,
+    setting: &Setting,
+) -> Result<Option<(Value, Origin)>, String> {
     let file_name = format!("{name}_FILE");
+    let given = |variable: &str, text: &str, dotenv: Option<&String>, file: Option<&String>| {
+        let value = parsed(setting, text).map_err(|why| format!("{variable}: {why}"))?;
+        let from = Origin::Env { variable: variable.to_owned(), dotenv: dotenv.cloned(), file: file.cloned() };
+        Ok(Some((value, from)))
+    };
     match (variables.get(&key(name)), variables.get(&key(&file_name))) {
         (Some(_), Some(_)) => Err(format!("{name} and {file_name} are both set")),
-        (Some((text, None)), None) => Ok(Some((text.clone(), Origin::Process, name.to_owned()))),
-        (Some((text, Some(dotenv))), None) => Ok(Some((text.clone(), Origin::DotEnv(dotenv.clone()), name.to_owned()))),
+        (Some((text, dotenv)), None) => given(name, text, dotenv.as_ref(), None),
+        // The .env file that set a NAME_FILE variable is not kept: `explain`
+        // names the file it read, which holds the text.
         (None, Some((path, _))) => {
             let text = match &env.sent {
                 Some(sent) => sent
@@ -285,7 +285,7 @@ fn variable(env: &Env, variables: &Variables, name: &str) -> Result<Option<(Stri
                     read_at_most(path.as_ref(), MOST_BYTES).map_err(|error| format!("{file_name}: {path}: {error}"))?
                 }
             };
-            Ok(Some((without_newline(text), Origin::File(path.clone()), file_name)))
+            given(&file_name, &without_newline(text), None, Some(path))
         }
         (None, None) => Ok(None),
     }

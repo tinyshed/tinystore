@@ -17,7 +17,9 @@ import { ConnectionLostError, type Stream } from './session.ts'
 import { type DurationText, ms, spelled } from './time.ts'
 import type { Read } from './wire/codec.ts'
 import {
+	type ConfigLine,
 	ConfigOpen,
+	type ConfigOrigin,
 	ConfigReset,
 	ConfigUpdate,
 	ConfigValue,
@@ -226,7 +228,42 @@ export interface ExplainLine {
 	readonly from: string
 	/** the values it went over, newest first */
 	readonly over: string
+	/**
+	 * Every value the setting was given, newest first: its own, then the ones
+	 * it went over. `from` is `String(given[0].from)`. It is empty from a
+	 * server before 0.1.1. `console.table` and a spread leave it out, and JSON
+	 * keeps it.
+	 */
+	readonly given: readonly ExplainGiven[]
 }
+
+/** A value a setting was given, and where it came from. */
+export interface ExplainGiven {
+	/** as JSON, a duration spelled, a secret as *** */
+	readonly value: string
+	readonly from: ExplainOrigin
+}
+
+/**
+ * Where a value came from: the declaration, a layer in the list by its place,
+ * the declaration 1, a file, a variable, or a change. `String(origin)` is the
+ * text a line's `from` says: `the declaration`, `layer 2`, `app.yaml`,
+ * `APP_PORT in .env`, `a change, version 7, 2026-10-13 14:03:05 UTC`. A kind
+ * from a newer server is kept as it was sent, and its text is the kind.
+ */
+export type ExplainOrigin =
+	| { readonly kind: 'declaration' }
+	| { readonly kind: 'layer'; readonly place: number }
+	| { readonly kind: 'file'; readonly path: string }
+	| {
+			readonly kind: 'env'
+			readonly variable: string
+			/** the .env file that set the variable */
+			readonly dotenv?: string
+			/** the file a NAME_FILE variable named */
+			readonly file?: string
+	  }
+	| { readonly kind: 'change'; readonly version: number; readonly at: Date }
 
 /** Every setting's line, for console.table, and what was read and not used. */
 export type Explained = readonly ExplainLine[] & { readonly notes: readonly string[] }
@@ -729,6 +766,91 @@ function merged(value: unknown, changes: unknown): unknown {
 
 type Watcher<V> = (next: V, previous: V | undefined) => void
 type Answer = Read<typeof ConfigValue.fields>
+type SentLine = Read<typeof ConfigLine.fields>
+type SentOrigin = Read<typeof ConfigOrigin.fields>
+
+/**
+ * A line as the store sent it. `given` is not enumerable, so that
+ * `console.table(config.explain())` shows the four columns it always showed,
+ * and toJSON gives it back to JSON.stringify.
+ */
+function explainLine(line: SentLine): ExplainLine {
+	const shown = {
+		path: line.path ?? '',
+		value: line.value ?? '',
+		from: line.from ?? '',
+		over: (line.over ?? []).join(', '),
+	}
+	const given = (line.given ?? []).map(each => ({
+		value: each.value ?? '',
+		from: explainOrigin(each.from ?? {}),
+	}))
+	const json = {
+		toJSON() {
+			return { ...shown, given }
+		},
+	}
+	return Object.defineProperties(shown, {
+		given: { value: given },
+		toJSON: { value: json.toJSON },
+	}) as ExplainLine
+}
+
+const originMethods = {
+	toString(this: ExplainOrigin): string {
+		return originText(this)
+	},
+}
+
+/** Where a value came from, only the fields its kind names, its text the core's `from`. */
+export function explainOrigin(sent: SentOrigin): ExplainOrigin {
+	return Object.defineProperty(originOf(sent), 'toString', { value: originMethods.toString })
+}
+
+function originOf(sent: SentOrigin): ExplainOrigin {
+	switch (sent.kind) {
+		case 'layer':
+			return { kind: 'layer', place: sent.place ?? 0 }
+		case 'file':
+			return { kind: 'file', path: sent.path ?? '' }
+		case 'env':
+			return {
+				kind: 'env',
+				variable: sent.variable ?? '',
+				...(sent.dotenv === undefined ? {} : { dotenv: sent.dotenv }),
+				...(sent.file === undefined ? {} : { file: sent.file }),
+			}
+		case 'change':
+			return { kind: 'change', version: sent.version ?? 0, at: new Date(sent.at ?? 0) }
+		case 'declaration':
+		case undefined:
+			return { kind: 'declaration' }
+		default:
+			// a kind from a newer server, kept as it was sent
+			return { kind: sent.kind } as unknown as ExplainOrigin
+	}
+}
+
+/** The text the core's `from` says: crates/tinystore/src/kv/config/explain.rs, Origin's Display. */
+function originText(origin: ExplainOrigin): string {
+	switch (origin.kind) {
+		case 'declaration':
+			return 'the declaration'
+		case 'layer':
+			return `layer ${origin.place}`
+		case 'file':
+			return origin.path
+		case 'env':
+			if (origin.dotenv !== undefined) {
+				return `${origin.variable} in ${origin.dotenv}`
+			}
+			return origin.file === undefined ? origin.variable : `${origin.variable}, ${origin.file}`
+		case 'change':
+			return `a change, version ${origin.version}, ${origin.at.toISOString().slice(0, 19).replace('T', ' ')} UTC`
+	}
+	// a kind from a newer server says itself
+	return (origin as { kind: string }).kind
+}
 
 /**
  * A program's settings as one typed value, read from memory: open one with
@@ -855,7 +977,10 @@ export class Config<D> {
 		}
 	}
 
-	/** Every setting with its value, the layer that gave it and what it went over. */
+	/**
+	 * Every setting with its value, the layer that gave it and what it went
+	 * over, as text, and in `given` as data.
+	 */
 	explain(): Explained {
 		const refused =
 			this.#refused === undefined ? [] : [`a value validate refused: ${this.#refused.message}`]
@@ -937,12 +1062,7 @@ export class Config<D> {
 		this.#refused = undefined
 		this.#value = next
 		this.#version = version
-		this.#lines = (answer.lines ?? []).map(line => ({
-			path: line.path ?? '',
-			value: line.value ?? '',
-			from: line.from ?? '',
-			over: (line.over ?? []).join(', '),
-		}))
+		this.#lines = (answer.lines ?? []).map(explainLine)
 		this.#notes = answer.notes ?? []
 		for (const wake of this.#newer.splice(0)) {
 			wake()

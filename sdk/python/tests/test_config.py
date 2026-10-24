@@ -13,14 +13,14 @@ import json
 import logging
 import pickle
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import pytest
 
 import tinystore
-from tinystore import Items, Range, Secret, env, file, live, secret
+from tinystore import Given, Items, Origin, Range, Secret, env, file, live, secret
 from tinystore._time import ms, spelled
 from tinystore.config import env_name
 from ways import until
@@ -64,6 +64,11 @@ def test_a_secret_prints_as_stars_wherever_it_goes_and_reveal_gives_it() -> None
         pickle.dumps(url)
     assert "password" not in str(tinystore.InvalidError(f"bad {url}"))
     assert url.reveal() == "postgres://user:password@host"
+
+
+def test_an_origin_of_a_kind_from_a_newer_server_keeps_its_kind_which_is_also_its_text() -> None:
+    origin = Origin(cast("Any", "rule"))
+    assert (origin.kind, str(origin), f"{origin}") == ("rule", "rule", "rule")
 
 
 def test_a_mark_that_means_nothing_is_refused_where_it_is_written() -> None:
@@ -116,9 +121,56 @@ async def test_a_config_is_its_declaration_then_each_layer_in_the_order_written(
     assert value.db.url.reveal() == "postgres://local"
     assert value.db.pool == 10
     lines = {line.path: line for line in config.explain()}
-    assert lines["port"] == tinystore.Line("port", "9000", "APP_PORT", f"8000 from {yaml}, 8080 from the declaration")
+    port = lines["port"]
+    assert (port.path, port.value, port.from_, port.over) == (
+        "port",
+        "9000",
+        "APP_PORT",
+        f"8000 from {yaml}, 8080 from the declaration",
+    )
     assert lines["level"].from_ == "layer 2"
     assert lines["db.url"].value == "***"
+
+
+# contract: CFG-09, CFG-06
+async def test_explain_gives_every_value_a_setting_was_given_newest_first_with_where_each_came_from(
+    store: tinystore.Store, directory: Path
+) -> None:
+    yaml = directory / "given.yaml"
+    yaml.write_text("port: 8000\n")
+    dotenv = directory / "given.env"
+    dotenv.write_text("APP_TIMEOUT=1m\n")
+    secret_file = directory / "db-url"
+    secret_file.write_text("postgres://user:password@host\n")
+    variables = {"APP_PORT": "9000", "APP_DB_URL_FILE": str(secret_file)}
+    config = await store.config(
+        "given", [Settings, {"level": "debug"}, file(yaml), env("APP", files=[dotenv], from_=variables)]
+    )
+    before = datetime.now(UTC)
+    await config.update({"limits": {"rps": 200}})
+    lines = {line.path: line for line in config.explain()}
+    assert lines["port"].given == (
+        Given("9000", Origin("env", variable="APP_PORT")),
+        Given("8000", Origin("file", path=str(yaml))),
+        Given("8080", Origin("declaration")),
+    )
+    assert lines["level"].given == (Given('"debug"', Origin("layer", place=2)), Given('"info"', Origin("declaration")))
+    assert lines["timeout"].given == (
+        Given("1m", Origin("env", variable="APP_TIMEOUT", dotenv=str(dotenv))),
+        Given("30s", Origin("declaration")),
+    )
+    assert lines["db.url"].given == (Given("***", Origin("env", variable="APP_DB_URL_FILE", file=str(secret_file))),)
+    change, declared = lines["limits.rps"].given
+    assert (change.from_.kind, change.from_.version) == ("change", config.version)
+    assert change.from_.at is not None
+    assert before - timedelta(seconds=1) <= change.from_.at <= datetime.now(UTC) + timedelta(seconds=1)
+    assert declared == Given("100", Origin("declaration"))
+    for line in config.explain():
+        own, *over = line.given
+        assert (own.value, str(own.from_)) == (line.value, line.from_)
+        assert ", ".join(f"{each.value} from {each.from_}" for each in over) == line.over
+    assert "given=" not in repr(lines["port"]), "print(line) prints the four columns it printed before"
+    assert "password" not in repr(lines["db.url"].given)
 
 
 async def test_a_rule_of_one_value_is_the_cores_and_a_refusal_names_the_layer_that_gave_it(

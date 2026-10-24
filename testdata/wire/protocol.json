@@ -754,6 +754,45 @@
                 "from": {
                   "str": "from"
                 },
+                "given": {
+                  "list": [
+                    {
+                      "fields": {
+                        "from": {
+                          "fields": {
+                            "at": {
+                              "int": "1790000000000"
+                            },
+                            "dotenv": {
+                              "str": "dotenv"
+                            },
+                            "file": {
+                              "str": "file"
+                            },
+                            "kind": {
+                              "str": "kind"
+                            },
+                            "path": {
+                              "str": "path"
+                            },
+                            "place": {
+                              "uint": "207"
+                            },
+                            "variable": {
+                              "str": "variable"
+                            },
+                            "version": {
+                              "int": "-7"
+                            }
+                          }
+                        },
+                        "value": {
+                          "str": "value"
+                        }
+                      }
+                    }
+                  ]
+                },
                 "over": {
                   "list": [
                     {
@@ -785,7 +824,7 @@
           "int": "-7"
         }
       },
-      "hex": "85016b02f903a77b2261223a317d04918401a47061746802a576616c756503a466726f6d0491a46f7665720591a56e6f746573",
+      "hex": "85016b02f903a77b2261223a317d04918501a47061746802a576616c756503a466726f6d0491a46f76657205918201a576616c7565028801a46b696e6402cccf03a47061746804a87661726961626c6505a6646f74656e7606a466696c6507f908cf000001a0c4506c000591a56e6f746573",
       "message": "config.Value",
       "name": "config.Value with every field"
     },
@@ -799,6 +838,45 @@
       "fields": {
         "from": {
           "str": "from"
+        },
+        "given": {
+          "list": [
+            {
+              "fields": {
+                "from": {
+                  "fields": {
+                    "at": {
+                      "int": "1790000000000"
+                    },
+                    "dotenv": {
+                      "str": "dotenv"
+                    },
+                    "file": {
+                      "str": "file"
+                    },
+                    "kind": {
+                      "str": "kind"
+                    },
+                    "path": {
+                      "str": "path"
+                    },
+                    "place": {
+                      "uint": "207"
+                    },
+                    "variable": {
+                      "str": "variable"
+                    },
+                    "version": {
+                      "int": "-7"
+                    }
+                  }
+                },
+                "value": {
+                  "str": "value"
+                }
+              }
+            }
+          ]
         },
         "over": {
           "list": [
@@ -814,7 +892,7 @@
           "str": "value"
         }
       },
-      "hex": "8401a47061746802a576616c756503a466726f6d0491a46f766572",
+      "hex": "8501a47061746802a576616c756503a466726f6d0491a46f76657205918201a576616c7565028801a46b696e6402cccf03a47061746804a87661726961626c6505a6646f74656e7606a466696c6507f908cf000001a0c4506c00",
       "message": "config.Line",
       "name": "config.Line with every field"
     },
@@ -823,6 +901,87 @@
       "hex": "80",
       "message": "config.Line",
       "name": "config.Line with no field"
+    },
+    {
+      "fields": {
+        "from": {
+          "fields": {
+            "at": {
+              "int": "1790000000000"
+            },
+            "dotenv": {
+              "str": "dotenv"
+            },
+            "file": {
+              "str": "file"
+            },
+            "kind": {
+              "str": "kind"
+            },
+            "path": {
+              "str": "path"
+            },
+            "place": {
+              "uint": "207"
+            },
+            "variable": {
+              "str": "variable"
+            },
+            "version": {
+              "int": "-7"
+            }
+          }
+        },
+        "value": {
+          "str": "value"
+        }
+      },
+      "hex": "8201a576616c7565028801a46b696e6402cccf03a47061746804a87661726961626c6505a6646f74656e7606a466696c6507f908cf000001a0c4506c00",
+      "message": "config.Given",
+      "name": "config.Given with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Given",
+      "name": "config.Given with no field"
+    },
+    {
+      "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "dotenv": {
+          "str": "dotenv"
+        },
+        "file": {
+          "str": "file"
+        },
+        "kind": {
+          "str": "kind"
+        },
+        "path": {
+          "str": "path"
+        },
+        "place": {
+          "uint": "207"
+        },
+        "variable": {
+          "str": "variable"
+        },
+        "version": {
+          "int": "-7"
+        }
+      },
+      "hex": "8801a46b696e6402cccf03a47061746804a87661726961626c6505a6646f74656e7606a466696c6507f908cf000001a0c4506c00",
+      "message": "config.Origin",
+      "name": "config.Origin with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "config.Origin",
+      "name": "config.Origin with no field"
     },
     {
       "fields": {

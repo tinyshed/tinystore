@@ -34,13 +34,13 @@ import typing
 import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self, cast, overload
 
 from ._handles import open_call
 from ._session import ConnectionLostError
-from ._time import ms
+from ._time import moment, ms
 from ._wire.protocol import ConfigOpen, ConfigReset, ConfigUpdate, ConfigValue, Handle, methods
 from .errors import CallCancelledError, ConflictError, InvalidError, UnavailableError
 
@@ -203,6 +203,67 @@ def _flattened(given: Mapping[str, str | Mapping[str, Any]], path: str) -> dict[
     return out
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class Origin:
+    """Where a value came from: its kind, and only the fields that kind names, the others None.
+
+    ``str(origin)`` is the text a line's ``from_`` says: ``the declaration``, ``layer 2``,
+    ``app.yaml``, ``APP_PORT in .env``, ``a change, version 7, 2026-10-13 14:03:05 UTC``.
+    A kind from a newer server is kept as it was sent, and its text is the kind.
+    """
+
+    kind: Literal["declaration", "layer", "file", "env", "change"]
+    place: int | None = None
+    """a layer's place in the list, the declaration 1"""
+    path: str | None = None
+    """a file's path"""
+    variable: str | None = None
+    """an env's variable"""
+    dotenv: str | None = None
+    """the .env file that set the variable"""
+    file: str | None = None
+    """the file a NAME_FILE variable named"""
+    version: int | None = None
+    """a change's version"""
+    at: datetime | None = None
+    """when a change was made, in UTC"""
+
+    def __str__(self) -> str:
+        # the core's text: crates/tinystore/src/kv/config/explain.rs, Origin's Display
+        match self.kind:
+            case "declaration":
+                return "the declaration"
+            case "layer":
+                return f"layer {self.place}"
+            case "file":
+                return self.path or ""
+            case "env" if self.dotenv is not None:
+                return f"{self.variable} in {self.dotenv}"
+            case "env" if self.file is not None:
+                return f"{self.variable}, {self.file}"
+            case "env":
+                return self.variable or ""
+            case "change":
+                at = self.at.strftime("%Y-%m-%d %H:%M:%S") if self.at is not None else ""
+                return f"a change, version {self.version}, {at} UTC"
+            case _:
+                # a kind from a newer server says itself
+                return str(self.kind)
+
+    def __repr__(self) -> str:
+        fields = ((each.name, getattr(self, each.name)) for each in dataclasses.fields(self))
+        return f"Origin({', '.join(f'{name}={value!r}' for name, value in fields if value is not None)})"
+
+
+@dataclass(frozen=True, slots=True)
+class Given:
+    """A value a setting was given, and where it came from."""
+
+    value: str
+    """as JSON, a span spelled, a secret as ***"""
+    from_: Origin
+
+
 @dataclass(frozen=True, slots=True)
 class Line:
     """A setting's line of explain."""
@@ -214,6 +275,9 @@ class Line:
     """the layer that gave it: APP_PORT, app.yaml, layer 2, the declaration, a change"""
     over: str
     """the values it went over, newest first"""
+    given: tuple[Given, ...] = dataclasses.field(default=(), repr=False)
+    """Every value the setting was given, newest first: its own, then the ones it went over. from_ is
+    str(given[0].from_). It is empty from a server before 0.1.1, and print(line) leaves it out."""
 
 
 class Explained(list[Line]):
@@ -224,6 +288,28 @@ class Explained(list[Line]):
     def __init__(self, lines: list[Line], notes: list[str]) -> None:
         super().__init__(lines)
         self.notes = notes
+
+
+def _line(sent: dict[str, Any]) -> Line:
+    """A line as the store sent it."""
+    given = tuple(Given(each.get("value", ""), _origin(each.get("from", {}))) for each in sent.get("given", []))
+    over = ", ".join(sent.get("over", []))
+    return Line(sent.get("path", ""), sent.get("value", ""), sent.get("from", ""), over, given)
+
+
+def _origin(sent: dict[str, Any]) -> Origin:
+    """Where a value came from, as the store sent it: only the fields its kind names."""
+    at = sent.get("at")
+    return Origin(
+        kind=sent.get("kind", "declaration"),
+        place=sent.get("place"),
+        path=sent.get("path"),
+        variable=sent.get("variable"),
+        dotenv=sent.get("dotenv"),
+        file=sent.get("file"),
+        version=sent.get("version"),
+        at=None if at is None else moment(at),
+    )
 
 
 type _Reader = Callable[[Any], Any]
@@ -696,10 +782,7 @@ class Config[T]:
                     return
             self._refused = None
             self._raw, self._value, self._version = raw, following, version
-            self._lines = [
-                Line(each.get("path", ""), each.get("value", ""), each.get("from", ""), ", ".join(each.get("over", [])))
-                for each in answer.get("lines", [])
-            ]
+            self._lines = [_line(each) for each in answer.get("lines", [])]
             self._notes = list(answer.get("notes", []))
             self._taken += 1
             self._wake()

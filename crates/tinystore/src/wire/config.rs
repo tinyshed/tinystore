@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use super::codec::Message;
-use super::protocol::{ConfigLine, ConfigOpen, ConfigReset, ConfigUpdate, ConfigValue, Failure, Handle, method};
+use super::protocol::{
+    ConfigGiven, ConfigLine, ConfigOpen, ConfigOrigin, ConfigReset, ConfigUpdate, ConfigValue, Failure, Handle, method,
+};
 use super::{Link, Route};
-use crate::Store;
-use crate::config::{Config, Sent, Snapshot, Watching};
+use crate::config::{Config, Origin, Sent, Snapshot, Watching};
 use crate::sync::lock;
+use crate::{Store, unix_millis};
 
 use super::Answered;
 
@@ -90,6 +92,11 @@ fn message(handle: u64, snapshot: &Snapshot<Value>, config: &Config<Value>) -> C
         value: line.value,
         from: line.from,
         over: line.over,
+        given: line
+            .given
+            .into_iter()
+            .map(|given| ConfigGiven { value: given.value, from: origin(given.from) })
+            .collect(),
     });
     ConfigValue {
         handle,
@@ -97,6 +104,23 @@ fn message(handle: u64, snapshot: &Snapshot<Value>, config: &Config<Value>) -> C
         value: snapshot.to_string(),
         lines: lines.collect(),
         notes: explained.notes,
+    }
+}
+
+/// Where a value came from as the wire carries it: its kind, and only the
+/// fields that kind names, the others absent.
+fn origin(from: Origin) -> ConfigOrigin {
+    let kind = |kind: &str| ConfigOrigin { kind: kind.to_owned(), ..ConfigOrigin::default() };
+    match from {
+        Origin::Declaration => kind("declaration"),
+        Origin::Layer { place } => ConfigOrigin { place: Some(place as u64), ..kind("layer") },
+        Origin::File { path } => ConfigOrigin { path: Some(path), ..kind("file") },
+        Origin::Env { variable, dotenv, file } => {
+            ConfigOrigin { variable: Some(variable), dotenv, file, ..kind("env") }
+        }
+        Origin::Change { version, at } => {
+            ConfigOrigin { version: Some(version), at: Some(unix_millis(at)), ..kind("change") }
+        }
     }
 }
 

@@ -311,6 +311,10 @@ func NewMessage(name string) Message {
 		return &ConfigValue{}
 	case "config.Line":
 		return &ConfigLine{}
+	case "config.Given":
+		return &ConfigGiven{}
+	case "config.Origin":
+		return &ConfigOrigin{}
 	case "config.Update":
 		return &ConfigUpdate{}
 	case "config.Reset":
@@ -2312,6 +2316,8 @@ type ConfigLine struct {
 	From  string `wire:"3,from"`
 	// the values it went over, newest first
 	Over []string `wire:"4,over"`
+	// every value it was given, newest first: its own, then the ones it went over
+	Given []ConfigGiven `wire:"5,given"`
 }
 
 func (m ConfigLine) Write(w *Writer) {
@@ -2340,6 +2346,14 @@ func (m ConfigLine) Write(w *Writer) {
 		}
 		n++
 	}
+	if len(m.Given) > 0 {
+		w.Uint(5)
+		w.Array(len(m.Given))
+		for _, item0 := range m.Given {
+			item0.Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -2362,6 +2376,15 @@ func (m *ConfigLine) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Over = v
+		case 5:
+			v := []ConfigGiven{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 ConfigGiven
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Given = v
 		default:
 			r.Skip()
 		}
@@ -2374,7 +2397,170 @@ func (m ConfigLine) IsZero() bool {
 	return m.Path == "" &&
 		m.Value == "" &&
 		m.From == "" &&
-		len(m.Over) == 0
+		len(m.Over) == 0 &&
+		len(m.Given) == 0
+}
+
+// ConfigGiven is the schema's config.Given.
+//
+// A value a setting was given, and where it came from.
+type ConfigGiven struct {
+	// as JSON, a span spelled, a secret as ***
+	Value string       `wire:"1,value"`
+	From  ConfigOrigin `wire:"2,from"`
+}
+
+func (m ConfigGiven) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Value != "" {
+		w.Uint(1)
+		w.Str(m.Value)
+		n++
+	}
+	if !m.From.IsZero() {
+		w.Uint(2)
+		m.From.Write(w)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *ConfigGiven) Read(r *Reader) {
+	*m = ConfigGiven{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Value = r.Str()
+		case 2:
+			m.From.Read(r)
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether ConfigGiven writes as no field at all.
+func (m ConfigGiven) IsZero() bool {
+	return m.Value == "" &&
+		m.From.IsZero()
+}
+
+// ConfigOrigin is the schema's config.Origin.
+//
+// Where a value came from: its kind, and only the fields that kind names.
+type ConfigOrigin struct {
+	// declaration, layer, file, env or change
+	Kind string `wire:"1,kind"`
+	// a layer's place in the list, the declaration 1
+	Place *uint64 `wire:"2,place"`
+	// a file's path
+	Path *string `wire:"3,path"`
+	// an env's variable
+	Variable *string `wire:"4,variable"`
+	// the .env file that set the variable
+	Dotenv *string `wire:"5,dotenv"`
+	// the file a NAME_FILE variable named
+	File *string `wire:"6,file"`
+	// a change's version
+	Version *int64 `wire:"7,version"`
+	// when a change was made
+	At *int64 `wire:"8,at"`
+}
+
+func (m ConfigOrigin) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Kind != "" {
+		w.Uint(1)
+		w.Str(m.Kind)
+		n++
+	}
+	if m.Place != nil {
+		w.Uint(2)
+		w.Uint(*m.Place)
+		n++
+	}
+	if m.Path != nil {
+		w.Uint(3)
+		w.Str(*m.Path)
+		n++
+	}
+	if m.Variable != nil {
+		w.Uint(4)
+		w.Str(*m.Variable)
+		n++
+	}
+	if m.Dotenv != nil {
+		w.Uint(5)
+		w.Str(*m.Dotenv)
+		n++
+	}
+	if m.File != nil {
+		w.Uint(6)
+		w.Str(*m.File)
+		n++
+	}
+	if m.Version != nil {
+		w.Uint(7)
+		w.Int(*m.Version)
+		n++
+	}
+	if m.At != nil {
+		w.Uint(8)
+		w.Int(*m.At)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *ConfigOrigin) Read(r *Reader) {
+	*m = ConfigOrigin{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Kind = r.Str()
+		case 2:
+			v := r.Uint()
+			m.Place = &v
+		case 3:
+			v := r.Str()
+			m.Path = &v
+		case 4:
+			v := r.Str()
+			m.Variable = &v
+		case 5:
+			v := r.Str()
+			m.Dotenv = &v
+		case 6:
+			v := r.Str()
+			m.File = &v
+		case 7:
+			v := r.Int()
+			m.Version = &v
+		case 8:
+			v := r.Int()
+			m.At = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether ConfigOrigin writes as no field at all.
+func (m ConfigOrigin) IsZero() bool {
+	return m.Kind == "" &&
+		m.Place == nil &&
+		m.Path == nil &&
+		m.Variable == nil &&
+		m.Dotenv == nil &&
+		m.File == nil &&
+		m.Version == nil &&
+		m.At == nil
 }
 
 // ConfigUpdate is the schema's config.Update.

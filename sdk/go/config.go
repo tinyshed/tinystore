@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
@@ -143,6 +144,68 @@ func IfVersion(version int64) UpdateOption { return func(v *int64) { *v = versio
 // a secret ***, the layer that gave it and the values it went over, newest first.
 type Line struct {
 	Path, Value, From, Over string
+	// Given is every value the setting was given, newest first: its own, then
+	// the ones it went over; From is Given[0].From.String(). It is empty from
+	// a server before 0.1.1.
+	Given []Given
+}
+
+// Given is a value a setting was given, as JSON, a span spelled and a secret
+// ***, and where it came from.
+type Given struct {
+	Value string
+	From  Origin
+}
+
+// Origin is where a value came from: its kind, and only the fields that kind
+// names, the others zero. Its String is the text a Line's From says: the
+// declaration, layer 2, app.yaml, APP_PORT in .env, or a change, version 7,
+// 2026-10-13 14:03:05 UTC. A kind from a newer server is kept as it was sent,
+// and its String is the kind.
+type Origin struct {
+	Kind     OriginKind
+	Place    int       // a layer's place in the list, the declaration 1
+	Path     string    // a file's path
+	Variable string    // an env's variable
+	DotEnv   string    // the .env file that set the variable
+	File     string    // the file a NAME_FILE variable named
+	Version  int64     // a change's version
+	At       time.Time // when a change was made
+}
+
+// OriginKind is what gave a value.
+type OriginKind string
+
+// The kinds an origin has.
+const (
+	OriginDeclaration OriginKind = "declaration"
+	OriginLayer       OriginKind = "layer" // an object in a Bun or Python program's list of layers
+	OriginFile        OriginKind = "file"
+	OriginEnv         OriginKind = "env"
+	OriginChange      OriginKind = "change"
+)
+
+// String is the text a Line's From says, as the core writes it.
+func (o Origin) String() string {
+	switch o.Kind {
+	case OriginDeclaration:
+		return "the declaration"
+	case OriginLayer:
+		return fmt.Sprintf("layer %d", o.Place)
+	case OriginFile:
+		return o.Path
+	case OriginEnv:
+		if o.DotEnv != "" {
+			return o.Variable + " in " + o.DotEnv
+		}
+		if o.File != "" {
+			return o.Variable + ", " + o.File
+		}
+		return o.Variable
+	case OriginChange:
+		return fmt.Sprintf("a change, version %d, %s", o.Version, o.At.UTC().Format("2006-01-02 15:04:05 UTC"))
+	}
+	return string(o.Kind)
 }
 
 func (l Line) String() string {
@@ -326,14 +389,43 @@ func (c *Config[T]) Watch(ctx context.Context) iter.Seq[T] {
 }
 
 // Explain is every setting with its value, the layer that gave it and what
-// it went over, newest first; Notes is what was read and not used.
+// it went over, newest first, as text and in Given as data; Notes is what was
+// read and not used.
 func (c *Config[T]) Explain() []Line {
 	lines, _ := c.hub.Explained()
 	out := make([]Line, len(lines))
 	for i, line := range lines {
-		out[i] = Line{Path: line.Path, Value: line.Value, From: line.From, Over: strings.Join(line.Over, ", ")}
+		given := make([]Given, len(line.Given))
+		for j, each := range line.Given {
+			given[j] = Given{Value: each.Value, From: origin(each.From)}
+		}
+		over := strings.Join(line.Over, ", ")
+		out[i] = Line{Path: line.Path, Value: line.Value, From: line.From, Over: over, Given: given}
 	}
 	return out
+}
+
+// origin is where a value came from as the store sent it.
+func origin(sent wire.ConfigOrigin) Origin {
+	o := Origin{Kind: OriginKind(sent.Kind)}
+	if sent.Place != nil {
+		o.Place = int(*sent.Place)
+	}
+	o.Path, o.Variable, o.DotEnv, o.File = deref(sent.Path), deref(sent.Variable), deref(sent.Dotenv), deref(sent.File)
+	if sent.Version != nil {
+		o.Version = *sent.Version
+	}
+	if sent.At != nil {
+		o.At = time.UnixMilli(*sent.At).UTC()
+	}
+	return o
+}
+
+func deref(text *string) string {
+	if text == nil {
+		return ""
+	}
+	return *text
 }
 
 // Notes is what the config read and did not use, each with why: an optional

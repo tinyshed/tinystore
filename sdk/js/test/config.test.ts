@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inspect } from 'node:util'
 
-import { envName } from '../src/config.ts'
+import { envName, explainOrigin } from '../src/config.ts'
 import { parseDotenv } from '../src/dotenv.ts'
 import {
 	ConflictError,
@@ -94,6 +94,12 @@ describe('what every language reads alike', () => {
 		expect(() => live({ rps: 1 })).toThrow('a mark goes on a setting, not on a group')
 		expect(() => list(live(1) as never)).toThrow("a list's items are neither live nor secret")
 	})
+
+	test('an origin of a kind from a newer server keeps its kind, which is also its text', () => {
+		const origin = explainOrigin({ kind: 'rule' })
+		expect<object>(origin).toEqual({ kind: 'rule' })
+		expect(String(origin)).toBe('rule')
+	})
 })
 
 for (const way of ways) {
@@ -134,7 +140,8 @@ for (const way of ways) {
 			expect([port, config.value.limits.rps, config.value.level]).toEqual([9000, 50, 'debug'])
 			expect(config.value.timeout).toBe('30s')
 			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
-			expect(lines.port).toEqual({
+			// given is not enumerable: the line equals its four columns, as console.table shows them
+			expect<object | undefined>(lines.port).toEqual({
 				path: 'port',
 				value: '9000',
 				from: 'APP_PORT',
@@ -142,6 +149,63 @@ for (const way of ways) {
 			})
 			expect(lines.level?.from).toBe('layer 2')
 			expect(lines['db.url']?.value).toBe('***')
+		})
+
+		// contract: CFG-09, CFG-06
+		test('explain gives every value a setting was given, newest first, with where each came from', async () => {
+			const yaml = join(dir, 'given.yaml')
+			writeFileSync(yaml, 'port: 8000\n')
+			const dotenv = join(dir, 'given.env')
+			writeFileSync(dotenv, 'APP_TIMEOUT=1m\n')
+			const secretFile = join(dir, 'db-url')
+			writeFileSync(secretFile, 'postgres://user:password@host\n')
+			const config = await store.config('given', [
+				declaration(),
+				{ level: 'debug' as const },
+				file(yaml),
+				env('APP', { files: [dotenv], from: { APP_PORT: '9000', APP_DB_URL_FILE: secretFile } }),
+			])
+			const before = Date.now()
+			await config.update({ limits: { rps: 200 } })
+			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
+			expect(lines.port?.given).toEqual([
+				{ value: '9000', from: { kind: 'env', variable: 'APP_PORT' } },
+				{ value: '8000', from: { kind: 'file', path: yaml } },
+				{ value: '8080', from: { kind: 'declaration' } },
+			])
+			expect(lines.level?.given).toEqual([
+				{ value: '"debug"', from: { kind: 'layer', place: 2 } },
+				{ value: '"info"', from: { kind: 'declaration' } },
+			])
+			expect(lines.timeout?.given).toEqual([
+				{ value: '1m', from: { kind: 'env', variable: 'APP_TIMEOUT', dotenv } },
+				{ value: '30s', from: { kind: 'declaration' } },
+			])
+			expect(lines['db.url']?.given).toEqual([
+				{ value: '***', from: { kind: 'env', variable: 'APP_DB_URL_FILE', file: secretFile } },
+			])
+			const [change, declared] = lines['limits.rps']?.given ?? []
+			expect(change?.from).toEqual({
+				kind: 'change',
+				version: config.version,
+				at: expect.any(Date),
+			})
+			const at = change?.from.kind === 'change' ? change.from.at.getTime() : 0
+			expect(at).toBeGreaterThanOrEqual(before - 1000)
+			expect(at).toBeLessThanOrEqual(Date.now() + 1000)
+			expect(declared).toEqual({ value: '100', from: { kind: 'declaration' } })
+			for (const line of config.explain()) {
+				const [own, ...over] = line.given
+				expect([own?.value, String(own?.from)]).toEqual([line.value, line.from])
+				expect(over.map(each => `${each.value} from ${each.from}`).join(', ')).toBe(line.over)
+			}
+			// console.table shows the four columns it showed before, and JSON keeps given
+			expect(Object.keys(lines.port ?? {})).toEqual(['path', 'value', 'from', 'over'])
+			expect(JSON.parse(JSON.stringify(lines.port)).given[0]).toEqual({
+				value: '9000',
+				from: { kind: 'env', variable: 'APP_PORT' },
+			})
+			expect(JSON.stringify(config.explain())).not.toContain('password')
 		})
 
 		test('a rule of one value is the core’s, and a refusal names the layer that gave it', async () => {

@@ -10,12 +10,12 @@ console.table(config.explain())
 ```
 
 ```python
-for line in config.explain():  # Line(path, value, from_, over)
+for line in config.explain():  # Line(path, value, from_, over, given)
     print(line)
 ```
 
 ```go
-for _, line := range config.Explain() { // tinystore.Line{Path, Value, From, Over}
+for _, line := range config.Explain() { // tinystore.Line{Path, Value, From, Over, Given}
 	fmt.Println(line)
 }
 ```
@@ -24,17 +24,139 @@ for _, line := range config.Explain() { // tinystore.Line{Path, Value, From, Ove
 println!("{}", config.explain());
 ```
 
-```text
-path        value  from                                   over
-port        9000   PORT                                   8000 app.toml, 8080 the declaration
-db.url      ***    DATABASE_URL_FILE, /run/secrets/db-url
-limits.rps  200    a change, 12 October 14:03, version 7  1000 app.toml, 100 the declaration
-region      eu     APP_REGION
+For a config that reads `app.toml` and the variables `PORT`,
+`DATABASE_URL_FILE` and `APP_REGION`, after a change of `limits.rps`, each
+language prints:
+
+```text for=bun
+┌───┬────────────┬───────┬──────────────────────────────────────────────┬───────────────────────────────────────────────┐
+│   │ path       │ value │ from                                         │ over                                          │
+├───┼────────────┼───────┼──────────────────────────────────────────────┼───────────────────────────────────────────────┤
+│ 0 │ db.url     │ ***   │ DATABASE_URL_FILE, secrets/db-url            │                                               │
+│ 1 │ limits.rps │ 200   │ a change, version 1, 2026-10-24 09:34:52 UTC │ 1000 from app.toml, 100 from the declaration  │
+│ 2 │ port       │ 9000  │ PORT                                         │ 8000 from app.toml, 8080 from the declaration │
+│ 3 │ region     │ "eu"  │ APP_REGION                                   │                                               │
+└───┴────────────┴───────┴──────────────────────────────────────────────┴───────────────────────────────────────────────┘
 ```
 
-Each line is newest first: the layer that won, then what it went over. An
-object in code is named by its place in the list, `layer 2`. Secrets show as
-`***` here too.
+```text for=python
+Line(path='db.url', value='***', from_='DATABASE_URL_FILE, secrets/db-url', over='')
+Line(path='limits.rps', value='200', from_='a change, version 1, 2026-10-24 09:34:55 UTC', over='1000 from app.toml, 100 from the declaration')
+Line(path='port', value='9000', from_='PORT', over='8000 from app.toml, 8080 from the declaration')
+Line(path='region', value='"eu"', from_='APP_REGION', over='')
+```
+
+```text for=go
+db.url  ***  DATABASE_URL_FILE, secrets/db-url
+limits.rps  200  a change, version 1, 2026-10-24 09:34:59 UTC  over 1000 from app.toml, 100 from the declaration
+port  9000  PORT  over 8000 from app.toml, 8080 from the declaration
+region  "eu"  APP_REGION
+```
+
+```text for=rust
+db.url      ***   DATABASE_URL_FILE, secrets/db-url
+limits.rps  200   a change, version 1, 2026-10-24 09:35:00 UTC  over 1000 from app.toml, 100 from the declaration
+port        9000  PORT                                          over 8000 from app.toml, 8080 from the declaration
+region      "eu"  APP_REGION
+```
+
+`over` is newest first: the layer that won, then what it went over. An object
+in code is named by its place in the list, `layer 2`. Secrets show as `***`
+here too.
+
+## Each value as data
+
+Each line also has `given`: every value the setting was given, newest first.
+The first item is the line's own value, and the rest are the values it went
+over. Each item has its `value`, as `explain` shows it, and `from`, which says
+where the value came from as data. Use it to show a setting's history in your
+own words, instead of parsing the text:
+
+```ts
+const rps = config.explain().find(line => line.path === 'limits.rps')
+const [own, under] = rps?.given ?? []
+if (own?.from.kind === 'change') {
+	own.from.version // 1
+	own.from.at // a Date: when the change was made
+	under?.value // '1000': what a reset gives back
+	under?.from // { kind: 'file', path: 'app.toml' }
+}
+```
+
+```python
+rps = next(line for line in config.explain() if line.path == "limits.rps")
+if len(rps.given) > 1 and rps.given[0].from_.kind == "change":
+    own, under = rps.given[0], rps.given[1]
+    own.from_.version  # 1
+    own.from_.at  # a datetime in UTC: when the change was made
+    under.value  # "1000": what a reset gives back
+    under.from_  # Origin(kind='file', path='app.toml')
+```
+
+```go
+for _, line := range config.Explain() {
+	if line.Path != "limits.rps" || len(line.Given) < 2 {
+		continue
+	}
+	own, under := line.Given[0], line.Given[1]
+	if own.From.Kind == tinystore.OriginChange {
+		own.From.Version // 1
+		own.From.At      // a time.Time: when the change was made
+		under.Value      // "1000": what a reset gives back
+		under.From       // tinystore.Origin{Kind: tinystore.OriginFile, Path: "app.toml"}
+	}
+}
+```
+
+```rust
+use tinystore::config::Origin;
+
+let explained = config.explain();
+let rps = explained.settings.iter().find(|line| line.path == "limits.rps").unwrap();
+if let [own, under, ..] = rps.given.as_slice()
+    && let Origin::Change { version, at, .. } = &own.from
+{
+    // version is 1, and at is a SystemTime: when the change was made
+    // under.value is "1000": what a reset gives back
+    // under.from is Origin::File { path: "app.toml" }
+}
+```
+
+`from` has a `kind`, and only the fields that its kind names:
+
+| `kind`        | Fields                              | Its text                                                    |
+|---------------|-------------------------------------|-------------------------------------------------------------|
+| `declaration` |                                     | `the declaration`                                           |
+| `layer`       | `place`, where the declaration is 1 | `layer 2`                                                   |
+| `file`        | `path`                              | `app.toml`                                                  |
+| `env`         | `variable`, and `dotenv` or `file`  | `PORT`, `PORT in .env`, `DATABASE_URL_FILE, secrets/db-url` |
+| `change`      | `version` and `at`                  | `a change, version 1, 2026-10-24 09:35:00 UTC`              |
+
+- `dotenv` is the `.env` file that set the variable, and `file` is the file
+  that a `NAME_FILE` variable named. At most one of the two is set.
+- `from` is `from_` in Python and `From` in Go. In Go the kinds are the
+  constants `tinystore.OriginDeclaration`, `OriginLayer`, `OriginFile`,
+  `OriginEnv` and `OriginChange`. In Rust they are the variants of `Origin`.
+  `Origin` and each of its variants are `#[non_exhaustive]`, so a `match` on
+  it needs a `_` arm, and a variant's pattern needs `..`, as in
+  `Origin::File { path, .. }`.
+- A newer server may send a `kind` that your SDK does not know. The SDK keeps
+  it as it was sent, and its text is the kind, so give a `switch` on `kind` a
+  default case.
+- `at` is a `Date` in TypeScript, a `datetime` in UTC in Python, a
+  `time.Time` in Go and a `SystemTime` in Rust.
+- The first item's `from`, as text, is the line's `from`:
+  `String(given[0].from)`, `str(given[0].from_)`, `Given[0].From.String()` and
+  `given[0].from.to_string()`.
+- In TypeScript, `console.table` and a spread such as `{ ...line }` leave
+  `given` out, so the table keeps its four columns, and `JSON.stringify` keeps
+  it. Python's `print(line)` leaves it out too.
+
+> [!NOTE]
+> **A server before 0.1.1 sends no `given`**
+> An SDK from 0.1.1 that reaches an older sidecar, child or server gets an
+> empty `given`. Check its length before you read `given[0]`, as the code
+> above does, or Go panics and TypeScript reads `undefined`.
 
 ## What was read and not used
 
@@ -44,12 +166,13 @@ why. The open logs each once:
 ```text
 app.local.toml: absent
 APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?
-limits.rps: a kept change of 800 is ignored: above 500
+limits.rps: the change of version 1 is ignored: 800 is above 500
 ```
 
-In TypeScript these are the `notes` of what `explain()` returns, in Rust
-`Explained.notes`. A typo in a variable is said, never silently ignored, and
-the nearest setting's name is offered when one is an edit or two away.
+These are the `notes` of what `explain()` returns in TypeScript and Python,
+`Notes()` in Go and `Explained.notes` in Rust. A typo in a variable is said,
+never silently ignored, and the nearest setting's name is offered when one is
+an edit or two away.
 
 ## Validate
 

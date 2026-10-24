@@ -171,10 +171,60 @@ interface ExplainLine {
     readonly from: string
     /** the values it went over, newest first */
     readonly over: string
+    /**
+     * Every value the setting was given, newest first: its own, then the ones
+     * it went over. `from` is `String(given[0].from)`. It is empty from a
+     * server before 0.1.1. `console.table` and a spread leave it out, and JSON
+     * keeps it.
+     */
+    readonly given: readonly ExplainGiven[]
 }
 ```
 
 A setting's line of explain.
+
+## ExplainGiven
+
+```ts
+interface ExplainGiven {
+    /** as JSON, a duration spelled, a secret as *** */
+    readonly value: string
+    readonly from: ExplainOrigin
+}
+```
+
+A value a setting was given, and where it came from.
+
+## ExplainOrigin
+
+```ts
+type ExplainOrigin = {
+    readonly kind: 'declaration'
+} | {
+    readonly kind: 'layer'
+    readonly place: number
+} | {
+    readonly kind: 'file'
+    readonly path: string
+} | {
+    readonly kind: 'env'
+    readonly variable: string
+    /** the .env file that set the variable */
+    readonly dotenv?: string
+    /** the file a NAME_FILE variable named */
+    readonly file?: string
+} | {
+    readonly kind: 'change'
+    readonly version: number
+    readonly at: Date
+}
+```
+
+Where a value came from: the declaration, a layer in the list by its place,
+the declaration 1, a file, a variable, or a change. `String(origin)` is the
+text a line's `from` says: `the declaration`, `layer 2`, `app.yaml`,
+`APP_PORT in .env`, `a change, version 7, 2026-10-13 14:03:05 UTC`. A kind
+from a newer server is kept as it was sent, and its text is the kind.
 
 ## Explained
 
@@ -362,7 +412,8 @@ before it, made in this process or another. It returns the call that stops it.
 explain(): Explained
 ```
 
-Every setting with its value, the layer that gave it and what it went over.
+Every setting with its value, the layer that gave it and what it went
+over, as text, and in `given` as data.
 
 ### Config.stop
 

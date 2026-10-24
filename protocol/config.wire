@@ -2,10 +2,10 @@
 # docs/guides/config/README.md has them, with what the program read itself, a file's
 # text and its variables, since those belong to it and not to the server.
 message config.Open {
-  1 name: str          # [a-z0-9][a-z0-9_-]{0,63}
-  2 declaration: json  # each setting's kind, rules, default and marks
-  3 layers: json       # objects, files and the environment, in the order written
-  4 strict: bool       # a kept change that no longer fits refuses the open
+  1 name: str              # [a-z0-9][a-z0-9_-]{0,63}
+  2 declaration: json      # each setting's kind, rules, default and marks
+  3 layers: json           # objects, files and the environment, in the order written
+  4 strict: bool           # a kept change that no longer fits refuses the open
 }
 
 # A config's value at a version of its changes, and where each setting's
@@ -13,30 +13,49 @@ message config.Open {
 message config.Value {
   1 handle: uint
   2 version: int
-  3 value: json        # the settings, each span its milliseconds, each secret its text
+  3 value: json            # the settings, each span its milliseconds, each secret its text
   4 lines: [config.Line]
-  5 notes: [str]       # what was read and not used, each with why
+  5 notes: [str]           # what was read and not used, each with why
 }
 
 # A setting's line of explain.
 message config.Line {
   1 path: str
-  2 value: str         # as JSON, a span spelled, a secret as ***
+  2 value: str             # as JSON, a span spelled, a secret as ***
   3 from: str
-  4 over: [str]        # the values it went over, newest first
+  4 over: [str]            # the values it went over, newest first
+  5 given: [config.Given]  # every value it was given, newest first: its own, then the ones it went over
+}
+
+# A value a setting was given, and where it came from.
+message config.Given {
+  1 value: str             # as JSON, a span spelled, a secret as ***
+  2 from: config.Origin
+}
+
+# Where a value came from: its kind, and only the fields that kind names.
+message config.Origin {
+  1 kind: str              # declaration, layer, file, env or change
+  2 place: uint?           # a layer's place in the list, the declaration 1
+  3 path: str?             # a file's path
+  4 variable: str?         # an env's variable
+  5 dotenv: str?           # the .env file that set the variable
+  6 file: str?             # the file a NAME_FILE variable named
+  7 version: int?          # a change's version
+  8 at: time?              # when a change was made
 }
 
 # A change of live settings, made on the version the program's value had.
 message config.Update {
   1 handle: uint
-  2 version: int       # a change made since is a conflict
-  3 changes: json      # the settings it changes, in the declaration's shape
+  2 version: int           # a change made since is a conflict
+  3 changes: json          # the settings it changes, in the declaration's shape
 }
 
 # Drops the changes kept of a setting or of a group, or of every setting.
 message config.Reset {
   1 handle: uint
-  2 path: str          # empty for every change
+  2 path: str              # empty for every change
 }
 
 read  0x0701 config.open(config.Open)     -> config.Value

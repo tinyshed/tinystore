@@ -51,7 +51,7 @@ fn a_variable_reads_as_its_settings_kind_and_one_that_does_not_is_named() {
         ("APP_NAME", " spaced "),
     ]);
     let read = read(&env, &declared).unwrap();
-    let given: Vec<(String, Value)> = read.given.into_iter().map(|(path, value, _, _)| (path, value)).collect();
+    let given: Vec<(String, Value)> = read.given.into_iter().map(|(path, value, _)| (path, value)).collect();
     assert_eq!(
         given,
         [
@@ -81,7 +81,7 @@ fn a_name_given_a_setting_replaces_its_prefixed_one_and_two_settings_never_share
         ("DATABASE_URL", "postgres://x"),
     ]);
     let read = read(&env, &declared).unwrap();
-    let shown: Vec<&str> = read.given.iter().map(|(_, _, shown, _)| shown.as_str()).collect();
+    let shown: Vec<String> = read.given.iter().map(|(_, _, from)| from.to_string()).collect();
     assert_eq!(shown, ["DATABASE_URL", "PORT"]);
     let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
     assert_eq!(
@@ -103,11 +103,9 @@ fn name_file_gives_its_files_text_without_its_last_newline_and_both_set_is_refus
     let declared = declaration(json!({ "db": { "url": "" } }));
     let path = secret.display().to_string();
     let read = read(&Env::prefix("APP").from([("APP_DB_URL_FILE", path.as_str())]), &declared).unwrap();
-    let (_, value, shown, origin) = &read.given[0];
-    assert_eq!(
-        (value, shown.as_str(), origin),
-        (&json!("postgres://x"), "APP_DB_URL_FILE", &Origin::File(path.clone()))
-    );
+    let (_, value, from) = &read.given[0];
+    let named = Origin::Env { variable: "APP_DB_URL_FILE".to_owned(), dotenv: None, file: Some(path.clone()) };
+    assert_eq!((value, from), (&json!("postgres://x"), &named));
     let both = Env::prefix("APP").from([("APP_DB_URL_FILE", path.as_str()), ("APP_DB_URL", "y")]);
     assert_eq!(read_refused(&both, &declared), ["APP_DB_URL and APP_DB_URL_FILE are both set"]);
 }
@@ -122,9 +120,11 @@ fn a_dotenv_files_variables_count_where_the_process_has_none() {
     let env = Env::prefix("APP").files([file.clone(), dir.path().join("absent.env")]).from([("APP_PORT", "2")]);
     let read = read(&env, &declared).unwrap();
     let given: Vec<(&str, &Value, &Origin)> =
-        read.given.iter().map(|(path, value, _, origin)| (path.as_str(), value, origin)).collect();
+        read.given.iter().map(|(path, value, from)| (path.as_str(), value, from)).collect();
     let shown = file.display().to_string();
-    assert_eq!(given, [("name", &json!("from-file"), &Origin::DotEnv(shown)), ("port", &json!(2), &Origin::Process)]);
+    let from_file = Origin::Env { variable: "APP_NAME".to_owned(), dotenv: Some(shown), file: None };
+    let from_process = Origin::Env { variable: "APP_PORT".to_owned(), dotenv: None, file: None };
+    assert_eq!(given, [("name", &json!("from-file"), &from_file), ("port", &json!(2), &from_process)]);
     let unused: Vec<String> = read.unused.iter().map(ToString::to_string).collect();
     assert_eq!(unused, ["APP_PROT: a variable with the prefix that names no setting; did you mean APP_PORT?"]);
 }

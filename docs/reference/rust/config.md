@@ -96,6 +96,17 @@ pub struct Explained {
 Every setting of a config with its value, the layer that gave it and the
 values it went over, then what was read and not used, each with why.
 
+## Given
+
+```rust
+pub struct Given {
+    pub value: String,
+    pub from: Origin,
+}
+```
+
+A value a setting was given, and where it came from.
+
 ## Line
 
 ```rust
@@ -104,10 +115,35 @@ pub struct Line {
     pub value: String,
     pub from: String,
     pub over: Vec<String>,
+    pub given: Vec<Given>,
 }
 ```
 
-One setting's value and where it came from.
+One setting's value and where it came from, as text and as data.
+
+## Origin
+
+```rust
+pub enum Origin {
+    Declaration,
+    Layer { place: usize },
+    File { path: String },
+    Env { variable: String, dotenv: Option<String>, file: Option<String> },
+    Change { version: i64, at: SystemTime },
+}
+```
+
+Where a value came from. Its text is what a line's `from` says.
+
+```text
+Declaration                                          the declaration
+Layer { place: 2 }                                   layer 2
+File { path: "app.yaml" }                            app.yaml
+Env { variable: "APP_PORT" }                         APP_PORT
+Env { variable: "APP_PORT", dotenv: ".env" }         APP_PORT in .env
+Env { variable: "DB_URL_FILE", file: "/run/db" }     DB_URL_FILE, /run/db
+Change { version: 7, at }                            a change, version 7, 2026-10-13 14:03:05 UTC
+```
 
 ## File
 

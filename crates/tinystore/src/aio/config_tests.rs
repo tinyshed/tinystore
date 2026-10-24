@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::*;
 use crate::Options;
 use crate::aio::Store;
-use crate::config::Live;
+use crate::config::{Live, Origin};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -296,6 +296,21 @@ async fn a_watch_outlives_the_handle_it_was_made_from_and_keeps_no_store_open() 
     assert_eq!(*next(&mut watching).await.unwrap().unwrap().rps, 150);
     assert_eq!(next(&mut watching).await.unwrap().unwrap_err().kind(), ErrorKind::Closed);
     again.close().await.unwrap();
+}
+
+// contract: CFG-09
+#[tokio::test]
+async fn an_awaited_config_explains_where_each_value_came_from_as_the_blocking_one_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = opened(&dir);
+    let (config, blocking) = handles(&store);
+    config.update(|s| *s.rps = 200).await.unwrap();
+    let explained = config.explain();
+    let rps = explained.settings.iter().find(|line| line.path == "rps").unwrap();
+    let froms: Vec<&Origin> = rps.given.iter().map(|given| &given.from).collect();
+    assert!(matches!(froms[..], [Origin::Change { version: 1, .. }, Origin::Declaration]), "{:?}", rps.given);
+    assert_eq!(explained, blocking.explain());
+    store.close().await.unwrap();
 }
 
 #[tokio::test]

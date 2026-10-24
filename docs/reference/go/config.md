@@ -29,7 +29,7 @@ OpenConfig opens a config: defaults declare every setting, its type and its defa
 func (c *Config[T]) Explain() []Line
 ```
 
-Explain is every setting with its value, the layer that gave it and what it went over, newest first; Notes is what was read and not used.
+Explain is every setting with its value, the layer that gave it and what it went over, newest first, as text and in Given as data; Notes is what was read and not used.
 
 ### Config.Get
 
@@ -183,11 +183,26 @@ func Optional() FileOption
 
 Optional lets the file be absent: then it declares nothing, and Explain says so.
 
+## Given
+
+```go
+type Given struct {
+	Value string
+	From  Origin
+}
+```
+
+Given is a value a setting was given, as JSON, a span spelled and a secret \*\*\*, and where it came from.
+
 ## Line
 
 ```go
 type Line struct {
 	Path, Value, From, Over string
+	// Given is every value the setting was given, newest first: its own, then
+	// the ones it went over; From is Given[0].From.String(). It is empty from
+	// a server before 0.1.1.
+	Given []Given
 }
 ```
 
@@ -198,6 +213,53 @@ Line is a setting's line of Explain: its value as JSON, a span spelled and a sec
 ```go
 func (l Line) String() string
 ```
+
+## Origin
+
+```go
+type Origin struct {
+	Kind     OriginKind
+	Place    int       // a layer's place in the list, the declaration 1
+	Path     string    // a file's path
+	Variable string    // an env's variable
+	DotEnv   string    // the .env file that set the variable
+	File     string    // the file a NAME_FILE variable named
+	Version  int64     // a change's version
+	At       time.Time // when a change was made
+}
+```
+
+Origin is where a value came from: its kind, and only the fields that kind names, the others zero. Its String is the text a Line's From says: the declaration, layer 2, app.yaml, APP\_PORT in .env, or a change, version 7, 2026-10-13 14:03:05 UTC. A kind from a newer server is kept as it was sent, and its String is the kind.
+
+### Origin.String
+
+```go
+func (o Origin) String() string
+```
+
+String is the text a Line's From says, as the core writes it.
+
+## OriginKind
+
+```go
+type OriginKind string
+```
+
+OriginKind is what gave a value.
+
+### OriginDeclaration
+
+```go
+const (
+	OriginDeclaration OriginKind = "declaration"
+	OriginLayer       OriginKind = "layer" // an object in a Bun or Python program's list of layers
+	OriginFile        OriginKind = "file"
+	OriginEnv         OriginKind = "env"
+	OriginChange      OriginKind = "change"
+)
+```
+
+The kinds an origin has.
 
 ## Secret
 
