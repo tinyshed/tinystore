@@ -281,6 +281,62 @@ fn a_mistake_in_the_tokens_leaves_no_files_behind() {
     assert!(!store.exists(), "the store never opened");
 }
 
+// contract: ERR-02
+#[test]
+fn a_log_that_cannot_be_made_is_named_with_its_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("data");
+    std::fs::write(&file, "not a directory").unwrap();
+    let log = file.join("server").join("serve.log");
+    let failed = Command::new(BINARY)
+        .args(["serve", "--dir"])
+        .arg(&file)
+        .args(["--local", "--log-file"])
+        .arg(&log)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&failed.stderr);
+    assert_eq!(failed.status.code(), Some(1), "{said}");
+    let named = format!("tinystore serve: its log {}: ", log.display());
+    assert!(said.starts_with(&named), "{said}");
+}
+
+/// A sidecar's starter reads its stderr while it starts, and lets it go once
+/// it serves: a failure said after that goes nowhere, and the exit says it.
+#[test]
+fn a_server_whose_stderr_nobody_reads_still_exits_with_why_it_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut holder = Command::new(BINARY);
+    holder.arg("serve").arg(dir.path()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut holder = Stopped(holder.spawn().unwrap());
+    published(&dir.path().join("server").join("SERVE"));
+    let mut held = Command::new(BINARY)
+        .args(["serve", "--dir"])
+        .arg(dir.path())
+        .args(["--local", "--log-file"])
+        .arg(dir.path().join("server").join("held.log"))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(held.stderr.take());
+    assert_eq!(wait(&mut held), 3, "a directory held is exit 3, its stderr gone or not");
+    let stop = Command::new(BINARY).arg("stop").arg(dir.path()).output().unwrap();
+    assert!(stop.status.success(), "{}", String::from_utf8_lossy(&stop.stderr));
+    assert_eq!(wait(&mut holder.0), 0);
+}
+
+/// A server a test started, killed if the test fails before it stops.
+struct Stopped(Child);
+
+impl Drop for Stopped {
+    fn drop(&mut self) {
+        if self.0.try_wait().is_ok_and(|exited| exited.is_none()) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 // contract: CLI-03, SEC-05
 #[test]
 fn status_finds_a_running_server_and_stop_stops_it_its_serve_gone() {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,59 +81,166 @@ func startSidecar(ctx context.Context, serve, log, path string, args []string, s
 	held := false
 	pause := heldPause
 	for {
-		cmd := exec.Command(path, args...)
-		detach(cmd)
-		if err := cmd.Start(); err != nil {
-			return nil, Wrap(Closed, err, "cannot start the sidecar %s", path)
+		child, err := spawnSidecar(path, args, log)
+		if err != nil {
+			return nil, err
 		}
-		exited := make(chan int, 1)
-		go func() {
-			_ = cmd.Wait()
-			exited <- cmd.ProcessState.ExitCode()
-		}()
-		var again time.Time
-		wait := 5 * time.Millisecond
-		code := -1
-		for time.Now().Before(deadline) {
-			if found := reachServe(ctx, serve); found != nil {
-				if found.instance != stopped {
-					return found.connection, nil
-				}
-				found.connection.Close()
-			}
-			select {
-			case code = <-exited:
-			default:
-			}
-			if code >= 0 && code != 3 {
-				return nil, Errorf(Closed, "the sidecar exited with %d: %s", code, tailOf(log))
-			}
-			if code == 3 {
-				held = true
-				if again.IsZero() {
-					again = time.Now().Add(pause)
-				}
-				if !time.Now().Before(again) {
-					break
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
-			}
-			wait = min(wait*2, 100*time.Millisecond)
+		c, code, err := child.awaitServe(ctx, serve, stopped, deadline, pause)
+		child.release()
+		if c != nil || err != nil {
+			return c, err
 		}
+		held = held || code == 3
 		if !time.Now().Before(deadline) {
 			why := "no sidecar answered"
 			if held {
 				why = "another process holds the directory but no sidecar answers"
 			}
-			return nil, Errorf(Closed, "%s in %s: %s", why, StartTime, tailOf(log))
+			return nil, Errorf(Closed, "%s in %s: %s", why, StartTime, child.failure(false))
 		}
 		pause = min(pause*2, time.Second)
 	}
 }
+
+// spawned is a sidecar this process started, its stderr read while it
+// starts: a start that fails before its log opens says why there alone.
+type spawned struct {
+	exited  chan int
+	stderr  *lines
+	drained chan struct{}
+	read    *os.File
+	log     string
+	// logged is serve.log's size before it started: the log keeps every
+	// run's lines, so this one's begin here
+	logged int64
+}
+
+func spawnSidecar(path string, args []string, log string) (*spawned, error) {
+	logged := int64(0)
+	if info, err := os.Stat(log); err == nil {
+		logged = info.Size()
+	}
+	cmd := exec.Command(path, args...)
+	detach(cmd)
+	// a file, not a writer, so that exec copies nothing and the child's end is its own
+	read, write, err := os.Pipe()
+	if err != nil {
+		return nil, Wrap(Closed, err, "cannot start the sidecar %s", path)
+	}
+	cmd.Stderr = write
+	err = cmd.Start()
+	_ = write.Close()
+	if err != nil {
+		_ = read.Close()
+		return nil, notStarted("the sidecar", path, err)
+	}
+	s := &spawned{exited: make(chan int, 1), stderr: &lines{}, drained: make(chan struct{}), read: read, log: log, logged: logged}
+	go func() {
+		s.stderr.drain(read)
+		close(s.drained)
+	}()
+	go func() {
+		_ = cmd.Wait()
+		s.exited <- cmd.ProcessState.ExitCode()
+	}()
+	return s, nil
+}
+
+// awaitServe waits for SERVE to name a sidecar that answers, until the
+// deadline or until this one exits: one that found the directory held, exit
+// 3, is given up on after the pause, and any other exit is the error.
+func (s *spawned) awaitServe(ctx context.Context, serve, stopped string, deadline time.Time, pause time.Duration) (*Connection, int, error) {
+	var again time.Time
+	wait := 5 * time.Millisecond
+	code := -1
+	for time.Now().Before(deadline) {
+		if found := reachServe(ctx, serve); found != nil {
+			if found.instance != stopped {
+				return found.connection, code, nil
+			}
+			found.connection.Close()
+		}
+		select {
+		case code = <-s.exited:
+		default:
+		}
+		if code >= 0 && code != 3 {
+			return nil, code, Errorf(Closed, "the sidecar exited with %d: %s", code, s.failure(true))
+		}
+		if code == 3 {
+			if again.IsZero() {
+				again = time.Now().Add(pause)
+			}
+			if !time.Now().Before(again) {
+				return nil, code, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, code, ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, 100*time.Millisecond)
+	}
+	return nil, code, nil
+}
+
+// release stops reading its stderr once its start is over: what it writes
+// there later goes nowhere.
+func (s *spawned) release() { _ = s.read.Close() }
+
+// failure is why it stopped without serving: the last lines it wrote to
+// stderr, or else the lines its log gained since it started. Once it has
+// exited, its stderr is read to its end first, a moment at most.
+func (s *spawned) failure(exited bool) string {
+	if exited {
+		select {
+		case <-s.drained:
+		case <-time.After(time.Second):
+		}
+	}
+	if said := s.stderr.lastLines(5); said != "" {
+		return said
+	}
+	text, err := os.ReadFile(s.log)
+	if err != nil {
+		return "it wrote no log"
+	}
+	// a log shorter than it was is another file, every line of it new
+	if int64(len(text)) >= s.logged {
+		text = text[s.logged:]
+	}
+	gained := strings.TrimSpace(string(text))
+	if gained == "" {
+		return "it wrote no log"
+	}
+	return lastOf(strings.Split(gained, "\n"), 5)
+}
+
+// notStarted is the error of a process that did not start, its cause in the
+// words every SDK uses: not found, permission denied, or the system's own.
+func notStarted(what, path string, err error) *Error {
+	reason := err.Error()
+	var pathError *fs.PathError
+	switch {
+	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
+		reason = "not found"
+	case errors.Is(err, fs.ErrPermission):
+		reason = "permission denied"
+	case errors.As(err, &pathError):
+		reason = pathError.Err.Error()
+	}
+	return Wrap(Closed, toldAs{reason, err}, "cannot start %s %s", what, path)
+}
+
+// toldAs is a cause said in other words, still the cause errors.Is finds.
+type toldAs struct {
+	text string
+	err  error
+}
+
+func (t toldAs) Error() string { return t.text }
+func (t toldAs) Unwrap() error { return t.err }
 
 // stoppedSidecar asks a sidecar to stop as tinystore stop does, closing the
 // connection once it has answered; false when it refuses, the connection open.
@@ -175,18 +284,6 @@ func reachServe(ctx context.Context, serve string) *served {
 		return nil
 	}
 	return &served{connection: c, sidecar: published.Sidecar, instance: fmt.Sprint(published.Instance)}
-}
-
-func tailOf(log string) string {
-	text, err := os.ReadFile(log)
-	if err != nil {
-		return "it wrote no log"
-	}
-	lines := strings.Split(strings.TrimSpace(string(text)), "\n")
-	if len(lines) > 5 {
-		lines = lines[len(lines)-5:]
-	}
-	return strings.Join(lines, "\n")
 }
 
 var release = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$`)

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import stat
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, overload
 
@@ -51,7 +53,6 @@ from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
 
 if TYPE_CHECKING:
-    import os
     import ssl
     from collections.abc import Awaitable, Callable, Iterable, Sequence
     from datetime import datetime
@@ -702,10 +703,12 @@ _ADDRESS = re.compile(r"([a-z][a-z0-9+.-]+):", re.IGNORECASE)
 
 
 def _directory(directory: str | os.PathLike[str]) -> str:
-    """Refuses an address where a directory belongs.
+    """Refuses an address where a directory belongs, and a directory that is a file or sits under one.
 
     ``open("tcp://...")`` would make a folder of that name and start a server
-    in it, rather than reach the one meant.
+    in it, rather than reach the one meant. A file is refused in the core's
+    words before a server starts or the core loads, so that every way says it
+    alike.
     """
     text = str(directory)
     scheme = _ADDRESS.match(text)
@@ -717,4 +720,28 @@ def _directory(directory: str | os.PathLike[str]) -> str:
         raise InvalidError(
             f"open takes a store's directory, and {text} is an address: open the directory its server serves"
         )
+    absolute = os.path.abspath(text)
+    file = _file_in_the_way(absolute)
+    if file == absolute:
+        raise InvalidError(f"store {absolute} is a file, not a directory")
+    if file is not None:
+        raise InvalidError(f"store {absolute}: {file} is a file, not a directory")
     return text
+
+
+def _file_in_the_way(directory: str) -> str | None:
+    """The first of a directory and the folders above it that is there, when it is a file.
+
+    That file keeps the directory from being made.
+    """
+    path = directory
+    while True:
+        try:
+            found = os.stat(path)
+        except OSError:
+            parent = os.path.dirname(path)
+            if parent == path:
+                return None
+            path = parent
+            continue
+        return None if stat.S_ISDIR(found.st_mode) else path

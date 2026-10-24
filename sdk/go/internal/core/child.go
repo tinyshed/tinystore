@@ -111,7 +111,7 @@ func PrivateChild(directory string, binary func(context.Context) (string, error)
 			return nil, err
 		}
 		if err := cmd.Start(); err != nil {
-			return nil, Wrap(Closed, err, "cannot start the private server %s", path)
+			return nil, notStarted("the private server", path, err)
 		}
 		tail := &lines{}
 		drained := make(chan struct{})
@@ -149,7 +149,11 @@ func PrivateChild(directory string, binary func(context.Context) (string, error)
 		c := NewConnection(session, stdinTransport{stdin, &writing}, closing)
 		if err := c.Handshake(ctx); err != nil {
 			_ = cmd.Process.Kill()
-			return nil, Wrap(Closed, err, "the private server did not start: %s", tail.last(2000))
+			// the error of a child that exited carries its stderr already
+			if said := tail.last(2000); said != "" && !strings.Contains(err.Error(), said) {
+				return nil, Wrap(Closed, err, "the private server did not start: %v: %s", err, said)
+			}
+			return nil, Wrap(Closed, err, "the private server did not start")
 		}
 		return c, nil
 	}
@@ -196,4 +200,20 @@ func (l *lines) last(most int) string {
 		text = text[len(text)-most:]
 	}
 	return text
+}
+
+// lastLines are the last n lines kept that say something.
+func (l *lines) lastLines(n int) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return lastOf(l.kept, n)
+}
+
+// lastOf is the last n of lines, blank ones at the end left out.
+func lastOf(lines []string, n int) string {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	return strings.Join(lines[max(0, end-n):end], "\n")
 }

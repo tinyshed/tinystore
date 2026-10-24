@@ -3,11 +3,11 @@
 // started through node:child_process, which both implement, and the last
 // lines of a child's stderr.
 
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 
 import { ClosedError, InUseError, type TinystoreError } from '../errors.ts'
-import type { Child } from '../runtime.ts'
+import type { Detached } from '../runtime.ts'
 
 /**
  * The error of an open in this process that failed, which the core gives as a
@@ -82,20 +82,50 @@ export function address(endpoint: string): Address {
 /**
  * Starts a sidecar that outlives this process, through node:child_process in
  * Bun too, since Bun.spawn starts no process that outlives a Ctrl-C of its
- * parent's group.
+ * parent's group. Its stderr is read while it starts, since a start that
+ * fails before its log opens says why there alone, and let go after: a pipe
+ * still read would keep this process's event loop alive.
  */
-export function spawnDetached(argv: string[]): Child {
-	const child = spawn(argv[0]!, argv.slice(1), {
-		detached: true,
-		stdio: 'ignore',
-		windowsHide: true,
+export function spawnDetached(argv: string[]): Detached {
+	let child: ChildProcess
+	try {
+		child = spawn(argv[0]!, argv.slice(1), {
+			detached: true,
+			stdio: ['ignore', 'ignore', 'pipe'],
+			windowsHide: true,
+		})
+	} catch (err) {
+		const exited = Promise.reject(err)
+		exited.catch(() => {})
+		return { exited, stderr: () => '', release: () => {} }
+	}
+	const stderr = child.stderr!
+	let kept = ''
+	stderr.setEncoding('utf8')
+	stderr.on('data', (text: string) => {
+		kept = (kept + text).slice(-stderrKept)
 	})
-	const exited = new Promise<number>(resolve => {
-		child.once('exit', code => resolve(code ?? -1))
-		child.once('error', () => resolve(-1))
+	stderr.on('error', () => {})
+	const exited = new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+		child.once('error', reject)
+		// close comes once the child has exited and its stderr has ended
+		child.once('close', code => resolve({ code: code ?? -1, stderr: kept }))
 	})
+	exited.catch(() => {})
 	child.unref()
-	return { exited, kill: () => child.kill() }
+	return { exited, stderr: () => kept, release: () => stderr.destroy() }
+}
+
+/** Why a process did not start, in the words every SDK uses: not found, permission denied, or the system's own. */
+export function notStarted(err: unknown): string {
+	const code = (err as { code?: unknown } | undefined)?.code
+	if (code === 'ENOENT') {
+		return 'not found'
+	}
+	if (code === 'EACCES' || code === 'EPERM') {
+		return 'permission denied'
+	}
+	return err instanceof Error ? err.message : String(err)
 }
 
 /** How much of a child's stderr is kept, its last lines, to say why it ended. */

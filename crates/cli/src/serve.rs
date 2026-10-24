@@ -3,8 +3,9 @@
 //! every client `GOAWAY`, lets the streams running finish, removes `SERVE`,
 //! and only then lets go of the directory.
 
+use std::fmt::Display;
 use std::fs::OpenOptions;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -61,7 +62,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     let mut serve = match args::serve(args) {
         Ok(serve) => serve,
         Err(refused) => {
-            eprintln!("tinystore serve: {refused}");
+            say(refused);
             return ExitCode::from(2);
         }
     };
@@ -71,14 +72,14 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     let remote = match serve.remote.take().map(remote::Ready::of).transpose() {
         Ok(remote) => remote,
         Err(refused) => {
-            eprintln!("tinystore serve: {refused}");
+            say(refused);
             return ExitCode::FAILURE;
         }
     };
     let console = match Console::open(serve.log.as_deref(), serve.quiet) {
         Ok(console) => console,
         Err(error) => {
-            eprintln!("tinystore serve: its log: {error}");
+            say(format_args!("its log {error}"));
             return ExitCode::FAILURE;
         }
     };
@@ -110,6 +111,14 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         })
     });
     close(&store, served, &console)
+}
+
+/// Says why the server stops on stderr, where whoever started it reads. A
+/// sidecar's starter reads stderr only while it starts: a line said after
+/// that goes nowhere, and must not panic as `eprintln!` does on a pipe that
+/// nobody reads.
+fn say(message: impl Display) {
+    let _ = writeln!(io::stderr(), "tinystore serve: {message}");
 }
 
 /// The store's options as the flags give them.
@@ -497,11 +506,12 @@ impl Console {
         let level = lines::level();
         let file = match file {
             Some(path) => {
+                let named = |error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
                 // a sidecar logs into <dir>/server/, which may not be there yet
                 if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    std::fs::create_dir_all(parent).map_err(named)?;
                 }
-                Some(OpenOptions::new().create(true).append(true).open(path)?)
+                Some(OpenOptions::new().create(true).append(true).open(path).map_err(named)?)
             }
             None => None,
         };
@@ -544,7 +554,7 @@ impl Console {
     fn fail(self, message: &str) {
         tracing::error!(target: "tinystore", "{message}");
         if self.to_file && !self.terminal.terminal {
-            eprintln!("tinystore serve: {message}");
+            say(message);
         }
     }
 

@@ -1,3 +1,6 @@
+import { type Stats, statSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+
 import { type Backup, type BackupOptions, backup } from './backup.ts'
 import { type Files, type FilesOptions, openFiles } from './blobs.ts'
 import { Channel } from './channels.ts'
@@ -596,7 +599,10 @@ const address = /^([a-z][a-z0-9+.-]+):/i
 
 /**
  * Refuses an address where a directory belongs: open('tcp://…') would make a
- * folder of that name and start a server in it, rather than reach the one meant.
+ * folder of that name and start a server in it, rather than reach the one
+ * meant. Refuses a directory that is a file, or sits under one, in the core's
+ * words, before a server starts or the core loads, so that every way says it
+ * alike.
  *
  *     open('tcp://db.internal:7070')       → use connect
  *     open('pipe:tinystore-d761f24b7e59')  → open the directory it serves
@@ -613,6 +619,35 @@ function checkDirectory(dir: string): void {
 		throw new InvalidError(
 			`open takes a store's directory, and ${dir} is an address: open the directory its server serves, and it is found through SERVE`,
 		)
+	}
+	const absolute = resolve(dir)
+	const file = fileInTheWay(absolute)
+	if (file === absolute) {
+		throw new InvalidError(`store ${absolute} is a file, not a directory`)
+	}
+	if (file !== undefined) {
+		throw new InvalidError(`store ${absolute}: ${file} is a file, not a directory`)
+	}
+}
+
+/**
+ * The first of a directory and the folders above it that is there, when it
+ * is a file: what keeps the directory from being made.
+ */
+function fileInTheWay(dir: string): string | undefined {
+	for (let path = dir; ; path = dirname(path)) {
+		let found: Stats | undefined
+		try {
+			found = statSync(path)
+		} catch {
+			found = undefined
+		}
+		if (found !== undefined) {
+			return found.isDirectory() ? undefined : path
+		}
+		if (dirname(path) === path) {
+			return undefined
+		}
 	}
 }
 

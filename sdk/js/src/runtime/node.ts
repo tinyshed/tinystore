@@ -105,8 +105,13 @@ function connected(
 	})
 }
 
-function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
+async function spawnPrivate(argv: string[], events: TransportEvents): Promise<PrivateChild> {
 	const proc = spawn(argv[0]!, argv.slice(1), { stdio: 'pipe', windowsHide: true })
+	// a child that cannot start says so after the spawn, by its error
+	await new Promise((resolve, reject) => {
+		proc.once('spawn', resolve)
+		proc.once('error', reject)
+	})
 	let kept = ''
 	// a pipe nobody drains stops the server once it fills, so stderr is read to its end
 	proc.stderr.setEncoding('utf8')

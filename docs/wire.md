@@ -175,11 +175,17 @@ refuses its new mode. `SERVE` there is a hint; `LOCK` is the truth.
   when it leaves, before it lets go of `LOCK`.
 - **Find or start.** A client reads `SERVE`, connects to an endpoint and
   checks the proof. Any failure, no file, a refused connection or a proof that
-  does not check, starts `tinystore serve --dir <dir> --local --log
-  <dir>/server/serve.log`. That child takes `LOCK`, which means the old server
-  is gone, and publishes itself; or it finds `LOCK` held and exits with code 3,
-  and the client reads `SERVE` again until the winner answers, five seconds at
-  most, starting one again when none does.
+  does not check, starts `tinystore serve --dir <dir> --local --log-file
+  <dir>/server/serve.log`, detached, and reads its stderr until it answers.
+  That child takes `LOCK`, which means the old server is gone, and publishes
+  itself; or it finds `LOCK` held and exits with code 3, and the client reads
+  `SERVE` again until the winner answers, 15 seconds at most, starting one
+  again when none does. A child that exits with any other code failed, and
+  the client says why: the last lines it wrote to stderr, which is where a
+  failure before its log opened goes, or else the lines `serve.log` gained
+  since that child started, since the log keeps every run's lines. Before
+  anything starts, a client refuses a directory that is a file, or sits
+  under one, `invalid`, in the core's words.
 - **The proof.** A client that found its server through `SERVE` sends a
   `HELLO` with 16 random bytes as its challenge, and sends no `REQUEST` until
   `WELCOME`'s proof equals the HMAC-SHA256 of the challenge keyed with the

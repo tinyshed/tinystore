@@ -4,7 +4,7 @@
 // remote server.
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import manifest from '../package.json' with { type: 'json' }
@@ -16,7 +16,8 @@ import {
 	TinystoreError,
 	UnavailableError,
 } from './errors.ts'
-import type { PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
+import { lastLines, notStarted } from './runtime/shared.ts'
+import type { Detached, PrivateChild, Runtime, TlsOptions, Transport } from './runtime.ts'
 import {
 	ConnectionLostError,
 	protocol,
@@ -335,8 +336,12 @@ function nodeFlags(node: NodeOptions | undefined, config: string): string[] {
 	if (node.advertise !== undefined) {
 		settings.push(`advertise = ${JSON.stringify(node.advertise)}`)
 	}
-	mkdirSync(join(config, '..'), { recursive: true })
-	writeFileSync(config, `${settings.join('\n')}\n`)
+	try {
+		mkdirSync(join(config, '..'), { recursive: true })
+		writeFileSync(config, `${settings.join('\n')}\n`)
+	} catch (err) {
+		throw new ClosedError(`cannot write the node's config ${config}: ${(err as Error).message}`)
+	}
 	flags.push('--node-config', config)
 	return flags
 }
@@ -359,36 +364,127 @@ async function startSidecar(
 	const deadline = Date.now() + startTime
 	let held = false
 	for (let pause = heldPause; ; pause = Math.min(pause * 2, 1000)) {
-		const child = runtime.spawnDetached(command)
-		let exited: number | undefined
-		child.exited.then(code => {
-			exited = code
-		})
+		const child = new Spawned(runtime, command, log)
+		try {
+			const reached = await child.served(serve, deadline, pause, stoppedInstance)
+			if (reached !== undefined) {
+				return reached
+			}
+			held ||= child.exited?.code === 3
+			if (Date.now() >= deadline) {
+				const why = held
+					? 'another process holds the directory but no sidecar answers'
+					: 'no sidecar answered'
+				throw new ClosedError(`${why} in ${startTime / 1000} s: ${await child.failure()}`)
+			}
+		} finally {
+			child.release()
+		}
+	}
+}
+
+/** A sidecar this process started, and how it ended once it has, read without waiting. */
+class Spawned {
+	exited: { code: number; stderr: string } | undefined
+	#failed: { err: unknown } | undefined
+	readonly #runtime: Runtime
+	readonly #child: Detached
+	readonly #binary: string
+	readonly #log: string
+	/** serve.log's size before it started: the log keeps every run's lines, so this one's begin here */
+	readonly #logged: number
+
+	constructor(runtime: Runtime, command: string[], log: string) {
+		this.#runtime = runtime
+		this.#binary = command[0]!
+		this.#log = log
+		this.#logged = sizeOf(log)
+		this.#child = runtime.spawnDetached(command)
+		this.#child.exited.then(
+			ended => {
+				this.exited = ended
+			},
+			(err: unknown) => {
+				this.#failed = { err }
+			},
+		)
+	}
+
+	/**
+	 * The sidecar SERVE names once one answers, this one or a winner; none
+	 * once this one found the directory held and the pause passed, or at the
+	 * deadline. Any other exit of this one is the error.
+	 */
+	async served(
+		serve: string,
+		deadline: number,
+		pause: number,
+		stoppedInstance: string | undefined,
+	): Promise<Connection | undefined> {
 		let again: number | undefined
 		for (let wait = 5; Date.now() < deadline; wait = Math.min(wait * 2, 100)) {
-			const reached = await reachServe(runtime, serve)
+			const reached = await reachServe(this.#runtime, serve)
 			if (reached !== undefined && reached.instance !== stoppedInstance) {
 				return reached.connection
 			}
 			await reached?.connection.close()
-			if (exited !== undefined && exited !== 3) {
-				throw new ClosedError(`the sidecar exited with ${exited}: ${await tail(runtime, log)}`)
+			if (this.#failed !== undefined) {
+				throw new ClosedError(
+					`cannot start the sidecar ${this.#binary}: ${notStarted(this.#failed.err)}`,
+				)
 			}
-			if (exited === 3) {
-				held = true
+			if (this.exited !== undefined && this.exited.code !== 3) {
+				throw new ClosedError(
+					`the sidecar exited with ${this.exited.code}: ${await this.failure()}`,
+				)
+			}
+			if (this.exited?.code === 3) {
 				again ??= Date.now() + pause
 				if (Date.now() >= again) {
-					break
+					return undefined
 				}
 			}
 			await sleep(wait)
 		}
-		if (Date.now() >= deadline) {
-			const why = held
-				? 'another process holds the directory but no sidecar answers'
-				: 'no sidecar answered'
-			throw new ClosedError(`${why} in ${startTime / 1000} s: ${await tail(runtime, log)}`)
-		}
+		return undefined
+	}
+
+	/** Why it stopped without serving, as startFailure says it. */
+	async failure(): Promise<string> {
+		const stderr = this.exited?.stderr ?? this.#child.stderr()
+		const log =
+			stderr.trim() === ''
+				? await this.#runtime.readFile(this.#log).catch(() => undefined)
+				: undefined
+		return startFailure(stderr, log, this.#logged)
+	}
+
+	/** Stops reading its stderr once the start is over. */
+	release(): void {
+		this.#child.release()
+	}
+}
+
+/**
+ * Why a sidecar that never served stopped: the last lines it wrote to
+ * stderr, which say a failure before its log opened, or else the lines its
+ * log gained since it started, when it was `logged` bytes long.
+ */
+export function startFailure(stderr: string, log: Uint8Array | undefined, logged: number): string {
+	if (stderr.trim() !== '') {
+		return lastLines(stderr)
+	}
+	// a log shorter than it was is another file, every line of it new
+	const from = log === undefined || log.length < logged ? 0 : logged
+	const gained = log === undefined ? '' : new TextDecoder().decode(log.subarray(from))
+	return gained.trim() === '' ? 'it wrote no log' : lastLines(gained)
+}
+
+function sizeOf(path: string): number {
+	try {
+		return statSync(path).size
+	} catch {
+		return 0
 	}
 }
 
@@ -509,15 +605,6 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function tail(runtime: Runtime, log: string): Promise<string> {
-	const text = await runtime.readFile(log).catch(() => undefined)
-	if (text === undefined) {
-		return 'it wrote no log'
-	}
-	const lines = new TextDecoder().decode(text).trimEnd().split('\n')
-	return lines.slice(-5).join('\n')
-}
-
 /** A private child: tinystore serve --stdio, living and dying with this process. */
 export function privateChild(
 	runtime: Runtime,
@@ -539,10 +626,14 @@ export function privateChild(
 			...clocked,
 			...storeFlags(started, resolve(dir)),
 		]
-		const child = runtime.spawnPrivate(argv, {
-			data: bytes => session?.receive(bytes),
-			end: err => session?.end(err),
-		})
+		const child = await runtime
+			.spawnPrivate(argv, {
+				data: bytes => session?.receive(bytes),
+				end: err => session?.end(err),
+			})
+			.catch((err: unknown) => {
+				throw new ClosedError(`cannot start the private server ${argv[0]}: ${notStarted(err)}`)
+			})
 		session = new Session(bytes => child.transport.write(bytes), { client: runtime.client })
 		session.onEnd(() => {
 			child.transport.close()

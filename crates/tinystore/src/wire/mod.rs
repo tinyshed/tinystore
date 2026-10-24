@@ -32,6 +32,7 @@ mod session;
 #[cfg(feature = "sql")]
 mod sql;
 
+pub(crate) use message::code_of;
 pub(crate) use session::Session;
 pub use session::Wake;
 

@@ -44,10 +44,21 @@ all four (`test/ways.ts`, `tests/ways.py`, `internal/ways`):
    with a fresh 16-byte challenge in `HELLO`, and before any `REQUEST` check
    `WELCOME.proof`, the HMAC-SHA256 of the challenge keyed with the secret,
    in constant time. Any failure starts `tinystore serve --dir <dir> --local
-   --log-file <dir>/server/serve.log`, detached; exit code 3 means another
-   process holds the directory, so read `SERVE` again. A sidecar of an older
-   release is stopped and replaced; any other server of an older release is
-   told of once. Never trust `pid`: `LOCK` is the truth.
+   --log-file <dir>/server/serve.log`, detached, its stderr read until the
+   start is over and let go after, so that the program can exit while the
+   sidecar serves on; exit code 3 means another process holds the directory,
+   so read `SERVE` again. Any other exit is `ClosedError` with the last five
+   lines of stderr, read to its end first, or else the lines `serve.log`
+   gained since that spawn, whose size is taken before it: the log keeps
+   every run's. A sidecar of an older release is stopped and replaced; any
+   other server of an older release is told of once. Never trust `pid`:
+   `LOCK` is the truth.
+
+   Before anything starts, `open` refuses a directory that is a file, or
+   sits under one, `invalid` in the core's words, so that every way answers
+   alike, and a binary that does not start is `cannot start the sidecar
+   <path>: not found` (or `the private server`), the reason worded the same
+   in every SDK.
 4. **A remote server**: `tls://` checks the certificate before the token
    leaves in `HELLO`; `tcp://` sends it in the clear.
 

@@ -68,10 +68,7 @@ impl PythonPipe {
 fn open(py: Python<'_>, dir: &str, options: &[u8]) -> PyResult<PythonPipe> {
     match py.detach(|| Pipe::open(dir, options, None)) {
         Ok(pipe) => Ok(PythonPipe { pipe: Mutex::new(Some(Arc::new(pipe))) }),
-        Err(error) => {
-            let code = error.kind().as_str().replace(' ', "_");
-            Err(PyConnectionError::new_err((code, error.to_string())))
-        }
+        Err(error) => Err(PyConnectionError::new_err((tinystore::pipe::code(error.kind()), error.to_string()))),
     }
 }
 

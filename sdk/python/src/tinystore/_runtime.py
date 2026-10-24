@@ -2,7 +2,7 @@
 
 A Unix socket, a Windows named pipe through the Proactor loop, which CPython
 serves there without AF_UNIX, TCP and TLS; a private child on stdin and
-stdout; a sidecar that outlives this process.
+stdout; a sidecar that outlives this process, its stderr read while it starts.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from importlib import metadata, resources
 from typing import TYPE_CHECKING
@@ -107,16 +108,28 @@ class PrivateChild:
     reading: asyncio.Future[None]
 
     def tail(self) -> str:
-        return "".join(self.stderr)[-4000:].strip()
+        return "".join(self.stderr)[-2000:].strip()
+
+
+def not_started(err: OSError) -> str:
+    """Why a process did not start, in the words every SDK uses: not found, permission denied, or the system's own."""
+    if isinstance(err, FileNotFoundError):
+        return "not found"
+    if isinstance(err, PermissionError):
+        return "permission denied"
+    return err.strerror or str(err)
 
 
 async def spawn_private(
     argv: list[str], data: Callable[[bytes], None], end: Callable[[BaseException], None]
 ) -> PrivateChild:
     """Starts a private server, reading its stdout into the session and its stderr to the end."""
-    process = await asyncio.create_subprocess_exec(
-        *argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+    except OSError as err:
+        raise ClosedError(f"cannot start the private server {argv[0]}: {not_started(err)}") from err
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
@@ -129,39 +142,85 @@ async def spawn_private(
             kept.append(line.decode(errors="replace"))
             del kept[:-50]
 
+    def close() -> None:
+        if not stdin.is_closing():
+            stdin.close()
+
     async def read() -> None:
         draining = asyncio.ensure_future(drain())
         while chunk := await stdout.read(1 << 16):
             data(chunk)
         await draining
         code = await process.wait()
-        end(ClosedError(f"the private server exited with {code}: {''.join(kept)[-2000:].strip()}"))
+        end(ClosedError(f"the private server exited with {code}: {child.tail()}"))
 
-    def close() -> None:
-        if not stdin.is_closing():
-            stdin.close()
-
-    return PrivateChild(Transport(stdin.write, close), process, kept, asyncio.ensure_future(read()))
+    child = PrivateChild(Transport(stdin.write, close), process, kept, asyncio.ensure_future(read()))
+    return child
 
 
-def spawn_detached(argv: list[str]) -> subprocess.Popen[bytes]:
-    """Starts a process that outlives this one, with no stdio to read, nor a console on Windows."""
-    if sys.platform == "win32":  # pyright knows a platform only by this test
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        return subprocess.Popen(
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-        )
-    return subprocess.Popen(
-        argv,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+STDERR_KEPT = 16 << 10
+"""How much of a sidecar's stderr is kept while it starts, its last bytes, to say why it stopped."""
+
+
+class Detached:
+    """A sidecar this process started, which outlives it, its stderr read while it starts.
+
+    A thread of its own reads stderr to its end, which comes once the sidecar
+    exits. Nothing closes the pipe under it, since closing a pipe that another
+    thread is blocked reading can hang: once the sidecar serves, the thread
+    waits there until the sidecar or this process leaves.
+    """
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self.process = process
+        self._kept = bytearray()
+        self._keeping = threading.Lock()
+        self._reading = threading.Thread(target=self._read, name="tinystore sidecar stderr", daemon=True)
+        self._reading.start()
+
+    def _read(self) -> None:
+        stderr = self.process.stderr
+        assert stderr is not None
+        # os.read gives what came so far, where the buffer's read waits for all it asked
+        while chunk := os.read(stderr.fileno(), 1 << 12):
+            with self._keeping:
+                self._kept += chunk
+                del self._kept[:-STDERR_KEPT]
+
+    def stderr(self) -> str:
+        """The last of what it wrote to stderr so far."""
+        with self._keeping:
+            return self._kept.decode(errors="replace")
+
+    async def ended(self) -> str:
+        """What it wrote to stderr, once that has ended, as it does when the sidecar exits."""
+        await asyncio.to_thread(self._reading.join, 1.0)
+        return self.stderr()
+
+
+def spawn_detached(argv: list[str]) -> Detached:
+    """Starts a process that outlives this one, its stderr read while it starts, and no console on Windows."""
+    try:
+        if sys.platform == "win32":  # pyright knows a platform only by this test
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            process = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                creationflags=flags,
+            )
+        else:
+            process = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+    except OSError as err:
+        raise ClosedError(f"cannot start the sidecar {argv[0]}: {not_started(err)}") from err
+    return Detached(process)
 
 
 def packaged_binary() -> str | None:

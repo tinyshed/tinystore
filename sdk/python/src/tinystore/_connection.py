@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import re
 import secrets
@@ -278,6 +279,8 @@ async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_ins
     held = False
     pause = HELD_PAUSE
     while True:
+        # serve.log keeps every run's lines, so this start's begin at its size now
+        logged = _size_of(log)
         child = _runtime.spawn_detached(command)
         again: float | None = None
         wait = 0.005
@@ -287,9 +290,10 @@ async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_ins
                 return reached[0]
             if reached is not None:
                 await reached[0].close()
-            code = child.poll()
+            code = child.process.poll()
             if code is not None and code != 3:
-                raise ClosedError(f"the sidecar exited with {code}: {_tail(log)}")
+                why = start_failure(log, logged, await child.ended())
+                raise ClosedError(f"the sidecar exited with {code}: {why}")
             if code == 3:
                 held = True
                 if again is None:
@@ -300,7 +304,7 @@ async def _start_sidecar(serve: Path, log: Path, command: list[str], stopped_ins
             wait = min(wait * 2, 0.1)
         if loop.time() >= deadline:
             why = "another process holds the directory but no sidecar answers" if held else "no sidecar answered"
-            raise ClosedError(f"{why} in {START_TIME:.0f} s: {_tail(log)}")
+            raise ClosedError(f"{why} in {START_TIME:.0f} s: {start_failure(log, logged, child.stderr())}")
         pause = min(pause * 2, 1.0)
 
 
@@ -399,11 +403,32 @@ async def _reach_serve(serve: Path) -> tuple[Connection, bool, str] | None:
         return None
 
 
-def _tail(log: Path) -> str:
+def start_failure(log: Path, start: int, stderr: str) -> str:
+    """Why a sidecar that never served stopped.
+
+    The last lines it wrote to stderr, which say a failure before its log
+    opened, or else the lines its log gained since it started.
+    """
+    if stderr.strip():
+        return _last_lines(stderr)
     try:
-        return "\n".join(log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-5:])
+        text = log.read_bytes()
     except OSError:
-        return "it wrote no log"
+        text = b""
+    # a log shorter than it was is another file, every line of it new
+    gained = (text if len(text) < start else text[start:]).decode(errors="replace")
+    return _last_lines(gained) if gained.strip() else "it wrote no log"
+
+
+def _last_lines(text: str) -> str:
+    return "\n".join(text.strip().splitlines()[-5:])
+
+
+def _size_of(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def private_child(
@@ -443,8 +468,14 @@ def private_child(
         try:
             await connection.handshake()
         except BaseException as err:
-            child.process.kill()
-            raise ClosedError(f"the private server did not start: {err} {child.tail()}") from err
+            # a child that already exited has nothing to kill
+            with contextlib.suppress(ProcessLookupError):
+                child.process.kill()
+            said, tail = str(err), child.tail()
+            # the error of a child that exited carries its stderr already
+            if tail and tail not in said:
+                said = f"{said}: {tail}"
+            raise ClosedError(f"the private server did not start: {said}") from err
         return connection
 
     return start

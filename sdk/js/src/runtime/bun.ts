@@ -142,7 +142,8 @@ function connectPipe(path: string, events: TransportEvents): Promise<Transport> 
 	})
 }
 
-function spawnPrivate(argv: string[], events: TransportEvents): PrivateChild {
+// async, so that the throw of a Bun.spawn that cannot start is its rejection
+async function spawnPrivate(argv: string[], events: TransportEvents): Promise<PrivateChild> {
 	const proc = Bun.spawn(argv, { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', windowsHide: true })
 	let kept = ''
 	// a pipe nobody drains stops the server once it fills, so stderr is read to its end

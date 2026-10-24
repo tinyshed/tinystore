@@ -111,12 +111,16 @@ test('the core in this process answers under Node: values, many writes, a file, 
 	rmSync(dir, { recursive: true, force: true })
 })
 
-test('a directory the core cannot open fails under Node with its reason', {
+// contract: ERR-03, WIRE-01
+test('a directory that is a file fails under Node, InvalidError naming it, before the core loads', {
 	skip: addon === undefined && 'TINYSTORE_ADDON names no tinystore.node',
 }, async () => {
 	const file = join(scratch, 'a-file')
 	writeFileSync(file, 'not a directory')
-	await assert.rejects(open(file, { embedded: true, library: addon }), /cannot open/)
+	await assert.rejects(open(file, { embedded: true, library: addon }), {
+		name: 'InvalidError',
+		message: `store ${file} is a file, not a directory`,
+	})
 })
 
 test('a store opens through its sidecar under Node, and again through the one running', async () => {

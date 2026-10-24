@@ -48,7 +48,7 @@ These contracts are what does not.
 
 - **ERR-01** Every failure MUST be one `Error` whose `ErrorKind` means the same in every engine, on the wire and in every SDK.
 - **ERR-02** An error MUST name what failed — engine, item, key — and keep its cause.
-- **ERR-03** A key already held MUST be `conflict`; a request that breaks a rule `invalid`; bytes that no longer read `corrupt`, naming the invariant that broke.
+- **ERR-03** A key already held MUST be `conflict`; a request that breaks a rule `invalid`; bytes that no longer read `corrupt`, naming the invariant that broke. A store's directory that is a file, or sits under one, MUST be `invalid`, naming the file.
 - **ERR-04** A decoder given any bytes MUST answer what they hold or fail `corrupt`, and MUST NOT panic.
 - **ERR-05** A call past a bound MUST fail `limit`, naming the bound, what the call wanted and the bound's value, and MUST NOT return a smaller answer.
 - **ERR-06** A call that fails `limit` or `invalid` MUST change nothing.
@@ -213,7 +213,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 
 ## 6. Wire and SDKs
 
-- **WIRE-01** Every SDK MUST give the same answer as the Rust core for the same call, whether the core runs in its process, as a private child, as a sidecar or remote.
+- **WIRE-01** Every SDK MUST give the same answer as the Rust core for the same call, `open` among them and a failure of the same kind, whether the core runs in its process, as a private child, as a sidecar or remote.
 - **WIRE-02** A request MUST be understood whole or refused, naming the field and the server's version; a frame past its agreed size MUST be refused unread.
 - **WIRE-03** A client past its credit MUST be cut off; a server MUST NOT wait on a slow reader, and a connection's output MUST stay bounded.
 - **WIRE-04** Every stream MUST end with one final frame.

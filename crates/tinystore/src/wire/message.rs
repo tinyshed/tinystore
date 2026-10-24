@@ -51,7 +51,7 @@ impl From<Error> for Failure {
 }
 
 /// An error kind's code, the same in every SDK's error classes.
-fn code_of(kind: ErrorKind) -> &'static str {
+pub(crate) fn code_of(kind: ErrorKind) -> &'static str {
     match kind {
         ErrorKind::Invalid => "invalid",
         ErrorKind::NotFound => "not_found",

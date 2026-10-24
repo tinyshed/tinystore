@@ -52,6 +52,14 @@ let store = Store::open("./data", Options::default())?; // always the core in th
   host's event loop never blocks: every call answers through a completion.
 - **A private child** can run on a test's clock: `clock` sets it, and
   `store.clock.advance('1h')` moves time instead of the test waiting.
+- **A start that fails says why.** A directory that is a file, or sits under
+  one, fails with an invalid error in every way, before anything starts:
+  `store /srv/data is a file, not a directory` (`InvalidError` in TypeScript
+  and Python, `tinystore.ErrInvalid` in Go, `ErrorKind::Invalid` in Rust). A
+  `tinystore` binary that is not there fails with a closed error, `cannot
+  start the sidecar /usr/local/bin/tinystore: not found`. A sidecar that
+  exits before it serves gives the last lines it wrote to stderr, or the
+  lines it added to `<dir>/server/serve.log` when it wrote nothing to stderr.
 
 ## A remote server
 

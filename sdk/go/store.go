@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -229,16 +231,44 @@ var address = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]+):`)
 
 // checkDirectory refuses an address where a directory belongs: Open of
 // "tcp://..." would make a folder of that name and start a server in it,
-// rather than reach the one meant.
+// rather than reach the one meant. It refuses a directory that is a file, or
+// sits under one, in the core's words, before a server starts or the core
+// loads, so that every way says it alike.
 func checkDirectory(directory string) error {
-	scheme := address.FindStringSubmatch(directory)
-	if scheme == nil {
+	if scheme := address.FindStringSubmatch(directory); scheme != nil {
+		if s := strings.ToLower(scheme[1]); s == "tcp" || s == "tls" {
+			return core.Errorf(core.Invalid, "Open takes a store's directory, and %s is a server's address: Connect reaches it", directory)
+		}
+		return core.Errorf(core.Invalid, "Open takes a store's directory, and %s is an address: open the directory its server serves", directory)
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
 		return nil
 	}
-	if s := strings.ToLower(scheme[1]); s == "tcp" || s == "tls" {
-		return core.Errorf(core.Invalid, "Open takes a store's directory, and %s is a server's address: Connect reaches it", directory)
+	switch file := fileInTheWay(absolute); file {
+	case "":
+		return nil
+	case absolute:
+		return core.Errorf(core.Invalid, "store %s is a file, not a directory", absolute)
+	default:
+		return core.Errorf(core.Invalid, "store %s: %s is a file, not a directory", absolute, file)
 	}
-	return core.Errorf(core.Invalid, "Open takes a store's directory, and %s is an address: open the directory its server serves", directory)
+}
+
+// fileInTheWay is the first of a directory and the folders above it that is
+// there, when it is a file: what keeps the directory from being made.
+func fileInTheWay(directory string) string {
+	for path := directory; ; path = filepath.Dir(path) {
+		if info, err := os.Stat(path); err == nil {
+			if info.IsDir() {
+				return ""
+			}
+			return path
+		}
+		if filepath.Dir(path) == path {
+			return ""
+		}
+	}
 }
 
 // Close stops every worker, each once its handlers under way have

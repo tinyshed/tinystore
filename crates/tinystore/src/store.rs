@@ -745,8 +745,24 @@ fn absolute(dir: &Path) -> Result<PathBuf> {
         return Err(Error::invalid("store: a directory with no name"));
     }
     let dir = std::path::absolute(dir).map_err(|error| Error::io(format!("store {}", dir.display()), error))?;
-    fs::create_dir_all(&dir).map_err(|error| Error::io(format!("store {}", dir.display()), error))?;
+    if let Err(error) = fs::create_dir_all(&dir) {
+        return Err(match file_in_the_way(&dir) {
+            Some(file) if file == dir => Error::invalid(format!("store {} is a file, not a directory", dir.display())),
+            Some(file) => {
+                Error::invalid(format!("store {}: {} is a file, not a directory", dir.display(), file.display()))
+            }
+            None => Error::io(format!("store {}", dir.display()), error),
+        });
+    }
     Ok(dir)
+}
+
+/// The first of a directory and the folders above it that is there, when it
+/// is a file: what kept the directory from being made. The system's own error
+/// says neither which, nor, on Windows, that it is a file at all.
+fn file_in_the_way(dir: &Path) -> Option<&Path> {
+    let (found, there) = dir.ancestors().find_map(|path| fs::metadata(path).ok().map(|there| (path, there)))?;
+    (!there.is_dir()).then_some(found)
 }
 
 /// The engines a store has open, and the names they hold in its directory.
@@ -861,6 +877,23 @@ mod tests {
         let store = Store::open(&dir, Options::default()).unwrap();
         assert!(dir.join("LOCK").is_file());
         store.close().unwrap();
+    }
+
+    // contract: ERR-02, ERR-03
+    #[test]
+    fn a_directory_that_is_a_file_or_sits_under_one_is_invalid_naming_the_file() {
+        let parent = tempfile::tempdir().unwrap();
+        let file = parent.path().join("data");
+        std::fs::write(&file, "not a directory").unwrap();
+        let itself = Store::open(&file, Options::default()).unwrap_err();
+        assert_eq!(itself.kind(), ErrorKind::Invalid, "{itself}");
+        assert_eq!(itself.to_string(), format!("store {} is a file, not a directory: invalid", file.display()));
+
+        let under = file.join("store");
+        let below = Store::open(&under, Options::default()).unwrap_err();
+        assert_eq!(below.kind(), ErrorKind::Invalid, "{below}");
+        let said = format!("store {}: {} is a file, not a directory: invalid", under.display(), file.display());
+        assert_eq!(below.to_string(), said);
     }
 
     #[test]

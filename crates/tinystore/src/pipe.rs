@@ -13,13 +13,19 @@ use crate::wire::Session;
 pub use crate::wire::Wake;
 use crate::wire::codec::Message;
 use crate::wire::protocol::StoreOptions;
-use crate::{Durability, Error, Options, Result, Store, TestClock};
+use crate::{Durability, Error, ErrorKind, Options, Result, Store, TestClock};
 
 /// The stores this process holds through pipes, by directory, and how many
 /// pipes each has: one store a directory, closed with its last pipe.
 fn stores() -> MutexGuard<'static, HashMap<PathBuf, (Store, usize)>> {
     static STORES: OnceLock<Mutex<HashMap<PathBuf, (Store, usize)>>> = OnceLock::new();
     STORES.get_or_init(Mutex::default).lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// An error kind's code as the wire spells it, the same in every SDK's error
+/// classes: what a host that opens a pipe raises for a store that did not open.
+pub fn code(kind: ErrorKind) -> &'static str {
+    crate::wire::code_of(kind)
 }
 
 /// Answers a HELLO's challenge: the HMAC-SHA256 of it, keyed with `SERVE`'s
