@@ -79,6 +79,95 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 New to SQL in TinyStore? [Messages](../../handbook/chat/messages.md) in the
 Handbook builds a chat's tables, writes and pages step by step.
 
+## Async Rust
+
+This section is about Rust only. In Bun, Node and Python every call is
+already awaited, and in Go a call blocks only its goroutine.
+
+With the `async` feature, `tinystore::aio` opens the same database with
+awaited calls. You open the store and the database as before, and you add
+`.await` to each call that reads or writes:
+
+```rust
+use tinystore::aio::Store;
+use tinystore::sql::{self, Direction};
+
+let store = Store::open("data", Default::default())?;
+let db = store.database("chat").migrations("migrations").open()?; // opening is still a plain call
+let messages = db.table::<Message>("messages");
+
+let sent = db
+    .exec(sql!("insert into messages (chat_id, role, text) values (?, 'user', ?)", chat_id, text))
+    .await?;
+let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Direction::Desc).list(50, None).await?;
+```
+
+Each call has the same name, arguments and answer as its blocking twin.
+`sql!`, `sql::eq`, `Done`, `Page` and the rest come from `tinystore::sql`,
+as in blocking Rust:
+
+| Blocking                                      | Async                                                | Where it runs                                                  | If you drop the future after it was polled |
+|-----------------------------------------------|------------------------------------------------------|----------------------------------------------------------------|--------------------------------------------|
+| `db.all(q)?`, `db.one(q)?`, `db.scalar(q)?`   | `db.all(q).await?`, and the same for the others      | on the store's threads                                         | the query stops at once                    |
+| a query's `all`, `count`, `list` and the rest | `query.list(50, None).await?`                        | on the store's threads                                         | the query stops at once                    |
+| `db.exec(q)?`, `db.batch(writes)?`            | `db.exec(q).await?`, `db.batch(writes).await?`       | queued at the writer, the commit on the store's threads        | the write still commits                    |
+| `table.insert(&row)?`, `query.delete()?`      | `table.insert(&row).await?`, `query.delete().await?` | as `exec`                                                      | the write still commits                    |
+| `db.tx(...)?`                                 | `db.tx(move ...).await?`                             | the closure, on the store's threads, one transaction at a time | it runs to its end                         |
+
+No call commits, syncs the disk or waits on your executor's thread. Every
+future is `Send + 'static`, so you can pass it to `tokio::spawn`, and it does
+nothing until it is first polled. A statement that writes, such as an
+`insert … returning id` that you run with `db.all`, goes on to the writer
+once TinyStore finds that it writes. From then on it commits like `exec`,
+even if you drop the future (contract DUR-11).
+
+### Stop a slow query
+
+```rust
+let total = db.scalar::<i64>("select count(*) from messages");
+match tokio::time::timeout(Duration::from_secs(2), total).await {
+    Ok(total) => println!("{} messages", total?),
+    Err(_) => println!("too slow: the query was stopped"), // its connection is free again
+}
+```
+
+When the timeout drops the future, SQLite stops the statement and the
+connection goes back at once (contract STORE-09). The same happens when an
+HTTP handler's client goes away and the handler's future is dropped. A
+`CancellationToken` works too: a read whose future you make inside
+`token.run(|| db.all(q))` stops when the token is cancelled or its timeout
+passes.
+
+### Transactions
+
+```rust
+let moved = db
+    .tx(move |tx| -> tinystore::Result<u64> {
+        let done = tx.exec(sql!("update messages set chat_id = ? where chat_id = ?", to_chat, from_chat))?;
+        tx.exec(sql!("delete from chats where id = ?", from_chat))?;
+        Ok(done.changes)
+    })
+    .await?;
+```
+
+The closure is the blocking one, made `move`, because it runs on one of the
+store's threads after `tx` returns. It holds the database's writer, so the
+calls inside it are blocking and have no `.await`. The transactions of one
+database run one at a time, in the order you first await them, and they wait
+for their turn without holding a thread. The five-second bound counts from
+the first poll, so the time a transaction waits for its turn counts too
+(contract SQL-07).
+
+A bucket, a queue or a table's search index kept in the database opens from
+`db.blocking()`, and its own calls are blocking for now. A bucket or a queue
+joins `db.tx` through `tx.with(&queue)` and `db.batch` through
+`queue.adding(&job)`, as in blocking Rust. To drop a table's search index,
+await `db.drop_search_index(name)`. The drop waits for its turn with the
+database's transactions, and once polled it runs to its end.
+
+`Database::from(db)` and `db.blocking()` cross between the two APIs. Both
+are cheap copies of one database, never a second one.
+
 ## Reference
 
 [Bun and Node](../../reference/bun/sql.md) ·

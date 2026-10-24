@@ -1,6 +1,6 @@
 # SQL API for Rust
 
-Every public type, trait and function of the SQL engine in `tinystore::sql`, generated from its source. The [SQL guide](../../guides/sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md), [Python](../python/sql.md) and [Go](../go/sql.md) pages list the same API.
+Every public type, trait and function of the SQL engine in `tinystore::sql` and `tinystore::aio::sql`, generated from its source. The [SQL guide](../../guides/sql/README.md) explains how to use them, and the [Bun and Node](../bun/sql.md), [Python](../python/sql.md) and [Go](../go/sql.md) pages list the same API.
 
 ## Store
 
@@ -16,6 +16,25 @@ pub fn database(&self, name: &str) -> DatabaseBuilder
 
 The application's database `name`, `sql/<name>.db` in the store's
 directory, made the first time it opens:
+
+```rust
+let db = store.database("app").migrations("migrations").open()?;
+```
+
+## aio::Store
+
+```rust
+impl aio::Store
+```
+
+### aio::Store.database
+
+```rust
+pub fn database(&self, name: &str) -> DatabaseBuilder
+```
+
+The application's database `name`, `sql/<name>.db` in the store's
+directory, as `crate::Store::database` opens it:
 
 ```rust
 let db = store.database("app").migrations("migrations").open()?;
@@ -742,5 +761,429 @@ db.tx(|tx| -> tinystore::Result<()> {
     Ok(())
 })?;
 ```
+
+## aio::sql::DatabaseBuilder
+
+```rust
+pub struct DatabaseBuilder { /* private fields */ }
+```
+
+How a database opens; [`Store::database`](super::Store::database) makes
+one, with the blocking builder's options.
+
+### aio::sql::DatabaseBuilder.migrations
+
+```rust
+pub fn migrations(self, migrations: impl Into<Migrations>) -> Self
+```
+
+The migrations the file must have applied, as
+`sql::DatabaseBuilder::migrations` takes them.
+
+### aio::sql::DatabaseBuilder.durability
+
+```rust
+pub fn durability(self, durability: Durability) -> Self
+```
+
+How far its commits go before they return, as
+`sql::DatabaseBuilder::durability` says.
+
+### aio::sql::DatabaseBuilder.open
+
+```rust
+pub fn open(self) -> Result<Database>
+```
+
+Opens the database as `sql::DatabaseBuilder::open` does: a plain
+call, made once at start, since a first open applies and checks the
+migrations.
+
+## aio::sql::Database
+
+```rust
+pub struct Database { /* private fields */ }
+```
+
+An application's database whose calls are awaited: the same file,
+writer and readers as `sql::Database`, and the same database when one
+is made from the other. Clones share it, and it closes with its store.
+
+### aio::sql::Database.name
+
+```rust
+pub fn name(&self) -> &str
+```
+
+### aio::sql::Database.blocking
+
+```rust
+pub fn blocking(&self) -> &Database
+```
+
+The same database, for its blocking calls, and to open a bucket, a
+queue or a table's index kept in its file.
+
+### aio::sql::Database.all
+
+```rust
+pub fn all<T>(
+    &self,
+    statement: impl Into<Sql>,
+) -> impl Future<Output = Result<Vec<T>>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+```
+
+The rows a statement gives, each read as a `T`, as
+`sql::Database::all` reads them. A statement that writes, as one
+with `returning` does, is queued at the writer by the read that finds
+it writes, and from then on it commits whether or not its future is
+still awaited.
+
+### aio::sql::Database.one
+
+```rust
+pub fn one<T>(
+    &self,
+    statement: impl Into<Sql>,
+) -> impl Future<Output = Result<Option<T>>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+```
+
+The one row a statement gives, or none, as `sql::Database::one`
+reads it; it runs as `Database::all` does.
+
+### aio::sql::Database.scalar
+
+```rust
+pub fn scalar<T>(
+    &self,
+    statement: impl Into<Sql>,
+) -> impl Future<Output = Result<T>> + Send + 'static
+where
+    T: DeserializeOwned + Send + 'static,
+```
+
+The one value of the one row a statement gives, as
+`sql::Database::scalar` reads it; it runs as `Database::all` does.
+
+### aio::sql::Database.exec
+
+```rust
+pub fn exec(&self, statement: impl Into<Sql>) -> impl Future<Output = Result<Done>> + Send + 'static
+```
+
+Runs a write once it is durable, sharing a commit with the writes of
+other callers, as `sql::Database::exec` does. On a copy it is passed
+to the home from a thread of its own, which waits for the home's
+answer.
+
+### aio::sql::Database.batch
+
+```rust
+pub fn batch<I>(&self, writes: I) -> impl Future<Output = Result<Vec<Done>>> + Send + 'static
+where
+    I: IntoIterator,
+    <I as >::Item: Into<Write>,
+```
+
+Runs writes known before they run as one, all of them or none, as
+`sql::Database::batch` does: statements, and jobs' adds of queues
+opened from the database, `queue.adding(&job)`.
+
+### aio::sql::Database.tx
+
+```rust
+pub fn tx<T, E, F>(&self, work: F) -> impl Future<Output = Result<T, E>> + Send + 'static
+where
+    F: FnOnce(&Tx<'_>) -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: From<Error> + Send + 'static,
+```
+
+Runs `work` in a transaction that holds the writer, as
+`sql::Database::tx` does, on a thread of the store's pool: `work` is
+blocking, so it must not wait for the program's awaits, and it runs on
+no executor's thread. Inside, a bucket or a queue opened from the
+database joins it through `tx.with(&handle)`.
+
+The database's transactions wait in one line, one at a time in the
+order they were polled, whether awaited or asked for over the wire;
+those waiting hold no thread. Its five seconds count from its first
+poll, its wait in the line among them. A panic in `work` rolls the
+transaction back and is resumed at the `.await`.
+
+```rust
+let booked = db
+    .tx(move |tx| -> tinystore::Result<bool> {
+        let left: i64 = tx.scalar(sql!("select seats_left from flights where id = ?", flight_id))?;
+        if left == 0 {
+            return Ok(false); // sold out: nothing is written
+        }
+        tx.exec(sql!("update flights set seats_left = seats_left - 1 where id = ?", flight_id))?;
+        Ok(true)
+    })
+    .await?;
+```
+
+### aio::sql::Database.table
+
+```rust
+pub fn table<T>(&self, name: &str) -> Table<T>
+```
+
+A table of the database, typed where it opens, as
+`sql::Database::table` gives one: its inserts and upserts, and its
+queries, each awaited. It costs nothing until its first call.
+
+### aio::sql::Database.drop_search_index
+
+```rust
+pub fn drop_search_index(&self, name: &str) -> impl Future<Output = Result<bool>> + Send + 'static
+```
+
+Drops the table's index `name` this database keeps, as
+`Database::drop_search_index` does. It runs in one transaction, so
+it waits in the database's line with its transactions, on no thread,
+and once polled it runs to its end: the triggers come off the table
+in one commit or not at all, whether or not its future is still awaited.
+
+## aio::sql::Query
+
+```rust
+pub struct Query<T> { /* private fields */ }
+```
+
+A query on a table whose calls are awaited, built as
+`sql::Query` is: each step returns a new query, so that the first
+stays as it was. `all`, `one`, `scalar`, `count`, `explain` and `list`
+read on the store's pool; `update` and `delete` write.
+
+```rust
+let urgent: Vec<Order> = db
+    .table::<Order>("orders")
+    .filter(sql::eq("status", "pending"))
+    .order_by("created_at", Direction::Desc)
+    .limit(50)
+    .all()
+    .await?;
+```
+
+### aio::sql::Query.filter
+
+```rust
+pub fn filter(&self, condition: impl Into<Sql>) -> Self
+```
+
+Adds a condition with `and`, as `sql::Query::filter` does.
+
+### aio::sql::Query.select
+
+```rust
+pub fn select<S>(&self, columns: impl Into<Sql>) -> Query<S>
+```
+
+The columns a row holds, as SQL text, and the shape of the row they
+make, as `sql::Query::select` says.
+
+### aio::sql::Query.include
+
+```rust
+pub fn include<C>(&self, name: &str, query: &Query<C>) -> Self
+```
+
+Gives each row the rows of another query as a list under `name`, as
+`sql::Query::include` does, in the same statement.
+
+### aio::sql::Query.join
+
+```rust
+pub fn join(&self, table: &str, on: impl Into<Sql>) -> Self
+```
+
+Joins a table, `"users as u"`, on a condition.
+
+### aio::sql::Query.left_join
+
+```rust
+pub fn left_join(&self, table: &str, on: impl Into<Sql>) -> Self
+```
+
+Joins a table whose columns may be null where no row of it meets the condition.
+
+### aio::sql::Query.group_by
+
+```rust
+pub fn group_by<I: IntoIterator<Item = S>, S: AsRef<str>>(&self, columns: I) -> Self
+```
+
+Groups the rows by columns, quoted as names.
+
+### aio::sql::Query.having
+
+```rust
+pub fn having(&self, condition: impl Into<Sql>) -> Self
+```
+
+A condition on the groups, as `filter` takes one.
+
+### aio::sql::Query.order_by
+
+```rust
+pub fn order_by(&self, column: &str, direction: Direction) -> Self
+```
+
+Orders the rows by a column, quoted as a name.
+
+### aio::sql::Query.order_by_sql
+
+```rust
+pub fn order_by_sql(&self, piece: impl Into<Sql>, direction: Direction) -> Self
+```
+
+Orders the rows by a piece of SQL: `sql!("lower(title)")`.
+
+### aio::sql::Query.limit
+
+```rust
+pub fn limit(&self, rows: u64) -> Self
+```
+
+### aio::sql::Query.offset
+
+```rust
+pub fn offset(&self, rows: u64) -> Self
+```
+
+### aio::sql::Query.to_sql
+
+```rust
+pub fn to_sql(&self) -> Result<Sql>
+```
+
+The text and the values the query sends, to read or to log.
+
+### aio::sql::Query.count
+
+```rust
+pub fn count(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+How many rows the conditions match, or how many groups, as
+`sql::Query::count` counts them.
+
+### aio::sql::Query.explain
+
+```rust
+pub fn explain(&self) -> impl Future<Output = Result<Vec<String>>> + Send + 'static
+```
+
+SQLite's plan for the query, a line a step.
+
+### aio::sql::Query.update
+
+```rust
+pub fn update<I, S>(&self, sets: I) -> impl Future<Output = Result<Done>> + Send + 'static
+where
+    I: IntoIterator<Item = (S, Sql)>,
+    S: AsRef<str>,
+```
+
+Sets columns of the rows the conditions match, as
+`sql::Query::update` does, and says how many changed.
+
+### aio::sql::Query.delete
+
+```rust
+pub fn delete(&self) -> impl Future<Output = Result<Done>> + Send + 'static
+```
+
+Deletes the rows the conditions match, and says how many it deleted.
+
+### aio::sql::Query.all
+
+```rust
+pub fn all(&self) -> impl Future<Output = Result<Vec<T>>> + Send + 'static
+```
+
+### aio::sql::Query.one
+
+```rust
+pub fn one(&self) -> impl Future<Output = Result<Option<T>>> + Send + 'static
+```
+
+### aio::sql::Query.scalar
+
+```rust
+pub fn scalar<V: DeserializeOwned + Send + 'static>(
+    &self,
+) -> impl Future<Output = Result<V>> + Send + 'static
+```
+
+### aio::sql::Query.list
+
+```rust
+pub fn list(
+    &self,
+    limit: u64,
+    after: Option<&str>,
+) -> impl Future<Output = Result<Page<T>>> + Send + 'static
+```
+
+A page after the last row of the one before, by the query's order, as
+`sql::Query::list` reads one; its `next` reads the next page, and
+only of this query.
+
+## aio::sql::Table
+
+```rust
+pub struct Table<T> { /* private fields */ }
+
+impl Deref<Target = Query<T>>
+```
+
+A table whose calls are awaited: its queries, and its rows' inserts and
+upserts, as `sql::Table` has them. `Deref`s to the query of all its
+rows.
+
+### aio::sql::Table.name
+
+```rust
+pub fn name(&self) -> &str
+```
+
+### aio::sql::Table.insert
+
+```rust
+pub fn insert(&self, row: &T) -> impl Future<Output = Result<T>> + Send + 'static
+```
+
+Inserts a row and gives it back as the file keeps it, as
+`sql::Table::insert` does. The row is encoded when the call is made.
+
+### aio::sql::Table.insert_all
+
+```rust
+pub fn insert_all(&self, rows: &[T]) -> impl Future<Output = Result<Vec<T>>> + Send + 'static
+```
+
+Inserts rows of one shape as one write, all of them or none, as
+`sql::Table::insert_all` does.
+
+### aio::sql::Table.upsert
+
+```rust
+pub fn upsert(
+    &self,
+    row: &T,
+    upsert: Upsert,
+) -> impl Future<Output = Result<Option<T>>> + Send + 'static
+```
+
+Inserts a row, or updates the row that holds its key, as
+`sql::Table::upsert` does; `None` when the upsert's condition kept
+that row.
 
 <!-- Generated by task reference from crates/tinystore through rustdoc. Edit the doc comments there, not this file. -->

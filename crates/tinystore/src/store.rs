@@ -137,7 +137,8 @@ pub(crate) struct WeakStore(
             feature = "records",
             feature = "metrics",
             feature = "replication",
-            feature = "search"
+            feature = "search",
+            all(feature = "sql", feature = "async")
         )),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]
@@ -160,7 +161,8 @@ impl WeakStore {
             feature = "records",
             feature = "metrics",
             feature = "replication",
-            feature = "search"
+            feature = "search",
+            all(feature = "sql", feature = "async")
         )),
         expect(dead_code, reason = "a database's file holds its store for its guests, and sql alone has none")
     )]

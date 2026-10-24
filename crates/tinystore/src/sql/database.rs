@@ -1,14 +1,13 @@
 use std::fmt;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use serde::de::DeserializeOwned;
 
 use super::batch::{Batch, Ran, Write};
 use super::engine::{Base, Databases};
 use super::migrations::Migrations;
-#[cfg(feature = "wire")]
-use super::rows::Answer;
-use super::rows::{Held, Rows};
+use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
@@ -188,7 +187,17 @@ impl Database {
     /// A bucket or a queue opened from the database joins it through
     /// `tx.with(&handle)`, so that its keys and jobs commit with the rows.
     pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
-        let started = self.base.now();
+        self.tx_since(self.base.now(), work)
+    }
+
+    /// `tx`, its bound counted from `started`: when an awaited transaction
+    /// was first polled, so that its wait in its database's line counts, as
+    /// a blocking one's wait for the writer does.
+    pub(crate) fn tx_since<T, E: From<Error>>(
+        &self,
+        started: SystemTime,
+        work: impl FnOnce(&Tx<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let bound = || self.base.within_bound(started);
         let owner = self.base.describe();
         Transaction::run(self.base.file(), &owner, Some(&bound), |transaction| work(&Tx::new(transaction, &self.base)))
@@ -210,7 +219,9 @@ impl Database {
     }
 
     /// `exec` without waiting: `done` is called on the thread that commits it.
-    #[cfg(feature = "wire")]
+    /// A copy passes it on to its home from a thread of its own, which waits
+    /// for the home's answer.
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn exec_then(&self, statement: Sql, done: impl FnOnce(Result<Done>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
@@ -222,8 +233,9 @@ impl Database {
         self.base.file().submit(weight, move |tx| run::exec(tx, &statement), move |ran| done(ran.map_err(fail)));
     }
 
-    /// `batch` without waiting: `done` is called on the thread that commits it.
-    #[cfg(feature = "wire")]
+    /// `batch` without waiting: `done` is called on the thread that commits it,
+    /// or, on a copy, on the thread that waits for its home's answer.
+    #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn batch_then(&self, writes: Vec<Write>, done: impl FnOnce(Result<Vec<Done>>) + Send + 'static) {
         #[cfg(feature = "replication")]
         if self.base.file().is_copy() {
@@ -250,16 +262,24 @@ impl Database {
         wanted: Wanted,
         done: impl FnOnce(Result<A>) + Send + 'static,
     ) {
-        let fail = self.failed_by(&statement);
-        if !self.base.writes(statement.text()) {
-            let held = Held::of(&self.base.memory);
-            match self.base.file().read(|connection| run::read(connection, &statement, wanted, held)) {
-                Ok(Read::Rows(rows)) => return done(Ok(rows)),
-                Ok(Read::Writes) => self.base.remember_write(statement.text()),
-                Err(error) => return done(Err(fail(error))),
-            }
+        match self.probed(&statement, wanted) {
+            Ok(Some(rows)) => done(Ok(rows)),
+            Ok(None) => self.written_rows_then(statement, wanted, done),
+            Err(error) => done(Err(self.failed_by(&statement)(error))),
         }
-        let (weight, held) = (statement.weight(), Held::of(&self.base.memory));
+    }
+
+    /// The rows of a statement known to write, once its commit ends, on the
+    /// thread that commits it: `rows_then` past its read, and an awaited
+    /// call's write once its read on the pool found that it writes.
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn written_rows_then<A: Answer + Send + 'static>(
+        &self,
+        statement: Sql,
+        wanted: Wanted,
+        done: impl FnOnce(Result<A>) + Send + 'static,
+    ) {
+        let (fail, weight, held) = (self.failed_by(&statement), statement.weight(), Held::of(&self.base.memory));
         let write = move |tx: &crate::sqlite::Tx<'_>| run::write(tx, &statement, wanted, held);
         self.base.file().submit(weight, write, move |rows| done(rows.map_err(fail)));
     }
@@ -270,12 +290,31 @@ impl Database {
     /// the shared reader, and a PRAGMA that changes the reader, as reads.
     #[cfg(feature = "wire")]
     pub(crate) fn read<A: Answer>(&self, statement: &Sql, wanted: Wanted) -> Result<Option<A>> {
-        if !is_query(statement.text()) || self.base.writes(statement.text()) {
+        if !is_query(statement.text()) {
+            return Ok(None);
+        }
+        self.probed(statement, wanted).map_err(|error| self.base.failed(statement, error))
+    }
+
+    /// A statement's rows from a reader, or from the writer when SQLite says
+    /// it writes; a statement known to write goes to the writer at once.
+    fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
+        if let Some(rows) = self.probed(statement, wanted)? {
+            return Ok(rows);
+        }
+        let (running, held) = (statement.clone(), Held::of(&self.base.memory));
+        self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted, held))
+    }
+
+    /// A statement's rows from a reader, or none when it writes: one known
+    /// to write is not read, and one SQLite finds writes is remembered, so
+    /// that the next goes to the writer at once.
+    pub(crate) fn probed<A: Answer>(&self, statement: &Sql, wanted: Wanted) -> Result<Option<A>> {
+        if self.base.writes(statement.text()) {
             return Ok(None);
         }
         let held = Held::of(&self.base.memory);
-        let read = self.base.file().read(|connection| run::read(connection, statement, wanted, held));
-        match read.map_err(|error| self.base.failed(statement, error))? {
+        match self.base.file().read(|connection| run::read(connection, statement, wanted, held))? {
             Read::Rows(rows) => Ok(Some(rows)),
             Read::Writes => {
                 self.base.remember_write(statement.text());
@@ -284,25 +323,43 @@ impl Database {
         }
     }
 
-    /// A statement's rows from a reader, or from the writer when SQLite says
-    /// it writes; a statement known to write goes to the writer at once.
-    fn rows(&self, statement: &Sql, wanted: Wanted) -> Result<Rows> {
-        if !self.base.writes(statement.text()) {
-            let held = Held::of(&self.base.memory);
-            match self.base.file().read(|connection| run::read(connection, statement, wanted, held))? {
-                Read::Rows(rows) => return Ok(rows),
-                Read::Writes => self.base.remember_write(statement.text()),
-            }
-        }
-        let (running, held) = (statement.clone(), Held::of(&self.base.memory));
-        self.base.file().write(statement.weight(), move |tx| run::write(tx, &running, wanted, held))
+    /// Whether the database knows `statement` writes, so that a read of it
+    /// goes to the writer without asking a reader first.
+    #[cfg(feature = "async")]
+    pub(crate) fn known_to_write(&self, statement: &Sql) -> bool {
+        self.base.writes(statement.text())
     }
 
     /// What names a failure of `statement`, to say it on another thread.
-    #[cfg(feature = "wire")]
-    fn failed_by(&self, statement: &Sql) -> impl FnOnce(Error) -> Error + Send + 'static {
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn failed_by(&self, statement: &Sql) -> impl Fn(Error) -> Error + Clone + Send + Sync + use<> {
         let (statement, database) = (statement.describe(), self.base.describe());
-        move |error| error.within(statement).within(database)
+        move |error| error.within(&statement).within(&database)
+    }
+
+    /// The line of the store's pool the database's transactions wait in, one
+    /// at a time and in their order, whether a connection or an awaited call
+    /// asked for them.
+    #[cfg(any(feature = "wire", feature = "async"))]
+    pub(crate) fn line(&self) -> String {
+        self.base.describe()
+    }
+
+    /// The database as an error names it: `sql app`.
+    #[cfg(feature = "async")]
+    pub(crate) fn describe(&self) -> String {
+        self.base.describe()
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn now(&self) -> SystemTime {
+        self.base.now()
+    }
+
+    /// The store the database is open in, while it is open.
+    #[cfg(feature = "async")]
+    pub(crate) fn store(&self) -> Result<Store> {
+        self.base.shared.store()
     }
 }
 

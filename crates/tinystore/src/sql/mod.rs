@@ -50,11 +50,18 @@ pub use tx::Tx;
 #[cfg(feature = "wire")]
 pub(crate) use {
     columns::{Column, Columns},
-    rows::{Answer, Held, Keep, Kept, Rows},
-    run::Wanted,
+    rows::{Answer, Held, Keep, Kept},
     tx::BOUND as TX_BOUND,
     values::Value,
 };
+
+// What the wire and the async API both take: a statement's rows, and what a call wants of them.
+#[cfg(any(feature = "wire", feature = "async"))]
+pub(crate) use {rows::Rows, run::Wanted};
+
+// What the async API's queries are made of: the blocking builder's parts and statements.
+#[cfg(feature = "async")]
+pub(crate) use query::{Paging, Parts, insert_sql, plan_of, upsert_sql};
 
 // What a table's search index reads of its hits' rows.
 #[cfg(all(feature = "search", feature = "wire"))]

@@ -2,6 +2,11 @@
 //! builder adds the ands, the parentheses, the placeholders and the quotes
 //! around names, and nothing else. The Bun SDK's builder writes the same text
 //! from the same steps, which testdata/sql/queries.json holds both to.
+//!
+//! A query is its [`Parts`] and what runs them: each step changes the parts,
+//! and each call that ends a query renders their statement and makes its
+//! answer from the rows. The async API's queries hold the same parts and run
+//! the same statements on the store's pool.
 
 use std::marker::PhantomData;
 
@@ -126,8 +131,10 @@ struct Included {
     columns: Vec<String>,
 }
 
+/// What a query is made of, whatever runs it: each step changes a copy, and
+/// a refused piece is kept to fail the call that runs the query.
 #[derive(Clone, Debug)]
-struct Parts {
+pub(crate) struct Parts {
     table: String,
     alias: Option<String>,
     select: Option<Sql>,
@@ -202,29 +209,11 @@ impl<'t> Tx<'t> {
 
 impl<'r, T> Table<'r, T> {
     fn new(runner: Runner<'r>, name: &str) -> Self {
-        let (table, alias, refused) = match table_ref(name) {
-            Ok((table, alias)) => (table, alias, None),
-            Err(why) => (name.to_owned(), None, Some(why)),
-        };
-        let parts = Parts {
-            table,
-            alias,
-            select: None,
-            joins: Vec::new(),
-            conditions: Vec::new(),
-            groups: Vec::new(),
-            having: Vec::new(),
-            order: Vec::new(),
-            limit: None,
-            offset: None,
-            includes: Vec::new(),
-            refused,
-        };
-        Table { query: Query { runner, parts, row: PhantomData } }
+        Table { query: Query { runner, parts: Parts::of_table(name), row: PhantomData } }
     }
 
     pub fn name(&self) -> &str {
-        &self.query.parts.table
+        self.query.parts.table()
     }
 
     /// A table whose statements a test reads rather than runs.
@@ -247,39 +236,14 @@ impl<T: Serialize + DeserializeOwned> Table<'_, T> {
         if rows.is_empty() {
             return Ok(Vec::new());
         }
-        let insert = insert_of(self.name(), rows)?;
-        let (text, values, _) = insert.into_parts();
-        let returning = Sql::piece(format!("{text} returning *"), values, false);
-        self.query.runner.rows_of(&returning, Wanted::All)?.decode()
+        self.query.runner.rows_of(&insert_sql(self.name(), rows)?, Wanted::All)?.decode()
     }
 
     /// Inserts a row, or, when its key is taken, sets the columns `update`
     /// names on the row that holds it, if that row meets the upsert's
     /// condition; `None` when the condition kept it.
     pub fn upsert(&self, row: &T, upsert: Upsert) -> Result<Option<T>> {
-        if upsert.update.is_empty() {
-            return Err(Error::invalid("an upsert names the columns its update sets"));
-        }
-        let insert = insert_of(self.name(), std::slice::from_ref(row))?;
-        let (insert_text, mut values, _) = insert.into_parts();
-        let conflict = quote_all(&upsert.conflict)?;
-        let sets = upsert
-            .update
-            .iter()
-            .map(|name| quote(name).map(|quoted| format!("{quoted} = excluded.{quoted}")))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Error::invalid)?;
-        let mut text = format!("{insert_text} on conflict ({}) do update set {}", conflict.join(", "), sets.join(", "));
-        if let Some(condition) = upsert.only_if {
-            // in an upsert's update, a column is the row's that holds the key
-            let (condition, condition_values, refused) = checked(condition).into_parts();
-            if let Some(why) = refused {
-                return Err(Error::invalid(why));
-            }
-            text.push_str(&format!(" where {condition}"));
-            values.extend(condition_values);
-        }
-        let statement = Sql::piece(format!("{text} returning *"), values, false);
+        let statement = upsert_sql(self.name(), row, upsert)?;
         let rows: Vec<T> = self.query.runner.rows_of(&statement, Wanted::One)?.decode()?;
         Ok(rows.into_iter().next())
     }
@@ -290,13 +254,13 @@ impl<'r, T> Query<'r, T> {
     /// and the rest. `filter`, since `where` is Rust's own word.
     #[must_use]
     pub fn filter(&self, condition: impl Into<Sql>) -> Self {
-        self.with(|parts| parts.conditions.push(checked(condition.into())))
+        self.with(|parts| parts.filter(condition.into()))
     }
 
     /// The columns a row holds, as SQL text, and the shape of the row they make.
     pub fn select<S>(&self, columns: impl Into<Sql>) -> Query<'r, S> {
         let mut parts = self.parts.clone();
-        parts.select = Some(checked(columns.into()));
+        parts.select(columns.into());
         Query { runner: self.runner.clone(), parts, row: PhantomData }
     }
 
@@ -324,111 +288,272 @@ impl<'r, T> Query<'r, T> {
     /// ```
     #[must_use]
     pub fn include<C>(&self, name: &str, query: &Query<'_, C>) -> Self {
-        let included = included(name, &query.parts, &self.parts);
-        self.with(|parts| match included {
-            Ok(included) => parts.includes.push(included),
-            Err(why) => refuse(parts, format!("the included {name:?}: {why}")),
-        })
+        self.with(|parts| parts.include(name, &query.parts))
     }
 
     /// Joins a table, `"users as u"`, on a condition.
     #[must_use]
     pub fn join(&self, table: &str, on: impl Into<Sql>) -> Self {
-        self.joined("join", table, on.into())
+        self.with(|parts| parts.join(table, on.into()))
     }
 
     /// Joins a table whose columns may be null where no row of it meets the condition.
     #[must_use]
     pub fn left_join(&self, table: &str, on: impl Into<Sql>) -> Self {
-        self.joined("left join", table, on.into())
+        self.with(|parts| parts.left_join(table, on.into()))
     }
 
     /// Groups the rows by columns, quoted as names.
     #[must_use]
     pub fn group_by<I: IntoIterator<Item = S>, S: AsRef<str>>(&self, columns: I) -> Self {
-        let quoted: Vec<Result<String, String>> = columns.into_iter().map(|column| quote(column.as_ref())).collect();
-        self.with(|parts| {
-            for column in quoted {
-                match column {
-                    Ok(column) => parts.groups.push(column),
-                    Err(why) => refuse(parts, why),
-                }
-            }
-        })
+        self.with(|parts| parts.group_by(columns))
     }
 
     /// A condition on the groups, as `filter` takes one.
     #[must_use]
     pub fn having(&self, condition: impl Into<Sql>) -> Self {
-        self.with(|parts| parts.having.push(checked(condition.into())))
+        self.with(|parts| parts.having(condition.into()))
     }
 
     /// Orders the rows by a column, quoted as a name, so that a sort a
     /// request chooses cannot be SQL.
     #[must_use]
     pub fn order_by(&self, column: &str, direction: Direction) -> Self {
-        let quoted = quote(column);
-        self.with(|parts| match quoted {
-            Ok(quoted) => parts.order.push(Order {
-                piece: Sql::piece(quoted, Vec::new(), true),
-                column: Some(column.to_owned()),
-                direction,
-            }),
-            Err(why) => refuse(parts, why),
-        })
+        self.with(|parts| parts.order_by(column, direction))
     }
 
     /// Orders the rows by a piece of SQL: `sql!("lower(title)")`.
     #[must_use]
     pub fn order_by_sql(&self, piece: impl Into<Sql>, direction: Direction) -> Self {
-        self.with(|parts| parts.order.push(Order { piece: checked(piece.into()), column: None, direction }))
+        self.with(|parts| parts.order_by_sql(piece.into(), direction))
     }
 
     #[must_use]
     pub fn limit(&self, rows: u64) -> Self {
-        self.with(|parts| parts.limit = Some(rows))
+        self.with(|parts| parts.limit(rows))
     }
 
     #[must_use]
     pub fn offset(&self, rows: u64) -> Self {
-        self.with(|parts| parts.offset = Some(rows))
+        self.with(|parts| parts.offset(rows))
     }
 
     /// The text and the values the query sends, to read or to log.
     pub fn to_sql(&self) -> Result<Sql> {
-        render(&self.parts)
+        self.parts.to_sql()
     }
 
     /// How many rows the conditions match, or how many groups with
     /// `group_by`, without the order and the limit.
     pub fn count(&self) -> Result<u64> {
-        let mut counted = self.parts.clone();
-        counted.select = Some(Sql::new("count(*)"));
-        counted.order.clear();
-        counted.limit = None;
-        counted.offset = None;
-        counted.includes.clear();
-        let statement = if counted.groups.is_empty() {
-            render(&counted)?
-        } else {
-            counted.select = Some(Sql::new("1"));
-            let (inner, values, _) = render(&counted)?.into_parts();
-            Sql::piece(format!("select count(*) from ({inner})"), values, false)
-        };
-        self.runner.rows_of(&statement, Wanted::Scalar)?.scalar()
+        self.runner.rows_of(&self.parts.count_sql()?, Wanted::Scalar)?.scalar()
     }
 
     /// SQLite's plan for the query, a line a step.
     pub fn explain(&self) -> Result<Vec<String>> {
-        let (text, values, _) = render(&self.parts)?.into_parts();
-        let plan = Sql::piece(format!("explain query plan {text}"), values, false);
-        let rows: Vec<(i64, i64, i64, String)> = self.runner.rows_of(&plan, Wanted::All)?.decode()?;
-        Ok(rows.into_iter().map(|(_, _, _, detail)| detail).collect())
+        plan_of(self.runner.rows_of(&self.parts.explain_sql()?, Wanted::All)?)
     }
 
     /// Sets columns of the rows the conditions match, each a value from
     /// `sql::value` or a piece of SQL, and says how many changed.
     pub fn update<I, S>(&self, sets: I) -> Result<Done>
+    where
+        I: IntoIterator<Item = (S, Sql)>,
+        S: AsRef<str>,
+    {
+        self.runner.exec_of(self.parts.update_sql(sets)?)
+    }
+
+    /// Deletes the rows the conditions match, and says how many it deleted.
+    pub fn delete(&self) -> Result<Done> {
+        self.runner.exec_of(self.parts.delete_sql()?)
+    }
+
+    fn with(&self, change: impl FnOnce(&mut Parts)) -> Self {
+        let mut parts = self.parts.clone();
+        change(&mut parts);
+        Query { runner: self.runner.clone(), parts, row: PhantomData }
+    }
+}
+
+impl<T: DeserializeOwned> Query<'_, T> {
+    pub fn all(&self) -> Result<Vec<T>> {
+        self.runner.rows_of(&self.parts.to_sql()?, Wanted::All)?.nesting(self.parts.nested()).decode()
+    }
+
+    pub fn one(&self) -> Result<Option<T>> {
+        let rows = self.runner.rows_of(&self.parts.to_sql()?, Wanted::One)?.nesting(self.parts.nested());
+        Ok(rows.decode::<T>()?.into_iter().next())
+    }
+
+    pub fn scalar<V: DeserializeOwned>(&self) -> Result<V> {
+        self.runner.rows_of(&self.parts.to_sql()?, Wanted::Scalar)?.scalar()
+    }
+
+    /// A page after the last row of the one before, by the query's order,
+    /// which ends in a unique column so that no row is read twice or skipped;
+    /// `next` reads the next page, and only of this query.
+    pub fn list(&self, limit: u64, after: Option<&str>) -> Result<Page<T>> {
+        let (statement, paging) = self.parts.page_sql(limit, after)?;
+        paging.page(self.runner.rows_of(&statement, Wanted::All)?)
+    }
+}
+
+impl Parts {
+    /// The parts of the query of every row of the table `name`, `"orders"` or
+    /// `"orders as o"`; a name that is not one fails the query when it runs.
+    pub(crate) fn of_table(name: &str) -> Parts {
+        let (table, alias, refused) = match table_ref(name) {
+            Ok((table, alias)) => (table, alias, None),
+            Err(why) => (name.to_owned(), None, Some(why)),
+        };
+        Parts {
+            table,
+            alias,
+            select: None,
+            joins: Vec::new(),
+            conditions: Vec::new(),
+            groups: Vec::new(),
+            having: Vec::new(),
+            order: Vec::new(),
+            limit: None,
+            offset: None,
+            includes: Vec::new(),
+            refused,
+        }
+    }
+
+    pub(crate) fn table(&self) -> &str {
+        &self.table
+    }
+
+    pub(crate) fn filter(&mut self, condition: Sql) {
+        self.conditions.push(checked(condition));
+    }
+
+    pub(crate) fn select(&mut self, columns: Sql) {
+        self.select = Some(checked(columns));
+    }
+
+    pub(crate) fn include(&mut self, name: &str, query: &Parts) {
+        match included(name, query, self) {
+            Ok(included) => self.includes.push(included),
+            Err(why) => refuse(self, format!("the included {name:?}: {why}")),
+        }
+    }
+
+    pub(crate) fn join(&mut self, table: &str, on: Sql) {
+        self.joined("join", table, on);
+    }
+
+    pub(crate) fn left_join(&mut self, table: &str, on: Sql) {
+        self.joined("left join", table, on);
+    }
+
+    pub(crate) fn group_by<I: IntoIterator<Item = S>, S: AsRef<str>>(&mut self, columns: I) {
+        for column in columns {
+            match quote(column.as_ref()) {
+                Ok(column) => self.groups.push(column),
+                Err(why) => refuse(self, why),
+            }
+        }
+    }
+
+    pub(crate) fn having(&mut self, condition: Sql) {
+        self.having.push(checked(condition));
+    }
+
+    pub(crate) fn order_by(&mut self, column: &str, direction: Direction) {
+        match quote(column) {
+            Ok(quoted) => self.order.push(Order {
+                piece: Sql::piece(quoted, Vec::new(), true),
+                column: Some(column.to_owned()),
+                direction,
+            }),
+            Err(why) => refuse(self, why),
+        }
+    }
+
+    pub(crate) fn order_by_sql(&mut self, piece: Sql, direction: Direction) {
+        self.order.push(Order { piece: checked(piece), column: None, direction });
+    }
+
+    pub(crate) fn limit(&mut self, rows: u64) {
+        self.limit = Some(rows);
+    }
+
+    pub(crate) fn offset(&mut self, rows: u64) {
+        self.offset = Some(rows);
+    }
+
+    /// The query as one statement: what `all`, `one` and `scalar` run.
+    pub(crate) fn to_sql(&self) -> Result<Sql> {
+        render(self)
+    }
+
+    /// The columns of the query's rows that hold the rows of the queries it
+    /// includes, which its rows are decoded with.
+    pub(crate) fn nested(&self) -> Vec<Nested> {
+        let list =
+            |included: &Included| Nested { column: included.name.clone(), columns: included.columns.clone().into() };
+        self.includes.iter().map(list).collect()
+    }
+
+    /// What `count` runs: the rows the conditions match, or the groups,
+    /// without the order and the limit.
+    pub(crate) fn count_sql(&self) -> Result<Sql> {
+        let mut counted = self.clone();
+        counted.select = Some(Sql::new("count(*)"));
+        counted.order.clear();
+        counted.limit = None;
+        counted.offset = None;
+        counted.includes.clear();
+        if counted.groups.is_empty() {
+            return render(&counted);
+        }
+        counted.select = Some(Sql::new("1"));
+        let (inner, values, _) = render(&counted)?.into_parts();
+        Ok(Sql::piece(format!("select count(*) from ({inner})"), values, false))
+    }
+
+    /// What `explain` runs: SQLite's plan of the query, which [`plan_of`]
+    /// reads.
+    pub(crate) fn explain_sql(&self) -> Result<Sql> {
+        let (text, values, _) = render(self)?.into_parts();
+        Ok(Sql::piece(format!("explain query plan {text}"), values, false))
+    }
+
+    /// What `list` runs for the page of `limit` rows after the cursor
+    /// `after`, and what makes that page of the rows it gives.
+    pub(crate) fn page_sql(&self, limit: u64, after: Option<&str>) -> Result<(Sql, Paging)> {
+        let order = &self.order;
+        if order.is_empty() || order.iter().any(|each| each.column.is_none()) {
+            return Err(Error::invalid(
+                "a page is read by the query's order, of columns by their names: order_by first",
+            ));
+        }
+        let mut whole = self.clone();
+        whole.limit = None;
+        whole.offset = None;
+        let digest = digest_of(&render(&whole)?);
+        let mut parts = self.clone();
+        parts.limit = Some(limit);
+        parts.offset = None;
+        if let Some(after) = after {
+            let values = cursor_of(after, &digest)?;
+            // A cursor is anyone's to send: one short of the order's values is no page's.
+            if values.len() != order.len() {
+                return Err(Error::invalid("a cursor that is not one: pass the next of a page"));
+            }
+            parts.conditions.push(keyset(order, &values));
+        }
+        let paging = Paging { order: order.clone(), limit, digest, nested: self.nested() };
+        Ok((render(&parts)?, paging))
+    }
+
+    /// What `update` runs: the columns `sets` names set on the rows the
+    /// conditions match.
+    pub(crate) fn update_sql<I, S>(&self, sets: I) -> Result<Sql>
     where
         I: IntoIterator<Item = (S, Sql)>,
         S: AsRef<str>,
@@ -451,65 +576,57 @@ impl<'r, T> Query<'r, T> {
         let (table, condition, condition_values) = self.target()?;
         values.extend(condition_values);
         let text = format!("update {table} set {} where {condition}", texts.join(", "));
-        self.runner.exec_of(Sql::piece(text, values, false))
+        Ok(Sql::piece(text, values, false))
     }
 
-    /// Deletes the rows the conditions match, and says how many it deleted.
-    pub fn delete(&self) -> Result<Done> {
+    /// What `delete` runs: a delete of the rows the conditions match.
+    pub(crate) fn delete_sql(&self) -> Result<Sql> {
         self.refuse_every_row("a delete")?;
         let (table, condition, values) = self.target()?;
-        self.runner.exec_of(Sql::piece(format!("delete from {table} where {condition}"), values, false))
+        Ok(Sql::piece(format!("delete from {table} where {condition}"), values, false))
     }
 
     /// The table an update or a delete writes, quoted, and the condition
     /// that picks its rows, with the condition's values.
     fn target(&self) -> Result<(String, String, Vec<Value>)> {
-        let (condition, values) = conditions_text(&self.parts.conditions)?;
-        Ok((quote(&self.parts.table).map_err(Error::invalid)?, condition, values))
+        let (condition, values) = conditions_text(&self.conditions)?;
+        Ok((quote(&self.table).map_err(Error::invalid)?, condition, values))
     }
 
-    fn with(&self, change: impl FnOnce(&mut Parts)) -> Self {
-        let mut parts = self.parts.clone();
-        change(&mut parts);
-        Query { runner: self.runner.clone(), parts, row: PhantomData }
-    }
-
-    fn joined(&self, kind: &str, table: &str, on: Sql) -> Self {
+    fn joined(&mut self, kind: &str, table: &str, on: Sql) {
         let joined = table_ref(table).map(|(name, alias)| table_text(&name, alias.as_deref()));
-        let on = checked(on);
-        self.with(|parts| match joined {
+        match joined {
             Ok(table) => {
-                let (text, values, refused) = on.into_parts();
+                let (text, values, refused) = checked(on).into_parts();
                 if let Some(why) = refused {
-                    return refuse(parts, why);
+                    return refuse(self, why);
                 }
-                parts.joins.push(Sql::piece(format!("{kind} {table} on {text}"), values, false));
+                self.joins.push(Sql::piece(format!("{kind} {table} on {text}"), values, false));
             }
-            Err(why) => refuse(parts, why),
-        })
+            Err(why) => refuse(self, why),
+        }
     }
 
     /// Refuses an update or a delete of every row, which SQL says plainly.
     fn refuse_every_row(&self, what: &str) -> Result<()> {
-        if let Some(why) = &self.parts.refused {
+        if let Some(why) = &self.refused {
             return Err(Error::invalid(why.clone()));
         }
-        if self.parts.conditions.iter().all(|condition| condition.text() == "1") {
+        if self.conditions.iter().all(|condition| condition.text() == "1") {
             return Err(Error::invalid(format!("{what} without a condition: every row is said in SQL, delete from …")));
         }
-        if !self.parts.joins.is_empty() {
+        if !self.joins.is_empty() {
             return Err(Error::invalid(format!("{what} of a join: write it in SQL")));
         }
         // SQLite's update and delete take none of these: `limit(10).delete()`
         // would delete every row the conditions match.
-        let parts = &self.parts;
-        let shaped = parts.limit.is_some()
-            || parts.offset.is_some()
-            || !parts.order.is_empty()
-            || !parts.groups.is_empty()
-            || !parts.having.is_empty()
-            || parts.select.is_some()
-            || !parts.includes.is_empty();
+        let shaped = self.limit.is_some()
+            || self.offset.is_some()
+            || !self.order.is_empty()
+            || !self.groups.is_empty()
+            || !self.having.is_empty()
+            || self.select.is_some()
+            || !self.includes.is_empty();
         if shaped {
             return Err(Error::invalid(format!(
                 "{what} with a limit, offset, order, group, select or include: narrow it by conditions, or write it in SQL"
@@ -519,52 +636,66 @@ impl<'r, T> Query<'r, T> {
     }
 }
 
-impl<T: DeserializeOwned> Query<'_, T> {
-    pub fn all(&self) -> Result<Vec<T>> {
-        self.runner.rows_of(&render(&self.parts)?, Wanted::All)?.nesting(nested(&self.parts)).decode()
-    }
+/// What makes a page of the rows a page's statement gave: the rows decoded,
+/// and the cursor of the next page from the last row's order values when the
+/// page is full.
+pub(crate) struct Paging {
+    order: Vec<Order>,
+    limit: u64,
+    digest: String,
+    nested: Vec<Nested>,
+}
 
-    pub fn one(&self) -> Result<Option<T>> {
-        let rows = self.runner.rows_of(&render(&self.parts)?, Wanted::One)?.nesting(nested(&self.parts));
-        Ok(rows.decode::<T>()?.into_iter().next())
-    }
-
-    pub fn scalar<V: DeserializeOwned>(&self) -> Result<V> {
-        self.runner.rows_of(&render(&self.parts)?, Wanted::Scalar)?.scalar()
-    }
-
-    /// A page after the last row of the one before, by the query's order,
-    /// which ends in a unique column so that no row is read twice or skipped;
-    /// `next` reads the next page, and only of this query.
-    pub fn list(&self, limit: u64, after: Option<&str>) -> Result<Page<T>> {
-        let order = &self.parts.order;
-        if order.is_empty() || order.iter().any(|each| each.column.is_none()) {
-            return Err(Error::invalid(
-                "a page is read by the query's order, of columns by their names: order_by first",
-            ));
-        }
-        let mut whole = self.parts.clone();
-        whole.limit = None;
-        whole.offset = None;
-        let digest = digest_of(&render(&whole)?);
-        let mut parts = self.parts.clone();
-        parts.limit = Some(limit);
-        parts.offset = None;
-        if let Some(after) = after {
-            let values = cursor_of(after, &digest)?;
-            // A cursor is anyone's to send: one short of the order's values is no page's.
-            if values.len() != order.len() {
-                return Err(Error::invalid("a cursor that is not one: pass the next of a page"));
-            }
-            parts.conditions.push(keyset(order, &values));
-        }
-        let rows = self.runner.rows_of(&render(&parts)?, Wanted::All)?;
-        let last = last_order_values(&rows, order)?;
-        let full = rows.len() as u64 == limit;
-        let decoded: Vec<T> = rows.nesting(nested(&self.parts)).decode()?;
-        let next = if full && limit > 0 { last.map(|values| cursor_text(&values, &digest)) } else { None };
+impl Paging {
+    pub(crate) fn page<T: DeserializeOwned>(self, rows: Rows) -> Result<Page<T>> {
+        let last = last_order_values(&rows, &self.order)?;
+        let full = rows.len() as u64 == self.limit;
+        let decoded: Vec<T> = rows.nesting(self.nested).decode()?;
+        let next = if full && self.limit > 0 { last.map(|values| cursor_text(&values, &self.digest)) } else { None };
         Ok(Page { rows: decoded, next })
     }
+}
+
+/// What `insert` and `insert_all` run: an insert of rows of one shape that
+/// gives each back as the file keeps it.
+pub(crate) fn insert_sql<T: Serialize>(table: &str, rows: &[T]) -> Result<Sql> {
+    let (text, values, _) = insert_of(table, rows)?.into_parts();
+    Ok(Sql::piece(format!("{text} returning *"), values, false))
+}
+
+/// What `upsert` runs: an insert of `row` that, when its key is taken, sets
+/// the columns the upsert names on the row that holds it, and gives back the
+/// row it wrote, or none when the upsert's condition kept the row.
+pub(crate) fn upsert_sql<T: Serialize>(table: &str, row: &T, upsert: Upsert) -> Result<Sql> {
+    if upsert.update.is_empty() {
+        return Err(Error::invalid("an upsert names the columns its update sets"));
+    }
+    let insert = insert_of(table, std::slice::from_ref(row))?;
+    let (insert_text, mut values, _) = insert.into_parts();
+    let conflict = quote_all(&upsert.conflict)?;
+    let sets = upsert
+        .update
+        .iter()
+        .map(|name| quote(name).map(|quoted| format!("{quoted} = excluded.{quoted}")))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Error::invalid)?;
+    let mut text = format!("{insert_text} on conflict ({}) do update set {}", conflict.join(", "), sets.join(", "));
+    if let Some(condition) = upsert.only_if {
+        // in an upsert's update, a column is the row's that holds the key
+        let (condition, condition_values, refused) = checked(condition).into_parts();
+        if let Some(why) = refused {
+            return Err(Error::invalid(why));
+        }
+        text.push_str(&format!(" where {condition}"));
+        values.extend(condition_values);
+    }
+    Ok(Sql::piece(format!("{text} returning *"), values, false))
+}
+
+/// SQLite's plan as `explain query plan` gives it: a line a step.
+pub(crate) fn plan_of(rows: Rows) -> Result<Vec<String>> {
+    let rows: Vec<(i64, i64, i64, String)> = rows.decode()?;
+    Ok(rows.into_iter().map(|(_, _, _, detail)| detail).collect())
 }
 
 /// The values of the order's columns in the last of `rows`.
@@ -747,12 +878,6 @@ fn included_text(included: &Included) -> Result<Sql> {
     let text =
         format!("(select group_concat('(' || {} || ')', ','{order}) from ({}))", row.join(" || ',' || "), inner.text());
     Ok(Sql::piece(text, inner.values().to_vec(), false))
-}
-
-/// The columns of a query's rows that hold the rows of the queries it includes.
-fn nested(parts: &Parts) -> Vec<Nested> {
-    let list = |included: &Included| Nested { column: included.name.clone(), columns: included.columns.clone().into() };
-    parts.includes.iter().map(list).collect()
 }
 
 /// An insert of rows of one shape, the first row's columns.

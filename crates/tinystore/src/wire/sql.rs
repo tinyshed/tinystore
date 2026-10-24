@@ -565,9 +565,10 @@ pub(crate) struct Running {
 
 impl Running {
     /// The line the transactions of its database take the writer in, one
-    /// at a time and in their order, across every connection to the store.
+    /// at a time and in their order, across every connection to the store
+    /// and the async API's transactions.
     pub(crate) fn line(&self) -> String {
-        format!("sql {}", self.database.name())
+        self.database.line()
     }
 }
 

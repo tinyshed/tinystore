@@ -222,7 +222,7 @@ pub(crate) fn blocking<T, F>(
     line: Option<String>,
     what: String,
     work: F,
-) -> impl Future<Output = Result<T>> + Send + 'static
+) -> impl Future<Output = Result<T>> + Send + 'static + use<T, F>
 where
     F: FnOnce() -> Result<T> + Send + 'static,
     T: Send + 'static,

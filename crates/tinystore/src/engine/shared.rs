@@ -22,8 +22,11 @@ pub(crate) struct SharedFile {
     owner: String,
     /// Weak, as an engine holds it, so that a handle never keeps it open.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search", feature = "replication")),
-        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "search", feature = "replication", feature = "async")),
+        expect(
+            dead_code,
+            reason = "read by kv's, jobs' and search's guests, a copy's writes and the async API's databases"
+        )
     )]
     store: WeakStore,
     #[cfg_attr(
@@ -40,7 +43,7 @@ impl SharedFile {
     }
 
     /// The store the file is open in, while it is open.
-    #[cfg(all(feature = "replication", feature = "sql"))]
+    #[cfg(all(feature = "sql", any(feature = "replication", feature = "async")))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))
     }

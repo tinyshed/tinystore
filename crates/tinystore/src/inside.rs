@@ -118,6 +118,22 @@ impl Database {
     }
 }
 
+#[cfg(all(feature = "search", feature = "async"))]
+impl crate::aio::sql::Database {
+    /// Drops the table's index `name` this database keeps, as
+    /// [`Database::drop_search_index`] does. It runs in one transaction, so
+    /// it waits in the database's line with its transactions, on no thread,
+    /// and once polled it runs to its end: the triggers come off the table
+    /// in one commit or not at all, whether or not its future is still awaited.
+    pub fn drop_search_index(
+        &self,
+        name: &str,
+    ) -> impl std::future::Future<Output = crate::Result<bool>> + Send + 'static {
+        let name = name.to_owned();
+        self.run_in_line(&format!("index {name}: its drop"), move |db| db.drop_search_index(&name))
+    }
+}
+
 #[cfg(all(test, feature = "kv", feature = "jobs"))]
 #[path = "inside_tests.rs"]
 mod tests;
