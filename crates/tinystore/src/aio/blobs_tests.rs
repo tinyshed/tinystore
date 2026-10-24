@@ -308,6 +308,7 @@ async fn on_a_copy_a_write_waits_for_its_home_on_a_thread_of_its_own_while_every
     within("a copy", pin!(async { docs.copy("far", "far (copy)").await.map(drop) })).await;
     within("a rename", pin!(async { docs.rename("far (copy)", "moved").await.map(drop) })).await;
     within("a delete", pin!(docs.delete("new"))).await;
+    within("a clear", pin!(docs.folder("drafts").clear())).await;
     drop(closed);
 
     let mut upload = docs.upload("uploaded").await.unwrap();

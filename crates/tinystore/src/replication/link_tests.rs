@@ -769,6 +769,7 @@ fn a_node_s_status_says_which_files_it_writes_and_where_its_copies_stand() {
     assert_eq!(links(home_dir.path()).unwrap(), None, "a node that stopped says no links");
 }
 
+// contract: REPL-06
 #[test]
 fn a_file_written_on_a_copy_is_kept_at_its_home_and_reads_back_on_the_copy() {
     let (home_dir, copy_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -807,6 +808,11 @@ fn a_file_written_on_a_copy_is_kept_at_its_home_and_reads_back_on_the_copy() {
     assert!(read(&home_files, "small.txt").is_none() && read(&files, "small.txt").is_none());
     assert!(files.expire("new.txt", Duration::from_secs(60)).unwrap());
     assert!(home_files.head("new.txt").unwrap().unwrap().expires.is_some());
+    let drafts = files.folder("drafts");
+    drafts.put("a.txt", b"draft").unwrap();
+    drafts.clear().unwrap();
+    assert!(home_files.folder("drafts").head("a.txt").unwrap().is_none(), "cleared at the home");
+    assert!(drafts.head("a.txt").unwrap().is_none(), "and read back so on the copy");
     copy.close().unwrap();
     home.close().unwrap();
 }

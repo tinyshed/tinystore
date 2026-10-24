@@ -90,6 +90,12 @@ impl Files {
     /// Removes this folder and every folder in it, at once for every reader,
     /// however many files it holds. On the files themselves it empties them.
     pub fn clear(&self) -> Result<()> {
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            let folder = self.whole_folder()?;
+            let cleared = self.pass_on(&super::forward::Call::Clear { folder: &folder });
+            return cleared.map(drop).map_err(|error| self.fail(&folder, error));
+        }
         let (folder, clearing) = self.clearing()?;
         let ((), freed) = self.blobs.file.write(0, clearing).map_err(|error| self.fail(&folder, error))?;
         self.blobs.remove_freed(&freed);

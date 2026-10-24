@@ -5,11 +5,12 @@
 //!
 //! ```text
 //! name, ttl and max_file_size     the set's, each a u8 saying it is there
-//! u8 call    0 put, 1 create, 2 delete, 3 copy, 4 rename, 5 expire
+//! u8 call    0 put, 1 create, 2 delete, 3 copy, 4 rename, 5 expire, 6 clear
 //! put, create      path, options, bytes
 //! delete           path, if_match
 //! copy, rename     from, to, options
 //! expire           path, milliseconds
+//! clear            the folder's whole prefix, users/42/, or nothing for the set
 //! ```
 
 use std::time::Duration;
@@ -28,6 +29,7 @@ pub(crate) enum Call<'a> {
     Delete { path: &'a str, if_match: Option<&'a str> },
     Copy { from: &'a str, to: &'a str, options: &'a Options, rename: bool },
     Expire { path: &'a str, after: Duration },
+    Clear { folder: &'a str },
 }
 
 /// The set a call is on, as its home opens it.
@@ -51,6 +53,7 @@ pub(crate) fn pass_on(store: &Store, set: &Set<'_>, call: &Call<'_>) -> Result<b
             options_out(out.byte(3 + u8::from(*rename)).text(from).text(to), options)
         }
         Call::Expire { path, after } => out.byte(5).text(path).span(*after),
+        Call::Clear { folder } => out.byte(6).text(folder),
     };
     let answer = crate::replication::pass_on(store, FILE, out.0)?;
     In { bytes: &answer, at: 0 }.byte().map(|did| did == 1)
@@ -102,6 +105,15 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
         5 => {
             let path = at.text()?;
             files.expire(&path, at.span()?)?
+        }
+        6 => {
+            let prefix = at.text()?;
+            let folder = prefix
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .fold(files, |in_it, segment| in_it.folder(segment));
+            folder.clear()?;
+            true
         }
         _ => return Err(corrupt("a call")),
     };
