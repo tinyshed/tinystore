@@ -170,7 +170,13 @@ func TestAFlushTheStoreCannotBeReachedForFailsAndWhatItCarriedGoesOnceItCanBe(t 
 		t.Fatalf("a flush of a store that is down: %v", err)
 	}
 	link.setDown(false)
-	ways.Must(in.flush(ctx))
+	// a tick of the background flush may have begun its dial while the store was down
+	deadline := time.Now().Add(5 * time.Second)
+	for _, err := in.flush(ctx); err != nil; _, err = in.flush(ctx) {
+		if !errors.Is(err, tinystore.ErrUnavailable) || time.Now().After(deadline) {
+			t.Fatalf("a flush once the store is up again: %v", err)
+		}
+	}
 	if total := counted(t, keeper, "down_jobs_total"); total != 3 {
 		t.Fatalf("total %v, want 3", total)
 	}
