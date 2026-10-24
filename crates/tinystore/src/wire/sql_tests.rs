@@ -326,7 +326,7 @@ fn transactions_past_the_workers_wait_their_turn_on_no_thread_and_each_commits()
     let holding = begin(&mut client, handle);
     call(&mut client, holding, "insert into notes (id, title) values ('held', 'a')", Vec::new(), "exec");
     let waiting: Vec<u32> =
-        (0..3 * crate::wire::workers::MOST).map(|n| insert_in_tx(&mut client, handle, &format!("n{n}"))).collect();
+        (0..3 * crate::pool::MOST).map(|n| insert_in_tx(&mut client, handle, &format!("n{n}"))).collect();
     // The client's next call runs on a worker, and the one holding the
     // writer goes on only once it is answered: none of the threads may be
     // waiting for the writer.
@@ -338,7 +338,7 @@ fn transactions_past_the_workers_wait_their_turn_on_no_thread_and_each_commits()
         committed(&mut client, stream);
     }
     let rows = query(&mut client, handle, "select count(*) from notes", "scalar").rows;
-    assert_eq!(rows, [vec![Cell::Int(1 + 3 * crate::wire::workers::MOST as i64)]]);
+    assert_eq!(rows, [vec![Cell::Int(1 + 3 * crate::pool::MOST as i64)]]);
     assert_eq!(client.pipe.streams(), 0);
 }
 
@@ -372,7 +372,7 @@ fn transactions_of_every_connection_wait_for_a_writer_held_elsewhere_on_one_work
             })
         });
         begun.recv().unwrap();
-        let waiting: Vec<(usize, u32)> = (0..2 * crate::wire::workers::MOST)
+        let waiting: Vec<(usize, u32)> = (0..2 * crate::pool::MOST)
             .map(|n| {
                 let at = n % clients.len();
                 (at, insert_in_tx(&mut clients[at], handles[at], &format!("n{n}")))
@@ -386,7 +386,7 @@ fn transactions_of_every_connection_wait_for_a_writer_held_elsewhere_on_one_work
         }
     });
     let rows = query(&mut clients[0], handles[0], "select count(*) from notes", "scalar").rows;
-    assert_eq!(rows, [vec![Cell::Int(1 + 2 * crate::wire::workers::MOST as i64)]]);
+    assert_eq!(rows, [vec![Cell::Int(1 + 2 * crate::pool::MOST as i64)]]);
     drop(clients);
     store.close().unwrap();
 }

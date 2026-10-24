@@ -32,13 +32,13 @@ use super::records;
 use super::search;
 #[cfg(feature = "sql")]
 use super::sql;
-use super::workers::Workers;
 #[cfg(feature = "sql")]
 use crate::Transaction;
 use crate::clock::from_unix_millis;
 use crate::engine::SharedFile;
 use crate::kv::Handed;
 use crate::pipe::{Capability, Connect};
+use crate::pool::Pool;
 use crate::sync::lock;
 use crate::{CancellationToken, Clock, Result, Store, unix_millis};
 
@@ -86,7 +86,8 @@ pub(crate) struct Session {
 
 struct Shared {
     store: Store,
-    workers: Arc<Workers>,
+    /// The store's pool, where the calls that do not answer inline run.
+    workers: Arc<Pool>,
     kv: kv::Handles,
     #[cfg(feature = "config")]
     config: config::Configs,
@@ -185,7 +186,7 @@ struct Input {
 
 impl Session {
     pub(crate) fn new(store: Store, mut connect: Connect) -> Result<Session> {
-        let workers = Workers::of(&store)?;
+        let workers = Pool::of(&store)?;
         let wake = Mutex::new(connect.wake.take());
         let shared = Shared {
             store,

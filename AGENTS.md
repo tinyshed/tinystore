@@ -218,7 +218,8 @@ weakly, so that it never keeps it open, and a handle that outlives its store
 is `Closed`.
 
 **Only the store starts threads that outlive a call**: the scheduler's thread,
-the pipe's workers, the locks' timer, the threads channels run handlers on,
+its pool, which the pipe's calls run on and whose idle threads end after a
+minute, the locks' timer, the threads channels run handlers on,
 and the threads a queue's `work` asks for, which its worker's `stop` and the
 store's close stop. Engines register periodic work
 with `Host::every`; `background: false` stops all of it, for tests, which run

@@ -43,6 +43,8 @@ mod memory;
 pub mod metrics;
 #[cfg(feature = "wire")]
 pub mod pipe;
+#[cfg(feature = "wire")]
+mod pool;
 #[cfg(feature = "store")]
 mod probe;
 #[cfg(feature = "records")]

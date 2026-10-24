@@ -163,10 +163,10 @@ impl Client {
 /// a session sends them waits behind.
 #[cfg(feature = "metrics")]
 pub(crate) fn hold_every_worker(store: &crate::Store) -> Vec<std::sync::mpsc::Sender<()>> {
-    let workers = crate::wire::workers::Workers::of(store).unwrap();
-    let held = (0..crate::wire::workers::MOST).map(|_| {
+    let pool = crate::pool::Pool::of(store).unwrap();
+    let held = (0..crate::pool::MOST).map(|_| {
         let (holding, held) = std::sync::mpsc::channel::<()>();
-        workers.run(Box::new(move || {
+        pool.run(Box::new(move || {
             let _ = held.recv();
         }));
         holding

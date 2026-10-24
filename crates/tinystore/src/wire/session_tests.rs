@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use super::super::workers::{MOST, Workers};
 use super::{CROWD, OUTPUT_MOST, Route, Session, route};
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
+use crate::pool::{MOST, Pool};
 use crate::sync::lock;
 use crate::wire::codec::Message;
 use crate::wire::codec::Row;
@@ -31,7 +31,7 @@ fn get_at_once(client: &mut Client, handle: u64, streams: std::ops::Range<u32>) 
 /// Holds every worker of the store on a gate of its own, and returns the
 /// gates' locks: dropping one lets one worker go on.
 fn hold_every_worker<'gates>(store: &Store, gates: &'gates [Arc<Mutex<()>>]) -> Vec<MutexGuard<'gates, ()>> {
-    let workers = Workers::of(store).unwrap();
+    let workers = Pool::of(store).unwrap();
     let closed = gates.iter().map(|gate| gate.lock().unwrap()).collect();
     for gate in gates {
         let gate = Arc::clone(gate);

@@ -1,3 +1,12 @@
+//! The store's pool: its threads for the calls that must not run where they
+//! were made. A connection's calls run here, off the thread that reads its
+//! frames, and so do an awaited call's reads, commits and transactions, off
+//! the executor that polls it.
+//!
+//! The pool is the store's, one for the wire and the async API both, so that
+//! one bound holds the threads of both and a database's transactions wait in
+//! one line whoever asked for them.
+
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9,27 +18,35 @@ use crate::Result;
 use crate::Store;
 use crate::engine::{Engine, Host};
 
-/// Threads a store's connections run their calls on, at most this many: a
-/// write blocks its thread until its group commits, and the threads waiting
-/// together are the writes one commit can carry.
+/// Threads the pool runs at most: a write blocks its thread until its group
+/// commits, and the threads waiting together are the writes one commit can
+/// carry.
 pub(crate) const MOST: usize = 16;
 /// How long a thread that found no job looks for the next before it sleeps.
 /// Waking a thread that sleeps costs more than a point read, and under a
-/// hypervisor ten times more: a read through a worker took 52 microseconds
-/// where the worker slept between two, and 10 where it had not.
+/// hypervisor ten times more: a read through the pool took 52 microseconds
+/// where its thread slept between two, and 10 where it had not.
 const LINGER: Duration = Duration::from_micros(200);
+/// How long a thread sleeps without a job before it ends, as a file's idle
+/// readers close after a minute: a burst of calls otherwise keeps sixteen
+/// threads and their stacks for as long as the store is open.
+const RETIRE_AFTER: Duration = Duration::from_secs(60);
+/// The name of every thread of the pool.
+pub(crate) const THREAD: &str = "tinystore-pool";
 
-type Job = Box<dyn FnOnce() + Send>;
+pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
-/// The store's threads for the calls connections send: started as calls need
-/// them, kept until the store closes, which waits for the calls under way.
-pub(crate) struct Workers {
+/// The store's threads: started as calls need them, each ended once it slept
+/// a minute without a job, and all of them stopped when the store closes,
+/// which waits for the calls under way.
+pub(crate) struct Pool {
     queue: Mutex<Queue>,
     ready: Condvar,
     /// Jobs waiting, which the thread that lingers reads without the lock.
     waiting: AtomicUsize,
     closing: AtomicBool,
     linger: Duration,
+    retire_after: Duration,
     threads: Mutex<Vec<JoinHandle<()>>>,
     /// The jobs waiting on each line, by its name, while one of its jobs
     /// runs; a line that runs none has no entry.
@@ -66,24 +83,26 @@ struct Queue {
     stopped: bool,
 }
 
-impl Workers {
-    pub(crate) fn of(store: &Store) -> Result<Arc<Workers>> {
-        store.engine(|_| Ok(Arc::new(Workers::lingering(LINGER))))
+impl Pool {
+    /// The store's pool, which starts no thread before its first job.
+    pub(crate) fn of(store: &Store) -> Result<Arc<Pool>> {
+        store.engine(|_| Ok(Arc::new(Pool::new(LINGER, RETIRE_AFTER))))
     }
 
-    fn lingering(linger: Duration) -> Workers {
-        Workers {
+    fn new(linger: Duration, retire_after: Duration) -> Pool {
+        Pool {
             queue: Mutex::new(Queue::default()),
             ready: Condvar::new(),
             waiting: AtomicUsize::new(0),
             closing: AtomicBool::new(false),
             linger,
+            retire_after,
             threads: Mutex::new(Vec::new()),
             lines: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Runs `job` on a worker once the jobs queued on `line` before it have
+    /// Runs `job` on the pool once the jobs queued on `line` before it have
     /// ended: a line runs one job at a time, in their order, on one thread,
     /// and the jobs waiting on it hold none.
     ///
@@ -93,21 +112,30 @@ impl Workers {
     /// transaction, waited behind them until its bound rolled it back. The
     /// waiters also took the writer in no order: with slow commits, one
     /// waited past its five seconds while those after it committed.
-    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only sql's transactions wait in a line"))]
+    ///
+    /// A pool that stopped drops `job` unrun, as [`Pool::run`] does: a line
+    /// it began would never end, and the jobs queued behind its first would
+    /// wait for ever.
+    #[allow(dead_code, reason = "only transactions wait in a line: sql's over the wire, and the async API's")]
     pub(crate) fn run_in_line(self: &Arc<Self>, line: &str, job: Job) {
         let mut lines = self.lock_lines();
+        // under the lines' lock, which the close takes to clear them after it stops the pool
+        if self.lock().stopped {
+            drop(lines);
+            return drop(job);
+        }
         if let Some(waiting) = lines.get_mut(line) {
             return waiting.push_back(job);
         }
         lines.insert(line.to_owned(), VecDeque::new());
         drop(lines);
-        let (workers, line) = (Arc::clone(self), line.to_owned());
-        self.run(Box::new(move || workers.run_line(&line, job)));
+        let (pool, line) = (Arc::clone(self), line.to_owned());
+        self.run(Box::new(move || pool.run_line(&line, job)));
     }
 
     /// Runs `first`, then each job queued on `line` behind it, until none
     /// waits. A job that panics ends alone, and the line goes on.
-    #[cfg_attr(not(feature = "sql"), expect(dead_code, reason = "only sql's transactions wait in a line"))]
+    #[allow(dead_code, reason = "only transactions wait in a line: sql's over the wire, and the async API's")]
     fn run_line(&self, line: &str, first: Job) {
         let mut next = Some(first);
         while let Some(job) = next.take() {
@@ -124,11 +152,14 @@ impl Workers {
         self.lines.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs `job` on a worker; a store that closed drops it unrun.
+    /// Runs `job` on a thread of the pool; a store that closed drops it unrun,
+    /// here, outside the pool's lock, since what a job holds may answer its
+    /// caller as it drops.
     pub(crate) fn run(self: &Arc<Self>, job: Job) {
         let mut queue = self.lock();
         if queue.stopped {
-            return;
+            drop(queue);
+            return drop(job);
         }
         queue.jobs.push_back(job);
         self.waiting.store(queue.jobs.len(), Ordering::Release);
@@ -147,10 +178,15 @@ impl Workers {
     }
 
     fn start(self: &Arc<Self>) {
-        let workers = Arc::clone(self);
-        let spawned = thread::Builder::new().name("tinystore-worker".to_owned()).spawn(move || workers.work());
+        let pool = Arc::clone(self);
+        let spawned = thread::Builder::new().name(THREAD.to_owned()).spawn(move || pool.work());
         match spawned {
-            Ok(handle) => self.threads.lock().unwrap_or_else(PoisonError::into_inner).push(handle),
+            Ok(handle) => {
+                let mut threads = self.threads.lock().unwrap_or_else(PoisonError::into_inner);
+                // a thread that ended idle is joined here, or the list grows with every burst
+                threads.retain(|thread| !thread.is_finished());
+                threads.push(handle);
+            }
             // the jobs queued wait for a thread already running, or for the next start
             Err(_) => {
                 let mut queue = self.lock();
@@ -193,9 +229,17 @@ impl Workers {
                 continue;
             }
             queue.idle += 1;
-            queue = self.ready.wait(queue).unwrap_or_else(PoisonError::into_inner);
+            let (woken, slept) =
+                self.ready.wait_timeout(queue, self.retire_after).unwrap_or_else(PoisonError::into_inner);
+            queue = woken;
             queue.idle -= 1;
             queue.waking = false;
+            // A wake that lands as the sleep ends still finds its job queued,
+            // and only a thread that finds none ends: the next job starts one.
+            if slept.timed_out() && queue.jobs.is_empty() && !queue.stopped {
+                queue.started -= 1;
+                return;
+            }
         }
     }
 
@@ -254,7 +298,7 @@ impl Queue {
     }
 }
 
-impl Engine for Workers {
+impl Engine for Pool {
     /// Lets the queued calls run while every engine they reach is open.
     fn stop(&self) {
         let _ = self.close();
@@ -266,19 +310,23 @@ impl Engine for Workers {
         self.closing.store(true, Ordering::Release);
         self.ready.notify_all();
         let threads = std::mem::take(&mut *self.threads.lock().unwrap_or_else(PoisonError::into_inner));
-        // a call that drops the store's last handle closes it from a worker, which is not joined
-        for worker in threads.into_iter().filter(|worker| worker.thread().id() != thread::current().id()) {
-            let _ = worker.join();
+        // a call that drops the store's last handle closes it from the pool, whose thread is not joined
+        for thread in threads.into_iter().filter(|thread| thread.thread().id() != thread::current().id()) {
+            let _ = thread.join();
         }
-        // a line whose first job came after the stop runs nothing more
-        self.lock_lines().clear();
+        // A line whose first job came after the stop runs nothing more. Its
+        // jobs are dropped outside the lines' lock, since what one holds may
+        // answer its caller as it drops, and a caller woken there may queue
+        // another.
+        let unrun = std::mem::take(&mut *self.lock_lines());
+        drop(unrun);
         Ok(())
     }
 }
 
-impl std::fmt::Debug for Workers {
+impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Workers({})", self.lock().started)
+        write!(f, "Pool({})", self.lock().started)
     }
 }
 
@@ -291,12 +339,17 @@ mod tests {
     use super::*;
     use crate::Options;
 
+    /// A pool whose threads never end idle within a test.
+    fn lingering(linger: Duration) -> Arc<Pool> {
+        Arc::new(Pool::new(linger, RETIRE_AFTER))
+    }
+
     /// Queues four jobs that end only once all four run at one time.
-    fn run_four_together(workers: &Arc<Workers>) {
+    fn run_four_together(pool: &Arc<Pool>) {
         let (together, ended) = (Arc::new(Barrier::new(4)), mpsc::channel());
         for _ in 0..4 {
             let (together, ended) = (Arc::clone(&together), ended.0.clone());
-            workers.run(Box::new(move || {
+            pool.run(Box::new(move || {
                 together.wait();
                 ended.send(()).unwrap();
             }));
@@ -307,15 +360,15 @@ mod tests {
     }
 
     /// Runs a job and waits for it to end.
-    fn run_one(workers: &Arc<Workers>) {
+    fn run_one(pool: &Arc<Pool>) {
         let ended = mpsc::channel();
-        workers.run(Box::new(move || ended.0.send(()).unwrap()));
+        pool.run(Box::new(move || ended.0.send(()).unwrap()));
         ended.1.recv_timeout(Duration::from_secs(10)).expect("the job runs");
     }
 
-    fn wait_until(what: &str, holds: impl Fn(&Queue) -> bool, workers: &Workers) {
+    fn wait_until(what: &str, holds: impl Fn(&Queue) -> bool, pool: &Pool) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !holds(&workers.lock()) {
+        while !holds(&pool.lock()) {
             assert!(Instant::now() < deadline, "{what}");
             thread::sleep(Duration::from_millis(1));
         }
@@ -323,12 +376,12 @@ mod tests {
 
     #[test]
     fn a_thread_that_lingers_takes_the_next_job_with_no_wake_and_no_thread_more() {
-        let workers = Arc::new(Workers::lingering(Duration::from_secs(60)));
+        let pool = lingering(Duration::from_secs(60));
         // two threads, which sleep after their first jobs: nothing says yet that jobs come close together
         let (together, ended) = (Arc::new(Barrier::new(2)), mpsc::channel());
         for _ in 0..2 {
             let (together, ended) = (Arc::clone(&together), ended.0.clone());
-            workers.run(Box::new(move || {
+            pool.run(Box::new(move || {
                 together.wait();
                 ended.send(()).unwrap();
             }));
@@ -336,41 +389,41 @@ mod tests {
         for _ in 0..2 {
             ended.1.recv_timeout(Duration::from_secs(10)).expect("two jobs run together");
         }
-        wait_until("the threads never slept", |queue| queue.idle == 2, &workers);
+        wait_until("the threads never slept", |queue| queue.idle == 2, &pool);
 
         // the next job came within the linger of the queue's emptying: the thread it woke lingers after it
-        run_one(&workers);
-        wait_until("no thread lingered", |queue| queue.lingering, &workers);
-        assert_eq!(workers.lock().idle, 1, "one thread lingers, the other sleeps");
+        run_one(&pool);
+        wait_until("no thread lingered", |queue| queue.lingering, &pool);
+        assert_eq!(pool.lock().idle, 1, "one thread lingers, the other sleeps");
 
-        workers.run(Box::new(|| {}));
-        assert!(!workers.lock().waking, "the job woke nobody");
-        wait_until("the thread that lingers took no job", |queue| queue.jobs.is_empty(), &workers);
-        let queue = workers.lock();
+        pool.run(Box::new(|| {}));
+        assert!(!pool.lock().waking, "the job woke nobody");
+        wait_until("the thread that lingers took no job", |queue| queue.jobs.is_empty(), &pool);
+        let queue = pool.lock();
         assert_eq!((queue.started, queue.idle), (2, 1), "the sleeping thread sleeps on, and none was started");
         drop(queue);
-        workers.close().unwrap();
+        pool.close().unwrap();
     }
 
     #[test]
     fn a_thread_sleeps_once_no_job_comes_within_the_linger() {
-        let workers = Arc::new(Workers::lingering(Duration::from_millis(5)));
-        run_one(&workers);
-        run_one(&workers);
-        wait_until("a thread lingered on", |queue| queue.idle == queue.started, &workers);
+        let pool = lingering(Duration::from_millis(5));
+        run_one(&pool);
+        run_one(&pool);
+        wait_until("a thread lingered on", |queue| queue.idle == queue.started, &pool);
         // long past the linger, a job says nothing of the next: its thread sleeps at once after it
         thread::sleep(Duration::from_millis(20));
-        run_one(&workers);
-        wait_until("a thread never slept", |queue| queue.idle == queue.started, &workers);
-        assert!(!workers.lock().dense, "jobs this far apart are not worth looking for");
-        workers.close().unwrap();
+        run_one(&pool);
+        wait_until("a thread never slept", |queue| queue.idle == queue.started, &pool);
+        assert!(!pool.lock().dense, "jobs this far apart are not worth looking for");
+        pool.close().unwrap();
     }
 
     #[test]
     fn the_jobs_behind_one_that_blocks_its_thread_get_a_thread_of_their_own() {
-        let workers = Arc::new(Workers::lingering(Duration::ZERO));
-        run_one(&workers);
-        wait_until("the thread never slept", |queue| queue.idle == 1, &workers);
+        let pool = lingering(Duration::ZERO);
+        run_one(&pool);
+        wait_until("the thread never slept", |queue| queue.idle == 1, &pool);
         // A burst queues its calls while the one thread sleeps: the first wakes
         // it, and the rest find it counted idle still, so they start none. The
         // first then blocks its thread, as a kv write waiting for its file's
@@ -378,36 +431,110 @@ mod tests {
         let (release, released) = mpsc::channel::<()>();
         let (ran, behind) = mpsc::channel();
         {
-            let mut queue = workers.lock();
+            let mut queue = pool.lock();
             queue.jobs.push_back(Box::new(move || {
                 let _ = released.recv();
             }));
             queue.jobs.push_back(Box::new(move || ran.send(()).unwrap()));
-            workers.waiting.store(queue.jobs.len(), Ordering::Release);
+            pool.waiting.store(queue.jobs.len(), Ordering::Release);
             assert!(queue.wakes_one());
         }
-        workers.ready.notify_one();
+        pool.ready.notify_one();
         let behind = behind.recv_timeout(Duration::from_secs(10));
         release.send(()).unwrap();
         behind.expect("the job behind one that blocks its thread never ran");
-        workers.close().unwrap();
+        pool.close().unwrap();
     }
 
     #[test]
     fn jobs_queued_for_sleeping_threads_wake_them_one_through_another() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
-        let workers = Workers::of(&store).unwrap();
+        let pool = Pool::of(&store).unwrap();
         // the first four find no thread and start one each
-        run_four_together(&workers);
+        run_four_together(&pool);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while workers.lock().idle < 4 {
+        while pool.lock().idle < 4 {
             assert!(Instant::now() < deadline, "the threads never slept");
             thread::sleep(Duration::from_millis(1));
         }
         // the next four find them asleep: the first wakes one, which wakes the next
-        run_four_together(&workers);
-        assert_eq!(workers.lock().started, 4, "no thread more was started");
+        run_four_together(&pool);
+        assert_eq!(pool.lock().started, 4, "no thread more was started");
         store.close().unwrap();
+    }
+
+    #[test]
+    fn a_thread_that_slept_its_while_without_a_job_ends_and_the_next_job_starts_one() {
+        let pool = Arc::new(Pool::new(Duration::ZERO, Duration::from_millis(20)));
+        run_four_together(&pool);
+        wait_until("an idle thread lived on", |queue| queue.started == 0 && queue.idle == 0, &pool);
+        let ended = |pool: &Pool| pool.threads.lock().unwrap().iter().filter(|thread| thread.is_finished()).count();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while ended(&pool) < 4 {
+            assert!(Instant::now() < deadline, "the idle threads never ended");
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        run_one(&pool);
+        assert_eq!(pool.threads.lock().unwrap().len(), 1, "the ended threads were let go as one started");
+        pool.close().unwrap();
+    }
+
+    /// Runs its closure as it is dropped, as an awaited call's answer wakes
+    /// its caller when its job is dropped unrun.
+    struct OnDrop<F: FnOnce()>(Option<F>);
+
+    impl<F: FnOnce()> Drop for OnDrop<F> {
+        fn drop(&mut self) {
+            if let Some(dropped) = self.0.take() {
+                dropped();
+            }
+        }
+    }
+
+    #[test]
+    fn a_line_of_a_stopped_pool_drops_every_job_it_is_given_at_once() {
+        let pool = lingering(LINGER);
+        pool.close().unwrap();
+        // the first job began the line, which no thread would ever end, and the next waited behind it
+        for _ in 0..2 {
+            let (told, dropped) = mpsc::channel();
+            let answer = OnDrop(Some(move || {
+                let _ = told.send(());
+            }));
+            pool.run_in_line("store", Box::new(move || drop(answer)));
+            dropped.try_recv().expect("the job waits on a line that never runs");
+        }
+        assert!(pool.lock_lines().is_empty());
+    }
+
+    #[test]
+    fn a_closing_pool_drops_the_jobs_left_on_its_lines_outside_their_lock() {
+        let pool = lingering(LINGER);
+        // a job left on a line, whose drop wakes a caller that queues another at once
+        let (told, dropped) = mpsc::channel();
+        let again = Arc::clone(&pool);
+        let answer = OnDrop(Some(move || {
+            again.run_in_line("store", Box::new(|| {}));
+            let _ = told.send(());
+        }));
+        let left: Job = Box::new(move || drop(answer));
+        pool.lock_lines().insert("store".to_owned(), VecDeque::from([left]));
+        let closing = {
+            let pool = Arc::clone(&pool);
+            thread::spawn(move || pool.close().unwrap())
+        };
+        dropped.recv_timeout(Duration::from_secs(10)).expect("the close dropped the job under the lines' lock");
+        closing.join().unwrap();
+    }
+
+    #[test]
+    fn a_job_runs_on_a_thread_named_for_the_pool() {
+        let pool = lingering(LINGER);
+        let (named, name) = mpsc::channel();
+        pool.run(Box::new(move || named.send(thread::current().name().map(str::to_owned)).unwrap()));
+        assert_eq!(name.recv_timeout(Duration::from_secs(10)).unwrap().as_deref(), Some(THREAD));
+        pool.close().unwrap();
     }
 }
