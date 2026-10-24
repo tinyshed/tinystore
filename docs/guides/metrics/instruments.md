@@ -1,10 +1,9 @@
 # Instruments
 
 A program measures itself with instruments: counters, gauges, timers and
-histograms. A call changes a number in memory and never waits; every 15
-seconds the instruments send what changed to the store, which adds it to the
-totals it keeps and writes them. Every process counting into one counter
-counts into one total.
+histograms. A call changes a number in memory and never waits. The store adds
+what changed to the totals it keeps and writes them every 15 seconds. Every
+process counting into one counter counts into one total.
 
 ```ts
 const requests = store.metrics.counter<'route' | 'status'>('http_requests_total', { help: 'Requests served.' })
@@ -89,7 +88,9 @@ the store's series: every request counted once
 The store keeps a counter's total, and a timer's count, sum and buckets, so
 processes that share a store, through a sidecar or a server, count into one
 series. A send whose connection was lost goes again on the next and counts
-once. A crash loses at most the last 15 seconds.
+once. A crash of the store loses at most the last 15 seconds of totals. A
+program on Bun, Node, Python or Go sends what changed every second, so its
+own crash loses about the last second.
 
 A gauge is the state of the process that sets it, so two processes setting
 one gauge overwrite each other: give each a label of its own, `instance`.
@@ -213,8 +214,11 @@ err = metrics.Flush(ctx, store)
 stats.flush()?;
 ```
 
-A store opened with `background: false` writes instruments only at `flush()`
-and when it closes, so a test flushes before it reads.
+The store writes the totals every 15 seconds of real time, at `flush` and
+when it closes, so a test calls `flush` before it reads them. Moving a test
+clock does not write them. A Rust test that opens its store with
+`background: false` has no 15-second write: only `flush`, a backup and
+closing the store write them.
 
 ## Options
 
