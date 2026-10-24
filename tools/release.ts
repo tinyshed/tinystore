@@ -2,6 +2,7 @@
 // the archives, npm's packages and PyPI's wheels, `SHA256SUMS` and the notes.
 //
 //     bun tools/release.ts --version v0.1.0 --native native --out dist
+//     bun tools/release.ts --version v0.1.1 --notes-only --out dist     # NOTES.md alone
 //
 // `native/<target>/` holds what the release workflow's build of that target
 // copied out: `bin/` the executable, `lib/` the core's library and the Node
@@ -53,6 +54,11 @@ function main(): void {
 		fail(`version ${asked.version}: vX.Y.Z, or with -alpha.N, -beta.N or -rc.N`)
 	}
 	const out = join(root, asked.out)
+	if (asked.notesOnly) {
+		// a release's notes before it is dispatched, from the commits it would carry
+		mkdirSync(out, { recursive: true })
+		return notes(targets, version, out)
+	}
 	rmSync(out, { recursive: true, force: true })
 	mkdirSync(join(out, 'npm'), { recursive: true })
 	mkdirSync(join(out, 'pypi'), { recursive: true })
@@ -219,6 +225,7 @@ function notes(built: Target[], version: string, out: string): void {
 		`Built for ${built.map((target) => `\`${target.name}\``).join(', ')}. Each archive holds the`,
 		'`tinystore` executable in `bin/`, and in `lib/` the core\'s library and the Node addon; the Go',
 		'SDK fetches its platform\'s at the first open. `SHA256SUMS` checks them all.',
+		...changes(version),
 	]
 	writeFileSync(join(out, 'NOTES.md'), `${lines.join('\n')}\n`)
 }
@@ -229,27 +236,48 @@ const sections: [type: string, heading: string][] = [
 	['perf', 'Performance'],
 ]
 
-/** The commits since the release before, a section a type, from their Conventional Commits subjects. */
+/** A commit by its Conventional Commits subject; `!` marks one that changes what a program writes. */
+interface Commit {
+	type: string
+	scope?: string
+	changesNames: boolean
+	text: string
+}
+
+function commitOf(subject: string): Commit[] {
+	const [, type, scope, bang, text] = subject.match(/^(\w+)(?:\(([^)]+)\))?(!)?: (.+)$/) ?? []
+	return type && text ? [{ type, scope, changesNames: bang === '!', text }] : []
+}
+
+/**
+ * The commits since the release before: first those marked `!`, the names a
+ * program must change before it upgrades, then a section a type.
+ */
 function changes(version: string): string[] {
 	const previous = previousTag(version)
 	if (!previous) {
 		return []
 	}
-	const subjects = git(['log', '--no-merges', '--format=%s', `${previous}..HEAD`]).split('\n').filter(Boolean)
-	const lines: string[] = []
-	for (const [type, heading] of sections) {
-		const own = subjects.flatMap((subject) => {
-			const [, scope, breaking, text] = subject.match(new RegExp(`^${type}(?:\\(([^)]+)\\))?(!)?: (.+)$`)) ?? []
-			return text ? [`- ${breaking ? '**breaking** ' : ''}${scope ? `${scope}: ` : ''}${text}`] : []
-		})
-		if (own.length > 0) {
-			lines.push('', `### ${heading}`, '', ...own)
-		}
-	}
+	const subjects = git(['log', '--no-merges', '--format=%s', `${previous}..HEAD`]).split('\n')
+	const commits = subjects.flatMap(commitOf)
+	const groups: [heading: string, commits: Commit[]][] = [
+		['Changed names', commits.filter((commit) => commit.changesNames)],
+		...sections.map(([type, heading]): [string, Commit[]] => [
+			heading,
+			commits.filter((commit) => !commit.changesNames && commit.type === type),
+		]),
+	]
+	const lines = groups.flatMap(([heading, own]) =>
+		own.length === 0 ? [] : ['', `### ${heading}`, '', ...own.map(itemOf)],
+	)
 	if (lines.length === 0) {
 		return []
 	}
 	return ['', `## Changes since ${previous}`, ...lines, '', `Full history: \`${previous}...v${version}\`.`]
+}
+
+function itemOf(commit: Commit): string {
+	return `- ${commit.scope ? `${commit.scope}: ` : ''}${commit.text}`
 }
 
 /** The newest tag below `version`; a stable release skips the candidates, a candidate follows the last of any. */
@@ -334,7 +362,7 @@ function run(command: string, args: string[], cwd = root): void {
 	}
 }
 
-function flags(args: string[]): { version: string; native: string; out: string } {
+function flags(args: string[]): { version: string; native: string; out: string; notesOnly: boolean } {
 	const value = (name: string, otherwise?: string) => {
 		const at = args.indexOf(`--${name}`)
 		const given = at >= 0 ? args[at + 1] : otherwise
@@ -343,7 +371,12 @@ function flags(args: string[]): { version: string; native: string; out: string }
 		}
 		return given as string
 	}
-	return { version: value('version'), native: value('native', 'native'), out: value('out', 'dist') }
+	return {
+		version: value('version'),
+		native: value('native', 'native'),
+		out: value('out', 'dist'),
+		notesOnly: args.includes('--notes-only'),
+	}
 }
 
 function fail(message: string): never {

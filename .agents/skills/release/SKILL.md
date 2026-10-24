@@ -95,7 +95,11 @@ A release is one run of `.github/workflows/release.yml`, dispatched from
    plain, with `node` and with `python`, into `native/<target>/`. Linux's run
    in `manylinux_2_28` and `alpine` through `docker run`.
 4. `package`: `tools/release.ts` packs `native/` into `dist/`: the archives,
-   `npm/*.tgz`, `pypi/*.whl`, `SHA256SUMS`, `NOTES.md`.
+   `npm/*.tgz`, `pypi/*.whl`, `SHA256SUMS`, `NOTES.md`. The notes are the
+   install lines, then the commits since the release before, from their
+   subjects: those marked `!` first under Changed names, then Features, Fixes
+   and Performance from `feat:`, `fix:` and `perf:`; every other type is left
+   out.
 5. `smoke` and `smoke-musl`: `tools/smoke.sh` installs `dist/` into empty
    projects and opens a store embedded and as a private child, from Node, Bun
    and Python. Intel macOS is not tried: no machine runs it.
@@ -108,6 +112,11 @@ artifact: that is how a release is tried in CI.
 
 ## Trying it here
 
+- `bun tools/release.ts --version vX.Y.Z --notes-only --out dist` writes
+  `dist/NOTES.md` alone, from the commits since the release before up to
+  `HEAD`: read it before dispatching. A release whose notes need more than
+  its subjects say gets them with `gh release edit vX.Y.Z --notes-file` once
+  it is published, as `v0.1.1`'s Changed names were written by hand.
 - `just release-native <version> <target> <triple>` builds this machine's
   target into `native/`. It rewrites `Cargo.toml` and `Cargo.lock`'s
   version, so run it in a clone or a worktree (`git worktree add`), never in

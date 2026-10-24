@@ -491,7 +491,10 @@ No body, no footers, no trailers of any kind — including co-author and
 generated-by trailers. The log is read as a changelog, so the subject carries
 the whole message. `feat:` and `fix:` become changelog sections, so pick the
 type for how the change reads to a user. A `fix:` says something a user had was
-broken; repairing what the same unpushed work introduced is not that.
+broken; repairing what the same unpushed work introduced is not that. A commit
+that renames, removes or changes the meaning of something a program writes
+marks its type with `!`, as `feat(config)!: …`: a release's notes list it
+first, under Changed names, the notes a minor release owes until `1.0`.
 
 **Commit where the work is coherent, not every time it compiles.** A change
 that exists only because an earlier one in the same push was wrong belongs
