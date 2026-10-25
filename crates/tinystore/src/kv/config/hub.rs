@@ -140,6 +140,12 @@ impl Hub {
         Arc::new(Hub { kv: None, name: name.to_owned(), state: Mutex::new(state) })
     }
 
+    /// Whether the config was loaded without a store, and keeps no change.
+    #[cfg(feature = "async")]
+    pub(super) fn keeps_nothing(&self) -> bool {
+        self.kv.is_none()
+    }
+
     /// The kv engine that keeps the changes; refused for a config loaded
     /// without a store.
     fn kv(&self) -> Result<&Arc<Kv>> {

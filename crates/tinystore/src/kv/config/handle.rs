@@ -296,6 +296,12 @@ where
         &self.inner.name
     }
 
+    /// Whether it was loaded without a store, with no change to keep.
+    #[cfg(feature = "async")]
+    pub(crate) fn detached(&self) -> bool {
+        self.inner.hub.keeps_nothing()
+    }
+
     /// Changes the live settings `changes` names, a partial value in the
     /// declaration's shape, while the config is still at `version`: what a
     /// program's SDK sends once its own `validate` took the value they make.

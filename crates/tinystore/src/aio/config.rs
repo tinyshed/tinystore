@@ -276,6 +276,13 @@ async fn changed<T>(
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
+    if config.detached() {
+        // loaded without a store, it keeps no change, and its calls wait for nothing
+        return match if_version {
+            Some(version) => config.if_version(version).update(change),
+            None => config.update(change),
+        };
+    }
     let pool = alive(config.name(), pool)?;
     for _ in 0..crate::config::Config::<T>::ATTEMPTS {
         let Some(proposal) = config.proposal(if_version, &mut change)? else { return Ok(()) };
@@ -298,6 +305,9 @@ async fn reset<T>(config: crate::config::Config<T>, pool: Option<Arc<Pool>>, pat
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
+    if config.detached() {
+        return if path.is_empty() { config.reset_all() } else { config.reset(&path) };
+    }
     let pool = alive(config.name(), pool)?;
     let (submitting, elsewhere) = (config.clone(), run::lead_on(&pool));
     let what = format!("config {}: a reset", config.name());

@@ -207,8 +207,9 @@ let hub = agent.get().hub.clone();
 
 - A loaded config has no live settings, because only a store keeps a change.
   A `Live` field is refused when it opens, and the error names the field.
-- `update` changes nothing, and `explain` says where each value came from, as
-  it does for a config opened from a store.
+- `update` fails with an invalid error, since no setting is live, and
+  `explain` says where each value came from, as it does for a config opened
+  from a store.
 - Only Rust has it so far. Bun, Node, Python and Go reach the config engine
   through a store, so they open one to read their settings.
 

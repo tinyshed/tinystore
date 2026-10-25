@@ -332,3 +332,19 @@ async fn a_blocking_config_crosses_to_the_async_api_and_back_as_the_same_config(
     let closed = config.update(|s| *s.rps = 300).await.unwrap_err();
     assert_eq!(closed.kind(), ErrorKind::Closed, "{closed}");
 }
+
+// contract: CFG-10
+#[tokio::test]
+async fn an_awaited_config_loaded_without_a_store_answers_as_the_blocking_one() {
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+    #[serde(default)]
+    struct Agent {
+        retries: u32,
+    }
+    let loaded = crate::config::load("agent", Agent::default()).open().unwrap();
+    let awaited = Config::from(loaded);
+    let refused = awaited.update(|agent| agent.retries = 3).await.unwrap_err();
+    assert_eq!(refused.kind(), crate::ErrorKind::Invalid, "{refused}");
+    awaited.reset_all().await.unwrap();
+    assert_eq!(awaited.get().retries, 0);
+}
