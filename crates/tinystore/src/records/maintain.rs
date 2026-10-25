@@ -54,12 +54,15 @@ const NOTE_EXPIRED: &str = "insert or replace into expired (segment, events, at)
 /// behind it.
 const EXPIRED_KEPT: Duration = Duration::from_hours(30 * 24);
 const FORGET_EXPIRED: &str = "delete from expired where at < ?1";
-/// The ids of a stream's events that none of its head rows and segments can
-/// hold any more, older than the oldest event they hold: every id of a stream
-/// that holds none.
-const FORGET_IDS: &str = "delete from event_ids where stream = ?1 and at < coalesce((select min(oldest) from (
-    select min(first_at) as oldest from heads where stream = ?1
-    union all select min(first_at) from segments where stream = ?1 and holder is null)), 9223372036854775807)";
+/// The ids of a stream's events of a span that none of its head rows and
+/// segments can hold any more: no span of one holds their time. An event
+/// still held lies in its own's span, so its id stays; one whose own went
+/// stays while another's span holds its time, a stream's `keep` at most.
+const FORGET_IDS: &str = "delete from event_ids where stream = ?1 and at between ?2 and ?3
+    and not exists (select 1 from heads h
+        where h.stream = ?1 and h.first_at <= event_ids.at and h.last_at >= event_ids.at)
+    and not exists (select 1 from segments s
+        where s.stream = ?1 and s.holder is null and s.first_at <= event_ids.at and s.last_at >= event_ids.at)";
 const DROP_TRACES: &str = "delete from block_traces where block in (select id from blocks where segment in
     (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
 const DROP_FILTERS: &str = "delete from block_filters where block in (select id from blocks where segment in
@@ -164,8 +167,15 @@ fn drop_past(tx: &Connection, stream: i64, cutoff: i64, now: i64) -> Result<()> 
     for (sql, what) in drops {
         execute(tx, sql, params![stream, cutoff], &format!("remove the {what} a stream keeps no longer"))?;
     }
-    execute(tx, FORGET_IDS, params![stream], "forget the ids of what a stream keeps no longer")?;
+    forget_ids(tx, stream, (i64::MIN, cutoff))?;
     left.into_iter().try_for_each(|(late, events, weight)| settle(tx, (stream, late), events, weight).map(drop))
+}
+
+/// Forgets the ids of a stream's events between `from` and `to` that no head
+/// row or segment the stream still holds can hold: what expiry or a drop of
+/// damage removed. An append of one writes its event again.
+pub(super) fn forget_ids(tx: &Connection, stream: i64, (from, to): (i64, i64)) -> Result<()> {
+    execute(tx, FORGET_IDS, params![stream, from, to], "forget the ids of events a stream holds no longer").map(drop)
 }
 
 /// Notes the events of head rows keep removed under a segment's id that

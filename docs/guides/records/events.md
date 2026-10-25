@@ -142,8 +142,12 @@ let written: usize = deploys.append_all([NewEvent::new("push").id(&delivery).fie
 - In a list, the first event of an id is written and later ones with the same
   id are not. The rest of the list is written whole, and a refused event
   still refuses the whole list.
-- The stream keeps an id for as long as a read or a poll can still return its
-  event. Once `keep` removes the event, its id can be used again.
+- The stream holds an id for as long as a read or a poll can still return
+  its event. Once `keep` removes the event, the id is let go when no part of
+  the stream that is still kept spans the event's time, so a late part may
+  hold it up to one more `keep`.
+- A [drop](repair.md) of damaged events lets their ids go, so a producer can
+  send those events again.
 - An id is 1 to 128 bytes. Each stream has its own ids, so one id in two
   streams makes two events.
 - A read returns the id as `id` (`ID` in Go).

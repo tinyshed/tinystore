@@ -172,3 +172,27 @@ fn a_poll_that_meets_a_damaged_holder_through_a_place_lists_the_holder() {
     all.drop(damage).unwrap();
     assert_eq!(fixture.rows("segments"), 0, "dropped, the holder goes with its places");
 }
+
+// contract: REC-11, ERR-07
+#[test]
+fn a_dropped_part_lets_go_of_the_ids_of_its_events_so_that_they_are_appended_again() {
+    let fixture = fixture();
+    let deploys = fixture.events("deploys");
+    let delivery = "72d3162e-cc78-11e3-81ab-4c9367dc0958";
+    assert!(deploys.event("push").id(delivery).append(&()).unwrap());
+    zero(&fixture, "heads");
+    assert!(deploys.list().page().is_err(), "a read finds the damage");
+    let all = fixture.store.all_events().unwrap();
+    let damaged = all.damaged().unwrap();
+    all.drop(&damaged[0]).unwrap();
+    assert!(deploys.event("push").id(delivery).append(&()).unwrap(), "the delivery sent again is written");
+    // and of a segment's, once packed and lost
+    fixture.pass(HOUR);
+    assert_eq!(maintain(&fixture.store).unwrap().segments, 1);
+    zero(&fixture, "blocks");
+    assert!(deploys.list().page().is_err());
+    let damaged = all.damaged().unwrap();
+    all.drop(&damaged[0]).unwrap();
+    assert!(deploys.event("push").id(delivery).append(&()).unwrap());
+    assert_eq!(names(&deploys.list().page().unwrap().events), ["push"]);
+}

@@ -296,10 +296,10 @@ fn value(json: &str) -> String {
 }
 
 /// One JSON object, as the console prints a line of it: time, level,
-/// stream, the event's name for a line other than a log line, msg, the
-/// context's fields, the event's, the trace and the span. A field keeps its
-/// spelling, and a key repeated stays repeated, as the console and Go's
-/// `slog` leave it.
+/// stream, the event's name for a line other than a log line, its id as
+/// `event_id`, msg, the context's fields, the event's, the trace and the
+/// span. A field keeps its spelling, and a key repeated stays repeated, as
+/// the console and Go's `slog` leave it.
 pub(crate) fn json(event: &Event) -> String {
     let at = jiff::Timestamp::try_from(event.at)
         .map_or_else(|_| String::new(), |at| at.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
@@ -310,6 +310,9 @@ pub(crate) fn json(event: &Event) -> String {
     pairs.push(("stream".to_owned(), quoted(&event.stream)));
     if event.name != "log" {
         pairs.push(("event".to_owned(), quoted(&event.name)));
+    }
+    if let Some(id) = &event.id {
+        pairs.push(("event_id".to_owned(), quoted(id)));
     }
     if let Some(message) = &event.message {
         pairs.push(("msg".to_owned(), quoted(message)));
@@ -425,6 +428,24 @@ mod tests {
             compared += 1;
         }
         assert!(compared > 20, "only {compared} vectors compared");
+    }
+
+    #[test]
+    fn an_events_id_is_printed_after_its_name_apart_from_a_field_of_that_name() {
+        let event = Event {
+            at: SystemTime::UNIX_EPOCH,
+            stream: "deploys".to_owned(),
+            id: Some("d-1".to_owned()),
+            name: "push".to_owned(),
+            level: None,
+            message: None,
+            fields: tinystore::records::Fields::read(r#"{"id":42}"#).unwrap(),
+            context: tinystore::records::Fields::default(),
+            trace_id: None,
+            span_id: None,
+        };
+        let line = json(&event);
+        assert!(line.contains(r#""event":"push","event_id":"d-1","id":42"#), "{line}");
     }
 
     #[test]

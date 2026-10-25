@@ -16,12 +16,13 @@ use std::fmt;
 use std::sync::{MutexGuard, PoisonError};
 use std::time::SystemTime;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::block;
 use super::engine::{Records, execute};
 use super::events::AllEvents;
 use super::head::{self, Codec};
+use super::maintain::forget_ids;
 use super::pack::{HELD, PATIENCE, settle};
 use super::segment::Schema;
 use crate::sqlite::sql_error;
@@ -73,6 +74,8 @@ pub(super) type Damaged = BTreeMap<(Part, i64), (String, String)>;
 type SegmentBytes = ((Vec<u8>, i64), Vec<(i64, Vec<u8>)>);
 
 const HEAD_TIMES: &str = "select first_at, last_at from heads where id = ?1";
+const HEAD_SPAN: &str = "select stream, first_at, last_at from heads where id = ?1";
+const SEGMENT_SPAN: &str = "select stream, first_at, last_at from segments where id = ?1 and holder is null";
 const SEGMENT_TIMES: &str = "select first_at, last_at from segments where id = ?1 and holder is null";
 const HEAD_BODY: &str = "select body from heads where id = ?1";
 const HEAD_COUNTS: &str = "select stream, late, count, weight from heads where id = ?1";
@@ -219,7 +222,9 @@ impl Records {
             let counts: Option<(i64, bool, i64, i64)> =
                 counts.optional().map_err(|error| sql_error("read a head row", error))?;
             let Some((stream, late, events, weight)) = counts else { return Ok(None) };
+            let held = held_span(tx, HEAD_SPAN, id)?;
             execute(tx, DROP_HEAD_ROW, [id], "remove a head row that no longer reads")?;
+            held.map_or(Ok(()), |(stream, span)| forget_ids(tx, stream, span))?;
             settle(tx, (stream, late), events, weight).map(|emptied| (emptied && !late).then_some(stream))
         })?;
         if let Some(stream) = emptied {
@@ -228,20 +233,35 @@ impl Records {
         Ok(())
     }
 
-    /// Removes a segment with its blocks and places, noting what they held.
+    /// Removes a segment with its blocks and places, noting what they held,
+    /// and forgets the ids of the events it held.
     fn drop_segment(&self, id: i64) -> Result<()> {
         let now = self.now();
         self.file.write(0, move |tx| {
+            let held = held_span(tx, SEGMENT_SPAN, id)?;
             execute(tx, NOTE_DROPPED, params![id, now], "note what a dropped segment held")?;
             DROP_SEGMENT.iter().try_for_each(|(sql, what)| {
                 execute(tx, sql, [id], &format!("remove a dropped segment's {what}")).map(drop)
-            })
+            })?;
+            held.map_or(Ok(()), |(stream, span)| forget_ids(tx, stream, span))
         })
     }
 
     fn lock_damaged(&self) -> MutexGuard<'_, Damaged> {
         self.damaged.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The stream of a head row or a segment and the span of times it holds,
+/// by `sql`'s read of it.
+fn held_span(tx: &Connection, sql: &'static str, id: i64) -> Result<Option<(i64, (i64, i64))>> {
+    let read = tx.prepare_cached(sql).and_then(|mut select| {
+        let row =
+            |row: &rusqlite::Row<'_>| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?));
+        select.query_row([id], row).optional()
+    });
+    let read = read.map_err(|error| sql_error("read the times a part holds", error))?;
+    Ok(read.and_then(|(stream, first, last)| Some((stream, (first?, last?)))))
 }
 
 use crate::clock::from_unix_nanos as time_of;

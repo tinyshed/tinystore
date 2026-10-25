@@ -154,7 +154,7 @@ These contracts are what does not.
 - **REC-08** A tail MUST give the events appended after it opened, and say how many it missed when slower than the writers.
 - **REC-09** A stream's `keep` MUST be its own; another `keep` for an open stream MUST be refused, naming both.
 - **REC-10** Another program's lines MUST become events however they were cut; a stack trace's or a JSON value's lines MUST become one event.
-- **REC-11** An event's id MUST name one event of its stream while the stream holds that event for a read or a poll: an append of an id the stream holds, or of one an earlier event of its list has, MUST write nothing and say so, the rest of its list written whole, and the first event of an id stands whatever a later one carries.
+- **REC-11** An event's id MUST name one event of its stream while the stream holds that event for a read or a poll, and MUST be let go once no part the stream keeps spans the event's time, or a drop removed it: an append of an id the stream holds, or of one an earlier event of its list has, MUST write nothing and say so, the rest of its list written whole, and the first event of an id stands whatever a later one carries.
 
 ### Logger and console
 
