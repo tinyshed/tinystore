@@ -340,7 +340,7 @@ const NAMES: &[(&str, Made, &str, &str)] = &[
     ("tinystore_records_segments_packed_total", Made::Counter, "segments", "Segments packed from heads."),
     ("tinystore_records_segments_merged_total", Made::Counter, "segments", "Segments merged into larger ones."),
     ("tinystore_records_expired_total", Made::Counter, "rows", "Head rows and segments past what a stream keeps."),
-    ("tinystore_metrics_samples_total", Made::Counter, "samples", "Samples an ingest wrote."),
+    ("tinystore_metrics_samples_total", Made::Counter, "samples", "Samples ingests were given, sent again or not."),
     ("tinystore_channels_published_total", Made::Counter, "messages", "Messages published."),
     ("tinystore_channels_delivered_total", Made::Counter, "messages", "Messages a subscriber took."),
     (

@@ -209,6 +209,16 @@
       "name": "a sample of two names, one before its braces and one quoted in them",
       "text": "e_two{\"e.two\"} 1\n",
       "error": {"kind": "invalid", "has": "metrics: line 1, `e_two{\"e.two\"} 1`: a sample of two names, e_two and \"e.two\""}
+    },
+    {
+      "name": "an empty quoted name",
+      "text": "{\"\"} 1\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `{\"\"} 1`: a quoted name of no character"}
+    },
+    {
+      "name": "an empty quoted label name",
+      "text": "{\"e.empty\", \"\"=\"v\"} 1\n",
+      "error": {"kind": "invalid", "has": "metrics: line 1, `{\"e.empty\", \"\"=\"v\"} 1`: a quoted name of no character"}
     }
   ]
 }

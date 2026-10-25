@@ -543,7 +543,11 @@ fn labels_of(rest: &str) -> Result<(Option<String>, Labels, &str)> {
 /// A label's name at the start of `rest`, quoted or not, and what follows it.
 fn label_name(rest: &str) -> Result<(String, &str)> {
     if rest.starts_with('"') {
-        return quoted(rest, "a quoted name");
+        let (name, after) = quoted(rest, "a quoted name")?;
+        if name.is_empty() {
+            return Err(Error::invalid("a quoted name of no character"));
+        }
+        return Ok((name, after));
     }
     let (label, after) = name_at(rest, false);
     if label.is_empty() {
