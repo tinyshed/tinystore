@@ -46,7 +46,7 @@ pub(super) struct Names {
 }
 
 const SELECT_NAMES: &str = "select id, name, keep from names";
-const INSERT_NAME: &str = "insert into names (name, keep) values (?1, ?2) returning id";
+const INSERT_NAME: &str = "insert into names (name, keep) values (?1, ?2)";
 /// A name's unit and help in place of what they were, its row made when it
 /// has none yet.
 const DESCRIBE: &str = "insert into names (name, unit, help) values (?1, ?2, ?3)
@@ -244,9 +244,10 @@ fn changes(known: &HashMap<String, Name>, wanted: &BTreeMap<&str, Option<Duratio
 pub(super) fn write_changes(tx: &Tx<'_>, changes: &Changes) -> Result<HashMap<String, i64>> {
     let failed = |error| sql_error("write a name", error);
     let mut ids = HashMap::with_capacity(changes.made.len());
+    // read back with last_insert_rowid: `returning` costs SQLite a table of its own each time
     for (name, keep) in &changes.made {
-        let mut insert = tx.prepare_cached(INSERT_NAME).map_err(failed)?;
-        ids.insert(name.clone(), insert.query_row(params![name, keep], |row| row.get(0)).map_err(failed)?);
+        tx.prepare_cached(INSERT_NAME).and_then(|mut insert| insert.execute(params![name, keep])).map_err(failed)?;
+        ids.insert(name.clone(), tx.last_insert_rowid());
     }
     for (name, id, before, after) in &changes.kept {
         let moved = tx.prepare_cached(SET_KEEP).and_then(|mut set| set.execute(params![id, after]));

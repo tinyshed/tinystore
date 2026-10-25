@@ -26,7 +26,7 @@ use super::head::{self, Extent};
 use super::labels::Kept;
 use super::ladder::{unit_end, unit_of};
 use super::names::{Changes, KEEP, Name, checked_keep, millis, write_changes};
-use super::registry;
+use super::registry::Registering;
 use super::repeat::Packed;
 use super::retention::expires;
 use super::series::{Kind, Labels, Series};
@@ -237,14 +237,15 @@ impl Engine {
         let (zstd, ready, made) = self.file.write(bytes, move |tx| {
             let mut zstd = zstd;
             let made = write_changes(tx, &names)?;
-            let mut ready = false;
+            let (mut ready, mut registering) = (false, Registering::new(max_series));
             for batch in &mut batches {
                 if let Some(id) = made.get(batch.kept.name()) {
                     batch.name = *id;
                 }
-                let written = write_series(tx, &mut zstd, batch, max_series);
+                let written = write_series(tx, &mut zstd, &mut registering, batch);
                 ready |= written.map_err(|error| error.within(format!("metrics {}", batch.kept)))?;
             }
+            registering.finish(tx)?;
             describe::fill(tx, &described)?;
             Ok((zstd, ready, made))
         })?;
@@ -445,8 +446,8 @@ impl State {
 /// Writes one series' samples into its head, and says whether it now holds
 /// a block's worth. Its samples sent again behind what it has packed leave
 /// the batch first, so that a call retried after packing changes nothing.
-fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &mut Batch, max_series: i64) -> Result<bool> {
-    let (id, _) = registry::resolve(tx, batch, max_series)?;
+fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, registering: &mut Registering, batch: &mut Batch) -> Result<bool> {
+    let (id, _) = registering.resolve(tx, batch)?;
     let state = State::read(tx, id)?;
     state.drop_repeats(tx, zstd, id, &mut batch.points)?;
     if batch.points.is_empty() {

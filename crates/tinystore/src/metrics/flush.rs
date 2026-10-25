@@ -22,7 +22,7 @@ use super::codec::Point;
 use super::engine::{Engine, execute};
 use super::ingest::{Batch, State, store};
 use super::names::millis;
-use super::registry;
+use super::registry::Registering;
 use super::totals::{Outcome, Planned, Told, Written};
 use crate::compress::frame::Zstd;
 use crate::sqlite::Tx;
@@ -182,11 +182,13 @@ struct Write {
 /// fails the whole write.
 fn write_slot(tx: &Tx<'_>, zstd: &mut Zstd, samples: &[Sample], write: Write, ready: &mut bool) -> Result<Outcome> {
     execute(tx, SAVEPOINT, params![], "start an instrument's write")?;
-    let mut any_ready = false;
+    let (mut any_ready, mut registering) = (false, Registering::new(write.max_series));
     let written = samples.iter().try_for_each(|sample| {
-        any_ready |= write_sample(tx, zstd, sample, write).map_err(|error| error.within(&sample.written.kept))?;
+        let wrote = write_sample(tx, zstd, &mut registering, sample, write.now);
+        any_ready |= wrote.map_err(|error| error.within(&sample.written.kept))?;
         Ok::<_, Error>(())
     });
+    let written = written.and_then(|()| registering.finish(tx));
     match written {
         Ok(()) => {
             execute(tx, RELEASE, params![], "end an instrument's write")?;
@@ -210,8 +212,13 @@ fn refuses_the_series(kind: ErrorKind) -> bool {
 
 /// Writes one series' sample at the write's time, and the zero its run begins
 /// with before it, each placed after what the series already holds.
-fn write_sample(tx: &Tx<'_>, zstd: &mut Zstd, sample: &Sample, write: Write) -> Result<bool> {
-    let now = write.now;
+fn write_sample(
+    tx: &Tx<'_>,
+    zstd: &mut Zstd,
+    registering: &mut Registering,
+    sample: &Sample,
+    now: i64,
+) -> Result<bool> {
     let cutoff = now.saturating_sub(sample.keep);
     let mut points = Vec::with_capacity(2);
     if let Some(zero) = sample.zero {
@@ -227,7 +234,7 @@ fn write_sample(tx: &Tx<'_>, zstd: &mut Zstd, sample: &Sample, write: Write) -> 
         keep: sample.keep,
         points,
     };
-    let (id, fresh) = registry::resolve(tx, &batch, write.max_series)?;
+    let (id, fresh) = registering.resolve(tx, &batch)?;
     let state = State::read(tx, id)?;
     if !fresh {
         place(&mut batch.points, state.max_seen);
