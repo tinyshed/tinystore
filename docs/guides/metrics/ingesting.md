@@ -182,6 +182,12 @@ Each sample line becomes a series with one sample, of the kind that its
   does on a series.
 - Values are kept bit for bit, `NaN`, `+Inf`, `-Inf` and `-0` included. A
   label with an empty value is the same as no label, as in Prometheus.
+- A name with characters other than letters, digits, `_` and `:`, such as
+  OpenTelemetry's dots, comes in quotes in Prometheus 3's text:
+  `{"http.server.request.duration", method="GET"} 0.25`. TinyStore keeps
+  the name as it is, dots and all, and reads a quoted label name the same
+  way. An exporter writes quoted names only when the scrape asks for them;
+  otherwise it writes underscores in their place.
 - `# HELP` and `# UNIT` lines and OpenMetrics' exemplars are not kept. Call
   `describe` to give a name its help.
 - OpenMetrics' `_created` samples are left out, because a series doesn't keep

@@ -71,17 +71,34 @@ pub fn exposition(bytes: &[u8]) {
 }
 
 /// A series of one sample as Prometheus' text spells it, its time in
-/// milliseconds and its value's sign kept, a NaN's among them.
+/// milliseconds and its value's sign kept, a NaN's among them; a name past
+/// the classic characters quoted, as Prometheus 3 spells it.
 fn spelled(series: &Series) -> String {
     let escaped = |value: &str| value.replace('\\', r"\\").replace('"', r#"\""#).replace('\n', r"\n");
-    let labels: Vec<String> =
-        series.labels.iter().map(|(label, value)| format!("{label}=\"{}\"", escaped(value))).collect();
+    let classic = |name: &str, metric: bool| {
+        let named = |(at, byte): (usize, u8)| {
+            byte.is_ascii_alphabetic() || byte == b'_' || (metric && byte == b':') || (at > 0 && byte.is_ascii_digit())
+        };
+        !name.is_empty() && name.bytes().enumerate().all(named)
+    };
+    let spell = |name: &str, metric: bool| {
+        if classic(name, metric) { name.to_owned() } else { format!("\"{}\"", escaped(name)) }
+    };
+    let mut parts: Vec<String> =
+        series.labels.iter().map(|(label, value)| format!("{}=\"{}\"", spell(label, false), escaped(value))).collect();
+    let name = spell(&series.name, true);
+    let before = if name.starts_with('"') {
+        parts.insert(0, name);
+        String::new()
+    } else {
+        name
+    };
     let sample = series.samples[0];
     let value = match sample.value {
         nan if nan.is_nan() && nan.is_sign_negative() => "-NaN".to_owned(),
         value => format!("{value:?}"),
     };
-    format!("{}{{{}}} {value} {}\n", series.name, labels.join(","), unix_millis(sample.at))
+    format!("{before}{{{}}} {value} {}\n", parts.join(","), unix_millis(sample.at))
 }
 
 /// What a reading gives of each series but its kind, which a text spelt

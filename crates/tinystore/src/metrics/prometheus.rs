@@ -13,6 +13,14 @@
 //! seconds; any other is Prometheus', whose timestamps are milliseconds. The
 //! text is read whole before anything is written, so a line it cannot read
 //! refuses all of it, naming the line.
+//!
+//! A name past the classic characters comes quoted, as Prometheus 3 writes
+//! it, and is kept as it is:
+//!
+//! ```text
+//! # TYPE "http.server.duration" histogram
+//! {"http.server.duration_bucket", "url.scheme"="https", le="0.1"} 7
+//! ```
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -259,20 +267,18 @@ impl<'a> Reader<'a> {
     /// A `# TYPE` line declares a family; `# HELP`, `# UNIT` and any other
     /// comment say nothing a series keeps.
     fn comment(&mut self, comment: &str) -> Result<()> {
-        let mut words = comment.split(BLANK).filter(|word| !word.is_empty());
-        if words.next() != Some("TYPE") {
+        let (keyword, rest) = comment.trim_start_matches(BLANK).split_once(BLANK).unwrap_or((comment.trim(), ""));
+        if keyword != "TYPE" {
             return Ok(());
         }
-        let (Some(name), Some(word), None) = (words.next(), words.next(), words.next()) else {
-            return Err(Error::invalid("a type's line is `# TYPE`, a metric's name and its type"));
-        };
-        self.declare(name, word)
+        let line = || Error::invalid("a type's line is `# TYPE`, a metric's name and its type");
+        let (name, rest) = metric_name(rest).map_err(|error| if rest.trim().is_empty() { line() } else { error })?;
+        let mut words = rest.split(BLANK).filter(|word| !word.is_empty());
+        let (Some(word), None) = (words.next(), words.next()) else { return Err(line()) };
+        self.declare(&name, word)
     }
 
     fn declare(&mut self, name: &str, word: &str) -> Result<()> {
-        if name.is_empty() || name_at(name, true).0 != name {
-            return Err(Error::invalid(format!("a metric's name {name:?}: {NAMED}")));
-        }
         let family = TYPES.iter().find(|(given, _)| *given == word).map(|(_, family)| *family).ok_or_else(|| {
             Error::invalid(format!(
                 "a type {word:?}: counter, gauge, histogram, summary or untyped, \
@@ -292,11 +298,19 @@ impl<'a> Reader<'a> {
     }
 
     fn sample(&mut self, line: &str) -> Result<()> {
-        let (name, rest) = name_at(line, true);
-        if name.is_empty() {
-            return Err(Error::invalid(format!("a sample's line begins with its metric's name: {NAMED}")));
-        }
-        let (labels, rest) = labels_of(rest)?;
+        let (classic, rest) = name_at(line, true);
+        let (quoted, labels, rest) = labels_of(rest)?;
+        let name = match (classic, quoted) {
+            ("", Some(quoted)) => quoted,
+            ("", None) => {
+                return Err(Error::invalid(format!("a sample's line begins with its metric's name: {NAMED}")));
+            }
+            (classic, None) => classic.to_owned(),
+            (classic, Some(quoted)) => {
+                return Err(Error::invalid(format!("a sample of two names, {classic} and {quoted:?}")));
+            }
+        };
+        let name = name.as_str();
         let (value, at) = self.value_and_time(rest)?;
         let Some(kind) = self.kind_of(name)? else { return Ok(()) };
         let labels = self.with_given(labels)?;
@@ -384,7 +398,26 @@ impl<'a> Reader<'a> {
 }
 
 /// What a name holds.
-const NAMED: &str = "a name holds letters, digits, `_` and a metric's `:`, and begins with no digit";
+const NAMED: &str = "a name holds letters, digits, `_` and a metric's `:`, and begins with no digit, or is quoted";
+
+/// The metric's name at the start of `text`, past blanks, quoted or not,
+/// and what follows it.
+fn metric_name(text: &str) -> Result<(String, &str)> {
+    let text = text.trim_start_matches(BLANK);
+    if text.starts_with('"') {
+        let (name, rest) = quoted(text, "a metric's name")?;
+        if name.is_empty() {
+            return Err(Error::invalid("a metric's name of no character"));
+        }
+        return Ok((name, rest));
+    }
+    let (name, rest) = name_at(text, true);
+    if name.is_empty() || !(rest.is_empty() || rest.starts_with(BLANK)) {
+        let word = text.split(BLANK).next().unwrap_or(text);
+        return Err(Error::invalid(format!("a metric's name {word:?}: {NAMED}")));
+    }
+    Ok((name.to_owned(), rest))
+}
 
 /// The name at the start of `text` and what follows it.
 fn name_at(text: &str, metric: bool) -> (&str, &str) {
@@ -396,45 +429,74 @@ fn name_at(text: &str, metric: bool) -> (&str, &str) {
 }
 
 /// The labels between braces after a sample's name, when it has them, and
-/// what follows them. A label whose value is empty is no label, as
-/// Prometheus reads it.
-fn labels_of(rest: &str) -> Result<(Labels, &str)> {
-    let Some(mut rest) = rest.trim_start_matches(BLANK).strip_prefix('{') else { return Ok((Labels::new(), rest)) };
-    let (mut labels, mut empty) = (Labels::new(), Vec::new());
+/// what follows them; a name past the classic characters comes first
+/// between them, quoted and with no `=`. A label's own name may be quoted
+/// too. A label whose value is empty is no label, as Prometheus reads it.
+fn labels_of(rest: &str) -> Result<(Option<String>, Labels, &str)> {
+    let Some(mut rest) = rest.trim_start_matches(BLANK).strip_prefix('{') else {
+        return Ok((None, Labels::new(), rest));
+    };
+    let (mut name, mut labels, mut empty) = (None, Labels::new(), Vec::new());
+    let mut first = true;
     loop {
         rest = rest.trim_start_matches(BLANK);
         if let Some(after) = rest.strip_prefix('}') {
-            return Ok((labels, after));
+            return Ok((name, labels, after));
         }
-        let (label, after) = name_at(rest, false);
-        if label.is_empty() {
-            return Err(Error::invalid(format!("a label's name, where {NAMED}")));
-        }
-        let after = after.trim_start_matches(BLANK).strip_prefix('=');
-        let after = after.ok_or_else(|| Error::invalid(format!("label {label} without `=` and its value")))?;
-        let (value, after) = quoted(after.trim_start_matches(BLANK), label)?;
-        if labels.contains_key(label) || empty.contains(&label) {
+        let (label, after) = label_name(rest)?;
+        let after = after.trim_start_matches(BLANK);
+        let Some(after) = after.strip_prefix('=') else {
+            if !(first && rest.starts_with('"')) {
+                return Err(Error::invalid(format!("label {label} without `=` and its value")));
+            }
+            name = Some(label);
+            (rest, first) = (next_in_braces(after, "the metric's quoted name")?, false);
+            continue;
+        };
+        first = false;
+        let (value, after) = quoted(after.trim_start_matches(BLANK), &format!("label {label}"))?;
+        if labels.contains_key(&label) || empty.contains(&label) {
             return Err(Error::invalid(format!("label {label} twice")));
         }
+        let what = format!("label {label}'s value");
         if value.is_empty() {
             empty.push(label);
         } else {
-            labels.insert(label.to_owned(), value);
+            labels.insert(label, value);
         }
-        rest = after.trim_start_matches(BLANK);
-        rest = match rest.strip_prefix(',') {
-            Some(after) => after,
-            None if rest.starts_with('}') => rest,
-            None => return Err(Error::invalid(format!("label {label}'s value followed by neither `,` nor `}}`"))),
-        };
+        rest = next_in_braces(after, &what)?;
     }
 }
 
-/// A label's value between double quotes, `\\`, `\"` and `\n` read as what
-/// they stand for, and what follows it. Any other backslash is kept as it
-/// is, as Prometheus keeps it, rather than refusing the scrape it is in.
-fn quoted<'a>(rest: &'a str, label: &str) -> Result<(String, &'a str)> {
-    let refused = |what| Error::invalid(format!("label {label}: {what}"));
+/// A label's name at the start of `rest`, quoted or not, and what follows it.
+fn label_name(rest: &str) -> Result<(String, &str)> {
+    if rest.starts_with('"') {
+        return quoted(rest, "a quoted name");
+    }
+    let (label, after) = name_at(rest, false);
+    if label.is_empty() {
+        return Err(Error::invalid(format!("a label's name, where {NAMED}")));
+    }
+    Ok((label.to_owned(), after))
+}
+
+/// What follows `what` between braces: past its `,`, or at the `}` that
+/// ends them.
+fn next_in_braces<'a>(rest: &'a str, what: &str) -> Result<&'a str> {
+    let rest = rest.trim_start_matches(BLANK);
+    match rest.strip_prefix(',') {
+        Some(after) => Ok(after),
+        None if rest.starts_with('}') => Ok(rest),
+        None => Err(Error::invalid(format!("{what} followed by neither `,` nor `}}`"))),
+    }
+}
+
+/// A text between double quotes, a label's value or a quoted name, `\\`, `\"`
+/// and `\n` read as what they stand for, and what follows it. Any other
+/// backslash is kept as it is, as Prometheus keeps it, rather than refusing
+/// the scrape it is in.
+fn quoted<'a>(rest: &'a str, what: &str) -> Result<(String, &'a str)> {
+    let refused = |problem| Error::invalid(format!("{what}: {problem}"));
     let mut rest = rest.strip_prefix('"').ok_or_else(|| refused("a value between double quotes"))?;
     let mut value = String::new();
     while let Some(at) = rest.find(['"', '\\']) {
