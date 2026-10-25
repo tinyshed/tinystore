@@ -12,8 +12,9 @@
 //! A text whose last line is `# EOF` is OpenMetrics', whose timestamps are
 //! seconds; any other is Prometheus', whose timestamps are milliseconds. The
 //! text is read whole before anything is written, so a line it cannot read
-//! refuses all of it, naming the line. A family's `# HELP` and `# UNIT` give
-//! its names a help and a unit where they have none.
+//! refuses all of it, naming the line, and it is written whole, in one write
+//! of up to 100,000 samples, ten ingests' worth. A family's `# HELP` and
+//! `# UNIT` give its names a help and a unit where they have none.
 //!
 //! A name past the classic characters comes quoted, as Prometheus 3 writes
 //! it, and is kept as it is:
@@ -29,7 +30,7 @@ use std::time::{Duration, SystemTime};
 
 use super::Metrics;
 use super::describe::Description;
-use super::ingest::{SAMPLE_BYTES, within_one_ingest};
+use super::ingest::{ONE_TEXT, SAMPLE_BYTES, within};
 use super::instruments::{MOST_HELP, MOST_UNIT};
 use super::labels::NAME;
 use super::series::{Kind, Labels, Sample, Series};
@@ -92,11 +93,11 @@ impl Prometheus {
 
     /// Reads the text and writes its series, every one or none, as `ingest`
     /// does: a line it cannot read is `invalid`, naming the line, and a text
-    /// past what one ingest carries is a `limit`.
+    /// past 100,000 samples or 32 MiB is a `limit`.
     pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()> {
         let engine = &self.metrics.engine;
         let read = self.read(text.as_ref())?;
-        engine.ingest_held(engine.check(&read.series)?.described(read.described))
+        engine.ingest_held(engine.check_within(&read.series, ONE_TEXT)?.described(read.described))
     }
 
     /// The text's series checked as `ingest` checks them, before their write
@@ -104,7 +105,7 @@ impl Prometheus {
     #[cfg(feature = "async")]
     pub(crate) fn check(&self, text: &[u8]) -> Result<super::ingest::Checked> {
         let read = self.read(text)?;
-        Ok(self.metrics.check(&read.series)?.described(read.described))
+        Ok(self.metrics.engine.check_within(&read.series, ONE_TEXT)?.described(read.described))
     }
 
     /// The same text with its time fixed now from the store's clock, unless
@@ -381,7 +382,7 @@ impl<'a> Reader<'a> {
         let labels = self.with_given(labels)?;
         self.bytes += NAME.len() + name.len() + SAMPLE_BYTES;
         self.bytes += labels.iter().map(|(label, value)| label.len() + value.len()).sum::<usize>();
-        within_one_ingest("a text", self.series.len() + 1, self.bytes)?;
+        within(ONE_TEXT, "a text", self.series.len() + 1, self.bytes)?;
         let samples = vec![Sample { at: from_unix_millis(at), value }];
         self.series.push(Series { name: name.to_owned(), kind, labels, samples, keep: None });
         Ok(())

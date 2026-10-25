@@ -34,9 +34,21 @@ use crate::compress::frame::Zstd;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Reservation, Result, unix_millis};
 
-/// What one call carries at most: more is sent in several.
-const MOST_SAMPLES: usize = 10_000;
-const MOST_BYTES: usize = 4 << 20;
+/// What one write of samples carries at most: more is sent in several.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Bound {
+    /// What a limit error names it.
+    limit: &'static str,
+    samples: usize,
+    bytes: usize,
+}
+
+/// One `ingest`'s series.
+pub(super) const ONE_INGEST: Bound = Bound { limit: "one ingest", samples: 10_000, bytes: 4 << 20 };
+/// One exposition's text, which a scrape gives whole and which is written
+/// whole: a large exporter's text, kube-state-metrics' or cadvisor's, goes in
+/// one write rather than in parts a failure could leave half written.
+pub(super) const ONE_TEXT: Bound = Bound { limit: "one text", samples: 100_000, bytes: 32 << 20 };
 /// What a sample weighs against the call's bytes, a time and a value.
 pub(super) const SAMPLE_BYTES: usize = 16;
 use crate::memory::PATIENCE;
@@ -107,8 +119,13 @@ impl Engine {
     /// The call's series checked within one ingest's bounds and gathered by
     /// their labels, its `now` read once.
     pub(super) fn check(&self, series: &[Series]) -> Result<Checked> {
+        self.check_within(series, ONE_INGEST)
+    }
+
+    /// The call's series checked within `bound` and gathered by their labels.
+    pub(super) fn check_within(&self, series: &[Series], bound: Bound) -> Result<Checked> {
         let now = self.now();
-        let (gathered, samples, bytes) = gather(series)?;
+        let (gathered, samples, bytes) = gather(series, bound)?;
         Ok(Checked { now, gathered, samples, bytes, described: Vec::new() })
     }
 
@@ -167,10 +184,10 @@ impl Engine {
     }
 }
 
-/// Checks each series and gathers its samples by its labels, within the
-/// call's bounds: one series given in several parts is one. Gives the
-/// samples given and the bytes they weigh beside them.
-fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usize)> {
+/// Checks each series and gathers its samples by its labels, within
+/// `bound`: one series given in several parts is one. Gives the samples
+/// given and the bytes they weigh beside them.
+fn gather(series: &[Series], bound: Bound) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usize)> {
     let (mut gathered, mut samples, mut bytes) = (BTreeMap::new(), 0, 0);
     for given in series {
         let named = || format!("metrics {given}");
@@ -183,7 +200,7 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usi
         let keep = given.keep.map(checked_keep).transpose().map_err(|error| error.within(named()))?;
         samples += given.samples.len();
         bytes += kept.bytes() + SAMPLE_BYTES * given.samples.len();
-        within_one_ingest("an ingest", samples, bytes).map_err(|error| error.within("metrics"))?;
+        within(bound, "an ingest", samples, bytes).map_err(|error| error.within("metrics"))?;
         let points = given.samples.iter().map(|sample| Point { at: unix_millis(sample.at), value: sample.value });
         let entry = gathered.entry(kept.identity()).or_insert_with(|| Gathered {
             kept: kept.clone(),
@@ -200,18 +217,15 @@ fn gather(series: &[Series]) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usi
     Ok((gathered, samples, bytes))
 }
 
-/// Refuses `what` past the samples or the bytes one ingest carries, a sample
+/// Refuses `what` past the samples or the bytes `bound` carries, a sample
 /// weighing its labels, its name among them, and `SAMPLE_BYTES`.
-pub(super) fn within_one_ingest(what: &str, samples: usize, bytes: usize) -> Result<()> {
-    if samples <= MOST_SAMPLES && bytes <= MOST_BYTES {
+pub(super) fn within(bound: Bound, what: &str, samples: usize, bytes: usize) -> Result<()> {
+    if samples <= bound.samples && bytes <= bound.bytes {
         return Ok(());
     }
-    let error =
-        Error::limit(format!("{what} past {MOST_SAMPLES} samples or {} MiB: send it in parts", MOST_BYTES >> 20));
-    Err(error
-        .naming("limit", "one ingest")
-        .naming("wanted", samples.to_string())
-        .naming("bound", MOST_SAMPLES.to_string()))
+    let (most, mib) = (bound.samples, bound.bytes >> 20);
+    let error = Error::limit(format!("{what} past {most} samples or {mib} MiB: send it in parts"));
+    Err(error.naming("limit", bound.limit).naming("wanted", samples.to_string()).naming("bound", most.to_string()))
 }
 
 /// A series' labels, a histogram's bound among them written as JavaScript

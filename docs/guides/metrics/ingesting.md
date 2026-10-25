@@ -211,19 +211,21 @@ metrics: line 12, `node_load1{host="web-1} 0.42`: label host: a value without it
 ```
 
 A series that the store refuses, such as one with a label that starts with
-`__`, names itself by its labels, as it does in `ingest`. One text is one
-`ingest`, so it holds 10,000 samples at most. Bun, Node, Python and Go send
-the text in one message, which holds 2 MiB.
+`__`, names itself by its labels, as it does in `ingest`. A text is written
+whole, in one write, so it may hold more than one `ingest`: up to 100,000
+samples, enough for kube-state-metrics or cadvisor on a busy cluster. While
+a large text is written, other writes of metrics wait behind it. Bun, Node,
+Python and Go send the text in one message, which holds 2 MiB.
 
 ## Limits
 
-| What              | Limit                                                   |
-|-------------------|---------------------------------------------------------|
-| one `ingest`      | 10,000 samples or 4 MiB                                 |
-| one text          | as one `ingest`, and 2 MiB from Bun, Node, Python or Go |
-| a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB |
-| a sample's time   | from `keep` ago to ten minutes ahead                    |
-| series in a store | 100,000 unless `maxSeries` says                         |
+| What              | Limit                                                             |
+|-------------------|-------------------------------------------------------------------|
+| one `ingest`      | 10,000 samples or 4 MiB                                           |
+| one text          | 100,000 samples or 32 MiB, and 2 MiB from Bun, Node, Python or Go |
+| a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB           |
+| a sample's time   | from `keep` ago to ten minutes ahead                              |
+| series in a store | 100,000 unless `maxSeries` says                                   |
 
 ## How many series
 

@@ -675,7 +675,7 @@ pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()>
 
 Reads the text and writes its series, every one or none, as `ingest`
 does: a line it cannot read is `invalid`, naming the line, and a text
-past what one ingest carries is a `limit`.
+past 100,000 samples or 32 MiB is a `limit`.
 
 ## Condition
 

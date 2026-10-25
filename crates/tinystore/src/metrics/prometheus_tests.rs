@@ -4,7 +4,7 @@ use serde_json::Value as Json;
 
 use super::parse;
 use crate::ErrorKind;
-use crate::metrics::fixture::{DAY, fixture};
+use crate::metrics::fixture::{DAY, MINUTE, SECOND, fixture};
 use crate::metrics::series::Labels;
 use crate::metrics::{Description, Series};
 
@@ -113,14 +113,52 @@ fn an_error_quotes_the_start_of_a_long_line() {
     assert!(quoted.ends_with('…') && quoted.len() <= 64 + '…'.len_utf8(), "{quoted}");
 }
 
+// contract: MET-15
 #[test]
-fn a_text_past_what_one_ingest_carries_is_a_limit() {
-    let lines = |count: usize| (0..count).map(|index| format!("up{{shard=\"{index}\"}} 1\n")).collect::<String>();
-    assert_eq!(parse(lines(10_000).as_bytes(), &Labels::new(), 0).unwrap().series.len(), 10_000);
-    let error = parse(lines(10_001).as_bytes(), &Labels::new(), 0).unwrap_err();
+fn a_text_past_one_ingest_is_written_whole_and_one_past_one_text_is_a_limit() {
+    let lines = |count: usize| {
+        (0..count)
+            .map(|index| {
+                format!(
+                    "up{{shard=\"{index}\"}} 1
+"
+                )
+            })
+            .collect::<String>()
+    };
+    let f = fixture();
+    // more than one ingest carries, one series a line, in one write
+    f.metrics().prometheus().ingest(lines(12_000)).unwrap();
+    assert_eq!(f.rows("series"), 12_000);
+    assert_eq!(parse(lines(100_000).as_bytes(), &Labels::new(), 0).unwrap().series.len(), 100_000);
+    let error = parse(lines(100_001).as_bytes(), &Labels::new(), 0).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
-    assert!(error.to_string().starts_with("metrics: line 10001, "), "{error}");
-    assert_eq!(error.fact("limit"), Some("one ingest"));
+    assert!(error.to_string().starts_with("metrics: line 100001, "), "{error}");
+    assert_eq!((error.fact("limit"), error.fact("bound")), (Some("one text"), Some("100000")));
+}
+
+// contract: MET-15, MET-03
+#[test]
+fn a_text_one_sample_of_which_its_write_refuses_writes_nothing() {
+    let f = fixture();
+    f.metrics().ingest(&[f.gauge("load", 481, 15 * SECOND, |index| index as f64)]).unwrap();
+    crate::metrics::maintain(&f.store).unwrap();
+    let packed = crate::unix_millis(f.now() - 60 * MINUTE);
+    let mut text: String = (0..12_000)
+        .map(|index| {
+            format!(
+                "fresh{{shard=\"{index}\"}} 1
+"
+            )
+        })
+        .collect();
+    text.push_str(&format!(
+        "load 99 {packed}
+"
+    ));
+    let error = f.metrics().prometheus().ingest(text).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TooOld, "{error}");
+    assert_eq!(f.rows("series"), 1, "none of the text's 12,000 new series");
 }
 
 #[test]
@@ -181,4 +219,38 @@ fn a_help_past_what_a_name_keeps_or_one_that_does_not_read_is_left_out_and_the_t
     f.metrics().prometheus().ingest(text).unwrap();
     assert_eq!(f.metrics().description("long").unwrap(), Description::default());
     assert_eq!(f.rows("series"), 2);
+}
+
+/// What a text of 100,000 series holds the file's writer for, the first
+/// scrape, which registers every series, and the next, against ten texts of
+/// 10,000.
+///
+/// `cargo test -p tinystore --release --lib metrics::prometheus::tests::timing -- --ignored --nocapture`
+#[test]
+#[ignore = "a timing, run by hand"]
+fn timing_one_text_of_a_hundred_thousand_series() {
+    let lines = |from: usize, count: usize, value: usize| {
+        (from..from + count).map(|index| format!("up{{shard=\"{index}\"}} {value}\n")).collect::<String>()
+    };
+    let f = fixture();
+    for scrape in 0..3 {
+        f.pass(std::time::Duration::from_secs(15));
+        let text = lines(0, 99_999, scrape);
+        let started = std::time::Instant::now();
+        f.metrics().prometheus().ingest(&text).unwrap();
+        println!("one text, scrape {scrape}: {:?}", started.elapsed());
+    }
+    let g = fixture();
+    for scrape in 0..3 {
+        g.pass(std::time::Duration::from_secs(15));
+        let parts: Vec<String> = (0..10).map(|part| lines(part * 10_000, 9_999, scrape)).collect();
+        let started = std::time::Instant::now();
+        let mut longest = std::time::Duration::ZERO;
+        for part in &parts {
+            let one = std::time::Instant::now();
+            g.metrics().prometheus().ingest(part).unwrap();
+            longest = longest.max(one.elapsed());
+        }
+        println!("ten texts, scrape {scrape}: {:?}, the longest {longest:?}", started.elapsed());
+    }
 }
