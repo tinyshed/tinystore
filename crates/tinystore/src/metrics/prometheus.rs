@@ -24,18 +24,21 @@
 //! {"http.server.duration_bucket", "url.scheme"="https", le="0.1"} 7
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use super::Metrics;
 use super::describe::Description;
-use super::ingest::{ONE_TEXT, SAMPLE_BYTES, within};
+use super::ingest::{
+    Checked, Gathering, NAME_HOLDS, ONE_TEXT, PAIR_HOLDS, POINT_HOLDS, SAMPLE_BYTES, SERIES_HOLDS, within,
+};
 use super::instruments::{MOST_HELP, MOST_UNIT};
 use super::labels::NAME;
 use super::series::{Kind, Labels, Sample, Series};
 use crate::clock::from_unix_millis;
-use crate::{Error, Result, unix_millis};
+use crate::memory::PATIENCE;
+use crate::{Error, Reservation, Result, unix_millis};
 
 /// A text an exporter serves, in Prometheus' format or OpenMetrics', and the
 /// labels, the time and the keep its ingest gives every series of it. It is
@@ -95,17 +98,20 @@ impl Prometheus {
     /// does: a line it cannot read is `invalid`, naming the line, and a text
     /// past 100,000 samples or 32 MiB is a `limit`.
     pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()> {
-        let engine = &self.metrics.engine;
-        let read = self.read(text.as_ref())?;
-        engine.ingest_held(engine.check_within(&read.series, ONE_TEXT)?.described(read.described))
+        let text = text.as_ref();
+        let held = self.metrics.engine.memory.reserve(self.holds(text), "metrics: a text", PATIENCE)?;
+        self.ingest_held(text, held)
     }
 
-    /// The text's series checked as `ingest` checks them, before their write
-    /// reserves the store's memory: an awaited ingest's, on the store's pool.
-    #[cfg(feature = "async")]
-    pub(crate) fn check(&self, text: &[u8]) -> Result<super::ingest::Checked> {
-        let read = self.read(text)?;
-        Ok(self.metrics.engine.check_within(&read.series, ONE_TEXT)?.described(read.described))
+    /// What reading the text and writing its series hold of the store's
+    /// memory at most, reserved before a byte of it is read.
+    pub(crate) fn holds(&self, text: &[u8]) -> u64 {
+        holds(text, &self.labels)
+    }
+
+    /// Reads the text and writes its series, `_held` the memory `holds` said.
+    pub(crate) fn ingest_held(&self, text: &[u8], held: Reservation) -> Result<()> {
+        self.metrics.engine.ingest_checked(self.checked(text)?, held)
     }
 
     /// The same text with its time fixed now from the store's clock, unless
@@ -120,24 +126,56 @@ impl Prometheus {
     }
 
     /// The series of each sample line, with the labels, the time and the keep
-    /// given, and what the text describes of their names.
-    fn read(&self, text: &[u8]) -> Result<Exposition> {
-        let at = self.at.map_or_else(|| self.metrics.engine.now(), unix_millis);
-        let mut read = parse(text, &self.labels, at)?;
-        if let Some(keep) = self.keep {
-            read.series.iter_mut().for_each(|series| series.keep = Some(keep));
-        }
-        Ok(read)
+    /// given, checked and gathered as each line is read, so that a line's
+    /// series is let go of before the next is read; and what the text
+    /// describes of their names.
+    fn checked(&self, text: &[u8]) -> Result<Checked> {
+        let engine = &self.metrics.engine;
+        let at = self.at.map_or_else(|| engine.now(), unix_millis);
+        let mut gathering = Gathering::new(ONE_TEXT);
+        let described = read(text, &self.labels, at, &mut |mut series| {
+            series.keep = self.keep;
+            gathering.add(&series)
+        })?;
+        Ok(engine.checked(gathering).described(described))
     }
 }
 
-/// What a text gives: the series of its sample lines, and the help and the
-/// unit its families give each of their names.
-#[derive(Debug)]
-pub(super) struct Exposition {
-    pub(super) series: Vec<Series>,
-    pub(super) described: Vec<(String, Description)>,
+/// What reading `text` and writing its series hold of the heap at most: each
+/// sample line a series, with a pair for each `=` it holds, each label given
+/// and its name, and its bytes in two copies; a line that may name a name
+/// the line before did not, that name's places among the call's names; and
+/// each comment's bytes in five, a family's help being copied to each of its
+/// names.
+///
+/// ```text
+/// # HELP up Is it up.    five times its 19 bytes, and a family's place
+/// up{shard="7"} 1        a series of three pairs, two copies of its 15 bytes, a name
+/// up{shard="8"} 1        a series of three pairs, two copies of its 15 bytes
+/// ```
+fn holds(text: &[u8], given: &Labels) -> u64 {
+    let given_bytes: usize = NAME.len() + given.iter().map(|(label, value)| label.len() + value.len()).sum::<usize>();
+    let (mut holds, mut before) = (0, None);
+    for line in text.split(|byte| *byte == b'\n').map(<[u8]>::trim_ascii).filter(|line| !line.is_empty()) {
+        if line.starts_with(b"#") {
+            holds += 5 * line.len() + FAMILY_HOLDS;
+            continue;
+        }
+        let pairs = given.len() + 1 + line.iter().filter(|byte| **byte == b'=').count();
+        holds += SERIES_HOLDS + POINT_HOLDS + PAIR_HOLDS * pairs + 2 * line.len() + given_bytes;
+        // a quoted name is told from the line before's only by reading it
+        let name = line.split(|byte| matches!(byte, b'{' | b' ' | b'\t')).next().filter(|name| !name.is_empty());
+        if name.is_none() || name != before {
+            holds += NAME_HOLDS + 4 * name.map_or(line.len(), <[u8]>::len);
+        }
+        before = name;
+    }
+    holds as u64
 }
+
+/// What a family holds of the heap beside its name and its help: its type,
+/// its description and its place among the families.
+const FAMILY_HOLDS: usize = 128;
 
 /// Blanks between a line's parts.
 const BLANK: [char; 2] = [' ', '\t'];
@@ -147,11 +185,23 @@ const EOF: &str = "# EOF";
 const QUOTED: usize = 64;
 
 /// The series of each sample line of `text`, the `given` labels beside its
-/// own, at `at` unless the line gives its time, and what its families
-/// describe of their names.
-pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Exposition> {
+/// own, at `at` unless the line gives its time.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Vec<Series>> {
+    let mut series = Vec::new();
+    read(text, given, at, &mut |one| {
+        series.push(one);
+        Ok(())
+    })?;
+    Ok(series)
+}
+
+/// Hands `sink` the series of each sample line of `text` as it is read, and
+/// gives what the text's families describe of the names it wrote. A line the
+/// sink refuses refuses the text, naming the line.
+fn read(text: &[u8], given: &Labels, at: i64, sink: &mut dyn FnMut(Series) -> Result<()>) -> Result<Described> {
     let text = text.strip_prefix(b"\xef\xbb\xbf").unwrap_or(text);
-    let mut reader = Reader::new(given, at, is_open_metrics(text));
+    let mut reader = Reader::new(given, at, is_open_metrics(text), sink);
     for (index, line) in text.split(|byte| *byte == b'\n').enumerate() {
         let number = index + 1;
         let line =
@@ -159,9 +209,11 @@ pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Exposition> 
         let line = line.trim_ascii();
         reader.line(line).map_err(|error| error.within(format!("metrics: line {number}, `{}`", excerpt(line))))?;
     }
-    let described = reader.described();
-    Ok(Exposition { series: reader.series, described })
+    Ok(reader.described())
 }
+
+/// Each name a text wrote that its family describes, with what it gives it.
+type Described = Vec<(String, Description)>;
 
 /// Whether the text is OpenMetrics': its last line that is not blank is
 /// `# EOF`.
@@ -243,7 +295,8 @@ impl Type {
     }
 }
 
-/// A text as it is read, a line at a time.
+/// A text as it is read, a line at a time, each sample line's series handed
+/// to `sink`.
 struct Reader<'a> {
     given: &'a Labels,
     at: i64,
@@ -253,17 +306,22 @@ struct Reader<'a> {
     descriptions: HashMap<String, Description>,
     /// The names of the samples read before any `# TYPE` of their family.
     untyped: HashSet<String>,
-    series: Vec<Series>,
-    /// What the series weigh against one ingest's bytes.
+    sink: &'a mut dyn FnMut(Series) -> Result<()>,
+    /// The series read, against one text's samples.
+    series: usize,
+    /// The names the series were written under.
+    names: BTreeSet<String>,
+    /// What the series weigh against one text's bytes.
     bytes: usize,
     /// Whether `# EOF` was read, after which no line may follow.
     ended: bool,
 }
 
 impl<'a> Reader<'a> {
-    fn new(given: &'a Labels, at: i64, open_metrics: bool) -> Self {
+    fn new(given: &'a Labels, at: i64, open_metrics: bool, sink: &'a mut dyn FnMut(Series) -> Result<()>) -> Self {
         let (families, descriptions, untyped) = (HashMap::new(), HashMap::new(), HashSet::new());
-        Reader { given, at, open_metrics, families, descriptions, untyped, series: Vec::new(), bytes: 0, ended: false }
+        let (series, names, bytes, ended) = (0, BTreeSet::new(), 0, false);
+        Reader { given, at, open_metrics, families, descriptions, untyped, sink, series, names, bytes, ended }
     }
 
     fn line(&mut self, line: &str) -> Result<()> {
@@ -329,10 +387,7 @@ impl<'a> Reader<'a> {
     /// # UNIT rpc_seconds seconds    rpc_seconds_sum  seconds
     ///                               rpc_seconds_bucket, rpc_seconds_count  none: they count observations
     /// ```
-    fn described(&self) -> Vec<(String, Description)> {
-        let mut names: Vec<&str> = self.series.iter().map(|series| series.name.as_str()).collect();
-        names.sort_unstable();
-        names.dedup();
+    fn described(&self) -> Described {
         let of_family = |name: &str| {
             let family = self.family_of(name).map_or(name, |(family, _)| family);
             let given = self.descriptions.get(family)?;
@@ -341,7 +396,7 @@ impl<'a> Reader<'a> {
             let described = Description { unit, help: given.help.clone() };
             (described != Description::default()).then(|| (name.to_owned(), described))
         };
-        names.into_iter().filter_map(of_family).collect()
+        self.names.iter().map(String::as_str).filter_map(of_family).collect()
     }
 
     fn declare(&mut self, name: &str, word: &str) -> Result<()> {
@@ -382,10 +437,13 @@ impl<'a> Reader<'a> {
         let labels = self.with_given(labels)?;
         self.bytes += NAME.len() + name.len() + SAMPLE_BYTES;
         self.bytes += labels.iter().map(|(label, value)| label.len() + value.len()).sum::<usize>();
-        within(ONE_TEXT, "a text", self.series.len() + 1, self.bytes)?;
+        within(ONE_TEXT, "a text", self.series + 1, self.bytes)?;
+        self.series += 1;
+        if !self.names.contains(name) {
+            self.names.insert(name.to_owned());
+        }
         let samples = vec![Sample { at: from_unix_millis(at), value }];
-        self.series.push(Series { name: name.to_owned(), kind, labels, samples, keep: None });
-        Ok(())
+        (self.sink)(Series { name: name.to_owned(), kind, labels, samples, keep: None })
     }
 
     /// The kind of the series a sample called `name` writes, of the family

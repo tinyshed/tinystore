@@ -81,14 +81,14 @@ fn a_line_that_is_not_utf8_is_refused_by_its_number() {
 
 #[test]
 fn a_negative_nan_keeps_its_sign_and_a_byte_order_mark_is_read_past() {
-    let series = parse(b"\xef\xbb\xbfodd -NaN\n", &Labels::new(), 0).unwrap().series;
+    let series = parse(b"\xef\xbb\xbfodd -NaN\n", &Labels::new(), 0).unwrap();
     assert_eq!(series[0].samples()[0].value.to_bits(), 0xfff8_0000_0000_0000);
 }
 
 #[test]
 fn openmetrics_seconds_are_rounded_to_the_millisecond() {
     let text = b"# TYPE late gauge\nlate 1 1789999990.789\nlate 2 1789999990.0016\n# EOF";
-    let series = parse(text, &Labels::new(), 0).unwrap().series;
+    let series = parse(text, &Labels::new(), 0).unwrap();
     let times: Vec<i64> = series.iter().map(|series| crate::unix_millis(series.samples()[0].at)).collect();
     assert_eq!(times, [1_789_999_990_789, 1_789_999_990_002]);
 }
@@ -130,7 +130,7 @@ fn a_text_past_one_ingest_is_written_whole_and_one_past_one_text_is_a_limit() {
     // more than one ingest carries, one series a line, in one write
     f.metrics().prometheus().ingest(lines(12_000)).unwrap();
     assert_eq!(f.rows("series"), 12_000);
-    assert_eq!(parse(lines(100_000).as_bytes(), &Labels::new(), 0).unwrap().series.len(), 100_000);
+    assert_eq!(parse(lines(100_000).as_bytes(), &Labels::new(), 0).unwrap().len(), 100_000);
     let error = parse(lines(100_001).as_bytes(), &Labels::new(), 0).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
     assert!(error.to_string().starts_with("metrics: line 100001, "), "{error}");

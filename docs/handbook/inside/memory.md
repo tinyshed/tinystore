@@ -17,6 +17,7 @@ else is going on:
 | a search of a table's index    | 64 MiB of its hits' rows together; ask for fewer hits      |
 | a page of `list`               | 1,000 keys, files, jobs or events                          |
 | an aggregate of metrics        | 100,000 buckets, and its own budgets of samples and bytes  |
+| an ingest of metrics           | 10,000 samples; a Prometheus text, 100,000                 |
 | `top` and `distinct` of events | 64 MiB of different values                                 |
 | a value in kv, a job, a step   | 1 MiB                                                      |
 | an upload                      | a few buffers of 64 KiB to 1 MiB, whatever the file's size |
@@ -50,7 +51,8 @@ limit to make a budget of its own: inside a container, give `memory` (or
 `--memory`) a part of the container's limit yourself (contract STORE-05).
 
 The budget counts what the store's work holds: the rows of an answer, a block
-being decoded, an upload's buffers. It is not a limit on the process's
+being decoded, an upload's buffers, the series of a Prometheus text while it
+is read and written, which it reserves before it reads a line. It is not a limit on the process's
 resident memory, which also holds your program and SQLite's page caches.
 
 Background work fits inside the budget too. Packing a stream's events into a

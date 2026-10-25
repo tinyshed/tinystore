@@ -12,6 +12,7 @@
 //! that the call can be sent again without it.
 
 use std::borrow::Cow;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
@@ -39,7 +40,7 @@ use crate::{Error, ErrorKind, Reservation, Result, unix_millis};
 pub(super) struct Bound {
     /// What a limit error names it.
     limit: &'static str,
-    samples: usize,
+    pub(super) samples: usize,
     bytes: usize,
 }
 
@@ -52,6 +53,20 @@ pub(super) const ONE_TEXT: Bound = Bound { limit: "one text", samples: 100_000, 
 /// What a sample weighs against the call's bytes, a time and a value.
 pub(super) const SAMPLE_BYTES: usize = 16;
 use crate::memory::PATIENCE;
+
+/// What a series of a call holds of the heap beside its labels and its
+/// samples until its write ends: its place in the call's map, which a b-tree
+/// keeps at worst half full, its batch once its name is settled, and its
+/// name's place among the call's names.
+pub(super) const SERIES_HOLDS: usize = 2 * (32 + size_of::<Gathered>()) + size_of::<Batch>() + 64;
+/// What a name holds of the heap beside its bytes, in their copies: its place
+/// among the call's names, those it makes, and the engine's.
+pub(super) const NAME_HOLDS: usize = 384;
+/// What a pair of labels holds of the heap beside its bytes.
+pub(super) const PAIR_HOLDS: usize = size_of::<(String, String)>();
+/// What a sample holds while its series is gathered, its vector grown to
+/// twice what it holds at worst.
+pub(super) const POINT_HOLDS: usize = 2 * size_of::<Point>();
 
 /// One series' samples of a call, checked, in the order of their times, a
 /// time given twice holding the value given last.
@@ -75,29 +90,79 @@ struct Gathered {
     points: Vec<Point>,
 }
 
+/// A call's series as they are checked and gathered by their labels, within
+/// `bound`: one series given in several parts is one.
+pub(super) struct Gathering {
+    bound: Bound,
+    gathered: BTreeMap<[u8; 32], Gathered>,
+    samples: usize,
+    /// What the series weigh against `bound`: their labels' bytes, and
+    /// `SAMPLE_BYTES` a sample.
+    bytes: usize,
+    /// What the series hold of the heap until their write ends.
+    holds: usize,
+}
+
+impl Gathering {
+    pub(super) fn new(bound: Bound) -> Gathering {
+        Gathering { bound, gathered: BTreeMap::new(), samples: 0, bytes: 0, holds: 0 }
+    }
+
+    /// Checks a series and gathers its samples with those of a series of its
+    /// labels given before.
+    pub(super) fn add(&mut self, given: &Series) -> Result<()> {
+        let named = || format!("metrics {given}");
+        super::instruments::refuse_the_stores_own(&given.name).map_err(|error| error.within(named()))?;
+        let labels = bounded(given).map_err(|error| error.within(named()))?;
+        let kept = Kept::of(&given.name, &labels).map_err(|error| error.within(named()))?;
+        if given.samples.is_empty() {
+            return Err(Error::invalid(format!("{}: a series without samples", named())));
+        }
+        let keep = given.keep.map(checked_keep).transpose().map_err(|error| error.within(named()))?;
+        self.samples += given.samples.len();
+        self.bytes += kept.bytes() + SAMPLE_BYTES * given.samples.len();
+        within(self.bound, "an ingest", self.samples, self.bytes).map_err(|error| error.within("metrics"))?;
+        self.holds += POINT_HOLDS * given.samples.len();
+        let points = given.samples.iter().map(|sample| Point { at: unix_millis(sample.at), value: sample.value });
+        let entry = match self.gathered.entry(kept.identity()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                self.holds += SERIES_HOLDS + kept.holds() + NAME_HOLDS + 4 * given.name.len();
+                entry.insert(Gathered { kept, kind: given.kind, keep, points: Vec::new() })
+            }
+        };
+        if entry.kind != given.kind || (keep.is_some() && entry.keep.is_some_and(|before| Some(before) != keep)) {
+            return Err(Error::invalid(format!("{}: given twice in one ingest, as two kinds or two keeps", named())));
+        }
+        entry.keep = entry.keep.or(keep);
+        entry.points.extend(points);
+        Ok(())
+    }
+}
+
 /// A call's series checked and gathered by their labels, its time read,
 /// before it reserves the store's memory their write holds: an awaited
 /// ingest waits for those bytes on no thread.
 pub(crate) struct Checked {
     now: i64,
-    gathered: BTreeMap<[u8; 32], Gathered>,
-    samples: usize,
-    bytes: usize,
+    gathering: Gathering,
     /// The help and the unit a name takes where it has none.
     described: Vec<(String, Description)>,
 }
 
 impl Checked {
     /// What the write holds of the store's memory.
-    pub(crate) fn bytes(&self) -> u64 {
-        self.bytes as u64
+    pub(crate) fn holds(&self) -> u64 {
+        self.gathering.holds as u64
     }
 
     /// The same series, their write giving each name of `described` its
     /// help and its unit where it has none.
     pub(super) fn described(mut self, described: Vec<(String, Description)>) -> Checked {
         let weighs = |(name, given): &(String, Description)| name.len() + given.unit.len() + given.help.len();
-        self.bytes += described.iter().map(weighs).sum::<usize>();
+        let weight = described.iter().map(weighs).sum::<usize>();
+        self.gathering.bytes += weight;
+        self.gathering.holds += weight + described.len() * size_of::<(String, Description)>();
         self.described = described;
         self
     }
@@ -112,27 +177,28 @@ impl Engine {
     /// Writes series checked once the store's memory holds what their write
     /// holds.
     pub(super) fn ingest_held(&self, checked: Checked) -> Result<()> {
-        let held = self.memory.reserve(checked.bytes(), "metrics: an ingest", PATIENCE)?;
+        let held = self.memory.reserve(checked.holds(), "metrics: an ingest", PATIENCE)?;
         self.ingest_checked(checked, held)
     }
 
     /// The call's series checked within one ingest's bounds and gathered by
     /// their labels, its `now` read once.
     pub(super) fn check(&self, series: &[Series]) -> Result<Checked> {
-        self.check_within(series, ONE_INGEST)
+        let mut gathering = Gathering::new(ONE_INGEST);
+        series.iter().try_for_each(|given| gathering.add(given))?;
+        Ok(self.checked(gathering))
     }
 
-    /// The call's series checked within `bound` and gathered by their labels.
-    pub(super) fn check_within(&self, series: &[Series], bound: Bound) -> Result<Checked> {
-        let now = self.now();
-        let (gathered, samples, bytes) = gather(series, bound)?;
-        Ok(Checked { now, gathered, samples, bytes, described: Vec::new() })
+    /// The series gathered, the call's `now` read once they are.
+    pub(super) fn checked(&self, gathering: Gathering) -> Checked {
+        Checked { now: self.now(), gathering, described: Vec::new() }
     }
 
     /// Writes series checked, every one or none, `_held` the memory their
     /// write holds until it ends.
     pub(super) fn ingest_checked(&self, checked: Checked, _held: Reservation) -> Result<()> {
-        let Checked { now, gathered, samples, bytes, described } = checked;
+        let Checked { now, gathering, described } = checked;
+        let Gathering { gathered, samples, bytes, .. } = gathering;
         let wanted = wanted_names(&gathered)?;
         // A call refused for its times makes no name and moves no keep.
         let keeps = self.names.foreseen(&wanted);
@@ -141,7 +207,10 @@ impl Engine {
         }
         let settling = self.names.settling(&wanted)?;
         let names = settling.names();
-        let batches = gathered.into_values().map(|series| batch(series, &names, now)).collect::<Result<Vec<_>>>()?;
+        let mut batches = Vec::with_capacity(gathered.len());
+        for (identity, series) in gathered {
+            batches.push(batch(identity, series, &names, now)?);
+        }
         if batches.is_empty() {
             return Ok(());
         }
@@ -182,39 +251,6 @@ impl Engine {
         self.codecs.give_back(zstd);
         Ok((ready, made))
     }
-}
-
-/// Checks each series and gathers its samples by its labels, within
-/// `bound`: one series given in several parts is one. Gives the samples
-/// given and the bytes they weigh beside them.
-fn gather(series: &[Series], bound: Bound) -> Result<(BTreeMap<[u8; 32], Gathered>, usize, usize)> {
-    let (mut gathered, mut samples, mut bytes) = (BTreeMap::new(), 0, 0);
-    for given in series {
-        let named = || format!("metrics {given}");
-        super::instruments::refuse_the_stores_own(&given.name).map_err(|error| error.within(named()))?;
-        let labels = bounded(given).map_err(|error| error.within(named()))?;
-        let kept = Kept::of(&given.name, &labels).map_err(|error| error.within(named()))?;
-        if given.samples.is_empty() {
-            return Err(Error::invalid(format!("{}: a series without samples", named())));
-        }
-        let keep = given.keep.map(checked_keep).transpose().map_err(|error| error.within(named()))?;
-        samples += given.samples.len();
-        bytes += kept.bytes() + SAMPLE_BYTES * given.samples.len();
-        within(bound, "an ingest", samples, bytes).map_err(|error| error.within("metrics"))?;
-        let points = given.samples.iter().map(|sample| Point { at: unix_millis(sample.at), value: sample.value });
-        let entry = gathered.entry(kept.identity()).or_insert_with(|| Gathered {
-            kept: kept.clone(),
-            kind: given.kind,
-            keep,
-            points: Vec::new(),
-        });
-        if entry.kind != given.kind || (keep.is_some() && entry.keep.is_some_and(|before| Some(before) != keep)) {
-            return Err(Error::invalid(format!("{}: given twice in one ingest, as two kinds or two keeps", named())));
-        }
-        entry.keep = entry.keep.or(keep);
-        entry.points.extend(points);
-    }
-    Ok((gathered, samples, bytes))
 }
 
 /// Refuses `what` past the samples or the bytes `bound` carries, a sample
@@ -262,13 +298,13 @@ fn wanted_names(gathered: &BTreeMap<[u8; 32], Gathered>) -> Result<BTreeMap<&str
 
 /// A series' samples as its write takes them: each inside its name's window,
 /// in the order of their times, a time given twice holding the later value.
-fn batch(series: Gathered, names: &HashMap<String, Name>, now: i64) -> Result<Batch> {
+fn batch(identity: [u8; 32], series: Gathered, names: &HashMap<String, Name>, now: i64) -> Result<Batch> {
     let named = || format!("metrics {}", series.kept);
     let name = names.get(series.kept.name()).ok_or_else(|| Error::internal(format!("{}: its name", named())))?;
     within_window(&series, name.keeps(), now)?;
     let keep = millis(name.keeps());
     let points = ordered(series.points);
-    Ok(Batch { identity: series.kept.identity(), kept: series.kept, kind: series.kind, name: name.id, keep, points })
+    Ok(Batch { identity, kept: series.kept, kind: series.kind, name: name.id, keep, points })
 }
 
 /// Refuses a sample older than `keep` or more than ten minutes ahead.

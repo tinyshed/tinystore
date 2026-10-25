@@ -58,7 +58,7 @@ pub fn rows(bytes: &[u8]) {
 pub fn exposition(bytes: &[u8]) {
     let given = Labels::from([("instance".to_owned(), "web-1".to_owned())]);
     let series = match prometheus::parse(bytes, &given, 1_790_000_000_000) {
-        Ok(read) => read.series,
+        Ok(series) => series,
         Err(error) => {
             assert!(matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit), "{error}");
             assert!(error.what().starts_with("metrics: line "), "{error}");
@@ -66,8 +66,7 @@ pub fn exposition(bytes: &[u8]) {
         }
     };
     let spelled: String = series.iter().map(spelled).collect();
-    let again =
-        prometheus::parse(spelled.as_bytes(), &Labels::new(), 0).expect("the text a reading spells reads").series;
+    let again = prometheus::parse(spelled.as_bytes(), &Labels::new(), 0).expect("the text a reading spells reads");
     assert_eq!(seen(&again), seen(&series), "{spelled}");
 }
 

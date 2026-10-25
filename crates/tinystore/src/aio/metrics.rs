@@ -121,7 +121,7 @@ impl Metrics {
         // Not a submit: a call that makes a name holds the names' lock until its commit.
         run::holding(&self.pool, self.blocking.memory(), INGEST.to_owned(), move || {
             let checked = stats.check(&series)?;
-            Ok((checked.bytes(), move |held| stats.ingest_checked(checked, held)))
+            Ok((checked.holds(), move |held| stats.ingest_checked(checked, held)))
         })
     }
 
@@ -468,18 +468,17 @@ impl Prometheus {
     /// Reads the text and writes its series, every one or none, as
     /// [`crate::metrics::Prometheus::ingest`] does. The text is copied when
     /// the call is made, and the time of its samples that give none is read
-    /// in the future's first poll. The text is then parsed on a thread of
-    /// the store's pool, the memory its write holds is awaited on no thread,
-    /// and the write runs blocking on the pool, which waits there for the
+    /// in the future's first poll. The memory its reading and its write hold
+    /// is awaited on no thread, and the text is then read and written
+    /// blocking on a thread of the store's pool, which waits there for the
     /// commit.
     pub fn ingest(&self, text: impl AsRef<[u8]>) -> impl Future<Output = Result<()>> + Send + 'static {
-        let (prometheus, stats, text) = (self.blocking.clone(), self.stats.clone(), text.as_ref().to_vec());
+        let (prometheus, text) = (self.blocking.clone(), text.as_ref().to_vec());
         let (pool, memory) = (Arc::clone(&self.pool), Arc::clone(self.stats.memory()));
         async move {
             let prometheus = prometheus.timed();
             let ingesting = run::holding(&pool, &memory, INGEST.to_owned(), move || {
-                let checked = prometheus.check(&text)?;
-                Ok((checked.bytes(), move |held| stats.ingest_checked(checked, held)))
+                Ok((prometheus.holds(&text), move |held| prometheus.ingest_held(&text, held)))
             });
             ingesting.await
         }

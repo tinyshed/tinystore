@@ -157,6 +157,12 @@ impl Kept {
         self.0.iter().map(|(label, value)| label.len() + value.len()).sum()
     }
 
+    /// What it holds of the heap: its pairs, and their names' and values'
+    /// bytes.
+    pub(super) fn holds(&self) -> usize {
+        self.0.capacity() * size_of::<(String, String)>() + self.bytes()
+    }
+
     /// The SHA-256 of the pairs, each name and value behind its length: two
     /// series with one identity are one series.
     pub(super) fn identity(&self) -> [u8; 32] {

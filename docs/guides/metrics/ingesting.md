@@ -227,6 +227,10 @@ Python and Go send the text in one message, which holds 2 MiB.
 | a sample's time   | from `keep` ago to ten minutes ahead                              |
 | series in a store | 100,000 unless `maxSeries` says                                   |
 
+A store given a memory budget reserves part of it for a text before reading a
+line: about half a KiB a series beside its labels' bytes, so a text of
+100,000 short series holds about 60 MiB of the budget while it is written.
+
 ## How many series
 
 A store holds 100,000 series unless it is opened with more. A new series past
