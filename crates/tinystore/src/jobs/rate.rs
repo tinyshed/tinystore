@@ -122,41 +122,67 @@ const GROUP_LOGS: usize = 1024;
 pub(crate) struct GroupRates {
     count: u32,
     per: Duration,
-    logs: Mutex<HashMap<String, RateLog>>,
+    groups: Mutex<Groups>,
+}
+
+#[derive(Debug, Default)]
+struct Groups {
+    by_name: HashMap<String, Group>,
+    /// How many groups the map may hold before the idle ones are let go:
+    /// twice what the last sweep left, so that a sweep costs a take little.
+    sweep_at: usize,
+}
+
+/// A group's starts, and the turn its waiting jobs were last given.
+#[derive(Debug)]
+struct Group {
+    log: RateLog,
+    /// The latest turn given to a job that waits, and how many it was given:
+    /// a job that comes to wait after them takes the turn after theirs.
+    turn: i64,
+    given: usize,
 }
 
 impl GroupRates {
     pub(crate) fn new(count: u32, per: Duration) -> GroupRates {
-        GroupRates { count, per, logs: Mutex::default() }
+        GroupRates { count, per, groups: Mutex::default() }
     }
 
     /// Counts a start of `group` at `now`; when its rate lets none start,
-    /// gives the time of the turn of its job `waiting` places behind the
-    /// first that waits, its rate's count each span.
+    /// gives the job its turn: the next its group has, past those given to
+    /// the jobs that wait already, its rate's count a turn, so that a job
+    /// waits once.
     ///
     /// ```text
     /// 2 a second, starts at 0 and 0 ms   jobs that wait: 1000, 1000, 2000, 2000, 3000 ms
     /// ```
-    pub(crate) fn take(&self, group: &str, now: i64, waiting: usize) -> Result<(), i64> {
-        let mut logs = self.logs.lock().unwrap_or_else(PoisonError::into_inner);
-        if logs.len() >= GROUP_LOGS {
-            logs.retain(|_, log| !log.idle(now));
+    pub(crate) fn take(&self, group: &str, now: i64) -> Result<(), i64> {
+        let mut groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
+        if groups.by_name.len() >= groups.sweep_at.max(GROUP_LOGS) {
+            groups.by_name.retain(|_, group| !group.log.idle(now) || group.turn > now);
+            groups.sweep_at = groups.by_name.len() * 2;
         }
-        let log = logs.entry(group.to_owned()).or_insert_with(|| RateLog::new(self.count, self.per));
-        if log.take(now, 1) == 1 {
+        let entry = groups.by_name.entry(group.to_owned());
+        let group = entry.or_insert_with(|| Group { log: RateLog::new(self.count, self.per), turn: 0, given: 0 });
+        if group.log.take(now, 1) == 1 {
             return Ok(());
         }
-        let first = log.room(now).1.unwrap_or(now);
-        let spans = i64::try_from(waiting / log.count).unwrap_or(i64::MAX);
-        Err(first.saturating_add(spans.saturating_mul(log.per)))
+        let first = group.log.room(now).1.unwrap_or(now);
+        if group.turn < first {
+            (group.turn, group.given) = (first, 0);
+        } else if group.given == group.log.count {
+            (group.turn, group.given) = (group.turn.saturating_add(group.log.per), 0);
+        }
+        group.given += 1;
+        Err(group.turn)
     }
 
     /// Uncounts the start the last take of `group` counted, which its claim
     /// did not lease.
     pub(crate) fn give_back(&self, group: &str) {
-        let logs = self.logs.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(log) = logs.get(group) {
-            log.give_back(1);
+        let groups = self.groups.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(group) = groups.by_name.get(group) {
+            group.log.give_back(1);
         }
     }
 }
@@ -164,6 +190,17 @@ impl GroupRates {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // contract: JOB-09
+    #[test]
+    fn a_job_that_waits_for_its_groups_turn_takes_the_one_after_those_waiting_already() {
+        let rates = GroupRates::new(2, Duration::from_secs(1));
+        assert_eq!((rates.take("bot", 0), rates.take("bot", 0)), (Ok(()), Ok(())));
+        let turns: Vec<_> = (0..5).map(|_| rates.take("bot", 0)).collect();
+        assert_eq!(turns, [Err(1000), Err(1000), Err(2000), Err(2000), Err(3000)]);
+        assert_eq!(rates.take("bot", 10), Err(3000), "a job that comes later waits behind them, once");
+        assert_eq!(rates.take("other", 10), Ok(()), "another group has its own");
+    }
 
     // contract: JOB-09
     #[test]

@@ -97,6 +97,7 @@ impl Policy {
     /// Whether the queue bounds what runs or starts, so that a worker claims no
     /// job ahead for a handler still busy: the jobs it holds are the ones running.
     pub(crate) fn bounded(&self) -> bool {
-        self.concurrency.total.is_some() || self.concurrency.group.is_some() || self.rate.is_some()
+        let limits = [self.concurrency.total.is_some(), self.concurrency.group.is_some()];
+        limits.contains(&true) || self.rate.is_some() || self.group_rate.is_some()
     }
 }

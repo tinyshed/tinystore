@@ -386,6 +386,39 @@ fn a_group_rate_lets_each_group_start_its_count_a_span_and_a_group_past_it_holds
 
 // contract: JOB-09
 #[test]
+fn a_worker_claims_no_job_of_a_group_rate_ahead_of_a_free_handler() {
+    let f = fixture();
+    let messages = f.store.queue::<Push>("messages").group_rate(1, SECOND).open().unwrap();
+    messages.group("b").add(&Push { user: 0 }).unwrap();
+    messages.group("a").add(&Push { user: 1 }).unwrap();
+    messages.group("a").add(&Push { user: 2 }).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let worker = messages
+        .work(move |push: Push, _run| -> Result<()> {
+            started_tx.send(push.user).unwrap();
+            if push.user == 0 {
+                release_rx.lock().unwrap().recv().unwrap();
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(started_rx.recv().unwrap(), 0);
+    // a's first job waits for the handler unclaimed, so its start is counted when it starts
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(leases(&messages), 1, "only the job running holds a lease");
+    f.advance(SECOND);
+    release_tx.send(()).unwrap();
+    assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)), Ok(1));
+    assert!(started_rx.recv_timeout(Duration::from_millis(200)).is_err(), "a's second waits a second after its first");
+    f.advance(SECOND);
+    assert_eq!(started_rx.recv_timeout(Duration::from_secs(5)), Ok(2));
+    worker.stop();
+}
+
+// contract: JOB-09
+#[test]
 fn a_group_rate_and_a_group_bound_hold_together_and_the_queues_rate_over_both() {
     let f = fixture();
     let bounded = Concurrency::total(10).group(1);

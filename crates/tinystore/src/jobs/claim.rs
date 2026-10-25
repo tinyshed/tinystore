@@ -295,42 +295,74 @@ fn in_order(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
 /// it leases. Past `PARK_AT_MOST` moved it stops, with more due jobs to look
 /// at.
 fn by_group(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
-    let bound = i64::from(claiming.queue.policy.concurrency.group.unwrap_or(u32::MAX));
     let mut running = running_by_group(c, &claiming)?;
     let mut claimed = Claimed::default();
-    let (mut moved, mut waiting) = (0, HashMap::new());
+    let (mut moved, mut counted) = (0, Vec::new());
+    let walked = walk_by_group(c, &claiming, (&mut claimed, &mut counted), (&mut running, &mut moved));
+    match walked {
+        Ok(()) => Ok(claimed),
+        Err(error) => {
+            given_back(&claiming, &counted);
+            Err(error)
+        }
+    }
+}
+
+/// Uncounts a start of each group of `counted`, whose jobs a claim did not
+/// lease after all.
+fn given_back(claiming: &Claiming<'_>, counted: &[String]) {
+    if let Some(rates) = &claiming.queue.group_rates {
+        counted.iter().for_each(|group| rates.give_back(group));
+    }
+}
+
+/// `by_group`'s walk over the due jobs, the groups whose starts it counted
+/// kept in `counted`, so that a claim that fails gives them back.
+fn walk_by_group(
+    c: &Connection,
+    claiming: &Claiming<'_>,
+    (claimed, counted): (&mut Claimed, &mut Vec<String>),
+    (running, moved): (&mut HashMap<String, i64>, &mut usize),
+) -> Result<()> {
+    let bound = i64::from(claiming.queue.policy.concurrency.group.unwrap_or(u32::MAX));
     while claimed.leases.len() < claiming.limit {
         let asked = claiming.limit - claimed.leases.len();
-        let due_now = due(c, &claiming, asked)?;
+        let due_now = due(c, claiming, asked)?;
         let found = due_now.len();
         for row in due_now {
             let full = row.group.as_ref().is_some_and(|group| running.get(group).copied().unwrap_or(0) >= bound);
             let to = match (&row.group, &claiming.queue.group_rates) {
                 _ if full => Some(row.next + PARKED_BY),
-                (Some(group), Some(rates)) => {
-                    let behind = waiting.entry(group.clone()).or_insert(0);
-                    let turn = rates.take(group, claiming.now, *behind).err();
-                    *behind += usize::from(turn.is_some());
-                    turn
-                }
+                (Some(group), Some(rates)) => match rates.take(group, claiming.now) {
+                    Ok(()) => {
+                        counted.push(group.clone());
+                        None
+                    }
+                    Err(turn) => Some(turn),
+                },
                 _ => None,
             };
+            let rated = to.is_none() && row.group.is_some() && claiming.queue.group_rates.is_some();
             if let Some(to) = to {
-                if moved == PARK_AT_MOST {
+                if *moved == PARK_AT_MOST {
                     claimed.more = true;
-                    return Ok(claimed);
+                    return Ok(());
                 }
-                moved += 1;
+                *moved += 1;
                 rows::move_to(c, claiming.queue.id, (row.next, row.id, row.key.as_deref()), to)?;
                 continue;
             }
-            claimed.lease_in_group(c, &claiming, row, &mut running)?;
+            let leased = claimed.lease_in_group(c, claiming, row, running)?;
+            if rated && !leased {
+                let group = counted.pop();
+                given_back(claiming, group.as_slice());
+            }
         }
         if found < asked {
             break;
         }
     }
-    Ok(claimed)
+    Ok(())
 }
 
 fn running_by_group(c: &Connection, claiming: &Claiming<'_>) -> Result<HashMap<String, i64>> {
@@ -409,24 +441,20 @@ impl Claimed {
     }
 
     /// Leases a due job of a group, counting it among the group's running
-    /// jobs; one it leases no more gives back the start its group rate
-    /// counted for it.
+    /// jobs, and says whether it leased it.
     fn lease_in_group(
         &mut self,
         c: &Connection,
         claiming: &Claiming<'_>,
         row: DueRow,
         running: &mut HashMap<String, i64>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let group = row.group.clone();
         let leased = self.lease(c, claiming, row)?;
-        let Some(group) = group else { return Ok(()) };
-        match (leased, &claiming.queue.group_rates) {
-            (true, _) => *running.entry(group).or_default() += 1,
-            (false, Some(rates)) => rates.give_back(&group),
-            (false, None) => {}
+        if leased && let Some(group) = group {
+            *running.entry(group).or_default() += 1;
         }
-        Ok(())
+        Ok(leased)
     }
 }
 
