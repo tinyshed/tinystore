@@ -7,9 +7,10 @@
 //! of that kind exist.
 //!
 //! A row written here is read back with `last_insert_rowid`, never with
-//! `insert … returning id`: SQLite gives a statement that returns what it
-//! wrote a table of its own each time it runs, ten times a plain insert's
-//! cost, and registering a text's 100,000 series paid it twice a series.
+//! `insert … returning id`: in metrics.db, which vacuums incrementally, a
+//! statement that returns what it wrote cost ten times a plain insert once a
+//! write outgrew the page cache, and registering a text's 100,000 series paid
+//! it twice a series.
 
 use rusqlite::{OptionalExtension, params};
 

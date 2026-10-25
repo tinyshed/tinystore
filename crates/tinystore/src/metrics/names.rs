@@ -244,7 +244,7 @@ fn changes(known: &HashMap<String, Name>, wanted: &BTreeMap<&str, Option<Duratio
 pub(super) fn write_changes(tx: &Tx<'_>, changes: &Changes) -> Result<HashMap<String, i64>> {
     let failed = |error| sql_error("write a name", error);
     let mut ids = HashMap::with_capacity(changes.made.len());
-    // read back with last_insert_rowid: `returning` costs SQLite a table of its own each time
+    // read back with last_insert_rowid: here `returning` costs a large write ten times an insert
     for (name, keep) in &changes.made {
         tx.prepare_cached(INSERT_NAME).and_then(|mut insert| insert.execute(params![name, keep])).map_err(failed)?;
         ids.insert(name.clone(), tx.last_insert_rowid());
