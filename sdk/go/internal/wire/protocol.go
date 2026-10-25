@@ -6817,6 +6817,10 @@ type MetricsAggregateAsked struct {
 	Without *[]string `wire:"5,without"`
 	// a timer's percentile also gives a point between its bounds
 	Estimate bool `wire:"6,estimate"`
+	// day, week or month: buckets of a calendar in timeZone, in place of every
+	Calendar *string `wire:"7,calendar"`
+	// an IANA name, UTC among them, which calendar takes
+	TimeZone *string `wire:"8,timeZone"`
 }
 
 func (m MetricsAggregateAsked) Write(w *Writer) {
@@ -6858,6 +6862,16 @@ func (m MetricsAggregateAsked) Write(w *Writer) {
 		w.Bool(m.Estimate)
 		n++
 	}
+	if m.Calendar != nil {
+		w.Uint(7)
+		w.Str(*m.Calendar)
+		n++
+	}
+	if m.TimeZone != nil {
+		w.Uint(8)
+		w.Str(*m.TimeZone)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -6892,6 +6906,12 @@ func (m *MetricsAggregateAsked) Read(r *Reader) {
 			m.Without = &v
 		case 6:
 			m.Estimate = r.Bool()
+		case 7:
+			v := r.Str()
+			m.Calendar = &v
+		case 8:
+			v := r.Str()
+			m.TimeZone = &v
 		default:
 			r.Skip()
 		}
@@ -6906,7 +6926,9 @@ func (m MetricsAggregateAsked) IsZero() bool {
 		m.Op == nil &&
 		m.By == nil &&
 		m.Without == nil &&
-		!m.Estimate
+		!m.Estimate &&
+		m.Calendar == nil &&
+		m.TimeZone == nil
 }
 
 // MetricsBucket is the schema's metrics.Bucket.
@@ -9499,6 +9521,10 @@ type RecordsAggregateAsked struct {
 	By       []string     `wire:"3,by"`
 	Stats    []string     `wire:"4,stats"`
 	Distinct []string     `wire:"5,distinct"`
+	// day, week or month: rows of a calendar in timeZone, in place of every
+	Calendar *string `wire:"6,calendar"`
+	// an IANA name, UTC among them, which calendar takes
+	TimeZone *string `wire:"7,timeZone"`
 }
 
 func (m RecordsAggregateAsked) Write(w *Writer) {
@@ -9538,6 +9564,16 @@ func (m RecordsAggregateAsked) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Calendar != nil {
+		w.Uint(6)
+		w.Str(*m.Calendar)
+		n++
+	}
+	if m.TimeZone != nil {
+		w.Uint(7)
+		w.Str(*m.TimeZone)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -9575,6 +9611,12 @@ func (m *RecordsAggregateAsked) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Distinct = v
+		case 6:
+			v := r.Str()
+			m.Calendar = &v
+		case 7:
+			v := r.Str()
+			m.TimeZone = &v
 		default:
 			r.Skip()
 		}
@@ -9588,7 +9630,9 @@ func (m RecordsAggregateAsked) IsZero() bool {
 		m.Every == nil &&
 		len(m.By) == 0 &&
 		len(m.Stats) == 0 &&
-		len(m.Distinct) == 0
+		len(m.Distinct) == 0 &&
+		m.Calendar == nil &&
+		m.TimeZone == nil
 }
 
 // RecordsStats is the schema's records.Stats.

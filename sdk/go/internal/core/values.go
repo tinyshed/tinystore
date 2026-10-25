@@ -298,3 +298,17 @@ func FromJSON[T any](text string) (T, error) {
 	}
 	return value, nil
 }
+
+// CalendarOf is an aggregate's calendar and its time zone as the wire
+// carries them: absent when neither is given, so that the store refuses one
+// given without the other.
+func CalendarOf(unit, zone string) (*string, *string) {
+	var calendar, timeZone *string
+	if unit != "" {
+		calendar = &unit
+	}
+	if zone != "" {
+		timeZone = &zone
+	}
+	return calendar, timeZone
+}

@@ -76,6 +76,42 @@ Buckets of any width add up to the range, and two adjacent ranges to the
 range they make. Nothing is interpolated or extrapolated to a bucket's edges,
 unlike Prometheus' `increase`, whose answer changes with the window.
 
+## Days in a time zone
+
+A day of `every: '1d'` runs from midnight to midnight in UTC. A shop in
+Moscow counts its orders from its own midnight, which is 21:00 in UTC. Ask
+for buckets of the calendar instead, with the zone's IANA name:
+
+```ts
+const days = await store.metrics.aggregate({ name: 'orders', since: '30d', op: 'sum', calendar: 'day', timeZone: 'Europe/Moscow' })
+```
+
+```python
+days = await store.metrics.aggregate(name="orders", since="30d", op="sum", calendar="day", time_zone="Europe/Moscow")
+```
+
+```go
+days, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "orders", Since: 30 * 24 * time.Hour, Op: metrics.Sum,
+	Calendar: tinystore.Day, TimeZone: "Europe/Moscow"})
+```
+
+```rust
+let days = stats
+    .query()
+    .name("orders")
+    .since(Duration::from_hours(30 * 24))
+    .calendar(Calendar::Day, "Europe/Moscow")
+    .aggregate(Op::Sum)?;
+```
+
+- `calendar` is `day`, `week` or `month`. A week begins on Monday, as ISO 8601
+  counts weeks, and a month on its first day, each at local midnight.
+- A bucket's `at` is the instant its local day, week or month begins.
+- A day is 23 or 25 hours long on the days the clock moves, and a month is as
+  long as it is. A `rate` divides by the seconds its bucket has.
+- `calendar` takes a time zone, and goes in place of `every`. Both at once
+  fail with an invalid error, and so does a zone no one has.
+
 ## Partial buckets and gaps
 
 | A bucket says   | When                                               | A chart                                           |

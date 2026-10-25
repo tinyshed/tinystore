@@ -767,6 +767,17 @@ An aggregate's buckets: spans this long, each beginning at a whole
 number of them since 1970 in UTC, the range cutting the first and the
 last. Without it the range is one bucket.
 
+### Query.calendar
+
+```rust
+pub fn calendar(self, unit: Calendar, zone: &str) -> Self
+```
+
+An aggregate's buckets on the calendar of a time zone, its IANA name:
+`calendar(Calendar::Day, "Europe/Moscow")` begins each at a local
+midnight, a day 23 or 25 hours long when the clock moves. A bucket's
+`at` is the instant it begins, and a rate counts its own seconds.
+
 ### Query.by
 
 ```rust
@@ -1430,6 +1441,15 @@ pub fn every(self, span: Duration) -> Self
 
 An aggregate's buckets: spans this long, each beginning at a whole
 number of them since 1970 in UTC.
+
+### aio::metrics::Query.calendar
+
+```rust
+pub fn calendar(self, unit: Calendar, zone: &str) -> Self
+```
+
+An aggregate's buckets on the calendar of a time zone, as
+`crate::metrics::Query::calendar` has them.
 
 ### aio::metrics::Query.by
 

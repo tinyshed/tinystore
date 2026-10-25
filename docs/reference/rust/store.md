@@ -2,6 +2,27 @@
 
 Every public type, trait and function of the store in `tinystore` and `tinystore::aio`, generated from its source. The [Store guide](../../handbook/start/directory.md) explains how to use them, and the [Bun and Node](../bun/store.md), [Python](../python/store.md) and [Go](../go/store.md) pages list the same API.
 
+## Calendar
+
+```rust
+pub enum Calendar {
+    Day,
+    Week,
+    Month,
+}
+```
+
+The span of the calendar a bucket covers, in the time zone an aggregate
+gives with it.
+
+### Calendar.as_str
+
+```rust
+pub fn as_str(self) -> &'static str
+```
+
+The unit as the wire and every SDK spell it: `day`, `week`, `month`.
+
 ## CancellationToken
 
 ```rust

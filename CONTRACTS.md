@@ -173,7 +173,7 @@ These contracts are what does not.
 - **MET-01** A sample MUST be kept bit for bit — `-0`, NaN payloads and infinities included — through every codec, file and restart.
 - **MET-02** A series MUST be its name and its labels; names and labels beginning `tinystore_` or `__` are the store's and MUST be refused from a program.
 - **MET-03** An ingest MUST be applied whole; a late sample behind what is sealed MUST be refused, never reopen a block (MET-16).
-- **MET-04** An aggregate MUST be exact and rounded once, across blocks, counter resets and retention; buckets of any width MUST add up to the range.
+- **MET-04** An aggregate MUST be exact and rounded once, across blocks, counter resets and retention; buckets of any width, or of a calendar in a time zone, MUST add up to the range, and a rate MUST count the seconds its bucket has.
 - **MET-05** A bucket the range, the clock or retention cut MUST say `partial`; a step across a whole empty bucket MUST say `gap`; no other bucket says either.
 - **MET-06** A summary MUST answer only for a whole block inside one bucket and the range; anything else MUST be decoded.
 - **MET-07** A read MUST be bounded before it starts — samples, bytes, blocks, series — and a plan MUST say what the call will spend.

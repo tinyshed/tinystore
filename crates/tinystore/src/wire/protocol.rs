@@ -5883,6 +5883,10 @@ pub(crate) struct MetricsAggregateAsked {
     pub(crate) without: Option<Vec<String>>,
     /// A timer's percentile also gives a point between its bounds.
     pub(crate) estimate: bool,
+    /// Day, week or month: buckets of a calendar in timeZone, in place of every.
+    pub(crate) calendar: Option<String>,
+    /// An IANA name, UTC among them, which calendar takes.
+    pub(crate) time_zone: Option<String>,
 }
 
 #[cfg(feature = "metrics")]
@@ -5900,6 +5904,8 @@ impl Message for MetricsAggregateAsked {
                 4 => message.by = Some(codec::list(r, "by", codec::str)?),
                 5 => message.without = Some(codec::list(r, "without", codec::str)?),
                 6 => message.estimate = codec::bool(r, "estimate")?,
+                7 => message.calendar = Some(codec::str(r, "calendar")?),
+                8 => message.time_zone = Some(codec::str(r, "timeZone")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -5932,6 +5938,14 @@ impl Message for MetricsAggregateAsked {
             map.field(out, 6);
             codec::write_bool(out, &self.estimate);
         }
+        if let Some(calendar) = &self.calendar {
+            map.field(out, 7);
+            codec::write_str(out, calendar);
+        }
+        if let Some(time_zone) = &self.time_zone {
+            map.field(out, 8);
+            codec::write_str(out, time_zone);
+        }
         map.close(out);
     }
 
@@ -5943,6 +5957,8 @@ impl Message for MetricsAggregateAsked {
             + self.by.as_ref().map_or(0, |by| 1 + codec::list_size(by, |item| 5 + item.len()))
             + self.without.as_ref().map_or(0, |without| 1 + codec::list_size(without, |item| 5 + item.len()))
             + 2
+            + self.calendar.as_ref().map_or(0, |calendar| 1 + 5 + calendar.len())
+            + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -5952,6 +5968,8 @@ impl Message for MetricsAggregateAsked {
             && self.by.is_none()
             && self.without.is_none()
             && !self.estimate
+            && self.calendar.is_none()
+            && self.time_zone.is_none()
     }
 }
 
@@ -8333,6 +8351,10 @@ pub(crate) struct RecordsAggregateAsked {
     pub(crate) by: Vec<String>,
     pub(crate) stats: Vec<String>,
     pub(crate) distinct: Vec<String>,
+    /// Day, week or month: rows of a calendar in timeZone, in place of every.
+    pub(crate) calendar: Option<String>,
+    /// An IANA name, UTC among them, which calendar takes.
+    pub(crate) time_zone: Option<String>,
 }
 
 #[cfg(feature = "records")]
@@ -8349,6 +8371,8 @@ impl Message for RecordsAggregateAsked {
                 3 => message.by = codec::list(r, "by", codec::str)?,
                 4 => message.stats = codec::list(r, "stats", codec::str)?,
                 5 => message.distinct = codec::list(r, "distinct", codec::str)?,
+                6 => message.calendar = Some(codec::str(r, "calendar")?),
+                7 => message.time_zone = Some(codec::str(r, "timeZone")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -8377,6 +8401,14 @@ impl Message for RecordsAggregateAsked {
             map.field(out, 5);
             codec::write_list(out, &self.distinct, codec::write_str);
         }
+        if let Some(calendar) = &self.calendar {
+            map.field(out, 6);
+            codec::write_str(out, calendar);
+        }
+        if let Some(time_zone) = &self.time_zone {
+            map.field(out, 7);
+            codec::write_str(out, time_zone);
+        }
         map.close(out);
     }
 
@@ -8387,6 +8419,8 @@ impl Message for RecordsAggregateAsked {
             + 1 + codec::list_size(&self.by, |item| 5 + item.len())
             + 1 + codec::list_size(&self.stats, |item| 5 + item.len())
             + 1 + codec::list_size(&self.distinct, |item| 5 + item.len())
+            + self.calendar.as_ref().map_or(0, |calendar| 1 + 5 + calendar.len())
+            + self.time_zone.as_ref().map_or(0, |time_zone| 1 + 5 + time_zone.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -8395,6 +8429,8 @@ impl Message for RecordsAggregateAsked {
             && self.by.is_empty()
             && self.stats.is_empty()
             && self.distinct.is_empty()
+            && self.calendar.is_none()
+            && self.time_zone.is_none()
     }
 }
 

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, overloa
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
 from ._handles import handle_on, via_link
-from ._time import Duration, ms, spelled_keep
+from ._time import Calendar, Duration, ms, spelled_keep
 from ._values import to_json
 from ._wire.protocol import (
     Empty,
@@ -231,6 +231,10 @@ class Topped(Counted, total=False):
 class Aggregated(Counted, total=False):
     every: Duration
     """the span of a row: the range is one without it"""
+    calendar: Calendar
+    """rows of a calendar in time_zone, in place of every: "day" begins each at a local midnight"""
+    time_zone: str
+    """the IANA zone a calendar's rows are in, such as Europe/Moscow or UTC"""
     by: Sequence[str]
     """keys whose every value has rows of its own"""
     stats: Sequence[str]
@@ -393,6 +397,7 @@ class _Reads:
     async def aggregate(self, **query: Unpack[Aggregated]) -> list[Row]:
         """A row for each span of every and each value of the keys of by, with its count."""
         every, by = query.pop("every", None), query.pop("by", None)
+        calendar, time_zone = query.pop("calendar", None), query.pop("time_zone", None)
         stats, distinct = query.pop("stats", None), query.pop("distinct", None)
         asked = _query_of(query)
         answer = await self._ask(
@@ -400,6 +405,8 @@ class _Reads:
             lambda h: RecordsAggregateAsked.encode(
                 query={**asked, "handle": h},
                 every=None if every is None else ms(every, "an aggregate's every"),
+                calendar=calendar,
+                time_zone=time_zone,
                 by=None if by is None else list(by),
                 stats=None if stats is None else list(stats),
                 distinct=None if distinct is None else list(distinct),

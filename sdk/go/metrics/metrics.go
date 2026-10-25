@@ -198,7 +198,12 @@ type Query struct {
 
 	// Every is the buckets' span, counted from 1970 in UTC; the range is one bucket without it.
 	Every time.Duration
-	Op    Op
+	// Calendar is buckets of a calendar in TimeZone, in place of Every:
+	// tinystore.Day begins each at a local midnight.
+	Calendar tinystore.Calendar
+	// TimeZone is the IANA zone a calendar's buckets are in: "Europe/Moscow", "UTC".
+	TimeZone string
+	Op       Op
 	// By is the labels a group keeps; without By and Without, every series of a name is one group.
 	By []string
 	// Without is the labels a group leaves out, keeping every other.
@@ -260,6 +265,7 @@ func (q Query) aggregate() (wire.MetricsAggregateAsked, error) {
 		}
 		out.Every = &ms
 	}
+	out.Calendar, out.TimeZone = core.CalendarOf(string(q.Calendar), q.TimeZone)
 	if q.Op != "" {
 		op := string(q.Op)
 		out.Op = &op

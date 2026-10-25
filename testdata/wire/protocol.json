@@ -2919,6 +2919,9 @@
             }
           ]
         },
+        "calendar": {
+          "str": "calendar"
+        },
         "estimate": {
           "bool": true
         },
@@ -2965,6 +2968,9 @@
             }
           }
         },
+        "timeZone": {
+          "str": "timeZone"
+        },
         "without": {
           "list": [
             {
@@ -2973,7 +2979,7 @@
           ]
         }
       },
-      "hex": "86018501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0002cd05dc03a26f700491a262790591a7776974686f757406c3",
+      "hex": "88018501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0002cd05dc03a26f700491a262790591a7776974686f757406c307a863616c656e64617208a874696d655a6f6e65",
       "message": "metrics.AggregateAsked",
       "name": "metrics.AggregateAsked with every field"
     },
@@ -4324,6 +4330,9 @@
             }
           ]
         },
+        "calendar": {
+          "str": "calendar"
+        },
         "distinct": {
           "list": [
             {
@@ -4395,9 +4404,12 @@
               "str": "stats"
             }
           ]
+        },
+        "timeZone": {
+          "str": "timeZone"
         }
       },
-      "hex": "85018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202cd05dc0391a262790491a573746174730591a864697374696e6374",
+      "hex": "87018d016b02cd05dc03cf18d75b8423f4e24004cf18d75b8423f4e2400591a773747265616d730691a56e616d657307f908c40201ff0981a161a77b2261223a317d0aa67365617263680bc30ccd04b70da5616674657202cd05dc0391a262790491a573746174730591a864697374696e637406a863616c656e64617207a874696d655a6f6e65",
       "message": "records.AggregateAsked",
       "name": "records.AggregateAsked with every field"
     },

@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from .errors import InvalidError
 
 Duration = timedelta | str
 """A length of time: a timedelta, or its text, such as ``"30d"``, ``"1h30m"``, ``"15m"``, ``"1s"`` and ``"250ms"``."""
+
+Calendar = Literal["day", "week", "month"]
+"""A span of a calendar an aggregate's bucket covers in its time zone: a local day, a week from Monday, a month."""
 
 _UNITS = {"w": 604_800_000, "d": 86_400_000, "h": 3_600_000, "m": 60_000, "s": 1000, "ms": 1}
 _SPELLED = re.compile(r"(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+)s)?(?:(\d+)ms)?")

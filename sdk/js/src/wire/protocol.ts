@@ -6147,6 +6147,10 @@ export const MetricsAggregateAsked = message(
 		without: [5, list(str)],
 		/** a timer's percentile also gives a point between its bounds */
 		estimate: [6, bool],
+		/** day, week or month: buckets of a calendar in timeZone, in place of every */
+		calendar: [7, str],
+		/** an IANA name, UTC among them, which calendar takes */
+		timeZone: [8, str],
 	},
 	{
 		write(w, v) {
@@ -6188,6 +6192,16 @@ export const MetricsAggregateAsked = message(
 				w.bool(v.estimate)
 				n++
 			}
+			if (v.calendar !== undefined) {
+				w.field(7)
+				w.str(v.calendar)
+				n++
+			}
+			if (v.timeZone !== undefined) {
+				w.field(8)
+				w.str(v.timeZone)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -6197,6 +6211,8 @@ export const MetricsAggregateAsked = message(
 			let $by: string[] | undefined
 			let $without: string[] | undefined
 			let $estimate: boolean | undefined
+			let $calendar: string | undefined
+			let $timeZone: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -6229,6 +6245,12 @@ export const MetricsAggregateAsked = message(
 					case 6:
 						$estimate = r.bool()
 						break
+					case 7:
+						$calendar = r.str()
+						break
+					case 8:
+						$timeZone = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -6241,6 +6263,8 @@ export const MetricsAggregateAsked = message(
 				by: $by,
 				without: $without,
 				estimate: $estimate,
+				calendar: $calendar,
+				timeZone: $timeZone,
 			}
 		},
 	},
@@ -8757,6 +8781,10 @@ export const RecordsAggregateAsked = message(
 		by: [3, list(str)],
 		stats: [4, list(str)],
 		distinct: [5, list(str)],
+		/** day, week or month: rows of a calendar in timeZone, in place of every */
+		calendar: [6, str],
+		/** an IANA name, UTC among them, which calendar takes */
+		timeZone: [7, str],
 	},
 	{
 		write(w, v) {
@@ -8796,6 +8824,16 @@ export const RecordsAggregateAsked = message(
 				}
 				n++
 			}
+			if (v.calendar !== undefined) {
+				w.field(6)
+				w.str(v.calendar)
+				n++
+			}
+			if (v.timeZone !== undefined) {
+				w.field(7)
+				w.str(v.timeZone)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -8804,6 +8842,8 @@ export const RecordsAggregateAsked = message(
 			let $by: string[] | undefined
 			let $stats: string[] | undefined
 			let $distinct: string[] | undefined
+			let $calendar: string | undefined
+			let $timeZone: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8839,12 +8879,26 @@ export const RecordsAggregateAsked = message(
 						$distinct = items0
 						break
 					}
+					case 6:
+						$calendar = r.str()
+						break
+					case 7:
+						$timeZone = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { query: $query, every: $every, by: $by, stats: $stats, distinct: $distinct }
+			return {
+				query: $query,
+				every: $every,
+				by: $by,
+				stats: $stats,
+				distinct: $distinct,
+				calendar: $calendar,
+				timeZone: $timeZone,
+			}
 		},
 	},
 )

@@ -242,6 +242,10 @@ let hourly = store
 - `top` gives a key's most frequent values, ten unless `limit` asks for more,
   1,000 at most. The key is a field's or a context's, or `stream`, `name` or
   `level`.
+- `calendar` with `timeZone` (`time_zone` in Python, `Calendar` and
+  `TimeZone` in Go, `.calendar(Calendar::Day, zone)` in Rust) gives a row for
+  each local day, week from Monday or month in place of `every`, as
+  [metrics' days](../metrics/aggregates.md#days-in-a-time-zone) do.
 - `aggregate` gives a row for each span of `every` and each value of the keys
   in `by`, with its `count`. A span without events has no row. `at` is where
   a row's span begins, counted from 1970 in UTC.

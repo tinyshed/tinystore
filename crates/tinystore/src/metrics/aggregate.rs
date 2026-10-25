@@ -24,8 +24,8 @@
 //! # }
 //! ```
 //!
-//! Buckets are spans of `every` counted from 1970 in UTC, and the range cuts
-//! the first and the last. A series' samples reach its buckets in the order
+//! Buckets are spans of `every` counted from 1970 in UTC, or of a calendar
+//! in a time zone, and the range cuts the first and the last. A series' samples reach its buckets in the order
 //! of their times, a block inside one bucket whole, from its summary, and a
 //! step between two samples is counted in the bucket it ends in:
 //!
@@ -46,6 +46,7 @@ use super::rank::Rank;
 use super::series::{Kind, Labels};
 use super::snapshot::Window;
 use super::timer::Part;
+use crate::calendar::{Calendar, Zoned};
 use crate::{Error, Result};
 
 /// What a bucket's value is of its samples.
@@ -199,6 +200,8 @@ enum Grouping {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Asking<'a> {
     pub(super) every: Option<Duration>,
+    /// Buckets of a calendar in the zone of its IANA name.
+    pub(super) calendar: Option<(Calendar, &'a str)>,
     pub(super) by: Option<&'a [String]>,
     pub(super) without: Option<&'a [String]>,
     /// The name it asked for: a timer's is read as the series it writes.
@@ -211,8 +214,8 @@ pub(super) struct Asking<'a> {
 pub(super) struct Shape {
     op: Op,
     rank: Option<Rank>,
-    /// A bucket's width in milliseconds; without one the range is one bucket.
-    every: Option<i64>,
+    /// What a bucket spans; without it the range is one bucket.
+    grid: Option<Grid>,
     grouping: Grouping,
     name: Option<String>,
     estimate: bool,
@@ -227,12 +230,16 @@ impl Shape {
             }
             _ => None,
         };
-        let every = match asking.every {
-            None => None,
-            Some(span) if span.is_zero() || span.subsec_nanos() % 1_000_000 != 0 => {
+        let grid = match (asking.every, asking.calendar) {
+            (Some(_), Some(_)) => {
+                return Err(Error::invalid("an aggregate's buckets are `every` or `calendar`, not both"));
+            }
+            (Some(span), None) if span.is_zero() || span.subsec_nanos() % 1_000_000 != 0 => {
                 return Err(Error::invalid("every: a span of whole milliseconds, one at least"));
             }
-            Some(span) => Some(crate::clock::millis(span)),
+            (Some(span), None) => Some(Grid::Every(crate::clock::millis(span))),
+            (None, Some((unit, zone))) => Some(Grid::Calendar(Zoned::of(unit, zone)?)),
+            (None, None) => None,
         };
         let grouping = match (asking.by, asking.without) {
             (Some(_), Some(_)) => {
@@ -243,7 +250,7 @@ impl Shape {
             (None, None) => Grouping::Name,
         };
         let name = asking.name.map(str::to_owned);
-        Ok(Shape { op, rank, every, grouping, name, estimate: asking.estimate })
+        Ok(Shape { op, rank, grid, grouping, name, estimate: asking.estimate })
     }
 
     pub(super) fn op(&self) -> Op {
@@ -292,7 +299,7 @@ impl Shape {
     /// window and in one bucket, and the `op` takes no sample's rank.
     pub(super) fn holds(&self, op: Op, block: &Block, window: Window) -> bool {
         let (start, end) = (block.times.start, block.times.end);
-        let one_bucket = self.every.is_none_or(|every| start.div_euclid(every) == end.div_euclid(every));
+        let one_bucket = self.grid.as_ref().is_none_or(|grid| grid.start(start) == grid.start(end));
         let ranks = matches!(op, Op::Percentile(_));
         !ranks && block.summary.exact.is_some() && start >= window.from && end < window.to && one_bucket
     }
@@ -354,9 +361,10 @@ impl Shape {
     }
 
     /// Where the bucket that holds `at` begins: a whole number of `every`
-    /// since 1970, or where the range does when it is one bucket.
+    /// since 1970, a calendar's local start, or where the range does when it
+    /// is one bucket.
     pub(super) fn bucket_of(&self, at: i64, range_from: i64) -> i64 {
-        self.every.map_or(range_from, |every| at.div_euclid(every) * every)
+        self.grid.as_ref().map_or(range_from, |grid| grid.start(at))
     }
 
     /// What the range leaves of the bucket that begins at `at`.
@@ -365,8 +373,8 @@ impl Shape {
     /// every 1h, range 10:20 to 12:40    10:00 → 10:20 to 11:00    12:00 → 12:00 to 12:40
     /// ```
     pub(super) fn span(&self, at: i64, range_from: i64, to: i64) -> (i64, i64) {
-        match self.every {
-            Some(every) => (at.max(range_from), at.saturating_add(every).min(to)),
+        match &self.grid {
+            Some(grid) => (at.max(range_from), grid.end(at).min(to)),
             None => (range_from, to),
         }
     }
@@ -379,17 +387,46 @@ impl Shape {
     /// every 1h, since 1h at 12:10    11:00 → cut at 11:10    12:00 → ten minutes of it so far
     /// ```
     pub(super) fn cuts(&self, at: i64, span: (i64, i64), cutoff: i64, now: i64) -> bool {
-        let by_range = self.every.is_some_and(|every| span.0 > at || span.1 < at.saturating_add(every));
+        let by_range = self.grid.as_ref().is_some_and(|grid| span.0 > at || span.1 < grid.end(at));
         by_range || span.1 > now.saturating_add(1) || span.0 < cutoff
     }
 
     /// Whether a step from a sample at `before` into the bucket at `at`
     /// began before the bucket before it, so that a whole bucket between
-    /// them had no samples. The yardstick is the query's `every`, the range
+    /// them had no samples. The yardstick is the query's buckets, the range
     /// when it is one bucket, never a guess at how often a series writes.
     pub(super) fn gap(&self, before: i64, at: i64, span: (i64, i64)) -> bool {
-        let width = self.every.unwrap_or(span.1.saturating_sub(span.0));
-        before < at.saturating_sub(width)
+        match &self.grid {
+            Some(grid) => before < grid.start(at.saturating_sub(1)),
+            None => before < at.saturating_sub(span.1.saturating_sub(span.0)),
+        }
+    }
+}
+
+/// What a bucket spans, in milliseconds since 1970.
+#[derive(Clone, Debug)]
+enum Grid {
+    /// A width counted from 1970 in UTC.
+    Every(i64),
+    /// A span of a calendar in a time zone, as long as that span is there.
+    Calendar(Zoned),
+}
+
+impl Grid {
+    /// Where the bucket that holds `at` begins.
+    fn start(&self, at: i64) -> i64 {
+        match self {
+            Grid::Every(every) => at.div_euclid(*every) * every,
+            Grid::Calendar(zoned) => zoned.start_millis(at),
+        }
+    }
+
+    /// Where the bucket that begins at `start` ends.
+    fn end(&self, start: i64) -> i64 {
+        match self {
+            Grid::Every(every) => start.saturating_add(*every),
+            Grid::Calendar(zoned) => zoned.end_millis(start),
+        }
     }
 }
 

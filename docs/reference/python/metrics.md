@@ -20,6 +20,8 @@ The series a call finds and its range; a condition given as None is InvalidError
 ```python
 class AggregateQuery(SeriesQuery, total=False):
     every: Duration  # the buckets' span, counted from 1970 in UTC; the range is one bucket without it
+    calendar: Calendar  # buckets of a calendar in time_zone, in place of every: "day" begins each at a local midnight
+    time_zone: str  # the IANA zone a calendar's buckets are in, such as Europe/Moscow or UTC
     op: Op | str
     by: Sequence[str]  # the labels a group keeps; without by and without, every series of a name is one group
     without: Sequence[str]  # the labels a group leaves out, keeping every other; [] keeps every series apart

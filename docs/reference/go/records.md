@@ -530,6 +530,11 @@ type Query struct {
 
 	// Every is the span of an aggregate's row: the range is one without it.
 	Every time.Duration
+	// Calendar is rows of a calendar in TimeZone, in place of Every:
+	// tinystore.Day begins each at a local midnight.
+	Calendar tinystore.Calendar
+	// TimeZone is the IANA zone a calendar's rows are in: "Europe/Moscow", "UTC".
+	TimeZone string
 	// By is keys whose every value has rows of its own.
 	By []string
 	// Stats is fields whose numbers a row sums.

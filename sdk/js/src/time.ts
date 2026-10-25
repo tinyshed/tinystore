@@ -53,6 +53,9 @@ export type DurationText = Offered | (Spelled<Units> & Record<never, never>)
 /** A length of time: milliseconds, or the text of one, such as '1h30m'. */
 export type Duration = number | DurationText
 
+/** A span of a calendar an aggregate's bucket covers in its timeZone: a local day, a week from Monday, a month. */
+export type Calendar = 'day' | 'week' | 'month'
+
 /** A moment: a Date, or unix milliseconds. */
 export type Time = Date | number
 

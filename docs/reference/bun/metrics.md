@@ -121,6 +121,10 @@ What a bucket answers: count … last, or a percentile; rate is a second's incre
 interface AggregateQuery<O extends Op = Op> extends Query {
     /** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
     every?: Duration | undefined
+    /** buckets of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
+    calendar?: Calendar | undefined
+    /** the IANA zone a calendar's buckets are in: 'Europe/Moscow', 'UTC' */
+    timeZone?: string | undefined
     op: O
     /** the labels a group keeps; without by and without, every series of a name is one group */
     by?: readonly string[] | undefined

@@ -297,6 +297,12 @@ impl Query {
         self.with(|query| query.every(span))
     }
 
+    /// An aggregate's buckets on the calendar of a time zone, as
+    /// [`crate::metrics::Query::calendar`] has them.
+    pub fn calendar(self, unit: crate::Calendar, zone: &str) -> Self {
+        self.with(|query| query.calendar(unit, zone))
+    }
+
     /// The labels an aggregate keeps: the series of a name that share them
     /// are one group.
     pub fn by(self, labels: &[&str]) -> Self {

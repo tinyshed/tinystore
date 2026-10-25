@@ -152,6 +152,30 @@ for (const way of ways) {
 			expect(await last(store, 'bytes_given')).toEqual({ '{}': 1 })
 		})
 
+		test("a calendar's buckets begin at the local midnight of their time zone", async () => {
+			// a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end
+			const midnight =
+				Math.floor(Date.now() / 86_400_000) * 86_400_000 - 10 * 86_400_000 - 3 * 3_600_000
+			const samples = [midnight + 3_600_000, midnight + 23 * 3_600_000].map(at => [at, 1] as const)
+			await store.metrics.ingest({ name: 'orders', kind: 'gauge', labels: {}, samples })
+			const range = {
+				name: 'orders',
+				from: new Date(midnight),
+				to: new Date(midnight + 86_400_000),
+			}
+			const [local] = await store.metrics.aggregate({
+				...range,
+				op: 'sum',
+				calendar: 'day',
+				timeZone: 'Europe/Moscow',
+			})
+			expect(local?.buckets.map(bucket => [bucket.at.getTime(), bucket.value])).toEqual([
+				[midnight, 2],
+			])
+			const [utc] = await store.metrics.aggregate({ ...range, op: 'sum', every: '1d' })
+			expect(utc?.buckets.map(bucket => bucket.value)).toEqual([1, 1])
+		})
+
 		test("an aggregate's buckets are exact by group, and a timer's percentile is its bounds", async () => {
 			const at = Date.now() - 60_000
 			const route = (name: string, values: number[]) => ({

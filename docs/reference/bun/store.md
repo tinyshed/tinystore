@@ -900,6 +900,14 @@ type Duration = number | DurationText
 
 A length of time: milliseconds, or the text of one, such as '1h30m'.
 
+## Calendar
+
+```ts
+type Calendar = 'day' | 'week' | 'month'
+```
+
+A span of a calendar an aggregate's bucket covers in its timeZone: a local day, a week from Monday, a month.
+
 ## Time
 
 ```ts

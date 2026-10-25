@@ -27,7 +27,7 @@ use crate::records::{
     TailBatch, TraceId,
 };
 use crate::sync::lock;
-use crate::{ErrorKind, Store, unix_nanos};
+use crate::{Calendar, ErrorKind, Store, unix_nanos};
 
 use super::Answered;
 
@@ -217,6 +217,9 @@ fn aggregate(store: &Store, handles: &Handles, asked: RecordsAggregateAsked) -> 
     let mut aggregate = Aggregate::new().by(asked.by).stats(asked.stats).distinct(asked.distinct);
     if let Some(every) = asked.every {
         aggregate = aggregate.every(Duration::from_millis(every));
+    }
+    if let Some((unit, zone)) = Calendar::asked(asked.calendar.as_deref(), asked.time_zone.as_deref())? {
+        aggregate = aggregate.calendar(unit, zone);
     }
     let rows = query(store, handles, &asked.query)?.aggregate(&aggregate)?;
     let rows = rows.into_iter().map(|row| RecordsRow {

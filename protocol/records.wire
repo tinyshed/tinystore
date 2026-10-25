@@ -97,6 +97,8 @@ message records.AggregateAsked {
   3 by: [str]
   4 stats: [str]
   5 distinct: [str]
+  6 calendar: str?       # day, week or month: rows of a calendar in timeZone, in place of every
+  7 timeZone: str?       # an IANA name, UTC among them, which calendar takes
 }
 
 # A field's numbers in a row: a sum, a min and a max are JSON numbers, an

@@ -18,7 +18,7 @@ import {
 	newStoreLogger,
 } from './logger.ts'
 import type { Stream } from './session.ts'
-import { type Duration, type DurationText, ms } from './time.ts'
+import { type Calendar, type Duration, type DurationText, ms } from './time.ts'
 import { currentTrace, type Trace } from './trace.ts'
 import {
 	Empty,
@@ -165,6 +165,10 @@ export interface Row {
 export interface Aggregate extends Counted {
 	/** the span of a row: the range is one without it */
 	every?: Duration
+	/** rows of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
+	calendar?: Calendar
+	/** the IANA zone a calendar's rows are in: 'Europe/Moscow', 'UTC' */
+	timeZone?: string
 	/** keys whose every value has rows of its own */
 	by?: readonly string[]
 	/** fields whose numbers a row sums */
@@ -300,12 +304,14 @@ abstract class Reads {
 
 	/** A row for each span of `every` and each value of the keys of `by`, with its count. */
 	async aggregate(query: Aggregate = {}): Promise<Row[]> {
-		const { every, by, stats, distinct, ...counted } = query
+		const { every, calendar, timeZone, by, stats, distinct, ...counted } = query
 		const asked = queryOf(counted)
 		const answer = await this.ask('records.aggregate', handle =>
 			RecordsAggregateAsked.encode({
 				query: { ...asked, handle },
 				every: every === undefined ? undefined : ms(every),
+				calendar,
+				timeZone,
 				by: by === undefined ? undefined : [...by],
 				stats: stats === undefined ? undefined : [...stats],
 				distinct: distinct === undefined ? undefined : [...distinct],

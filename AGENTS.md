@@ -170,7 +170,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
 - **A dependency is a decision**, and every program linking TinyStore pays for
   it: rusqlite pinned to one release with SQLite bundled, serde, serde_json,
   tracing, tracing-subscriber's registry for a logger's layer, jiff for a
-  cron's zone and a console line's time, sha2 for blobs' hashes, a key's id,
+  cron's zone, a console line's time and an aggregate's calendar, sha2 for blobs' hashes, a key's id,
   a series' identity, a backup's files, a table's row in its index and a log's entries, rustls, with `replication-tls` alone, for a node's links,
   chacha20poly1305 for the values of encrypted
   buckets, zstd for the rows of records, the runs of metrics and a node's links, the

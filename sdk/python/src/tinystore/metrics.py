@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from ._connection import Link
-    from ._time import Duration
+    from ._time import Calendar, Duration
 
 __all__ = [
     "Aggregate",
@@ -137,6 +137,10 @@ class AggregateQuery(SeriesQuery, total=False):
 
     every: Duration
     """the buckets' span, counted from 1970 in UTC; the range is one bucket without it"""
+    calendar: Calendar
+    """buckets of a calendar in time_zone, in place of every: "day" begins each at a local midnight"""
+    time_zone: str
+    """the IANA zone a calendar's buckets are in, such as Europe/Moscow or UTC"""
     op: Op | str
     by: Sequence[str]
     """the labels a group keeps; without by and without, every series of a name is one group"""
@@ -554,6 +558,8 @@ def _aggregate_of(query: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "query": _query_of(query),
         "every": None if every is None else ms(every, "an aggregate's every"),
+        "calendar": query.get("calendar"),
+        "time_zone": query.get("time_zone"),
         "op": query.get("op"),
         "by": None if by is None else list(by),
         "without": None if without is None else list(without),

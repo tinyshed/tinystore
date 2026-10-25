@@ -1,10 +1,10 @@
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::ErrorKind;
 use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
 use crate::metrics::labels::Kept;
-use crate::metrics::{Series, maintain};
+use crate::metrics::{Query, Series, maintain};
+use crate::{Calendar, ErrorKind};
 
 /// `series` with a sample of each value, a `step` apart from `first`.
 fn run(mut series: Series, first: SystemTime, step: Duration, values: impl IntoIterator<Item = f64>) -> Series {
@@ -449,4 +449,66 @@ fn an_overflowed_set_is_a_group_of_its_own_whatever_a_query_groups_by() {
     assert_eq!(labels(&by(Some(&route), None), &overflowed), ["__overflow"]);
     assert_eq!(labels(&by(None, Some(&route)), &routed), ["status"]);
     assert_eq!(labels(&by(None, Some(&[])), &routed), ["route", "status"]);
+}
+
+/// 2027-01-12 00:00 in Moscow, three days before the fixture's clock.
+const MOSCOW_MIDNIGHT: u64 = 1_799_701_200;
+
+// contract: MET-04, MET-05
+#[test]
+fn calendar_days_begin_at_local_midnight_and_add_up_packed_or_not() {
+    let f = fixture();
+    let midnight = UNIX_EPOCH + Duration::from_secs(MOSCOW_MIDNIGHT);
+    // an order an hour for two Moscow days, as a shop in Moscow takes them
+    f.metrics().ingest(&[run(Series::gauge("orders"), midnight, HOUR, [1.0; 48])]).unwrap();
+    let days = |query: Query| {
+        let answer = query.name("orders").from(midnight).to(midnight + 2 * DAY).aggregate(Op::Sum).unwrap();
+        answer[0].buckets.iter().map(|bucket| (bucket.at, number(bucket), bucket.partial)).collect::<Vec<_>>()
+    };
+    let local = vec![(midnight, 24.0, false), (midnight + DAY, 24.0, false)];
+    assert_eq!(days(f.metrics().query().calendar(Calendar::Day, "Europe/Moscow")), local);
+    // days of UTC cut at 03:00 in Moscow, as the issue saw them
+    let utc: Vec<f64> = days(f.metrics().query().every(DAY)).iter().map(|(_, sum, _)| *sum).collect();
+    assert_eq!(utc, [3.0, 24.0, 21.0]);
+    // packed into blocks that cross a local midnight, the days are the same
+    assert!(maintain(&f.store).unwrap().blocks > 0);
+    assert_eq!(days(f.metrics().query().calendar(Calendar::Day, "Europe/Moscow")), local);
+}
+
+// contract: MET-04
+#[test]
+fn a_rate_over_a_calendar_day_counts_the_seconds_the_day_has() {
+    let f = fixture();
+    // Berlin's 2026-10-25 is 25 hours long; a counter that grows by one a second, a sample an hour
+    // from an hour before the day before it, where the first day's first step begins
+    let midnight = UNIX_EPOCH + Duration::from_secs(1_792_879_200);
+    let counted = Series::counter("ticks_total").keep(Duration::from_hours(24 * 400));
+    let hours = (0..1 + 24 + 25 + 24).map(|hour| f64::from(hour * 3600));
+    let counted = run(counted, midnight - DAY - HOUR, HOUR, hours);
+    f.metrics().ingest(&[counted]).unwrap();
+    let rates = f
+        .metrics()
+        .query()
+        .name("ticks_total")
+        .from(midnight - DAY)
+        .to(midnight + Duration::from_hours(49))
+        .calendar(Calendar::Day, "Europe/Berlin")
+        .aggregate(Op::Rate)
+        .unwrap();
+    let days: Vec<(SystemTime, f64)> = rates[0].buckets.iter().map(|bucket| (bucket.at, number(bucket))).collect();
+    let hours = |count: u64| Duration::from_hours(count);
+    assert_eq!(days, [(midnight - DAY, 1.0), (midnight, 1.0), (midnight + hours(25), 1.0)]);
+}
+
+#[test]
+fn every_and_a_calendar_together_or_a_zone_no_one_has_are_refused() {
+    let f = fixture();
+    f.metrics().ingest(&[Series::gauge("orders").sample(f.now(), 1.0)]).unwrap();
+    let query = || f.metrics().query().name("orders").since(DAY);
+    let both = query().every(HOUR).calendar(Calendar::Day, "UTC").aggregate(Op::Sum).unwrap_err();
+    assert!(both.to_string().contains("`every` or `calendar`, not both"), "{both}");
+    let nowhere = query().calendar(Calendar::Week, "Mars/Olympus").aggregate(Op::Sum).unwrap_err();
+    assert_eq!(nowhere.kind(), ErrorKind::Invalid, "{nowhere}");
+    let read = query().calendar(Calendar::Day, "UTC").read().unwrap_err();
+    assert!(read.to_string().contains("`calendar`"), "{read}");
 }

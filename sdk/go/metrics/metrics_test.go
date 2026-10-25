@@ -167,6 +167,28 @@ func TestEveryTextOfTheVectorsWritesItsSeriesOrIsRefusedWhole(t *testing.T) {
 	})
 }
 
+func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		// a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end
+		midnight := time.Now().UTC().Truncate(24 * time.Hour).Add(-10*24*time.Hour - 3*time.Hour)
+		samples := []metrics.Sample{{At: midnight.Add(time.Hour), Value: 1}, {At: midnight.Add(23 * time.Hour), Value: 1}}
+		ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "orders", Kind: metrics.KindGauge, Samples: samples}))
+		query := metrics.Query{Name: "orders", From: midnight, To: midnight.Add(24 * time.Hour), Op: metrics.Sum}
+		local := query
+		local.Calendar, local.TimeZone = tinystore.Day, "Europe/Moscow"
+		days := ways.Must(metrics.Aggregate(ctx, store, local))
+		if buckets := days[0].Buckets; len(buckets) != 1 || !buckets[0].At.Equal(midnight) || *buckets[0].Value != 2 {
+			t.Fatalf("a Moscow day: %+v", buckets)
+		}
+		utc := query
+		utc.Every = 24 * time.Hour
+		if buckets := ways.Must(metrics.Aggregate(ctx, store, utc))[0].Buckets; len(buckets) != 2 {
+			t.Fatalf("days of UTC: %+v", buckets)
+		}
+	})
+}
+
 func TestAnAggregatesBucketsAreExactByGroupAndATimersPercentileIsItsBounds(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

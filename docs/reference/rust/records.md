@@ -83,8 +83,8 @@ a plain call made once at start, since it may migrate records.db.
 pub struct Aggregate { /* private fields */ }
 ```
 
-What `aggregate` makes rows of: spans of `every`, the values of the keys
-in `by`, and of the fields in `stats` and `distinct`.
+What `aggregate` makes rows of: spans of `every` or of a calendar, the
+values of the keys in `by`, and of the fields in `stats` and `distinct`.
 
 ### Aggregate.new
 
@@ -100,6 +100,17 @@ pub fn every(self, span: Duration) -> Self
 
 A row a span this long, each beginning at a whole number of them
 since 1970; the whole range is one span without it.
+
+### Aggregate.calendar
+
+```rust
+pub fn calendar(self, unit: Calendar, zone: &str) -> Self
+```
+
+A row a span of the calendar of a time zone, its IANA name:
+`calendar(Calendar::Day, "Europe/Moscow")` begins each at a local
+midnight, a day 23 or 25 hours long when the clock moves; a row's `at`
+is the instant its span begins.
 
 ### Aggregate.by
 

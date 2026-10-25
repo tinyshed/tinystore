@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"tinyshed.org/tinystore"
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/wire"
 )
@@ -43,6 +44,11 @@ type Query struct {
 
 	// Every is the span of an aggregate's row: the range is one without it.
 	Every time.Duration
+	// Calendar is rows of a calendar in TimeZone, in place of Every:
+	// tinystore.Day begins each at a local midnight.
+	Calendar tinystore.Calendar
+	// TimeZone is the IANA zone a calendar's rows are in: "Europe/Moscow", "UTC".
+	TimeZone string
 	// By is keys whose every value has rows of its own.
 	By []string
 	// Stats is fields whose numbers a row sums.
@@ -239,7 +245,9 @@ func (r reads) aggregate(ctx context.Context, q Query) ([]Row, error) {
 	}
 	answer, err := r.ask(ctx, wire.MethodRecordsAggregate, func(handle *uint64) []byte {
 		asked, _ := q.asked(handle)
-		return wire.Encode(&wire.RecordsAggregateAsked{Query: asked, Every: every, By: q.By, Stats: q.Stats, Distinct: q.Distinct})
+		message := wire.RecordsAggregateAsked{Query: asked, Every: every, By: q.By, Stats: q.Stats, Distinct: q.Distinct}
+		message.Calendar, message.TimeZone = core.CalendarOf(string(q.Calendar), q.TimeZone)
+		return wire.Encode(&message)
 	})
 	if err != nil {
 		return nil, err

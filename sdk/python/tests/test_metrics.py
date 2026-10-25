@@ -106,6 +106,22 @@ async def test_every_text_of_the_vectors_writes_its_series_or_is_refused_whole(s
 
 
 # contract: MET-04
+async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zone(store: tinystore.Store) -> None:
+    # a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight = today - timedelta(days=10, hours=3)
+    samples = [(midnight + timedelta(hours=1), 1.0), (midnight + timedelta(hours=23), 1.0)]
+    await store.metrics.ingest(Series(name="orders", kind="gauge", labels={}, samples=samples))
+    end = midnight + timedelta(days=1)
+    [local] = await store.metrics.aggregate(
+        name="orders", from_=midnight, to=end, op="sum", calendar="day", time_zone="Europe/Moscow"
+    )
+    assert [(bucket.at, bucket.value) for bucket in local.buckets] == [(midnight, 2)]
+    [utc] = await store.metrics.aggregate(name="orders", from_=midnight, to=end, op="sum", every="1d")
+    assert [bucket.value for bucket in utc.buckets] == [1, 1]
+
+
+# contract: MET-04
 async def test_an_aggregates_buckets_are_exact_by_group_and_a_timers_percentile_is_its_bounds(
     store: tinystore.Store,
 ) -> None:

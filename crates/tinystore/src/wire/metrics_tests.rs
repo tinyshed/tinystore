@@ -142,6 +142,36 @@ fn an_aggregate_and_the_newest_samples_answer_over_the_wire() {
     assert_eq!(values, [(a, 25.0), (b, 1.0)]);
 }
 
+// contract: MET-04
+#[test]
+fn an_aggregate_takes_a_calendar_with_its_time_zone_and_refuses_one_without_the_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let at = now() - 60_000;
+    ingest(&mut client, vec![series("orders", "gauge", &[], &[(at, 1.0), (at + 1000, 2.0)])]);
+    let asked = MetricsAggregateAsked {
+        query: named("orders"),
+        op: Some("sum".to_owned()),
+        calendar: Some("day".to_owned()),
+        time_zone: Some("Europe/Moscow".to_owned()),
+        ..MetricsAggregateAsked::default()
+    };
+    let parts: Vec<MetricsAggregates> = downloaded(&mut client, method::METRICS_AGGREGATE, &asked);
+    let buckets: Vec<_> = parts.iter().flat_map(|part| &part.groups).flat_map(|group| &group.buckets).collect();
+    assert_eq!(buckets.iter().map(|bucket| bucket.value).collect::<Vec<_>>(), [Some(3.0)]);
+    for (calendar, time_zone) in [(Some("day"), None), (None, Some("UTC")), (Some("fortnight"), Some("UTC"))] {
+        let wrong = MetricsAggregateAsked {
+            calendar: calendar.map(str::to_owned),
+            time_zone: time_zone.map(str::to_owned),
+            ..asked.clone()
+        };
+        let stream = client.start(method::METRICS_AGGREGATE, &wrong);
+        let refused = answered::<MetricsAggregates>(&client.next_on(stream)).unwrap_err();
+        assert_eq!(refused.code, "invalid", "{calendar:?} {time_zone:?}");
+    }
+}
+
 #[test]
 fn what_a_store_holds_and_its_removal_over_the_wire() {
     let dir = tempfile::tempdir().unwrap();

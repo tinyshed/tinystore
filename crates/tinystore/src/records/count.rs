@@ -22,6 +22,7 @@ use super::engine::{Records, nanos};
 use super::event::Event;
 use super::events::AllEvents;
 use super::read::List;
+use crate::calendar::{Calendar, Zoned};
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -87,11 +88,12 @@ pub struct Row {
     pub distinct: BTreeMap<String, u64>,
 }
 
-/// What `aggregate` makes rows of: spans of `every`, the values of the keys
-/// in `by`, and of the fields in `stats` and `distinct`.
+/// What `aggregate` makes rows of: spans of `every` or of a calendar, the
+/// values of the keys in `by`, and of the fields in `stats` and `distinct`.
 #[derive(Clone, Debug, Default)]
 pub struct Aggregate {
     every: Option<Duration>,
+    calendar: Option<(Calendar, String)>,
     by: Vec<String>,
     stats: Vec<String>,
     distinct: Vec<String>,
@@ -106,6 +108,15 @@ impl Aggregate {
     /// since 1970; the whole range is one span without it.
     pub fn every(mut self, span: Duration) -> Self {
         self.every = Some(span);
+        self
+    }
+
+    /// A row a span of the calendar of a time zone, its IANA name:
+    /// `calendar(Calendar::Day, "Europe/Moscow")` begins each at a local
+    /// midnight, a day 23 or 25 hours long when the clock moves; a row's `at`
+    /// is the instant its span begins.
+    pub fn calendar(mut self, unit: Calendar, zone: &str) -> Self {
+        self.calendar = Some((unit, zone.to_owned()));
         self
     }
 
@@ -178,18 +189,46 @@ impl List {
     /// order of their spans: an answer whole, or an error of kind `limit`
     /// past 10,000 rows.
     pub fn aggregate(&self, aggregate: &Aggregate) -> Result<Vec<Row>> {
-        let every = match aggregate.every {
-            Some(span) if span.is_zero() => return Err(Error::invalid("every: a span longer than none")),
-            span => span.map(nanos),
-        };
+        let spans = Spans::of(aggregate)?;
         let (first, _) = self.span()?;
         let mut rows = Rows { asked: aggregate, rows: HashMap::new(), held: Held::default() };
         for event in self.walk("aggregate")? {
             let event = event?;
-            let at = every.map_or(first, |every| unix_nanos(event.at).div_euclid(every) * every);
-            rows.add(at, &event)?;
+            rows.add(spans.start(unix_nanos(event.at), first), &event)?;
         }
         Ok(rows.finish())
+    }
+}
+
+/// What an aggregate's rows span, in nanoseconds since 1970.
+enum Spans {
+    /// The whole range, one row.
+    Range,
+    /// A width counted from 1970 in UTC.
+    Every(i64),
+    /// A span of a calendar in a time zone.
+    Calendar(Zoned),
+}
+
+impl Spans {
+    fn of(aggregate: &Aggregate) -> Result<Spans> {
+        match (aggregate.every, &aggregate.calendar) {
+            (Some(_), Some(_)) => Err(Error::invalid("an aggregate's rows are `every` or `calendar`, not both")),
+            (Some(span), None) if span.is_zero() => Err(Error::invalid("every: a span longer than none")),
+            (Some(span), None) => Ok(Spans::Every(nanos(span))),
+            (None, Some((unit, zone))) => Ok(Spans::Calendar(Zoned::of(*unit, zone)?)),
+            (None, None) => Ok(Spans::Range),
+        }
+    }
+
+    /// Where the row of an event at `at` begins; `first`, the range's start,
+    /// when the range is one row.
+    fn start(&self, at: i64, first: i64) -> i64 {
+        match self {
+            Spans::Range => first,
+            Spans::Every(every) => at.div_euclid(*every) * every,
+            Spans::Calendar(zoned) => zoned.start_nanos(at),
+        }
     }
 }
 

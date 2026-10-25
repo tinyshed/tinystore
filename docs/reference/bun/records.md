@@ -182,6 +182,10 @@ interface Row {
 interface Aggregate extends Counted {
     /** the span of a row: the range is one without it */
     every?: Duration
+    /** rows of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
+    calendar?: Calendar
+    /** the IANA zone a calendar's rows are in: 'Europe/Moscow', 'UTC' */
+    timeZone?: string
     /** keys whose every value has rows of its own */
     by?: readonly string[]
     /** fields whose numbers a row sums */

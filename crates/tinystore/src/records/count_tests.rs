@@ -7,8 +7,8 @@ use super::super::events::Events;
 use super::super::fixture::{DAY, Fixture, SECOND, fixture};
 use super::super::maintain::maintain;
 use super::*;
-use crate::ErrorKind;
 use crate::records::{Level, NewEvent};
+use crate::{Calendar, ErrorKind};
 
 const HOUR: Duration = Duration::from_secs(60 * 60);
 const MINUTE: Duration = Duration::from_secs(60);
@@ -208,4 +208,25 @@ fn what_a_count_holds_of_different_values_is_bounded_in_bytes_and_a_sum_past_128
     let mut summing = Summing::default();
     summing.add(Number::Integer(i128::MAX)).unwrap();
     assert_eq!(summing.add(Number::Integer(1)).unwrap_err().kind(), ErrorKind::Limit);
+}
+
+#[test]
+fn calendar_rows_begin_at_local_midnight_and_every_and_a_calendar_together_are_refused() {
+    let fixture = fixture();
+    // 2027-01-12 00:00 in Moscow, three days before the fixture's clock: an order an hour for two days
+    let midnight = std::time::UNIX_EPOCH + Duration::from_secs(1_799_701_200);
+    let orders = fixture.events("orders");
+    let placed = (0..48).map(|hour| NewEvent::new("order").at(midnight + HOUR * hour));
+    orders.append_all(placed).unwrap();
+    let days = |asked: Aggregate| {
+        let rows = orders.list().from(midnight).to(midnight + 2 * DAY).aggregate(&asked).unwrap();
+        rows.iter().map(|row| (row.at, row.count)).collect::<Vec<_>>()
+    };
+    let local = days(Aggregate::new().calendar(Calendar::Day, "Europe/Moscow"));
+    assert_eq!(local, [(midnight, 24), (midnight + DAY, 24)]);
+    let utc: Vec<u64> = days(Aggregate::new().every(DAY)).into_iter().map(|(_, count)| count).collect();
+    assert_eq!(utc, [3, 24, 21], "days of UTC cut at 03:00 in Moscow");
+    let both = Aggregate::new().every(DAY).calendar(Calendar::Day, "UTC");
+    let refused = orders.list().from(midnight).aggregate(&both).unwrap_err();
+    assert!(refused.to_string().contains("`every` or `calendar`, not both"), "{refused}");
 }

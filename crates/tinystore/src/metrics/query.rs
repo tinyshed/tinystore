@@ -29,6 +29,7 @@ use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
 use super::latest::Latest;
 use super::series::Series;
+use crate::calendar::Calendar;
 use crate::{Error, Result, unix_millis};
 
 /// The values a list of a condition holds at most.
@@ -141,6 +142,7 @@ pub struct Query {
     from: Option<SystemTime>,
     to: Option<SystemTime>,
     every: Option<Duration>,
+    calendar: Option<(Calendar, String)>,
     by: Option<Vec<String>>,
     without: Option<Vec<String>>,
     estimate: bool,
@@ -155,6 +157,7 @@ impl fmt::Debug for Query {
             .field("from", &self.from)
             .field("to", &self.to)
             .field("every", &self.every)
+            .field("calendar", &self.calendar)
             .field("by", &self.by)
             .field("without", &self.without)
             .field("estimate", &self.estimate)
@@ -186,6 +189,7 @@ impl Query {
             from: None,
             to: None,
             every: None,
+            calendar: None,
             by: None,
             without: None,
             estimate: false,
@@ -229,6 +233,15 @@ impl Query {
     /// last. Without it the range is one bucket.
     pub fn every(mut self, span: Duration) -> Self {
         self.every = Some(span);
+        self
+    }
+
+    /// An aggregate's buckets on the calendar of a time zone, its IANA name:
+    /// `calendar(Calendar::Day, "Europe/Moscow")` begins each at a local
+    /// midnight, a day 23 or 25 hours long when the clock moves. A bucket's
+    /// `at` is the instant it begins, and a rate counts its own seconds.
+    pub fn calendar(mut self, unit: Calendar, zone: &str) -> Self {
+        self.calendar = Some((unit, zone.to_owned()));
         self
     }
 
@@ -344,6 +357,7 @@ impl Query {
     fn shape(&self, op: Op) -> Result<Shape> {
         let asking = Asking {
             every: self.every,
+            calendar: self.calendar.as_ref().map(|(unit, zone)| (*unit, zone.as_str())),
             by: self.by.as_deref(),
             without: self.without.as_deref(),
             name: self.name.as_deref(),
@@ -354,9 +368,10 @@ impl Query {
 
     /// Refuses what only an aggregate takes, for a call that is none.
     fn plain(&self, call: &str) -> Result<()> {
-        if self.every.is_some() || self.by.is_some() || self.without.is_some() || self.estimate {
+        let asks = self.every.is_some() || self.calendar.is_some() || self.by.is_some() || self.without.is_some();
+        if asks || self.estimate {
             return Err(Error::invalid(format!(
-                "`every`, `by`, `without` and `estimate` are an aggregate's: {call} takes none"
+                "`every`, `calendar`, `by`, `without` and `estimate` are an aggregate's: {call} takes none"
             )));
         }
         Ok(())

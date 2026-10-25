@@ -5045,6 +5045,14 @@ def _write_metrics_aggregate_asked(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(6)
         w.bool(x)
         n += 1
+    if (x := v.get("calendar")) is not None:
+        w.uint(7)
+        w.str(x)
+        n += 1
+    if (x := v.get("time_zone")) is not None:
+        w.uint(8)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5069,6 +5077,10 @@ def _read_metrics_aggregate_asked(r: Reader) -> dict[str, Any]:
                 read["without"] = items0
             case 6:
                 read["estimate"] = r.bool()
+            case 7:
+                read["calendar"] = r.str()
+            case 8:
+                read["time_zone"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -5089,6 +5101,10 @@ MetricsAggregateAsked = Message(
         "without": (5, list_(str_)),
         # a timer's percentile also gives a point between its bounds
         "estimate": (6, bool_),
+        # day, week or month: buckets of a calendar in timeZone, in place of every
+        "calendar": (7, str_),
+        # an IANA name, UTC among them, which calendar takes
+        "time_zone": (8, str_),
     },
     _write_metrics_aggregate_asked,
     _read_metrics_aggregate_asked,
@@ -7182,6 +7198,14 @@ def _write_records_aggregate_asked(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             w.str(item0)
         n += 1
+    if (x := v.get("calendar")) is not None:
+        w.uint(6)
+        w.str(x)
+        n += 1
+    if (x := v.get("time_zone")) is not None:
+        w.uint(7)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -7206,6 +7230,10 @@ def _read_records_aggregate_asked(r: Reader) -> dict[str, Any]:
                 items0 = [r.str() for _ in range(r.array())]
                 r.leave()
                 read["distinct"] = items0
+            case 6:
+                read["calendar"] = r.str()
+            case 7:
+                read["time_zone"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -7221,6 +7249,10 @@ RecordsAggregateAsked = Message(
         "by": (3, list_(str_)),
         "stats": (4, list_(str_)),
         "distinct": (5, list_(str_)),
+        # day, week or month: rows of a calendar in timeZone, in place of every
+        "calendar": (6, str_),
+        # an IANA name, UTC among them, which calendar takes
+        "time_zone": (7, str_),
     },
     _write_records_aggregate_asked,
     _read_records_aggregate_asked,

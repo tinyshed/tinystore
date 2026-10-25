@@ -59,6 +59,8 @@ message metrics.AggregateAsked {
   4 by: [str]?
   5 without: [str]?
   6 estimate: bool      # a timer's percentile also gives a point between its bounds
+  7 calendar: str?      # day, week or month: buckets of a calendar in timeZone, in place of every
+  8 timeZone: str?      # an IANA name, UTC among them, which calendar takes
 }
 
 # A bucket of an aggregate: its value, or a timer's percentile's bounds.

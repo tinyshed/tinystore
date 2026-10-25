@@ -20,7 +20,7 @@ import {
 	Timer,
 	type TimerOptions,
 } from './instruments.ts'
-import { type Duration, type DurationText, ms, type Time, unixMs } from './time.ts'
+import { type Calendar, type Duration, type DurationText, ms, type Time, unixMs } from './time.ts'
 import {
 	Empty,
 	MetricsAggregateAsked,
@@ -153,6 +153,10 @@ export type Op =
 export interface AggregateQuery<O extends Op = Op> extends Query {
 	/** the buckets' span, counted from 1970 in UTC; the range is one bucket without it */
 	every?: Duration | undefined
+	/** buckets of a calendar in timeZone, in place of every: 'day' begins each at a local midnight */
+	calendar?: Calendar | undefined
+	/** the IANA zone a calendar's buckets are in: 'Europe/Moscow', 'UTC' */
+	timeZone?: string | undefined
 	op: O
 	/** the labels a group keeps; without by and without, every series of a name is one group */
 	by?: readonly string[] | undefined
@@ -617,6 +621,8 @@ function aggregateOf(query: AggregateQuery): Parameters<typeof MetricsAggregateA
 	return {
 		query: queryOf(query),
 		every: query.every === undefined ? undefined : ms(query.every),
+		calendar: query.calendar,
+		timeZone: query.timeZone,
 		op: query.op,
 		by: query.by === undefined ? undefined : [...query.by],
 		without: query.without === undefined ? undefined : [...query.without],

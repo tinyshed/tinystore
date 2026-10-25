@@ -10,6 +10,8 @@ pub mod aio;
 pub mod backup;
 #[cfg(feature = "blobs")]
 pub mod blobs;
+#[cfg(any(feature = "metrics", feature = "records"))]
+mod calendar;
 #[cfg(feature = "store")]
 mod cancel;
 #[cfg(feature = "channels")]
@@ -81,6 +83,8 @@ pub mod typos;
 #[cfg(feature = "wire")]
 pub(crate) mod wire;
 
+#[cfg(any(feature = "metrics", feature = "records"))]
+pub use calendar::Calendar;
 #[cfg(feature = "store")]
 pub use cancel::CancellationToken;
 pub use clock::{Clock, SystemClock, TestClock, unix_millis, unix_nanos};

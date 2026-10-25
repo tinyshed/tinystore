@@ -22,6 +22,7 @@ use super::protocol::{
     MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, method,
 };
 use super::{Link, Route};
+use crate::Calendar;
 use crate::clock::from_unix_millis;
 use crate::metrics::{
     Ack, Aggregate, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op, Query, Remote,
@@ -178,6 +179,9 @@ fn aggregating(metrics: &Metrics, asked: MetricsAggregateAsked) -> Result<Query,
     let mut query = query(metrics, asked.query)?;
     if let Some(every) = asked.every {
         query = query.every(Duration::from_millis(every));
+    }
+    if let Some((unit, zone)) = Calendar::asked(asked.calendar.as_deref(), asked.time_zone.as_deref())? {
+        query = query.calendar(unit, zone);
     }
     if let Some(by) = &asked.by {
         query = query.by(&by.iter().map(String::as_str).collect::<Vec<_>>());
