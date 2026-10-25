@@ -2780,6 +2780,8 @@ export const JobsQueueOpen = message(
 		maxWaiting: [9, uint],
 		/** a database's handle: the queue lives in its file; jobs.db when absent */
 		database: [10, uint],
+		/** each group's starts, beside the queue's rate */
+		groupRate: [11, JobsRate],
 	},
 	{
 		write(w, v) {
@@ -2835,6 +2837,11 @@ export const JobsQueueOpen = message(
 				w.uint(v.database)
 				n++
 			}
+			if (v.groupRate !== undefined) {
+				w.field(11)
+				JobsRate.write(w, v.groupRate)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2848,6 +2855,7 @@ export const JobsQueueOpen = message(
 			let $keep: number | undefined
 			let $maxWaiting: number | undefined
 			let $database: number | undefined
+			let $groupRate: Read<typeof JobsRate.fields> | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2880,6 +2888,9 @@ export const JobsQueueOpen = message(
 					case 10:
 						$database = r.uint()
 						break
+					case 11:
+						$groupRate = JobsRate.read(r)
+						break
 					default:
 						r.skip()
 				}
@@ -2896,6 +2907,7 @@ export const JobsQueueOpen = message(
 				keep: $keep,
 				maxWaiting: $maxWaiting,
 				database: $database,
+				groupRate: $groupRate,
 			}
 		},
 	},

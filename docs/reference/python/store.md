@@ -140,6 +140,7 @@ def queue[T](
     dedupe: Duration | None = None,
     keep: Duration | None = None,
     max_waiting: int | None = None,
+    group_rate: str | None = None,
 ) -> Queue[T]: ...
 @overload
 def queue(
@@ -154,6 +155,7 @@ def queue(
     dedupe: Duration | None = None,
     keep: Duration | None = None,
     max_waiting: int | None = None,
+    group_rate: str | None = None,
 ) -> Queue[Any]: ...
 def queue(
     name: str,
@@ -167,6 +169,7 @@ def queue(
     dedupe: Duration | None = None,
     keep: Duration | None = None,
     max_waiting: int | None = None,
+    group_rate: str | None = None,
 ) -> Queue[Any]: ...
 ```
 

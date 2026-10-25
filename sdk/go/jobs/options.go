@@ -34,6 +34,7 @@ type queueOptions struct {
 	timeout     *time.Duration
 	concurrency *wire.JobsConcurrency
 	rate        *wire.JobsRate
+	groupRate   *wire.JobsRate
 	dedupe      *time.Duration
 	keep        *time.Duration
 	maxWaiting  *uint64
@@ -135,6 +136,22 @@ func (r rate) queue(o *queueOptions) {
 		return
 	}
 	o.rate = &wire.JobsRate{Count: uint64(r.n), Per: per}
+}
+
+type groupRate rate
+
+// GroupRate bounds how many runs of each group of a queue start a span,
+// beside its Rate: jobs.GroupRate(2, time.Second), each account's own limit.
+// It lives in memory, as Rate does.
+func GroupRate(n int, per time.Duration) groupRate { return groupRate{n, per} }
+
+func (r groupRate) queue(o *queueOptions) {
+	per, err := core.Millis(r.per, "a group's rate's span")
+	if err != nil || r.n < 1 || per < 1 {
+		o.err = core.Errorf(core.Invalid, "a group's rate of %d a %s", r.n, r.per)
+		return
+	}
+	o.groupRate = &wire.JobsRate{Count: uint64(r.n), Per: per}
 }
 
 type dedupe time.Duration

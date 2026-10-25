@@ -786,6 +786,8 @@ class QueueOptions:
     dedupe: Duration | None = None
     keep: Duration | None = None
     max_waiting: int | None = None
+    group_rate: str | None = None
+    """jobs of each group started in any span, beside rate: "2/s", each account's own limit"""
 
 
 def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, Any]:
@@ -794,10 +796,10 @@ def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, A
     concurrency = options.concurrency
     if isinstance(concurrency, int):
         concurrency = Concurrency(total=concurrency)
-    rate = None
-    if options.rate is not None:
-        count, per = rate_of(options.rate)
-        rate = {"count": count, "per": per}
+    rate = None if options.rate is None else dict(zip(("count", "per"), rate_of(options.rate), strict=True))
+    group_rate = (
+        None if options.group_rate is None else dict(zip(("count", "per"), rate_of(options.group_rate), strict=True))
+    )
     return {
         "name": name,
         "attempts": _whole(options.attempts, describe, "attempts"),
@@ -810,6 +812,7 @@ def queue_fields(name: str, describe: str, options: QueueOptions) -> dict[str, A
             "group": _whole(concurrency.group, describe, "a group's concurrency"),
         },
         "rate": rate,
+        "group_rate": group_rate,
         "dedupe": None if options.dedupe is None else ms(options.dedupe, f"{describe}: dedupe"),
         "keep": None if options.keep is None else ms(options.keep, f"{describe}: keep"),
         "max_waiting": _whole(options.max_waiting, describe, "a max_waiting"),

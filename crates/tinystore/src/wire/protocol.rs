@@ -2690,6 +2690,8 @@ pub(crate) struct JobsQueueOpen {
     pub(crate) max_waiting: Option<u64>,
     /// A database's handle: the queue lives in its file; jobs.db when absent.
     pub(crate) database: Option<u64>,
+    /// Each group's starts, beside the queue's rate.
+    pub(crate) group_rate: Option<JobsRate>,
 }
 
 #[cfg(feature = "jobs")]
@@ -2711,6 +2713,7 @@ impl Message for JobsQueueOpen {
                 8 => message.keep = Some(codec::uint(r, "keep")?),
                 9 => message.max_waiting = Some(codec::uint(r, "maxWaiting")?),
                 10 => message.database = Some(codec::uint(r, "database")?),
+                11 => message.group_rate = Some(JobsRate::read(r)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2759,6 +2762,10 @@ impl Message for JobsQueueOpen {
             map.field(out, 10);
             codec::write_uint(out, database);
         }
+        if let Some(group_rate) = &self.group_rate {
+            map.field(out, 11);
+            codec::write_message(out, group_rate);
+        }
         map.close(out);
     }
 
@@ -2774,6 +2781,7 @@ impl Message for JobsQueueOpen {
             + self.keep.map_or(0, |_| 10)
             + self.max_waiting.map_or(0, |_| 10)
             + self.database.map_or(0, |_| 10)
+            + self.group_rate.as_ref().map_or(0, |group_rate| 1 + group_rate.size())
     }
 
     fn is_zero(&self) -> bool {
@@ -2787,6 +2795,7 @@ impl Message for JobsQueueOpen {
             && self.keep.is_none()
             && self.max_waiting.is_none()
             && self.database.is_none()
+            && self.group_rate.is_none()
     }
 }
 

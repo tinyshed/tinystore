@@ -1339,6 +1339,16 @@
         "dedupe": {
           "uint": "1500"
         },
+        "groupRate": {
+          "fields": {
+            "count": {
+              "uint": "107"
+            },
+            "per": {
+              "uint": "1500"
+            }
+          }
+        },
         "keep": {
           "uint": "1500"
         },
@@ -1362,7 +1372,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8a01a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b0acd03ef",
+      "hex": "8b01a46e616d6502cccf038201cd05dc02cd05dc04cd05dc0582016b02cccf0682016b02cd05dc07cd05dc08cd05dc09cd038b0acd03ef0b82016b02cd05dc",
       "message": "jobs.QueueOpen",
       "name": "jobs.QueueOpen with every field"
     },

@@ -111,7 +111,7 @@ These contracts are what does not.
 - **JOB-06** A step MUST run once in a run, across its attempts.
 - **JOB-07** A failure MUST be retried with growing waits and then fail for good; a snooze MUST count no attempt; a job that kills its process MUST fail after its attempts.
 - **JOB-08** A repeating job MUST NOT overlap itself nor pile up; a cron MUST keep its zone across daylight saving and MUST be given one.
-- **JOB-09** Concurrency in all, by group, and rate limits MUST hold across workers and claims; a full group MUST NOT hold back another.
+- **JOB-09** Concurrency in all, by group, and rate limits in all and by group MUST hold across workers and claims, a rate within the process that counts it; a full group, or one past its rate, MUST NOT hold back another.
 - **JOB-10** `maxWaiting` MUST hold under concurrent adds.
 - **JOB-11** A stopping worker MUST wait for its handlers and give back, uncounted, the jobs it had not started.
 - **JOB-12** A value that no longer decodes MUST fail its job, not its queue.

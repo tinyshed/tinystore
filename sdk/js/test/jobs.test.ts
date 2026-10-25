@@ -282,6 +282,25 @@ for (const way of ways) {
 			expect(all).toEqual(['chat:42:1', 'chat:4:1', 'chat:4:2', 'chat:4:3'])
 		})
 
+		test("a group rate starts each group's count a span, and a group past it holds back no other", async () => {
+			const messages = store.queue<{ bot: string; n: number }>('messages', { groupRate: '2/m' })
+			for (const [bot, n] of [
+				['a', 0],
+				['a', 1],
+				['a', 2],
+				['b', 0],
+				['b', 1],
+			] as const) {
+				await messages.add({ bot, n }, { group: bot })
+			}
+			const sent: string[] = []
+			expect(await messages.runDue(async message => sent.push(`${message.bot}${message.n}`))).toBe(
+				4,
+			)
+			expect(sent).toEqual(['a0', 'a1', 'b0', 'b1'])
+			expect(await messages.runDue(async () => {})).toBe(0)
+		})
+
 		test('a schema checks each value before a handler gets it, and one that no longer meets it fails its job, not its queue', async () => {
 			const loose = store.queue('checked')
 			await loose.add({ userId: 'not a number' }, { id: 'bad' })

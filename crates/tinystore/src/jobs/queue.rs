@@ -99,6 +99,15 @@ where
         self
     }
 
+    /// Jobs of each group started in any span of `per`, beside the queue's
+    /// `rate`: each account's own limit at a provider, 2 a second a bot. A
+    /// job of a group past it waits for its group's turn, and the other
+    /// groups' jobs start meanwhile. It lives in memory, as `rate` does.
+    pub fn group_rate(mut self, count: u32, per: Duration) -> Self {
+        self.policy.group_rate = Some((count, per));
+        self
+    }
+
     /// How long a done job keeps its id taken, so that adding it again adds
     /// nothing: an id runs once.
     pub fn dedupe(mut self, span: Duration) -> Self {

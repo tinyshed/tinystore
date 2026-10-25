@@ -120,7 +120,7 @@ func OpenQueue[T any](home tinystore.Home, name string, opts ...QueueOption) (*Q
 	if o.err != nil {
 		return nil, core.Wrap(core.Invalid, o.err, "%s", describe)
 	}
-	message := wire.JobsQueueOpen{Name: name, Attempts: o.attempts, Backoff: o.backoff, Concurrency: o.concurrency, Rate: o.rate, MaxWaiting: o.maxWaiting}
+	message := wire.JobsQueueOpen{Name: name, Attempts: o.attempts, Backoff: o.backoff, Concurrency: o.concurrency, Rate: o.rate, GroupRate: o.groupRate, MaxWaiting: o.maxWaiting}
 	var err error
 	if message.Timeout, err = millis(o.timeout, describe+": timeout"); err != nil {
 		return nil, err

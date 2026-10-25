@@ -474,6 +474,17 @@ pub fn rate(self, count: u32, per: Duration) -> Self
 Jobs started in any span of `per`: 30 a second, as an API's limit asks.
 It counts starts, retries among them, and lives in memory.
 
+### QueueBuilder.group_rate
+
+```rust
+pub fn group_rate(self, count: u32, per: Duration) -> Self
+```
+
+Jobs of each group started in any span of `per`, beside the queue's
+`rate`: each account's own limit at a provider, 2 a second a bot. A
+job of a group past it waits for its group's turn, and the other
+groups' jobs start meanwhile. It lives in memory, as `rate` does.
+
 ### QueueBuilder.dedupe
 
 ```rust

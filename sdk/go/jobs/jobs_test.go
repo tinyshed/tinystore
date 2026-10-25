@@ -3,6 +3,8 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -325,6 +327,33 @@ func TestAPageReadsTheIDsUnderAPrefix(t *testing.T) {
 		// byte order: "2" is 0x32, before ":" at 0x3a
 		if strings.Join(ids, ",") != "chat:42:1,chat:4:1,chat:4:2,chat:4:3" {
 			t.Fatalf("ids %v", ids)
+		}
+	})
+}
+
+func TestAGroupRateStartsEachGroupsCountASpanAndHoldsBackNoOther(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		type message struct {
+			Bot string
+			N   int
+		}
+		messages := ways.Must(jobs.OpenQueue[message](store, "messages", jobs.GroupRate(2, time.Minute)))
+		for _, m := range []message{{"a", 0}, {"a", 1}, {"a", 2}, {"b", 0}, {"b", 1}} {
+			ways.Must(messages.Add(ctx, m, jobs.Group(m.Bot)))
+		}
+		var sent []string
+		send := func(ctx context.Context, m message, run *jobs.Run) error {
+			sent = append(sent, fmt.Sprintf("%s%d", m.Bot, m.N))
+			return nil
+		}
+		ways.Must(0, messages.RunDue(ctx, send))
+		if want := []string{"a0", "a1", "b0", "b1"}; !slices.Equal(sent, want) {
+			t.Fatalf("sent %v in the first span, not %v", sent, want)
+		}
+		ways.Must(0, messages.RunDue(ctx, send))
+		if len(sent) != 4 {
+			t.Fatalf("sent %v, more within the span", sent)
 		}
 	})
 }

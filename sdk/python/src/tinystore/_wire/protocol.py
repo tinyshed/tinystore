@@ -2296,6 +2296,10 @@ def _write_jobs_queue_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.uint(x)
         n += 1
+    if (x := v.get("group_rate")) is not None:
+        w.uint(11)
+        JobsRate.write(w, x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -2324,6 +2328,8 @@ def _read_jobs_queue_open(r: Reader) -> dict[str, Any]:
                 read["max_waiting"] = r.uint()
             case 10:
                 read["database"] = r.uint()
+            case 11:
+                read["group_rate"] = JobsRate.read(r)
             case _:
                 r.skip()
     r.leave()
@@ -2353,6 +2359,8 @@ JobsQueueOpen = Message(
         "max_waiting": (9, uint),
         # a database's handle: the queue lives in its file; jobs.db when absent
         "database": (10, uint),
+        # each group's starts, beside the queue's rate
+        "group_rate": (11, JobsRate),
     },
     _write_jobs_queue_open,
     _read_jobs_queue_open,

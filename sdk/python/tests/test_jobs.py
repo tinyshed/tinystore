@@ -353,6 +353,20 @@ async def test_a_transaction_of_the_store_makes_its_jobs_together_or_none(store:
 
 
 @pytest.mark.skipif(not SERVED, reason="tinystore is not built here")
+async def test_a_group_rate_starts_each_groups_count_a_span_and_holds_back_no_other(store: tinystore.Store) -> None:
+    messages = store.queue("messages", group_rate="2/m")
+    for bot, n in [("a", 0), ("a", 1), ("a", 2), ("b", 0), ("b", 1)]:
+        await messages.add({"bot": bot, "n": n}, group=bot)
+    sent: list[str] = []
+
+    async def send(message: dict[str, object], run: tinystore.Run) -> None:
+        sent.append(f"{message['bot']}{message['n']}")
+
+    assert await messages.run_due(send) == 4
+    assert sent == ["a0", "a1", "b0", "b1"]
+    assert await messages.run_due(send) == 0
+
+
 async def test_run_due_runs_what_the_tests_clock_made_due(directory: Path) -> None:
     start = datetime(2026, 10, 9, 9, tzinfo=UTC)
     async with await tinystore.open(directory, private=True, clock=start) as store:

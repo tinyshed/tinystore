@@ -258,8 +258,8 @@ pub(crate) fn claim(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
         return Ok(Claimed::default());
     }
     let claiming = Claiming { limit, ..claiming };
-    let claimed =
-        if claiming.queue.policy.concurrency.group.is_some() { by_group(c, claiming) } else { in_order(c, claiming) };
+    let grouped = claiming.queue.policy.concurrency.group.is_some() || claiming.queue.group_rates.is_some();
+    let claimed = if grouped { by_group(c, claiming) } else { in_order(c, claiming) };
     if let Some(rate) = &claiming.queue.rate {
         rate.give_back(limit - claimed.as_ref().map_or(0, |claimed| claimed.leases.len()));
     }
@@ -289,35 +289,42 @@ fn in_order(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
     Ok(claimed)
 }
 
-/// Leases due jobs in the order of their time, as `in_order` does, and parks
-/// those of a group whose places are taken, counting what it leases. Past
-/// `PARK_AT_MOST` it stops, with more due jobs to look at.
+/// Leases due jobs in the order of their time, as `in_order` does, and moves
+/// out of the way those of a group that may start none: parked while its
+/// places are taken, or set to its turn under its group rate, counting what
+/// it leases. Past `PARK_AT_MOST` moved it stops, with more due jobs to look
+/// at.
 fn by_group(c: &Connection, claiming: Claiming<'_>) -> Result<Claimed> {
     let bound = i64::from(claiming.queue.policy.concurrency.group.unwrap_or(u32::MAX));
     let mut running = running_by_group(c, &claiming)?;
     let mut claimed = Claimed::default();
-    let mut parked = 0;
+    let (mut moved, mut waiting) = (0, HashMap::new());
     while claimed.leases.len() < claiming.limit {
         let asked = claiming.limit - claimed.leases.len();
         let due_now = due(c, &claiming, asked)?;
         let found = due_now.len();
         for row in due_now {
             let full = row.group.as_ref().is_some_and(|group| running.get(group).copied().unwrap_or(0) >= bound);
-            if full {
-                if parked == PARK_AT_MOST {
+            let to = match (&row.group, &claiming.queue.group_rates) {
+                _ if full => Some(row.next + PARKED_BY),
+                (Some(group), Some(rates)) => {
+                    let behind = waiting.entry(group.clone()).or_insert(0);
+                    let turn = rates.take(group, claiming.now, *behind).err();
+                    *behind += usize::from(turn.is_some());
+                    turn
+                }
+                _ => None,
+            };
+            if let Some(to) = to {
+                if moved == PARK_AT_MOST {
                     claimed.more = true;
                     return Ok(claimed);
                 }
-                parked += 1;
-                rows::move_to(c, claiming.queue.id, (row.next, row.id, row.key.as_deref()), row.next + PARKED_BY)?;
+                moved += 1;
+                rows::move_to(c, claiming.queue.id, (row.next, row.id, row.key.as_deref()), to)?;
                 continue;
             }
-            let group = row.group.clone();
-            if claimed.lease(c, &claiming, row)?
-                && let Some(group) = group
-            {
-                *running.entry(group).or_default() += 1;
-            }
+            claimed.lease_in_group(c, &claiming, row, &mut running)?;
         }
         if found < asked {
             break;
@@ -399,6 +406,27 @@ impl Claimed {
             on_cancel: CancelHook::default(),
         });
         Ok(true)
+    }
+
+    /// Leases a due job of a group, counting it among the group's running
+    /// jobs; one it leases no more gives back the start its group rate
+    /// counted for it.
+    fn lease_in_group(
+        &mut self,
+        c: &Connection,
+        claiming: &Claiming<'_>,
+        row: DueRow,
+        running: &mut HashMap<String, i64>,
+    ) -> Result<()> {
+        let group = row.group.clone();
+        let leased = self.lease(c, claiming, row)?;
+        let Some(group) = group else { return Ok(()) };
+        match (leased, &claiming.queue.group_rates) {
+            (true, _) => *running.entry(group).or_default() += 1,
+            (false, Some(rates)) => rates.give_back(&group),
+            (false, None) => {}
+        }
+        Ok(())
     }
 }
 

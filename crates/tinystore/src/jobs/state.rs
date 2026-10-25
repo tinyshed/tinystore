@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use super::alarm::Alarm;
 use super::claim::Lease;
 use super::policy::Policy;
-use super::rate::RateLog;
+use super::rate::{GroupRates, RateLog};
 use super::watch::Watchers;
 use crate::sync::lock;
 
@@ -42,6 +42,7 @@ pub(crate) struct QueueState {
     lent_by: Option<String>,
     pub(crate) alarm: Alarm,
     pub(crate) rate: Option<RateLog>,
+    pub(crate) group_rates: Option<GroupRates>,
     pub(crate) watchers: Watchers,
     /// The jobs this process's leases hold, by job id: running, or claimed for
     /// a handler still busy with the one before.
@@ -70,6 +71,7 @@ impl QueueState {
             lent_by,
             alarm: Alarm::new(),
             rate: policy.rate.map(|(count, per)| RateLog::new(count, per)),
+            group_rates: policy.group_rate.map(|(count, per)| GroupRates::new(count, per)),
             watchers: Watchers::default(),
             held: Mutex::new(HashMap::new()),
             keys_after: Mutex::new(String::new()),

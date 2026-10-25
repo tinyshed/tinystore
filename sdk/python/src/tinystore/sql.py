@@ -765,6 +765,7 @@ class Database:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[T]: ...
     @overload
     def queue(
@@ -780,6 +781,7 @@ class Database:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[Any]: ...
     def queue(
         self,
@@ -794,6 +796,7 @@ class Database:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[Any]:
         """A queue of jobs kept in this database's file, as ``store.queue`` keeps one in jobs.db.
 
@@ -801,7 +804,7 @@ class Database:
         ``db.tx``, through ``tx.with_(queue)``. It shares the database's
         writer, which is the point and its cost.
         """
-        options = QueueOptions(attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting)
+        options = QueueOptions(attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting, group_rate)
         return open_queue(self._link, self._workers, name, of, options, self)
 
     @overload

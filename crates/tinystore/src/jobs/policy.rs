@@ -40,6 +40,8 @@ pub(crate) struct Policy {
     pub(crate) timeout: Duration,
     pub(crate) concurrency: Concurrency,
     pub(crate) rate: Option<(u32, Duration)>,
+    /// Jobs of each group started in a span.
+    pub(crate) group_rate: Option<(u32, Duration)>,
     pub(crate) dedupe: Option<Duration>,
     pub(crate) keep: Duration,
     pub(crate) max_waiting: u64,
@@ -53,6 +55,7 @@ impl Default for Policy {
             timeout: Duration::from_mins(1),
             concurrency: Concurrency::default(),
             rate: None,
+            group_rate: None,
             dedupe: None,
             keep: Duration::from_hours(24 * 7),
             max_waiting: 10_000_000,
@@ -71,7 +74,11 @@ impl Policy {
             Some(format!("a timeout of {:?}", self.timeout))
         } else if self.concurrency.total == Some(0) || self.concurrency.group == Some(0) {
             Some("a concurrency of 0, which would run nothing".to_owned())
-        } else if self.rate.is_some_and(|(count, per)| count == 0 || per < Duration::from_millis(1)) {
+        } else if [self.rate, self.group_rate]
+            .into_iter()
+            .flatten()
+            .any(|(count, per)| count == 0 || per < Duration::from_millis(1))
+        {
             Some("a rate of nothing a span".to_owned())
         } else if self.max_waiting == 0 {
             Some("a max_waiting of 0, which would refuse every add".to_owned())

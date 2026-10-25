@@ -79,6 +79,14 @@ func Group(g string) group
 
 Group is the group a job runs in, which Concurrency's Group bounds.
 
+## GroupRate
+
+```go
+func GroupRate(n int, per time.Duration) groupRate
+```
+
+GroupRate bounds how many runs of each group of a queue start a span, beside its Rate: jobs.GroupRate(2, time.Second), each account's own limit. It lives in memory, as Rate does.
+
 ## ID
 
 ```go

@@ -3471,6 +3471,8 @@ type JobsQueueOpen struct {
 	MaxWaiting *uint64 `wire:"9,maxWaiting"`
 	// a database's handle: the queue lives in its file; jobs.db when absent
 	Database *uint64 `wire:"10,database"`
+	// each group's starts, beside the queue's rate
+	GroupRate *JobsRate `wire:"11,groupRate"`
 }
 
 func (m JobsQueueOpen) Write(w *Writer) {
@@ -3526,6 +3528,11 @@ func (m JobsQueueOpen) Write(w *Writer) {
 		w.Uint(*m.Database)
 		n++
 	}
+	if m.GroupRate != nil {
+		w.Uint(11)
+		m.GroupRate.Write(w)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -3566,6 +3573,10 @@ func (m *JobsQueueOpen) Read(r *Reader) {
 		case 10:
 			v := r.Uint()
 			m.Database = &v
+		case 11:
+			var v JobsRate
+			v.Read(r)
+			m.GroupRate = &v
 		default:
 			r.Skip()
 		}
@@ -3584,7 +3595,8 @@ func (m JobsQueueOpen) IsZero() bool {
 		m.Dedupe == nil &&
 		m.Keep == nil &&
 		m.MaxWaiting == nil &&
-		m.Database == nil
+		m.Database == nil &&
+		m.GroupRate == nil
 }
 
 // JobsScheduleOpen is the schema's jobs.ScheduleOpen.

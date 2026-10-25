@@ -357,6 +357,56 @@ fn a_rate_lets_no_more_than_its_count_start_in_a_span() {
     assert_eq!(telegram.run_due(|_: Push, _run| -> Result<()> { Ok(()) }).unwrap(), 1);
 }
 
+// contract: JOB-09
+#[test]
+fn a_group_rate_lets_each_group_start_its_count_a_span_and_a_group_past_it_holds_back_no_other() {
+    let f = fixture();
+    let messages = f.store.queue::<Push>("messages").group_rate(2, SECOND).open().unwrap();
+    // bot-a's backlog first, then bot-b's: bot-b still sends two in the first second
+    for user in 0..5 {
+        messages.group("bot-a").add(&Push { user }).unwrap();
+    }
+    for user in 10..13 {
+        messages.group("bot-b").add(&Push { user }).unwrap();
+    }
+    let sent = std::sync::Mutex::new(Vec::new());
+    let send = |push: Push, _run: &Run| -> Result<()> {
+        sent.lock().unwrap().push(push.user);
+        Ok(())
+    };
+    let mut seconds = Vec::new();
+    for _ in 0..4 {
+        messages.run_due(send).unwrap();
+        assert_eq!(messages.run_due(send).unwrap(), 0, "nothing more within the second");
+        seconds.push(std::mem::take(&mut *sent.lock().unwrap()));
+        f.clock.advance(SECOND);
+    }
+    assert_eq!(seconds, [vec![0, 1, 10, 11], vec![2, 3, 12], vec![4], vec![]]);
+}
+
+// contract: JOB-09
+#[test]
+fn a_group_rate_and_a_group_bound_hold_together_and_the_queues_rate_over_both() {
+    let f = fixture();
+    let bounded = Concurrency::total(10).group(1);
+    let calls =
+        f.store.queue::<Push>("calls").concurrency(bounded).group_rate(1, SECOND).rate(3, SECOND).open().unwrap();
+    for (group, user) in [("a", 1), ("a", 2), ("b", 3), ("c", 4), ("d", 5)] {
+        calls.group(group).add(&Push { user }).unwrap();
+    }
+    let mut claimed = Vec::new();
+    while let Some(job) = calls.claim().unwrap() {
+        claimed.push(job);
+    }
+    let users: Vec<i64> = claimed.iter().map(|job| job.value.user).collect();
+    assert_eq!(users, [1, 3, 4], "a's second waits for its group, and d for the queue's rate");
+    claimed.remove(0).settle(()).unwrap();
+    assert!(calls.claim().unwrap().is_none(), "a's place is free, and its rate and the queue's are not");
+    f.clock.advance(SECOND);
+    let next: Vec<i64> = std::iter::from_fn(|| calls.claim().unwrap()).map(|job| job.value.user).collect();
+    assert_eq!(next, [2, 5]);
+}
+
 // contract: JOB-06
 #[test]
 fn a_step_runs_once_across_the_attempts_of_a_run() {

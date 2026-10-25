@@ -57,6 +57,8 @@ export interface QueueOptions {
 	concurrency?: number | Concurrency | undefined
 	/** jobs started in any span: '30/s' */
 	rate?: Rate | undefined
+	/** jobs of each group started in any span, beside rate: '2/s', each account's own limit; it lives in memory */
+	groupRate?: Rate | undefined
 	/** how long a done job's id stays taken, so that an add of it adds nothing */
 	dedupe?: Duration | undefined
 	/** how long a failed job stays, to be found and started again: a week */
@@ -983,6 +985,7 @@ export function openQueue<T>(
 						group: whole(concurrency.group, describe, "a group's concurrency"),
 					},
 		rate: options.rate === undefined ? undefined : rateOf(options.rate),
+		groupRate: options.groupRate === undefined ? undefined : rateOf(options.groupRate),
 		dedupe: msOf(options.dedupe),
 		keep: msOf(options.keep),
 		maxWaiting: whole(options.maxWaiting, describe, 'a maxWaiting'),

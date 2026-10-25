@@ -241,6 +241,9 @@ fn open_queue(store: &Store, lent: Lent<'_>, open: JobsQueueOpen) -> Result<Queu
     if let Some(rate) = open.rate {
         builder = builder.rate(small(rate.count, "a rate")?, span(rate.per));
     }
+    if let Some(rate) = open.group_rate {
+        builder = builder.group_rate(small(rate.count, "a group's rate")?, span(rate.per));
+    }
     if let Some(dedupe) = open.dedupe {
         builder = builder.dedupe(span(dedupe));
     }

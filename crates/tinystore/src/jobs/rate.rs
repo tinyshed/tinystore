@@ -1,6 +1,7 @@
-//! The starts a queue's rate counts, in memory: a restart forgets them.
+//! The starts a queue's rate counts, and each group's under its group rate,
+//! in memory: a restart forgets them.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -82,6 +83,13 @@ impl RateLog {
         state.used -= n;
     }
 
+    /// Whether no start it counted is left in the span at `now`.
+    fn idle(&self, now: i64) -> bool {
+        let mut state = self.lock();
+        self.forget(&mut state, now);
+        state.used == 0
+    }
+
     /// Drops the starts a span old at `now`, and answers `now`, or the latest
     /// time asked about when the clock stepped back.
     fn forget(&self, state: &mut Starts, now: i64) -> i64 {
@@ -99,6 +107,57 @@ impl RateLog {
 
     fn lock(&self) -> MutexGuard<'_, Starts> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A log of each group that started a job within the last span, past which
+/// the logs of the groups idle since are let go.
+const GROUP_LOGS: usize = 1024;
+
+/// Each group's starts under a queue's group rate. A job of a group whose
+/// rate lets none start waits for its turn under the rate, rather than for a
+/// claim that meets it again: it moves out of the way of every other group's
+/// jobs, and is due again when its group may start it.
+#[derive(Debug)]
+pub(crate) struct GroupRates {
+    count: u32,
+    per: Duration,
+    logs: Mutex<HashMap<String, RateLog>>,
+}
+
+impl GroupRates {
+    pub(crate) fn new(count: u32, per: Duration) -> GroupRates {
+        GroupRates { count, per, logs: Mutex::default() }
+    }
+
+    /// Counts a start of `group` at `now`; when its rate lets none start,
+    /// gives the time of the turn of its job `waiting` places behind the
+    /// first that waits, its rate's count each span.
+    ///
+    /// ```text
+    /// 2 a second, starts at 0 and 0 ms   jobs that wait: 1000, 1000, 2000, 2000, 3000 ms
+    /// ```
+    pub(crate) fn take(&self, group: &str, now: i64, waiting: usize) -> Result<(), i64> {
+        let mut logs = self.logs.lock().unwrap_or_else(PoisonError::into_inner);
+        if logs.len() >= GROUP_LOGS {
+            logs.retain(|_, log| !log.idle(now));
+        }
+        let log = logs.entry(group.to_owned()).or_insert_with(|| RateLog::new(self.count, self.per));
+        if log.take(now, 1) == 1 {
+            return Ok(());
+        }
+        let first = log.room(now).1.unwrap_or(now);
+        let spans = i64::try_from(waiting / log.count).unwrap_or(i64::MAX);
+        Err(first.saturating_add(spans.saturating_mul(log.per)))
+    }
+
+    /// Uncounts the start the last take of `group` counted, which its claim
+    /// did not lease.
+    pub(crate) fn give_back(&self, group: &str) {
+        let logs = self.logs.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(log) = logs.get(group) {
+            log.give_back(1);
+        }
     }
 }
 

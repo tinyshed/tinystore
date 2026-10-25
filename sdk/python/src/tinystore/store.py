@@ -189,6 +189,7 @@ class Store:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[T]: ...
     @overload
     def queue(
@@ -204,6 +205,7 @@ class Store:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[Any]: ...
     def queue(
         self,
@@ -218,13 +220,14 @@ class Store:
         dedupe: Duration | None = None,
         keep: Duration | None = None,
         max_waiting: int | None = None,
+        group_rate: str | None = None,
     ) -> Queue[Any]:
         """A queue of jobs of one type, JSON, run in the order of their time::
 
         emails = store.queue("emails", Email, attempts=20, backoff=Backoff(initial="5s", max="30m"))
         refreshes = store.queue("refreshes", Refresh, concurrency=Concurrency(total=8, group=2))
         """
-        options = QueueOptions(attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting)
+        options = QueueOptions(attempts, backoff, timeout, concurrency, rate, dedupe, keep, max_waiting, group_rate)
         return open_queue(self._link, self._workers, name, of, options)
 
     def schedule(
