@@ -591,3 +591,45 @@ fn jobs_db_commits_as_far_as_its_store_says_and_syncs_each_commit_unless_told() 
         store.close().unwrap();
     }
 }
+
+/// What a job costs from its add to its end, one call at a time, on a store
+/// whose commits are not synced, so that each call's SQL shows rather than
+/// the disk.
+///
+/// `cargo test -p tinystore --release --lib timing_a_job -- --ignored --nocapture`
+#[test]
+#[ignore = "a timing, run by hand"]
+fn timing_a_job_from_its_add_to_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crate::Options { background: false, durability: Some(crate::Durability::Os), ..Default::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let notes = store.queue::<Note>("notes").open().unwrap();
+    for round in 0..3 {
+        let started = std::time::Instant::now();
+        for _ in 0..10_000 {
+            notes.add(&note("a note")).unwrap();
+        }
+        let added = started.elapsed();
+        let started = std::time::Instant::now();
+        while let Some(claimed) = notes.claim().unwrap() {
+            claimed.settle(()).unwrap();
+        }
+        let ran = started.elapsed();
+        let each = |spent: Duration| spent.as_secs_f64() * 100.0;
+        println!("round {round}: an add {:.1} µs, a claim and its settle {:.1} µs", each(added), each(ran));
+        let started = std::time::Instant::now();
+        std::thread::scope(|callers| {
+            for _ in 0..16 {
+                callers.spawn(|| {
+                    for _ in 0..2_000 {
+                        notes.add(&note("a note")).unwrap();
+                    }
+                });
+            }
+        });
+        println!("round {round}: 16 callers at once, {:.0} adds a second", 32_000.0 / started.elapsed().as_secs_f64());
+        while let Some(claimed) = notes.claim().unwrap() {
+            claimed.settle(()).unwrap();
+        }
+    }
+}

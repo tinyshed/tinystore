@@ -31,11 +31,15 @@ const CLAIM_JOBS: &str = "select next, id, key, at, attempt, value, spill, grp
     order by next, id limit cast(?3 as integer)";
 /// A lease's attempt counts the attempt a lease that ended without a
 /// settlement held, so that a job whose process died each time fails for good.
+///
+/// What a write here changes is read back by a select of its own rather than
+/// by `returning`, which costs a statement a microsecond more, a claim and
+/// its settlement three.
 const TAKE_LEASE: &str =
     "insert into _tinystore_jobs_leases (id, queue, next, attempt, until) values (?1, ?2, ?3, ?4, ?5)
     on conflict (id) do update set next = excluded.next, until = excluded.until,
-        attempt = max(_tinystore_jobs_leases.attempt, excluded.attempt - 1) + 1
-    returning attempt";
+        attempt = max(_tinystore_jobs_leases.attempt, excluded.attempt - 1) + 1";
+const LEASE_ATTEMPT: &str = "select attempt from _tinystore_jobs_leases where id = ?1";
 const LIVE_LEASES: &str = "select count(*) from _tinystore_jobs_leases where queue = ?1 and until > ?2";
 const RUNNING_IN_GROUPS: &str = "select j.grp, count(*) from _tinystore_jobs_leases l
         join _tinystore_jobs j on j.queue = l.queue and j.next = l.next and j.id = l.id
@@ -56,9 +60,11 @@ const DROP_ANY_LEASE: &str = "delete from _tinystore_jobs_leases where id = ?1";
 const EXTEND_LEASE: &str = "update _tinystore_jobs_leases set until = ?3 where id = ?1 and attempt = ?2 and next = ?4";
 const JOB_HELD: &str =
     "select again, repeat, error, attempt from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
-const DELETE_JOB: &str = "delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3 returning spill";
-const DELETE_DONE: &str = "delete from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
-    and again is null and repeat is null returning spill";
+const JOB_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
+/// The spill of a job whose end deletes it: one that neither repeats nor was
+/// asked to run again.
+const DONE_SPILL: &str = "select spill from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3
+    and again is null and repeat is null";
 const MOVE_JOB: &str = "update _tinystore_jobs set next = ?4, at = ?5, attempt = ?6, again = null, error = ?7,
         ran = coalesce(?8, ran), took = coalesce(?9, took)
     where queue = ?1 and next = ?2 and id = ?3";
@@ -66,7 +72,8 @@ const FAIL_JOB: &str = "insert into _tinystore_jobs_failed (queue, id, key, at, 
         ran, took, grp)
     select queue, id, key, at, ?4, ?5, ?6, value, spill, coalesce(?7, ran), coalesce(?8, took), grp
     from _tinystore_jobs where queue = ?1 and next = ?2 and id = ?3";
-const FORGET_DONE: &str = "delete from _tinystore_jobs_done where queue = ?1 and key = ?2 returning spill";
+const DONE_ID_SPILL: &str = "select spill from _tinystore_jobs_done where queue = ?1 and key = ?2";
+const FORGET_DONE: &str = "delete from _tinystore_jobs_done where queue = ?1 and key = ?2";
 const KEEP_DONE: &str =
     "insert into _tinystore_jobs_done (queue, key, until, at, attempt, value, spill, ran, took, grp)
     select queue, key, ?4, at, ?5, value, spill, coalesce(?6, ran), coalesce(?7, took), grp
@@ -406,13 +413,11 @@ impl Claimed {
     /// place it no longer wants. Says whether it leased.
     fn lease(&mut self, c: &Connection, claiming: &Claiming<'_>, row: DueRow) -> Result<bool> {
         let queue = claiming.queue;
+        let lease = params![row.id, queue.id, row.next, row.attempt + 1, claiming.until];
+        execute(c, TAKE_LEASE, lease, "a claim: a job's lease")?;
         let attempt: i64 = c
-            .prepare_cached(TAKE_LEASE)
-            .and_then(|mut insert| {
-                insert.query_row(params![row.id, queue.id, row.next, row.attempt + 1, claiming.until], |found| {
-                    found.get(0)
-                })
-            })
+            .prepare_cached(LEASE_ATTEMPT)
+            .and_then(|mut select| select.query_row([row.id], |found| found.get(0)))
             .map_err(|error| sql_error("a claim: a job's lease", error))?;
         if attempt > i64::from(queue.policy.attempts) {
             if abandon(c, claiming, &row, attempt - 1)? {
@@ -621,13 +626,15 @@ fn done_alone(c: &Connection, queue: &QueueState, lease: &Lease) -> Result<Optio
     if queue.policy.dedupe.is_some() && lease.key.is_some() {
         return Ok(None);
     }
+    let place = params![queue.id, lease.next, lease.id];
     let spilled: Option<Option<i64>> = c
-        .prepare_cached(DELETE_DONE)
-        .and_then(|mut delete| delete.query_row(params![queue.id, lease.next, lease.id], |row| row.get(0)).optional())
+        .prepare_cached(DONE_SPILL)
+        .and_then(|mut select| select.query_row(place, |row| row.get(0)).optional())
         .map_err(|error| sql_error("a done job", error))?;
     let Some(spilled) = spilled else {
         return Ok(None);
     };
+    execute(c, DROP_JOB_ROW, place, "a done job")?;
     rows::drop_spill(c, spilled)?;
     Ok(Some(Settled::default()))
 }
@@ -663,9 +670,12 @@ fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: 
     }
     if let (Some(dedupe), Some(key)) = (queue.policy.dedupe, &lease.key) {
         let forgotten: Option<Option<i64>> = c
-            .prepare_cached(FORGET_DONE)
-            .and_then(|mut delete| delete.query_row(params![queue.id, key], |row| row.get(0)).optional())
+            .prepare_cached(DONE_ID_SPILL)
+            .and_then(|mut select| select.query_row(params![queue.id, key], |row| row.get(0)).optional())
             .map_err(|error| sql_error("a done job's id", error))?;
+        if forgotten.is_some() {
+            execute(c, FORGET_DONE, params![queue.id, key], "a done job's id")?;
+        }
         rows::drop_spill(c, forgotten.flatten())?;
         let until = now.saturating_add(crate::clock::millis(dedupe));
         let (ran, took) = lease.last_run(now);
@@ -674,10 +684,12 @@ fn done(c: &Connection, queue: &QueueState, lease: &Lease, held: &HeldRow, now: 
         execute(c, DROP_JOB_ROW, params![queue.id, lease.next, lease.id], "a done job")?;
         return Ok(Settled::default());
     }
+    let place = params![queue.id, lease.next, lease.id];
     let spilled: Option<i64> = c
-        .prepare_cached(DELETE_JOB)
-        .and_then(|mut delete| delete.query_row(params![queue.id, lease.next, lease.id], |row| row.get(0)))
+        .prepare_cached(JOB_SPILL)
+        .and_then(|mut select| select.query_row(place, |row| row.get(0)))
         .map_err(|error| sql_error("a done job", error))?;
+    execute(c, DROP_JOB_ROW, place, "a done job")?;
     rows::drop_spill(c, spilled)?;
     Ok(Settled::default())
 }

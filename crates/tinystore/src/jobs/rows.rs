@@ -38,7 +38,10 @@ const UNPARK_JOBS: &str =
     concat!("update _tinystore_jobs set next = next - ?2 where queue = ?1 and next >= ", parked_from!());
 const UNPARK_KEYS: &str =
     concat!("update _tinystore_jobs_keys set next = next - ?2 where queue = ?1 and next >= ", parked_from!());
-const NEXT_ID: &str = "update _tinystore_jobs_meta set value = value + 1 where name = 'ids' returning value";
+const NEXT_ID: &str = "update _tinystore_jobs_meta set value = value + 1 where name = 'ids'";
+/// The id `NEXT_ID` took, read back by a select rather than `returning`,
+/// which costs every add a microsecond more.
+const IDS: &str = "select value from _tinystore_jobs_meta where name = 'ids'";
 /// A lease the file still holds at open belongs to a process that died: its
 /// attempt counts, and its job is due again at once.
 const COUNT_DEAD_ATTEMPTS: &str = "update _tinystore_jobs set attempt = l.attempt from _tinystore_jobs_leases l
@@ -171,8 +174,9 @@ pub(crate) fn keep_group_bound(c: &Connection, queue: i64, was: i64, is: i64) ->
 /// rolls back with the row, so that an id is never given twice, not after a
 /// crash either, and no write waits for another to reserve it one.
 pub(crate) fn next_id(c: &Connection) -> Result<i64> {
-    c.prepare_cached(NEXT_ID)
-        .and_then(|mut update| update.query_row([], |row| row.get(0)))
+    execute(c, NEXT_ID, [], "the next job id")?;
+    c.prepare_cached(IDS)
+        .and_then(|mut select| select.query_row([], |row| row.get(0)))
         .map_err(|error| sql_error("the next job id", error))
 }
 
