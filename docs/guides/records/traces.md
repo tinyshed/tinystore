@@ -24,7 +24,7 @@ with tinystore.trace(trace_id=trace_id, span_id=span_id):
 ```go
 ctx = records.WithTrace(ctx, traceID, spanID)
 log.InfoContext(ctx, "checkout started", "cart", cart.ID) // the context carries it
-err = audit.Append(ctx, "order.created", records.Fields{"order": order.ID})
+_, err = audit.Append(ctx, "order.created", records.Fields{"order": order.ID})
 ```
 
 ```rust

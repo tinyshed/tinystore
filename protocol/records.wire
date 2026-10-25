@@ -20,12 +20,19 @@ message records.NewEvent {
   6 context: json?       # an object
   7 traceId: bin?        # 16 bytes
   8 spanId: bin?         # 8 bytes
+  9 id: str?             # 1 to 128 bytes: an event of an id its stream holds is written as nothing
 }
 
 # Events to write to a stream, all of them or none.
 message records.Append {
   1 handle: uint
   2 events: [records.NewEvent]
+}
+
+# What an append wrote: none of an event whose id its stream held, or an
+# earlier event of the append held.
+message records.Appended {
+  1 held: uint           # the events written as nothing
 }
 
 # An event as a read gives it.
@@ -39,6 +46,7 @@ message records.Event {
   7 context: json?
   8 traceId: bin?
   9 spanId: bin?
+  10 id: str?
 }
 
 # What a read finds: each condition given holds.
@@ -180,7 +188,7 @@ message records.Damages {
 }
 
 read  0x0501 records.open(records.Open)                  -> Handle
-write 0x0502 records.append(records.Append)              -> Empty
+write 0x0502 records.append(records.Append)              -> records.Appended
 read  0x0503 records.list(records.Query)                 -> records.Page
 read  0x0504 records.count(records.Query)                -> records.Count
 read  0x0505 records.top(records.TopAsked)               -> records.Tops

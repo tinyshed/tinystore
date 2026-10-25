@@ -51,6 +51,28 @@ async def test_an_appended_event_comes_back_whole(store: tinystore.Store) -> Non
     assert (signed.trace_id, signed.span_id) == (TRACE_ID, SPAN_ID)
 
 
+async def test_an_event_whose_id_its_stream_holds_is_written_as_nothing_and_its_id_read_back(
+    store: tinystore.Store,
+) -> None:
+    deploys = store.events("deploys")
+    delivery = "72d3162e-cc78-11e3-81ab-4c9367dc0958"
+    assert await deploys.append("push", {"sha": "26a0865"}, id=delivery) is True
+    assert await deploys.append("push", {"sha": "f00ba47"}, id=delivery) is False
+    assert await deploys.append("tick") is True
+    events = [Event("push", id=delivery), Event("tag", id="v0.2.0"), Event("tag", id="v0.2.0"), Event("tick")]
+    assert await deploys.append(events) == 2
+    page = await deploys.list()
+    assert [(event.name, event.id) for event in page.events] == [
+        ("push", delivery),
+        ("tick", None),
+        ("tag", "v0.2.0"),
+        ("tick", None),
+    ]
+    assert page.events[0].fields == {"sha": "26a0865"}
+    with pytest.raises(tinystore.InvalidError, match="an id"):
+        await deploys.append("push", id="")
+
+
 async def test_a_list_is_appended_whole_or_not_at_all_and_a_refused_event_names_its_place(
     store: tinystore.Store,
 ) -> None:

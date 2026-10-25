@@ -51,6 +51,19 @@ fn requests(fixture: &Fixture) -> Vec<NewEvent> {
     (0..30).map(request).collect()
 }
 
+// contract: REC-11, DUR-11
+#[tokio::test]
+async fn an_awaited_append_of_an_id_its_stream_holds_is_false_and_writes_nothing() {
+    let fixture = fixture();
+    let deploys = awaited(&fixture).events("deploys").open().unwrap();
+    let delivery = "72d3162e-cc78-11e3-81ab-4c9367dc0958";
+    assert!(spawnable(deploys.event("push").id(delivery).append(&json!({ "sha": "26a0865" }))).await.unwrap());
+    assert!(!deploys.event("push").id(delivery).append(&json!({ "sha": "26a0865" })).await.unwrap());
+    let list = [NewEvent::new("push").id(delivery), NewEvent::new("tag").id("v0.2.0"), NewEvent::new("tick")];
+    assert_eq!(deploys.append_all(list).await.unwrap(), 2);
+    assert_eq!(names(&deploys.blocking().list().page().unwrap().events), ["push", "tag", "tick"]);
+}
+
 #[tokio::test]
 async fn awaited_appends_and_reads_answer_as_the_blocking_calls_do_on_the_same_store() {
     let fixture = fixture();

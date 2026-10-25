@@ -63,14 +63,18 @@ pub(super) fn line_of(event: &Event) -> String {
 }
 
 /// Reads any bytes as a head row, a segment's row and a block of a segment
-/// of fields, of this version and of v0.1.0's: each gives its events or
-/// fails `corrupt`, and none panics.
+/// of fields, of this version and of those released before it: each gives
+/// its events or fails `corrupt`, and none panics.
 pub fn rows(bytes: &[u8]) {
     let mut codec = Codec::default();
-    corrupt_or_read(head::parse(&sealed(head::VERSION, bytes), &mut codec));
-    corrupt_or_read(Schema::parse(&sealed(segment::VERSION, bytes), &mut codec));
+    for version in [head::VERSION, head::VERSION_1] {
+        corrupt_or_read(head::parse(&sealed(version, bytes), &mut codec));
+    }
+    for version in [segment::VERSION, segment::VERSION_1] {
+        corrupt_or_read(Schema::parse(&sealed(version, bytes), &mut codec));
+    }
     let (schema, _) = Schema::of(&seeds());
-    for version in [block::VERSION, block::VERSION_2] {
+    for version in [block::VERSION, block::VERSION_3, block::VERSION_2] {
         corrupt_or_read(block::parse(&schema, (1, &sealed(version, bytes)), &mut codec));
     }
 }
@@ -93,7 +97,7 @@ fn corrupt_or_read<T>(read: Result<T>) {
 }
 
 /// The events of the segment whose blocks `rows` reads: names, fields of
-/// numbers and text, and an event with none.
+/// numbers and text, an event with none, and one with an id.
 fn seeds() -> Vec<Kept> {
     let spelled = |name: &str, at: i64, json: &str| match RawValue::from_string(json.to_owned()) {
         Ok(fields) => NewEvent::new(name).fields(&fields).kept(at),
@@ -103,6 +107,7 @@ fn seeds() -> Vec<Kept> {
         spelled("request", 1, r#"{"route":"/a","ms":12,"user":"9f86d081884c7d65"}"#),
         spelled("request", 2, r#"{"route":"/b","ms":7.5,"ok":true}"#),
         spelled("signup", 3, "{}"),
+        NewEvent::new("push").id("72d3162e-cc78-11e3-81ab-4c9367dc0958").kept(4),
     ]
 }
 
@@ -114,7 +119,7 @@ mod tests {
     // contract: ERR-04
     #[test]
     fn a_block_with_any_byte_changed_or_cut_gives_its_events_or_fails_corrupt() {
-        let arrivals = [1025, 1026, 3072];
+        let arrivals = [1025, 1026, 3072, 4096];
         let made = made_of(&seeds(), &arrivals, &mut Codec::default()).unwrap();
         let body = &made.blocks[0].body;
         let inner = &body[1..body.len() - 4];

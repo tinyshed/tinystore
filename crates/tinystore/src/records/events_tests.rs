@@ -312,7 +312,7 @@ fn records_work_holds_the_stores_memory_waits_for_it_and_one_past_it_is_limit() 
         });
         assert!(started.elapsed() >= Duration::from_millis(150), "{what} waited for the store's memory");
     };
-    waits("an append", &|| audit.append("signup", &()).unwrap());
+    waits("an append", &|| assert!(audit.append("signup", &()).unwrap()));
     waits("a read", &|| assert_eq!(audit.list().page().unwrap().events.len(), 1));
     clock.set(store.now() + Duration::from_secs(3601)).unwrap();
     waits("a packing", &|| assert_eq!(maintain(&store).unwrap().segments, 1));

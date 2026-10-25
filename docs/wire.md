@@ -709,7 +709,7 @@ carries.
 | method   | name               | may   | request                   | answer                                         |
 |----------|--------------------|-------|---------------------------|------------------------------------------------|
 | `0x0501` | records.open       | read  | `records.Open`            | `Handle`                                       |
-| `0x0502` | records.append     | write | `records.Append`          | `Empty`                                        |
+| `0x0502` | records.append     | write | `records.Append`          | `records.Appended`                             |
 | `0x0503` | records.list       | read  | `records.Query`           | `records.Page`                                 |
 | `0x0504` | records.count      | read  | `records.Query`           | `records.Count`                                |
 | `0x0505` | records.top        | read  | `records.TopAsked`        | `records.Tops`                                 |

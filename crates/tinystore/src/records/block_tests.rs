@@ -20,11 +20,12 @@ fn mixed() -> Vec<Kept> {
         line.context(&request).fields(&json!({ "route": "/notes", "ms": 1200 + n, "ok": n % 2 == 0 })).kept(1000 + n)
     };
     let mut events: Vec<Kept> = (0..20).map(line).collect();
-    events.push(NewEvent::new("click").trace(TraceId([7; 16]), SpanId([9; 8])).kept(2000));
+    events.push(NewEvent::new("click").trace(TraceId([7; 16]), SpanId([9; 8])).id("click-1").kept(2000));
     events.push(NewEvent::new("bare").kept(2000));
     events.push(spelled("spelled", 2001, r#"{"n": 1.2300, "big": 9007199254740993, "n": {"x": [1, "y\n"]}, "e": ""}"#));
     events.push(spelled("spelled", 2002, r#"{"n": -0, "big": 12, "n": null, "e": "café"}"#));
     events.push(NewEvent::new("log").level(Level::ERROR).message("").kept(2003));
+    events.push(NewEvent::new("push").id("72d3162e-cc78-11e3-81ab-4c9367dc0958").kept(2003));
     events
 }
 
@@ -96,11 +97,34 @@ fn a_block_of_version_2_gives_its_events_the_arrivals_of_where_they_lie_below_ev
     let read = parse(&schema, (9, &hex(VERSION_2_BLOCK)), &mut codec).unwrap();
     assert_eq!(read, [(9 * 1024 - (1 << 62), events[0].clone()), (9 * 1024 + 1 - (1 << 62), events[1].clone())]);
     assert!(read.iter().all(|(arrival, _)| *arrival < super::head::arrival(1, 0)));
-    // the same events written now are of version 3, which keeps their arrivals
+    // the same events written now are of version 4, which keeps their arrivals
     let (_, ids) = Schema::of(&events);
     let row = encode(&schema, (&events, &[7, 3]), [&ids.names, &ids.shapes, &ids.contexts], &mut codec).unwrap();
     assert_eq!(row.body[0], VERSION);
     assert_eq!(parse(&schema, (9, &row.body), &mut codec).unwrap()[1].0, 3);
+}
+
+/// The same events with arrivals 1025 and 1026, and the row of their segment,
+/// as v0.1.1 (c107a3ce) wrote them.
+const VERSION_3_BLOCK: &str = "03020a0607060000000000000000020100010282100002010000000001000102ff1bb2ee";
+const VERSION_1_SEGMENT: &str = "010014020772657175657374067369676e757000010000d42743b0";
+
+// contract: REC-01
+#[test]
+fn a_block_of_version_3_reads_as_it_was_written_its_events_without_ids() {
+    let events = [NewEvent::new("request").kept(1), NewEvent::new("signup").kept(2)];
+    let mut codec = Codec::default();
+    let schema = Schema::parse(&hex(VERSION_1_SEGMENT), &mut codec).unwrap();
+    let read = parse(&schema, (9, &hex(VERSION_3_BLOCK)), &mut codec).unwrap();
+    assert_eq!(read, [(1025, events[0].clone()), (1026, events[1].clone())]);
+    // a shape with an id is refused from a segment of version 1, which never wrote one
+    let (with_id, _) = Schema::of(&[NewEvent::new("push").id("x").kept(1)]);
+    let mut row = with_id.encode(&mut codec).unwrap();
+    row[0] = super::super::segment::VERSION_1;
+    let sum = crate::compress::checksum::crc32(&row[..row.len() - 4]);
+    let at = row.len() - 4;
+    row[at..].copy_from_slice(&sum.to_le_bytes());
+    assert_eq!(Schema::parse(&row, &mut codec).unwrap_err().kind(), ErrorKind::Corrupt);
 }
 
 fn hex(text: &str) -> Vec<u8> {

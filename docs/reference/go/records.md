@@ -158,6 +158,14 @@ func Context(value any) AppendOption
 
 Context is what the event happened in: who asked, which request.
 
+### ID
+
+```go
+func ID(id string) AppendOption
+```
+
+ID names the event in its stream, a webhook's delivery or a job's key, 1 to 128 bytes: an append of an id the stream holds writes nothing and gives false, so that an append sent again is harmless.
+
 ## Batch
 
 ```go
@@ -195,6 +203,10 @@ type Event struct {
 	At time.Time
 	// Stream is the stream a read found it in.
 	Stream string
+	// ID names it in its stream, a webhook's delivery or a job's key, 1 to
+	// 128 bytes: an append of an id the stream holds writes nothing, and the
+	// first event of an id stands. "" for none.
+	ID string
 	// Name is what happened; "log" for a logger's line.
 	Name string
 	// Level is nil for an event without one, and slog's number on a read.
@@ -254,18 +266,18 @@ All is every event the query finds, a page after another, holding nothing betwee
 ### Events.Append
 
 ```go
-func (e *Events) Append(ctx context.Context, name string, fields any, opts ...AppendOption) error
+func (e *Events) Append(ctx context.Context, name string, fields any, opts ...AppendOption) (bool, error)
 ```
 
-Append writes an event: fields any value JSON writes as an object, a Fields or a struct. It returns once the event is written, and a read finds it at once.
+Append writes an event: fields any value JSON writes as an object, a Fields or a struct. It returns once the event is written, and a read finds it at once, and says whether it wrote it: false when the stream holds its ID.
 
 ### Events.AppendMany
 
 ```go
-func (e *Events) AppendMany(ctx context.Context, events []Event) error
+func (e *Events) AppendMany(ctx context.Context, events []Event) (int, error)
 ```
 
-AppendMany writes a list of events whole or not at all; a refused event names its place in the list and its name.
+AppendMany writes a list of events whole or not at all, and says how many it wrote: an event whose ID the stream holds, or an earlier event of the list has, is nothing. A refused event names its place in the list and its name.
 
 ### Events.Count
 

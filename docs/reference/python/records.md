@@ -16,6 +16,7 @@ class Event:
     trace_id: str | None = None  # 32 hex digits: the current trace's unless given
     span_id: str | None = None  # 16 hex digits
     stream: str | None = None  # the stream a read found it in
+    id: str | None = None  # what names it in its stream, 1 to 128 bytes: an append of an id the stream holds writes nothing
 ```
 
 An event: what an append writes, and what a read gives back.
@@ -147,24 +148,44 @@ A stream of events: written with append, which waits for the file, and read back
 ### Events.append
 
 ```python
+@overload
 async def append(
-    name_or_events: str | Sequence[Event],
+    name_or_events: str,
     fields: Mapping[str, Any] | None = None,
     /,
     *,
+    id: str | None = None,
     at: datetime | None = None,
     context: Mapping[str, Any] | None = None,
     level: EventLevel | None = None,
     message: str | None = None,
     trace_id: str | None = None,
     span_id: str | None = None,
-) -> None: ...
+) -> bool: ...
+@overload
+async def append(name_or_events: Sequence[Event], /) -> int: ...
+async def append(
+    name_or_events: str | Sequence[Event],
+    fields: Mapping[str, Any] | None = None,
+    /,
+    *,
+    id: str | None = None,
+    at: datetime | None = None,
+    context: Mapping[str, Any] | None = None,
+    level: EventLevel | None = None,
+    message: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+) -> bool | int: ...
 ```
 
 Writes an event, or a list of them whole or not at all.
 
-It returns once they are written, and a read finds them at once. A
-refused event names its place in the list and its name.
+It returns once they are written, and a read finds them at once. An
+event whose id the stream holds, or an earlier event of the list
+has, is written as nothing: one event answers whether it was
+written, a list how many of its events were. A refused event names
+its place in the list and its name.
 
 ### Events.append_lines
 

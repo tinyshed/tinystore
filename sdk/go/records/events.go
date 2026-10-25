@@ -6,7 +6,7 @@
 // another program's output into events.
 //
 //	audit, err := records.OpenEvents(store, "audit", records.Keep(365*24*time.Hour))
-//	err = audit.Append(ctx, "role.changed", records.Fields{"user": 42, "role": "admin"})
+//	_, err = audit.Append(ctx, "role.changed", records.Fields{"user": 42, "role": "admin"})
 //	page, err := events.List(ctx, records.Query{Since: time.Hour, MinLevel: slog.LevelWarn})
 package records
 
@@ -40,6 +40,10 @@ type Event struct {
 	At time.Time
 	// Stream is the stream a read found it in.
 	Stream string
+	// ID names it in its stream, a webhook's delivery or a job's key, 1 to
+	// 128 bytes: an append of an id the stream holds writes nothing, and the
+	// first event of an id stands. "" for none.
+	ID string
 	// Name is what happened; "log" for a logger's line.
 	Name string
 	// Level is nil for an event without one, and slog's number on a read.
@@ -157,6 +161,15 @@ func At(t time.Time) AppendOption { return at(t) }
 
 func (a at) append(e *Event) { e.At = time.Time(a) }
 
+type givenID string
+
+// ID names the event in its stream, a webhook's delivery or a job's key, 1 to
+// 128 bytes: an append of an id the stream holds writes nothing and gives
+// false, so that an append sent again is harmless.
+func ID(id string) AppendOption { return givenID(id) }
+
+func (i givenID) append(e *Event) { e.ID = string(i) }
+
 type givenContext struct{ value any }
 
 // Context is what the event happened in: who asked, which request.
@@ -238,35 +251,51 @@ func openEvents(store *core.Store, stream string, kept *time.Duration) (*Events,
 func (e *Events) Name() string { return e.name }
 
 // Append writes an event: fields any value JSON writes as an object, a Fields
-// or a struct. It returns once the event is written, and a read finds it at once.
-func (e *Events) Append(ctx context.Context, name string, fields any, opts ...AppendOption) error {
+// or a struct. It returns once the event is written, and a read finds it at
+// once, and says whether it wrote it: false when the stream holds its ID.
+func (e *Events) Append(ctx context.Context, name string, fields any, opts ...AppendOption) (bool, error) {
 	event := Event{Name: name, Fields: fields}
 	for _, opt := range opts {
+		if id, given := opt.(givenID); given && id == "" {
+			return false, core.Errorf(core.Invalid, "event 0 %q: an id of 0 bytes, not 1 to 128", name)
+		}
 		opt.append(&event)
 	}
-	return e.AppendMany(ctx, []Event{event})
+	written, err := e.AppendMany(ctx, []Event{event})
+	return written == 1, err
 }
 
-// AppendMany writes a list of events whole or not at all; a refused event
-// names its place in the list and its name.
-func (e *Events) AppendMany(ctx context.Context, events []Event) error {
+// AppendMany writes a list of events whole or not at all, and says how many
+// it wrote: an event whose ID the stream holds, or an earlier event of the
+// list has, is nothing. A refused event names its place in the list and its
+// name.
+func (e *Events) AppendMany(ctx context.Context, events []Event) (int, error) {
 	message := wire.RecordsAppend{Events: make([]wire.RecordsNewEvent, len(events))}
 	for place, event := range events {
 		written, err := newEvent(ctx, event, place)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		message.Events[place] = written
 	}
-	return e.appendWire(ctx, message)
+	held, err := e.appendWire(ctx, message)
+	return len(events) - held, err
 }
 
-func (e *Events) appendWire(ctx context.Context, message wire.RecordsAppend) error {
-	_, err := core.ViaLink{Link: e.store.Link}.Call(ctx, e.opener, wire.MethodRecordsAppend, func(handle uint64) []byte {
+// appendWire sends an append and gives how many of its events it held.
+func (e *Events) appendWire(ctx context.Context, message wire.RecordsAppend) (int, error) {
+	answer, err := core.ViaLink{Link: e.store.Link}.Call(ctx, e.opener, wire.MethodRecordsAppend, func(handle uint64) []byte {
 		message.Handle = handle
 		return wire.Encode(&message)
 	}, core.Writing)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	var appended wire.RecordsAppended
+	if err := decode(answer, &appended); err != nil {
+		return 0, err
+	}
+	return int(appended.Held), nil
 }
 
 // newEvent is an event as the wire carries it, the context's trace when it gives none.
@@ -276,6 +305,9 @@ func newEvent(ctx context.Context, event Event, place int) (wire.RecordsNewEvent
 		return wire.RecordsNewEvent{}, core.Errorf(core.Invalid, "%s: an event has a name", named)
 	}
 	out := wire.RecordsNewEvent{Name: event.Name}
+	if event.ID != "" {
+		out.Id = &event.ID
+	}
 	if !event.At.IsZero() {
 		nanos := event.At.UnixNano()
 		out.At = &nanos
@@ -351,6 +383,9 @@ func object(value any, what string) (*string, error) {
 // eventOf is an event a read gave.
 func eventOf(read wire.RecordsEvent) Event {
 	event := Event{At: time.Unix(0, read.At).UTC(), Stream: read.Stream, Name: read.Name}
+	if read.Id != nil {
+		event.ID = *read.Id
+	}
 	if read.Level != nil {
 		event.Level = slog.Level(*read.Level)
 	}

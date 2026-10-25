@@ -24,6 +24,7 @@ use crate::{Clock, Durability, Error, Memory, Result, Store, unix_nanos};
 const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
     Migration::of(2, "0002_arrivals.sql", include_str!("migrations/0002_arrivals.sql")),
+    Migration::of(3, "0003_ids.sql", include_str!("migrations/0003_ids.sql")),
 ];
 
 /// records' file in the store's directory.

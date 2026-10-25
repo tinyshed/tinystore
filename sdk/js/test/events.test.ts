@@ -51,6 +51,31 @@ for (const way of ways) {
 			expect([signed?.traceId, signed?.spanId]).toEqual([traceId, spanId])
 		})
 
+		test('an event whose id its stream holds is written as nothing, and its id read back', async () => {
+			const deploys = store.events('deploys')
+			const delivery = '72d3162e-cc78-11e3-81ab-4c9367dc0958'
+			expect(await deploys.append('push', { sha: '26a0865' }, { id: delivery })).toBe(true)
+			expect(await deploys.append('push', { sha: 'f00ba47' }, { id: delivery })).toBe(false)
+			expect(await deploys.append('tick')).toBe(true)
+			const list = [
+				{ name: 'push', id: delivery },
+				{ name: 'tag', id: 'v0.2.0' },
+				{ name: 'tag', id: 'v0.2.0' },
+				{ name: 'tick' },
+			]
+			expect(await deploys.append(list)).toBe(2)
+			const { events } = await deploys.list()
+			expect(events.map(event => [event.name, event.id])).toEqual([
+				['push', delivery],
+				['tick', undefined],
+				['tag', 'v0.2.0'],
+				['tick', undefined],
+			])
+			expect(events[0]?.fields).toEqual({ sha: '26a0865' })
+			const empty = await caught(deploys.append('push', {}, { id: '' }))
+			expect(empty).toBeInstanceOf(InvalidError)
+		})
+
 		test('a list is appended whole or not at all, and a refused event names its place', async () => {
 			const clicks = store.events('clicks')
 			const err = await caught(clicks.append([{ name: 'view', fields: { page: 1 } }, { name: '' }]))

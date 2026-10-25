@@ -54,6 +54,12 @@ const NOTE_EXPIRED: &str = "insert or replace into expired (segment, events, at)
 /// behind it.
 const EXPIRED_KEPT: Duration = Duration::from_hours(30 * 24);
 const FORGET_EXPIRED: &str = "delete from expired where at < ?1";
+/// The ids of a stream's events that none of its head rows and segments can
+/// hold any more, older than the oldest event they hold: every id of a stream
+/// that holds none.
+const FORGET_IDS: &str = "delete from event_ids where stream = ?1 and at < coalesce((select min(oldest) from (
+    select min(first_at) as oldest from heads where stream = ?1
+    union all select min(first_at) from segments where stream = ?1 and holder is null)), 9223372036854775807)";
 const DROP_TRACES: &str = "delete from block_traces where block in (select id from blocks where segment in
     (select id from segments where stream = ?1 and holder is null and last_at < ?2))";
 const DROP_FILTERS: &str = "delete from block_filters where block in (select id from blocks where segment in
@@ -136,6 +142,9 @@ impl Records {
 /// Removes a stream's head rows and segments whose newest event is before
 /// `cutoff`, a segment's blocks and places with it, and takes the rows from
 /// what their heads hold; the events of the rows are noted for the polls.
+/// An id goes only once no event its stream still holds can be its event, so
+/// that a poll, which reads a segment whole, never finds an event whose id
+/// was let go.
 fn drop_past(tx: &Connection, stream: i64, cutoff: i64, now: i64) -> Result<()> {
     let left = tx.prepare_cached(EXPIRED_HEADS).and_then(|mut select| {
         let heads = select.query_map(params![stream, cutoff], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)));
@@ -155,6 +164,7 @@ fn drop_past(tx: &Connection, stream: i64, cutoff: i64, now: i64) -> Result<()> 
     for (sql, what) in drops {
         execute(tx, sql, params![stream, cutoff], &format!("remove the {what} a stream keeps no longer"))?;
     }
+    execute(tx, FORGET_IDS, params![stream], "forget the ids of what a stream keeps no longer")?;
     left.into_iter().try_for_each(|(late, events, weight)| settle(tx, (stream, late), events, weight).map(drop))
 }
 

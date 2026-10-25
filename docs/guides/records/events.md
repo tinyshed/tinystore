@@ -24,9 +24,9 @@ await clicks.append([Event(name=click.type, fields=click.props, at=click.time) f
 ```go
 audit, err := records.OpenEvents(store, "audit", records.Keep(365*24*time.Hour))
 
-err = audit.Append(ctx, "role.changed", records.Fields{"user": 42, "role": "admin"})
-err = audit.Append(ctx, "role.changed", change, records.At(changedAt), records.Context(records.Fields{"actor": admin.ID}))
-err = clicks.AppendMany(ctx, events) // []records.Event{{Name, Fields, At}}, all or none
+_, err = audit.Append(ctx, "role.changed", records.Fields{"user": 42, "role": "admin"})
+_, err = audit.Append(ctx, "role.changed", change, records.At(changedAt), records.Context(records.Fields{"actor": admin.ID}))
+_, err = clicks.AppendMany(ctx, events) // []records.Event{{Name, Fields, At}}, all or none
 ```
 
 ```rust
@@ -52,6 +52,7 @@ clicks.append_all(batch)?; // NewEvent::new(name).fields(&props).at(time), all o
 |---------------------|--------------------------------------------------------------------------------------|
 | `at`                | its time; kept to the nanosecond, and events are read in its order                   |
 | `stream`            | the stream it was written to                                                         |
+| `id`                | the id its append gave it; absent on an event without one                            |
 | `name`              | what happened, `role.changed`; `log` for a logger's line                             |
 | `level`             | `trace`, `debug`, `info`, `warn`, `error` or `fatal`; absent on an event without one |
 | `message`           | a line's text; absent on an event without one                                        |
@@ -88,7 +89,7 @@ await clicks.append("view", {"page": page, "client_at": body.at})
 ```
 
 ```go
-err = clicks.Append(ctx, "view", records.Fields{"page": page, "clientAt": body.At})
+_, err = clicks.Append(ctx, "view", records.Fields{"page": page, "clientAt": body.At})
 ```
 
 ```rust
@@ -97,6 +98,55 @@ clicks.append("view", &View { page, client_at: body.at })?;
 
 A phone set a year back cannot bury its events in last year's segments, and a
 phone set ahead cannot write the future.
+
+## An append sent again
+
+A job step runs at least once. If a worker crashes after `append` and before
+its step finishes, the next attempt appends the same event again. Give the
+event an id, such as a webhook's delivery id, and the second append writes
+nothing:
+
+```ts
+const deploys = store.events('deploys')
+await deploys.append('push', { sha }, { id: delivery }) // true
+await deploys.append('push', { sha }, { id: delivery }) // false: the stream holds this id
+await deploys.append([{ name: 'push', id: delivery, fields: { sha } }]) // 0 written
+```
+
+```python
+deploys = store.events("deploys")
+await deploys.append("push", {"sha": sha}, id=delivery)  # True
+await deploys.append("push", {"sha": sha}, id=delivery)  # False: the stream holds this id
+await deploys.append([Event("push", {"sha": sha}, id=delivery)])  # 0 written
+```
+
+```go
+deploys, err := records.OpenEvents(store, "deploys")
+added, err := deploys.Append(ctx, "push", records.Fields{"sha": sha}, records.ID(delivery)) // true
+added, err = deploys.Append(ctx, "push", records.Fields{"sha": sha}, records.ID(delivery))  // false: the stream holds this id
+written, err := deploys.AppendMany(ctx, []records.Event{{Name: "push", ID: delivery, Fields: records.Fields{"sha": sha}}}) // 0
+```
+
+```rust
+let deploys = store.events("deploys").open()?;
+let added: bool = deploys.event("push").id(&delivery).append(&push)?; // true
+let added: bool = deploys.event("push").id(&delivery).append(&push)?; // false: the stream holds this id
+let written: usize = deploys.append_all([NewEvent::new("push").id(&delivery).fields(&push)])?; // 0
+```
+
+- One event's `append` returns whether it wrote the event, and a list's
+  returns how many events it wrote. An event without an id is always
+  written.
+- The first event of an id stays. TinyStore compares only the id, so a later
+  event with the same id writes nothing even if its fields differ.
+- In a list, the first event of an id is written and later ones with the same
+  id are not. The rest of the list is written whole, and a refused event
+  still refuses the whole list.
+- The stream keeps an id for as long as a read or a poll can still return its
+  event. Once `keep` removes the event, its id can be used again.
+- An id is 1 to 128 bytes. Each stream has its own ids, so one id in two
+  streams makes two events.
+- A read returns the id as `id` (`ID` in Go).
 
 ## How long a stream keeps
 
@@ -132,6 +182,7 @@ them all.
 | What            | Limit                                |
 |-----------------|--------------------------------------|
 | an event        | 256 KiB, and 128 keys in all         |
+| an event's id   | 1 to 128 bytes                       |
 | one `append`    | 4 MiB                                |
 | an event's time | from `keep` ago to ten minutes ahead |
 | `keep`          | 14 days unless the stream says       |

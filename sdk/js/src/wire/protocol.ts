@@ -7979,6 +7979,8 @@ export const RecordsNewEvent = message(
 		traceId: [7, bin],
 		/** 8 bytes */
 		spanId: [8, bin],
+		/** 1 to 128 bytes: an event of an id its stream holds is written as nothing */
+		id: [9, str],
 	},
 	{
 		write(w, v) {
@@ -8024,6 +8026,11 @@ export const RecordsNewEvent = message(
 				w.bin(v.spanId)
 				n++
 			}
+			if (v.id !== undefined) {
+				w.field(9)
+				w.str(v.id)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -8035,6 +8042,7 @@ export const RecordsNewEvent = message(
 			let $context: string | undefined
 			let $traceId: Uint8Array | undefined
 			let $spanId: Uint8Array | undefined
+			let $id: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8061,6 +8069,9 @@ export const RecordsNewEvent = message(
 					case 8:
 						$spanId = r.bytes()
 						break
+					case 9:
+						$id = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -8075,6 +8086,7 @@ export const RecordsNewEvent = message(
 				context: $context,
 				traceId: $traceId,
 				spanId: $spanId,
+				id: $id,
 			}
 		},
 	},
@@ -8136,6 +8148,44 @@ export const RecordsAppend = message(
 )
 
 /**
+ * What an append wrote: none of an event whose id its stream held, or an
+ * earlier event of the append held.
+ */
+export const RecordsAppended = message(
+	'records.Appended',
+	{
+		/** the events written as nothing */
+		held: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.held !== undefined) {
+				w.field(1)
+				w.uint(v.held)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $held: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$held = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { held: $held }
+		},
+	},
+)
+
+/**
  * An event as a read gives it.
  */
 export const RecordsEvent = message(
@@ -8151,6 +8201,7 @@ export const RecordsEvent = message(
 		context: [7, str],
 		traceId: [8, bin],
 		spanId: [9, bin],
+		id: [10, str],
 	},
 	{
 		write(w, v) {
@@ -8201,6 +8252,11 @@ export const RecordsEvent = message(
 				w.bin(v.spanId)
 				n++
 			}
+			if (v.id !== undefined) {
+				w.field(10)
+				w.str(v.id)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -8213,6 +8269,7 @@ export const RecordsEvent = message(
 			let $context: string | undefined
 			let $traceId: Uint8Array | undefined
 			let $spanId: Uint8Array | undefined
+			let $id: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8242,6 +8299,9 @@ export const RecordsEvent = message(
 					case 9:
 						$spanId = r.bytes()
 						break
+					case 10:
+						$id = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -8257,6 +8317,7 @@ export const RecordsEvent = message(
 				context: $context,
 				traceId: $traceId,
 				spanId: $spanId,
+				id: $id,
 			}
 		},
 	},

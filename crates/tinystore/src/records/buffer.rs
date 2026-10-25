@@ -234,6 +234,7 @@ impl Keep for Buffer {
 fn event_of(line: Line) -> NewEvent {
     NewEvent {
         name: line.name,
+        id: None,
         at: Some(crate::clock::from_unix_nanos(line.at)),
         level: line.level.map(Level::of),
         message: line.message,

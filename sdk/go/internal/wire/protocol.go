@@ -493,6 +493,8 @@ func NewMessage(name string) Message {
 		return &RecordsNewEvent{}
 	case "records.Append":
 		return &RecordsAppend{}
+	case "records.Appended":
+		return &RecordsAppended{}
 	case "records.Event":
 		return &RecordsEvent{}
 	case "records.Query":
@@ -8733,6 +8735,8 @@ type RecordsNewEvent struct {
 	TraceId *[]byte `wire:"7,traceId"`
 	// 8 bytes
 	SpanId *[]byte `wire:"8,spanId"`
+	// 1 to 128 bytes: an event of an id its stream holds is written as nothing
+	Id *string `wire:"9,id"`
 }
 
 func (m RecordsNewEvent) Write(w *Writer) {
@@ -8778,6 +8782,11 @@ func (m RecordsNewEvent) Write(w *Writer) {
 		w.Bin(*m.SpanId)
 		n++
 	}
+	if m.Id != nil {
+		w.Uint(9)
+		w.Str(*m.Id)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -8809,6 +8818,9 @@ func (m *RecordsNewEvent) Read(r *Reader) {
 		case 8:
 			v := r.Bin()
 			m.SpanId = &v
+		case 9:
+			v := r.Str()
+			m.Id = &v
 		default:
 			r.Skip()
 		}
@@ -8825,7 +8837,8 @@ func (m RecordsNewEvent) IsZero() bool {
 		m.Fields == nil &&
 		m.Context == nil &&
 		m.TraceId == nil &&
-		m.SpanId == nil
+		m.SpanId == nil &&
+		m.Id == nil
 }
 
 // RecordsAppend is the schema's records.Append.
@@ -8884,6 +8897,45 @@ func (m RecordsAppend) IsZero() bool {
 		len(m.Events) == 0
 }
 
+// RecordsAppended is the schema's records.Appended.
+//
+// What an append wrote: none of an event whose id its stream held, or an
+// earlier event of the append held.
+type RecordsAppended struct {
+	// the events written as nothing
+	Held uint64 `wire:"1,held"`
+}
+
+func (m RecordsAppended) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Held != 0 {
+		w.Uint(1)
+		w.Uint(m.Held)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsAppended) Read(r *Reader) {
+	*m = RecordsAppended{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Held = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsAppended writes as no field at all.
+func (m RecordsAppended) IsZero() bool {
+	return m.Held == 0
+}
+
 // RecordsEvent is the schema's records.Event.
 //
 // An event as a read gives it.
@@ -8898,6 +8950,7 @@ type RecordsEvent struct {
 	Context *string `wire:"7,context"`
 	TraceId *[]byte `wire:"8,traceId"`
 	SpanId  *[]byte `wire:"9,spanId"`
+	Id      *string `wire:"10,id"`
 }
 
 func (m RecordsEvent) Write(w *Writer) {
@@ -8948,6 +9001,11 @@ func (m RecordsEvent) Write(w *Writer) {
 		w.Bin(*m.SpanId)
 		n++
 	}
+	if m.Id != nil {
+		w.Uint(10)
+		w.Str(*m.Id)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -8980,6 +9038,9 @@ func (m *RecordsEvent) Read(r *Reader) {
 		case 9:
 			v := r.Bin()
 			m.SpanId = &v
+		case 10:
+			v := r.Str()
+			m.Id = &v
 		default:
 			r.Skip()
 		}
@@ -8997,7 +9058,8 @@ func (m RecordsEvent) IsZero() bool {
 		m.Fields == nil &&
 		m.Context == nil &&
 		m.TraceId == nil &&
-		m.SpanId == nil
+		m.SpanId == nil &&
+		m.Id == nil
 }
 
 // RecordsQuery is the schema's records.Query.

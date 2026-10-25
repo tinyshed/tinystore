@@ -203,6 +203,7 @@ A value of a key and how many events hold it.
 pub struct Event {
     pub at: SystemTime,
     pub stream: String,
+    pub id: Option<String>,
     pub name: String,
     pub level: Option<Level>,
     pub message: Option<String>,
@@ -366,6 +367,17 @@ An event to write: its name, and what it carries beside its fields.
 pub fn new(name: &str) -> NewEvent
 ```
 
+### NewEvent.id
+
+```rust
+pub fn id(self, id: impl AsRef<str>) -> Self
+```
+
+What names it in its stream, a webhook's delivery or a job's key: an
+append of an id the stream holds writes nothing, so that an append
+sent again is harmless. The stream holds an id while it keeps its
+event; the first event of an id stands, whatever a later one carries.
+
 ### NewEvent.at
 
 ```rust
@@ -499,6 +511,17 @@ pub struct EventCall<'e> { /* private fields */ }
 
 One event on its way into a stream.
 
+### EventCall.id
+
+```rust
+pub fn id(self, id: impl AsRef<str>) -> Self
+```
+
+What names it in its stream, a webhook's delivery or a job's key: an
+append of an id the stream holds writes nothing and gives `false`,
+so that an append sent again is harmless. The stream holds an id
+while it keeps its event, and the first event of an id stands.
+
 ### EventCall.at
 
 ```rust
@@ -537,8 +560,11 @@ pub fn trace(self, trace_id: TraceId, span_id: SpanId) -> Self
 ### EventCall.append
 
 ```rust
-pub fn append(self, fields: &impl Serialize) -> Result<()>
+pub fn append(self, fields: &impl Serialize) -> Result<bool>
 ```
+
+Writes the event, and says whether it did: `false` when its stream
+holds its id.
 
 ## Events
 
@@ -552,12 +578,13 @@ read back by time and by what they hold.
 ### Events.append
 
 ```rust
-pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<()>
+pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<bool>
 ```
 
 Writes an event of `name` with `fields`, a struct or a map, at the
 store's time. It returns once the event is written, and a read finds
-it at once.
+it at once: always `true`, since only an event with an id can be one
+its stream holds.
 
 ### Events.event
 
@@ -576,11 +603,13 @@ audit.event("role.changed").at(at).context(&actor).append(&change)?;
 ### Events.append_all
 
 ```rust
-pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<()>
+pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<usize>
 ```
 
-Writes a list of events, all of them or none: a refused one names its
-place in the list and its name.
+Writes a list of events, all of them or none, and says how many it
+wrote: an event whose id the stream holds, or an earlier event of the
+list holds, is nothing. A refused one names its place in the list and
+its name.
 
 ### Events.list
 
@@ -1384,12 +1413,13 @@ pub fn append(
     &self,
     name: &str,
     fields: &impl Serialize,
-) -> impl Future<Output = Result<()>> + Send + 'static
+) -> impl Future<Output = Result<bool>> + Send + 'static
 ```
 
 Writes an event of `name` with `fields`, a struct or a map, at the
 store's time, its fields serialized when the call is made. It answers
-once the event is written, and a read finds it at once.
+once the event is written, and a read finds it at once: always
+`true`, since only an event with an id can be one its stream holds.
 
 ### aio::records::Events.event
 
@@ -1406,10 +1436,12 @@ verb, as `crate::records::Events::event` has.
 pub fn append_all(
     &self,
     events: impl IntoIterator<Item = NewEvent>,
-) -> impl Future<Output = Result<()>> + Send + 'static
+) -> impl Future<Output = Result<usize>> + Send + 'static
 ```
 
-Writes a list of events, all of them or none, in one commit.
+Writes a list of events, all of them or none, in one commit, and
+answers how many it wrote: an event whose id the stream holds, or an
+earlier event of the list holds, is nothing.
 
 The events are checked in the future's first poll, at most 4 MiB an
 append, and queued at records.db's writer, whose commit runs on the
@@ -1446,6 +1478,15 @@ pub struct EventCall<'e> { /* private fields */ }
 ```
 
 One event on its way into a stream.
+
+### aio::records::EventCall.id
+
+```rust
+pub fn id(self, id: impl AsRef<str>) -> Self
+```
+
+What names it in its stream, as `crate::records::EventCall::id`
+has: an append of an id the stream holds writes nothing.
 
 ### aio::records::EventCall.at
 
@@ -1485,10 +1526,11 @@ pub fn trace(self, trace_id: TraceId, span_id: SpanId) -> Self
 ### aio::records::EventCall.append
 
 ```rust
-pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<()>> + Send + 'static
+pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<bool>> + Send + 'static
 ```
 
-Writes the event with `fields`, as `Events::append_all` writes one.
+Writes the event with `fields`, as `Events::append_all` writes one,
+and answers whether it did: `false` when its stream holds its id.
 
 ## aio::records::AllEvents
 

@@ -143,8 +143,8 @@ These contracts are what does not.
 
 ### Records
 
-- **REC-01** An event MUST come back as it was written: each value as it was spelled, its fields, its time.
-- **REC-02** A list of events MUST be appended whole or not at all; a refused one names its place.
+- **REC-01** An event MUST come back as it was written: each value as it was spelled, its fields, its time, its id.
+- **REC-02** A list of events MUST be appended whole or not at all; a refused one names its place, and an event whose id its stream holds is nothing, not a refusal (REC-11).
 - **REC-03** An appended event MUST be readable at once, before it is packed, and MUST survive an abrupt exit.
 - **REC-04** A read MUST return events in event time, those of one time in the order they were appended, within a stream and across streams, each once, across packed segments and what waits; events of one time that v0.1.0 packed keep the order v0.1.0 read them in (NOT-12).
 - **REC-05** A page MUST NOT split one timestamp nor lose one; a budget MUST end a page rather than fail it.
@@ -153,6 +153,7 @@ These contracts are what does not.
 - **REC-08** A tail MUST give the events appended after it opened, and say how many it missed when slower than the writers.
 - **REC-09** A stream's `keep` MUST be its own; another `keep` for an open stream MUST be refused, naming both.
 - **REC-10** Another program's lines MUST become events however they were cut; a stack trace's or a JSON value's lines MUST become one event.
+- **REC-11** An event's id MUST name one event of its stream while the stream holds that event for a read or a poll: an append of an id the stream holds, or of one an earlier event of its list has, MUST write nothing and say so, the rest of its list written whole, and the first event of an id stands whatever a later one carries.
 
 ### Logger and console
 

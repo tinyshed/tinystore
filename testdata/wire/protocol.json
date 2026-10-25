@@ -3915,6 +3915,9 @@
         "fields": {
           "str": "{\"a\":1}"
         },
+        "id": {
+          "str": "id"
+        },
         "level": {
           "int": "-7"
         },
@@ -3931,7 +3934,7 @@
           "bin": "01ff"
         }
       },
-      "hex": "8801a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff",
+      "hex": "8901a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff09a26964",
       "message": "records.NewEvent",
       "name": "records.NewEvent with every field"
     },
@@ -3956,6 +3959,9 @@
                 "fields": {
                   "str": "{\"a\":1}"
                 },
+                "id": {
+                  "str": "id"
+                },
                 "level": {
                   "int": "-7"
                 },
@@ -3979,7 +3985,7 @@
           "uint": "107"
         }
       },
-      "hex": "82016b02918801a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff",
+      "hex": "82016b02918901a46e616d6502cf18d75b8423f4e24003f904a76d65737361676505a77b2261223a317d06a77b2261223a317d07c40201ff08c40201ff09a26964",
       "message": "records.Append",
       "name": "records.Append with every field"
     },
@@ -3991,6 +3997,22 @@
     },
     {
       "fields": {
+        "held": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "records.Appended",
+      "name": "records.Appended with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "records.Appended",
+      "name": "records.Appended with no field"
+    },
+    {
+      "fields": {
         "at": {
           "int": "1790000000000123456"
         },
@@ -3999,6 +4021,9 @@
         },
         "fields": {
           "str": "{\"a\":1}"
+        },
+        "id": {
+          "str": "id"
         },
         "level": {
           "int": "-7"
@@ -4019,7 +4044,7 @@
           "bin": "01ff"
         }
       },
-      "hex": "8901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff",
+      "hex": "8a01cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff0aa26964",
       "message": "records.Event",
       "name": "records.Event with every field"
     },
@@ -4108,6 +4133,9 @@
                 "fields": {
                   "str": "{\"a\":1}"
                 },
+                "id": {
+                  "str": "id"
+                },
                 "level": {
                   "int": "-7"
                 },
@@ -4134,7 +4162,7 @@
           "str": "next"
         }
       },
-      "hex": "8201918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02a46e657874",
+      "hex": "8201918a01cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff0aa2696402a46e657874",
       "message": "records.Page",
       "name": "records.Page with every field"
     },
@@ -4703,6 +4731,9 @@
                 "fields": {
                   "str": "{\"a\":1}"
                 },
+                "id": {
+                  "str": "id"
+                },
                 "level": {
                   "int": "-7"
                 },
@@ -4729,7 +4760,7 @@
           "uint": "307"
         }
       },
-      "hex": "8301918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02a6637572736f7203cd0133",
+      "hex": "8301918a01cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff0aa2696402a6637572736f7203cd0133",
       "message": "records.Batch",
       "name": "records.Batch with every field"
     },
@@ -4753,6 +4784,9 @@
                 },
                 "fields": {
                   "str": "{\"a\":1}"
+                },
+                "id": {
+                  "str": "id"
                 },
                 "level": {
                   "int": "-7"
@@ -4780,7 +4814,7 @@
           "uint": "207"
         }
       },
-      "hex": "8201918901cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff02cccf",
+      "hex": "8201918a01cf18d75b8423f4e24002a673747265616d03a46e616d6504f905a76d65737361676506a77b2261223a317d07a77b2261223a317d08c40201ff09c40201ff0aa2696402cccf",
       "message": "records.TailBatch",
       "name": "records.TailBatch with every field"
     },

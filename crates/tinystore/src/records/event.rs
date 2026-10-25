@@ -13,6 +13,9 @@ use crate::{Error, Result};
 pub(super) const MAX_KEYS: usize = 128;
 /// The bytes one event weighs at most.
 pub(super) const MAX_EVENT: usize = 256 << 10;
+/// The bytes of an event's id at most: its key in `event_ids` stays on its
+/// page of records.db, whose pages are 1 KiB.
+pub(super) const MAX_ID: usize = 128;
 
 /// How grave an event is: one of six names, or a number between two of them
 /// as Go's `slog` counts, which reads as the name under it.
@@ -184,6 +187,8 @@ pub struct Event {
     /// Its time, which the file keeps to the nanosecond.
     pub at: SystemTime,
     pub stream: String,
+    /// What its append named it by: its stream holds one event of an id.
+    pub id: Option<String>,
     /// What happened; `log` for a logger's line.
     pub name: String,
     pub level: Option<Level>,
@@ -201,6 +206,7 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Kept {
     pub(super) at: i64,
+    pub(super) id: Option<String>,
     pub(super) name: String,
     pub(super) level: Option<Level>,
     pub(super) message: Option<String>,
@@ -214,13 +220,15 @@ impl Kept {
     /// What the event weighs against the bounds of an append, a row and a
     /// segment: more than its bytes in any of them.
     pub(super) fn weight(&self) -> usize {
-        weight(&self.name, self.message.as_deref(), &self.fields.0, &self.context.0)
+        let id = self.id.as_ref().map_or(0, String::len);
+        id + weight(&self.name, self.message.as_deref(), &self.fields.0, &self.context.0)
     }
 
     pub(super) fn into_event(self, stream: &str) -> Event {
         Event {
             at: crate::clock::from_unix_nanos(self.at),
             stream: stream.to_owned(),
+            id: self.id,
             name: self.name,
             level: self.level,
             message: self.message,
@@ -250,6 +258,7 @@ pub(super) fn weight(
 #[derive(Clone, Debug)]
 pub struct NewEvent {
     pub(super) name: String,
+    pub(super) id: Option<String>,
     pub(super) at: Option<SystemTime>,
     pub(super) level: Option<Level>,
     pub(super) message: Option<String>,
@@ -266,6 +275,7 @@ impl NewEvent {
     pub fn new(name: &str) -> NewEvent {
         NewEvent {
             name: name.to_owned(),
+            id: None,
             at: None,
             level: None,
             message: None,
@@ -275,6 +285,15 @@ impl NewEvent {
             span_id: None,
             refused: None,
         }
+    }
+
+    /// What names it in its stream, a webhook's delivery or a job's key: an
+    /// append of an id the stream holds writes nothing, so that an append
+    /// sent again is harmless. The stream holds an id while it keeps its
+    /// event; the first event of an id stands, whatever a later one carries.
+    pub fn id(mut self, id: impl AsRef<str>) -> Self {
+        self.id = Some(id.as_ref().to_owned());
+        self
     }
 
     /// Its time: when it is appended, unless given.
@@ -320,6 +339,7 @@ impl NewEvent {
     pub(super) fn kept(self, at: i64) -> Kept {
         Kept {
             at,
+            id: self.id,
             name: self.name,
             level: self.level,
             message: self.message,

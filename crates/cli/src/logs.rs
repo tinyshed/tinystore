@@ -412,6 +412,7 @@ mod tests {
             let event = Event {
                 at: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(nanos),
                 stream: line["stream"].as_str().unwrap().to_owned(),
+                id: None,
                 name: line["event"].as_str().unwrap_or("log").to_owned(),
                 level: line["level"].as_i64().map(|number| Level::of(number as i32)),
                 message: line["msg"].as_str().map(str::to_owned),
@@ -432,6 +433,7 @@ mod tests {
         let event = Event {
             at,
             stream: "api".to_owned(),
+            id: None,
             name: "log".to_owned(),
             level: Some(Level::INFO),
             message: Some("tick".to_owned()),

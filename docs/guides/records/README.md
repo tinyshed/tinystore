@@ -29,7 +29,7 @@ log := slog.New(records.NewHandler(store, "api", console.Redact(console.Secrets.
 audit, err := records.OpenEvents(store, "audit", records.Keep(365*24*time.Hour))
 
 log.Info("signed in", "userId", 42)
-err = audit.Append(ctx, "role.changed", records.Fields{"userId": 42, "role": "admin"})
+_, err = audit.Append(ctx, "role.changed", records.Fields{"userId": 42, "role": "admin"})
 events, err := records.OpenAllEvents(store)
 page, err := events.List(ctx, records.Query{Since: time.Hour, MinLevel: slog.LevelWarn})
 ```
@@ -61,7 +61,7 @@ let page = store.all_events()?.list().since(Duration::from_hours(1)).min_level(L
 |---------------------------------------------|------------------------------------------------------------------------------------|
 | [Logging](logging.md)                       | levels, `with`, `redact`, Go's `slog` and Rust's `tracing`                         |
 | [Console output](console.md)                | pretty or JSON, a quiet console, `LOG_LEVEL`, `LOG_CONSOLE_LEVEL`, a console alone |
-| [Events](events.md)                         | `append`, names, fields, context, times                                            |
+| [Events](events.md)                         | `append`, names, fields, context, times, ids for an append sent again              |
 | [Reading](reading.md)                       | `list`, `all`, `where`, `search`, `count`, `top`, `aggregate`                      |
 | [Traces](traces.md)                         | one request's lines across streams                                                 |
 | [Tail and poll](tail-and-poll.md)           | live events, and every event once from a cursor                                    |

@@ -18,7 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack
+from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, overload
 
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
@@ -30,6 +30,7 @@ from ._wire.protocol import (
     Handle,
     RecordsAggregateAsked,
     RecordsAppend,
+    RecordsAppended,
     RecordsBatch,
     RecordsCount,
     RecordsDamage,
@@ -95,6 +96,8 @@ class Event:
     """16 hex digits"""
     stream: str | None = None
     """the stream a read found it in"""
+    id: str | None = None
+    """what names it in its stream, 1 to 128 bytes: an append of an id the stream holds writes nothing"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +306,7 @@ def _event_of(read: dict[str, Any]) -> Event:
         trace_id=None if trace is None else trace.hex(),
         span_id=None if span is None else span.hex(),
         stream=read.get("stream", ""),
+        id=read.get("id"),
     )
 
 
@@ -325,9 +329,12 @@ def _new_event(event: Event, place: int) -> dict[str, Any]:
     named = f"event {place} {event.name!r}"
     if not isinstance(event.name, str) or not event.name:  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidError(f"{named}: an event has a name")
+    if event.id is not None and (not isinstance(event.id, str) or not event.id):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidError(f"{named}: an id is a string of 1 to 128 bytes")
     traced = current_trace() if event.trace_id is None else (event.trace_id, event.span_id)
     return {
         "name": event.name,
+        "id": event.id,
         "at": None if event.at is None else _nanos(event.at, f"{named}: its time"),
         "level": None if event.level is None else _level_number(event.level, named),
         "message": event.message,
@@ -474,32 +481,56 @@ class Events(_Reads):
         self._via = via_link(link)
         self._opener = opener
 
+    @overload
     async def append(
         self,
-        name_or_events: str | Sequence[Event],
+        name_or_events: str,
         fields: Mapping[str, Any] | None = None,
         /,
         *,
+        id: str | None = None,
         at: datetime | None = None,
         context: Mapping[str, Any] | None = None,
         level: EventLevel | None = None,
         message: str | None = None,
         trace_id: str | None = None,
         span_id: str | None = None,
-    ) -> None:
+    ) -> bool: ...
+
+    @overload
+    async def append(self, name_or_events: Sequence[Event], /) -> int: ...
+
+    async def append(
+        self,
+        name_or_events: str | Sequence[Event],
+        fields: Mapping[str, Any] | None = None,
+        /,
+        *,
+        id: str | None = None,
+        at: datetime | None = None,
+        context: Mapping[str, Any] | None = None,
+        level: EventLevel | None = None,
+        message: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> bool | int:
         """Writes an event, or a list of them whole or not at all.
 
-        It returns once they are written, and a read finds them at once. A
-        refused event names its place in the list and its name.
+        It returns once they are written, and a read finds them at once. An
+        event whose id the stream holds, or an earlier event of the list
+        has, is written as nothing: one event answers whether it was
+        written, a list how many of its events were. A refused event names
+        its place in the list and its name.
         """
         if isinstance(name_or_events, str):
-            events: Sequence[Event] = [
-                Event(name_or_events, fields or {}, at, context or {}, level, message, trace_id, span_id)
-            ]
+            event = Event(name_or_events, fields or {}, at, context or {}, level, message, trace_id, span_id, id=id)
+            events: Sequence[Event] = [event]
         else:
             events = name_or_events
         encoded = [_new_event(event, place) for place, event in enumerate(events)]
-        await self._call("records.append", lambda h: RecordsAppend.encode(handle=h, events=encoded), "write")
+        answer = await self._call("records.append", lambda h: RecordsAppend.encode(handle=h, events=encoded), "write")
+        written = len(events) - RecordsAppended.decode(answer).get("held", 0)
+        return written == 1 if isinstance(name_or_events, str) else written
 
     async def append_lines(self, lines: list[Line]) -> None:
         """A logger's lines, each an event of this stream."""

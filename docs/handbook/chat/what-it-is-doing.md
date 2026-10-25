@@ -104,7 +104,7 @@ await audit.append("chat.deleted", {"chat_id": 9, "user_id": 42})
 ```
 
 ```go
-err = audit.Append(ctx, "chat.deleted", records.Fields{"chatId": 9, "userId": 42})
+_, err = audit.Append(ctx, "chat.deleted", records.Fields{"chatId": 9, "userId": 42})
 ```
 
 ```rust

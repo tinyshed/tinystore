@@ -57,7 +57,7 @@ await store.events("webhooks").append("github", {"requestId": "r-81", "status": 
 
 ```go
 webhooks, err := records.OpenEvents(store, "webhooks")
-err = webhooks.Append(ctx, "github", records.Fields{"requestId": "r-81", "status": 200},
+_, err = webhooks.Append(ctx, "github", records.Fields{"requestId": "r-81", "status": 200},
 	records.Context(records.Fields{"target": "home"}))
 ```
 
@@ -147,7 +147,7 @@ page = await audit.list(since="1m")  # cart.created, item.added, checkout
 ```
 
 ```go
-err := audit.AppendMany(ctx, []records.Event{{Name: "cart.created"}, {Name: "item.added"}, {Name: "checkout"}})
+_, err := audit.AppendMany(ctx, []records.Event{{Name: "cart.created"}, {Name: "item.added"}, {Name: "checkout"}})
 page, err := audit.List(ctx, records.Query{Since: time.Minute}) // cart.created, item.added, checkout
 ```
 

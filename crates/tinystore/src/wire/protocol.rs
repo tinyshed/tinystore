@@ -7632,6 +7632,8 @@ pub(crate) struct RecordsNewEvent {
     pub(crate) trace_id: Option<Vec<u8>>,
     /// 8 bytes.
     pub(crate) span_id: Option<Vec<u8>>,
+    /// 1 to 128 bytes: an event of an id its stream holds is written as nothing.
+    pub(crate) id: Option<String>,
 }
 
 #[cfg(feature = "records")]
@@ -7651,6 +7653,7 @@ impl Message for RecordsNewEvent {
                 6 => message.context = Some(codec::str(r, "context")?),
                 7 => message.trace_id = Some(codec::bin(r, "traceId")?),
                 8 => message.span_id = Some(codec::bin(r, "spanId")?),
+                9 => message.id = Some(codec::str(r, "id")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7691,6 +7694,10 @@ impl Message for RecordsNewEvent {
             map.field(out, 8);
             codec::write_bin(out, span_id);
         }
+        if let Some(id) = &self.id {
+            map.field(out, 9);
+            codec::write_str(out, id);
+        }
         map.close(out);
     }
 
@@ -7704,6 +7711,7 @@ impl Message for RecordsNewEvent {
             + self.context.as_ref().map_or(0, |context| 1 + 5 + context.len())
             + self.trace_id.as_ref().map_or(0, |trace_id| 1 + 5 + trace_id.len())
             + self.span_id.as_ref().map_or(0, |span_id| 1 + 5 + span_id.len())
+            + self.id.as_ref().map_or(0, |id| 1 + 5 + id.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -7715,6 +7723,7 @@ impl Message for RecordsNewEvent {
             && self.context.is_none()
             && self.trace_id.is_none()
             && self.span_id.is_none()
+            && self.id.is_none()
     }
 }
 
@@ -7768,6 +7777,50 @@ impl Message for RecordsAppend {
     }
 }
 
+/// What an append wrote: none of an event whose id its stream held, or an
+/// earlier event of the append held.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsAppended {
+    /// The events written as nothing.
+    pub(crate) held: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsAppended {
+    const NAME: &'static str = "records.Appended";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.held = codec::uint(r, "held")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.held != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.held);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.held == 0
+    }
+}
+
 /// An event as a read gives it.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -7783,6 +7836,7 @@ pub(crate) struct RecordsEvent {
     pub(crate) context: Option<String>,
     pub(crate) trace_id: Option<Vec<u8>>,
     pub(crate) span_id: Option<Vec<u8>>,
+    pub(crate) id: Option<String>,
 }
 
 #[cfg(feature = "records")]
@@ -7803,6 +7857,7 @@ impl Message for RecordsEvent {
                 7 => message.context = Some(codec::str(r, "context")?),
                 8 => message.trace_id = Some(codec::bin(r, "traceId")?),
                 9 => message.span_id = Some(codec::bin(r, "spanId")?),
+                10 => message.id = Some(codec::str(r, "id")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7847,6 +7902,10 @@ impl Message for RecordsEvent {
             map.field(out, 9);
             codec::write_bin(out, span_id);
         }
+        if let Some(id) = &self.id {
+            map.field(out, 10);
+            codec::write_str(out, id);
+        }
         map.close(out);
     }
 
@@ -7861,6 +7920,7 @@ impl Message for RecordsEvent {
             + self.context.as_ref().map_or(0, |context| 1 + 5 + context.len())
             + self.trace_id.as_ref().map_or(0, |trace_id| 1 + 5 + trace_id.len())
             + self.span_id.as_ref().map_or(0, |span_id| 1 + 5 + span_id.len())
+            + self.id.as_ref().map_or(0, |id| 1 + 5 + id.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -7873,6 +7933,7 @@ impl Message for RecordsEvent {
             && self.context.is_none()
             && self.trace_id.is_none()
             && self.span_id.is_none()
+            && self.id.is_none()
     }
 }
 
@@ -11957,6 +12018,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.NewEvent" => RecordsNewEvent::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Append" => RecordsAppend::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.Appended" => RecordsAppended::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Event" => RecordsEvent::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

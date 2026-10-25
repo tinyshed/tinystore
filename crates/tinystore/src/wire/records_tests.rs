@@ -3,10 +3,10 @@ use crate::pipe::fixture::{Client, answered};
 use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
-    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDamage, RecordsDamages,
-    RecordsDropped, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece,
-    RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops,
-    method,
+    Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount, RecordsDamage,
+    RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage,
+    RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked,
+    RecordsTops, method,
 };
 use crate::{Options, Store};
 
@@ -48,6 +48,27 @@ fn an_appended_event_comes_back_whole_its_fields_spelled_as_they_were_written() 
     assert_eq!(read.context.as_deref(), Some(r#"{"actor":7}"#));
     assert_eq!((read.trace_id.as_deref(), read.span_id.as_deref()), (Some(&TRACE[..]), Some(&SPAN[..])));
     assert_eq!(page.next, None);
+}
+
+// contract: REC-11
+#[test]
+fn an_append_answers_how_many_events_it_held_and_a_read_gives_each_its_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let deploys = open(&mut client, "deploys");
+    let push =
+        |id: Option<&str>| RecordsNewEvent { id: id.map(str::to_owned), ..event("push", r#"{"sha":"26a0865"}"#) };
+    let mut held = |events: Vec<RecordsNewEvent>| {
+        let append = RecordsAppend { handle: deploys, events };
+        client.call::<RecordsAppended>(method::RECORDS_APPEND, &append).unwrap().held
+    };
+    assert_eq!(held(vec![push(Some("d-1")), push(None)]), 0);
+    assert_eq!(held(vec![push(Some("d-1")), push(Some("d-2")), push(Some("d-2"))]), 2);
+    let page: RecordsPage = client.call(method::RECORDS_LIST, &RecordsQuery::default()).unwrap();
+    let ids: Vec<Option<&str>> = page.events.iter().map(|event| event.id.as_deref()).collect();
+    assert_eq!(ids, [Some("d-1"), None, Some("d-2")]);
+    // an append that held none answers what v0.1.1 answered, an empty map
+    assert_eq!(RecordsAppended { held: 0 }.encode(), Empty {}.encode());
 }
 
 #[test]

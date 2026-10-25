@@ -6567,6 +6567,10 @@ def _write_records_new_event(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(8)
         w.bin(x)
         n += 1
+    if (x := v.get("id")) is not None:
+        w.uint(9)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6591,6 +6595,8 @@ def _read_records_new_event(r: Reader) -> dict[str, Any]:
                 read["trace_id"] = r.bin()
             case 8:
                 read["span_id"] = r.bin()
+            case 9:
+                read["id"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -6615,6 +6621,8 @@ RecordsNewEvent = Message(
         "trace_id": (7, bin_),
         # 8 bytes
         "span_id": (8, bin_),
+        # 1 to 128 bytes: an event of an id its stream holds is written as nothing
+        "id": (9, str_),
     },
     _write_records_new_event,
     _read_records_new_event,
@@ -6666,6 +6674,42 @@ RecordsAppend = Message(
 )
 
 
+def _write_records_appended(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("held")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_appended(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["held"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What an append wrote: none of an event whose id its stream held, or an
+# earlier event of the append held.
+RecordsAppended = Message(
+    "records.Appended",
+    {
+        # the events written as nothing
+        "held": (1, uint),
+    },
+    _write_records_appended,
+    _read_records_appended,
+)
+
+
 def _write_records_event(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -6705,6 +6749,10 @@ def _write_records_event(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         w.bin(x)
         n += 1
+    if (x := v.get("id")) is not None:
+        w.uint(10)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6731,6 +6779,8 @@ def _read_records_event(r: Reader) -> dict[str, Any]:
                 read["trace_id"] = r.bin()
             case 9:
                 read["span_id"] = r.bin()
+            case 10:
+                read["id"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -6751,6 +6801,7 @@ RecordsEvent = Message(
         "context": (7, str_),
         "trace_id": (8, bin_),
         "span_id": (9, bin_),
+        "id": (10, str_),
     },
     _write_records_event,
     _read_records_event,
@@ -9962,6 +10013,7 @@ messages: dict[str, Message] = {
     "records.Open": RecordsOpen,
     "records.NewEvent": RecordsNewEvent,
     "records.Append": RecordsAppend,
+    "records.Appended": RecordsAppended,
     "records.Event": RecordsEvent,
     "records.Query": RecordsQuery,
     "records.Page": RecordsPage,

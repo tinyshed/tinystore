@@ -128,9 +128,10 @@ impl Events {
 
     /// Writes an event of `name` with `fields`, a struct or a map, at the
     /// store's time, its fields serialized when the call is made. It answers
-    /// once the event is written, and a read finds it at once.
-    pub fn append(&self, name: &str, fields: &impl Serialize) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.append_all([NewEvent::new(name).fields(fields)])
+    /// once the event is written, and a read finds it at once: always
+    /// `true`, since only an event with an id can be one its stream holds.
+    pub fn append(&self, name: &str, fields: &impl Serialize) -> impl Future<Output = Result<bool>> + Send + 'static {
+        one(self.append_all([NewEvent::new(name).fields(fields)]))
     }
 
     /// An append of one event, what it carries beside its fields before its
@@ -139,7 +140,9 @@ impl Events {
         EventCall { events: self, event: NewEvent::new(name) }
     }
 
-    /// Writes a list of events, all of them or none, in one commit.
+    /// Writes a list of events, all of them or none, in one commit, and
+    /// answers how many it wrote: an event whose id the stream holds, or an
+    /// earlier event of the list holds, is nothing.
     ///
     /// The events are checked in the future's first poll, at most 4 MiB an
     /// append, and queued at records.db's writer, whose commit runs on the
@@ -153,7 +156,7 @@ impl Events {
     pub fn append_all(
         &self,
         events: impl IntoIterator<Item = NewEvent>,
-    ) -> impl Future<Output = Result<()>> + Send + 'static {
+    ) -> impl Future<Output = Result<usize>> + Send + 'static {
         let (handle, events) = (self.events.clone(), events.into_iter().collect::<Vec<_>>());
         let what = format!("events {}: an append", self.events.name());
         run::write(&self.pool, what, move |answer| handle.append_then(events, move |appended| answer.send(appended)))
@@ -182,6 +185,13 @@ pub struct EventCall<'e> {
 }
 
 impl EventCall<'_> {
+    /// What names it in its stream, as [`crate::records::EventCall::id`]
+    /// has: an append of an id the stream holds writes nothing.
+    pub fn id(mut self, id: impl AsRef<str>) -> Self {
+        self.event = self.event.id(id);
+        self
+    }
+
     /// Its time, from as long ago as the stream keeps to ten minutes ahead
     /// of the store's clock.
     pub fn at(mut self, at: SystemTime) -> Self {
@@ -210,10 +220,16 @@ impl EventCall<'_> {
         self
     }
 
-    /// Writes the event with `fields`, as [`Events::append_all`] writes one.
-    pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<()>> + Send + 'static {
-        self.events.append_all([self.event.fields(fields)])
+    /// Writes the event with `fields`, as [`Events::append_all`] writes one,
+    /// and answers whether it did: `false` when its stream holds its id.
+    pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<bool>> + Send + 'static {
+        one(self.events.append_all([self.event.fields(fields)]))
     }
+}
+
+/// Whether an append of one event wrote it.
+async fn one(appended: impl Future<Output = Result<usize>>) -> Result<bool> {
+    appended.await.map(|written| written == 1)
 }
 
 /// Every stream's events, to read.

@@ -257,7 +257,8 @@ func (k *keeper) write(ctx context.Context, batch []logline.Line) error {
 		event.TraceId, event.SpanId = wireTrace(line.TraceID, line.SpanID)
 		message.Events[i] = event
 	}
-	return k.events.appendWire(ctx, message)
+	_, err := k.events.appendWire(ctx, message)
+	return err
 }
 
 // objectOf is a line's fields as the JSON object they spell, none for no field.

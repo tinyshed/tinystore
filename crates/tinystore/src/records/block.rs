@@ -14,6 +14,7 @@
 //! traces     of the events that have one, sixteen bytes each
 //! spans      of the events that have one, eight bytes each
 //! whole      the fields of the events whose shape has no columns, as an object's JSON
+//! ids        of the events that have one
 //! then a column a key: the values of the events whose shape has the key
 //! ```
 //!
@@ -31,13 +32,15 @@
 //! version 3  times 5 5 5   arrivals 1025 1027 2048    as head rows 1 and 2 held them
 //! version 2  times 5 5 5   block 9: 9 × 1024 + 0, + 1, + 2, less 2⁶²
 //! ```
+//!
+//! Versions 2 and 3, which v0.1.1 and those before it wrote, have no ids.
 
 use std::collections::BTreeSet;
 
 use super::event::{Fields, Kept, Level, SpanId, TraceId};
 use super::head::{self, Codec, ROW_EVENTS, Row};
 use super::ints::{put_ints, read_ints};
-use super::segment::{HAS_CONTEXT, HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE, Schema, Shape, WHOLE_FIELDS};
+use super::segment::{HAS_CONTEXT, HAS_ID, HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE, Schema, Shape, WHOLE_FIELDS};
 use super::text::{Decoder, Keep, put_texts, read_texts, wants};
 use super::values::{put_values, read_values, values_equal};
 use crate::compress::checksum::crc32;
@@ -45,8 +48,10 @@ use crate::compress::varint::{Reader, put_count, put_int};
 use crate::{Error, Result};
 
 /// A block's first byte, which no head row has.
-pub(super) const VERSION: u8 = 3;
-/// v0.1.0's blocks, which have no arrivals and read forever.
+pub(super) const VERSION: u8 = 4;
+/// v0.1.1's blocks, which have no ids and read forever.
+pub(super) const VERSION_3: u8 = 3;
+/// v0.1.0's blocks, which have no arrivals either.
 pub(super) const VERSION_2: u8 = 2;
 
 const TIMES: usize = 0;
@@ -59,8 +64,9 @@ const MESSAGES: usize = 6;
 const TRACES: usize = 7;
 const SPANS: usize = 8;
 const WHOLE: usize = 9;
+const IDS: usize = 10;
 /// The columns every block has before its keys'.
-const FIXED: usize = 10;
+const FIXED: usize = 11;
 
 /// The text a block's columns may expand to, all together.
 const BLOCK_TEXT: usize = 4 << 20;
@@ -96,6 +102,8 @@ pub(super) fn encode(
     events.iter().filter_map(|event| event.span_id).for_each(|span| columns[SPANS].extend_from_slice(&span.0));
     let whole: Vec<String> = with(WHOLE_FIELDS).map(|place| events[place].fields.object()).collect();
     put_texts(&mut columns[WHOLE], &whole.iter().map(String::as_str).collect::<Vec<_>>(), codec)?;
+    let ids: Vec<&str> = events.iter().filter_map(|event| event.id.as_deref()).collect();
+    put_texts(&mut columns[IDS], &ids, codec)?;
 
     let mut values: Vec<(Vec<&str>, Vec<i64>)> = vec![Default::default(); schema.columns];
     for (place, event) in events.iter().enumerate() {
@@ -148,8 +156,8 @@ fn read_arrivals(reader: &mut Reader<'_>, count: usize) -> Vec<i64> {
     arrivals
 }
 
-/// A block's columns, checked and not read yet, those of version 2 with no
-/// arrivals.
+/// A block's columns, checked and not read yet: those of version 2 with no
+/// arrivals, and of versions 2 and 3 with no ids, which read as empty.
 struct Opened<'b> {
     count: usize,
     columns: Vec<&'b [u8]>,
@@ -162,15 +170,16 @@ impl<'b> Opened<'b> {
         let Some((framed, sum)) = body.split_last_chunk::<4>() else {
             return Err(Error::corrupt("a block shorter than its checksum"));
         };
-        let has_arrivals = match framed.first() {
-            Some(&VERSION) => true,
-            Some(&VERSION_2) => false,
+        let (has_arrivals, has_ids) = match framed.first() {
+            Some(&VERSION) => (true, true),
+            Some(&VERSION_3) => (true, false),
+            Some(&VERSION_2) => (false, false),
             _ => return Err(Error::corrupt("a block's version")),
         };
         if crc32(framed) != u32::from_le_bytes(*sum) {
             return Err(Error::corrupt("a block's checksum"));
         }
-        let written = FIXED - usize::from(!has_arrivals) + schema.columns;
+        let written = FIXED - usize::from(!has_arrivals) - usize::from(!has_ids) + schema.columns;
         let mut reader = Reader::new(&framed[1..]);
         let count = reader.count(ROW_EVENTS);
         if reader.count(written) != written {
@@ -184,6 +193,9 @@ impl<'b> Opened<'b> {
         }
         if !has_arrivals {
             columns.insert(ARRIVALS, &[]);
+        }
+        if !has_ids {
+            columns.insert(IDS, &[]);
         }
         Ok(Opened { count, columns, has_arrivals })
     }
@@ -253,8 +265,8 @@ impl<'b> Opened<'b> {
         }
     }
 
-    /// `count` ids of `N` bytes each.
-    fn ids<const N: usize>(&self, column: usize, count: usize, what: &'static str) -> Result<Vec<[u8; N]>> {
+    /// `count` values of `N` bytes each: trace or span ids.
+    fn fixed<const N: usize>(&self, column: usize, count: usize, what: &'static str) -> Result<Vec<[u8; N]>> {
         let (ids, rest) = self.columns[column].as_chunks::<N>();
         if ids.len() == count && rest.is_empty() { Ok(ids.to_vec()) } else { Err(Error::corrupt(what)) }
     }
@@ -301,6 +313,7 @@ struct Columns<'s> {
     traces: std::vec::IntoIter<[u8; 16]>,
     spans: std::vec::IntoIter<[u8; 8]>,
     whole: std::vec::IntoIter<String>,
+    ids: std::vec::IntoIter<String>,
     values: Vec<std::vec::IntoIter<String>>,
 }
 
@@ -321,6 +334,7 @@ impl<'s> Columns<'s> {
         };
         let (said_at, said) = of(&|shape| shape.has(HAS_MESSAGE));
         let (_, whole) = of(&|shape| shape.has(WHOLE_FIELDS));
+        let (_, named) = of(&|shape| shape.has(HAS_ID));
         let mut values = Vec::with_capacity(schema.columns);
         for column in 0..schema.columns {
             let (at, kept) = of(&|shape| shape.columns.contains(&column));
@@ -331,14 +345,16 @@ impl<'s> Columns<'s> {
         let messages = opened.values((MESSAGES, "a block's messages"), &said_at, &mut decoder, said.as_deref())?;
         let whole =
             opened.texts((WHOLE, "a block's whole fields"), with(WHOLE_FIELDS), &mut decoder, whole.as_deref())?;
+        let ids = opened.texts((IDS, "a block's ids"), with(HAS_ID), &mut decoder, named.as_deref())?;
         Ok(Columns {
             schema,
             contexts: opened.ints(CONTEXTS, with(HAS_CONTEXT), "a block's contexts")?.into_iter(),
             levels: opened.ints(LEVELS, with(HAS_LEVEL), "a block's levels")?.into_iter(),
             messages: messages.into_iter(),
-            traces: opened.ids::<16>(TRACES, with(HAS_TRACE), "a block's traces")?.into_iter(),
-            spans: opened.ids::<8>(SPANS, with(HAS_SPAN), "a block's spans")?.into_iter(),
+            traces: opened.fixed::<16>(TRACES, with(HAS_TRACE), "a block's traces")?.into_iter(),
+            spans: opened.fixed::<8>(SPANS, with(HAS_SPAN), "a block's spans")?.into_iter(),
             whole: whole.into_iter(),
+            ids: ids.into_iter(),
             values,
             times,
             names,
@@ -356,6 +372,7 @@ impl<'s> Columns<'s> {
             !shape.has(HAS_TRACE) || self.traces.next().is_some(),
             !shape.has(HAS_SPAN) || self.spans.next().is_some(),
             !shape.has(WHOLE_FIELDS) || self.whole.next().is_some(),
+            !shape.has(HAS_ID) || self.ids.next().is_some(),
         ];
         let fields = shape.columns.iter().all(|column| self.values[*column].next().is_some());
         if taken.contains(&false) || !fields {
@@ -393,6 +410,7 @@ impl<'s> Columns<'s> {
         }
         Ok(Kept {
             at: self.times[place],
+            id: if shape.has(HAS_ID) { Some(self.ids.next().ok_or_else(broken)?) } else { None },
             name: name.clone(),
             level: level.map(Level::of),
             message: if shape.has(HAS_MESSAGE) { Some(self.messages.next().ok_or_else(broken)?) } else { None },
@@ -464,7 +482,7 @@ fn kept(schema: &Schema, opened: &Opened<'_>, codec: &mut Codec, wanted: &Wanted
         both(&mut keep, shapes.iter().map(grave).collect::<Vec<_>>());
     }
     if let Some(trace) = wanted.trace {
-        let mut traces = opened.ids::<16>(TRACES, with(HAS_TRACE), "a block's traces")?.into_iter();
+        let mut traces = opened.fixed::<16>(TRACES, with(HAS_TRACE), "a block's traces")?.into_iter();
         both(
             &mut keep,
             shapes.iter().map(|shape| shape.has(HAS_TRACE) && traces.next() == Some(trace.0)).collect::<Vec<_>>(),

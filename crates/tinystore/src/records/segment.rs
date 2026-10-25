@@ -19,6 +19,8 @@
 //!
 //! A segment gives columns to the first shapes it meets, and keeps the
 //! fields of an event of any shape past them whole, as the JSON of an object.
+//!
+//! Version 1, which v0.1.1 and those before it wrote, has no shape with an id.
 
 use std::collections::HashMap;
 
@@ -29,7 +31,9 @@ use crate::compress::checksum::crc32;
 use crate::compress::varint::{Reader, put_count, put_text};
 use crate::{Error, Result};
 
-pub(super) const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 2;
+/// v0.1.1's rows, which have no ids and read forever.
+pub(super) const VERSION_1: u8 = 1;
 
 /// What an event carries beside its time and its name.
 pub(super) const HAS_LEVEL: u8 = 1;
@@ -39,7 +43,8 @@ pub(super) const HAS_SPAN: u8 = 1 << 3;
 pub(super) const HAS_CONTEXT: u8 = 1 << 4;
 /// Its fields are kept whole, as an object's JSON, and not in columns.
 pub(super) const WHOLE_FIELDS: u8 = 1 << 5;
-const PRESENCE: u8 = (1 << 6) - 1;
+pub(super) const HAS_ID: u8 = 1 << 6;
+const PRESENCE: u8 = (1 << 7) - 1;
 
 /// The shapes a segment gives columns, and the columns it has at most.
 const COLUMNED_SHAPES: usize = 64;
@@ -94,6 +99,7 @@ fn presence_of(event: &Kept) -> u8 {
         (event.trace_id.is_some(), HAS_TRACE),
         (event.span_id.is_some(), HAS_SPAN),
         (!event.context.is_empty(), HAS_CONTEXT),
+        (event.id.is_some(), HAS_ID),
     ];
     parts.iter().filter(|(has, _)| *has).fold(0, |bits, (_, bit)| bits | bit)
 }
@@ -189,9 +195,11 @@ impl Schema {
         let Some((framed, sum)) = row.split_last_chunk::<4>() else {
             return Err(Error::corrupt("a segment row shorter than its checksum"));
         };
-        if framed.first() != Some(&VERSION) {
-            return Err(Error::corrupt("a segment row's version"));
-        }
+        let parts = match framed.first() {
+            Some(&VERSION) => PRESENCE,
+            Some(&VERSION_1) => PRESENCE & !HAS_ID,
+            _ => return Err(Error::corrupt("a segment row's version")),
+        };
         if crc32(framed) != u32::from_le_bytes(*sum) {
             return Err(Error::corrupt("a segment row's checksum"));
         }
@@ -208,7 +216,7 @@ impl Schema {
         let mut columns: HashMap<(String, usize), usize> = HashMap::new();
         for _ in 0..shapes {
             let presence = reader.byte();
-            if presence & !PRESENCE != 0 {
+            if presence & !parts != 0 {
                 reader.fail("a shape's presence");
             }
             let count = reader.count(MAX_KEYS);

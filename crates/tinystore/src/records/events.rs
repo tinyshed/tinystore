@@ -1,6 +1,7 @@
 //! A stream of events as a program opens it, `store.events("audit")`, and
 //! every stream as it reads them, `store.all_events()`.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Arc, MutexGuard, PoisonError};
 #[cfg(feature = "async")]
@@ -12,10 +13,10 @@ use serde::Serialize;
 
 use super::engine::{AHEAD, LATENESS, Records, Stream, execute, nanos};
 use super::event::Kept;
-use super::event::{Level, MAX_EVENT, MAX_KEYS, NewEvent, SpanId, TraceId};
+use super::event::{Level, MAX_EVENT, MAX_ID, MAX_KEYS, NewEvent, SpanId, TraceId};
 use super::head::{self, Codec, Row};
 use super::read::List;
-use crate::sqlite::Tx;
+use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Result, Store, unix_nanos};
 #[cfg(feature = "async")]
 use crate::{Reservation, polled::Lead};
@@ -78,8 +79,9 @@ impl fmt::Debug for Events {
 impl Events {
     /// Writes an event of `name` with `fields`, a struct or a map, at the
     /// store's time. It returns once the event is written, and a read finds
-    /// it at once.
-    pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<()> {
+    /// it at once: always `true`, since only an event with an id can be one
+    /// its stream holds.
+    pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<bool> {
         self.event(name).append(fields)
     }
 
@@ -97,9 +99,11 @@ impl Events {
         EventCall { events: self, event: NewEvent::new(name) }
     }
 
-    /// Writes a list of events, all of them or none: a refused one names its
-    /// place in the list and its name.
-    pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<()> {
+    /// Writes a list of events, all of them or none, and says how many it
+    /// wrote: an event whose id the stream holds, or an earlier event of the
+    /// list holds, is nothing. A refused one names its place in the list and
+    /// its name.
+    pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<usize> {
         let appended = self.records.append(&self.stream, events.into_iter().collect());
         appended.map_err(|error| error.within(format!("events {}", self.stream.name)))
     }
@@ -115,8 +119,8 @@ impl Events {
 #[cfg(feature = "async")]
 impl Events {
     /// Appends `events`, all of them or none, without waiting: they are
-    /// checked here, and `done` is given the answer on the thread that
-    /// commits them, or here when they are refused first.
+    /// checked here, and `done` is given how many were written on the thread
+    /// that commits them, or the refusal here when they are refused first.
     ///
     /// Run inside `polled::leading_on`, as an awaited append's submit is, it
     /// waits for nothing here:
@@ -132,15 +136,16 @@ impl Events {
     /// goes to the pool goes whatever becomes of the future that asked, so a
     /// polled append commits (DUR-11), and fails `Limit` once the memory's
     /// patience is out.
-    pub(crate) fn append_then(&self, events: Vec<NewEvent>, done: impl FnOnce(Result<()>) + Send + 'static) {
+    pub(crate) fn append_then(&self, events: Vec<NewEvent>, done: impl FnOnce(Result<usize>) + Send + 'static) {
         let name = Arc::clone(&self.stream.name);
-        let done = move |appended: Result<()>| done(appended.map_err(|error| error.within(format!("events {name}"))));
+        let done =
+            move |appended: Result<usize>| done(appended.map_err(|error| error.within(format!("events {name}"))));
         let (checked, now) = match self.records.check_append(&self.stream, events) {
             Ok(checked) => checked,
             Err(error) => return done(Err(error)),
         };
         if checked.is_empty() {
-            return done(Ok(()));
+            return done(Ok(0));
         }
         let weight = weight_of(&checked);
         let records = Arc::clone(&self.records);
@@ -187,7 +192,7 @@ impl Appending {
     /// Compresses the events and queues them at the file's writer here, when
     /// they weigh a head row at most and no other append holds the codec;
     /// otherwise both run on the scope's pool, `held` with them.
-    fn submit_here_or_lead(self, held: Reservation, done: impl FnOnce(Result<()>) + Send + 'static) {
+    fn submit_here_or_lead(self, held: Reservation, done: impl FnOnce(Result<usize>) + Send + 'static) {
         let records = Arc::clone(&self.records);
         let light = self.weight <= COMPRESSED_IN_A_POLL;
         let Some(mut codec) = light.then(|| records.codec_if_free()).flatten() else {
@@ -195,22 +200,22 @@ impl Appending {
         };
         let encoded = records.encode(&self.stream, self.checked, self.now, &mut codec);
         drop(codec);
-        records.submit_encoded(encoded, held, done);
+        records.submit_encoded(&self.stream, encoded, held, done);
     }
 
     /// Compresses the events, waiting for the codec, and queues them: on the
     /// pool, where a wait is no executor's.
-    fn submit(self, held: Reservation, done: impl FnOnce(Result<()>) + Send + 'static) {
+    fn submit(self, held: Reservation, done: impl FnOnce(Result<usize>) + Send + 'static) {
         let Appending { records, stream, checked, now, .. } = self;
         let encoded = records.encode(&stream, checked, now, &mut records.codec());
-        records.submit_encoded(encoded, held, done);
+        records.submit_encoded(&stream, encoded, held, done);
     }
 
     /// Hands the compression and the submit to `lead`, the scope's pool,
     /// which runs them whoever still waits: never on the thread that polls,
     /// nor on the one that gave memory back. Outside an awaited call, with no
     /// lead, they run here.
-    fn lead(self, lead: Option<Lead>, held: Reservation, done: impl FnOnce(Result<()>) + Send + 'static) {
+    fn lead(self, lead: Option<Lead>, held: Reservation, done: impl FnOnce(Result<usize>) + Send + 'static) {
         let submit = move || self.submit(held, done);
         match lead {
             Some(lead) => lead(Box::new(submit)),
@@ -224,7 +229,7 @@ impl Appending {
     /// The waiter is kept by what answers it, not by the future that asked:
     /// dropped with that future it would leave the line, and an append polled
     /// once would then write nothing.
-    fn wait_for_memory(self, done: impl FnOnce(Result<()>) + Send + 'static) {
+    fn wait_for_memory(self, done: impl FnOnce(Result<usize>) + Send + 'static) {
         let (memory, lead) = (Arc::clone(&self.records.memory), crate::polled::lead());
         let kept: Arc<Mutex<Option<crate::memory::Waiting>>> = Arc::default();
         let keeping = Arc::clone(&kept);
@@ -254,18 +259,19 @@ impl Records {
     /// they commit.
     fn submit_encoded(
         self: &Arc<Self>,
+        stream: &Stream,
         encoded: Result<(HeadRows, Written)>,
         held: Reservation,
-        done: impl FnOnce(Result<()>) + Send + 'static,
+        done: impl FnOnce(Result<usize>) + Send + 'static,
     ) {
         let (rows, written) = match encoded {
             Ok(encoded) => encoded,
             Err(error) => return done(Err(error)),
         };
-        let records = Arc::clone(self);
+        let (records, stream) = (Arc::clone(self), stream.clone());
         self.file.submit(
             rows.bytes(),
-            move |tx| rows.write(tx).map(|()| records.when_committed(tx, written)),
+            move |tx| records.commit(tx, &stream, rows, written),
             move |appended| {
                 drop(held);
                 done(appended);
@@ -282,6 +288,15 @@ pub struct EventCall<'e> {
 }
 
 impl EventCall<'_> {
+    /// What names it in its stream, a webhook's delivery or a job's key: an
+    /// append of an id the stream holds writes nothing and gives `false`,
+    /// so that an append sent again is harmless. The stream holds an id
+    /// while it keeps its event, and the first event of an id stands.
+    pub fn id(mut self, id: impl AsRef<str>) -> Self {
+        self.event = self.event.id(id);
+        self
+    }
+
     /// Its time, from as long ago as the stream keeps to ten minutes ahead
     /// of the store's clock.
     pub fn at(mut self, at: SystemTime) -> Self {
@@ -310,8 +325,10 @@ impl EventCall<'_> {
         self
     }
 
-    pub fn append(self, fields: &impl Serialize) -> Result<()> {
-        self.events.append_all([self.event.fields(fields)])
+    /// Writes the event, and says whether it did: `false` when its stream
+    /// holds its id.
+    pub fn append(self, fields: &impl Serialize) -> Result<bool> {
+        self.events.append_all([self.event.fields(fields)]).map(|written| written == 1)
     }
 }
 
@@ -345,14 +362,15 @@ const ADD_TO_HEAD: &str = "insert into head_state (stream, late, count, weight, 
 
 impl Records {
     /// Appends `events` to a stream, all of them or none: check each, then
-    /// write them in one commit.
-    fn append(self: &Arc<Self>, stream: &Stream, events: Vec<NewEvent>) -> Result<()> {
+    /// write them in one commit. Gives how many it wrote.
+    fn append(self: &Arc<Self>, stream: &Stream, events: Vec<NewEvent>) -> Result<usize> {
         let (checked, now) = self.check_append(stream, events)?;
         self.write_checked(stream, checked, now)
     }
 
     /// The events of an append, each one the file keeps, and the store's time
-    /// they were checked at: a refused one names its place and its name.
+    /// they were checked at: a refused one names its place and its name. Of
+    /// the events of one id, the first stands.
     fn check_append(&self, stream: &Stream, events: Vec<NewEvent>) -> Result<(Vec<Kept>, i64)> {
         let now = self.now();
         let window = window(stream, now);
@@ -361,6 +379,8 @@ impl Records {
             let named = format!("event {place} {:?}", event.name);
             checked.push(check(event, now, window).map_err(|error| error.within(named))?);
         }
+        let mut ids = HashSet::new();
+        checked.retain(|event| event.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
         let weight = weight_of(&checked);
         if weight > MAX_APPEND as u64 {
             return Err(Error::limit(format!("an append of {weight} bytes, past the {MAX_APPEND} one carries")));
@@ -401,15 +421,41 @@ impl Records {
     }
 
     /// Writes events already checked in one commit: reserve → encode → write
-    /// → hand them to the tails.
-    fn write_checked(self: &Arc<Self>, stream: &Stream, checked: Vec<Kept>, now: i64) -> Result<()> {
+    /// → hand them to the tails. Gives how many it wrote.
+    fn write_checked(self: &Arc<Self>, stream: &Stream, checked: Vec<Kept>, now: i64) -> Result<usize> {
         if checked.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let _held = self.memory.reserve(weight_of(&checked), APPEND, PATIENCE)?;
         let (rows, written) = self.encode(stream, checked, now, &mut self.codec())?;
-        let records = Arc::clone(self);
-        self.file.write(rows.bytes(), move |tx| rows.write(tx).map(|()| records.when_committed(tx, written)))
+        let (records, stream) = (Arc::clone(self), stream.clone());
+        self.file.write(rows.bytes(), move |tx| records.commit(tx, &stream, rows, written))
+    }
+
+    /// An append's commit, on the file's writer: its events whose id the
+    /// stream holds are left out, the rest written with their ids, and
+    /// handed to the tails once it commits. Gives how many it wrote.
+    ///
+    /// The ids are looked up here, where no other append can write one
+    /// between the look and the write. The rows were compressed before the
+    /// writer was taken; only an append that meets an id its stream holds,
+    /// an append sent again, compresses what is left once more, here.
+    fn commit(self: &Arc<Self>, tx: &Tx<'_>, stream: &Stream, rows: HeadRows, written: Written) -> Result<usize> {
+        let held = held_ids(tx, stream.id, &written)?;
+        let (rows, written) = if held.is_empty() {
+            (rows, written)
+        } else {
+            let rest = written.without(&held);
+            if rest.is_empty() {
+                return Ok(0);
+            }
+            self.encode(stream, rest, rows.now, &mut Codec::default())?
+        };
+        hold_ids(tx, stream.id, &written)?;
+        rows.write(tx)?;
+        let count = written.on_time.len() + written.late.len();
+        self.when_committed(tx, written);
+        Ok(count)
     }
 
     /// Asks the commit that writes an append's rows to follow it with
@@ -528,6 +574,43 @@ struct Written {
     late: Vec<Kept>,
 }
 
+impl Written {
+    fn events(&self) -> impl Iterator<Item = &Kept> {
+        self.on_time.iter().chain(&self.late)
+    }
+
+    /// Its events but those of the ids `held`, to be encoded again.
+    fn without(self, held: &HashSet<String>) -> Vec<Kept> {
+        let events = self.on_time.into_iter().chain(self.late);
+        events.filter(|event| event.id.as_ref().is_none_or(|id| !held.contains(id))).collect()
+    }
+}
+
+const HELD: &str = "select 1 from event_ids where stream = ?1 and id = ?2";
+const HOLD: &str = "insert into event_ids (stream, id, at) values (?1, ?2, ?3)";
+
+/// The ids of `written` that its stream holds already.
+fn held_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<HashSet<String>> {
+    let mut held = HashSet::new();
+    for id in written.events().filter_map(|event| event.id.as_deref()) {
+        let found = tx.prepare_cached(HELD).and_then(|mut select| select.exists(params![stream, id]));
+        if found.map_err(|error| sql_error("look up an event's id", error))? {
+            held.insert(id.to_owned());
+        }
+    }
+    Ok(held)
+}
+
+/// Holds the ids of `written`, none of which its stream holds.
+fn hold_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<()> {
+    for event in written.events() {
+        if let Some(id) = &event.id {
+            execute(tx, HOLD, params![stream, id, event.at], "hold an event's id")?;
+        }
+    }
+    Ok(())
+}
+
 /// The times a stream takes an event at: from what it keeps to ten minutes
 /// ahead of `now`.
 fn window(stream: &Stream, now: i64) -> (i64, i64) {
@@ -542,6 +625,11 @@ fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept
     }
     if event.name.is_empty() {
         return Err(Error::invalid("an event has a name"));
+    }
+    if let Some(id) = &event.id
+        && (id.is_empty() || id.len() > MAX_ID)
+    {
+        return Err(Error::invalid(format!("an id of {} bytes, not 1 to {MAX_ID}", id.len())));
     }
     for (what, fields) in [("fields", &event.fields), ("context", &event.context)] {
         if fields.len() > MAX_KEYS {
@@ -566,3 +654,7 @@ fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept
 #[cfg(test)]
 #[path = "events_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ids_tests.rs"]
+mod ids_tests;

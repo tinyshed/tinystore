@@ -4,18 +4,22 @@
 //!
 //! ```text
 //! version | count | zstd frame of the events | crc-32
-//! event   = at | name | presence | level | message | trace | span | context | fields
+//! event   = at | name | presence | level | message | trace | span | id | context | fields
 //! ```
+//!
+//! Version 1, which v0.1.1 and those before it wrote, has no event with an id.
 
-use super::event::{Fields, Kept, Level, MAX_EVENT, SpanId, TraceId};
+use super::event::{Fields, Kept, Level, MAX_EVENT, MAX_ID, SpanId, TraceId};
 use crate::compress::checksum::crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count, put_int, put_text};
 use crate::{Error, Result};
 
-pub(super) const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 2;
+/// v0.1.1's rows, which have no ids and read forever.
+pub(super) const VERSION_1: u8 = 1;
 
-use super::segment::{HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE};
+use super::segment::{HAS_ID, HAS_LEVEL, HAS_MESSAGE, HAS_SPAN, HAS_TRACE};
 
 /// The events one row holds at most.
 pub(super) const ROW_EVENTS: usize = 1024;
@@ -114,6 +118,7 @@ fn put_event(out: &mut Vec<u8>, event: &Kept) {
         (event.message.is_some(), HAS_MESSAGE),
         (event.trace_id.is_some(), HAS_TRACE),
         (event.span_id.is_some(), HAS_SPAN),
+        (event.id.is_some(), HAS_ID),
     ];
     out.push(presence.iter().filter(|(has, _)| *has).fold(0, |bits, (_, bit)| bits | bit));
     if let Some(level) = event.level {
@@ -128,6 +133,9 @@ fn put_event(out: &mut Vec<u8>, event: &Kept) {
     if let Some(span) = event.span_id {
         out.extend_from_slice(&span.0);
     }
+    if let Some(id) = &event.id {
+        put_text(out, id);
+    }
     event.context.put_pairs(out);
     event.fields.put_pairs(out);
 }
@@ -138,9 +146,11 @@ pub(super) fn parse(body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
     let Some((framed, sum)) = body.split_last_chunk::<4>() else {
         return Err(Error::corrupt("a row shorter than its checksum"));
     };
-    if framed.first() != Some(&VERSION) {
-        return Err(Error::corrupt("a row's version"));
-    }
+    let presence = match framed.first() {
+        Some(&VERSION) => HAS_LEVEL | HAS_MESSAGE | HAS_TRACE | HAS_SPAN | HAS_ID,
+        Some(&VERSION_1) => HAS_LEVEL | HAS_MESSAGE | HAS_TRACE | HAS_SPAN,
+        _ => return Err(Error::corrupt("a row's version")),
+    };
     if crc32(framed) != u32::from_le_bytes(*sum) {
         return Err(Error::corrupt("a row's checksum"));
     }
@@ -153,15 +163,16 @@ pub(super) fn parse(body: &[u8], codec: &mut Codec) -> Result<Vec<Kept>> {
     }
     let plain = codec.expand(frame, ROW_PLAIN)?;
     let mut reader = Reader::new(&plain);
-    let events = (0..count).map(|_| read_event(&mut reader)).collect();
+    let events = (0..count).map(|_| read_event(&mut reader, presence)).collect();
     reader.finish().map(|()| events)
 }
 
-fn read_event(reader: &mut Reader<'_>) -> Kept {
+/// An event of a row whose version lets its events carry `parts`.
+fn read_event(reader: &mut Reader<'_>, parts: u8) -> Kept {
     let at = reader.int();
     let name = reader.text(MAX_EVENT).to_owned();
     let presence = reader.byte();
-    if presence & !(HAS_LEVEL | HAS_MESSAGE | HAS_TRACE | HAS_SPAN) != 0 {
+    if presence & !parts != 0 {
         reader.fail("an event's presence");
     }
     let has = |bit: u8| presence & bit != 0;
@@ -175,12 +186,13 @@ fn read_event(reader: &mut Reader<'_>) -> Kept {
     let message = has(HAS_MESSAGE).then(|| reader.text(MAX_EVENT).to_owned());
     let trace_id = has(HAS_TRACE).then(|| TraceId(taken(reader)));
     let span_id = has(HAS_SPAN).then(|| SpanId(taken(reader)));
+    let id = has(HAS_ID).then(|| reader.text(MAX_ID).to_owned());
     let context = Fields::read_pairs(reader);
     let fields = Fields::read_pairs(reader);
     if at < 0 {
         reader.fail("an event's time before 1970");
     }
-    Kept { at, name, level, message, fields, context, trace_id, span_id }
+    Kept { at, id, name, level, message, fields, context, trace_id, span_id }
 }
 
 fn taken<const N: usize>(reader: &mut Reader<'_>) -> [u8; N] {
@@ -200,7 +212,8 @@ mod tests {
             .message("slow request")
             .context(&serde_json::json!({ "request": "9f86d0" }))
             .trace(TraceId([7; 16]), SpanId([9; 8]));
-        vec![click.kept(2_000), line.kept(1_000)]
+        let push = NewEvent::new("push").id("72d3162e-cc78-11e3-81ab-4c9367dc0958");
+        vec![click.kept(2_000), line.kept(1_000), push.kept(1_500)]
     }
 
     #[test]
@@ -208,7 +221,7 @@ mod tests {
         let mut codec = Codec::default();
         let written = events();
         let row = encode(&written, &mut codec).unwrap();
-        assert_eq!((row.first, row.last, row.count, row.levels), (1_000, 2_000, 2, Level::WARN.bit()));
+        assert_eq!((row.first, row.last, row.count, row.levels), (1_000, 2_000, 3, Level::WARN.bit()));
         assert_eq!(row.weight, written.iter().map(Kept::weight).sum::<usize>());
         assert_eq!(parse(&row.body, &mut codec).unwrap(), written);
     }
@@ -242,6 +255,21 @@ mod tests {
                 bytes as f64 / f64::from(count)
             );
         }
+    }
+
+    /// Events `request` and `signup` at 1 and 2 ns, as v0.1.1 (c107a3ce)
+    /// wrote them in a row.
+    const VERSION_1_ROW: &str = "010228b52ffd2017b9000002077265717565737400000004067369676e7570000000842ebcf3";
+
+    // contract: REC-01
+    #[test]
+    fn a_row_of_version_1_reads_as_it_was_written_its_events_without_ids() {
+        let row: Vec<u8> = (0..VERSION_1_ROW.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&VERSION_1_ROW[at..at + 2], 16).unwrap())
+            .collect();
+        let read = parse(&row, &mut Codec::default()).unwrap();
+        assert_eq!(read, [NewEvent::new("request").kept(1), NewEvent::new("signup").kept(2)]);
     }
 
     #[test]

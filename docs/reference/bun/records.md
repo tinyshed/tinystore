@@ -33,6 +33,8 @@ interface Event {
     /** its time, which the file keeps to the nanosecond */
     at: Date
     stream: string
+    /** what its append named it by: its stream holds one event of an id */
+    id?: string
     /** what happened; `log` for a logger's line */
     name: string
     level?: EventLevel
@@ -54,6 +56,11 @@ An event as a read gives it.
 ```ts
 interface NewEvent {
     name: string
+    /**
+     * what names it in its stream, a webhook's delivery or a job's key, 1 to 128 bytes:
+     * an append of an id the stream holds writes nothing, and the first event of an id stands
+     */
+    id?: string
     fields?: Fields
     /** its time: now unless given, from what the stream keeps to ten minutes ahead */
     at?: Date
@@ -259,13 +266,15 @@ A stream of events: written with `append`, which waits for the file, and read ba
 ### Events.append
 
 ```ts
-append(name: string, fields?: Fields, options?: AppendOptions): Promise<void>
-append(events: readonly NewEvent[]): Promise<void>
+append(name: string, fields?: Fields, options?: AppendOptions): Promise<boolean>
+append(events: readonly NewEvent[]): Promise<number>
 ```
 
 Writes an event, or a list of them whole or not at all: it returns once
-they are written, and a read finds them at once. A refused event names
-its place in the list and its name.
+they are written, and a read finds them at once. An event whose id the
+stream holds, or an earlier event of the list has, is written as
+nothing: one event answers whether it was written, a list how many of
+its events were. A refused event names its place in the list and its name.
 
 ### Events.appendLines
 

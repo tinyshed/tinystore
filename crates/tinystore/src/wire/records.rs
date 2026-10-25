@@ -16,10 +16,10 @@ use serde_json::value::RawValue;
 
 use super::codec::Message;
 use super::protocol::{
-    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsBatch, RecordsCount, RecordsDamage,
-    RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen,
-    RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream,
-    RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
+    Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount,
+    RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent,
+    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats,
+    RecordsStream, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
 use super::{Link, Route};
 use crate::records::{
@@ -162,8 +162,10 @@ fn open(store: &Store, handles: &Handles, asked: RecordsOpen, read_only: bool) -
 fn append(handles: &Handles, asked: RecordsAppend) -> Answered {
     let events = handles.events(asked.handle)?;
     let new = asked.events.into_iter().enumerate().map(|(place, event)| new_event(place, event));
-    events.append_all(new.collect::<Result<Vec<_>, Failure>>()?)?;
-    Ok(Empty {}.encode())
+    let new = new.collect::<Result<Vec<_>, Failure>>()?;
+    let given = new.len();
+    let written = events.append_all(new)?;
+    Ok(RecordsAppended { held: (given - written) as u64 }.encode())
 }
 
 /// An event as the client wrote it; what cannot be one names its place in
@@ -171,6 +173,9 @@ fn append(handles: &Handles, asked: RecordsAppend) -> Answered {
 fn new_event(place: usize, asked: RecordsNewEvent) -> Result<NewEvent, Failure> {
     let refused = |what: &str| Failure::invalid(format!("event {place} {:?}: {what}", asked.name));
     let mut event = NewEvent::new(&asked.name);
+    if let Some(id) = &asked.id {
+        event = event.id(id);
+    }
     if let Some(at) = asked.at {
         event = event.at(time_of(at));
     }
@@ -336,6 +341,7 @@ fn event_of(event: Event) -> RecordsEvent {
         context: object_of(&event.context),
         trace_id: event.trace_id.map(|trace| trace.0.to_vec()),
         span_id: event.span_id.map(|span| span.0.to_vec()),
+        id: event.id,
     }
 }
 

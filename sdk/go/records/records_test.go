@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,13 +55,13 @@ func TestAnAppendedEventComesBackWhole(t *testing.T) {
 		ctx := context.Background()
 		audit := ways.Must(records.OpenEvents(store, "audit"))
 		changedAt := time.Now().Add(-time.Minute).Truncate(time.Millisecond).UTC()
-		ways.Must(0, audit.AppendMany(ctx, []records.Event{{
+		ways.Must(audit.AppendMany(ctx, []records.Event{{
 			Name: "role.changed", At: changedAt, Level: slog.LevelWarn, Message: "role changed",
 			Fields:  records.Fields{"user": 42, "id": int64(9007199254740993), "tags": []string{"a", "b"}},
 			Context: records.Fields{"actor": 7},
 		}}))
 		traced := records.WithTrace(ctx, traceID, spanID)
-		ways.Must(0, audit.Append(traced, "signed.in", records.Fields{"user": 42}))
+		ways.Must(audit.Append(traced, "signed.in", records.Fields{"user": 42}))
 		page := ways.Must(audit.List(ctx, records.Query{}))
 		if page.Next != "" || len(page.Events) != 2 {
 			t.Fatalf("page %+v", page)
@@ -84,18 +85,48 @@ func TestAnAppendedEventComesBackWhole(t *testing.T) {
 	})
 }
 
+func TestAnEventWhoseIDItsStreamHoldsIsWrittenAsNothingAndItsIDReadBack(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		deploys := ways.Must(records.OpenEvents(store, "deploys"))
+		delivery := "72d3162e-cc78-11e3-81ab-4c9367dc0958"
+		if !ways.Must(deploys.Append(ctx, "push", records.Fields{"sha": "26a0865"}, records.ID(delivery))) {
+			t.Fatal("the first push was not written")
+		}
+		if ways.Must(deploys.Append(ctx, "push", records.Fields{"sha": "f00ba47"}, records.ID(delivery))) {
+			t.Fatal("a push of an id the stream holds was written")
+		}
+		ways.Must(deploys.Append(ctx, "tick", nil))
+		events := []records.Event{{Name: "push", ID: delivery}, {Name: "tag", ID: "v0.2.0"}, {Name: "tag", ID: "v0.2.0"}, {Name: "tick"}}
+		if written := ways.Must(deploys.AppendMany(ctx, events)); written != 2 {
+			t.Fatalf("%d of the list written, not 2", written)
+		}
+		page := ways.Must(deploys.List(ctx, records.Query{}))
+		var got []string
+		for _, event := range page.Events {
+			got = append(got, event.Name+"="+event.ID)
+		}
+		if want := []string{"push=" + delivery, "tick=", "tag=v0.2.0", "tick="}; !slices.Equal(got, want) {
+			t.Fatalf("read %v, not %v", got, want)
+		}
+		_, err := deploys.Append(ctx, "push", nil, records.ID(""))
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAListIsAppendedWholeOrNotAtAllAndARefusedEventNamesItsPlace(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		clicks := ways.Must(records.OpenEvents(store, "clicks"))
-		err := clicks.AppendMany(ctx, []records.Event{{Name: "view", Fields: records.Fields{"page": 1}}, {}})
+		_, err := clicks.AppendMany(ctx, []records.Event{{Name: "view", Fields: records.Fields{"page": 1}}, {}})
 		is(t, err, tinystore.ErrInvalid)
 		if !strings.Contains(err.Error(), "event 1") {
 			t.Fatalf("the refusal %v names no place", err)
 		}
-		err = clicks.AppendMany(ctx, []records.Event{{Name: "view"}, {Name: "view", At: time.Now().Add(time.Hour)}})
+		_, err = clicks.AppendMany(ctx, []records.Event{{Name: "view"}, {Name: "view", At: time.Now().Add(time.Hour)}})
 		is(t, err, tinystore.ErrTooNew)
-		is(t, clicks.Append(ctx, "view", []int{1}), tinystore.ErrInvalid)
+		_, err = clicks.Append(ctx, "view", []int{1})
+		is(t, err, tinystore.ErrInvalid)
 		if count := ways.Must(clicks.Count(ctx, records.Query{})); count != 0 {
 			t.Fatalf("%d events of a refused list", count)
 		}
@@ -122,7 +153,7 @@ func TestAQueryFindsByWhatEventsHoldAPageAtATime(t *testing.T) {
 				Fields: records.Fields{"route": route, "ms": n},
 			})
 		}
-		ways.Must(0, api.AppendMany(ctx, events))
+		ways.Must(api.AppendMany(ctx, events))
 		ms := func(events []records.Event) []string {
 			var out []string
 			for _, event := range events {
@@ -175,7 +206,7 @@ func TestCountsAKeysTopValuesAndRowsOfASpanWithTheirStats(t *testing.T) {
 			}
 			paid = append(paid, records.Event{Name: "paid", Fields: records.Fields{"method": method, "ms": ms}})
 		}
-		ways.Must(0, checkout.AppendMany(ctx, paid))
+		ways.Must(checkout.AppendMany(ctx, paid))
 		if count := ways.Must(checkout.Count(ctx, records.Query{Names: []string{"paid"}})); count != 4 {
 			t.Fatalf("count %d", count)
 		}
@@ -205,7 +236,7 @@ func TestAStoreSaysItsStreamsWhatEachKeepsAndTheKeysEventsHold(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		kept := ways.Must(records.OpenEvents(store, "kept", records.Keep(30*24*time.Hour)))
-		ways.Must(0, kept.Append(ctx, "signup", records.Fields{"plan": "pro", "user": 1}))
+		ways.Must(kept.Append(ctx, "signup", records.Fields{"plan": "pro", "user": 1}))
 		every := ways.Must(records.OpenAllEvents(store))
 		var found []records.Stream
 		for _, stream := range ways.Must(every.Streams(ctx)) {
@@ -246,7 +277,7 @@ func TestATailGivesTheEventsWrittenAfterItABatchAsTheyCome(t *testing.T) {
 		defer stop()
 		go func() {
 			for n := 0; ticking.Err() == nil; n++ {
-				_ = live.Append(ticking, "tick", records.Fields{"n": n})
+				_, _ = live.Append(ticking, "tick", records.Fields{"n": n})
 				time.Sleep(20 * time.Millisecond)
 			}
 		}()
@@ -344,7 +375,7 @@ func TestNothingDamagedIsListedAndWhatStillReadsIsNeverDropped(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
 		audit := ways.Must(records.OpenEvents(store, "audit"))
-		ways.Must(0, audit.Append(ctx, "signed.in", records.Fields{"user": 42}))
+		ways.Must(audit.Append(ctx, "signed.in", records.Fields{"user": 42}))
 		every := ways.Must(records.OpenAllEvents(store))
 		if damaged := ways.Must(every.Damaged(ctx)); len(damaged) != 0 {
 			t.Fatalf("damaged %+v", damaged)
