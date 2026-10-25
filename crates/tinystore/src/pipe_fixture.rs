@@ -93,7 +93,7 @@ impl Client {
 
     /// The credit the server gives back next on `stream`, for the DATA the
     /// client sent on it; the frames of other kinds kept for later.
-    #[cfg(feature = "blobs")]
+    #[cfg(any(feature = "blobs", feature = "metrics"))]
     pub(crate) fn credit_on(&mut self, stream: u32) -> u64 {
         loop {
             let frame = self.read();
@@ -109,7 +109,14 @@ impl Client {
 
     /// Whether no frame of `stream` arrives within `wait`, the frames that do
     /// arrive kept for later.
-    #[cfg(any(feature = "jobs", feature = "sql", feature = "backup", feature = "channels", feature = "blobs"))]
+    #[cfg(any(
+        feature = "jobs",
+        feature = "sql",
+        feature = "backup",
+        feature = "channels",
+        feature = "blobs",
+        feature = "metrics"
+    ))]
     pub(crate) fn silent_on(&mut self, stream: u32, wait: Duration) -> bool {
         let bytes = self.pipe.recv(wait);
         self.reader.push(&bytes);

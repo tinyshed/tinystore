@@ -214,22 +214,29 @@ A series that the store refuses, such as one with a label that starts with
 `__`, names itself by its labels, as it does in `ingest`. A text is written
 whole, in one write, so it may hold more than one `ingest`: up to 100,000
 samples, enough for kube-state-metrics or cadvisor on a busy cluster. While
-a large text is written, other writes of metrics wait behind it. Bun, Node,
-Python and Go send the text in one message, which holds 2 MiB.
+a large text is written, other writes of metrics wait behind it.
+
+Bun, Node, Python and Go send a small text in one message. A text larger than
+one message, 2 MiB, goes in pieces, and the store holds all of it in memory,
+counted in its `memory` budget, until the text is written whole or refused.
+Nothing is written before the last piece arrives, so a call that is cancelled
+or loses its connection before then writes nothing. A text over 32 MiB is a
+limit error (`LimitError`, `ErrLimit`) before the store keeps any of it.
 
 ## Limits
 
-| What              | Limit                                                             |
-|-------------------|-------------------------------------------------------------------|
-| one `ingest`      | 10,000 samples or 4 MiB                                           |
-| one text          | 100,000 samples or 32 MiB, and 2 MiB from Bun, Node, Python or Go |
-| a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB           |
-| a sample's time   | from `keep` ago to ten minutes ahead                              |
-| series in a store | 100,000 unless `maxSeries` says                                   |
+| What              | Limit                                                                      |
+|-------------------|----------------------------------------------------------------------------|
+| one `ingest`      | 10,000 samples or 4 MiB                                                    |
+| one text          | 100,000 samples or 32 MiB, and 32 MiB of text from Bun, Node, Python or Go |
+| a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB                    |
+| a sample's time   | from `keep` ago to ten minutes ahead                                       |
+| series in a store | 100,000 unless `maxSeries` says                                            |
 
 A store given a memory budget reserves part of it for a text before reading a
 line: about half a KiB a series beside its labels' bytes, so a text of
-100,000 short series holds about 60 MiB of the budget while it is written.
+100,000 short series holds about 60 MiB of the budget while it is written,
+beside the text's own bytes when it came in pieces.
 
 ## How many series
 

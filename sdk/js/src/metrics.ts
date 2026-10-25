@@ -5,8 +5,8 @@
 // A series' samples travel as two columns, an int64 time and a float64 value
 // a sample, so that every value's bits come back as they were written.
 
-import { download, type Link } from './connection.ts'
-import { InvalidError } from './errors.ts'
+import { type Connection, download, type Link, pieceOf } from './connection.ts'
+import { InvalidError, OutcomeUnknownError } from './errors.ts'
 import {
 	Counter,
 	Gauge,
@@ -20,6 +20,7 @@ import {
 	Timer,
 	type TimerOptions,
 } from './instruments.ts'
+import { ConnectionLostError, type Stream } from './session.ts'
 import { type Calendar, type Duration, type DurationText, ms, type Time, unixMs } from './time.ts'
 import {
 	Empty,
@@ -34,11 +35,13 @@ import {
 	MetricsNameAsked,
 	MetricsNamePage,
 	MetricsPageAsked,
+	MetricsPiece,
 	MetricsPlan,
 	MetricsQuery,
 	MetricsRead,
 	MetricsSeriesNamed,
 	MetricsTextPage,
+	MetricsUpload,
 	methods,
 } from './wire/protocol.ts'
 
@@ -323,15 +326,26 @@ export class Metrics {
 		for (const [label, value] of Object.entries(options.labels ?? {})) {
 			labels[label] = String(value)
 		}
-		const body = MetricsExposition.encode({
-			text: typeof text === 'string' ? new TextEncoder().encode(text) : text,
+		const given: ExpositionFields = {
 			labels,
 			at: options.at === undefined ? undefined : unixMs(options.at),
 			keep: options.keep === undefined ? undefined : ms(options.keep),
+		}
+		const bytes = typeof text === 'string' ? new TextEncoder().encode(text) : text
+		await this.#link.run('write', async connection => {
+			const body = oneMessage(connection, bytes, given)
+			if (body !== undefined) {
+				await connection.session.call(methods['metrics.ingestPrometheus'], body)
+				return
+			}
+			const asked = MetricsUpload.encode({ size: bytes.length, ...given })
+			const stream = await connection.session.open(
+				methods['metrics.uploadPrometheus'],
+				asked,
+				false,
+			)
+			await uploaded(stream, bytes, pieceOf(connection))
 		})
-		await this.#link.run('write', connection =>
-			connection.session.call(methods['metrics.ingestPrometheus'], body),
-		)
 	}
 
 	/** The samples of each series the query finds, in its range: whole, or a limit error naming its bound. */
@@ -687,6 +701,58 @@ function newSeries(
 		times: new Uint8Array(timeBytes.buffer),
 		values: valueBytes,
 		keep: given.keep === undefined ? undefined : ms(given.keep),
+	}
+}
+
+/** What a text's ingest gives every series of it, one message or an upload. */
+interface ExpositionFields {
+	labels: Labels
+	at: number | undefined
+	keep: number | undefined
+}
+
+/** A text's one message, when it fits the body the connection agreed; a longer text goes in pieces. */
+function oneMessage(
+	connection: Connection,
+	text: Uint8Array,
+	given: ExpositionFields,
+): Uint8Array | undefined {
+	const most = connection.session.agreed?.maxBody ?? 0
+	if (text.length > most) {
+		return undefined
+	}
+	const body = MetricsExposition.encode({ text, ...given })
+	return body.length <= most ? body : undefined
+}
+
+/**
+ * Sends a text's pieces as DATA within the stream's credit, the last ending
+ * them, and waits for the store to write it. A connection lost before that
+ * last DATA left nothing written, so the text goes again on the next one;
+ * lost after it, whether the text was written is unknown.
+ */
+async function uploaded(stream: Stream, text: Uint8Array, piece: number): Promise<void> {
+	let ending = false
+	try {
+		for (let at = 0; !ending; at += piece) {
+			ending = at + piece >= text.length
+			await stream.send(MetricsPiece.encode({ bytes: text.subarray(at, at + piece) }), ending)
+		}
+		// the RESPONSE that began it, then the answer to its last piece
+		await stream.next()
+		await stream.next()
+	} catch (err) {
+		if (err instanceof ConnectionLostError && !ending) {
+			// the store let go of what came and wrote nothing, so the whole text goes again
+			throw new ConnectionLostError(err.message, false)
+		}
+		stream.cancel()
+		if (err instanceof ConnectionLostError) {
+			throw new OutcomeUnknownError(
+				`the connection was lost as the text was written: ${err.message}`,
+			)
+		}
+		throw err
 	}
 }
 

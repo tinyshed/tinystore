@@ -105,6 +105,25 @@ async def test_every_text_of_the_vectors_writes_its_series_or_is_refused_whole(s
     assert await last(store.metrics, "bytes_given") == {"{}": 1}
 
 
+# contract: MET-15
+async def test_a_text_past_one_message_goes_in_pieces_and_is_written_whole(store: tinystore.Store) -> None:
+    long = "x" * 640
+    text = "".join(f'wide_{n % 10}{{n="{n}",long="{long}"}} {n}\n' for n in range(6000))
+    assert len(text) > 3 << 20
+    await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
+    for name in range(10):
+        read = await store.metrics.read(name=f"wide_{name}", since="1h")
+        wrong = [
+            series.labels
+            for series in read
+            if (series.labels["instance"], series.labels["long"]) != ("web-1", long)
+            or list(series.values or []) != [float(series.labels["n"])]
+        ]
+        assert (len(read), wrong) == (600, [])
+    with pytest.raises(tinystore.LimitError):
+        await store.metrics.ingest_prometheus(b"#" * ((32 << 20) + 1))
+
+
 # contract: MET-04
 async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zone(store: tinystore.Store) -> None:
     # a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end

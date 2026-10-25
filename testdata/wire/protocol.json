@@ -3325,6 +3325,51 @@
     },
     {
       "fields": {
+        "at": {
+          "int": "1790000000000"
+        },
+        "keep": {
+          "uint": "1500"
+        },
+        "labels": {
+          "names": {
+            "a": {
+              "str": "labels"
+            }
+          }
+        },
+        "size": {
+          "uint": "107"
+        }
+      },
+      "hex": "84016b0281a161a66c6162656c7303cf000001a0c4506c0004cd05dc",
+      "message": "metrics.Upload",
+      "name": "metrics.Upload with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Upload",
+      "name": "metrics.Upload with no field"
+    },
+    {
+      "fields": {
+        "bytes": {
+          "bin": "01ff"
+        }
+      },
+      "hex": "8101c40201ff",
+      "message": "metrics.Piece",
+      "name": "metrics.Piece with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Piece",
+      "name": "metrics.Piece with no field"
+    },
+    {
+      "fields": {
         "after": {
           "str": "after"
         },
@@ -5971,6 +6016,7 @@
     "metrics.latest": 1538,
     "metrics.names": 1541,
     "metrics.read": 1537,
+    "metrics.uploadPrometheus": 1552,
     "records.aggregate": 1286,
     "records.append": 1282,
     "records.count": 1284,

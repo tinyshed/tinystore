@@ -254,6 +254,8 @@ fn every_method_runs_as_the_shape_its_schema_line_says() {
             Route::Parts => "download",
             #[cfg(feature = "metrics")]
             Route::Instruments => "exchange",
+            #[cfg(feature = "metrics")]
+            Route::Gather => "exchange",
             #[cfg(feature = "config")]
             Route::Follow => "download",
             #[cfg(feature = "backup")]

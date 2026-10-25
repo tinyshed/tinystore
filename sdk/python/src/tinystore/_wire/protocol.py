@@ -103,6 +103,11 @@ methods: dict[str, int] = {
     "metrics.flush": 0x060D,
     "metrics.instruments": 0x060E,
     "metrics.ingestPrometheus": 0x060F,
+    # Answers its RESPONSE at once; the store's memory for the whole text is
+    # taken before a piece is kept, and the last piece is answered once the text
+    # is written, every series or none. A cancel or a lost connection leaves
+    # nothing written and lets go of what came.
+    "metrics.uploadPrometheus": 0x0610,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -5548,6 +5553,106 @@ MetricsExposition = Message(
 )
 
 
+def _write_metrics_upload(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("size")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    if (x := v.get("labels")) is not None:
+        w.uint(2)
+        w.map(len(x))
+        for name0 in sorted(x):
+            w.str(name0)
+            w.str(x[name0])
+        n += 1
+    if (x := v.get("at")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    if (x := v.get("keep")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_upload(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["size"] = r.uint()
+            case 2:
+                named0: dict[str, Any] = {}
+                names0: set[str] = set()
+                for _ in range(r.map()):
+                    name0 = r.name(names0)
+                    named0[name0] = r.str()
+                r.leave()
+                read["labels"] = named0
+            case 3:
+                read["at"] = r.int()
+            case 4:
+                read["keep"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A text past what one message holds: what metrics.Exposition carries but
+# the text, whose bytes follow as the client's DATA, a metrics.Piece each.
+MetricsUpload = Message(
+    "metrics.Upload",
+    {
+        # the text's bytes, 32 MiB at most: pieces that come to more or fewer are refused
+        "size": (1, uint),
+        "labels": (2, names(str_)),
+        "at": (3, int_),
+        "keep": (4, uint),
+    },
+    _write_metrics_upload,
+    _read_metrics_upload,
+)
+
+
+def _write_metrics_piece(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("bytes")) is not None:
+        w.uint(1)
+        w.bin(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_piece(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["bytes"] = r.bin()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A piece of an uploaded text, cut anywhere.
+MetricsPiece = Message(
+    "metrics.Piece",
+    {
+        "bytes": (1, bin_),
+    },
+    _write_metrics_piece,
+    _read_metrics_piece,
+)
+
+
 def _write_metrics_page_asked(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -10033,6 +10138,8 @@ messages: dict[str, Message] = {
     "metrics.NewSeries": MetricsNewSeries,
     "metrics.Ingest": MetricsIngest,
     "metrics.Exposition": MetricsExposition,
+    "metrics.Upload": MetricsUpload,
+    "metrics.Piece": MetricsPiece,
     "metrics.PageAsked": MetricsPageAsked,
     "metrics.Name": MetricsName,
     "metrics.NamePage": MetricsNamePage,

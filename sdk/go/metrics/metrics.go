@@ -92,13 +92,73 @@ func IngestPrometheus(ctx context.Context, store *tinystore.Store, text []byte, 
 	case t.unit != nil || t.help != nil || t.bounds != nil || t.exponential:
 		return core.Errorf(core.Invalid, "metrics: a text's ingest is told Labels, At and Keep alone")
 	}
-	message := wire.MetricsExposition{Text: text, Labels: t.labels, Keep: t.keep}
+	given := wire.MetricsUpload{Size: uint64(len(text)), Labels: t.labels, Keep: t.keep}
 	if t.at != nil {
 		at := t.at.UnixMilli()
-		message.At = &at
+		given.At = &at
 	}
-	_, err := linkOf(store).Call(ctx, core.Writing, wire.MethodMetricsIngestPrometheus, wire.Encode(&message))
-	return err
+	return linkOf(store).Run(ctx, core.Writing, func(c *core.Connection) error {
+		if body := oneMessage(c, text, given); body != nil {
+			_, err := c.Session.Call(ctx, wire.MethodMetricsIngestPrometheus, body)
+			return err
+		}
+		stream, err := c.Session.Open(ctx, wire.MethodMetricsUploadPrometheus, wire.Encode(&given), false)
+		if err != nil {
+			return err
+		}
+		return uploaded(ctx, stream, text, core.Piece(c))
+	})
+}
+
+// oneMessage is a text's one message when it fits the body the connection
+// agreed, and nil for a longer text, which goes in pieces.
+func oneMessage(c *core.Connection, text []byte, given wire.MetricsUpload) []byte {
+	var most uint64
+	if agreed := c.Session.Agreed(); agreed != nil {
+		most = agreed.MaxBody
+	}
+	if uint64(len(text)) > most {
+		return nil
+	}
+	body := wire.Encode(&wire.MetricsExposition{Text: text, Labels: given.Labels, At: given.At, Keep: given.Keep})
+	if uint64(len(body)) > most {
+		return nil
+	}
+	return body
+}
+
+// uploaded sends a text's pieces as DATA within the stream's credit, the last
+// ending them, and waits for the store to write it. A connection lost before
+// that last DATA left nothing written, so the text goes again on the next
+// one; lost after it, whether the text was written is unknown.
+func uploaded(ctx context.Context, stream *core.Stream, text []byte, piece int) error {
+	ending := false
+	fail := func(err error) error {
+		lost, _ := core.IsConnectionLost(err)
+		if lost && !ending {
+			// the store let go of what came and wrote nothing, so the whole text goes again
+			return core.Unsent(err)
+		}
+		stream.Cancel()
+		if lost {
+			return core.Wrap(core.OutcomeUnknown, err, "the connection was lost as the text was written")
+		}
+		return err
+	}
+	for at := 0; !ending; at += piece {
+		ending = at+piece >= len(text)
+		cut := text[at:min(at+piece, len(text))]
+		if err := stream.Send(ctx, wire.Encode(&wire.MetricsPiece{Bytes: cut}), ending); err != nil {
+			return fail(err)
+		}
+	}
+	// the RESPONSE that began it, then the answer to its last piece
+	for range 2 {
+		if _, err := stream.Next(ctx); err != nil {
+			return fail(err)
+		}
+	}
+	return nil
 }
 
 func newSeries(given Series) (wire.MetricsNewSeries, error) {

@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
 
-from ._connection import download
+from ._connection import download, piece_of
+from ._session import ConnectionLostError
 from ._time import moment as _moment
 from ._time import ms, spelled_keep, unix_ms
 from ._wire.protocol import (
@@ -37,14 +38,16 @@ from ._wire.protocol import (
     MetricsNameAsked,
     MetricsNamePage,
     MetricsPageAsked,
+    MetricsPiece,
     MetricsPlan,
     MetricsQuery,
     MetricsRead,
     MetricsSeriesNamed,
     MetricsTextPage,
+    MetricsUpload,
     methods,
 )
-from .errors import InvalidError
+from .errors import InvalidError, OutcomeUnknownError
 from .instruments import (
     Counter,
     Gauge,
@@ -61,7 +64,8 @@ from .instruments import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from ._connection import Link
+    from ._connection import Connection, Link
+    from ._session import Stream
     from ._time import Calendar, Duration
 
 __all__ = [
@@ -315,13 +319,23 @@ class Metrics:
             text = httpx.get("http://web-1:9100/metrics").text
             await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
         """
-        body = MetricsExposition.encode(
-            text=text.encode() if isinstance(text, str) else bytes(text),
-            labels={label: label_text(label, value) for label, value in (labels or {}).items()},
-            at=None if at is None else _stamp("text", at),
-            keep=None if keep is None else ms(keep, "metrics: keep"),
-        )
-        await self._link.run("write", lambda c: c.session.call(methods["metrics.ingestPrometheus"], body))
+        given = {
+            "labels": {label: label_text(label, value) for label, value in (labels or {}).items()},
+            "at": None if at is None else _stamp("text", at),
+            "keep": None if keep is None else ms(keep, "metrics: keep"),
+        }
+        data = text.encode() if isinstance(text, str) else bytes(text)
+
+        async def attempt(connection: Connection) -> None:
+            body = _one_message(connection, data, given)
+            if body is not None:
+                await connection.session.call(methods["metrics.ingestPrometheus"], body)
+                return
+            asked = MetricsUpload.encode(given, size=len(data))
+            stream = await connection.session.open(methods["metrics.uploadPrometheus"], asked, False)
+            await _uploaded(stream, data, piece_of(connection))
+
+        await self._link.run("write", attempt)
 
     async def read(self, **query: Unpack[SeriesQuery]) -> list[Series]:
         """The samples of each series the query finds, in its range: whole, or a LimitError naming its bound."""
@@ -605,6 +619,45 @@ def _columns_of(given: Series) -> tuple[Sequence[Time], Sequence[float]]:
     if given.times is None or given.values is None or len(given.times) != len(given.values):
         raise InvalidError(f"metrics {given.name}: samples, or times and values as long as each other")
     return given.times, given.values
+
+
+def _one_message(connection: Connection, text: bytes, given: Mapping[str, Any]) -> bytes | None:
+    """A text's one message, when it fits the body the connection agreed; a longer text goes in pieces."""
+    agreed = connection.session.agreed
+    most = agreed.max_body if agreed is not None else 0
+    if len(text) > most:
+        return None
+    body = MetricsExposition.encode(given, text=text)
+    return body if len(body) <= most else None
+
+
+async def _uploaded(stream: Stream, text: bytes, piece: int) -> None:
+    """Sends a text's pieces as DATA within the stream's credit, the last ending them, and waits for its write.
+
+    A connection lost before that last DATA left nothing written, so the text
+    goes again on the next one; lost after it, whether the text was written is
+    unknown.
+    """
+    ending = False
+    view = memoryview(text)
+    try:
+        at = 0
+        while not ending:
+            ending = at + piece >= len(text)
+            await stream.send(MetricsPiece.encode(bytes=view[at : at + piece] or None), ending)
+            at += piece
+        # the RESPONSE that began it, then the answer to its last piece
+        await stream.next()
+        await stream.next()
+    except ConnectionLostError as err:
+        if not ending:
+            # the store let go of what came and wrote nothing, so the whole text goes again
+            raise ConnectionLostError(str(err), sent=False) from err
+        stream.cancel()
+        raise OutcomeUnknownError(f"the connection was lost as the text was written: {err}") from err
+    except BaseException:
+        stream.cancel()
+        raise
 
 
 def _stamp(name: str, at: Time) -> int:

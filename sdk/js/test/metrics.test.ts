@@ -152,6 +152,30 @@ for (const way of ways) {
 			expect(await last(store, 'bytes_given')).toEqual({ '{}': 1 })
 		})
 
+		// contract: MET-15
+		test('a text past one message goes in pieces and is written whole, and one past 32 MiB is a limit', async () => {
+			const long = 'x'.repeat(640)
+			const lines = Array.from(
+				{ length: 6000 },
+				(_, n) => `wide_${n % 10}{n="${n}",long="${long}"} ${n}`,
+			)
+			const text = `${lines.join('\n')}\n`
+			expect(text.length).toBeGreaterThan(3 << 20)
+			await store.metrics.ingestPrometheus(text, { labels: { instance: 'web-1' } })
+			for (let name = 0; name < 10; name++) {
+				const read = await store.metrics.read({ name: `wide_${name}`, since: '1h' })
+				const wrong = read.filter(
+					series =>
+						series.labels.instance !== 'web-1' ||
+						series.labels.long !== long ||
+						series.values[0] !== Number(series.labels.n),
+				)
+				expect([read.length, wrong.length]).toEqual([600, 0])
+			}
+			const past = await caught(store.metrics.ingestPrometheus('#'.repeat((32 << 20) + 1)))
+			expect(past).toBeInstanceOf(LimitError)
+		})
+
 		test("a calendar's buckets begin at the local midnight of their time zone", async () => {
 			// a Moscow day ten days ago, a sample an hour after its midnight and one an hour before its end
 			const midnight =

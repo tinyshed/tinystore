@@ -119,6 +119,10 @@ pub(crate) enum Route {
     /// items.
     #[cfg(feature = "metrics")]
     Instruments,
+    /// A text past one message, its pieces gathered whole before it is
+    /// written.
+    #[cfg(feature = "metrics")]
+    Gather,
     /// A config's values, now and at each change, until the client cancels.
     #[cfg(feature = "config")]
     Follow,
@@ -148,7 +152,7 @@ pub(crate) type Spawn = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) + Send +
 
 /// What a stream whose DATA goes either way needs of its session: a file's
 /// bytes, a tail's batches, a writer's lines, a read's parts, the answers to
-/// a client's instruments, a config's values.
+/// a client's instruments, a text's pieces, a config's values.
 #[cfg(any(
     feature = "blobs",
     feature = "records",

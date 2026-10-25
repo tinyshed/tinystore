@@ -751,13 +751,20 @@ handle.
 | `0x060d` | metrics.flush            | write | `Empty`                  | `Empty`                                                  |
 | `0x060e` | metrics.instruments      | write | `metrics.Session`        | exchange `metrics.Ack` for `metrics.Batch`               |
 | `0x060f` | metrics.ingestPrometheus | write | `metrics.Exposition`     | `Empty`                                                  |
+| `0x0610` | metrics.uploadPrometheus | write | `metrics.Upload`         | exchange `Empty` for `metrics.Piece`                     |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/metrics.wire`. A read, the newest samples and an
 aggregate answer in parts within the client's credit, a series longer than a
 part cut across parts. `metrics.instruments` takes a client's batches on a
 stream of their own, applied in turn, each answered with the last batch of
-the session the store applied.
+the session the store applied. `metrics.ingestPrometheus` carries an
+exposition's text in its request; a text past the body agreed goes by
+`metrics.uploadPrometheus`, its size in the request, 32 MiB at most, and its
+bytes as `DATA` pieces. The store reserves its memory for the whole text
+before it keeps a piece, refuses pieces that come to more or fewer bytes than
+the size, and answers the last piece once the text is written, every series
+or none.
 
 ### config
 

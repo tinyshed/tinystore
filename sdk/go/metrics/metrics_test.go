@@ -167,6 +167,40 @@ func TestEveryTextOfTheVectorsWritesItsSeriesOrIsRefusedWhole(t *testing.T) {
 	})
 }
 
+// contract: MET-15
+func TestATextPastOneMessageGoesInPiecesAndIsWrittenWhole(t *testing.T) {
+	long := strings.Repeat("x", 640)
+	var text strings.Builder
+	for n := range 6000 {
+		fmt.Fprintf(&text, "wide_%d{n=\"%d\",long=\"%s\"} %d\n", n%10, n, long, n)
+	}
+	if text.Len() <= 3<<20 {
+		t.Fatalf("a text of %d bytes fits one message", text.Len())
+	}
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		if err := metrics.IngestPrometheus(ctx, store, []byte(text.String()), metrics.Labels{"instance": "web-1"}); err != nil {
+			t.Fatal(err)
+		}
+		for name := range 10 {
+			read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: fmt.Sprintf("wide_%d", name), Since: time.Hour}))
+			var wrong []metrics.Labels
+			for _, series := range read {
+				n := ways.Must(strconv.ParseFloat(series.Labels["n"], 64))
+				if series.Labels["instance"] != "web-1" || series.Labels["long"] != long ||
+					len(series.Samples) != 1 || series.Samples[0].Value != n {
+					wrong = append(wrong, series.Labels)
+				}
+			}
+			if len(read) != 600 || len(wrong) != 0 {
+				t.Fatalf("wide_%d: %d series, %d of them wrong", name, len(read), len(wrong))
+			}
+		}
+		past := []byte(strings.Repeat("#", 32<<20+1))
+		is(t, metrics.IngestPrometheus(ctx, store, past), tinystore.ErrLimit)
+	})
+}
+
 func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

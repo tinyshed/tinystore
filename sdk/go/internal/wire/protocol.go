@@ -94,6 +94,11 @@ const (
 	MethodMetricsFlush            = 0x060d
 	MethodMetricsInstruments      = 0x060e
 	MethodMetricsIngestPrometheus = 0x060f
+	// Answers its RESPONSE at once; the store's memory for the whole text is
+	// taken before a piece is kept, and the last piece is answered once the text
+	// is written, every series or none. A cancel or a lost connection leaves
+	// nothing written and lets go of what came.
+	MethodMetricsUploadPrometheus = 0x0610
 	MethodRecordsOpen             = 0x0501
 	MethodRecordsAppend           = 0x0502
 	MethodRecordsList             = 0x0503
@@ -212,6 +217,7 @@ var methodNames = []struct {
 	{"metrics.flush", MethodMetricsFlush},
 	{"metrics.instruments", MethodMetricsInstruments},
 	{"metrics.ingestPrometheus", MethodMetricsIngestPrometheus},
+	{"metrics.uploadPrometheus", MethodMetricsUploadPrometheus},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -453,6 +459,10 @@ func NewMessage(name string) Message {
 		return &MetricsIngest{}
 	case "metrics.Exposition":
 		return &MetricsExposition{}
+	case "metrics.Upload":
+		return &MetricsUpload{}
+	case "metrics.Piece":
+		return &MetricsPiece{}
 	case "metrics.PageAsked":
 		return &MetricsPageAsked{}
 	case "metrics.Name":
@@ -7527,6 +7537,123 @@ func (m MetricsExposition) IsZero() bool {
 		len(m.Labels) == 0 &&
 		m.At == nil &&
 		m.Keep == nil
+}
+
+// MetricsUpload is the schema's metrics.Upload.
+//
+// A text past what one message holds: what metrics.Exposition carries but
+// the text, whose bytes follow as the client's DATA, a metrics.Piece each.
+type MetricsUpload struct {
+	// the text's bytes, 32 MiB at most: pieces that come to more or fewer are refused
+	Size   uint64            `wire:"1,size"`
+	Labels map[string]string `wire:"2,labels"`
+	At     *int64            `wire:"3,at"`
+	Keep   *uint64           `wire:"4,keep"`
+}
+
+func (m MetricsUpload) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Size != 0 {
+		w.Uint(1)
+		w.Uint(m.Size)
+		n++
+	}
+	if len(m.Labels) > 0 {
+		w.Uint(2)
+		w.Map(len(m.Labels))
+		for _, name0 := range SortedNames(m.Labels) {
+			w.Str(name0)
+			w.Str(m.Labels[name0])
+		}
+		n++
+	}
+	if m.At != nil {
+		w.Uint(3)
+		w.Int(*m.At)
+		n++
+	}
+	if m.Keep != nil {
+		w.Uint(4)
+		w.Uint(*m.Keep)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsUpload) Read(r *Reader) {
+	*m = MetricsUpload{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Size = r.Uint()
+		case 2:
+			v := map[string]string{}
+			seen0 := map[string]struct{}{}
+			for k0 := r.Map(); k0 > 0; k0-- {
+				name0 := r.Name(seen0)
+				item0 := r.Str()
+				v[name0] = item0
+			}
+			r.Leave()
+			m.Labels = v
+		case 3:
+			v := r.Int()
+			m.At = &v
+		case 4:
+			v := r.Uint()
+			m.Keep = &v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsUpload writes as no field at all.
+func (m MetricsUpload) IsZero() bool {
+	return m.Size == 0 &&
+		len(m.Labels) == 0 &&
+		m.At == nil &&
+		m.Keep == nil
+}
+
+// MetricsPiece is the schema's metrics.Piece.
+//
+// A piece of an uploaded text, cut anywhere.
+type MetricsPiece struct {
+	Bytes []byte `wire:"1,bytes"`
+}
+
+func (m MetricsPiece) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.Bytes) > 0 {
+		w.Uint(1)
+		w.Bin(m.Bytes)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsPiece) Read(r *Reader) {
+	*m = MetricsPiece{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Bytes = r.Bin()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsPiece writes as no field at all.
+func (m MetricsPiece) IsZero() bool {
+	return len(m.Bytes) == 0
 }
 
 // MetricsPageAsked is the schema's metrics.PageAsked.

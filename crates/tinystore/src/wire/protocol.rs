@@ -6514,6 +6514,118 @@ impl Message for MetricsExposition {
     }
 }
 
+/// A text past what one message holds: what metrics.Exposition carries but
+/// the text, whose bytes follow as the client's DATA, a metrics.Piece each.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsUpload {
+    /// The text's bytes, 32 MiB at most: pieces that come to more or fewer are refused.
+    pub(crate) size: u64,
+    pub(crate) labels: BTreeMap<String, String>,
+    /// Unix milliseconds.
+    pub(crate) at: Option<i64>,
+    /// Milliseconds.
+    pub(crate) keep: Option<u64>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsUpload {
+    const NAME: &'static str = "metrics.Upload";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.size = codec::uint(r, "size")?,
+                2 => message.labels = codec::names(r, "labels", codec::str)?,
+                3 => message.at = Some(codec::int(r, "at")?),
+                4 => message.keep = Some(codec::uint(r, "keep")?),
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.size != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.size);
+        }
+        if !self.labels.is_empty() {
+            map.field(out, 2);
+            codec::write_names(out, &self.labels, codec::write_str);
+        }
+        if let Some(at) = &self.at {
+            map.field(out, 3);
+            codec::write_int(out, at);
+        }
+        if let Some(keep) = &self.keep {
+            map.field(out, 4);
+            codec::write_uint(out, keep);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+            + 1 + codec::names_size(&self.labels, |item| 5 + item.len())
+            + self.at.map_or(0, |_| 10)
+            + self.keep.map_or(0, |_| 10)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.size == 0
+            && self.labels.is_empty()
+            && self.at.is_none()
+            && self.keep.is_none()
+    }
+}
+
+/// A piece of an uploaded text, cut anywhere.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsPiece {
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsPiece {
+    const NAME: &'static str = "metrics.Piece";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.bytes = codec::bin(r, "bytes")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.bytes.is_empty() {
+            map.field(out, 1);
+            codec::write_bin(out, &self.bytes);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.bytes.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 /// A page of names, of a name's labels or of a label's values.
 #[cfg(feature = "metrics")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -11319,6 +11431,12 @@ pub(crate) mod method {
     pub(crate) const METRICS_INSTRUMENTS: u16 = 0x060e;
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_INGEST_PROMETHEUS: u16 = 0x060f;
+    /// Answers its RESPONSE at once; the store's memory for the whole text is
+    /// taken before a piece is kept, and the last piece is answered once the text
+    /// is written, every series or none. A cancel or a lost connection leaves
+    /// nothing written and lets go of what came.
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_UPLOAD_PROMETHEUS: u16 = 0x0610;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -11547,6 +11665,8 @@ pub(crate) mod method {
             METRICS_INSTRUMENTS => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_INGEST_PROMETHEUS => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_UPLOAD_PROMETHEUS => Some(Access::Write),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -11768,6 +11888,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("metrics.instruments", 0x060e, "exchange"),
     #[cfg(feature = "metrics")]
     ("metrics.ingestPrometheus", 0x060f, "call"),
+    #[cfg(feature = "metrics")]
+    ("metrics.uploadPrometheus", 0x0610, "exchange"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -12023,6 +12145,10 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "metrics.Ingest" => MetricsIngest::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Exposition" => MetricsExposition::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Upload" => MetricsUpload::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Piece" => MetricsPiece::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.PageAsked" => MetricsPageAsked::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

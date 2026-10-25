@@ -8,9 +8,13 @@
 //! so that every value's bits come back. A client's instruments send their
 //! batches on a stream of their own, applied in turn, each answered with the
 //! last batch of the session the store applied.
+//!
+//! An exposition's text past what one message holds comes as the client's
+//! pieces, gathered in the store's memory, reserved for the whole text before
+//! a piece is kept, then read and written as one text is.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::codec::Message;
@@ -18,18 +22,18 @@ use super::protocol::{
     Empty, Failure, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsBucket,
     MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds,
     MetricsExposition, MetricsGroup, MetricsIngest, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage,
-    MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPlan, MetricsQuery, MetricsRead, MetricsRefused,
-    MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, method,
+    MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead,
+    MetricsRefused, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload, method,
 };
 use super::{Link, Route};
-use crate::Calendar;
 use crate::clock::from_unix_millis;
+use crate::memory::PATIENCE;
 use crate::metrics::{
-    Ack, Aggregate, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op, Query, Remote,
-    Series, Set, Value,
+    Ack, Aggregate, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op, Prometheus,
+    Query, Remote, Series, Set, Value,
 };
 use crate::sync::lock;
-use crate::{Store, unix_millis};
+use crate::{Calendar, Error, Memory, Reservation, Store, unix_millis};
 
 use super::Answered;
 
@@ -43,21 +47,32 @@ const NAME_NUMBERS: usize = 64;
 const SAMPLE: usize = 16;
 /// What a bucket of an aggregate takes of a part at most.
 const BUCKET: usize = 64;
+/// The longest text an upload gathers: one text's 32 MiB, as the engine
+/// bounds what its series weigh. It bounds what the session holds for a
+/// client, so it is refused before a byte of the text comes.
+const TEXT_MOST: usize = 32 << 20;
+/// What an uploaded text's memory is reserved as, and its refusals name.
+const UPLOADED: &str = "metrics: an uploaded text";
 
 pub(crate) fn route(called: u16) -> Route {
     match called {
         method::METRICS_READ | method::METRICS_LATEST | method::METRICS_AGGREGATE => Route::Parts,
         method::METRICS_INSTRUMENTS => Route::Instruments,
+        method::METRICS_UPLOAD_PROMETHEUS => Route::Gather,
         _ => Route::Worker,
     }
 }
 
-/// A connection's streams that send DATA: its downloads, and its clients'
-/// instruments.
+/// A connection's texts that come in pieces, by stream.
+type Gatherings = Mutex<HashMap<u32, Arc<Gathering>>>;
+
+/// A connection's streams that send or take DATA: its downloads, its
+/// clients' instruments and its texts that come in pieces.
 #[derive(Default)]
 pub(crate) struct Handles {
     downloads: Mutex<HashMap<u32, Arc<Downloading>>>,
     instruments: Arc<Mutex<HashMap<u32, Arc<Instruments>>>>,
+    gatherings: Arc<Gatherings>,
 }
 
 impl Handles {
@@ -69,8 +84,8 @@ impl Handles {
         }
     }
 
-    /// Ends a download or an instruments' stream the client cancelled; says
-    /// whether the stream was one.
+    /// Ends a download, an instruments' stream or a text in pieces the client
+    /// cancelled; says whether the stream was one.
     pub(crate) fn cancel(&self, stream: u32) -> bool {
         if let Some(download) = lock(&self.downloads).remove(&stream) {
             download.end(Err(Failure::cancelled("the client cancelled its read")));
@@ -80,14 +95,29 @@ impl Handles {
             instruments.end(Err(Failure::cancelled("the client cancelled its instruments")));
             return true;
         }
+        // out of its map before it ends, which takes the map's lock again
+        let gathering = lock(&self.gatherings).remove(&stream);
+        if let Some(gathering) = gathering {
+            gathering.cancel();
+            return true;
+        }
         false
     }
 
-    /// Lets go of every stream: the connection ended, and a client's gauges
-    /// leave the totals with it.
+    /// Lets go of every stream: the connection ended, a client's gauges leave
+    /// the totals with it, and a text in pieces leaves nothing written.
     pub(crate) fn end(&self) {
         lock(&self.downloads).clear();
         lock(&self.instruments).clear();
+        let gatherings: Vec<_> = lock(&self.gatherings).drain().map(|(_, gathering)| gathering).collect();
+        for gathering in gatherings {
+            gathering.cancel();
+        }
+    }
+
+    /// The text in pieces a client's DATA on `stream` is a piece of.
+    pub(crate) fn gathering(&self, stream: u32) -> Option<Arc<Gathering>> {
+        lock(&self.gatherings).get(&stream).cloned()
     }
 
     /// Takes a client's batch on its instruments' stream, applied in turn on
@@ -333,18 +363,23 @@ fn ingest(metrics: &Metrics, ingest: MetricsIngest) -> Answered {
 
 /// A text an exporter serves, read by the core's one parser for every SDK.
 fn ingest_prometheus(metrics: &Metrics, given: MetricsExposition) -> Answered {
+    prometheus(metrics, given.labels, given.at, given.keep).ingest(&given.text)?;
+    Ok(Empty {}.encode())
+}
+
+/// What reads a text with the labels, the time and the keep a client gave.
+fn prometheus(metrics: &Metrics, labels: BTreeMap<String, String>, at: Option<i64>, keep: Option<u64>) -> Prometheus {
     let mut text = metrics.prometheus();
-    for (label, value) in given.labels {
+    for (label, value) in labels {
         text = text.label(label, value);
     }
-    if let Some(at) = given.at {
+    if let Some(at) = at {
         text = text.at(from_unix_millis(at));
     }
-    if let Some(keep) = given.keep {
+    if let Some(keep) = keep {
         text = text.keep(Duration::from_millis(keep));
     }
-    text.ingest(&given.text)?;
-    Ok(Empty {}.encode())
+    text
 }
 
 /// A series to write, its columns read back into samples.
@@ -707,6 +742,200 @@ fn batch_of(batch: MetricsBatch) -> Result<Batch, Failure> {
         changes: changes.collect(),
         flush: batch.flush,
     })
+}
+
+/// Begins a text that comes in pieces: what reads it, and its size, a size
+/// past what an upload gathers refused before any of it comes. The store's
+/// memory for it is reserved by [`Gathering::begin`], once the RESPONSE went.
+pub(crate) fn gather(
+    store: &Store,
+    handles: &Handles,
+    stream: u32,
+    body: &[u8],
+    link: Link,
+) -> Result<Arc<Gathering>, Failure> {
+    let asked = MetricsUpload::decode(body)?;
+    let size = usize::try_from(asked.size).ok().filter(|size| *size <= TEXT_MOST).ok_or_else(|| past(asked.size))?;
+    let gathering = Arc::new(Gathering {
+        stream,
+        size,
+        prometheus: prometheus(&store.metrics()?, asked.labels, asked.at, asked.keep),
+        memory: Arc::clone(store.memory()),
+        // busy until `begin`'s worker has the memory: a piece before it waits
+        state: Mutex::new(Gathered { busy: true, ..Gathered::default() }),
+        link,
+        gatherings: Arc::downgrade(&handles.gatherings),
+    });
+    lock(&handles.gatherings).insert(stream, Arc::clone(&gathering));
+    Ok(gathering)
+}
+
+/// A text of `size` bytes, past what an upload gathers, with the facts a
+/// limit names.
+fn past(size: u64) -> Failure {
+    let error = Error::limit(format!("{UPLOADED} of {size} bytes, past one text's {} MiB", TEXT_MOST >> 20));
+    let named = error.naming("limit", "one text's bytes").naming("wanted", size.to_string());
+    named.naming("bound", TEXT_MOST.to_string()).into()
+}
+
+/// A text that comes as the client's pieces, gathered in the store's memory
+/// before it is read and written whole. Its pieces are taken in turn on a
+/// worker, the first of which reserves the memory of the whole text.
+pub(crate) struct Gathering {
+    stream: u32,
+    size: usize,
+    prometheus: Prometheus,
+    memory: Arc<Memory>,
+    state: Mutex<Gathered>,
+    link: Link,
+    gatherings: Weak<Gatherings>,
+}
+
+#[derive(Default)]
+struct Gathered {
+    /// The text's bytes so far, here while no worker takes pieces: none
+    /// before its memory is reserved.
+    text: Option<Text>,
+    /// The client's DATA not taken yet, and whether each was its last.
+    pieces: VecDeque<(Vec<u8>, bool)>,
+    /// A worker reserves the text's memory or takes its pieces.
+    busy: bool,
+    /// The client cancelled: whoever holds the text lets it go, and then
+    /// answers, so that `cancelled` means nothing of it is held.
+    cancelled: bool,
+    ended: bool,
+}
+
+/// A text's bytes, and the store's memory held for all of them.
+struct Text {
+    bytes: Vec<u8>,
+    _held: Reservation,
+}
+
+impl Gathering {
+    /// Reserves the store's memory for the whole text on a worker, then takes
+    /// the pieces that came meanwhile.
+    pub(crate) fn begin(self: &Arc<Self>) {
+        let gathering = Arc::clone(self);
+        (self.link.spawn)(Box::new(move || gathering.reserve()));
+    }
+
+    /// Waits for the text's memory as an ingest does, rather than refuse a
+    /// scrape while a merge holds it for a moment.
+    fn reserve(&self) {
+        match self.memory.reserve(self.size as u64, UPLOADED, PATIENCE) {
+            Ok(held) => self.take_pieces(Text { bytes: Vec::with_capacity(self.size), _held: held }),
+            Err(error) => self.end(Err(error.into())),
+        }
+    }
+
+    /// A DATA the client sent, its last when `last`: queued, and taken in the
+    /// order it came on a worker.
+    pub(crate) fn piece(self: &Arc<Self>, body: Vec<u8>, last: bool) {
+        {
+            let mut state = lock(&self.state);
+            if state.ended || state.cancelled {
+                return;
+            }
+            state.pieces.push_back((body, last));
+            if std::mem::replace(&mut state.busy, true) {
+                return;
+            }
+        }
+        let gathering = Arc::clone(self);
+        (self.link.spawn)(Box::new(move || gathering.resume()));
+    }
+
+    /// Takes the pieces waiting with the text a worker before left.
+    fn resume(&self) {
+        let Some(text) = lock(&self.state).text.take() else { return };
+        self.take_pieces(text);
+    }
+
+    /// Takes the pieces waiting into the text in turn, each one's credit
+    /// given back once it is kept, the last writing the text; with none
+    /// waiting, the text stays for the worker of the next.
+    fn take_pieces(&self, mut text: Text) {
+        loop {
+            let (body, last) = {
+                let mut state = lock(&self.state);
+                if state.cancelled {
+                    drop(state);
+                    drop(text);
+                    return self.end(Err(Failure::cancelled("the client cancelled its upload")));
+                }
+                let Some(next) = state.pieces.pop_front() else {
+                    state.text = Some(text);
+                    state.busy = false;
+                    return;
+                };
+                next
+            };
+            if let Err(failure) = self.keep(&mut text.bytes, &body) {
+                drop(text);
+                return self.end(Err(failure));
+            }
+            if last {
+                return self.end(self.write(text));
+            }
+            (self.link.grant)(u32::try_from(body.len()).unwrap_or(u32::MAX));
+        }
+    }
+
+    /// Adds a piece's bytes to the text, refusing those past the size its
+    /// upload said, which is all its memory holds.
+    fn keep(&self, bytes: &mut Vec<u8>, body: &[u8]) -> Result<(), Failure> {
+        if body.is_empty() {
+            return Ok(());
+        }
+        let piece = MetricsPiece::decode(body)?;
+        if bytes.len() + piece.bytes.len() > self.size {
+            return Err(Failure::invalid(format!("{UPLOADED}: pieces past the {} bytes its upload said", self.size)));
+        }
+        bytes.extend_from_slice(&piece.bytes);
+        Ok(())
+    }
+
+    /// Reads and writes the whole text, every series or none, its memory let
+    /// go before the answer leaves.
+    fn write(&self, text: Text) -> Answered {
+        let (came, size) = (text.bytes.len(), self.size);
+        if came != size {
+            return Err(Failure::invalid(format!("{UPLOADED}: pieces of {came} bytes, short of the {size} it said")));
+        }
+        self.prometheus.ingest(&text.bytes)?;
+        Ok(Empty {}.encode())
+    }
+
+    /// Ends the upload, what it gathered let go: here, or by the worker that
+    /// holds the text once it is done with a piece. A text being written
+    /// still is, and the answer says how that went.
+    fn cancel(&self) {
+        let text = {
+            let mut state = lock(&self.state);
+            state.cancelled = true;
+            if state.busy {
+                return;
+            }
+            state.text.take()
+        };
+        drop(text);
+        self.end(Err(Failure::cancelled("the client cancelled its upload")));
+    }
+
+    fn end(&self, last: Answered) {
+        {
+            let mut state = lock(&self.state);
+            if std::mem::replace(&mut state.ended, true) {
+                return;
+            }
+            state.pieces.clear();
+        }
+        if let Some(gatherings) = self.gatherings.upgrade() {
+            lock(&gatherings).remove(&self.stream);
+        }
+        (self.link.finish)(last);
+    }
 }
 
 #[cfg(test)]

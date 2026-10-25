@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Capability, Connect, Pipe};
@@ -8,8 +8,8 @@ use crate::wire::frame::{self, Frame, Kind};
 use crate::wire::protocol::{
     Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange, MetricsCondition,
     MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsInstrument,
-    MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsQuery, MetricsRead,
-    MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, method,
+    MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery,
+    MetricsRead, MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload, method,
 };
 use crate::{Options, Store, unix_millis};
 
@@ -62,10 +62,16 @@ fn downloaded<M: Message>(client: &mut Client, called: u16, request: &impl Messa
 
 /// A client of `store` whose bodies are `max_body` bytes at most.
 fn client(store: &Store, max_body: u64) -> Client {
+    greeted(store, max_body).0
+}
+
+/// A client of `store` whose bodies are `max_body` bytes at most, and the DATA
+/// bytes the server takes on a stream before it gives credit back.
+fn greeted(store: &Store, max_body: u64) -> (Client, u64) {
     let mut client = Client::over(Pipe::connect(store, Connect::default()).unwrap());
     let hello = Hello { protocol: 1, client: "test/0".to_owned(), max_body: Some(max_body), ..Hello::default() };
-    client.greet(hello).unwrap();
-    client
+    let welcome = client.greet(hello).unwrap();
+    (client, welcome.stream_credit)
 }
 
 fn store(dir: &tempfile::TempDir) -> Store {
@@ -415,4 +421,158 @@ fn an_answer_past_the_agreed_body_is_limit_and_the_connection_goes_on() {
     assert_eq!(refused.code, "limit", "{}", refused.message);
     let short = MetricsDescription { name: "mem".to_owned(), unit: "B".to_owned(), help: "Used.".to_owned() };
     small.call::<Empty>(method::METRICS_DESCRIBE, &short).unwrap();
+}
+
+/// A text of `series` gauges over four names, so that a read of a name finds
+/// each of its series within a query's 1,000, a label `long` of `width` bytes
+/// on each: `wide_<n % 4>{n="<n>",long="xx…"} <n>`.
+fn wide_text(series: usize, width: usize) -> Vec<u8> {
+    use std::fmt::Write;
+    let long = "x".repeat(width);
+    let mut text = String::new();
+    for n in 0..series {
+        writeln!(text, "wide_{}{{n=\"{n}\",long=\"{long}\"}} {n}", n % 4).unwrap();
+    }
+    text.into_bytes()
+}
+
+/// Uploads `text` in pieces of `piece` bytes within the server's `credit`,
+/// and the stream's last frame.
+fn upload(client: &mut Client, asked: &MetricsUpload, text: &[u8], piece: usize, mut credit: u64) -> Frame {
+    let stream = client.open_stream(method::METRICS_UPLOAD_PROMETHEUS, asked);
+    let pieces: Vec<&[u8]> = text.chunks(piece).collect();
+    for (n, bytes) in pieces.iter().enumerate() {
+        let data = Frame::new(Kind::Data, stream, MetricsPiece { bytes: bytes.to_vec() }.encode());
+        while credit < data.body.len() as u64 {
+            credit += client.credit_on(stream);
+        }
+        credit -= data.body.len() as u64;
+        client.write(if n + 1 == pieces.len() { data.ending() } else { data });
+    }
+    let begun = client.next_on(stream);
+    assert_eq!((begun.kind, begun.flags), (Kind::Response, 0), "an upload begins: {:?}", answered::<Empty>(&begun));
+    client.next_on(stream)
+}
+
+/// The names the store holds samples of, and how many series each has.
+fn series_counts(client: &mut Client) -> Vec<(String, u64)> {
+    let page: MetricsNamePage = client.call(method::METRICS_NAMES, &MetricsPageAsked::default()).unwrap();
+    page.names.into_iter().map(|name| (name.name, name.series_count)).collect()
+}
+
+fn written(counts: &[(&str, u64)]) -> Vec<(String, u64)> {
+    counts.iter().map(|(name, count)| ((*name).to_owned(), *count)).collect()
+}
+
+/// Waits until what the store's memory holds is what `held` wants.
+fn memory_until(store: &Store, held: impl Fn(u64) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !held(store.memory().used()) {
+        assert!(Instant::now() < deadline, "the store's memory holds {} bytes, still", store.memory().used());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+// contract: MET-15
+#[test]
+fn a_text_past_one_message_comes_in_pieces_and_is_written_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let (mut client, credit) = greeted(&store, 64 << 10);
+    let text = wide_text(2000, 1200);
+    assert!(text.len() as u64 > credit, "past what a stream takes before its credit comes back");
+    let at = now() - 60_000;
+    let asked =
+        MetricsUpload { size: text.len() as u64, labels: labels(&[("instance", "web-1")]), at: Some(at), keep: None };
+    let last = upload(&mut client, &asked, &text, 60 << 10, credit);
+    assert_eq!((last.kind, last.flags & frame::END), (Kind::Data, frame::END));
+    answered::<Empty>(&last).unwrap();
+    let every = [("wide_0", 500), ("wide_1", 500), ("wide_2", 500), ("wide_3", 500)];
+    assert_eq!(series_counts(&mut client), written(&every), "every series, once");
+    let parts: Vec<MetricsRead> = downloaded(&mut client, method::METRICS_READ, &named("wide_3"));
+    let read: Vec<_> = parts.into_iter().flat_map(|part| part.series).collect();
+    assert_eq!(read.len(), 500);
+    for series in read {
+        let n: f64 = series.labels["n"].parse().unwrap();
+        assert_eq!((series.labels["instance"].as_str(), series.labels["long"].len()), ("web-1", 1200));
+        assert_eq!((series.times, series.values), (at.to_le_bytes().to_vec(), n.to_le_bytes().to_vec()));
+    }
+}
+
+// contract: MET-15
+#[test]
+fn a_text_past_its_bound_its_size_or_its_lines_is_refused_whole_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let (mut client, credit) = greeted(&store, 64 << 10);
+    // refused before a byte of it comes
+    let huge = MetricsUpload { size: (32 << 20) + 1, ..MetricsUpload::default() };
+    let stream = client.open_stream(method::METRICS_UPLOAD_PROMETHEUS, &huge);
+    let refused = answered::<Empty>(&client.next_on(stream)).unwrap_err();
+    assert_eq!(refused.code, "limit", "{}", refused.message);
+    let what = refused.what.unwrap_or_default();
+    let facts = [&what["limit"], &what["wanted"], &what["bound"]];
+    assert_eq!(facts, ["one text's bytes", "33554433", "33554432"]);
+
+    let text = wide_text(100, 10);
+    let at_most = |size: usize| MetricsUpload { size: size as u64, ..MetricsUpload::default() };
+    for (asked, why) in [(at_most(text.len() - 1), "pieces past"), (at_most(text.len() + 1), "short of")] {
+        let refused = answered::<Empty>(&upload(&mut client, &asked, &text, 1 << 10, credit)).unwrap_err();
+        assert_eq!(refused.code, "invalid", "{}", refused.message);
+        assert!(refused.message.contains(why), "{}", refused.message);
+    }
+    let broken = [text.as_slice(), b"wide_0{n=\"x} 1\n"].concat();
+    let refused = answered::<Empty>(&upload(&mut client, &at_most(broken.len()), &broken, 1 << 10, credit));
+    let refused = refused.unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.starts_with("metrics: line 101, "), "{}", refused.message);
+    assert_eq!(series_counts(&mut client), written(&[]), "a refused text writes nothing");
+}
+
+// contract: STORE-05
+#[test]
+fn a_text_past_the_stores_memory_is_refused_limit_before_a_piece_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = Options { background: false, memory: Some(1 << 20), ..Options::default() };
+    let store = Store::open(dir.path(), options).unwrap();
+    let (mut client, _) = greeted(&store, 64 << 10);
+    let text = wide_text(1000, 1200);
+    let asked = MetricsUpload { size: text.len() as u64, ..MetricsUpload::default() };
+    let stream = client.open_stream(method::METRICS_UPLOAD_PROMETHEUS, &asked);
+    client.write(Frame::new(Kind::Data, stream, MetricsPiece { bytes: text[..1000].to_vec() }.encode()));
+    assert_eq!(client.next_on(stream).flags, 0, "the RESPONSE goes before its memory is asked for");
+    let refused = answered::<Empty>(&client.next_on(stream)).unwrap_err();
+    assert_eq!(refused.code, "limit", "{}", refused.message);
+    assert_eq!(refused.what.unwrap_or_default()["limit"], "store memory");
+    assert_eq!(store.memory().used(), 0);
+    assert_eq!(series_counts(&mut client), written(&[]));
+}
+
+/// A cancel lets go of what came before the stream's last frame leaves, and a
+/// connection that ends mid-upload lets go of it too: neither writes.
+// contract: WIRE-04
+#[test]
+fn a_text_cancelled_or_left_mid_upload_holds_nothing_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let at_rest = store.memory().used();
+    let text = wide_text(1000, 1000);
+    let asked = MetricsUpload { size: text.len() as u64, ..MetricsUpload::default() };
+    let first = Frame::new(Kind::Data, 0, MetricsPiece { bytes: text[..60 << 10].to_vec() }.encode());
+    let mut client = client(&store, 64 << 10);
+    let stream = client.open_stream(method::METRICS_UPLOAD_PROMETHEUS, &asked);
+    client.write(Frame { stream, ..first.clone() });
+    memory_until(&store, |used| used >= at_rest + asked.size);
+    client.write(Frame::new(Kind::Cancel, stream, Vec::new()));
+    assert_eq!(client.next_on(stream).flags, 0);
+    assert_eq!(answered::<Empty>(&client.next_on(stream)).unwrap_err().code, "cancelled");
+    assert_eq!(store.memory().used(), at_rest, "let go of before the last frame");
+
+    let mut left = self::client(&store, 64 << 10);
+    let stream = left.open_stream(method::METRICS_UPLOAD_PROMETHEUS, &asked);
+    left.write(Frame { stream, ..first });
+    memory_until(&store, |used| used >= at_rest + asked.size);
+    drop(left);
+    memory_until(&store, |used| used == at_rest);
+    assert_eq!(series_counts(&mut client), written(&[]));
 }

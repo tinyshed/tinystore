@@ -595,6 +595,8 @@ impl Shared {
             Route::Parts => self.parts(input, stream, method, body),
             #[cfg(feature = "metrics")]
             Route::Instruments => self.instruments(input, stream, &body),
+            #[cfg(feature = "metrics")]
+            Route::Gather => self.gather(input, stream, &body),
             #[cfg(feature = "config")]
             Route::Follow => self.follow(input, stream, &body),
             #[cfg(feature = "backup")]
@@ -899,6 +901,23 @@ impl Shared {
         }
     }
 
+    /// Begins a text a client sends in pieces: the stream's RESPONSE, then
+    /// the store's memory for the whole text, then its pieces as DATA, the
+    /// last answered once the text is written. The memory is reserved on a
+    /// worker once the RESPONSE has gone: its refusal, a final frame, never
+    /// leaves before it.
+    #[cfg(feature = "metrics")]
+    fn gather(self: &Arc<Self>, input: &Input, stream: u32, body: &[u8]) {
+        let link = self.stream_link(input, stream);
+        match guarded(|| metrics::gather(&self.store, &self.metrics, stream, body, link)) {
+            Ok(gathering) => {
+                self.send(&[Frame::new(Kind::Response, stream, Empty {}.encode())]);
+                gathering.begin();
+            }
+            Err(failure) => self.answer(stream, Err(failure)),
+        }
+    }
+
     /// Starts a client's follow of a config: the stream's RESPONSE, then a
     /// DATA with its value now and one each time it changes.
     #[cfg(feature = "config")]
@@ -928,8 +947,8 @@ impl Shared {
     }
 
     /// What a stream of a file's bytes, a tail's batches, a writer's lines, a
-    /// read's parts, a client's instruments, a config's values or a backup's
-    /// zip needs of the session.
+    /// read's parts, a client's instruments, a text's pieces, a config's
+    /// values or a backup's zip needs of the session.
     #[cfg(any(
         feature = "blobs",
         feature = "records",
@@ -1065,6 +1084,10 @@ impl Shared {
         #[cfg(feature = "records")]
         if self.records.piece(frame.stream, &frame.body, frame.flags & frame::END != 0) {
             return;
+        }
+        #[cfg(feature = "metrics")]
+        if let Some(gathering) = self.metrics.gathering(frame.stream) {
+            return gathering.piece(frame.body, frame.flags & frame::END != 0);
         }
         #[cfg(feature = "metrics")]
         if self.metrics.batch(frame.stream, &frame.body, frame.flags & frame::END != 0) {

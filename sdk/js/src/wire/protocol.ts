@@ -119,6 +119,13 @@ export const methods = {
 	'metrics.flush': 0x060d,
 	'metrics.instruments': 0x060e,
 	'metrics.ingestPrometheus': 0x060f,
+	/**
+	 * Answers its RESPONSE at once; the store's memory for the whole text is
+	 * taken before a piece is kept, and the last piece is answered once the text
+	 * is written, every series or none. A cancel or a lost connection leaves
+	 * nothing written and lets go of what came.
+	 */
+	'metrics.uploadPrometheus': 0x0610,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -6781,6 +6788,110 @@ export const MetricsExposition = message(
 			}
 			r.leave()
 			return { text: $text, labels: $labels, at: $at, keep: $keep }
+		},
+	},
+)
+
+/**
+ * A text past what one message holds: what metrics.Exposition carries but
+ * the text, whose bytes follow as the client's DATA, a metrics.Piece each.
+ */
+export const MetricsUpload = message(
+	'metrics.Upload',
+	{
+		/** the text's bytes, 32 MiB at most: pieces that come to more or fewer are refused */
+		size: [1, uint],
+		labels: [2, names(str)],
+		at: [3, int],
+		keep: [4, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.size !== undefined) {
+				w.field(1)
+				w.uint(v.size)
+				n++
+			}
+			if (v.labels !== undefined) {
+				w.field(2)
+				writeNames(w, v.labels, str.write)
+				n++
+			}
+			if (v.at !== undefined) {
+				w.field(3)
+				w.int(v.at)
+				n++
+			}
+			if (v.keep !== undefined) {
+				w.field(4)
+				w.uint(v.keep)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $size: number | undefined
+			let $labels: Record<string, string> | undefined
+			let $at: number | undefined
+			let $keep: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$size = r.uint()
+						break
+					case 2:
+						$labels = readNames(r, str.read)
+						break
+					case 3:
+						$at = r.int()
+						break
+					case 4:
+						$keep = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { size: $size, labels: $labels, at: $at, keep: $keep }
+		},
+	},
+)
+
+/**
+ * A piece of an uploaded text, cut anywhere.
+ */
+export const MetricsPiece = message(
+	'metrics.Piece',
+	{
+		bytes: [1, bin],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.bytes !== undefined) {
+				w.field(1)
+				w.bin(v.bytes)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $bytes: Uint8Array | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$bytes = r.bytes()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { bytes: $bytes }
 		},
 	},
 )
