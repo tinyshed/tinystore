@@ -535,3 +535,43 @@ fn a_change_of_one_setting_made_meanwhile_is_counted_by_the_retry() {
     assert_eq!(runs, 2, "the change ran again on the settings the other made");
     assert_eq!(*first.get().limits.rps, 102, "both increments stay");
 }
+
+/// What an agent beside someone's database reads at start, with no live
+/// setting and no store.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Agent {
+    hub: String,
+    database: Secret<String>,
+    retries: u32,
+}
+
+// contract: CFG-10, CFG-01, CFG-06
+#[test]
+fn a_config_loaded_without_a_store_reads_its_layers_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("agent.toml");
+    std::fs::write(&file, "hub = \"wss://hub.example.com/agent\"\ndatabase = \"postgres://reader:secret@db/shop\"\n")
+        .unwrap();
+    let env = Env::prefix("AGENT").from([("AGENT_RETRIES", "5")]);
+    let agent = load("agent", Agent::default()).file(File::optional(&file)).env(env).open().unwrap();
+    let read = agent.get();
+    assert_eq!((read.hub.as_str(), read.retries), ("wss://hub.example.com/agent", 5));
+    assert_eq!(read.database.reveal(), "postgres://reader:secret@db/shop");
+    assert!(agent.explain().to_string().contains("agent.toml"), "{}", agent.explain());
+    // nothing to change, nothing to reset, and only the operator's file in the directory
+    assert_eq!(agent.update(|agent| agent.retries = 6).unwrap_err().kind(), ErrorKind::Invalid);
+    agent.reset_all().unwrap();
+    let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(left, ["agent.toml"]);
+}
+
+// contract: CFG-10, CFG-03
+#[test]
+fn a_config_loaded_without_a_store_refuses_a_live_setting_by_its_path_and_a_missing_file_by_its() {
+    let error = load("app", Settings::default()).open().unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid, "{error}");
+    assert!(error.to_string().contains("limits.burst is live"), "{error}");
+    let error = load("agent", Agent::default()).file("missing-agent.toml").open().unwrap_err();
+    assert!(error.to_string().contains("missing-agent.toml"), "{error}");
+}

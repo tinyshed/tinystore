@@ -417,6 +417,37 @@ ignoring it and saying so in the log.
 pub fn open(self) -> Result<Config<T>>
 ```
 
+## load
+
+```rust
+pub fn load<T>(name: &str, declaration: T) -> ConfigBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+```
+
+A program's settings read once from its declaration, its files and the
+environment, with no store: the same layers, rules, secrets and errors as
+`store.config`, and no directory, no file and no `kv.db`. A `Live` field
+is refused when it opens, naming it, since only a store keeps a change.
+
+```rust
+use serde::{Deserialize, Serialize};
+use tinystore::config::{Env, File, Secret};
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct Agent {
+    hub: String,
+    database: Secret<String>,
+}
+
+let agent = tinystore::config::load("agent", Agent::default())
+    .file(File::optional("agent.toml"))
+    .env(Env::prefix("AGENT"))
+    .open()?;
+let hub = agent.get().hub.clone();
+```
+
 ## aio::config::ConfigBuilder
 
 ```rust

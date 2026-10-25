@@ -117,7 +117,9 @@ struct Current<T> {
 /// What a config opens with: its declaration as the core reads it, its
 /// layers, the program's check, and how its value reaches the program.
 pub(super) struct Opening<T> {
-    pub(super) store: Store,
+    /// The store whose kv.db keeps the changes; none for a config loaded
+    /// without one.
+    pub(super) store: Option<Store>,
     pub(super) name: String,
     pub(super) declaration: Declaration,
     pub(super) layers: Vec<Layer>,
@@ -137,9 +139,24 @@ where
     let within = |error: Error| error.within(format!("config {}", builder.name));
     check_name(&builder.name).map_err(within)?;
     let declaration = declared(&builder.declaration).map_err(within)?;
+    if builder.store.is_none() {
+        refuse_live(&declaration).map_err(within)?;
+    }
     let (store, name, layers, validate, strict) =
         (builder.store, builder.name, builder.layers, builder.validate, builder.strict);
-    open_with(Opening { store, name, declaration, layers, validate, strict, view: View::Rust, remember: true })
+    let remember = store.is_some();
+    open_with(Opening { store, name, declaration, layers, validate, strict, view: View::Rust, remember })
+}
+
+/// Refuses a declaration with a live setting, for a config loaded without
+/// a store, before anything is read: only a store keeps a change.
+fn refuse_live(declaration: &Declaration) -> Result<()> {
+    match declaration.settings().into_iter().find(|(_, setting)| setting.live) {
+        Some((path, _)) => Err(Error::invalid(format!(
+            "{path} is live, and a config loaded without a store keeps no change: open it with store.config"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Opens a config: its layers read, its value made and checked, then the
@@ -154,7 +171,10 @@ where
     let making = Making { declaration: &opening.declaration, validate: opening.validate.as_ref(), view: opening.view };
     let base = Base::read(&opening.declaration, &opening.layers).map_err(|problems| within(refused(problems)))?;
     let (value, tree) = making.layered(&base).map_err(|problems| within(refused(problems)))?;
-    let hub = Hub::of(&Kv::of(&opening.store).map_err(within)?, &opening.name).map_err(within)?;
+    let hub = match &opening.store {
+        Some(store) => Hub::of(&Kv::of(store).map_err(within)?, &opening.name).map_err(within)?,
+        None => Hub::detached(&opening.name),
+    };
     let layered = (Arc::new(value), tree);
     let kept = hub.kept();
     let resolved = making.resolve((&layered.0, &layered.1), &kept);

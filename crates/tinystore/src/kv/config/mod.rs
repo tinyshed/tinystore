@@ -35,6 +35,9 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! A program that keeps no live setting reads its settings with
+//! [`load`], with no store and nothing written to disk.
 
 #[cfg(any(test, feature = "wire", feature = "records"))]
 mod data;
@@ -69,7 +72,9 @@ use crate::{Result, Store};
 /// order the program writes them, each declaring again what came before.
 #[must_use = "a config opens with open()"]
 pub struct ConfigBuilder<T> {
-    store: Store,
+    /// The store whose kv.db keeps the live settings' changes; none for a
+    /// config loaded without one.
+    store: Option<Store>,
     name: String,
     declaration: T,
     layers: Vec<Layer>,
@@ -87,7 +92,7 @@ impl Store {
         T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     {
         ConfigBuilder {
-            store: self.clone(),
+            store: Some(self.clone()),
             name: name.to_owned(),
             declaration,
             layers: Vec::new(),
@@ -95,6 +100,38 @@ impl Store {
             strict: false,
         }
     }
+}
+
+/// A program's settings read once from its declaration, its files and the
+/// environment, with no store: the same layers, rules, secrets and errors as
+/// `store.config`, and no directory, no file and no `kv.db`. A `Live` field
+/// is refused when it opens, naming it, since only a store keeps a change.
+///
+/// ```no_run
+/// use serde::{Deserialize, Serialize};
+/// use tinystore::config::{Env, File, Secret};
+///
+/// #[derive(Clone, Default, Serialize, Deserialize)]
+/// #[serde(default)]
+/// struct Agent {
+///     hub: String,
+///     database: Secret<String>,
+/// }
+///
+/// # fn main() -> tinystore::Result<()> {
+/// let agent = tinystore::config::load("agent", Agent::default())
+///     .file(File::optional("agent.toml"))
+///     .env(Env::prefix("AGENT"))
+///     .open()?;
+/// let hub = agent.get().hub.clone();
+/// # Ok(())
+/// # }
+/// ```
+pub fn load<T>(name: &str, declaration: T) -> ConfigBuilder<T>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+{
+    ConfigBuilder { store: None, name: name.to_owned(), declaration, layers: Vec::new(), validate: None, strict: false }
 }
 
 impl<T> ConfigBuilder<T>
@@ -158,7 +195,7 @@ impl Store {
         let declaration = data::declaration(sent.declaration).map_err(within)?;
         let layers = data::layers(sent.layers).map_err(within)?;
         handle::open_with(handle::Opening {
-            store: self.clone(),
+            store: Some(self.clone()),
             name: sent.name.to_owned(),
             declaration,
             layers,

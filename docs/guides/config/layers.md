@@ -190,6 +190,28 @@ A duration is written `'1h30m'`, `'250ms'`, of `w`, `d`, `h`, `m`, `s` and
 index. What relates two settings, `min` below `max`, is
 [`validate`](explain.md)'s.
 
+## Without a store
+
+A Rust program that only reads its settings at start, such as an agent that
+runs beside someone else's database, can load them without opening a store.
+`config::load` reads the same layers with the same rules, secrets and
+errors, and writes nothing to disk: no directory, no `kv.db`.
+
+```rust
+let agent = tinystore::config::load("agent", Agent::default())
+    .file(File::optional("agent.toml"))
+    .env(Env::prefix("AGENT"))
+    .open()?;
+let hub = agent.get().hub.clone();
+```
+
+- A loaded config has no live settings, because only a store keeps a change.
+  A `Live` field is refused when it opens, and the error names the field.
+- `update` changes nothing, and `explain` says where each value came from, as
+  it does for a config opened from a store.
+- Only Rust has it so far. Bun, Node, Python and Go reach the config engine
+  through a store, so they open one to read their settings.
+
 ## Limits
 
 | What              | Limit                      |

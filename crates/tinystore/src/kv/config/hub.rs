@@ -2,6 +2,9 @@
 //! kv.db and the config's version, read once and then moved by each change,
 //! and the handles that follow them. A change reaches every handle from here,
 //! once, however many handles and watchers the process holds.
+//!
+//! A config loaded without a store has a hub of its own with no kv.db behind
+//! it: it keeps no change, and a change it is asked to keep is refused.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
@@ -70,7 +73,9 @@ pub(super) trait Follower: Send + Sync {
 }
 
 pub(crate) struct Hub {
-    kv: Arc<Kv>,
+    /// The kv engine whose file keeps the changes; none for a config loaded
+    /// without a store.
+    kv: Option<Arc<Kv>>,
     name: String,
     state: Mutex<State>,
 }
@@ -117,16 +122,36 @@ impl Hub {
             #[cfg(feature = "async")]
             closing: Closing::default(),
         };
-        let hub = Arc::new(Hub { kv: Arc::clone(kv), name: name.to_owned(), state: Mutex::new(state) });
+        let hub = Arc::new(Hub { kv: Some(Arc::clone(kv)), name: name.to_owned(), state: Mutex::new(state) });
         hubs.retain(|_, hub| hub.strong_count() > 0);
         hubs.insert(name.to_owned(), Arc::downgrade(&hub));
         Ok(hub)
     }
 
+    /// The hub of a config loaded without a store, which keeps no change.
+    pub(super) fn detached(name: &str) -> Arc<Hub> {
+        let state = State {
+            kept: Arc::default(),
+            remembered: None,
+            followers: Vec::new(),
+            #[cfg(feature = "async")]
+            closing: Closing::default(),
+        };
+        Arc::new(Hub { kv: None, name: name.to_owned(), state: Mutex::new(state) })
+    }
+
+    /// The kv engine that keeps the changes; refused for a config loaded
+    /// without a store.
+    fn kv(&self) -> Result<&Arc<Kv>> {
+        self.kv.as_ref().ok_or_else(|| {
+            Error::invalid("a config loaded without a store keeps no change: open it with store.config to change it")
+        })
+    }
+
     /// The store the config was opened in, while it is open.
     #[cfg(feature = "async")]
     pub(super) fn store(&self) -> Result<crate::Store> {
-        self.kv.store()
+        self.kv()?.store()
     }
 
     pub(super) fn kept(&self) -> Arc<Kept> {
@@ -148,8 +173,9 @@ impl Hub {
     /// `expected`, and is `conflict` when another change came first; either
     /// way the changes as they are then reach every handle.
     pub(super) fn change(&self, expected: i64, leaves: Vec<(String, Value)>) -> Result<Arc<Kept>> {
-        let (bytes, work) = self.change_work(expected, leaves);
-        let written = self.kv.file().write(bytes, work)?;
+        let kv = self.kv()?;
+        let (bytes, work) = self.change_work(kv, expected, leaves);
+        let written = kv.file().write(bytes, work)?;
         self.published(written)
     }
 
@@ -165,21 +191,26 @@ impl Hub {
         elsewhere: Lead,
         done: impl FnOnce(Result<Unpublished>) + Send + 'static,
     ) {
-        let (bytes, work) = self.change_work(expected, leaves);
+        let kv = match self.kv() {
+            Ok(kv) => Arc::clone(kv),
+            Err(error) => return done(Err(error)),
+        };
+        let (bytes, work) = self.change_work(&kv, expected, leaves);
         let hub = Arc::clone(self);
         let written =
             move |written: Result<Written>| done(written.map(|written| Unpublished::of(hub, written, elsewhere)));
-        self.kv.file().submit(bytes, work, written);
+        kv.file().submit(bytes, work, written);
     }
 
     /// The write that keeps `leaves` while the config's version is still
     /// `expected`, and the bytes it adds to its commit.
     fn change_work(
         &self,
+        kv: &Kv,
         expected: i64,
         leaves: Vec<(String, Value)>,
     ) -> (usize, impl FnOnce(&Tx<'_>) -> Result<Written> + Send + 'static) {
-        let (name, revision, now) = (self.name.clone(), self.kv.revision(), self.kv.now());
+        let (name, revision, now) = (self.name.clone(), kv.revision(), kv.now());
         let bytes = leaves.iter().map(|(path, value)| path.len() + value.to_string().len()).sum();
         let work = move |tx: &Tx<'_>| {
             let (kept, _) = read(tx, &name)?;
@@ -199,10 +230,12 @@ impl Hub {
     }
 
     /// Drops the changes kept at `path` and under it, every change for an
-    /// empty path, and says whether there were any.
+    /// empty path, and says whether there were any: never, for a config
+    /// loaded without a store.
     pub(super) fn reset(&self, path: &str) -> Result<bool> {
-        let (bytes, work) = self.reset_work(path);
-        let (kept, dropped) = self.kv.file().write(bytes, work)?;
+        let Some(kv) = &self.kv else { return Ok(false) };
+        let (bytes, work) = self.reset_work(kv, path);
+        let (kept, dropped) = kv.file().write(bytes, work)?;
         self.publish(kept);
         Ok(dropped)
     }
@@ -215,18 +248,26 @@ impl Hub {
         elsewhere: Lead,
         done: impl FnOnce(Result<Unpublished>) + Send + 'static,
     ) {
-        let (bytes, work) = self.reset_work(path);
+        let kv = match self.kv() {
+            Ok(kv) => Arc::clone(kv),
+            Err(error) => return done(Err(error)),
+        };
+        let (bytes, work) = self.reset_work(&kv, path);
         let hub = Arc::clone(self);
         let written = move |written: Result<(Kept, bool)>| {
             done(written.map(|(kept, _)| Unpublished::of(hub, Written::Made(kept), elsewhere)));
         };
-        self.kv.file().submit(bytes, work, written);
+        kv.file().submit(bytes, work, written);
     }
 
     /// The write that drops the changes kept at `path` and under it, and the
     /// bytes it adds to its commit.
-    fn reset_work(&self, path: &str) -> (usize, impl FnOnce(&Tx<'_>) -> Result<(Kept, bool)> + Send + 'static) {
-        let (name, revision, path) = (self.name.clone(), self.kv.revision(), path.to_owned());
+    fn reset_work(
+        &self,
+        kv: &Kv,
+        path: &str,
+    ) -> (usize, impl FnOnce(&Tx<'_>) -> Result<(Kept, bool)> + Send + 'static) {
+        let (name, revision, path) = (self.name.clone(), kv.revision(), path.to_owned());
         let bytes = path.len();
         let work = move |tx: &Tx<'_>| {
             let dropped = tx
@@ -288,7 +329,7 @@ impl Hub {
             return Ok(());
         }
         let (name, kept) = (self.name.clone(), text.clone());
-        self.kv
+        self.kv()?
             .file()
             .write(text.len(), move |tx| execute(tx, KEEP_DECLARATION, params![name, kept], "its declaration"))?;
         lock(&self.state).remembered = Some(text);
