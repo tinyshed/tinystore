@@ -53,7 +53,7 @@ interface Sources {
 const sources: Record<string, Sources> = {
 	store: {
 		go: '',
-		goFiles: ['store.go', 'tinystore.go'],
+		goFiles: ['store.go', 'tinystore.go', 'calendar.go'],
 		bun: ['store', 'connection', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
 		python: ['store', 'clock', 'errors'],
 	},
