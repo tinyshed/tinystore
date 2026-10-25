@@ -268,7 +268,8 @@ pub fn fact(&self, name: &str) -> Option<&str>
 
 A fact the error carries by name: a limit's `limit`, `wanted` and
 `bound`; a broken constraint's `constraint`, `table`, `columns` and
-`name`, which `Error::constraint` reads as one.
+`name`, which `Error::constraint` reads as one; a metrics sample's
+`at` and the time its series is `packed` before, when it is too old.
 
 ### Error.constraint
 
