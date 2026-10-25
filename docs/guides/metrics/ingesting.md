@@ -188,8 +188,15 @@ Each sample line becomes a series with one sample, of the kind that its
   the name as it is, dots and all, and reads a quoted label name the same
   way. An exporter writes quoted names only when the scrape asks for them;
   otherwise it writes underscores in their place.
-- `# HELP` and `# UNIT` lines and OpenMetrics' exemplars are not kept. Call
-  `describe` to give a name its help.
+- A family's `# HELP` gives each of its names, such as `rpc_seconds_bucket`,
+  `_sum` and `_count`, a help where the name has none. Its `# UNIT` goes to
+  the names whose values are in that unit: `rpc_seconds_sum` takes
+  `seconds`, while `_bucket` and `_count`, which count observations, take
+  none.
+- What `describe` set in your code always stays. Otherwise the first text
+  that describes a name wins, and a later one changes nothing. A help past
+  1,024 bytes or a unit past 32 is left out, and the samples are still
+  written. OpenMetrics' exemplars are not kept.
 - OpenMetrics' `_created` samples are left out, because a series doesn't keep
   the time that its counter started. A counter's reset counts its new value
   whole, so a restart still reads right. Only what a new counter held before

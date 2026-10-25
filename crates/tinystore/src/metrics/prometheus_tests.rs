@@ -4,9 +4,9 @@ use serde_json::Value as Json;
 
 use super::parse;
 use crate::ErrorKind;
-use crate::metrics::Series;
 use crate::metrics::fixture::{DAY, fixture};
 use crate::metrics::series::Labels;
+use crate::metrics::{Description, Series};
 
 /// Texts and the series each writes, which every SDK reads too.
 const VECTORS: &str = include_str!("../../../../testdata/metrics/prometheus.json");
@@ -81,14 +81,14 @@ fn a_line_that_is_not_utf8_is_refused_by_its_number() {
 
 #[test]
 fn a_negative_nan_keeps_its_sign_and_a_byte_order_mark_is_read_past() {
-    let series = parse(b"\xef\xbb\xbfodd -NaN\n", &Labels::new(), 0).unwrap();
+    let series = parse(b"\xef\xbb\xbfodd -NaN\n", &Labels::new(), 0).unwrap().series;
     assert_eq!(series[0].samples()[0].value.to_bits(), 0xfff8_0000_0000_0000);
 }
 
 #[test]
 fn openmetrics_seconds_are_rounded_to_the_millisecond() {
     let text = b"# TYPE late gauge\nlate 1 1789999990.789\nlate 2 1789999990.0016\n# EOF";
-    let series = parse(text, &Labels::new(), 0).unwrap();
+    let series = parse(text, &Labels::new(), 0).unwrap().series;
     let times: Vec<i64> = series.iter().map(|series| crate::unix_millis(series.samples()[0].at)).collect();
     assert_eq!(times, [1_789_999_990_789, 1_789_999_990_002]);
 }
@@ -116,7 +116,7 @@ fn an_error_quotes_the_start_of_a_long_line() {
 #[test]
 fn a_text_past_what_one_ingest_carries_is_a_limit() {
     let lines = |count: usize| (0..count).map(|index| format!("up{{shard=\"{index}\"}} 1\n")).collect::<String>();
-    assert_eq!(parse(lines(10_000).as_bytes(), &Labels::new(), 0).unwrap().len(), 10_000);
+    assert_eq!(parse(lines(10_000).as_bytes(), &Labels::new(), 0).unwrap().series.len(), 10_000);
     let error = parse(lines(10_001).as_bytes(), &Labels::new(), 0).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
     assert!(error.to_string().starts_with("metrics: line 10001, "), "{error}");
@@ -129,4 +129,56 @@ fn a_text_without_samples_writes_nothing() {
     f.metrics().prometheus().ingest("# HELP up Whether it is up.\n# TYPE up gauge\n# EOF\n").unwrap();
     f.metrics().prometheus().ingest("").unwrap();
     assert_eq!(f.rows("series"), 0);
+}
+
+// contract: MET-15
+#[test]
+fn a_familys_help_goes_to_each_of_its_names_and_its_unit_to_those_whose_values_are_in_it() {
+    let f = fixture();
+    let text = "# HELP rpc_seconds How long a call took, \\\\ and \\\"quoted\\\"\\nover two lines.\n\
+                # TYPE rpc_seconds histogram\n\
+                # UNIT rpc_seconds seconds\n\
+                rpc_seconds_bucket{le=\"+Inf\"} 3\nrpc_seconds_sum 1.5\nrpc_seconds_count 3\n\
+                # HELP up Whether the target answered.\n\
+                up 1\n\
+                # HELP quiet\n\
+                quiet 0\n";
+    f.metrics().prometheus().ingest(text).unwrap();
+    let help = "How long a call took, \\ and \"quoted\"\nover two lines.";
+    // the sum is in seconds; the buckets and the count count observations
+    for (name, unit) in [("rpc_seconds_bucket", ""), ("rpc_seconds_sum", "seconds"), ("rpc_seconds_count", "")] {
+        let described = f.metrics().description(name).unwrap();
+        assert_eq!(described, Description { unit: unit.into(), help: help.into() }, "{name}");
+    }
+    assert_eq!(f.metrics().description("up").unwrap().help, "Whether the target answered.");
+    assert_eq!(f.metrics().description("quiet").unwrap(), Description::default());
+}
+
+// contract: MET-15
+#[test]
+fn what_describe_gave_a_name_stays_and_a_scrape_fills_only_what_it_left_empty() {
+    let f = fixture();
+    f.metrics().describe("load", Description { unit: "%".into(), help: String::new() }).unwrap();
+    let text = "# HELP load How busy the host is.\n# UNIT load ratio\n# TYPE load gauge\nload 0.4\n";
+    f.metrics().prometheus().ingest(text).unwrap();
+    let kept = Description { unit: "%".into(), help: "How busy the host is.".into() };
+    assert_eq!(f.metrics().description("load").unwrap(), kept);
+    // a later help in the text, and a describe after it
+    f.metrics().prometheus().ingest(text.replace("How busy", "How loaded")).unwrap();
+    assert_eq!(f.metrics().description("load").unwrap(), kept);
+    f.metrics().describe("load", Description { unit: "%".into(), help: "Load.".into() }).unwrap();
+    f.metrics().prometheus().ingest(text).unwrap();
+    assert_eq!(f.metrics().description("load").unwrap().help, "Load.");
+}
+
+#[test]
+fn a_help_past_what_a_name_keeps_or_one_that_does_not_read_is_left_out_and_the_text_written() {
+    let f = fixture();
+    let long = "x".repeat(1025);
+    let text = format!(
+        "# HELP long {long}\n# UNIT long a very long unit name past thirty two bytes\nlong 1\n# HELP \"open 2\nopen 2\n"
+    );
+    f.metrics().prometheus().ingest(text).unwrap();
+    assert_eq!(f.metrics().description("long").unwrap(), Description::default());
+    assert_eq!(f.rows("series"), 2);
 }

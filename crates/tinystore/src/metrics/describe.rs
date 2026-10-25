@@ -21,10 +21,15 @@ use super::engine::Engine;
 use super::instruments::{MOST_HELP, MOST_UNIT};
 use super::labels::Kept;
 use super::series::Labels;
-use crate::sqlite::sql_error;
+use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
 const DESCRIPTION: &str = "select unit, help from names where name = ?1";
+/// A name's unit and help where it has none, written only where one of them
+/// changes.
+const FILL: &str = "update names set unit = case when unit = '' then ?2 else unit end,
+    help = case when help = '' then ?3 else help end
+    where name = ?1 and (unit = '' and ?2 <> '' or help = '' and ?3 <> '')";
 
 /// A name's unit and help, empty when nothing gave them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +69,15 @@ impl Engine {
         })?;
         Ok(found.map(|(unit, help)| Description { unit, help }).unwrap_or_default())
     }
+}
+
+/// Gives each name of `described` its unit and its help where it has none,
+/// as an exporter's text describes them: what `describe` set stays.
+pub(super) fn fill(tx: &Tx<'_>, described: &[(String, Description)]) -> Result<()> {
+    for (name, given) in described {
+        super::engine::execute(tx, FILL, params![name, given.unit, given.help], "fill a name's unit and help")?;
+    }
+    Ok(())
 }
 
 /// A name and a description within their bounds.

@@ -12,7 +12,8 @@
 //! A text whose last line is `# EOF` is OpenMetrics', whose timestamps are
 //! seconds; any other is Prometheus', whose timestamps are milliseconds. The
 //! text is read whole before anything is written, so a line it cannot read
-//! refuses all of it, naming the line.
+//! refuses all of it, naming the line. A family's `# HELP` and `# UNIT` give
+//! its names a help and a unit where they have none.
 //!
 //! A name past the classic characters comes quoted, as Prometheus 3 writes
 //! it, and is kept as it is:
@@ -27,7 +28,9 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use super::Metrics;
+use super::describe::Description;
 use super::ingest::{SAMPLE_BYTES, within_one_ingest};
+use super::instruments::{MOST_HELP, MOST_UNIT};
 use super::labels::NAME;
 use super::series::{Kind, Labels, Sample, Series};
 use crate::clock::from_unix_millis;
@@ -91,14 +94,17 @@ impl Prometheus {
     /// does: a line it cannot read is `invalid`, naming the line, and a text
     /// past what one ingest carries is a `limit`.
     pub fn ingest(&self, text: impl AsRef<[u8]>) -> Result<()> {
-        self.metrics.ingest(&self.series(text.as_ref())?)
+        let engine = &self.metrics.engine;
+        let read = self.read(text.as_ref())?;
+        engine.ingest_held(engine.check(&read.series)?.described(read.described))
     }
 
     /// The text's series checked as `ingest` checks them, before their write
     /// reserves the store's memory: an awaited ingest's, on the store's pool.
     #[cfg(feature = "async")]
     pub(crate) fn check(&self, text: &[u8]) -> Result<super::ingest::Checked> {
-        self.metrics.check(&self.series(text)?)
+        let read = self.read(text)?;
+        Ok(self.metrics.check(&read.series)?.described(read.described))
     }
 
     /// The same text with its time fixed now from the store's clock, unless
@@ -113,15 +119,23 @@ impl Prometheus {
     }
 
     /// The series of each sample line, with the labels, the time and the keep
-    /// given.
-    fn series(&self, text: &[u8]) -> Result<Vec<Series>> {
+    /// given, and what the text describes of their names.
+    fn read(&self, text: &[u8]) -> Result<Exposition> {
         let at = self.at.map_or_else(|| self.metrics.engine.now(), unix_millis);
-        let mut series = parse(text, &self.labels, at)?;
+        let mut read = parse(text, &self.labels, at)?;
         if let Some(keep) = self.keep {
-            series.iter_mut().for_each(|series| series.keep = Some(keep));
+            read.series.iter_mut().for_each(|series| series.keep = Some(keep));
         }
-        Ok(series)
+        Ok(read)
     }
+}
+
+/// What a text gives: the series of its sample lines, and the help and the
+/// unit its families give each of their names.
+#[derive(Debug)]
+pub(super) struct Exposition {
+    pub(super) series: Vec<Series>,
+    pub(super) described: Vec<(String, Description)>,
 }
 
 /// Blanks between a line's parts.
@@ -132,8 +146,9 @@ const EOF: &str = "# EOF";
 const QUOTED: usize = 64;
 
 /// The series of each sample line of `text`, the `given` labels beside its
-/// own, at `at` unless the line gives its time.
-pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Vec<Series>> {
+/// own, at `at` unless the line gives its time, and what its families
+/// describe of their names.
+pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Exposition> {
     let text = text.strip_prefix(b"\xef\xbb\xbf").unwrap_or(text);
     let mut reader = Reader::new(given, at, is_open_metrics(text));
     for (index, line) in text.split(|byte| *byte == b'\n').enumerate() {
@@ -143,7 +158,8 @@ pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Vec<Series>>
         let line = line.trim_ascii();
         reader.line(line).map_err(|error| error.within(format!("metrics: line {number}, `{}`", excerpt(line))))?;
     }
-    Ok(reader.series)
+    let described = reader.described();
+    Ok(Exposition { series: reader.series, described })
 }
 
 /// Whether the text is OpenMetrics': its last line that is not blank is
@@ -232,6 +248,8 @@ struct Reader<'a> {
     at: i64,
     open_metrics: bool,
     families: HashMap<String, Type>,
+    /// Each family's `# HELP` and `# UNIT`, by its name.
+    descriptions: HashMap<String, Description>,
     /// The names of the samples read before any `# TYPE` of their family.
     untyped: HashSet<String>,
     series: Vec<Series>,
@@ -243,8 +261,8 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(given: &'a Labels, at: i64, open_metrics: bool) -> Self {
-        let (families, untyped) = (HashMap::new(), HashSet::new());
-        Reader { given, at, open_metrics, families, untyped, series: Vec::new(), bytes: 0, ended: false }
+        let (families, descriptions, untyped) = (HashMap::new(), HashMap::new(), HashSet::new());
+        Reader { given, at, open_metrics, families, descriptions, untyped, series: Vec::new(), bytes: 0, ended: false }
     }
 
     fn line(&mut self, line: &str) -> Result<()> {
@@ -264,18 +282,65 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A `# TYPE` line declares a family; `# HELP`, `# UNIT` and any other
-    /// comment say nothing a series keeps.
+    /// A `# TYPE` line declares a family, and `# HELP` and `# UNIT` describe
+    /// its names; any other comment says nothing a series keeps.
     fn comment(&mut self, comment: &str) -> Result<()> {
         let (keyword, rest) = comment.trim_start_matches(BLANK).split_once(BLANK).unwrap_or((comment.trim(), ""));
-        if keyword != "TYPE" {
-            return Ok(());
+        match keyword {
+            "TYPE" => self.type_line(rest),
+            "HELP" | "UNIT" => {
+                self.describe(keyword, rest);
+                Ok(())
+            }
+            _ => Ok(()),
         }
+    }
+
+    fn type_line(&mut self, rest: &str) -> Result<()> {
         let line = || Error::invalid("a type's line is `# TYPE`, a metric's name and its type");
         let (name, rest) = metric_name(rest).map_err(|error| if rest.trim().is_empty() { line() } else { error })?;
         let mut words = rest.split(BLANK).filter(|word| !word.is_empty());
         let (Some(word), None) = (words.next(), words.next()) else { return Err(line()) };
         self.declare(&name, word)
+    }
+
+    /// Keeps a family's help or unit for the names it writes. A line that
+    /// does not read, or a help or a unit past what a name keeps, is left
+    /// out rather than refusing the samples of the text.
+    fn describe(&mut self, keyword: &str, rest: &str) {
+        let Ok((name, text)) = metric_name(rest) else { return };
+        let text = text.trim_matches(BLANK);
+        let description = self.descriptions.entry(name).or_default();
+        if keyword == "HELP" {
+            let help = unescaped(text);
+            if help.len() <= MOST_HELP {
+                description.help = help;
+            }
+        } else if text.len() <= MOST_UNIT && !text.contains(BLANK) {
+            description.unit = text.to_owned();
+        }
+    }
+
+    /// Each name the text writes that its family describes, with its
+    /// family's help, and its unit where the name's values are in it:
+    ///
+    /// ```text
+    /// # UNIT rpc_seconds seconds    rpc_seconds_sum  seconds
+    ///                               rpc_seconds_bucket, rpc_seconds_count  none: they count observations
+    /// ```
+    fn described(&self) -> Vec<(String, Description)> {
+        let mut names: Vec<&str> = self.series.iter().map(|series| series.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let of_family = |name: &str| {
+            let family = self.family_of(name).map_or(name, |(family, _)| family);
+            let given = self.descriptions.get(family)?;
+            let in_unit = matches!(&name[family.len()..], "" | "_total" | "_sum" | "_gsum");
+            let unit = if in_unit { given.unit.clone() } else { String::new() };
+            let described = Description { unit, help: given.help.clone() };
+            (described != Description::default()).then(|| (name.to_owned(), described))
+        };
+        names.into_iter().filter_map(of_family).collect()
     }
 
     fn declare(&mut self, name: &str, word: &str) -> Result<()> {
@@ -326,11 +391,7 @@ impl<'a> Reader<'a> {
     /// its name belongs to, a gauge when it belongs to none; none for a
     /// sample left out.
     fn kind_of(&mut self, name: &str) -> Result<Option<Kind>> {
-        let role = [""].iter().chain(&SUFFIXES).find_map(|suffix| {
-            let role = self.families.get(name.strip_suffix(suffix)?)?.role(suffix);
-            (role != Role::Stranger).then_some(role)
-        });
-        match (role, self.families.get(name)) {
+        match (self.family_of(name).map(|(_, role)| role), self.families.get(name)) {
             (Some(Role::Written(kind)), _) => Ok(Some(kind)),
             (Some(_), _) => Ok(None),
             // only a histogram's family has no sample of its own name
@@ -348,6 +409,16 @@ impl<'a> Reader<'a> {
                 Ok(Some(Kind::Gauge))
             }
         }
+    }
+
+    /// The family a sample called `name` belongs to, and what the family
+    /// makes of it, when it belongs to one.
+    fn family_of<'n>(&self, name: &'n str) -> Option<(&'n str, Role)> {
+        [""].iter().chain(&SUFFIXES).find_map(|suffix| {
+            let family = name.strip_suffix(suffix)?;
+            let role = self.families.get(family)?.role(suffix);
+            (role != Role::Stranger).then_some((family, role))
+        })
     }
 
     /// A sample's labels with the call's beside them; one given by both is
@@ -514,6 +585,25 @@ fn quoted<'a>(rest: &'a str, what: &str) -> Result<(String, &'a str)> {
         rest = escaped.as_str();
     }
     Err(refused("a value without its closing quote"))
+}
+
+/// A help as `# HELP` writes it, `\\`, `\n` and OpenMetrics' `\"` read as
+/// what they stand for; any other backslash is kept.
+fn unescaped(text: &str) -> String {
+    let mut help = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        match (character, characters.clone().next()) {
+            ('\\', Some(escaped @ ('\\' | '"'))) => help.push(escaped),
+            ('\\', Some('n')) => help.push('\n'),
+            _ => {
+                help.push(character);
+                continue;
+            }
+        }
+        characters.next();
+    }
+    help
 }
 
 /// A sample's value, kept as the text spells it: `-0`, `NaN` and the

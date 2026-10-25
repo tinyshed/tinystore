@@ -19,6 +19,7 @@ use rusqlite::{OptionalExtension, params};
 
 use super::buckets::{bound_of, le};
 use super::codec::Point;
+use super::describe::{self, Description};
 use super::engine::{AHEAD, Engine, execute};
 use super::head::{self, Extent};
 use super::labels::Kept;
@@ -70,6 +71,8 @@ pub(crate) struct Checked {
     gathered: BTreeMap<[u8; 32], Gathered>,
     samples: usize,
     bytes: usize,
+    /// The help and the unit a name takes where it has none.
+    described: Vec<(String, Description)>,
 }
 
 impl Checked {
@@ -77,12 +80,26 @@ impl Checked {
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes as u64
     }
+
+    /// The same series, their write giving each name of `described` its
+    /// help and its unit where it has none.
+    pub(super) fn described(mut self, described: Vec<(String, Description)>) -> Checked {
+        let weighs = |(name, given): &(String, Description)| name.len() + given.unit.len() + given.help.len();
+        self.bytes += described.iter().map(weighs).sum::<usize>();
+        self.described = described;
+        self
+    }
 }
 
 impl Engine {
     /// Writes every series of the call or none of them.
     pub(super) fn ingest(&self, series: &[Series]) -> Result<()> {
-        let checked = self.check(series)?;
+        self.ingest_held(self.check(series)?)
+    }
+
+    /// Writes series checked once the store's memory holds what their write
+    /// holds.
+    pub(super) fn ingest_held(&self, checked: Checked) -> Result<()> {
         let held = self.memory.reserve(checked.bytes(), "metrics: an ingest", PATIENCE)?;
         self.ingest_checked(checked, held)
     }
@@ -92,13 +109,13 @@ impl Engine {
     pub(super) fn check(&self, series: &[Series]) -> Result<Checked> {
         let now = self.now();
         let (gathered, samples, bytes) = gather(series)?;
-        Ok(Checked { now, gathered, samples, bytes })
+        Ok(Checked { now, gathered, samples, bytes, described: Vec::new() })
     }
 
     /// Writes series checked, every one or none, `_held` the memory their
     /// write holds until it ends.
     pub(super) fn ingest_checked(&self, checked: Checked, _held: Reservation) -> Result<()> {
-        let Checked { now, gathered, samples, bytes } = checked;
+        let Checked { now, gathered, samples, bytes, described } = checked;
         let wanted = wanted_names(&gathered)?;
         // A call refused for its times makes no name and moves no keep.
         let keeps = self.names.foreseen(&wanted);
@@ -111,7 +128,7 @@ impl Engine {
         if batches.is_empty() {
             return Ok(());
         }
-        let (ready, made) = self.write(batches, settling.changes(), bytes)?;
+        let (ready, made) = self.write(batches, (settling.changes(), described), bytes)?;
         settling.settled(made);
         if ready {
             self.wake();
@@ -120,9 +137,15 @@ impl Engine {
         Ok(())
     }
 
-    /// The call's one write, its names' changes first, and whether a series
-    /// of it now holds a block's worth, with the ids of the names it made.
-    fn write(&self, mut batches: Vec<Batch>, names: Changes, bytes: usize) -> Result<(bool, HashMap<String, i64>)> {
+    /// The call's one write, its names' changes first and what it describes
+    /// of them last, and whether a series of it now holds a block's worth,
+    /// with the ids of the names it made.
+    fn write(
+        &self,
+        mut batches: Vec<Batch>,
+        (names, described): (Changes, Vec<(String, Description)>),
+        bytes: usize,
+    ) -> Result<(bool, HashMap<String, i64>)> {
         let zstd = self.codecs.take();
         let max_series = self.max_series;
         let (zstd, ready, made) = self.file.write(bytes, move |tx| {
@@ -136,6 +159,7 @@ impl Engine {
                 let written = write_series(tx, &mut zstd, batch, max_series);
                 ready |= written.map_err(|error| error.within(format!("metrics {}", batch.kept)))?;
             }
+            describe::fill(tx, &described)?;
             Ok((zstd, ready, made))
         })?;
         self.codecs.give_back(zstd);
