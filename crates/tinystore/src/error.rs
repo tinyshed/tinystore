@@ -217,7 +217,8 @@ impl Error {
 
     /// A fact the error carries by name: a limit's `limit`, `wanted` and
     /// `bound`; a broken constraint's `constraint`, `table`, `columns` and
-    /// `name`, which [`Error::constraint`] reads as one.
+    /// `name`, which [`Error::constraint`] reads as one; a metrics sample's
+    /// `at` and the time its series is `packed` before, when it is too old.
     pub fn fact(&self, name: &str) -> Option<&str> {
         self.facts.iter().find(|(named, _)| *named == name).map(|(_, value)| value.as_str())
     }

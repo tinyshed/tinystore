@@ -351,8 +351,9 @@ before the watermark, not what a `limit` returned. Ingest never moves
 **What may be sealed trails the series; silence need not seal anything.** A
 counter's increase cannot be added across two blocks overlapping in time, so
 lateness is bounded by a watermark that follows the newest sample that series
-has shown, and a sample behind it is refused, counted and visible, rather than
-reopening a block. There is no forced closure on a wall clock.
+has shown, and a sample behind it is refused and visible, rather than
+reopening a block; one bit for bit the sample packed at its time is an ingest
+sent again, and changes nothing. There is no forced closure on a wall clock.
 
 **Retention clips the read before a summary is chosen.** A query captures one
 `now`, each series its cutoff at it, and reads `[max(from, cutoff), to)`. A

@@ -72,12 +72,54 @@ millisecond.
 
 - Samples may come in any order. A time given twice keeps the later value,
   until the store has packed that stretch of the series.
-- A sample behind what its series has packed is `too old`, since a packed
-  counter's increase would change (NOT-08). A series that comes back after a
-  day away sends its backlog: what it has packed follows its own newest
-  sample, not the clock.
+- After that, a sample with a new value behind what its series has packed
+  fails with a too old error, and the whole call fails with it. A packed
+  counter's increase would change otherwise (NOT-08). The same sample sent
+  again is accepted, as [the next section](#an-ingest-sent-again) shows.
+- A series that comes back after a day away sends its backlog: what it has
+  packed follows its own newest sample, not the clock.
 - A time is taken from as long ago as its name keeps to ten minutes ahead of
   the store's clock.
+
+## An ingest sent again
+
+A job step runs at least once. If a collector's worker crashes after
+`ingest` and before its step finishes, the next attempt sends the same
+samples again. That second call changes nothing, even after the store has
+packed those samples:
+
+```ts
+await store.metrics.ingest(revenue) // three hours of samples, read from a database
+await store.metrics.ingest(revenue) // the step's next attempt: nothing changes
+```
+
+```python
+await store.metrics.ingest(revenue)  # three hours of samples, read from a database
+await store.metrics.ingest(revenue)  # the step's next attempt: nothing changes
+```
+
+```go
+err := metrics.Ingest(ctx, store, revenue) // three hours of samples, read from a database
+err = metrics.Ingest(ctx, store, revenue)  // the step's next attempt: nothing changes
+```
+
+```rust
+let stats = store.metrics()?;
+stats.ingest(&[revenue.clone()])?; // three hours of samples, read from a database
+stats.ingest(&[revenue])?; // the step's next attempt: nothing changes
+```
+
+- A sample counts as sent again when its time and its value's bits are the
+  ones the store keeps. `0` and `-0` differ, and so do two NaNs with different
+  payloads.
+- Any other sample behind what its series has packed fails the whole call
+  with a too old error (`TooOldError` in Bun and Python, `ErrTooOld` in Go,
+  `ErrorKind::TooOld` in Rust). The error's `what` names the sample's time,
+  `at`, and the time before which its series is packed, `packed`. To write
+  the rest, send that series again without its samples before `packed`.
+- A sample older than its name keeps is too old, sent again or not.
+- A value that changed after the fact, such as yesterday's revenue after a
+  refund, can't replace a packed sample.
 
 ## A name's `keep`
 

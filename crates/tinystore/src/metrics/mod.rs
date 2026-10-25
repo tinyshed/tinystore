@@ -64,6 +64,7 @@ mod recorder;
 mod registry;
 #[cfg(feature = "wire")]
 mod remote;
+mod repeat;
 mod residuals;
 mod retention;
 mod series;

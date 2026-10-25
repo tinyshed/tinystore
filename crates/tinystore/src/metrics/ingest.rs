@@ -25,6 +25,7 @@ use super::labels::Kept;
 use super::ladder::{unit_end, unit_of};
 use super::names::{Changes, KEEP, Name, checked_keep, millis, write_changes};
 use super::registry;
+use super::repeat::Packed;
 use super::retention::expires;
 use super::series::{Kind, Labels, Series};
 use super::timestamp::rfc3339;
@@ -339,6 +340,16 @@ impl State {
             .ok_or_else(|| Error::corrupt("a series without its state"))
     }
 
+    /// Takes out of `points` those sent again behind what the series has
+    /// packed, each the sample packed at its time, and refuses the call when
+    /// another reaches behind it. A series that stopped is `accepts`' to refuse.
+    fn drop_repeats(&self, tx: &Tx<'_>, zstd: &mut Zstd, id: i64, points: &mut Vec<Point>) -> Result<()> {
+        match self.sealed_before {
+            Some(sealed) if self.failure.is_none() => Packed::of(tx, zstd, id, sealed).drop_repeats(points),
+            _ => Ok(()),
+        }
+    }
+
     /// Refuses a write the series can no longer take.
     fn accepts(&self, points: &[Point]) -> Result<()> {
         if let Some(failure) = &self.failure {
@@ -358,10 +369,15 @@ impl State {
 }
 
 /// Writes one series' samples into its head, and says whether it now holds
-/// a block's worth.
-fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &Batch, max_series: i64) -> Result<bool> {
+/// a block's worth. Its samples sent again behind what it has packed leave
+/// the batch first, so that a call retried after packing changes nothing.
+fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &mut Batch, max_series: i64) -> Result<bool> {
     let (id, _) = registry::resolve(tx, batch, max_series)?;
     let state = State::read(tx, id)?;
+    state.drop_repeats(tx, zstd, id, &mut batch.points)?;
+    if batch.points.is_empty() {
+        return Ok(false);
+    }
     store(tx, zstd, id, &state, batch)
 }
 
@@ -369,7 +385,7 @@ fn write_series(tx: &Tx<'_>, zstd: &mut Zstd, batch: &Batch, max_series: i64) ->
 /// says `state`, and says whether it now holds a block's worth.
 pub(super) fn store(tx: &Tx<'_>, zstd: &mut Zstd, id: i64, state: &State, batch: &Batch) -> Result<bool> {
     state.accepts(&batch.points)?;
-    let (bytes, extent) = next_head(zstd, id, state, &batch.points)?;
+    let Some((bytes, extent)) = next_head(zstd, id, state, &batch.points)? else { return Ok(state.ready) };
     let max_seen = state.max_seen.max(batch.points[batch.points.len() - 1].at);
     let ready = ready(extent, max_seen);
     let first_due = expires(batch.points[0].at, batch.keep);
@@ -392,8 +408,10 @@ pub(super) fn store(tx: &Tx<'_>, zstd: &mut Zstd, id: i64, state: &State, batch:
 }
 
 /// The head after a write: the leading chunks the write does not reach kept
-/// as they are, the rest decoded, merged with the samples and encoded again.
-fn next_head(zstd: &mut Zstd, id: i64, state: &State, points: &[Point]) -> Result<(Vec<u8>, Extent)> {
+/// as they are, the rest decoded, merged with the samples and encoded again;
+/// none when each sample is the one the head holds at its time, bit for bit,
+/// as a batch sent again is, so that its write moves not even the version.
+fn next_head(zstd: &mut Zstd, id: i64, state: &State, points: &[Point]) -> Result<Option<(Vec<u8>, Extent)>> {
     let chunks = match &state.head {
         Some(bytes) if state.extent.count > 0 => head::parse(id, state.extent, bytes)?,
         None if state.extent.count == 0 => Vec::new(),
@@ -403,10 +421,14 @@ fn next_head(zstd: &mut Zstd, id: i64, state: &State, points: &[Point]) -> Resul
     let mut rest = Vec::new();
     head::decode(zstd, &chunks[kept..], i64::MIN, i64::MAX, &mut rest)?;
     let merged = head::merge(&rest, points);
+    let unchanged = |one: &Point, other: &Point| one.at == other.at && one.value.to_bits() == other.value.to_bits();
+    if merged.len() == rest.len() && merged.iter().zip(&rest).all(|(one, other)| unchanged(one, other)) {
+        return Ok(None);
+    }
     let bytes = head::encode(zstd, id, &chunks[..kept], &merged)?;
     let kept_count: usize = chunks[..kept].iter().map(|chunk| chunk.head.count).sum();
     let start = chunks.first().filter(|_| kept > 0).map_or(merged[0].at, |chunk| chunk.head.start);
-    Ok((bytes, Extent { count: kept_count + merged.len(), start, end: merged[merged.len() - 1].at }))
+    Ok(Some((bytes, Extent { count: kept_count + merged.len(), start, end: merged[merged.len() - 1].at })))
 }
 
 /// Whether a head holds a block's worth: a whole unit of its ladder behind

@@ -103,7 +103,9 @@ bucket's edge cuts.
   reset from.
 - **A sealed frontier never moves back.** Packing seals a prefix of a series,
   up to a watermark that trails its newest sample. A sample behind the
-  watermark is refused and counted, never allowed to reopen a block.
+  watermark is refused, never allowed to reopen a block, unless it is bit
+  for bit the sample already packed at its time: that is an ingest sent
+  again, and it changes nothing.
 - **Retention clips a read before a summary is used**, so a block that is
   half expired is decoded, not answered from a summary that still counts the
   expired half.

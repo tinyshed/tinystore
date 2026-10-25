@@ -69,7 +69,7 @@ program relies on most, and ends with what TinyStore does not promise.
 | NOT-04 | a copy's reads are stale by its lag                                                               |
 | NOT-05 | a promotion made while the old home still writes may lose what the old home took after it         |
 | NOT-06 | `committed locally` means no copy held the write, and a failover may lose it                      |
-| NOT-08 | a metric sample behind its series' sealed frontier is refused                                     |
+| NOT-08 | a metric sample behind its series' sealed frontier is refused, unless it is the one kept there    |
 | NOT-09 | a log line that finds its buffer full is dropped and counted                                      |
 | NOT-10 | a vector search with `recall` may miss some of the exact best                                     |
 | NOT-11 | nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration |

@@ -391,24 +391,24 @@ An error is the final frame of its stream, with ERROR set:
 | 2   | message | str            | what failed, as the engine's error says it                                                     |
 | 3   | what    | a map of names | the item it names: a bucket and key, a queue and key, a series' labels, a table and constraint |
 
-| code                 | means                                                                                                                               | sent again                  |
-|----------------------|-------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
-| `invalid`            | the request cannot be done as asked                                                                                                 | no                          |
-| `limit`              | a bound: memory, size or count; `what` names the `limit`, what the call `wanted` of it and the `bound`, where the engine knows them | later, or smaller           |
-| `closed`             | the store or the handle closed                                                                                                      | after opening again         |
-| `in_use`             | a name is taken, or a lock's key stayed held past a hold's wait                                                                     | later                       |
-| `conflict`           | a condition or a version no longer holds                                                                                            | after reading again         |
-| `corrupt`            | stored bytes no longer read                                                                                                         | no                          |
-| `too_old`, `too_new` | a time outside its engine's window                                                                                                  | no                          |
-| `suspended`          | a series in quarantine                                                                                                              | after its repair            |
-| `outcome_unknown`    | a commit whose result is unknown, or a write that ran and whose answer, as the values a take removed, is past the agreed body       | after reading what it wrote |
-| `committed_locally`  | a synchronous commit its home made and no copy it waits for held in time: it stands, and losing that home's disk would lose it      | no                          |
-| `lost`               | a lease ran out or was revoked at its maxHold: another holder may have run beside it                                                | no                          |
-| `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                   | no                          |
-| `unimplemented`      | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version              | no                          |
-| `cancelled`          | the client cancelled it                                                                                                             | —                           |
-| `unavailable`        | the server is closing                                                                                                               | on another connection       |
-| `internal`           | a fault of the server's                                                                                                             | —                           |
+| code                 | means                                                                                                                                    | sent again                  |
+|----------------------|------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
+| `invalid`            | the request cannot be done as asked                                                                                                      | no                          |
+| `limit`              | a bound: memory, size or count; `what` names the `limit`, what the call `wanted` of it and the `bound`, where the engine knows them      | later, or smaller           |
+| `closed`             | the store or the handle closed                                                                                                           | after opening again         |
+| `in_use`             | a name is taken, or a lock's key stayed held past a hold's wait                                                                          | later                       |
+| `conflict`           | a condition or a version no longer holds                                                                                                 | after reading again         |
+| `corrupt`            | stored bytes no longer read                                                                                                              | no                          |
+| `too_old`, `too_new` | a time outside its engine's window; a metrics sample behind what its series has packed names its `at` and the time it is `packed` before | no                          |
+| `suspended`          | a series in quarantine                                                                                                                   | after its repair            |
+| `outcome_unknown`    | a commit whose result is unknown, or a write that ran and whose answer, as the values a take removed, is past the agreed body            | after reading what it wrote |
+| `committed_locally`  | a synchronous commit its home made and no copy it waits for held in time: it stands, and losing that home's disk would lose it           | no                          |
+| `lost`               | a lease ran out or was revoked at its maxHold: another holder may have run beside it                                                     | no                          |
+| `permission`         | the connection's capability does not allow it, as a `read` connection opening an encrypted bucket                                        | no                          |
+| `unimplemented`      | a method, or a field of a request, this server does not have: `what` names the field, the message the server's version                   | no                          |
+| `cancelled`          | the client cancelled it                                                                                                                  | —                           |
+| `unavailable`        | the server is closing                                                                                                                    | on another connection       |
+| `internal`           | a fault of the server's                                                                                                                  | —                           |
 
 The first nine are the root's sentinels, so that an SDK's error classes mean
 what `errors.Is` means in Go. A frame or a `HELLO` the server cannot take is a

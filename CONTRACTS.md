@@ -170,7 +170,7 @@ These contracts are what does not.
 
 - **MET-01** A sample MUST be kept bit for bit — `-0`, NaN payloads and infinities included — through every codec, file and restart.
 - **MET-02** A series MUST be its name and its labels; names and labels beginning `tinystore_` or `__` are the store's and MUST be refused from a program.
-- **MET-03** An ingest MUST be applied whole; a late sample behind what is sealed MUST be refused and counted, never reopen a block.
+- **MET-03** An ingest MUST be applied whole; a late sample behind what is sealed MUST be refused, never reopen a block (MET-16).
 - **MET-04** An aggregate MUST be exact and rounded once, across blocks, counter resets and retention; buckets of any width MUST add up to the range.
 - **MET-05** A bucket the range, the clock or retention cut MUST say `partial`; a step across a whole empty bucket MUST say `gap`; no other bucket says either.
 - **MET-06** A summary MUST answer only for a whole block inside one bucket and the range; anything else MUST be decoded.
@@ -183,6 +183,7 @@ These contracts are what does not.
 - **MET-13** A series MUST be deletable whole, damaged or not, its neighbours untouched.
 - **MET-14** `self_metrics` MUST be off unless asked for, and a store opened without it holds none of its own names.
 - **MET-15** A text in Prometheus' format or OpenMetrics' MUST be written whole, each sample as the kind its family's type gives and its value bit for bit, or refused whole, naming the line it cannot read.
+- **MET-16** An ingest sent again MUST change nothing, packed or not: a sample behind what its series has packed that is bit for bit the one packed at its time MUST be taken as nothing, and any other MUST refuse the ingest whole, naming the sample's time, `at`, and the time its series has packed before, `packed`.
 
 ### Search
 
@@ -259,7 +260,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **NOT-05** A `node promote` made while the old home still writes — during a network split — may lose the commits the old home took after the promotion; the new home counts them as lost and the old one is fenced once it hears of it.
 - **NOT-06** `committed_locally` means no copy held the write: a failover may lose it.
 - **NOT-07** `LoseAtMost` counters may lose up to their interval at a crash.
-- **NOT-08** A metrics sample behind its series' sealed frontier is refused, not stored.
+- **NOT-08** A metrics sample behind its series' sealed frontier is refused, not stored, unless it is bit for bit the sample packed at its time (MET-16).
 - **NOT-09** A log line that finds its buffer full is dropped and counted, never waited for.
 - **NOT-10** A search with `recall` may miss some of the exact best; without it a vector search is exact.
 - **NOT-11** Nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration.

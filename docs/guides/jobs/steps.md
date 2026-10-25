@@ -52,7 +52,9 @@ let worker = agents.work(|question: Question, run| -> Result<(), AppError> {
   back without running `fn` again (contract JOB-06).
 - A step whose attempt ended before its answer was kept runs again, so what
   `fn` does outside the store should bear doing twice: pass an idempotency
-  key to a payment provider, use `on conflict do nothing` in SQL.
+  key to a payment provider, use `on conflict do nothing` in SQL. A metrics
+  [ingest sent again](../metrics/ingesting.md#an-ingest-sent-again) changes
+  nothing.
 - A name is a step's within its job; number steps in a loop, `tool:1`,
   `tool:2`.
 - A job that ends, done, failed or cancelled, takes its steps with it, and a

@@ -59,8 +59,10 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
   less.
 - Processes that count into one counter count into one total, and a send
   repeated after a lost connection counts once.
-- Not promised: a sample behind its series' sealed frontier is refused
-  (NOT-08).
+- An ingest sent again changes nothing, even after the store packed its
+  samples (MET-16).
+- Not promised: a sample with a new value behind its series' sealed frontier
+  is refused (NOT-08).
 
 ## In these guides
 
