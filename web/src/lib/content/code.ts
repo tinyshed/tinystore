@@ -39,6 +39,8 @@ export interface Fence {
 	language?: Language
 	/** `install="bun add @tinyshed/tinystore"`: the command the landing page shows beside its sample */
 	install?: string
+	/** `mark=2-3,5`: the lines the text is about, which the block marks and the others dim */
+	mark?: number[]
 }
 
 /** Fences that read as one block: a language each, and a file each within a language. */
@@ -140,7 +142,26 @@ export function toFence(node: Code): Fence {
 		...(attributes.title === undefined ? {} : { title: attributes.title }),
 		...(language === undefined ? {} : { language }),
 		...(attributes.install === undefined ? {} : { install: attributes.install }),
+		...(attributes.mark === undefined ? {} : { mark: linesOf(attributes.mark) }),
 	}
+}
+
+/** `2-3,5` → `[2, 3, 5]`: lines counted from 1, as an editor counts them. */
+export function linesOf(ranges: string): number[] {
+	return ranges.split(',').flatMap(range => {
+		const [from, to = from] = range.split('-').map(Number)
+		if (
+			from === undefined ||
+			to === undefined ||
+			!Number.isInteger(from) ||
+			!Number.isInteger(to) ||
+			from < 1 ||
+			to < from
+		) {
+			throw new Error(`mark=${ranges}: lines as 2, 2-3 or 2-3,5, counted from 1`)
+		}
+		return Array.from({ length: to - from + 1 }, (_, at) => from + at)
+	})
 }
 
 /** `title="metrics.ts" for=bun` → `{ title: 'metrics.ts', for: 'bun' }` */
@@ -204,12 +225,38 @@ export function renderGroup(group: CodeGroup, highlight: Highlight): Element {
 export function panes(fences: Fence[], highlight: Highlight): Element[] {
 	return fences.map((fence, index) => {
 		const pre = highlight(fence.code, fence.lang)
+		markLines(pre, fence.mark ?? [])
 		pre.properties.dataFile = String(index)
 		if (index > 0) {
 			pre.properties.hidden = true
 		}
 		return pre
 	})
+}
+
+/** Marks the highlighted lines `marked` names, as `mark=` on the fence asked. */
+function markLines(pre: Element, marked: number[]): void {
+	const code = pre.children.find(child => child.type === 'element' && child.tagName === 'code')
+	if (marked.length === 0 || code?.type !== 'element') {
+		return
+	}
+	const lines = code.children.filter(
+		(child): child is Element => child.type === 'element' && classesOf(child).includes('line'),
+	)
+	for (const number of marked) {
+		const line = lines[number - 1]
+		if (line === undefined) {
+			throw new Error(`mark=${number}: the fence has ${lines.length} lines`)
+		}
+		line.properties.className = [...classesOf(line), 'marked']
+		delete line.properties.class
+	}
+}
+
+// shiki writes a line's class as `class`, hastscript as `className`
+function classesOf(node: Element): string[] {
+	const given = node.properties.className ?? node.properties.class ?? []
+	return (Array.isArray(given) ? given.map(String) : String(given).split(/\s+/)).filter(Boolean)
 }
 
 // a block with no switch and no file name says its language, unless it is plain text

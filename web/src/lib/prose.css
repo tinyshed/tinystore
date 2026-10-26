@@ -964,3 +964,24 @@ dialog.diagram-zoom svg {
 	white-space: normal;
 	pointer-events: none;
 }
+
+/* the lines a fence's `mark=` names: the ones the text is about, the others dimmed */
+.prose .shiki .line.marked {
+	display: inline-block;
+	min-width: calc(100% + 44px);
+	margin: 0 -22px;
+	padding: 0 20px;
+	background: color-mix(in srgb, var(--ts-accent) 10%, transparent);
+	border-left: 2px solid var(--ts-accent);
+}
+
+.prose .shiki:has(.line.marked) .line:not(.marked) {
+	opacity: 0.55;
+	transition: opacity 0.15s;
+}
+
+@media (hover: hover) {
+	.prose .shiki:has(.line.marked):hover .line:not(.marked) {
+		opacity: 1;
+	}
+}

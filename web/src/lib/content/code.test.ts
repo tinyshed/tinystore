@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { toHtml } from 'hast-util-to-html'
 
-import { byLanguage, type Fence, parseMeta, renderGroup, splitRun, toFence } from './code'
+import { byLanguage, type Fence, linesOf, parseMeta, renderGroup, splitRun, toFence } from './code'
 import type { Highlight } from './highlight'
 
 const fence = (lang: string, title?: string, language?: Fence['language']): Fence => ({
@@ -112,5 +112,18 @@ describe('a block', () => {
 		expect(toHtml(renderGroup({ type: 'codeGroup', fences: [fence('text')] }, plain))).toContain(
 			'<span class="code-title"></span>',
 		)
+	})
+})
+
+describe('mark=', () => {
+	test('names lines, ranges and lists of them, counted from 1', () => {
+		expect(linesOf('3')).toEqual([3])
+		expect(linesOf('2-4,7')).toEqual([2, 3, 4, 7])
+	})
+
+	test('refuses what names no line', () => {
+		for (const wrong of ['0', '3-2', 'a', '2-']) {
+			expect(() => linesOf(wrong)).toThrow('counted from 1')
+		}
 	})
 })

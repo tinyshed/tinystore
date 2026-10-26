@@ -213,6 +213,9 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   language become files of one block. Leave the title off a single snippet.
   Two untitled blocks of the same language stay two separate blocks.
 - A shell command joins a language's tab with `for`: ` ```sh for=bun `.
+- `mark=3`, or `mark=2-4,7`, marks the lines the text after the block talks
+  about, and the site dims the others until the reader points at the block.
+  Each language's fence has its own line numbers, so each says its own.
 - Lines that a logger prints on a terminal go in a ` ```log ` fence. The site
   colours them as the console does: the time and `key=` dim, the level in its
   colour, the stream cyan. GitHub shows the fence as plain text.
