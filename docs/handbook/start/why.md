@@ -32,7 +32,8 @@ application:
 
 ```tree
 data/
-├── sql/chat.db    your SQL databases, one file each
+├── sql/
+│   └── chat.db    your SQL databases, one file each
 ├── kv.db          sessions, codes, counters, limits, settings
 ├── jobs.db        background jobs and schedules
 ├── blobs/         uploaded files

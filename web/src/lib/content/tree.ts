@@ -60,10 +60,13 @@ export function renderTree(text: string): Element {
 	return h('figure.tree', [list(parseTree(text))])
 }
 
+// folders first, as a file manager lists them, each kind in the order it was written
 function list(entries: Entry[]): Element {
+	const folders = entries.filter(entry => entry.name.endsWith('/'))
+	const files = entries.filter(entry => !entry.name.endsWith('/'))
 	return h(
 		'ul',
-		entries.map(entry =>
+		[...folders, ...files].map(entry =>
 			h('li', [
 				h('span.tree-entry', [
 					icon(entry.name.endsWith('/')),

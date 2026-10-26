@@ -371,7 +371,8 @@ data/
 ├── kv.db              the bucket
 ├── jobs.db            the queue
 ├── records.db         the log line
-└── server/SERVE       how other programs find the sidecar
+└── server/
+    └── SERVE          how other programs find the sidecar
 ```
 
 The engines open lazily: `kv.db` appears when the first bucket opens, and a

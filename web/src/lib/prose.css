@@ -1041,3 +1041,12 @@ dialog.diagram-zoom svg {
 	color: var(--ts-muted);
 	font-size: 14px;
 }
+
+/* a nested name's column narrows by its indent, so that every note lines up */
+.prose figure.tree ul ul .tree-name {
+	min-width: calc(15ch - 23px);
+}
+
+.prose figure.tree ul ul ul .tree-name {
+	min-width: calc(15ch - 46px);
+}

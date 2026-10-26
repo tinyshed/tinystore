@@ -46,3 +46,14 @@ describe('a tree fence', () => {
 		expect(html).toContain('<span class="tree-note">buckets, <code>once</code></span>')
 	})
 })
+
+describe('a tree as the page draws it', () => {
+	test('lists folders before files, each kind in its own order', () => {
+		const html = toHtml(renderTree('data/\n├── LOCK\n├── sql/\n├── kv.db\n└── blobs/'))
+		const names = [...html.matchAll(/<span class="tree-name">([^<]+)<\/span>/g)].map(
+			found => found[1],
+		)
+
+		expect(names).toEqual(['data/', 'sql/', 'blobs/', 'LOCK', 'kv.db'])
+	})
+})

@@ -97,7 +97,8 @@ after it started (contract WIRE-11).
 ```tree
 data/
 ├── LOCK              held by the one process that owns the store
-├── server/SERVE      the sidecar's address, so other programs find it
+├── server/
+│   └── SERVE         the sidecar's address, so other programs find it
 ├── kv.db             buckets, counters, limits, `once`, live settings
 ├── jobs.db           queues and schedules
 ├── sql/
