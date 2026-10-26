@@ -200,7 +200,7 @@ fn aggregate(asked: Asked) -> Done {
     if !by.is_empty() {
         query = query.by(&by.iter().map(String::as_str).collect::<Vec<_>>());
     }
-    let groups = query.aggregate(op)?;
+    let groups = query.aggregate(op)?.groups;
     if asked.has("--json") {
         return json_buckets(&groups);
     }

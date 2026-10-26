@@ -39,6 +39,7 @@ pub struct Aggregate {
     pub name: String,
     pub labels: Labels,
     pub buckets: Vec<Bucket>,
+    pub more: bool,
 }
 ```
 
@@ -623,13 +624,37 @@ pub struct SelfMetrics {
 
 What a store measures of itself, when it is opened with its own metrics.
 
+## AggregatePage
+
+```rust
+pub struct AggregatePage {
+    pub groups: Vec<Aggregate>,
+    pub next: Option<String>,
+}
+```
+
+One page of an aggregate: its groups, and `next` while there is more. A
+group the page cut says `Aggregate::more`, and the page `next` reads
+begins with the rest of its buckets. An aggregate without `limit` is one
+page, whole, without `next`.
+
+### AggregatePage.all
+
+```rust
+pub fn all(self) -> All<Aggregate>
+```
+
+The page's groups, then those of each page after it, read one page at
+a time as the walk reaches the end of the one it holds.
+
 ## All
 
 ```rust
-pub struct All { /* private fields */ }
+pub struct All<T> { /* private fields */ }
 ```
 
-The series of a page and of every page after it, one page held at a time.
+The series or the groups of a page and of every page after it, one page
+held at a time.
 
 ## SeriesPage
 
@@ -647,7 +672,7 @@ the rest of it. A read without `limit` is one page, whole, without `next`.
 ### SeriesPage.all
 
 ```rust
-pub fn all(self) -> All
+pub fn all(self) -> All<Series>
 ```
 
 The page's series, then those of each page after it, read one page at
@@ -871,15 +896,18 @@ which stops before what would pass `limit` or a bound and gives
 ### Query.aggregate
 
 ```rust
-pub fn aggregate(&self, op: Op) -> Result<Vec<Aggregate>>
+pub fn aggregate(&self, op: Op) -> Result<AggregatePage>
 ```
 
 The buckets of each group of the series the query finds, each one
 exact value of `op`, rounded once: a group without a sample in the
 range is left out, and so is a bucket without one. An `op` a series'
 kind has not is `invalid`, and so is a bucket over a NaN, an infinity
-or a counter below zero; past a bound it is a `limit` error, naming
-the bound, never fewer buckets.
+or a counter below zero. Without `limit` the page is the whole
+answer, and past a bound it is a `limit` error, naming the bound,
+never fewer buckets. With `limit` it is a page of that many buckets
+at most, which ends between two whole buckets of a group and gives
+`next`; one bucket that alone passes a bound is still `limit`.
 
 ### Query.latest
 
@@ -1566,7 +1594,7 @@ page of them, as `crate::metrics::Query::read` gives them.
 ### aio::metrics::Query.aggregate
 
 ```rust
-pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<Vec<Aggregate>>> + Send + 'static
+pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<AggregatePage>> + Send + 'static
 ```
 
 The buckets of each group of the series the query finds, each one

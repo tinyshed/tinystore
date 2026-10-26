@@ -18,10 +18,11 @@ use super::directory::Block;
 use super::engine::Engine;
 use super::grid::Bin;
 use super::labels::BIN;
+use super::page::{GroupPlace, Paging};
 use super::query::Asked;
 use super::read::PATIENCE;
 use super::series::{Kind, Labels};
-use super::snapshot::{Taken, Want, Window, decode_block};
+use super::snapshot::{Taken, TakenGroup, Want, Window, decode_block};
 use super::timer::Part;
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
@@ -31,9 +32,19 @@ use crate::{Error, Reservation, Result};
 const BUCKET_HELD: u64 = 512;
 
 impl Engine {
-    pub(super) fn aggregate(&self, asked: &Asked, shape: &Shape) -> Result<Vec<Aggregate>> {
+    /// The groups of an aggregate, whole; or those of a page, and the place
+    /// the page after it begins, none on the last.
+    pub(super) fn aggregate(
+        &self,
+        asked: &Asked,
+        shape: &Shape,
+        paging: Option<&Paging>,
+    ) -> Result<(Vec<Aggregate>, Option<GroupPlace>)> {
         let mut budget = Budget::default();
-        let taken = self.take(asked, Want::Buckets(shape), &mut budget)?;
+        let (taken, stopped) = match paging {
+            None => (grouped(self.take(asked, Want::Buckets(shape), &mut budget)?, shape)?, None),
+            Some(paging) => self.take_groups(asked, shape, paging, &mut budget)?,
+        };
         let mut held = self.memory.reserve_for_read(budget.bytes as u64, "metrics: an aggregate", PATIENCE)?;
         let mut zstd = self.codecs.take();
         let mut counting = Counting {
@@ -47,8 +58,21 @@ impl Engine {
         };
         let answer = counting.groups(taken);
         self.codecs.give_back(zstd);
-        answer
+        answer.map(|groups| (groups, stopped))
     }
+}
+
+/// What a snapshot took of an aggregate's series, by the group each falls
+/// in, the groups in the order of their names and labels.
+fn grouped(taken: Vec<Taken>, shape: &Shape) -> Result<Vec<TakenGroup>> {
+    let mut groups: BTreeMap<(String, Labels), Vec<Taken>> = BTreeMap::new();
+    for series in taken {
+        shape.check(&series.found)?;
+        let group = shape.group_of(&series.found).map_err(|error| error.within(&series.found.kept))?;
+        groups.entry(group).or_default().push(series);
+    }
+    let group = |((name, labels), members)| TakenGroup { name, labels, members, more: false };
+    Ok(groups.into_iter().map(group).collect())
 }
 
 /// One aggregate being answered from what a snapshot took.
@@ -64,20 +88,14 @@ struct Counting<'a> {
 }
 
 impl Counting<'_> {
-    /// Every group's buckets, the groups in the order of their names and
-    /// labels; one without a bucket is left out.
-    fn groups(&mut self, taken: Vec<Taken>) -> Result<Vec<Aggregate>> {
-        let mut groups: BTreeMap<(String, Labels), Vec<Taken>> = BTreeMap::new();
-        for series in taken {
-            self.shape.check(&series.found)?;
-            let group = self.shape.group_of(&series.found).map_err(|error| error.within(&series.found.kept))?;
-            groups.entry(group).or_default().push(series);
-        }
+    /// Every group's buckets, in the order taken; one without a bucket is
+    /// left out.
+    fn groups(&mut self, groups: Vec<TakenGroup>) -> Result<Vec<Aggregate>> {
         let mut answer = Vec::with_capacity(groups.len());
-        for ((name, labels), members) in groups {
+        for TakenGroup { name, labels, members, more } in groups {
             let buckets = self.group(members)?;
             if !buckets.is_empty() {
-                answer.push(Aggregate { name, labels, buckets });
+                answer.push(Aggregate { name, labels, buckets, more });
             }
         }
         Ok(answer)

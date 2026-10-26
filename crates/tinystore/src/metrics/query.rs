@@ -25,12 +25,12 @@ use std::time::{Duration, SystemTime};
 
 use sha2::{Digest, Sha256};
 
-use super::aggregate::{Aggregate, Asking, Op, Shape};
+use super::aggregate::{Asking, Op, Shape};
 use super::engine::Engine;
 use super::explain::Plan;
 use super::labels::{MOST_LABELS, MOST_NAME_BYTES, MOST_VALUE_BYTES, NAME};
 use super::latest::Latest;
-use super::page::{Cursor, MOST_SAMPLES, Paging, Place, SeriesPage};
+use super::page::{AggregatePage, Cursor, MOST, Paging, SeriesPage, Start};
 use crate::calendar::Calendar;
 use crate::{Error, Result, unix_millis};
 
@@ -304,12 +304,12 @@ impl Query {
     /// absolute start from the store's clock, and the read it gives, which
     /// the async API runs on the store's pool.
     pub(crate) fn checked_read(&self) -> Result<Checked<SeriesPage>> {
-        let checked = self.plain("read").and_then(|()| self.paged());
+        let checked = self.plain("read").and_then(|()| self.paged(None));
         let query = self.clone();
         self.once_checked(checked, move |engine, (asked, paging)| {
             let (series, place) = engine.read(&asked, paging.as_ref())?;
-            let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, place).written());
-            Ok(SeriesPage::of(series, next, query))
+            let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, Start::Series(place)));
+            Ok(SeriesPage::of(series, next.map(|next| next.written()), query))
         })
     }
 
@@ -317,17 +317,24 @@ impl Query {
     /// exact value of `op`, rounded once: a group without a sample in the
     /// range is left out, and so is a bucket without one. An `op` a series'
     /// kind has not is `invalid`, and so is a bucket over a NaN, an infinity
-    /// or a counter below zero; past a bound it is a `limit` error, naming
-    /// the bound, never fewer buckets.
-    pub fn aggregate(&self, op: Op) -> Result<Vec<Aggregate>> {
+    /// or a counter below zero. Without `limit` the page is the whole
+    /// answer, and past a bound it is a `limit` error, naming the bound,
+    /// never fewer buckets. With `limit` it is a page of that many buckets
+    /// at most, which ends between two whole buckets of a group and gives
+    /// `next`; one bucket that alone passes a bound is still `limit`.
+    pub fn aggregate(&self, op: Op) -> Result<AggregatePage> {
         self.checked_aggregate(op).and_then(|aggregate| aggregate())
     }
 
     /// `aggregate` in its two steps, as [`Query::checked_read`] is `read`.
-    pub(crate) fn checked_aggregate(&self, op: Op) -> Result<Checked<Vec<Aggregate>>> {
-        let shape = self.unpaged("an aggregate").and_then(|()| self.shape(op));
-        let checked = shape.and_then(|shape| Ok((self.asked()?, shape)));
-        self.once_checked(checked, |engine, (asked, shape)| engine.aggregate(&asked, &shape))
+    pub(crate) fn checked_aggregate(&self, op: Op) -> Result<Checked<AggregatePage>> {
+        let checked = self.shape(op).and_then(|shape| Ok((self.paged(Some(op))?, shape)));
+        let query = self.clone();
+        self.once_checked(checked, move |engine, ((asked, paging), shape)| {
+            let (groups, place) = engine.aggregate(&asked, &shape, paging.as_ref())?;
+            let next = place.zip(paging).map(|(place, paging)| Cursor::after(&asked, &paging, Start::Group(place)));
+            Ok(AggregatePage::of(groups, next.map(|next| next.written()), query, op))
+        })
     }
 
     /// The newest sample of each series the query finds, when it has one in
@@ -408,43 +415,47 @@ impl Query {
         Ok(())
     }
 
-    /// Refuses `limit` and `after`, which only a read takes.
+    /// Refuses `limit` and `after`, which only a read and an aggregate take.
     fn unpaged(&self, call: &str) -> Result<()> {
         if self.limit.is_some() || self.after.is_some() {
-            return Err(Error::invalid(format!("`limit` and `after` are a read's: {call} takes neither")));
+            return Err(Error::invalid(format!(
+                "`limit` and `after` are a read's and an aggregate's: {call} takes neither"
+            )));
         }
         Ok(())
     }
 
-    /// The query checked, and the page it asks for when given `limit`: the
-    /// first, or the one `after` names, whose range and clock replace those
-    /// the query would read now.
-    pub(super) fn paged(&self) -> Result<(Asked, Option<Paging>)> {
+    /// The query checked, and the page it asks for when given `limit`, a
+    /// read's or the aggregate's of `op`: the first, or the one `after`
+    /// names, whose range and clock replace those the query would read now.
+    pub(super) fn paged(&self, op: Option<Op>) -> Result<(Asked, Option<Paging>)> {
         let mut asked = self.asked()?;
         let Some(limit) = self.limit else {
             if self.after.is_some() {
-                return Err(Error::invalid("`after` goes on from a page: a read takes it with `limit`"));
+                return Err(Error::invalid("`after` goes on from a page: a call takes it with `limit`"));
             }
             return Ok((asked, None));
         };
-        if limit == 0 || limit > MOST_SAMPLES {
-            return Err(Error::invalid(format!("a page of 1 to {MOST_SAMPLES} samples, not {limit}")));
+        if limit == 0 || limit > MOST {
+            return Err(Error::invalid(format!("a page of 1 to {MOST} samples or buckets, not {limit}")));
         }
-        let query = self.digest(&asked);
-        let Some(after) = &self.after else { return Ok((asked, Some(Paging { limit, query, from: Place::FIRST }))) };
+        let query = self.digest(&asked, op);
+        let Some(after) = &self.after else { return Ok((asked, Some(Paging { limit, query, from: Start::First }))) };
         let cursor = Cursor::read(after)?;
         if cursor.query != query {
             return Err(Error::invalid(format!("after {after:?}: a page's next of another query")));
         }
         (asked.from, asked.to, asked.now) = (cursor.from, cursor.to, cursor.now);
-        Ok((asked, Some(Paging { limit, query, from: cursor.place })))
+        Ok((asked, Some(Paging { limit, query, from: cursor.start })))
     }
 
-    /// The query a cursor goes on with, as its conditions and its range were
-    /// given, before `since` was read against the clock: sixteen hex digits
-    /// of their SHA-256.
-    fn digest(&self, asked: &Asked) -> String {
-        let mut given = format!("{:?}~{:?}~{:?}", self.since, self.from.map(unix_millis), self.to.map(unix_millis));
+    /// The query a cursor goes on with, as its conditions, its range and an
+    /// aggregate's `op` and buckets were given, before `since` was read
+    /// against the clock: sixteen hex digits of their SHA-256.
+    fn digest(&self, asked: &Asked, op: Option<Op>) -> String {
+        let (from, to) = (self.from.map(unix_millis), self.to.map(unix_millis));
+        let mut given = format!("{:?}~{from:?}~{to:?}~{op:?}~{:?}~{:?}", self.since, self.every, self.calendar);
+        given.push_str(&format!("~{:?}~{:?}~{}", self.by, self.without, self.estimate));
         for (label, condition) in &asked.conditions {
             given.push_str(&format!("~{label:?}={condition:?}"));
         }

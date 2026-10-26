@@ -38,8 +38,8 @@ let traffic = stats
     .since(Duration::from_hours(24))
     .every(Duration::from_hours(1))
     .by(&["route"])
-    .aggregate(Op::Increase)?;
-let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?;
+    .aggregate(Op::Increase)?.groups;
+let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?.groups;
 ```
 
 ## Ops
@@ -101,7 +101,7 @@ let days = stats
     .name("orders")
     .since(Duration::from_hours(30 * 24))
     .calendar(Calendar::Day, "Europe/Moscow")
-    .aggregate(Op::Sum)?;
+    .aggregate(Op::Sum)?.groups;
 ```
 
 - `calendar` is `day`, `week` or `month`. A week begins on Monday, as ISO 8601
@@ -185,7 +185,7 @@ backlog, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "queue_depth",
 ```
 
 ```rust
-let backlog = stats.query().name("queue_depth").since(Duration::from_hours(24)).every(Duration::from_hours(1)).aggregate(Op::Last)?;
+let backlog = stats.query().name("queue_depth").since(Duration::from_hours(24)).every(Duration::from_hours(1)).aggregate(Op::Last)?.groups;
 ```
 
 ## A heatmap
@@ -204,7 +204,7 @@ heat, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "http_request_ms_
 ```
 
 ```rust
-let heat = stats.query().name("http_request_ms_bucket").since(Duration::from_hours(1)).every(Duration::from_mins(1)).by(&["le"]).aggregate(Op::Increase)?;
+let heat = stats.query().name("http_request_ms_bucket").since(Duration::from_hours(1)).every(Duration::from_mins(1)).by(&["le"]).aggregate(Op::Increase)?.groups;
 ```
 
 How many durations fell under each bound, each minute: a timer's buckets are

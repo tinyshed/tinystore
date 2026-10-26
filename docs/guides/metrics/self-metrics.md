@@ -53,7 +53,7 @@ let slow = store
     .since(Duration::from_hours(1))
     .every(Duration::from_mins(1))
     .by(&["file"])
-    .aggregate(Op::Max)?;
+    .aggregate(Op::Max)?.groups;
 ```
 
 ## The store, SQLite and the writer

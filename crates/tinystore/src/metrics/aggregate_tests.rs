@@ -53,8 +53,9 @@ fn buckets_of_any_width_add_up_to_the_range() {
             assert_eq!(maintain(&f.store).unwrap().blocks, 3, "an hour each, and the sample before ten");
         }
         let query = |run: &str| f.metrics().query().name("requests").filter("run", run);
-        let increase =
-            |run: &str, every| values(&query(run).from(ten).to(eleven).every(every).aggregate(Op::Increase).unwrap());
+        let increase = |run: &str, every| {
+            values(&query(run).from(ten).to(eleven).every(every).aggregate(Op::Increase).unwrap().groups)
+        };
         assert_eq!(increase("fresh", HOUR), [3585.0], "packed: {packed}");
         let five = increase("fresh", 5 * MINUTE);
         assert_eq!((five[0], &five[1..]), (285.0, &[300.0; 11][..]));
@@ -64,8 +65,8 @@ fn buckets_of_any_width_add_up_to_the_range() {
         assert_eq!(increase("running", HOUR), [3600.0], "packed: {packed}");
         assert_eq!(increase("running", 5 * MINUTE), [300.0; 12]);
         let cut = ten + 20 * MINUTE + 7 * SECOND;
-        let before = values(&query("fresh").from(ten).to(cut).aggregate(Op::Increase).unwrap());
-        let after = values(&query("fresh").from(cut).to(eleven).aggregate(Op::Increase).unwrap());
+        let before = values(&query("fresh").from(ten).to(cut).aggregate(Op::Increase).unwrap().groups);
+        let after = values(&query("fresh").from(cut).to(eleven).aggregate(Op::Increase).unwrap().groups);
         assert_eq!(before[0] + after[0], 3585.0, "two adjacent ranges add up to the range they make");
     }
 }
@@ -82,7 +83,8 @@ fn a_restart_counts_the_same_across_blocks() {
             assert_eq!(maintain(&f.store).unwrap().blocks, blocks);
         }
         let grew = |from: SystemTime, to: SystemTime| {
-            let answer = f.metrics().query().name("jobs_total").from(from).to(to).aggregate(Op::Increase).unwrap();
+            let answer =
+                f.metrics().query().name("jobs_total").from(from).to(to).aggregate(Op::Increase).unwrap().groups;
             answer.first().map_or((0.0, 0), |group| (number(&group.buckets[0]), group.buckets[0].resets))
         };
         let end = f.now();
@@ -110,7 +112,7 @@ fn only_a_step_across_an_empty_bucket_is_a_gap() {
     f.metrics().ingest(&[dense, hourly, silent, recent]).unwrap();
     let gaps = |name: &str, since: Duration, every: Option<Duration>| -> Vec<bool> {
         let query = f.metrics().query().name(name).from(now - since).to(now);
-        let answer = every.map_or(query.clone(), |every| query.every(every)).aggregate(Op::Increase).unwrap();
+        let answer = every.map_or(query.clone(), |every| query.every(every)).aggregate(Op::Increase).unwrap().groups;
         answer[0].buckets.iter().map(|bucket| bucket.gap).collect()
     };
     assert_eq!(gaps("dense", HOUR, Some(MINUTE)), [false; 60], "samples every 15 seconds never make one");
@@ -124,10 +126,10 @@ fn only_a_step_across_an_empty_bucket_is_a_gap() {
         [false, true, true, true, true, true, true],
         "an `every` finer than the samples marks every bucket a step enters"
     );
-    let since = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Increase).unwrap();
+    let since = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Increase).unwrap().groups;
     assert_eq!((number(&since[0].buckets[0]), since[0].buckets[0].gap), (200.0, true));
     assert_eq!(gaps("recent", HOUR, None), [false], "its step began in the hour before the range");
-    let moved = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Count).unwrap();
+    let moved = f.metrics().query().name("silent").since(HOUR).aggregate(Op::Count).unwrap().groups;
     assert!(!moved[0].buckets[0].gap, "a count takes no step");
 }
 
@@ -145,7 +147,11 @@ fn a_bucket_retention_cut_is_partial_and_so_is_a_step_from_a_sample_it_took() {
         }
         let ask = |name: &str, op: Op| -> Vec<(f64, bool)> {
             let query = f.metrics().query().name(name).from(start - DAY).to(f.now() + MINUTE).every(6 * HOUR);
-            query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (number(bucket), bucket.partial)).collect()
+            query.aggregate(op).unwrap().groups[0]
+                .buckets
+                .iter()
+                .map(|bucket| (number(bucket), bucket.partial))
+                .collect()
         };
         // six-hour buckets begin at 12:00 and 18:00; the name keeps from 08:00 the day before, and cuts none:
         // the last is the one the clock has not finished
@@ -176,7 +182,7 @@ fn a_bucket_the_range_cut_or_the_clock_has_not_finished_is_partial() {
     f.metrics().ingest(&[counted]).unwrap();
     let query = || f.metrics().query().name("requests");
     let buckets = |query: crate::metrics::Query, op: Op| -> Vec<(f64, bool)> {
-        query.aggregate(op).unwrap()[0].buckets.iter().map(|bucket| (number(bucket), bucket.partial)).collect()
+        query.aggregate(op).unwrap().groups[0].buckets.iter().map(|bucket| (number(bucket), bucket.partial)).collect()
     };
     // the hour before the clock, whole, and the millisecond of the next that holds the sample taken now
     let hour = buckets(query().since(HOUR).every(5 * MINUTE), Op::Rate);
@@ -211,25 +217,25 @@ fn a_group_is_the_series_of_a_name_that_share_the_labels_kept() {
     f.metrics().ingest(&written).unwrap();
     let hour = || f.metrics().query().filter("env", "prod").since(HOUR);
     // without `by`, every series of a name is one group, and never two names
-    let sums = groups(&hour().aggregate(Op::Sum).unwrap());
+    let sums = groups(&hour().aggregate(Op::Sum).unwrap().groups);
     assert_eq!(sums, [("cpu{}".to_owned(), vec![136.0]), ("mem{}".to_owned(), vec![7.0])]);
-    let by_zone = groups(&hour().by(&["zone"]).aggregate(Op::Avg).unwrap());
+    let by_zone = groups(&hour().by(&["zone"]).aggregate(Op::Avg).unwrap().groups);
     // every sample's sum over every sample's count: 36 / 5, not the mean of 2 and 15
     assert_eq!(by_zone[0], ("cpu{zone=x}".to_owned(), vec![7.2]));
     assert_eq!(by_zone[1..], [("cpu{zone=y}".to_owned(), vec![100.0]), ("mem{}".to_owned(), vec![7.0])]);
     let x = || hour().name("cpu").filter("zone", "x");
-    let of = |op| values(&x().aggregate(op).unwrap())[0];
+    let of = |op| values(&x().aggregate(op).unwrap().groups)[0];
     assert_eq!((of(Op::Count), of(Op::Min), of(Op::Max), of(Op::Sum)), (5.0, 1.0, 20.0, 36.0));
-    let without = groups(&hour().name("cpu").without(&["host"]).aggregate(Op::Count).unwrap());
+    let without = groups(&hour().name("cpu").without(&["host"]).aggregate(Op::Count).unwrap().groups);
     assert_eq!(
         without,
         [("cpu{env=prod,zone=x}".to_owned(), vec![5.0]), ("cpu{env=prod,zone=y}".to_owned(), vec![1.0])]
     );
-    let apart = hour().name("cpu").without(&[]).aggregate(Op::Count).unwrap();
+    let apart = hour().name("cpu").without(&[]).aggregate(Op::Count).unwrap().groups;
     assert_eq!(apart.len(), 3, "`without` nothing keeps every series apart");
     assert_eq!(apart[0].labels["host"], "a");
     // a minute a bucket: the group's buckets are the minutes any of its series has
-    let minutes = groups(&x().every(MINUTE).aggregate(Op::Sum).unwrap());
+    let minutes = groups(&x().every(MINUTE).aggregate(Op::Sum).unwrap().groups);
     assert_eq!(minutes, [("cpu{}".to_owned(), vec![11.0, 22.0, 3.0])]);
 }
 
@@ -242,14 +248,14 @@ fn last_adds_only_series_with_a_sample_in_the_bucket() {
     let written = [run(depth("mail"), first, MINUTE, [5.0, 6.0, 7.0]), run(depth("sync"), first, MINUTE, [10.0, 11.0])];
     f.metrics().ingest(&written).unwrap();
     let minutes =
-        |op| values(&f.metrics().query().name("queue_depth").since(HOUR).every(MINUTE).aggregate(op).unwrap());
+        |op| values(&f.metrics().query().name("queue_depth").since(HOUR).every(MINUTE).aggregate(op).unwrap().groups);
     assert_eq!(minutes(Op::Last), [15.0, 17.0, 7.0], "the queues' total length at each minute's end");
     assert_eq!(minutes(Op::First), [15.0, 17.0, 7.0]);
-    let hour = |op| values(&f.metrics().query().name("queue_depth").since(HOUR).aggregate(op).unwrap());
+    let hour = |op| values(&f.metrics().query().name("queue_depth").since(HOUR).aggregate(op).unwrap().groups);
     assert_eq!((hour(Op::First), hour(Op::Last)), (vec![15.0], vec![18.0]));
     // alone, a series' first and last keep their bits
     f.metrics().ingest(&[Series::gauge("zero").sample(first, -0.0).sample(first + MINUTE, 1.5)]).unwrap();
-    let first_of = f.metrics().query().name("zero").since(HOUR).aggregate(Op::First).unwrap();
+    let first_of = f.metrics().query().name("zero").since(HOUR).aggregate(Op::First).unwrap().groups;
     assert_eq!(number(&first_of[0].buckets[0]).to_bits(), (-0.0_f64).to_bits());
 }
 
@@ -275,7 +281,7 @@ fn a_block_inside_a_bucket_answers_as_its_samples_would() {
                 for every in spans {
                     let query = f.metrics().query().name(name).from(now - from).to(now - to);
                     let query = every.map_or(query.clone(), |every| query.every(every));
-                    answers.extend(ops.iter().map(|op| (name, from, every, *op, query.aggregate(*op).unwrap())));
+                    answers.extend(ops.iter().map(|op| (name, from, every, *op, query.aggregate(*op).unwrap().groups)));
                 }
             }
         }
@@ -307,22 +313,24 @@ fn a_rate_is_a_second_of_what_the_range_leaves_of_a_bucket_and_a_bucket_begins_o
     let counted = run(Series::counter("requests"), ten, 15 * SECOND, (0..240).map(|n| f64::from(n * 15)));
     f.metrics().ingest(&[counted]).unwrap();
     let query = || f.metrics().query().name("requests");
-    let whole = query().from(ten + 5 * MINUTE).to(ten + 10 * MINUTE).every(5 * MINUTE).aggregate(Op::Rate).unwrap();
+    let whole =
+        query().from(ten + 5 * MINUTE).to(ten + 10 * MINUTE).every(5 * MINUTE).aggregate(Op::Rate).unwrap().groups;
     assert_eq!(values(&whole), [1.0], "300 in 300 seconds");
     // three minutes left of the bucket: 180 counted over 180 seconds
-    let cut = query().from(ten + 7 * MINUTE).to(ten + 12 * MINUTE).every(5 * MINUTE).aggregate(Op::Rate).unwrap();
+    let cut =
+        query().from(ten + 7 * MINUTE).to(ten + 12 * MINUTE).every(5 * MINUTE).aggregate(Op::Rate).unwrap().groups;
     assert_eq!(values(&cut), [1.0, 1.0]);
     let begins: Vec<SystemTime> = cut[0].buckets.iter().map(|bucket| bucket.at).collect();
     assert_eq!(begins, [ten + 5 * MINUTE, ten + 10 * MINUTE], "where the bucket begins, not where the range cut it");
-    let one = query().from(ten + 7 * MINUTE).to(ten + 12 * MINUTE).aggregate(Op::Count).unwrap();
+    let one = query().from(ten + 7 * MINUTE).to(ten + 12 * MINUTE).aggregate(Op::Count).unwrap().groups;
     assert_eq!((one[0].buckets[0].at, number(&one[0].buckets[0])), (ten + 7 * MINUTE, 20.0), "one bucket, the range");
-    let all = query().aggregate(Op::Count).unwrap();
+    let all = query().aggregate(Op::Count).unwrap().groups;
     assert_eq!(
         (all[0].buckets[0].at, number(&all[0].buckets[0])),
         (f.now() - 30 * DAY, 240.0),
         "from where the name keeps"
     );
-    let empty = query().from(ten - HOUR).to(ten).every(MINUTE).aggregate(Op::Increase).unwrap();
+    let empty = query().from(ten - HOUR).to(ten).every(MINUTE).aggregate(Op::Increase).unwrap().groups;
     assert!(empty.is_empty(), "a group without a sample in the range is left out");
 }
 
@@ -351,11 +359,11 @@ fn an_op_a_kind_has_not_and_a_value_no_aggregate_takes_are_invalid() {
     assert!(refused("level", HOUR, Op::Count).contains("an infinity"));
     assert!(refused("hits", HOUR, Op::Increase).contains("a counter below zero"));
     // a range that does not hold the value answers
-    let before = f.metrics().query().name("temp").to(now - MINUTE).aggregate(Op::Max).unwrap();
+    let before = f.metrics().query().name("temp").to(now - MINUTE).aggregate(Op::Max).unwrap().groups;
     assert_eq!(values(&before), [20.5]);
     // of the samples before a range, only the one its first step begins at is taken
     let drift = |from: Duration| f.metrics().query().name("drift").from(now - from).aggregate(Op::Delta);
-    assert_eq!(values(&drift(90 * SECOND).unwrap()), [3.0], "from 1 to 4, whatever came before 1");
+    assert_eq!(values(&drift(90 * SECOND).unwrap().groups), [3.0], "from 1 to 4, whatever came before 1");
     let from_nan = drift(150 * SECOND).unwrap_err().to_string();
     assert!(from_nan.contains("drift: sample at 2027-01-15T07:57:00Z: an aggregate over a NaN"), "{from_nan}");
     let shape = |query: crate::metrics::Query| query.name("temp").since(HOUR).aggregate(Op::Max).unwrap_err().kind();
@@ -386,7 +394,7 @@ fn an_answer_past_its_buckets_is_a_limit() {
     let error = query().aggregate(Op::Count).unwrap_err();
     let facts = (error.kind(), error.fact("limit"), error.fact("wanted"), error.fact("bound"));
     assert_eq!(facts, (ErrorKind::Limit, Some("answer"), Some("100001"), Some("100000")));
-    let fits = query().from(first + Duration::from_millis(1)).aggregate(Op::Count).unwrap();
+    let fits = query().from(first + Duration::from_millis(1)).aggregate(Op::Count).unwrap().groups;
     assert_eq!(fits[0].buckets.len(), 100_000);
 }
 
@@ -399,22 +407,22 @@ fn a_gauges_percentile_is_the_sample_at_its_nearest_rank_among_every_series_of_i
     let host = |host: &str, value: fn(usize) -> f64| f.gauge("cpu", 240, 15 * SECOND, value).label("host", host);
     f.metrics().ingest(&[host("a", |index| index as f64 * 0.5), host("b", |index| 1000.0 + index as f64)]).unwrap();
     let hour = || f.metrics().query().name("cpu").from(now - HOUR).to(now + SECOND);
-    let rank = |percent| values(&hour().aggregate(Op::Percentile(percent)).unwrap())[0];
+    let rank = |percent| values(&hour().aggregate(Op::Percentile(percent)).unwrap().groups)[0];
     // of 480 samples the 240th is a's greatest, and the 241st b's least
     assert_eq!((rank(50.0), rank(50.1), rank(100.0), rank(0.001)), (119.5, 1000.0, 1239.0, 0.0));
-    let by_host = groups(&hour().by(&["host"]).aggregate(Op::Percentile(50.0)).unwrap());
+    let by_host = groups(&hour().by(&["host"]).aggregate(Op::Percentile(50.0)).unwrap().groups);
     assert_eq!(by_host, [("cpu{host=a}".to_owned(), vec![59.5]), ("cpu{host=b}".to_owned(), vec![1119.0])]);
-    let every = |percent| values(&hour().every(30 * MINUTE).aggregate(Op::Percentile(percent)).unwrap());
+    let every = |percent| values(&hour().every(30 * MINUTE).aggregate(Op::Percentile(percent)).unwrap().groups);
     let from_the_head = (every(50.0), every(99.0));
     // a percentile reads every sample, never a summary, and so does its plan
     assert_eq!(maintain(&f.store).unwrap().blocks, 2);
     assert_eq!((every(50.0), every(99.0)), from_the_head);
     assert_eq!(hour().every(HOUR).explain(Op::Percentile(50.0)).unwrap().decoded, 480);
-    let samples = hour().aggregate(Op::Percentile(50.0)).unwrap()[0].buckets[0].samples;
+    let samples = hour().aggregate(Op::Percentile(50.0)).unwrap().groups[0].buckets[0].samples;
     assert_eq!(samples, 480);
     // a sample keeps its bits, -0 below +0
     f.metrics().ingest(&[Series::gauge("zero").sample(now - MINUTE, 0.0).sample(now - SECOND, -0.0)]).unwrap();
-    let least = f.metrics().query().name("zero").since(HOUR).aggregate(Op::Percentile(50.0)).unwrap();
+    let least = f.metrics().query().name("zero").since(HOUR).aggregate(Op::Percentile(50.0)).unwrap().groups;
     assert_eq!(number(&least[0].buckets[0]).to_bits(), (-0.0_f64).to_bits());
     let counter = f.metrics().ingest(&[Series::counter("hits").sample(now, 1.0)]);
     counter.unwrap();
@@ -462,7 +470,7 @@ fn calendar_days_begin_at_local_midnight_and_add_up_packed_or_not() {
     // an order an hour for two Moscow days, as a shop in Moscow takes them
     f.metrics().ingest(&[run(Series::gauge("orders"), midnight, HOUR, [1.0; 48])]).unwrap();
     let days = |query: Query| {
-        let answer = query.name("orders").from(midnight).to(midnight + 2 * DAY).aggregate(Op::Sum).unwrap();
+        let answer = query.name("orders").from(midnight).to(midnight + 2 * DAY).aggregate(Op::Sum).unwrap().groups;
         answer[0].buckets.iter().map(|bucket| (bucket.at, number(bucket), bucket.partial)).collect::<Vec<_>>()
     };
     let local = vec![(midnight, 24.0, false), (midnight + DAY, 24.0, false)];
@@ -494,7 +502,8 @@ fn a_rate_over_a_calendar_day_counts_the_seconds_the_day_has() {
         .to(midnight + Duration::from_hours(49))
         .calendar(Calendar::Day, "Europe/Berlin")
         .aggregate(Op::Rate)
-        .unwrap();
+        .unwrap()
+        .groups;
     let days: Vec<(SystemTime, f64)> = rates[0].buckets.iter().map(|bucket| (bucket.at, number(bucket))).collect();
     let hours = |count: u64| Duration::from_hours(count);
     assert_eq!(days, [(midnight - DAY, 1.0), (midnight, 1.0), (midnight + hours(25), 1.0)]);

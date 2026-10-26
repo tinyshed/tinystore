@@ -128,7 +128,8 @@ fn a_counter_sent_again_across_a_reset_keeps_its_increase() {
     let mut counted = Series::counter("jobs_total");
     counted.extend([100.0, 110.0, 5.0, 20.0].into_iter().zip(0_u32..).map(|(value, day)| (first + DAY * day, value)));
     let increase = || {
-        let answer = f.metrics().query().name("jobs_total").from(first).to(f.now()).aggregate(Op::Increase).unwrap();
+        let answer =
+            f.metrics().query().name("jobs_total").from(first).to(f.now()).aggregate(Op::Increase).unwrap().groups;
         answer[0].buckets[0].value.exact().unwrap()
     };
     f.metrics().ingest(std::slice::from_ref(&counted)).unwrap();

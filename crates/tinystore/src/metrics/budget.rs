@@ -82,6 +82,17 @@ impl Budget {
         BYTES.most - self.bytes
     }
 
+    /// The samples a query may still decode.
+    pub(super) fn decoded_left(&self) -> usize {
+        DECODED.most.saturating_sub(self.decoded)
+    }
+
+    /// Spends nothing more: what a page took of a group it then leaves out
+    /// is given back, so that a bucket alone is tried with the whole bounds.
+    pub(super) fn reset(&mut self) {
+        *self = Budget { planning: self.planning, ..Budget::default() };
+    }
+
     /// Whether `bytes` more copied and `samples` more decoded stay within
     /// their bounds: a page asks before it takes a part, and stops rather
     /// than fail.
@@ -114,7 +125,8 @@ impl Budget {
         }
         let most = bound.most;
         Err(Error::limit(format!(
-            "a query past {most} {}: ask for less, a shorter range, a wider `every`, fewer series",
+            "a query past {most} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page \
+             at a time with `limit`",
             bound.name
         ))
         .naming("limit", bound.name)

@@ -64,9 +64,9 @@ use crate::cancel;
 use crate::pool::Pool;
 
 pub use crate::metrics::{
-    Aggregate, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc, Histogram,
-    Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample, Series,
-    SeriesPage, Timer, Timing, Value, ValuePage, Values, exponential_buckets,
+    Aggregate, AggregatePage, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge,
+    GaugeFunc, Histogram, Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading,
+    Recorder, Sample, Series, SeriesPage, Timer, Timing, Value, ValuePage, Values, exponential_buckets,
 };
 
 /// What an awaited ingest names in its errors, as its blocking twin names
@@ -341,7 +341,7 @@ impl Query {
     /// The buckets of each group of the series the query finds, each one
     /// exact value of `op`, rounded once, as
     /// [`crate::metrics::Query::aggregate`] gives them.
-    pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<Vec<Aggregate>>> + Send + 'static {
+    pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<AggregatePage>> + Send + 'static {
         let query = self.blocking.clone();
         checked_then_read(&self.pool, "metrics: an aggregate", move || query.checked_aggregate(op))
     }

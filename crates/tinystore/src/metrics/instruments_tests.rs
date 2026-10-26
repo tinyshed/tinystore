@@ -43,7 +43,7 @@ fn intervals(f: &Fixture, name: &str) -> Vec<(String, Vec<(i64, f64)>)> {
 
 /// The one bucket of a percentile of `name` since the day before.
 fn ranked(f: &Fixture, name: &str, percent: f64) -> (Value, u64) {
-    let answer = f.metrics().query().name(name).since(DAY).aggregate(Op::Percentile(percent)).unwrap();
+    let answer = f.metrics().query().name(name).since(DAY).aggregate(Op::Percentile(percent)).unwrap().groups;
     (answer[0].buckets[0].value, answer[0].buckets[0].samples)
 }
 
@@ -128,7 +128,7 @@ fn a_restart_begins_a_new_run_with_its_zero_and_increase_counts_both() {
     stats.flush().unwrap();
     let hour = ms(HOUR);
     assert_eq!(samples(&f, "jobs_total", &[]), [(-1, 0.0), (0, 2.0), (hour, 0.0), (hour + ms(15 * SECOND), 5.0)]);
-    let grew = f.metrics().query().name("jobs_total").since(DAY).aggregate(Op::Increase).unwrap();
+    let grew = f.metrics().query().name("jobs_total").since(DAY).aggregate(Op::Increase).unwrap().groups;
     assert_eq!(
         (grew[0].buckets[0].value, grew[0].buckets[0].resets),
         (Value::Exact(7.0), 1),
@@ -192,10 +192,11 @@ fn the_overflow_is_a_group_of_its_own() {
     // a query reads 1000 series at most: the users in two halves, and the series no user's label holds
     let users = |range: std::ops::Range<u32>| range.map(|user| user.to_string()).collect::<Vec<_>>();
     let query = || f.metrics().query().name("logins_total").since(HOUR);
-    let total = |query: crate::metrics::Query| query.aggregate(Op::Last).unwrap()[0].buckets[0].value.exact().unwrap();
+    let total =
+        |query: crate::metrics::Query| query.aggregate(Op::Last).unwrap().groups[0].buckets[0].value.exact().unwrap();
     let halves = total(query().filter("user", users(0..1000))) + total(query().filter("user", users(1000..2000)));
     let past = query().filter("user", Not(users(0..1000))).filter("user", Not(users(1000..2000)));
-    let overflow = past.by(&["user"]).aggregate(Op::Last).unwrap();
+    let overflow = past.by(&["user"]).aggregate(Op::Last).unwrap().groups;
     assert_eq!(overflow.len(), 1, "a group of its own, whatever the query groups by");
     let labels: Vec<&str> = overflow[0].labels.keys().map(String::as_str).collect();
     let overflowed = overflow[0].buckets[0].value.exact().unwrap();
@@ -234,8 +235,15 @@ fn a_series_nothing_was_sent_to_for_an_hour_ends_and_a_call_begins_another_run()
     f.pass(15 * SECOND);
     stats.flush().unwrap();
     assert_eq!(samples(&f, "jobs_total", &[("queue", "sync")])[3..], [(now, 0.0), (now + ms(15 * SECOND), 7.0)]);
-    let grew =
-        f.metrics().query().name("jobs_total").filter("queue", "mail").since(DAY).aggregate(Op::Increase).unwrap();
+    let grew = f
+        .metrics()
+        .query()
+        .name("jobs_total")
+        .filter("queue", "mail")
+        .since(DAY)
+        .aggregate(Op::Increase)
+        .unwrap()
+        .groups;
     assert_eq!(grew[0].buckets[0].value, Value::Exact(6.0));
 }
 
@@ -533,7 +541,7 @@ fn past_128_intervals_the_grid_halves_and_a_percentile_merges_both_resolutions()
     // a minute of the finer alone keeps their resolution
     let first = f.metrics().query().name("spread").from(f.now() - 2 * MINUTE);
     let first = first.to(f.now() - MINUTE + Duration::from_millis(1));
-    let first = first.aggregate(Op::Percentile(50.0)).unwrap();
+    let first = first.aggregate(Op::Percentile(50.0)).unwrap().groups;
     assert_eq!(first[0].buckets[0].value, between(Bin::At { schema: 3, index: 49 }.bounds()));
 }
 
@@ -562,7 +570,7 @@ fn an_interval_nothing_fell_in_for_an_hour_ends_and_begins_again_with_its_zero()
         written.into_iter().chain(again).collect::<Vec<_>>(),
         "ended after the hour, then a run of its own"
     );
-    let counted = f.metrics().query().name("sizes").since(DAY).aggregate(Op::Percentile(30.0)).unwrap();
+    let counted = f.metrics().query().name("sizes").since(DAY).aggregate(Op::Percentile(30.0)).unwrap().groups;
     assert_eq!((counted[0].buckets[0].value, counted[0].buckets[0].samples), (between((0.9170040432046711, 1.0)), 6));
 }
 

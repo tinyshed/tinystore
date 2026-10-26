@@ -47,7 +47,7 @@ let latency = stats
 
 requests.with(&[("route", "/notes")]).inc();
 latency.measure(|| handle(&request));
-let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?;
+let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?.groups;
 ```
 
 ## What it guarantees
@@ -98,14 +98,15 @@ let requests = stats.counter("http_requests_total").open()?; // instruments are 
 requests.with(&[("route", "/notes")]).inc();
 
 stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(SystemTime::now(), 0.42)]).await?;
-let cpu = stats.query().name("cpu").since(Duration::from_hours(1)).read().await?;
+let cpu = stats.query().name("cpu").since(Duration::from_hours(1)).read().await?.series;
 let p95 = stats
     .query()
     .name("http_request_ms")
     .since(Duration::from_hours(1))
     .every(Duration::from_mins(5))
     .aggregate(Op::Percentile(95.0))
-    .await?;
+    .await?
+    .groups;
 ```
 
 Each call has the same name, builder and answer as in blocking Rust, and

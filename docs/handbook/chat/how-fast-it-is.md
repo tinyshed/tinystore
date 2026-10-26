@@ -153,7 +153,7 @@ outcomes, err := metrics.Aggregate(ctx, store, metrics.Query{
 ```
 
 ```rust
-let outcomes = stats.query().name("chat_replies_total").since(Duration::from_hours(1)).by(&["outcome"]).aggregate(Op::Increase)?;
+let outcomes = stats.query().name("chat_replies_total").since(Duration::from_hours(1)).by(&["outcome"]).aggregate(Op::Increase)?.groups;
 ```
 
 How slow the model is, every five minutes:
@@ -177,8 +177,8 @@ mean, err := metrics.Aggregate(ctx, store, metrics.Query{Name: "chat_model_ms", 
 ```
 
 ```rust
-let p95 = stats.query().name("chat_model_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?;
-let mean = stats.query().name("chat_model_ms").since(Duration::from_hours(1)).aggregate(Op::Avg)?;
+let p95 = stats.query().name("chat_model_ms").since(Duration::from_hours(1)).every(Duration::from_mins(5)).aggregate(Op::Percentile(95.0))?.groups;
+let mean = stats.query().name("chat_model_ms").since(Duration::from_hours(1)).aggregate(Op::Avg)?.groups;
 ```
 
 An aggregate cuts the range into buckets of `every`, counted from 1970 in

@@ -69,7 +69,10 @@ async fn every_awaited_call_answers_as_its_blocking_twin_on_the_same_store() {
     let odd = stats.query().name("odd").since(HOUR).read().await.unwrap().series;
     assert_eq!(seen(&odd), seen(&blocking.query().name("odd").since(HOUR).read().unwrap().series), "bit for bit");
     let every = || query().every(5 * MINUTE);
-    assert_eq!(every().aggregate(Op::Avg).await.unwrap(), twin().every(5 * MINUTE).aggregate(Op::Avg).unwrap());
+    assert_eq!(
+        every().aggregate(Op::Avg).await.unwrap().groups,
+        twin().every(5 * MINUTE).aggregate(Op::Avg).unwrap().groups
+    );
     assert_eq!(query().latest().await.unwrap(), twin().latest().unwrap());
     assert_eq!(every().explain(Op::Avg).await.unwrap(), twin().every(5 * MINUTE).explain(Op::Avg).unwrap());
     assert_eq!(query().explain(None).await.unwrap(), twin().explain(None).unwrap());

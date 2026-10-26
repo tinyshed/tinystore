@@ -165,7 +165,7 @@ pub(crate) fn parts(store: &Store, called: u16, body: &[u8], bound: usize) -> Re
         _ => {
             let asked = MetricsAggregateAsked::decode(body)?;
             let op = op_of(asked.op.as_deref())?;
-            Ok(aggregate_parts(aggregating(&metrics, asked)?.aggregate(op)?, bound))
+            Ok(aggregate_parts(aggregating(&metrics, asked)?.aggregate(op)?.groups, bound))
         }
     }
 }

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use super::{Cursor, Place, SeriesPage};
+use super::{AggregatePage, Cursor, GroupPlace, Place, SeriesPage, Start};
 use crate::metrics::budget::Budget;
-use crate::metrics::fixture::{Fixture, HOUR, MINUTE, SECOND, fixture};
-use crate::metrics::{Query, Series, maintain};
+use crate::metrics::fixture::{DAY, Fixture, HOUR, MINUTE, SECOND, fixture};
+use crate::metrics::{Aggregate, Op, Query, Series, maintain};
 use crate::{ErrorKind, unix_millis};
 
 /// A series read back as its labels and each sample's time and bits.
@@ -19,11 +19,11 @@ fn bits(series: &Series) -> Bits {
 fn pages(query: &Query, limit: usize) -> Vec<SeriesPage> {
     let paged = query.clone().limit(limit);
     let mut pages = vec![paged.read().unwrap()];
-    let mut place = Place::FIRST;
+    let mut place = (i64::MIN, i64::MIN);
     while let Some(next) = pages.last().unwrap().next.clone() {
-        let went_on = Cursor::read(&next).unwrap().place;
-        assert!((went_on.series, went_on.at) > (place.series, place.at), "{went_on:?} after {place:?}");
-        place = went_on;
+        let Start::Series(went_on) = Cursor::read(&next).unwrap().start else { panic!("{next} names no series") };
+        assert!((went_on.series, went_on.at) > place, "{went_on:?} after {place:?}");
+        place = (went_on.series, went_on.at);
         pages.push(paged.clone().after(&next).read().unwrap());
     }
     for page in &pages {
@@ -105,7 +105,7 @@ fn a_page_stops_before_the_samples_it_may_decode_rather_than_fail() {
     let query = f.metrics().query().name("ping_rtt_ms").since(30 * 24 * HOUR);
     let whole = query.read().unwrap_err();
     assert_eq!((whole.kind(), whole.fact("limit")), (ErrorKind::Limit, Some("samples decoded")));
-    let (asked, paging) = query.clone().limit(10_000).paged().unwrap();
+    let (asked, paging) = query.clone().limit(10_000).paged(None).unwrap();
     let mut budget = Budget::default();
     let (taken, stopped) = f.engine().take_page(&asked, &paging.unwrap(), &mut budget).unwrap();
     assert!(budget.decoded <= 10_000 + 240, "a page takes its samples and one block: {budget:?}");
@@ -118,6 +118,16 @@ fn a_page_stops_before_the_samples_it_may_decode_rather_than_fail() {
         read += series.samples().len();
     }
     assert_eq!(read, 1_100_000);
+    let hourly = query.clone().every(HOUR);
+    let median = Op::Percentile(50.0);
+    assert_eq!(hourly.aggregate(median).unwrap_err().fact("limit"), Some("samples decoded"));
+    let mut samples = 0;
+    for group in hourly.clone().limit(100_000).aggregate(median).unwrap().all() {
+        samples += group.unwrap().buckets.iter().map(|bucket| bucket.samples).sum::<u64>();
+    }
+    assert_eq!(samples, 1_100_000, "every hour's median, from pages that share the samples they decode");
+    let one_bucket = query.clone().limit(10).aggregate(median).unwrap_err();
+    assert_eq!(one_bucket.fact("limit"), Some("samples decoded"), "a bucket is never split");
 }
 
 // contract: MET-17
@@ -132,6 +142,8 @@ fn a_page_goes_on_past_the_series_a_query_finds() {
     assert_eq!(query.read().unwrap_err().fact("limit"), Some("series"));
     let read = pages(&query, 100_000);
     assert_eq!(read.iter().map(|page| page.series.len()).collect::<Vec<_>>(), [1000, 1]);
+    let aggregate = query.clone().limit(10).aggregate(Op::Max).unwrap_err();
+    assert_eq!(aggregate.fact("limit"), Some("series"), "a bucket needs every series of its group at once");
 }
 
 // contract: MET-17
@@ -209,7 +221,140 @@ fn a_cursor_is_refused_with_another_query_and_after_or_limit_where_no_page_is() 
 
 #[test]
 fn a_cursor_reads_back_as_it_was_written() {
-    let place = Place { series: 42, at: -1_800_000_000_000 };
-    let cursor = Cursor { query: "00ff".to_owned(), from: i64::MIN, to: 7, now: 6, place };
-    assert_eq!(Cursor::read(&cursor.written()).unwrap(), cursor);
+    let labels = [("route".to_owned(), "/a~b".to_owned())].into();
+    let starts = [
+        Start::First,
+        Start::Series(Place { series: 42, at: -1_800_000_000_000 }),
+        Start::Group(GroupPlace { group: ("http_requests_total".to_owned(), labels), at: 7 }),
+    ];
+    for start in starts {
+        let cursor = Cursor { query: "00ff".to_owned(), from: i64::MIN, to: 7, now: 6, start };
+        assert_eq!(Cursor::read(&cursor.written()).unwrap(), cursor);
+    }
+}
+
+/// Every page of an aggregate of `op` `limit` buckets at a time by `next`,
+/// each checked to hold at most `limit` and to go on past the page before it.
+fn aggregate_pages(query: &Query, op: Op, limit: usize) -> Vec<AggregatePage> {
+    let paged = query.clone().limit(limit);
+    let mut pages = vec![paged.aggregate(op).unwrap()];
+    let mut place = None;
+    while let Some(next) = pages.last().unwrap().next.clone() {
+        let Start::Group(went_on) = Cursor::read(&next).unwrap().start else { panic!("{next} names no group") };
+        let went_on = Some((went_on.group, went_on.at));
+        assert!(went_on > place, "{went_on:?} after {place:?}");
+        place = went_on;
+        pages.push(paged.clone().after(&next).aggregate(op).unwrap());
+    }
+    for page in &pages {
+        assert!(page.groups.iter().map(|group| group.buckets.len()).sum::<usize>() <= limit);
+    }
+    pages
+}
+
+/// The groups of pages joined: a part that says `more` goes on in the first
+/// part of the page after it.
+fn joined_groups(pages: &[AggregatePage]) -> Vec<Aggregate> {
+    let mut joined: Vec<Aggregate> = Vec::new();
+    let mut more = false;
+    for group in pages.iter().flat_map(|page| &page.groups) {
+        match joined.last_mut() {
+            Some(last) if more => {
+                assert_eq!((&last.name, &last.labels), (&group.name, &group.labels), "a part goes on with its group");
+                last.buckets.extend(group.buckets.iter().copied());
+            }
+            _ => joined.push(Aggregate { more: false, ..group.clone() }),
+        }
+        more = group.more;
+    }
+    joined
+}
+
+/// Requests of three routes from two hosts each, counted every 15 seconds
+/// with a reset every 700 samples, and their latencies: packed into hourly
+/// blocks, with a head after them.
+fn traffic(f: &Fixture) {
+    let series = |name: &str, route: &str, host: &str, from: usize, count: usize| {
+        let first = f.now() - 15 * SECOND * (count as u32 - 1);
+        let mut series = match name {
+            "requests_total" => Series::counter(name),
+            _ => Series::gauge(name),
+        };
+        series = series.label("route", route).label("host", host);
+        let value = |index: usize| (index % 700) as f64 * 1.5 + route.len() as f64 + host.len() as f64;
+        series.extend((0..count).map(|index| (first + 15 * SECOND * index as u32, value(from + index))));
+        series
+    };
+    let all = |from, count| {
+        let mut all = Vec::new();
+        for route in ["/a", "/bb", "/ccc"] {
+            for host in ["h1", "h22"] {
+                all.push(series("requests_total", route, host, from, count));
+                all.push(series("latency_ms", route, host, from, count));
+            }
+        }
+        all
+    };
+    f.metrics().ingest(&all(0, 800)).unwrap();
+    maintain(&f.store).unwrap();
+    f.pass(20 * MINUTE);
+    f.metrics().ingest(&all(800, 80)).unwrap();
+}
+
+// contract: MET-17
+#[test]
+fn aggregate_pages_followed_by_next_give_the_whole_aggregate_bucket_for_bucket() {
+    let f = fixture();
+    traffic(&f);
+    let counters = f.metrics().query().name("requests_total").since(10 * HOUR);
+    let gauges = f.metrics().query().name("latency_ms").since(10 * HOUR);
+    let cases = [
+        (counters.clone().every(MINUTE).by(&["route"]), Op::Rate),
+        (counters.clone().every(7 * MINUTE), Op::Increase),
+        (counters.clone().every(HOUR).without(&[]), Op::Count),
+        (gauges.clone().every(MINUTE).by(&["route"]), Op::Avg),
+        (gauges.clone().every(HOUR).without(&[]), Op::Delta),
+        (gauges.clone().every(10 * MINUTE).by(&["host"]), Op::Percentile(95.0)),
+        (gauges.clone().by(&["route"]), Op::Max),
+    ];
+    for (query, op) in cases {
+        let whole = query.aggregate(op).unwrap().groups;
+        assert!(!whole.is_empty() && whole.iter().all(|group| !group.more), "{op}");
+        for limit in [1, 3, 17, 100_000] {
+            assert_eq!(joined_groups(&aggregate_pages(&query, op, limit)), whole, "{op} in pages of {limit}");
+        }
+    }
+}
+
+// contract: MET-17
+#[test]
+fn aggregate_pages_of_a_calendar_go_across_a_change_of_the_clock() {
+    let f = fixture();
+    // from mid January to the first days of April, past Berlin's change to summer time
+    f.pass(80 * DAY);
+    f.metrics().ingest(&[f.gauge("temp", 240, HOUR, |index| index as f64 * 0.25)]).unwrap();
+    maintain(&f.store).unwrap();
+    let query = f.metrics().query().name("temp").since(11 * DAY).calendar(crate::Calendar::Day, "Europe/Berlin");
+    let whole = query.aggregate(Op::Avg).unwrap().groups;
+    assert_eq!(whole[0].buckets.len(), 11);
+    for limit in [1, 2, 5] {
+        assert_eq!(joined_groups(&aggregate_pages(&query, Op::Avg, limit)), whole, "days in pages of {limit}");
+    }
+}
+
+// contract: MET-17
+#[test]
+fn an_aggregates_cursor_is_refused_with_another_op_or_another_call() {
+    let f = fixture();
+    traffic(&f);
+    let query = f.metrics().query().name("requests_total").since(HOUR).every(MINUTE).limit(5);
+    let next = query.aggregate(Op::Rate).unwrap().next.unwrap();
+    let invalid = |error: crate::Error| error.kind();
+    assert_eq!(invalid(query.clone().after(&next).aggregate(Op::Increase).unwrap_err()), ErrorKind::Invalid);
+    assert_eq!(invalid(query.clone().every(HOUR).after(&next).aggregate(Op::Rate).unwrap_err()), ErrorKind::Invalid);
+    let read = f.metrics().query().name("requests_total").since(HOUR).limit(5);
+    assert_eq!(invalid(read.clone().after(&next).read().unwrap_err()), ErrorKind::Invalid, "a read takes no group");
+    let read_next = read.read().unwrap().next.unwrap();
+    let aggregate = query.clone().after(&read_next).aggregate(Op::Rate).unwrap_err();
+    assert_eq!(invalid(aggregate), ErrorKind::Invalid, "an aggregate takes no series");
 }

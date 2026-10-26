@@ -93,7 +93,7 @@ pub use listing::{LabelPage, List, NameInfo, NamePage, ValuePage};
 pub use maintain::{Maintenance, maintain};
 pub use own::SelfMetrics;
 pub(crate) use own::measure_the_store;
-pub use page::{All, SeriesPage};
+pub use page::{AggregatePage, All, SeriesPage};
 pub use prometheus::Prometheus;
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use recorder::Recorder;

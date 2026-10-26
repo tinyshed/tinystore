@@ -48,7 +48,7 @@ fn a_timer_is_read_by_its_own_name() {
     f.pass(MINUTE);
     stats.flush().unwrap();
     let minutes = || f.metrics().query().name("http_request_ms").from(start).to(start + 3 * MINUTE).every(MINUTE);
-    let numbers = |op| answered(&minutes().aggregate(op).unwrap());
+    let numbers = |op| answered(&minutes().aggregate(op).unwrap().groups);
     let exact = |values: &[(f64, u64)]| -> Vec<(Value, u64)> {
         values.iter().map(|(value, samples)| (Value::Exact(*value), *samples)).collect()
     };
@@ -61,7 +61,7 @@ fn a_timer_is_read_by_its_own_name() {
     assert_eq!(numbers(Op::Max), exact(&[(200.0, 4), (20.0, 1)]));
     assert_eq!(numbers(Op::Percentile(50.0)), [(between(0.0, 10.0), 4), (between(10.0, 100.0), 1)]);
     assert_eq!(numbers(Op::Percentile(95.0))[0], (between(100.0, f64::INFINITY), 4));
-    let routes = minutes().by(&["route"]).aggregate(Op::Avg).unwrap();
+    let routes = minutes().by(&["route"]).aggregate(Op::Avg).unwrap().groups;
     let names: Vec<(&str, &str)> =
         routes.iter().map(|group| (group.name.as_str(), group.labels["route"].as_str())).collect();
     assert_eq!(names, [("http_request_ms", "/notes"), ("http_request_ms", "/users")], "a group bears the timer's name");
@@ -107,11 +107,13 @@ fn an_op_a_timer_has_not_and_a_part_it_keeps_none_of_are_invalid() {
     assert!(by_bound.contains("a percentile ranks a timer's buckets together"), "{by_bound}");
     let estimated = refused("api_ms", Query::estimate, Op::Avg);
     assert!(estimated.contains("an estimate of avg: only a percentile has one"), "{estimated}");
-    let answer = f.metrics().query().name("rpc_ms").since(HOUR).estimate().aggregate(Op::Percentile(50.0)).unwrap();
+    let answer =
+        f.metrics().query().name("rpc_ms").since(HOUR).estimate().aggregate(Op::Percentile(50.0)).unwrap().groups;
     let estimate = Value::Between { lower: 0.0, upper: 10.0, estimate: Some(5.0) };
     assert_eq!(answered(&answer), [(estimate, 4)], "a scrape's histogram reads as a timer");
     // the buckets of a histogram read by their own name are a counter each
-    let heat = f.metrics().query().name("rpc_ms_bucket").since(HOUR).by(&["le"]).aggregate(Op::Increase).unwrap();
+    let heat =
+        f.metrics().query().name("rpc_ms_bucket").since(HOUR).by(&["le"]).aggregate(Op::Increase).unwrap().groups;
     assert_eq!(heat.len(), 2);
 }
 
@@ -140,7 +142,7 @@ fn a_timers_percentile_lies_in_the_bucket_that_holds_its_rank_and_whole_blocks_a
     // three hours, and the sample before them a first step begins at
     f.metrics().ingest(&scraped(now - 3 * HOUR - 15 * SECOND, 721)).unwrap();
     let hours = || f.metrics().query().name("rpc_ms").from(now - 3 * HOUR).to(now).every(HOUR);
-    let ask = |percent: f64| answered(&hours().estimate().aggregate(Op::Percentile(percent)).unwrap());
+    let ask = |percent: f64| answered(&hours().estimate().aggregate(Op::Percentile(percent)).unwrap().groups);
     let ranked = |(lower, upper, estimate): (f64, f64, Option<f64>)| (Value::Between { lower, upper, estimate }, 1200);
     let from_the_head = [ask(50.0), ask(80.0), ask(95.0)];
     // each hour 1200 values: 240 at most 10, 720 at most 20, 960 at most 50 and 100
@@ -172,9 +174,9 @@ fn a_percentile_uses_the_bounds_two_sets_share_where_they_meet() {
     [1.0, 30.0].into_iter().for_each(|value| new.record(value));
     stats.flush().unwrap();
     let range = |every: Duration| f.metrics().query().name("job_ms").from(start).to(start + 3 * MINUTE).every(every);
-    let p50 = |every| answered(&range(every).aggregate(Op::Percentile(50.0)).unwrap());
+    let p50 = |every| answered(&range(every).aggregate(Op::Percentile(50.0)).unwrap().groups);
     assert_eq!(p50(HOUR), [(between(0.0, f64::INFINITY), 5)], "the hour of the change: neither set's bounds");
-    let estimated = answered(&range(HOUR).estimate().aggregate(Op::Percentile(50.0)).unwrap());
+    let estimated = answered(&range(HOUR).estimate().aggregate(Op::Percentile(50.0)).unwrap().groups);
     assert_eq!(estimated[0].0, between(0.0, f64::INFINITY), "no bound to estimate toward");
     // a minute of one set keeps its bounds
     assert_eq!(p50(MINUTE), [(between(0.0, f64::INFINITY), 3), (between(0.0, 5.0), 2)]);
@@ -201,15 +203,17 @@ fn a_percentile_uses_the_bounds_two_sets_share_where_they_meet() {
         bucket("b", "+Inf", 10.0),
     ];
     f.metrics().ingest(&written).unwrap();
-    let rank =
-        |percent| answered(&f.metrics().query().name("rpc_ms").since(HOUR).aggregate(Op::Percentile(percent)).unwrap());
+    let rank = |percent| {
+        answered(&f.metrics().query().name("rpc_ms").since(HOUR).aggregate(Op::Percentile(percent)).unwrap().groups)
+    };
     assert_eq!(rank(25.0), [(between(0.0, 20.0), 20)], "10 is a's alone");
     assert_eq!(rank(75.0), [(between(20.0, f64::INFINITY), 20)], "and 40 b's");
     // a process that measured nothing there narrows no other's bounds
     let idle = [counted("c", 0.0), bucket("c", "30", 0.0), bucket("c", "+Inf", 0.0)];
     f.metrics().ingest(&idle).unwrap();
     assert_eq!(rank(25.0), [(between(0.0, 20.0), 20)]);
-    let apart = f.metrics().query().name("rpc_ms").since(HOUR).without(&[]).aggregate(Op::Percentile(25.0)).unwrap();
+    let apart =
+        f.metrics().query().name("rpc_ms").since(HOUR).without(&[]).aggregate(Op::Percentile(25.0)).unwrap().groups;
     let alone: Vec<Value> = apart.iter().map(|group| group.buckets[0].value).collect();
     assert_eq!(alone, [between(0.0, 10.0), between(20.0, 40.0)], "each process alone keeps its own");
 }
@@ -223,7 +227,7 @@ fn a_rank_past_the_last_bound_has_no_upper_bound() {
     stats.flush().unwrap();
     let ask = |percent| {
         let answer = f.metrics().query().name("slow_ms").since(HOUR).estimate().aggregate(Op::Percentile(percent));
-        answered(&answer.unwrap())[0].0
+        answered(&answer.unwrap().groups)[0].0
     };
     // past the last bound the estimate is that bound, as Prometheus' histogram_quantile gives it
     assert_eq!(ask(95.0), Value::Between { lower: 10.0, upper: f64::INFINITY, estimate: Some(10.0) });

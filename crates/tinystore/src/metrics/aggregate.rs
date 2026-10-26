@@ -127,6 +127,9 @@ pub struct Aggregate {
     pub labels: Labels,
     /// A bucket without samples is left out.
     pub buckets: Vec<Bucket>,
+    /// A page of an aggregate cut the group here: the page its `next` reads
+    /// begins with the rest of its buckets.
+    pub more: bool,
 }
 
 /// One bucket of an aggregate.
@@ -365,6 +368,32 @@ impl Shape {
     /// is one bucket.
     pub(super) fn bucket_of(&self, at: i64, range_from: i64) -> i64 {
         self.grid.as_ref().map_or(range_from, |grid| grid.start(at))
+    }
+
+    /// Where a page of `buckets` buckets from `from` ends: where the bucket
+    /// after its last begins, the range's end `to` at most. A range that is
+    /// one bucket ends at `to`.
+    pub(super) fn after_buckets(&self, from: i64, buckets: usize, to: i64) -> i64 {
+        let Some(grid) = &self.grid else { return to };
+        let mut end = grid.start(from);
+        for _ in 0..buckets {
+            if end >= to {
+                break;
+            }
+            end = grid.end(end);
+        }
+        end.min(to)
+    }
+
+    /// How many buckets begin in `[from, to)`, the one that holds `from`
+    /// among them.
+    pub(super) fn buckets_in(&self, from: i64, to: i64) -> usize {
+        let Some(grid) = &self.grid else { return 1 };
+        let (mut at, mut count) = (grid.start(from), 0);
+        while at < to {
+            (at, count) = (grid.end(at), count + 1);
+        }
+        count
     }
 
     /// What the range leaves of the bucket that begins at `at`.

@@ -28,7 +28,7 @@ fn a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing() {
     // a first step begins at the last sample of the hour before the range, which its directory holds
     let stepped = hours().from(now - 7 * HOUR).every(HOUR).explain(Op::Delta).unwrap();
     assert_eq!(stepped.decoded, 0);
-    let moved = hours().from(now - 7 * HOUR).every(HOUR).filter("host", "a").aggregate(Op::Delta).unwrap();
+    let moved = hours().from(now - 7 * HOUR).every(HOUR).filter("host", "a").aggregate(Op::Delta).unwrap().groups;
     assert_eq!(moved[0].buckets.iter().map(|hour| hour.value.exact()).collect::<Vec<_>>(), [Some(240.0); 7]);
     // what each plan says is what its call spends
     let hour = Shape::of(Op::Avg, Asking { every: Some(HOUR), ..Asking::default() }).unwrap();
@@ -41,7 +41,7 @@ fn a_plan_says_what_the_call_spends_and_whole_blocks_decode_nothing() {
         assert_eq!(said, (spent.series, spent.bytes, spent.decoded), "{want:?}");
     }
     // and the aggregates it planned answer
-    assert_eq!(hours().every(HOUR).aggregate(Op::Avg).unwrap()[0].buckets.len(), 8);
+    assert_eq!(hours().every(HOUR).aggregate(Op::Avg).unwrap().groups[0].buckets.len(), 8);
 }
 
 // contract: MET-07
@@ -116,5 +116,5 @@ fn a_plan_counts_the_samples_or_buckets_a_call_would_answer() {
     let near = f.metrics().query().name("fine").from(first + 30 * SECOND).to(f.now() - 30 * SECOND);
     assert_eq!(near.clone().explain(None).unwrap().exceeds, None);
     assert_eq!(all().every(2 * SECOND).explain(Op::Avg).unwrap().exceeds, None);
-    assert_eq!(all().every(2 * SECOND).aggregate(Op::Avg).unwrap()[0].buckets.len(), 50_001);
+    assert_eq!(all().every(2 * SECOND).aggregate(Op::Avg).unwrap().groups[0].buckets.len(), 50_001);
 }
