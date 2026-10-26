@@ -59,10 +59,10 @@ fn a_series_is_cut_into_blocks_where_its_hours_begin_and_reads_back_whole() {
     assert_eq!(blocks.iter().map(|block| block.2).collect::<Vec<_>>(), [120, 240, 240, 240]);
     assert!(blocks.iter().all(|(start, end, _)| start.div_euclid(hour) == end.div_euclid(hour)), "{blocks:?}");
     assert_eq!(f.value("select head_count from series_state"), 1);
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written));
     let f = f.reopen();
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written), "after a restart too");
 }
 
@@ -73,7 +73,7 @@ fn a_range_reads_the_blocks_and_the_head_it_touches_and_no_more() {
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
     maintain(&f.store).unwrap();
     let start = written.samples()[1000].at;
-    let read = f.metrics().query().name("cpu").from(start).to(start + 10 * MINUTE).read().unwrap();
+    let read = f.metrics().query().name("cpu").from(start).to(start + 10 * MINUTE).read().unwrap().series;
     assert_eq!(read[0].samples().len(), 40);
     assert_eq!(read[0].samples()[0].value, 1000.0);
     let mut budget = crate::metrics::budget::Budget::default();
@@ -92,7 +92,7 @@ fn a_read_sees_one_state_while_ingests_and_packing_go_on_beside_it() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             while !done.load(std::sync::atomic::Ordering::Acquire) {
-                let read = f.metrics().query().name("cpu").from(from).to(to).read().unwrap();
+                let read = f.metrics().query().name("cpu").from(from).to(to).read().unwrap().series;
                 let values: Vec<f64> =
                     read.iter().flat_map(|series| series.samples().iter().map(|s| s.value)).collect();
                 // what a read sees is every ingest whole, each sample once, in a head or in a block
@@ -166,7 +166,7 @@ fn a_group_takes_in_the_one_before_it_while_that_holds_no_more_blocks() {
     // a group a publication, each taking in those before while they hold no more: 8 blocks in one group
     let found = groups(&f);
     assert_eq!(found.iter().map(|(_, _, blocks)| blocks.len()).collect::<Vec<_>>(), [8]);
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     let values: Vec<f64> = read[0].samples().iter().map(|sample| sample.value).filter(|value| *value != 0.0).collect();
     assert_eq!(values.len(), 8 * 240 - 1, "every packed sample but the first, which is 0");
 }
@@ -183,7 +183,7 @@ fn a_unit_holding_more_than_240_samples_is_cut_every_240() {
     maintain(&f.store).unwrap();
     let blocks: Vec<usize> = groups(&f).iter().flat_map(|(_, _, blocks)| blocks.iter().map(|block| block.2)).collect();
     assert_eq!(blocks, [1, 240, 60]);
-    let read = f.metrics().query().name("bursty").read().unwrap();
+    let read = f.metrics().query().name("bursty").read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written));
 }
 
@@ -246,7 +246,7 @@ fn a_publication_another_write_raced_among_its_samples_is_dropped_and_tried_agai
     }
     let done = maintain(&f.store).unwrap();
     assert_eq!(done.packed, 481, "every sample but the newest, the one written between them too");
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(read[0].samples().len(), 482);
 }
 
@@ -263,7 +263,7 @@ fn a_write_past_what_packing_read_leaves_its_publication_standing() {
     f.engine().publish(vec![staged], &mut packed).unwrap();
     assert_eq!((packed.conflicts, packed.blocks, packed.samples), (0, 2, 480));
     assert_eq!(f.value("select head_count from series_state"), 2);
-    let read = f.metrics().query().name("cpu").to(f.now() + MINUTE).read().unwrap();
+    let read = f.metrics().query().name("cpu").to(f.now() + MINUTE).read().unwrap().series;
     let values: Vec<f64> = read[0].samples().iter().map(|sample| sample.value).collect();
     assert_eq!((values.len(), values[479], values[480], values[481]), (482, 479.0, 9.0, 10.0));
 }
@@ -287,7 +287,7 @@ fn a_block_expires_whole_once_its_last_sample_has_and_a_group_keeps_its_payloads
         after.iter().map(|(start, _, _)| *start).collect::<Vec<_>>(),
         before.iter().map(|(start, _, _)| *start).collect::<Vec<_>>()
     );
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(read[0].samples().len(), 961 - 240);
     assert_eq!(f.rows("payloads"), 3);
 }
@@ -310,7 +310,7 @@ fn packing_a_head_whose_oldest_samples_have_expired_leaves_none_of_them_before_i
     let engine = f.engine();
     let (packed, _) = engine.pack(engine.now()).unwrap();
     assert_eq!((packed.samples, packed.blocks, packed.expired), (440, 2, 39));
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written)[39..], "every sample its name keeps, in order");
     assert!(f.metrics().damaged().unwrap().is_empty());
     assert_eq!(f.value("select head_count from series_state"), 1, "the newest sample waits");

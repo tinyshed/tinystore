@@ -25,7 +25,7 @@ for _, s := range series {
 
 ```rust
 let stats = store.metrics()?;
-let series = stats.query().name("cpu").filter("host", "web-1").since(Duration::from_hours(1)).read()?;
+let series = stats.query().name("cpu").filter("host", "web-1").since(Duration::from_hours(1)).read()?.series;
 ```
 
 A series comes back with its samples as two columns: `times`, unix
@@ -68,7 +68,8 @@ let failing = stats
     .filter("status", ["500", "502"])
     .filter("env", Not("dev"))
     .filter("host", Prefix("api-"))
-    .read()?;
+    .read()?
+    .series;
 ```
 
 | In a query           | Finds                                                  |

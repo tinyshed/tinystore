@@ -19,7 +19,7 @@ fn a_sample_comes_back_bit_for_bit() {
     ];
     let written = f.gauge("odd", values.len(), SECOND, |index| values[index]);
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
-    let read = f.metrics().query().name("odd").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("odd").since(HOUR).read().unwrap().series;
     assert_eq!(read.len(), 1);
     assert_eq!(bits(&read[0]), bits(&written));
     assert_eq!((read[0].name(), read[0].kind()), ("odd", Kind::Gauge));
@@ -33,7 +33,7 @@ fn a_histograms_bound_is_written_as_javascript_writes_it_and_one_without_is_refu
     f.metrics().ingest(&[bucket("5.0"), bucket("1e3"), bucket("+Inf"), bucket("0.250")]).unwrap();
     // the same bound however it is spelt is one series
     f.metrics().ingest(&[bucket("5").sample(now - SECOND, 0.0)]).unwrap();
-    let read = f.metrics().query().name("rpc_ms_bucket").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("rpc_ms_bucket").since(HOUR).read().unwrap().series;
     let mut bounds: Vec<(&str, usize)> =
         read.iter().map(|series| (series.labels()["le"].as_str(), series.samples().len())).collect();
     bounds.sort_unstable();
@@ -52,7 +52,7 @@ fn a_sample_survives_a_restart() {
     let written = f.gauge("cpu", 600, SECOND, |index| index as f64 / 4.0).label("host", "web-1");
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
     let f = f.reopen();
-    let read = f.metrics().query().name("cpu").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("cpu").since(HOUR).read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written));
     assert_eq!(read[0].labels()["host"], "web-1");
 }
@@ -67,7 +67,7 @@ fn a_series_is_its_name_and_its_labels_in_any_order() {
     let other = Series::gauge("cpu").label("host", "a").sample(now, 3.0);
     f.metrics().ingest(&[one, same, other]).unwrap();
     assert_eq!(f.rows("series"), 2);
-    let read = f.metrics().query().name("cpu").filter("zone", "1").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("cpu").filter("zone", "1").since(HOUR).read().unwrap().series;
     assert_eq!(read[0].samples().iter().map(|sample| sample.value).collect::<Vec<_>>(), [1.0, 2.0]);
 }
 
@@ -80,12 +80,15 @@ fn an_ingest_is_atomic_and_a_time_given_twice_keeps_the_last_value() {
     let bad = Series::gauge("cpu").label("__host", "b").sample(now, 2.0);
     let error = f.metrics().ingest(&[good.clone(), bad]).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Invalid);
-    assert!(f.metrics().query().name("cpu").since(HOUR).read().unwrap().is_empty(), "nothing of the call was written");
+    assert!(
+        f.metrics().query().name("cpu").since(HOUR).read().unwrap().series.is_empty(),
+        "nothing of the call was written"
+    );
 
     let twice = good.clone().sample(now - SECOND, 5.0).sample(now, 7.0);
     f.metrics().ingest(&[twice]).unwrap();
     f.metrics().ingest(&[Series::gauge("cpu").label("host", "a").sample(now - SECOND, 6.0)]).unwrap();
-    let read = f.metrics().query().name("cpu").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("cpu").since(HOUR).read().unwrap().series;
     assert_eq!(read[0].samples().iter().map(|sample| sample.value).collect::<Vec<_>>(), [6.0, 7.0]);
 }
 
@@ -260,7 +263,7 @@ fn samples_in_any_order_come_back_in_the_order_of_their_times() {
     let mut shuffled = Series::gauge("shuffled");
     shuffled.extend((0..500_u32).map(|n| ((n * 7919) % 500, n)).map(|(at, n)| (now - SECOND * at, f64::from(n))));
     f.metrics().ingest(&[shuffled]).unwrap();
-    let read = f.metrics().query().name("shuffled").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("shuffled").since(HOUR).read().unwrap().series;
     let times: Vec<i64> = bits(&read[0]).iter().map(|(at, _)| *at).collect();
     assert_eq!(times.len(), 500);
     assert!(times.windows(2).all(|pair| pair[0] < pair[1]));

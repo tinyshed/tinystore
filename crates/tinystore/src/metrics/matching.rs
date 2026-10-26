@@ -42,11 +42,29 @@ const PREFIX_COUNT: &str = "select coalesce(sum(posting_count), 0) from label_va
     where name = ?1 and value >= ?2 and (?3 is null or value < ?3)";
 const LABELS: &str = "select id, name, value from label_values where id in (select value from json_each(?1))";
 
-/// The series that meet every condition, in the order of their ids.
+/// The series that meet every condition, in the order of their ids; past
+/// the series a query finds, `limit`.
 pub(super) fn find(connection: &Connection, asked: &Asked, budget: &mut Budget) -> Result<Vec<Found>> {
     let Some((finding, leaving)) = sets(connection, asked)? else { return Ok(Vec::new()) };
-    let rows = series_of(connection, &finding, &leaving, budget)?;
+    let (rows, beyond) = series_of(connection, &finding, &leaving, i64::MIN, budget)?;
+    if beyond.is_some() {
+        budget.take_series()?;
+    }
     labelled(connection, rows, budget)
+}
+
+/// The series that meet every condition from the id `from` on, in the order
+/// of their ids, as many as a query finds, and the id of the next one when
+/// there are more: a page goes on from it.
+pub(super) fn find_from(
+    connection: &Connection,
+    asked: &Asked,
+    from: i64,
+    budget: &mut Budget,
+) -> Result<(Vec<Found>, Option<i64>)> {
+    let Some((finding, leaving)) = sets(connection, asked)? else { return Ok((Vec::new(), None)) };
+    let (rows, beyond) = series_of(connection, &finding, &leaving, from, budget)?;
+    Ok((labelled(connection, rows, budget)?, beyond))
 }
 
 /// The sets that find series, the smallest first, and those that leave
@@ -123,13 +141,21 @@ fn membership(set: &Set, alias: &str, values: &mut Vec<Value>) -> String {
 pub(super) type Row = (i64, Option<String>, Vec<u8>);
 
 /// The series of the postings every finding set holds and no leaving set
-/// does, the first past the budget's count refused.
-fn series_of(connection: &Connection, finding: &[Set], leaving: &[Set], budget: &mut Budget) -> Result<Vec<Row>> {
+/// does, from the id `from` on, as many as the budget's count, and the id of
+/// the one after them when there is one.
+fn series_of(
+    connection: &Connection,
+    finding: &[Set],
+    leaving: &[Set],
+    from: i64,
+    budget: &mut Budget,
+) -> Result<(Vec<Row>, Option<i64>)> {
     if finding.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
-    let mut values = Vec::new();
-    let mut filter = format!("select p.series_id from postings p where {}", membership(&finding[0], "p", &mut values));
+    let mut values = vec![Value::Integer(from)];
+    let first = membership(&finding[0], "p", &mut values);
+    let mut filter = format!("select p.series_id from postings p where p.series_id >= ?1 and {first}");
     for (set, negated) in finding[1..].iter().map(|set| (set, "")).chain(leaving.iter().map(|set| (set, "not "))) {
         let member = membership(set, "q", &mut values);
         filter.push_str(&format!(
@@ -147,12 +173,16 @@ fn series_of(connection: &Connection, finding: &[Set], leaving: &[Set], budget: 
     let mut rows = select.query(params_from_iter(values)).map_err(failed)?;
     let mut matched = Vec::new();
     while let Some(row) = rows.next().map_err(failed)? {
+        let id = row.get(0).map_err(failed)?;
+        if matched.len() == budget.series_limit() {
+            return Ok((matched, Some(id)));
+        }
         budget.take_series()?;
         let ids: Vec<u8> = row.get(2).map_err(failed)?;
         budget.take_bytes(ids.len())?;
-        matched.push((row.get(0).map_err(failed)?, row.get(1).map_err(failed)?, ids));
+        matched.push((id, row.get(1).map_err(failed)?, ids));
     }
-    Ok(matched)
+    Ok((matched, None))
 }
 
 /// Each series' labels, read from the dictionary in one statement for the

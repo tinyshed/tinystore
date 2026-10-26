@@ -82,6 +82,13 @@ impl Budget {
         BYTES.most - self.bytes
     }
 
+    /// Whether `bytes` more copied and `samples` more decoded stay within
+    /// their bounds: a page asks before it takes a part, and stops rather
+    /// than fail.
+    pub(super) fn fits(&self, bytes: usize, samples: usize) -> bool {
+        self.bytes.saturating_add(bytes) <= BYTES.most && self.decoded.saturating_add(samples) <= DECODED.most
+    }
+
     pub(super) fn take_decoded(&mut self, samples: usize) -> Result<()> {
         self.decoded = self.take(self.decoded, samples, &DECODED)?;
         Ok(())

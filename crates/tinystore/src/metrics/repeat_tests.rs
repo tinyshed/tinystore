@@ -28,7 +28,7 @@ fn kept(f: &Fixture) -> [i64; 5] {
 
 /// The series' samples as a read gives them.
 fn read(f: &Fixture) -> Vec<(i64, u64)> {
-    bits(&f.metrics().query().name("revenue").since(4 * HOUR).read().unwrap()[0])
+    bits(&f.metrics().query().name("revenue").since(4 * HOUR).read().unwrap().series[0])
 }
 
 /// `series` with its sample at `index` given another value.

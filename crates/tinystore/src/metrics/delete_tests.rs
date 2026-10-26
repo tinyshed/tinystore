@@ -30,7 +30,7 @@ fn a_series_is_deleted_whole_and_its_neighbours_keep_theirs() {
     assert!(stats.delete("cpu", [("host", "a"), ("zone", "eu")]).unwrap());
     assert!(!stats.delete("cpu", [("zone", "eu"), ("host", "a")]).unwrap(), "nothing left of it");
     assert!(!stats.delete("cpu", [("host", "b")]).unwrap(), "exactly these labels, no fewer");
-    let read = stats.query().name("cpu").read().unwrap();
+    let read = stats.query().name("cpu").read().unwrap().series;
     assert_eq!((read.len(), bits(&read[0])), (1, bits(&stays)));
     assert_eq!(stats.label_values("cpu", "host").page().unwrap().values, ["b"]);
     assert_eq!(stats.names().page().unwrap().names[0].series_count, 1);
@@ -63,15 +63,15 @@ fn a_series_of_the_stores_own_labels_and_one_an_instrument_writes_again_are_dele
     let latency = stats.timer("db_ms").buckets(Buckets::Exponential).open().unwrap();
     latency.record(Duration::from_millis(1));
     stats.flush().unwrap();
-    let bins = stats.query().name("db_ms_bucket").read().unwrap();
+    let bins = stats.query().name("db_ms_bucket").read().unwrap().series;
     assert_eq!(bins.len(), 1);
     assert!(stats.delete("db_ms_bucket", bins[0].labels()).unwrap());
-    assert!(stats.query().name("db_ms_bucket").read().unwrap().is_empty());
+    assert!(stats.query().name("db_ms_bucket").read().unwrap().series.is_empty());
     // the instrument's next write starts a new series
     latency.record(Duration::from_millis(1));
     f.pass(15 * SECOND);
     stats.flush().unwrap();
-    assert_eq!(stats.query().name("db_ms_bucket").read().unwrap().len(), 1);
+    assert_eq!(stats.query().name("db_ms_bucket").read().unwrap().series.len(), 1);
 }
 
 // contract: MET-13

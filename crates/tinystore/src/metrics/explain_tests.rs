@@ -109,7 +109,10 @@ fn a_plan_counts_the_samples_or_buckets_a_call_would_answer() {
     // a range the newest samples cut, and buckets of two seconds, fit
     let cut = f.metrics().query().name("fine").from(first + 30 * SECOND).explain(None).unwrap();
     assert_eq!(cut.exceeds, None);
-    assert_eq!(f.metrics().query().name("fine").from(first + 30 * SECOND).read().unwrap()[0].samples().len(), 99_971);
+    assert_eq!(
+        f.metrics().query().name("fine").from(first + 30 * SECOND).read().unwrap().series[0].samples().len(),
+        99_971
+    );
     let near = f.metrics().query().name("fine").from(first + 30 * SECOND).to(f.now() - 30 * SECOND);
     assert_eq!(near.clone().explain(None).unwrap().exceeds, None);
     assert_eq!(all().every(2 * SECOND).explain(Op::Avg).unwrap().exceeds, None);

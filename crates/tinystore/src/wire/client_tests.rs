@@ -56,7 +56,7 @@ fn welcomed(store: &Store) -> (Client<Piped>, Arc<AtomicBool>) {
 }
 
 fn samples_of(store: &Store, name: &str) -> usize {
-    let read = store.metrics().unwrap().query().name(name).since(Duration::from_secs(3600)).read().unwrap();
+    let read = store.metrics().unwrap().query().name(name).since(Duration::from_secs(3600)).read().unwrap().series;
     read.iter().map(|series| series.samples().len()).sum()
 }
 

@@ -67,6 +67,7 @@ pub struct Series {
     pub(super) labels: Labels,
     pub(super) samples: Vec<Sample>,
     pub(super) keep: Option<Duration>,
+    pub(super) more: bool,
 }
 
 impl Series {
@@ -86,7 +87,7 @@ impl Series {
     }
 
     pub(super) fn of(name: String, kind: Kind) -> Series {
-        Series { name, kind, labels: Labels::new(), samples: Vec::new(), keep: None }
+        Series { name, kind, labels: Labels::new(), samples: Vec::new(), keep: None, more: false }
     }
 
     /// One label more; a number or a boolean is kept as its text, `200` as
@@ -129,6 +130,12 @@ impl Series {
 
     pub fn samples(&self) -> &[Sample] {
         &self.samples
+    }
+
+    /// A page of a read cut the series here: the page its `next` reads
+    /// begins with the rest of its samples.
+    pub fn more(&self) -> bool {
+        self.more
     }
 }
 

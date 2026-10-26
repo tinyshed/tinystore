@@ -85,7 +85,8 @@ fn what_the_store_measured_is_kept_through_its_close_and_counted_on_after() {
     assert_eq!(newest(&metrics, "tinystore_commits_total", "metrics"), Some(1.0));
     ingest_one(&metrics);
     metrics.flush().unwrap();
-    let read = metrics.query().name("tinystore_commits_total").filter("file", "metrics").since(HOUR).read().unwrap();
+    let read =
+        metrics.query().name("tinystore_commits_total").filter("file", "metrics").since(HOUR).read().unwrap().series;
     let values: Vec<f64> = read[0].samples().iter().map(|sample| sample.value).collect();
     assert_eq!(values.first(), Some(&0.0));
     assert_eq!(values.last(), Some(&1.0));

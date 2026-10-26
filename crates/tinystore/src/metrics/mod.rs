@@ -11,7 +11,7 @@
 //! let requests = stats.counter("http_requests_total").open()?;
 //! requests.with(&[("route", "/notes")]).inc();
 //! stats.ingest(&[Series::gauge("cpu").label("host", "web-1").sample(SystemTime::now(), 0.42)])?;
-//! let cpu = stats.query().name("cpu").since(Duration::from_hours(1)).read()?;
+//! let cpu = stats.query().name("cpu").since(Duration::from_hours(1)).read()?.series;
 //! assert_eq!(cpu[0].labels()["host"], "web-1");
 //! # Ok(())
 //! # }
@@ -55,6 +55,7 @@ mod matching;
 mod names;
 mod own;
 mod pack;
+mod page;
 pub(crate) mod prometheus;
 mod publish;
 mod query;
@@ -92,6 +93,7 @@ pub use listing::{LabelPage, List, NameInfo, NamePage, ValuePage};
 pub use maintain::{Maintenance, maintain};
 pub use own::SelfMetrics;
 pub(crate) use own::measure_the_store;
+pub use page::{All, SeriesPage};
 pub use prometheus::Prometheus;
 pub use query::{Condition, Not, Prefix, Query, Values};
 pub use recorder::Recorder;

@@ -19,7 +19,7 @@ fn samples(f: &Fixture, name: &str, labels: &[(&str, &str)]) -> Vec<(i64, f64)> 
     for (label, value) in labels {
         query = query.filter(*label, *value);
     }
-    let read = query.read().unwrap();
+    let read = query.read().unwrap().series;
     let series = read.iter().find(|series| series.labels().len() == labels.len());
     series.map_or(Vec::new(), |series| {
         series.samples().iter().map(|sample| (crate::unix_millis(sample.at) - START, sample.value)).collect()
@@ -33,7 +33,7 @@ fn ms(span: Duration) -> i64 {
 /// The intervals of `name`'s grid, each by its label `__bin`, and its
 /// samples, from the fixture's start in milliseconds.
 fn intervals(f: &Fixture, name: &str) -> Vec<(String, Vec<(i64, f64)>)> {
-    let read = f.metrics().query().name(format!("{name}_bucket")).since(DAY).read().unwrap();
+    let read = f.metrics().query().name(format!("{name}_bucket")).since(DAY).read().unwrap().series;
     let interval = |series: &Series| {
         let samples = series.samples().iter().map(|sample| (crate::unix_millis(sample.at) - START, sample.value));
         (series.labels()["__bin"].clone(), samples.collect())
@@ -444,7 +444,11 @@ fn a_timer_the_store_refuses_writes_none_of_its_series() {
     latency.record(Duration::from_millis(3));
     stats.flush().unwrap();
     for name in ["latency_ms_count", "latency_ms_max", "latency_ms_bucket"] {
-        assert_eq!(f.metrics().query().name(name).read().unwrap().len(), 0, "{name}: a timer's series go together");
+        assert_eq!(
+            f.metrics().query().name(name).read().unwrap().series.len(),
+            0,
+            "{name}: a timer's series go together"
+        );
     }
 }
 

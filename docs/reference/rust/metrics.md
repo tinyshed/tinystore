@@ -623,6 +623,36 @@ pub struct SelfMetrics {
 
 What a store measures of itself, when it is opened with its own metrics.
 
+## All
+
+```rust
+pub struct All { /* private fields */ }
+```
+
+The series of a page and of every page after it, one page held at a time.
+
+## SeriesPage
+
+```rust
+pub struct SeriesPage {
+    pub series: Vec<Series>,
+    pub next: Option<String>,
+}
+```
+
+One page of a read: its series, and `next` while there is more. A series
+the page cut says `Series::more`, and the page `next` reads begins with
+the rest of it. A read without `limit` is one page, whole, without `next`.
+
+### SeriesPage.all
+
+```rust
+pub fn all(self) -> All
+```
+
+The page's series, then those of each page after it, read one page at
+a time as the walk reaches the end of the one it holds.
+
 ## Prometheus
 
 ```rust
@@ -807,15 +837,36 @@ A timer's percentile also gives a point between the bounds of the
 bucket of its spread that holds the rank, interpolated as Prometheus'
 `histogram_quantile` does: an estimate, which no measurement gave.
 
+### Query.limit
+
+```rust
+pub fn limit(self, samples: usize) -> Self
+```
+
+A read in pages: each at most this many samples, 100,000 at most, and
+its `next` while there is more.
+
+### Query.after
+
+```rust
+pub fn after(self, next: &str) -> Self
+```
+
+The page after the one whose `next` this is, read with the same query
+and `limit`: the range, and the clock, the first page read.
+
 ### Query.read
 
 ```rust
-pub fn read(&self) -> Result<Vec<Series>>
+pub fn read(&self) -> Result<SeriesPage>
 ```
 
 The samples of each series the query finds, in its range: a series
-without one is left out. Past a bound of a read it is a `limit`
-error, naming the bound, never fewer series or samples.
+without one is left out. Without `limit` the page is the whole
+answer, and past a bound of a read it is a `limit` error, naming the
+bound, never fewer series or samples. With `limit` it is a page,
+which stops before what would pass `limit` or a bound and gives
+`next`; it may hold fewer samples than `limit` and still have one.
 
 ### Query.aggregate
 
@@ -1016,6 +1067,15 @@ pub fn labels(&self) -> &Labels
 ```rust
 pub fn samples(&self) -> &[Sample]
 ```
+
+### Series.more
+
+```rust
+pub fn more(&self) -> bool
+```
+
+A page of a read cut the series here: the page its `next` reads
+begins with the rest of its samples.
 
 ## Metrics
 
@@ -1433,6 +1493,23 @@ pub fn to(self, at: SystemTime) -> Self
 
 The range's end, which is not in it; now unless given.
 
+### aio::metrics::Query.limit
+
+```rust
+pub fn limit(self, samples: usize) -> Self
+```
+
+A read in pages, as `crate::metrics::Query::limit` has them.
+
+### aio::metrics::Query.after
+
+```rust
+pub fn after(self, next: &str) -> Self
+```
+
+The page after the one whose `next` this is, as
+`crate::metrics::Query::after` reads it.
+
 ### aio::metrics::Query.every
 
 ```rust
@@ -1480,11 +1557,11 @@ bucket that holds the rank: an estimate, which no measurement gave.
 ### aio::metrics::Query.read
 
 ```rust
-pub fn read(&self) -> impl Future<Output = Result<Vec<Series>>> + Send + 'static
+pub fn read(&self) -> impl Future<Output = Result<SeriesPage>> + Send + 'static
 ```
 
-The samples of each series the query finds, in its range, as
-`crate::metrics::Query::read` gives them.
+The samples of each series the query finds, in its range, whole or a
+page of them, as `crate::metrics::Query::read` gives them.
 
 ### aio::metrics::Query.aggregate
 

@@ -16,7 +16,7 @@ fn a_failed_open_lets_its_file_go_and_the_store_opens_one_engine() {
     let (first, second) = (store.metrics().unwrap(), store.metrics().unwrap());
     let now = SystemTime::now();
     first.ingest(&[Series::gauge("cpu").sample(now - Duration::from_secs(1), 1.0)]).unwrap();
-    let read = second.query().name("cpu").from(now - Duration::from_secs(60)).read().unwrap();
+    let read = second.query().name("cpu").from(now - Duration::from_secs(60)).read().unwrap().series;
     assert_eq!(read.len(), 1, "two handles of one engine");
 }
 

@@ -63,7 +63,7 @@ fn every_text_of_the_vectors_writes_its_series_or_is_refused_whole() {
         names.dedup();
         let mut got = Vec::new();
         for name in names {
-            got.extend(f.metrics().query().name(name).since(keep).read().unwrap().iter().map(seen));
+            got.extend(f.metrics().query().name(name).since(keep).read().unwrap().series.iter().map(seen));
         }
         want.sort();
         got.sort();

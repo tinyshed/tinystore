@@ -507,7 +507,7 @@ impl Reader {
             }
         }
         let samples = vec![Sample { at: from_unix_millis(at), value }];
-        Ok(Some(Series { name: name.to_owned(), kind, labels, samples, keep: None }))
+        Ok(Some(Series { name: name.to_owned(), kind, labels, samples, keep: None, more: false }))
     }
 
     /// The kind of the series a sample called `name` writes, of the family

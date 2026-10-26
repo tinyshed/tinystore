@@ -12,7 +12,7 @@ fn values(f: &Fixture, name: &str, labels: &[(&str, &str)]) -> Vec<f64> {
     for (label, value) in labels {
         query = query.filter(*label, *value);
     }
-    let read = query.read().unwrap();
+    let read = query.read().unwrap().series;
     let series = read.iter().find(|series| series.labels().len() == labels.len());
     series.map_or(Vec::new(), |series| series.samples().iter().map(|sample| sample.value).collect())
 }
@@ -138,7 +138,7 @@ fn an_exponential_timers_intervals_count_where_the_client_put_them() {
         flush: true,
     };
     remote.apply(batch).unwrap();
-    let read = f.metrics().query().name("db_ms_bucket").since(Duration::from_hours(1)).read().unwrap();
+    let read = f.metrics().query().name("db_ms_bucket").since(Duration::from_hours(1)).read().unwrap().series;
     let mut intervals: Vec<(String, Vec<f64>)> = read
         .iter()
         .map(|series| (series.labels()["__bin"].clone(), series.samples().iter().map(|sample| sample.value).collect()))

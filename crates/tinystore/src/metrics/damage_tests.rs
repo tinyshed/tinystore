@@ -83,9 +83,9 @@ fn a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_n
     // it takes no sample; what does not reach the bytes that changed still reads
     let refused = stats.ingest(&[Series::gauge("cpu").label("host", "a").sample(f.now(), 1.0)]).unwrap_err();
     assert_eq!(refused.kind(), ErrorKind::Suspended);
-    let recent = stats.query().name("cpu").filter("host", "a").since(10 * MINUTE).read().unwrap();
+    let recent = stats.query().name("cpu").filter("host", "a").since(10 * MINUTE).read().unwrap().series;
     assert_eq!(recent[0].samples().len(), 41);
-    assert_eq!(bits(&stats.query().name("cpu").filter("host", "b").read().unwrap()[0]), bits(&b));
+    assert_eq!(bits(&stats.query().name("cpu").filter("host", "b").read().unwrap().series[0]), bits(&b));
     // the store remembers it after a restart, and a delete takes it whole
     let f = f.reopen();
     let stats = f.metrics();
@@ -94,7 +94,7 @@ fn a_series_whose_bytes_changed_is_suspended_by_the_read_that_met_them_and_its_n
         assert!(stats.delete(&damage.name, &damage.labels).unwrap());
     }
     assert!(stats.damaged().unwrap().is_empty());
-    assert_eq!(stats.query().name("cpu").read().unwrap().len(), 1);
+    assert_eq!(stats.query().name("cpu").read().unwrap().series.len(), 1);
     stats.ingest(&[Series::gauge("cpu").label("host", "a").sample(f.now(), 1.0)]).unwrap();
 }
 
@@ -109,7 +109,7 @@ fn packing_suspends_a_series_whose_head_changed_and_packs_the_rest() {
     assert_eq!((done.suspended, done.packed), (1, 840));
     let damaged = stats.damaged().unwrap();
     assert_eq!((damaged.len(), &damaged[0].labels), (1, &host("a")));
-    assert_eq!(bits(&stats.query().name("cpu").filter("host", "b").read().unwrap()[0]), bits(&b));
+    assert_eq!(bits(&stats.query().name("cpu").filter("host", "b").read().unwrap().series[0]), bits(&b));
     assert_eq!(maintain(&f.store).unwrap().suspended, 0, "said once");
     assert!(stats.delete("cpu", [("host", "a")]).unwrap());
     assert!(stats.damaged().unwrap().is_empty());
@@ -128,7 +128,7 @@ fn a_deleted_series_whose_group_no_longer_reads_leaves_that_groups_values_in_the
     assert!(stats.delete("cpu", [("host", "a")]).unwrap());
     assert_eq!(f.value("select count(*) from groups where series_id = 1"), 0);
     assert_eq!(f.rows("payloads"), payloads, "b's, and those the group that no longer reads named");
-    assert_eq!(stats.query().name("cpu").read().unwrap().len(), 1);
+    assert_eq!(stats.query().name("cpu").read().unwrap().series.len(), 1);
 }
 
 #[test]

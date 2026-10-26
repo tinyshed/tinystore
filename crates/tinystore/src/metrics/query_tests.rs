@@ -39,25 +39,25 @@ fn a_condition_finds_series_beyond_equality() {
     let f = fixture();
     written(&f);
     let query = || f.metrics().query().since(HOUR);
-    let failing = query().name("http_requests_total").filter("status", ["500", "502"]).read().unwrap();
+    let failing = query().name("http_requests_total").filter("status", ["500", "502"]).read().unwrap().series;
     assert_eq!(hosts(&failing), ["http_requests_total/api-1", "http_requests_total/api-2"]);
-    let not_dev = query().name("http_requests_total").filter("env", Not("dev")).read().unwrap();
+    let not_dev = query().name("http_requests_total").filter("env", Not("dev")).read().unwrap().series;
     assert_eq!(
         hosts(&not_dev),
         ["http_requests_total/api-1", "http_requests_total/api-3", "http_requests_total/web-1"]
     );
-    let api = query().filter("host", Prefix("api-")).filter("env", Not(["dev", "test"])).read().unwrap();
+    let api = query().filter("host", Prefix("api-")).filter("env", Not(["dev", "test"])).read().unwrap().series;
     assert_eq!(hosts(&api), ["cpu/api-1", "http_requests_total/api-1"]);
-    let one_host = query().filter("host", "api-1").read().unwrap();
+    let one_host = query().filter("host", "api-1").read().unwrap().series;
     assert_eq!(hosts(&one_host), ["cpu/api-1", "http_requests_total/api-1"]);
-    let a_number = query().filter("status", 200).read().unwrap();
+    let a_number = query().filter("status", 200).read().unwrap().series;
     assert_eq!(hosts(&a_number), ["http_requests_total/api-3", "http_requests_total/web-1"]);
     // a series without the label is not one of a list, and is none of it
-    let without = query().filter("env", "prod").filter("status", Not("500")).read().unwrap();
+    let without = query().filter("env", "prod").filter("status", Not("500")).read().unwrap().series;
     assert_eq!(hosts(&without), ["cpu/api-1", "http_requests_total/web-1"]);
-    assert!(query().name("nothing").read().unwrap().is_empty());
-    assert!(query().filter("host", Prefix("zzz")).read().unwrap().is_empty());
-    assert!(query().name("cpu").filter("status", ["500"]).read().unwrap().is_empty());
+    assert!(query().name("nothing").read().unwrap().series.is_empty());
+    assert!(query().filter("host", Prefix("zzz")).read().unwrap().series.is_empty());
+    assert!(query().name("cpu").filter("status", ["500"]).read().unwrap().series.is_empty());
 }
 
 #[test]
@@ -89,12 +89,12 @@ fn a_range_is_its_start_to_its_end_excluded_or_now_included() {
         read.first().map_or(Vec::new(), |series| series.samples().iter().map(|s| s.value).collect::<Vec<_>>())
     };
     let query = || f.metrics().query().name("m");
-    assert_eq!(values(query().since(3 * MINUTE).read().unwrap()), [6.0, 7.0, 8.0, 9.0]);
-    assert_eq!(values(query().from(now - 5 * MINUTE).to(now - 2 * MINUTE).read().unwrap()), [4.0, 5.0, 6.0]);
-    assert_eq!(values(query().to(now - 8 * MINUTE).read().unwrap()), [0.0]);
-    assert!(values(query().from(now + SECOND).read().unwrap()).is_empty());
+    assert_eq!(values(query().since(3 * MINUTE).read().unwrap().series), [6.0, 7.0, 8.0, 9.0]);
+    assert_eq!(values(query().from(now - 5 * MINUTE).to(now - 2 * MINUTE).read().unwrap().series), [4.0, 5.0, 6.0]);
+    assert_eq!(values(query().to(now - 8 * MINUTE).read().unwrap().series), [0.0]);
+    assert!(values(query().from(now + SECOND).read().unwrap().series).is_empty());
     f.pass(Duration::from_millis(1));
-    assert_eq!(values(query().since(Duration::ZERO).read().unwrap()), Vec::<f64>::new());
+    assert_eq!(values(query().since(Duration::ZERO).read().unwrap().series), Vec::<f64>::new());
 }
 
 // contract: ERR-01, ERR-05, MET-07
@@ -109,7 +109,7 @@ fn a_read_past_a_bound_is_a_limit_naming_it() {
         (error.kind(), error.fact("limit"), error.fact("bound")),
         (ErrorKind::Limit, Some("series"), Some("1000"))
     );
-    let fits = f.metrics().query().name("wide").filter("n", Not("0")).read().unwrap();
+    let fits = f.metrics().query().name("wide").filter("n", Not("0")).read().unwrap().series;
     assert_eq!(fits.len(), 1000);
 }
 
@@ -126,5 +126,5 @@ fn a_read_or_an_aggregate_whose_token_was_cancelled_fails_cancelled() {
     assert!(read.to_string().starts_with("metrics: "), "{read}");
     let summed = token.run(|| query().aggregate(crate::metrics::Op::Sum)).unwrap_err();
     assert_eq!(summed.kind(), ErrorKind::Cancelled, "{summed}");
-    assert_eq!(query().read().unwrap().len(), 4, "a read without the token answers");
+    assert_eq!(query().read().unwrap().series.len(), 4, "a read without the token answers");
 }

@@ -121,7 +121,7 @@ fn read(asked: Asked) -> Done {
     let (_store, Some(metrics)) = beside(&dir)? else {
         return outln!("{} holds no metrics yet", dir.display());
     };
-    let series = query_of(&metrics, name, &asked, window)?.read()?;
+    let series = query_of(&metrics, name, &asked, window)?.read()?.series;
     if asked.has("--json") {
         return json_samples(&series, most);
     }

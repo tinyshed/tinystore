@@ -65,9 +65,9 @@ async fn every_awaited_call_answers_as_its_blocking_twin_on_the_same_store() {
 
     let blocking = stats.blocking();
     let (query, twin) = (|| stats.query().name("cpu").since(HOUR), || blocking.query().name("cpu").since(HOUR));
-    assert_eq!(seen(&query().read().await.unwrap()), seen(&twin().read().unwrap()));
-    let odd = stats.query().name("odd").since(HOUR).read().await.unwrap();
-    assert_eq!(seen(&odd), seen(&blocking.query().name("odd").since(HOUR).read().unwrap()), "bit for bit");
+    assert_eq!(seen(&query().read().await.unwrap().series), seen(&twin().read().unwrap().series));
+    let odd = stats.query().name("odd").since(HOUR).read().await.unwrap().series;
+    assert_eq!(seen(&odd), seen(&blocking.query().name("odd").since(HOUR).read().unwrap().series), "bit for bit");
     let every = || query().every(5 * MINUTE);
     assert_eq!(every().aggregate(Op::Avg).await.unwrap(), twin().every(5 * MINUTE).aggregate(Op::Avg).unwrap());
     assert_eq!(query().latest().await.unwrap(), twin().latest().unwrap());
@@ -118,8 +118,8 @@ fn a_query_is_checked_in_its_first_poll_where_since_becomes_its_start() {
     // before its poll, which the sample is older than.
     let made = stats.query().name("cpu").since(30 * MINUTE).read();
     f.pass(HOUR);
-    assert!(runtime().block_on(made).unwrap().is_empty());
-    assert_eq!(stats.blocking().query().name("cpu").since(2 * HOUR).read().unwrap().len(), 1);
+    assert!(runtime().block_on(made).unwrap().series.is_empty());
+    assert_eq!(stats.blocking().query().name("cpu").since(2 * HOUR).read().unwrap().series.len(), 1);
     f.store.close().unwrap();
 }
 
@@ -231,7 +231,7 @@ fn ingests_that_wait_for_memory_hold_no_thread_of_the_pool_and_commit_once_it_co
     assert!(page.expect("a page of names ran on the pool").unwrap().names.is_empty(), "no ingest wrote yet");
     drop(held);
     let blocking = stats.blocking();
-    let written = || blocking.query().name("cpu").since(HOUR).read().unwrap().len() == waiting;
+    let written = || blocking.query().name("cpu").since(HOUR).read().unwrap().series.len() == waiting;
     wait_until(written, "ingests dropped while they waited for memory", "committed");
     store.blocking().close().unwrap();
 }
@@ -257,7 +257,7 @@ fn the_samples_of_a_text_that_give_no_time_take_the_clock_at_the_first_poll_not_
     f.pass(MINUTE);
     free.wait();
     runtime().block_on(ingest).unwrap();
-    let read = stats.blocking().query().name("queue_length").since(HOUR).read().unwrap();
+    let read = stats.blocking().query().name("queue_length").since(HOUR).read().unwrap().series;
     assert_eq!(bits(&read[0]), [(crate::unix_millis(polled_at), 3f64.to_bits())]);
     f.store.close().unwrap();
 }
@@ -290,9 +290,9 @@ fn an_ingest_polled_once_commits_though_its_future_is_dropped_and_one_never_poll
         let _ = polled.as_mut().poll(&mut Context::from_waker(Waker::noop()));
     }
     let blocking = stats.blocking();
-    let written = || !blocking.query().name("polled").since(HOUR).read().unwrap().is_empty();
+    let written = || !blocking.query().name("polled").since(HOUR).read().unwrap().series.is_empty();
     wait_until(written, "an ingest dropped after its first poll", "committed");
-    assert!(blocking.query().name("never").since(HOUR).read().unwrap().is_empty());
+    assert!(blocking.query().name("never").since(HOUR).read().unwrap().series.is_empty());
     let names: Vec<String> = blocking.names().page().unwrap().names.into_iter().map(|info| info.name).collect();
     assert_eq!(names, ["polled"], "the ingest never polled made no name");
     f.store.close().unwrap();
@@ -316,7 +316,7 @@ async fn a_flush_awaited_writes_the_totals_on_the_stores_pool_never_on_the_threa
     tokio::spawn(stats.flush()).await.unwrap().unwrap();
     let read_on = read_on.lock().unwrap().clone();
     assert_eq!(read_on, [Some(crate::pool::THREAD.to_owned())], "the write of the totals ran on the pool");
-    let read = stats.query().name("http_requests_total").since(HOUR).read().await.unwrap();
+    let read = stats.query().name("http_requests_total").since(HOUR).read().await.unwrap().series;
     assert_eq!(read[0].samples().last().map(|sample| sample.value), Some(1.0));
     f.store.close().unwrap();
 }
@@ -334,7 +334,7 @@ queue_length -0
     stats.blocking().prometheus().label("instance", "blocking").ingest(text).unwrap();
     for name in ["http_requests_total", "queue_length"] {
         let read = |instance| stats.blocking().query().name(name).filter("instance", instance).since(HOUR).read();
-        let (awaited, blocking) = (read("awaited").unwrap(), read("blocking").unwrap());
+        let (awaited, blocking) = (read("awaited").unwrap().series, read("blocking").unwrap().series);
         assert_eq!(awaited.len(), 1, "{name}");
         assert_eq!((awaited[0].kind(), bits(&awaited[0])), (blocking[0].kind(), bits(&blocking[0])), "{name}");
     }
@@ -349,8 +349,8 @@ async fn a_handle_crosses_from_the_blocking_api_and_fails_closed_once_its_store_
     let blocking = f.metrics();
     let stats = Metrics::from(blocking.clone());
     stats.ingest(&[Series::gauge("cpu").sample(f.now(), 0.5)]).await.unwrap();
-    let read = blocking.query().name("cpu").since(HOUR).read().unwrap();
-    assert_eq!(seen(&read), seen(&stats.query().name("cpu").since(HOUR).read().await.unwrap()));
+    let read = blocking.query().name("cpu").since(HOUR).read().unwrap().series;
+    assert_eq!(seen(&read), seen(&stats.query().name("cpu").since(HOUR).read().await.unwrap().series));
 
     Store::from(f.store.clone()).close().await.unwrap();
     let closed = stats.ingest(&[Series::gauge("cpu").sample(f.now(), 0.7)]).await.unwrap_err();

@@ -293,7 +293,7 @@ fn a_block_inside_a_bucket_answers_as_its_samples_would() {
         assert_eq!(head.4, blocks.4);
     }
     // and as a sum over what a read gives is: the first whole hour of the wave
-    let read = f.metrics().query().name("wave").from(now - 4 * HOUR).to(now - 3 * HOUR).read().unwrap();
+    let read = f.metrics().query().name("wave").from(now - 4 * HOUR).to(now - 3 * HOUR).read().unwrap().series;
     let mut exact = crate::metrics::exact::Exact::ZERO;
     read[0].samples().iter().for_each(|sample| assert!(exact.add_float(sample.value)));
     let hour = &from_blocks.iter().find(|answer| answer.3 == Op::Sum && answer.2 == Some(HOUR)).unwrap().4;

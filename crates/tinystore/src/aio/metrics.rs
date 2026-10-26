@@ -66,7 +66,7 @@ use crate::pool::Pool;
 pub use crate::metrics::{
     Aggregate, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc, Histogram,
     Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample, Series,
-    Timer, Timing, Value, ValuePage, Values, exponential_buckets,
+    SeriesPage, Timer, Timing, Value, ValuePage, Values, exponential_buckets,
 };
 
 /// What an awaited ingest names in its errors, as its blocking twin names
@@ -291,6 +291,17 @@ impl Query {
         self.with(|query| query.to(at))
     }
 
+    /// A read in pages, as [`crate::metrics::Query::limit`] has them.
+    pub fn limit(self, samples: usize) -> Self {
+        self.with(|query| query.limit(samples))
+    }
+
+    /// The page after the one whose `next` this is, as
+    /// [`crate::metrics::Query::after`] reads it.
+    pub fn after(self, next: &str) -> Self {
+        self.with(|query| query.after(next))
+    }
+
     /// An aggregate's buckets: spans this long, each beginning at a whole
     /// number of them since 1970 in UTC.
     pub fn every(self, span: Duration) -> Self {
@@ -320,9 +331,9 @@ impl Query {
         self.with(crate::metrics::Query::estimate)
     }
 
-    /// The samples of each series the query finds, in its range, as
-    /// [`crate::metrics::Query::read`] gives them.
-    pub fn read(&self) -> impl Future<Output = Result<Vec<Series>>> + Send + 'static {
+    /// The samples of each series the query finds, in its range, whole or a
+    /// page of them, as [`crate::metrics::Query::read`] gives them.
+    pub fn read(&self) -> impl Future<Output = Result<SeriesPage>> + Send + 'static {
         let query = self.blocking.clone();
         checked_then_read(&self.pool, "metrics: a read", move || query.checked_read())
     }

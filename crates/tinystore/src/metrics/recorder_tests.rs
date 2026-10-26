@@ -9,7 +9,7 @@ fn last(f: &Fixture, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
     for (label, value) in labels {
         query = query.filter(*label, *value);
     }
-    let read = query.read().unwrap();
+    let read = query.read().unwrap().series;
     let series = read.iter().find(|series| series.labels().len() == labels.len())?;
     series.samples().last().map(|sample| sample.value)
 }

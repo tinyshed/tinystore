@@ -18,7 +18,7 @@ fn samples_past_what_their_name_keeps_go_and_the_rest_stay() {
     f.pass(30 * DAY - 50 * HOUR);
     let done = maintain(&f.store).unwrap();
     assert_eq!((done.expired, done.reclaimed), (49, 0));
-    let read = f.metrics().query().name("cpu").read().unwrap();
+    let read = f.metrics().query().name("cpu").read().unwrap().series;
     assert_eq!(read[0].samples().len(), 51);
     assert_eq!(read[0].samples()[0].at, start - 50 * HOUR);
     assert_eq!(maintain(&f.store).unwrap(), Default::default(), "nothing more is due");
@@ -76,7 +76,7 @@ fn the_pass_after_an_expiry_gives_the_pages_it_left_back_and_every_read_stays() 
     assert_eq!(maintain(&f.store).unwrap().expired, 100_000);
     let expired = Division::of(&f.engine().file);
     assert!(expired.free > 5, "{expired:?}");
-    let read = f.metrics().query().name("stays").since(8 * DAY).read().unwrap();
+    let read = f.metrics().query().name("stays").since(8 * DAY).read().unwrap().series;
 
     // the pages stay free for a window of passes before they go back
     f.pass(10 * MINUTE);
@@ -86,7 +86,7 @@ fn the_pass_after_an_expiry_gives_the_pages_it_left_back_and_every_read_stays() 
     maintain(&f.store).unwrap();
     let after = Division::of(&f.engine().file);
     assert!(after.free == 0 && after.pages <= expired.pages - expired.free, "{expired:?} {after:?}");
-    let again = f.metrics().query().name("stays").since(8 * DAY).read().unwrap();
+    let again = f.metrics().query().name("stays").since(8 * DAY).read().unwrap().series;
     assert_eq!(bits(&again[0]), bits(&read[0]));
     assert_eq!(bits(&read[0]).len(), 2000);
 }
@@ -105,11 +105,11 @@ fn heads_a_bulk_load_grew_leave_their_pages_once_packed() {
         f.metrics().ingest(&hosts.iter().map(|&host| series(host).label("host", host)).collect::<Vec<_>>()).unwrap();
     }
     let grown = heads_pages(&f);
-    let read = f.metrics().query().name("cpu").since(DAY).read().unwrap();
+    let read = f.metrics().query().name("cpu").since(DAY).read().unwrap().series;
     maintain(&f.store).unwrap();
     let packed = heads_pages(&f);
     assert!(packed * 4 < grown, "the heads' pages: {grown} grown, {packed} packed");
-    let again = f.metrics().query().name("cpu").since(DAY).read().unwrap();
+    let again = f.metrics().query().name("cpu").since(DAY).read().unwrap().series;
     assert_eq!(again.iter().map(bits).collect::<Vec<_>>(), read.iter().map(bits).collect::<Vec<_>>());
 }
 

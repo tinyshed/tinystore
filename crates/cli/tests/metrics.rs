@@ -66,7 +66,8 @@ fn opened(dir: &Path) -> Store {
 /// The targets of `ping_rtt_ms` in the store, once its server let it go.
 fn targets(dir: &Path) -> Vec<String> {
     let store = opened(dir);
-    let read = store.metrics().unwrap().query().name("ping_rtt_ms").since(Duration::from_secs(3600)).read().unwrap();
+    let read =
+        store.metrics().unwrap().query().name("ping_rtt_ms").since(Duration::from_secs(3600)).read().unwrap().series;
     let mut targets: Vec<String> = read.iter().map(|series| series.labels()["target"].clone()).collect();
     targets.sort();
     targets
@@ -238,7 +239,8 @@ fn samples_beside(dir: &Path, name: &str, count: usize) -> usize {
     loop {
         let store = Store::open_beside(dir).unwrap();
         let read = store.metrics().map(|metrics| metrics.query().name(name).since(Duration::from_secs(3600)).read());
-        let seen = read.ok().and_then(Result::ok).map_or(0, |read| read.iter().map(|one| one.samples().len()).sum());
+        let seen =
+            read.ok().and_then(Result::ok).map_or(0, |read| read.series.iter().map(|one| one.samples().len()).sum());
         if seen >= count || Instant::now() > deadline {
             return seen;
         }

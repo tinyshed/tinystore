@@ -67,7 +67,7 @@ fn a_timer_is_read_by_its_own_name() {
     assert_eq!(names, [("http_request_ms", "/notes"), ("http_request_ms", "/users")], "a group bears the timer's name");
     assert_eq!(routes[1].buckets[0].value, Value::Exact(62.0 / 3.0));
     // a read and the newest values give the series it writes, each by its own name
-    let read = f.metrics().query().name("http_request_ms").since(HOUR).read().unwrap();
+    let read = f.metrics().query().name("http_request_ms").since(HOUR).read().unwrap().series;
     let mut written: Vec<String> = read.iter().map(|series| series.name().to_owned()).collect();
     written.sort_unstable();
     written.dedup();

@@ -160,7 +160,7 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> 
 pub(crate) fn parts(store: &Store, called: u16, body: &[u8], bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
     let metrics = store.metrics()?;
     match called {
-        method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?, bound)),
+        method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?.series, bound)),
         method::METRICS_LATEST => Ok(latest_parts(query(&metrics, MetricsQuery::decode(body)?)?.latest()?, bound)),
         _ => {
             let asked = MetricsAggregateAsked::decode(body)?;

@@ -72,7 +72,7 @@ impl Fixture {
         let events = store.events("audit").open().unwrap().list().page().unwrap().events;
         assert_eq!(events.iter().map(|event| event.name.as_str()).collect::<Vec<_>>(), ["role.changed"]);
         let read = store.metrics().unwrap().query().name("temperature").since(Duration::from_secs(3600)).read();
-        assert_eq!(read.unwrap()[0].samples()[0].value, 21.5);
+        assert_eq!(read.unwrap().series[0].samples()[0].value, 21.5);
         let notes = store.index::<String>("notes").open().unwrap();
         let hits = notes.search("starter").run().unwrap().hits;
         assert_eq!(hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["n-1"]);
