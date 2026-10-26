@@ -12,12 +12,12 @@
 //!     .every(Duration::from_hours(1))
 //!     .by(&["route"])
 //!     .aggregate(Op::Increase)?;
-//! for route in traffic {
+//! for route in traffic.groups {
 //!     let hours: Vec<Option<f64>> = route.buckets.iter().map(|hour| hour.value.exact()).collect();
 //!     println!("{}: {hours:?}", route.labels["route"]);
 //! }
 //! let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).aggregate(Op::Percentile(95.0))?;
-//! if let Value::Between { lower, upper, .. } = p95[0].buckets[0].value {
+//! if let Value::Between { lower, upper, .. } = p95.groups[0].buckets[0].value {
 //!     println!("95% of requests took at most {upper} ms, and the rest more than {lower}");
 //! }
 //! # Ok(())
