@@ -1055,7 +1055,7 @@ dialog.diagram-zoom svg {
 	top: 76px;
 	bottom: 0;
 	left: 17px;
-	border-left: 1px solid var(--ts-line);
+	border-left: 1px solid var(--ts-accent-line);
 }
 
 .prose [data-steps] > h2 {
