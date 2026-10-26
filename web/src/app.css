@@ -223,3 +223,52 @@ kbd {
 	padding: 1px 6px;
 	background: var(--ts-kbd);
 }
+
+/* two tones beside the themes, which a reader picks from the theme's menu:
+   warm paper under the light one, and true black under the dark one, for an
+   OLED screen. Each changes the surfaces alone; text, accent and code stay. */
+:root[data-theme="light"][data-tone="paper"] {
+	--ts-bg: #f8f4ec;
+	--ts-line: #e7dfcf;
+	--ts-border: #e1d8c6;
+	--ts-border-2: #ddd3c0;
+	--ts-border-3: #d2c6b1;
+	--ts-surface: #f1ebdf;
+	--ts-surface-2: #eae2d3;
+	--ts-hover: #eee7da;
+	--ts-pill: #ebe3d4;
+	--ts-chip: #e5dbc9;
+	--ts-kbd: #ebe3d4;
+	--ts-row-hover: #f3eee4;
+	--ts-dialog: #fffcf6;
+	--ts-dialog-foot: #f3eee4;
+	--ts-overlay: rgb(240 233 220 / 0.74);
+}
+
+:root[data-theme="dark"][data-tone="black"] {
+	--ts-bg: #000000;
+	--ts-line: #1b1a20;
+	--ts-border: #201f26;
+	--ts-border-2: #24222a;
+	--ts-border-3: #2b2932;
+	--ts-surface: #0c0c0f;
+	--ts-surface-2: #111014;
+	--ts-hover: #111014;
+	--ts-pill: #141318;
+	--ts-chip: #1b1a20;
+	--ts-kbd: #0a0a0c;
+	--ts-row-hover: #0b0b0e;
+	--ts-dialog: #0e0d11;
+	--ts-dialog-foot: #0a0a0d;
+	--ts-overlay: rgb(0 0 0 / 0.75);
+}
+
+/* each look as the theme's menu shows it, whatever the page's own */
+:root {
+	--ts-swatch-light: #f7f6f9;
+	--ts-swatch-paper: #f8f4ec;
+	--ts-swatch-dark: #141318;
+	--ts-swatch-black: #000000;
+	--ts-swatch-ink-light: #23212b;
+	--ts-swatch-ink-dark: #eceaf3;
+}
