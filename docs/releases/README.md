@@ -4,6 +4,9 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.3.0](v0.3.0.md)** · 27 October 2026\
+  Metrics read and aggregated in pages, a command line that writes to a
+  store, a command run under a lock, an AI agent that may write.
 - **[TinyStore 0.2.0](v0.2.0.md)** · 26 October 2026\
   Event ids, metrics that are safe to retry, a whole scrape in one write,
   calendar aggregates, a rate for each group of jobs.
