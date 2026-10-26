@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { slide } from 'svelte/transition'
+
 	import { href } from '$lib/href'
+	import { unfolding } from '$lib/motion'
 	import type { NavGroup } from '$lib/nav'
 
 	import Icon from './Icon.svelte'
@@ -11,16 +14,36 @@
 	}: { nav: NavGroup[]; current: string; large?: boolean } = $props()
 
 	const holds = (group: NavGroup) => group.items.some(item => item.href === current)
+
+	// the menu's groups fold, the current page's open, and a part's only group, and stay as
+	// the reader left them
+	let unfolded: Record<string, boolean> = $state({})
+	$effect(() => {
+		for (const group of nav) {
+			if (holds(group) || nav.length === 1) {
+				unfolded[group.title] = true
+			}
+		}
+	})
 </script>
 
 <!-- the menu's groups fold, the current page's open; the sidebar's are all open -->
 <nav aria-label="Documentation" class:large>
 	{#each nav as group (group.title)}
 		{#if large}
-			<details class="group" open={holds(group)}>
-				<summary class="title">{group.title}<Icon name="chevron" size={16} /></summary>
-				{@render items(group)}
-			</details>
+			<div class="group" class:unfolded={unfolded[group.title]}>
+				<button
+					type="button"
+					class="title"
+					aria-expanded={unfolded[group.title] === true}
+					onclick={() => (unfolded[group.title] = !unfolded[group.title])}
+				>
+					{group.title}<Icon name="chevron" size={16} />
+				</button>
+				{#if unfolded[group.title]}
+					<div transition:slide={unfolding()}>{@render items(group)}</div>
+				{/if}
+			</div>
 		{:else}
 			<div class="group">
 				<p class="title">{group.title}</p>
@@ -121,13 +144,11 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		width: 100%;
 		padding: 15px 6px;
-		list-style: none;
+		background: none;
+		border: 0;
 		cursor: pointer;
-	}
-
-	.large .title::-webkit-details-marker {
-		display: none;
 	}
 
 	.large .title :global(svg) {
@@ -135,7 +156,7 @@
 		transition: transform 0.2s;
 	}
 
-	.large .group[open] > .title :global(svg) {
+	.large .group.unfolded > .title :global(svg) {
 		transform: rotate(180deg);
 	}
 

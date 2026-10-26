@@ -366,7 +366,8 @@
 
 .code pre {
 	margin: 0;
-	padding: 20px 22px 22px;
+	--code-pad-x: 22px;
+	padding: 20px var(--code-pad-x) 22px;
 	overflow-x: auto;
 	font: 14px / 1.75 var(--ts-mono);
 	tab-size: 4;
@@ -398,37 +399,124 @@
 	color: var(--shiki-dark);
 }
 
-/* an editor's look colours the code as that editor does */
-:root[data-look="github-light"] .shiki span {
-	color: var(--shiki-github-light);
+/* an editor's look colours the code by its tokens' kinds, as that editor does */
+:root:is(
+		[data-look="github-light"],
+		[data-look="solarized-light"],
+		[data-look="rose-pine-dawn"],
+		[data-look="github-dark"],
+		[data-look="dracula"],
+		[data-look="nord"],
+		[data-look="tokyo-night"],
+		[data-look="catppuccin-mocha"]
+	)
+	.shiki
+	span {
+	color: var(--shiki-look);
 }
 
-:root[data-look="solarized-light"] .shiki span {
-	color: var(--shiki-solarized-light);
+:root[data-look="github-light"] {
+	--code-foreground: #1f2328;
+	--code-comment: #59636e;
+	--code-keyword: #cf222e;
+	--code-string: #0a3069;
+	--code-constant: #0550ae;
+	--code-function: #8250df;
+	--code-type: #953800;
+	--code-parameter: #1f2328;
+	--code-property: #0550ae;
+	--code-punctuation: #1f2328;
 }
 
-:root[data-look="rose-pine-dawn"] .shiki span {
-	color: var(--shiki-rose-pine-dawn);
+:root[data-look="solarized-light"] {
+	--code-foreground: #586e75;
+	--code-comment: #93a1a1;
+	--code-keyword: #859900;
+	--code-string: #2aa198;
+	--code-constant: #d33682;
+	--code-function: #268bd2;
+	--code-type: #b58900;
+	--code-parameter: #586e75;
+	--code-property: #268bd2;
+	--code-punctuation: #657b83;
 }
 
-:root[data-look="github-dark"] .shiki span {
-	color: var(--shiki-github-dark);
+:root[data-look="rose-pine-dawn"] {
+	--code-foreground: #575279;
+	--code-comment: #9893a5;
+	--code-keyword: #286983;
+	--code-string: #ea9d34;
+	--code-constant: #d7827e;
+	--code-function: #d7827e;
+	--code-type: #56949f;
+	--code-parameter: #907aa9;
+	--code-property: #907aa9;
+	--code-punctuation: #797593;
 }
 
-:root[data-look="dracula"] .shiki span {
-	color: var(--shiki-dracula);
+:root[data-look="github-dark"] {
+	--code-foreground: #e6edf3;
+	--code-comment: #8b949e;
+	--code-keyword: #ff7b72;
+	--code-string: #a5d6ff;
+	--code-constant: #79c0ff;
+	--code-function: #d2a8ff;
+	--code-type: #ffa657;
+	--code-parameter: #e6edf3;
+	--code-property: #79c0ff;
+	--code-punctuation: #e6edf3;
 }
 
-:root[data-look="nord"] .shiki span {
-	color: var(--shiki-nord);
+:root[data-look="dracula"] {
+	--code-foreground: #f8f8f2;
+	--code-comment: #6272a4;
+	--code-keyword: #ff79c6;
+	--code-string: #f1fa8c;
+	--code-constant: #bd93f9;
+	--code-function: #50fa7b;
+	--code-type: #8be9fd;
+	--code-parameter: #ffb86c;
+	--code-property: #f8f8f2;
+	--code-punctuation: #f8f8f2;
 }
 
-:root[data-look="tokyo-night"] .shiki span {
-	color: var(--shiki-tokyo-night);
+:root[data-look="nord"] {
+	--code-foreground: #d8dee9;
+	--code-comment: #616e88;
+	--code-keyword: #81a1c1;
+	--code-string: #a3be8c;
+	--code-constant: #b48ead;
+	--code-function: #88c0d0;
+	--code-type: #8fbcbb;
+	--code-parameter: #d8dee9;
+	--code-property: #d8dee9;
+	--code-punctuation: #eceff4;
 }
 
-:root[data-look="catppuccin-mocha"] .shiki span {
-	color: var(--shiki-catppuccin-mocha);
+:root[data-look="tokyo-night"] {
+	--code-foreground: #a9b1d6;
+	--code-comment: #565f89;
+	--code-keyword: #bb9af7;
+	--code-string: #9ece6a;
+	--code-constant: #ff9e64;
+	--code-function: #7aa2f7;
+	--code-type: #2ac3de;
+	--code-parameter: #e0af68;
+	--code-property: #73daca;
+	--code-punctuation: #89ddff;
+}
+
+:root[data-look="catppuccin-mocha"] {
+	--code-foreground: #cdd6f4;
+	--code-comment: #9399b2;
+	--code-keyword: #cba6f7;
+	--code-string: #a6e3a1;
+	--code-constant: #fab387;
+	--code-function: #89b4fa;
+	--code-type: #f9e2af;
+	--code-parameter: #eba0ac;
+	--code-property: #b4befe;
+	--code-punctuation: #9399b2;
 }
 
 @media (max-width: 720px) {
@@ -476,11 +564,24 @@
 
 	.code-title {
 		font-size: 12px;
+		overflow-wrap: anywhere;
 	}
 
 	.code-files {
+		flex-wrap: wrap;
 		gap: 6px;
 		margin-left: 0;
+	}
+
+	/* with no languages to switch, the name stays on the copy button's row */
+	.code-bar:has(span.code-langs) > :is(.code-title, .code-files) {
+		order: 0;
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	.code-bar:has(span.code-langs) > .code-tools {
+		width: auto;
 	}
 
 	.code-file {
@@ -497,7 +598,8 @@
 	}
 
 	.code pre {
-		padding: 14px 16px 16px;
+		--code-pad-x: 16px;
+		padding: 14px var(--code-pad-x) 16px;
 		font-size: 12.5px;
 		line-height: 1.7;
 	}
@@ -852,9 +954,16 @@ dialog.diagram-zoom svg {
 .prose .shiki .line.diff-add,
 .prose .shiki .line.diff-remove {
 	display: inline-block;
-	min-width: calc(100% + 44px);
-	margin: 0 -22px;
-	padding: 0 22px;
+	min-width: calc(100% + 2 * var(--code-pad-x, 22px));
+	margin: 0 calc(-1 * var(--code-pad-x, 22px));
+	padding: 0 var(--code-pad-x, 22px);
+}
+
+/* a block whose rows are tinted is as wide as its longest line, so that a
+   row's tint reaches the end of what scrolls */
+.prose .shiki:has(.line.marked, .line.diff-add, .line.diff-remove) > code {
+	display: inline-block;
+	min-width: 100%;
 }
 
 .prose .shiki .line.diff-add {
@@ -910,13 +1019,14 @@ dialog.diagram-zoom svg {
 	display: revert;
 }
 
-.prose div[data-for] {
+/* a code block for some languages alone hides as the text does, and needs no label */
+.prose div[data-for]:not(.code) {
 	margin: 0 0 24px;
 	padding-left: 16px;
 	border-left: 2px solid var(--ts-accent-line);
 }
 
-.prose div[data-for]::before {
+.prose div[data-for]:not(.code)::before {
 	content: attr(data-for);
 	display: block;
 	margin-bottom: 4px;
@@ -926,7 +1036,7 @@ dialog.diagram-zoom svg {
 	text-transform: uppercase;
 }
 
-.prose div[data-for] > :last-child {
+.prose div[data-for]:not(.code) > :last-child {
 	margin-bottom: 0;
 }
 
@@ -968,7 +1078,7 @@ dialog.diagram-zoom svg {
 	content: none;
 }
 
-/* a contract's id in the prose: its promise on a hover, CONTRACTS.md on a click */
+/* a contract's id in the prose: a click opens its promise in a card, as a call's does */
 .prose a.contract {
 	position: relative;
 	color: var(--ts-accent-text);
@@ -977,33 +1087,12 @@ dialog.diagram-zoom svg {
 	text-underline-offset: 4px;
 }
 
-.prose a.contract:hover::after,
-.prose a.contract:focus-visible::after {
-	content: attr(data-contract);
-	position: absolute;
-	left: 0;
-	bottom: calc(100% + 8px);
-	z-index: 10;
-	width: max-content;
-	max-width: min(360px, 80vw);
-	padding: 10px 12px;
-	color: var(--ts-text-note);
-	background: var(--ts-dialog);
-	border: 1px solid var(--ts-border);
-	border-radius: 10px;
-	box-shadow: 0 8px 24px var(--ts-shadow);
-	font: 400 13.5px / 1.5 var(--ts-sans);
-	text-align: left;
-	white-space: normal;
-	pointer-events: none;
-}
-
 /* the lines a fence's `mark=` names: the ones the text is about, the others dimmed */
 .prose .shiki .line.marked {
 	display: inline-block;
-	min-width: calc(100% + 44px);
-	margin: 0 -22px;
-	padding: 0 20px;
+	min-width: calc(100% + 2 * var(--code-pad-x, 22px));
+	margin: 0 calc(-1 * var(--code-pad-x, 22px));
+	padding: 0 calc(var(--code-pad-x, 22px) - 2px);
 	background: color-mix(in srgb, var(--ts-accent) 10%, transparent);
 	border-left: 2px solid var(--ts-accent);
 }
@@ -1141,4 +1230,50 @@ dialog.diagram-zoom svg {
 
 .prose figure.tree ul ul ul .tree-name {
 	min-width: calc(15ch - 46px);
+}
+
+/* a tree on a phone: each note under its name, the indent narrower, so that
+   names and notes never wrap into one another */
+@media (max-width: 720px) {
+	.prose figure.tree {
+		padding: 14px 14px 12px;
+		font-size: 14px;
+	}
+
+	.prose figure.tree ul ul {
+		margin-left: 6px;
+		padding-left: 12px;
+	}
+
+	.prose figure.tree .tree-entry {
+		flex-wrap: wrap;
+		row-gap: 0;
+		padding: 4px 0;
+	}
+
+	.prose figure.tree .tree-name,
+	.prose figure.tree ul ul .tree-name,
+	.prose figure.tree ul ul ul .tree-name {
+		min-width: 0;
+	}
+
+	.prose figure.tree .tree-note {
+		flex-basis: 100%;
+		padding-left: 23px;
+		font-size: 13px;
+		line-height: 1.45;
+	}
+}
+
+/* a block's language, as the reader switches to it, comes up softly */
+@media (prefers-reduced-motion: no-preference) {
+	.code-variant {
+		animation: variant-in 0.18s ease-out;
+	}
+}
+
+@keyframes variant-in {
+	from {
+		opacity: 0;
+	}
 }

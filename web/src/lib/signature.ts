@@ -52,6 +52,9 @@ export function showSignature(call: HTMLAnchorElement): void {
 }
 
 function card(call: HTMLAnchorElement, sheet: boolean): HTMLElement {
+	if (call.classList.contains('contract')) {
+		return contractCard(call, sheet)
+	}
 	const name = call.dataset.name ?? call.textContent ?? ''
 	const dot = name.lastIndexOf('.')
 	const owner = dot === -1 ? '' : name.slice(0, dot)
@@ -87,6 +90,30 @@ function card(call: HTMLAnchorElement, sheet: boolean): HTMLElement {
 		docOf(call.dataset.doc ?? ''),
 		foot(call),
 	)
+	return box
+}
+
+/** A contract's id in the prose, opened as a call is: its promise, and CONTRACTS.md a link away. */
+function contractCard(chip: HTMLAnchorElement, sheet: boolean): HTMLElement {
+	const id = chip.textContent ?? ''
+	const box = document.createElement('div')
+	box.className = 'api-pop'
+	box.setAttribute('role', 'dialog')
+	box.setAttribute('aria-label', id)
+
+	const head = element('div', 'api-head')
+	if (sheet) box.append(element('span', 'api-grip'))
+	const close = element('button', 'api-close', '×')
+	close.setAttribute('aria-label', 'Close')
+	close.addEventListener('click', () => closeSignature())
+	head.append(element('span', 'api-kind', 'contract'), element('span', 'api-name', id), close)
+
+	const foot = element('div', 'api-foot')
+	const link = element('a', '', 'Open CONTRACTS.md ↗') as HTMLAnchorElement
+	link.href = chip.href
+	foot.append(link)
+
+	box.append(head, docOf(chip.dataset.contract ?? ''), foot)
 	return box
 }
 
@@ -175,7 +202,7 @@ export function closeSignature(now = false): void {
 function onOutside(event: MouseEvent): void {
 	const target = event.target
 	if (!open || !(target instanceof Element)) return
-	if (!open.box.contains(target) && target.closest('a.api') === null) closeSignature()
+	if (!open.box.contains(target) && target.closest('a.api, a.contract') === null) closeSignature()
 }
 
 function onEscape(event: KeyboardEvent): void {

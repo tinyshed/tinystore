@@ -101,7 +101,7 @@ export type Highlight = (code: string, lang: string, decorations?: DecorationIte
  */
 export async function createHighlight(): Promise<Highlight> {
 	const highlighter = await createHighlighter({
-		themes: [themes.dark, themes.light, ...Object.values(editorThemes)],
+		themes: [themes.dark, themes.light, lookTheme],
 		// Oniguruma, the grammars' own engine: the JavaScript one tokenized a first fence wrongly
 		langs: [
 			...new Set(Object.values(grammars).filter(name => name !== consoleLog.name)),
@@ -112,7 +112,7 @@ export async function createHighlight(): Promise<Highlight> {
 	return (code, lang, decorations = []) => {
 		const root = highlighter.codeToHast(code, {
 			lang: grammars[lang] ?? 'text',
-			themes: { light: 'tinystore-light', dark: 'tinystore-dark', ...editorThemes },
+			themes: { light: 'tinystore-light', dark: 'tinystore-dark', look: 'tinystore-look' },
 			defaultColor: false,
 			// each theme tokenizes the line again: a slow first compile of a grammar must not cut it short
 			tokenizeTimeLimit: 10_000,
@@ -130,20 +130,62 @@ export async function createHighlight(): Promise<Highlight> {
 }
 
 /**
- * The code's colours of each look that is an editor's theme, by the look's
- * name: each token carries them all, `--shiki-dracula`, and the stylesheet
- * picks the reader's look's. The design's looks keep its own two.
+ * The code's colours of an editor's look, each token's kind named rather than
+ * coloured, `--shiki-look: var(--code-keyword)`, and each look's stylesheet
+ * saying what its keywords are: one variable more a token, however many looks
+ * there are, where a shiki theme a look would carry every look's colours on
+ * every token.
  */
-export const editorThemes = {
-	'github-light': 'github-light-default',
-	'solarized-light': 'solarized-light',
-	'rose-pine-dawn': 'rose-pine-dawn',
-	'github-dark': 'github-dark-default',
-	dracula: 'dracula',
-	nord: 'nord',
-	'tokyo-night': 'tokyo-night',
-	'catppuccin-mocha': 'catppuccin-mocha',
-} as const
+const lookTheme: ThemeRegistration = {
+	name: 'tinystore-look',
+	type: 'dark',
+	colors: {
+		'editor.foreground': 'var(--code-foreground)',
+		'editor.background': 'var(--code-background)',
+	},
+	tokenColors: [
+		{
+			scope: ['comment', 'punctuation.definition.comment'],
+			settings: { foreground: 'var(--code-comment)' },
+		},
+		{ scope: ['keyword', 'storage'], settings: { foreground: 'var(--code-keyword)' } },
+		{
+			scope: ['string', 'punctuation.definition.string'],
+			settings: { foreground: 'var(--code-string)' },
+		},
+		{
+			scope: ['constant', 'support.constant', 'variable.other.constant', 'variable.language'],
+			settings: { foreground: 'var(--code-constant)' },
+		},
+		{
+			scope: ['entity.name.function', 'support.function'],
+			settings: { foreground: 'var(--code-function)' },
+		},
+		{
+			scope: [
+				'entity.name.type',
+				'entity.name.class',
+				'support.type',
+				'support.class',
+				'entity.other.inherited-class',
+			],
+			settings: { foreground: 'var(--code-type)' },
+		},
+		{ scope: ['variable.parameter'], settings: { foreground: 'var(--code-parameter)' } },
+		{
+			scope: [
+				'variable.other.property',
+				'support.variable.property',
+				'meta.object-literal.key',
+				'entity.name.tag',
+			],
+			settings: { foreground: 'var(--code-property)' },
+		},
+		{ scope: ['punctuation', 'meta.brace'], settings: { foreground: 'var(--code-punctuation)' } },
+		{ scope: ['markup.inserted'], settings: { foreground: 'var(--code-function)' } },
+		{ scope: ['markup.deleted'], settings: { foreground: 'var(--code-keyword)' } },
+	],
+}
 
 /** A diff's lines marked by their first character, so that the stylesheet tints a whole row. */
 function diffLines(code: string): ShikiTransformer {

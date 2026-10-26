@@ -40,6 +40,7 @@ show as noise. What the site adds it reads from what GitHub already ignores:
 | fences one after another, a language each     | one under another     | one block, the language the reader picked          |
 | ` ```ts title="metrics.ts" `                  | a TypeScript block    | a tab named `metrics.ts`                           |
 | ` ```sh for=bun `                             | a shell block         | the Bun variant of its block                       |
+| ` ```toml for=rust `, no other language       | a TOML block          | the block, to a reader of Rust alone               |
 | `> [!NOTE]` then a **bold** line              | GitHub's note         | a callout labelled by the bold line                |
 | a table whose header row is empty, `\| \| \|` | a table               | a card of rows, no header                          |
 | `[kv](kv.md#expiry)`                          | the file, its heading | `/docs/kv#expiry`, the heading checked             |
@@ -136,8 +137,10 @@ private child.
 - The tokens in `src/app.css` are the design system: a component reads
   `--ts-*` and nothing else. Both themes are the design's own; each look of
   the theme's menu, paper, black and an editor's theme such as Dracula, is a
-  whole set of those tokens under `[data-look]`, and an editor's look colours
-  code with that editor's own shiki theme, `--shiki-<look>` on every token.
+  whole set of those tokens under `[data-look]`. An editor's look colours code
+  by a token's kind: shiki writes `--shiki-look: var(--code-keyword)` once,
+  and each look's `--code-*` in `prose.css` say what its keywords are, so a
+  look more costs the HTML nothing.
 - Fonts are installed, never fetched from a CDN: the site makes no request a
   reader did not ask for, analytics included.
 - `src/lib/content/` runs at build time only and imports no `$app` module, so

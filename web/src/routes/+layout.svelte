@@ -47,7 +47,9 @@
 <Search bind:open={searching} />
 <MobileMenu
 	bind:open={menu}
-	nav={data.nav.filter((group: { book: string }) => group.book === (book || 'Handbook'))}
+	nav={data.nav}
+	books={data.books}
+	book={book || 'Handbook'}
 	current={sidebarPath(path)}
 	onsearch={() => (searching = true)}
 />

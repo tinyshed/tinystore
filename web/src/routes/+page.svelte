@@ -424,6 +424,21 @@
 			width: auto;
 		}
 
+		/* the long lines run under a copy button in the code, so it moves up into the bar,
+		   where the install command it shares with leaves room on a phone */
+		.sample :global(.code-hero .code-variant) {
+			position: relative;
+		}
+
+		.sample :global(.code-body) {
+			position: static;
+		}
+
+		.sample :global(.code-body .code-copy) {
+			top: 11px;
+			right: 12px;
+		}
+
 		.sample :global(.code-body pre) {
 			padding: 16px 18px 18px;
 			font-size: 12.5px;

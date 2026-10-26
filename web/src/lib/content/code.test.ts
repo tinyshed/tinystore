@@ -104,6 +104,18 @@ describe('a block', () => {
 		expect(html).toContain('aria-selected="true">a.ts</button>')
 	})
 
+	test('written for some languages alone is shown to their readers alone', () => {
+		const pinned = (lang: string) =>
+			toFence({ type: 'code', lang: 'toml', meta: `title="config.toml" for=${lang}`, value: '' })
+		const html = (fences: Fence[]) => toHtml(renderGroup({ type: 'codeGroup', fences }, plain))
+
+		expect(html([pinned('rust')])).toContain('<div class="code" data-code="" data-for="rust">')
+		expect(html([pinned('go'), pinned('rust')])).toContain('data-for="go rust"')
+		expect(html(['bun', 'python', 'go', 'rust'].map(pinned))).not.toContain('data-for')
+		// a fence's own language shows it to every reader, as the docs are written for Rust
+		expect(html([rust])).not.toContain('data-for')
+	})
+
 	test('in one language has no switch, and says its language when nothing names it', () => {
 		const html = toHtml(renderGroup({ type: 'codeGroup', fences: [fence('sh')] }, plain))
 

@@ -8,15 +8,15 @@ export const looks = {
 	light: { label: 'TinyStore', theme: 'light' },
 	paper: { label: 'Paper', theme: 'light' },
 	'github-light': { label: 'GitHub Light', theme: 'light' },
-	'solarized-light': { label: 'Solarized Light', theme: 'light' },
-	'rose-pine-dawn': { label: 'Rosé Pine Dawn', theme: 'light' },
+	'solarized-light': { label: 'Solarized', theme: 'light' },
+	'rose-pine-dawn': { label: 'Rosé Pine', theme: 'light' },
 	dark: { label: 'TinyStore', theme: 'dark' },
 	black: { label: 'Black', theme: 'dark' },
 	'github-dark': { label: 'GitHub Dark', theme: 'dark' },
 	dracula: { label: 'Dracula', theme: 'dark' },
 	nord: { label: 'Nord', theme: 'dark' },
 	'tokyo-night': { label: 'Tokyo Night', theme: 'dark' },
-	'catppuccin-mocha': { label: 'Catppuccin Mocha', theme: 'dark' },
+	'catppuccin-mocha': { label: 'Catppuccin', theme: 'dark' },
 } as const satisfies Record<string, { label: string; theme: Theme }>
 
 export type Look = keyof typeof looks

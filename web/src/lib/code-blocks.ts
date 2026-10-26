@@ -13,7 +13,8 @@ export const codeBlocks: Attachment<HTMLElement> = node => {
 	const onClick = (event: MouseEvent) => {
 		const target = event.target instanceof Element ? event.target : null
 
-		const call = target?.closest<HTMLAnchorElement>('a.api')
+		// a call of a block and a contract's id in the prose open a card in place, where a hover cannot
+		const call = target?.closest<HTMLAnchorElement>('a.api, a.contract')
 		if (call !== null && call !== undefined && !opensElsewhere(event)) {
 			event.preventDefault()
 			showSignature(call)

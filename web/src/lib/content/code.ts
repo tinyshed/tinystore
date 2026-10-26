@@ -37,6 +37,8 @@ export interface Fence {
 	title?: string
 	/** `for=bun`: which language a fence belongs to when its own does not say, a shell command's */
 	language?: Language
+	/** the language was written out with `for=`, so the fence is that language's alone */
+	pinned?: true
 	/** `install="bun add @tinyshed/tinystore"`: the command the landing page shows beside its sample */
 	install?: string
 	/** `mark=2-3,5`: the lines the text is about, which the block marks and the others dim */
@@ -134,13 +136,15 @@ export function toFence(node: Code): Fence {
 	const lang = (node.lang ?? 'text').toLowerCase()
 	const attributes = parseMeta(node.meta ?? '')
 	const named = attributes.for as Language | undefined
-	const language = named !== undefined && languages.includes(named) ? named : fenceLanguages[lang]
+	const pinned = named !== undefined && languages.includes(named)
+	const language = pinned ? named : fenceLanguages[lang]
 
 	return {
 		lang,
 		code: node.value,
 		...(attributes.title === undefined ? {} : { title: attributes.title }),
 		...(language === undefined ? {} : { language }),
+		...(pinned ? { pinned } : {}),
 		...(attributes.install === undefined ? {} : { install: attributes.install }),
 		...(attributes.mark === undefined ? {} : { mark: linesOf(attributes.mark) }),
 	}
@@ -205,7 +209,7 @@ export function renderGroup(group: CodeGroup, highlight: Highlight): Element {
 
 	return h(
 		'div.code',
-		{ dataCode: '' },
+		{ dataCode: '', dataFor: readersOf(group.fences) },
 		variants.map((variant, index) =>
 			h(
 				'div.code-variant',
@@ -220,6 +224,21 @@ export function renderGroup(group: CodeGroup, highlight: Highlight): Element {
 			),
 		),
 	)
+}
+
+/**
+ * The readers a block is for, when every fence of it says `for=` and some
+ * language is missing: `.cargo/config.toml`, ` ```toml for=rust `, is shown to
+ * a reader of Rust alone, where a block of plain `rust` is shown to everyone.
+ */
+function readersOf(fences: Fence[]): string | undefined {
+	if (!fences.every(fence => fence.pinned)) {
+		return undefined
+	}
+	const named = new Set(fences.map(fence => fence.language))
+	return named.size < languages.length
+		? languages.filter(language => named.has(language)).join(' ')
+		: undefined
 }
 
 export function panes(fences: Fence[], highlight: Highlight): Element[] {

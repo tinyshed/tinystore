@@ -213,6 +213,10 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   language become files of one block. Leave the title off a single snippet.
   Two untitled blocks of the same language stay two separate blocks.
 - A shell command joins a language's tab with `for`: ` ```sh for=bun `.
+  A block whose every fence says `for` and that misses a language is shown
+  only to readers of the languages it names, as ` ```toml for=rust ` with
+  `.cargo/config.toml` is to Rust's; a block of plain ` ```rust ` is shown
+  to everyone.
 - `mark=3`, or `mark=2-4,7`, marks the lines the text after the block talks
   about, and the site dims the others until the reader points at the block.
   Each language's fence has its own line numbers, so each says its own.
@@ -484,8 +488,9 @@ page. The example tests compile and run, so they are the safest to copy from.
 
   The kinds are GitHub's: NOTE, TIP, IMPORTANT, WARNING and CAUTION.
 - A contract's id in the prose, `(contract STORE-05)`, is drawn as a link to
-  `CONTRACTS.md` that shows the promise on a hover: write the id, and the
-  site does the rest. An id in code, a link or a heading stays text.
+  `CONTRACTS.md` whose click or tap opens the promise in a card: write the
+  id, and the site does the rest. An id in code, a link or a heading stays
+  text.
 - Align every table, its cells padded so that the pipes line up: `just
   tables` does it, and the site's tests fail on a table that is not aligned.
 - A table with an empty header row, `| | |`, is drawn as rows without a

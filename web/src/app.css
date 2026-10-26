@@ -224,6 +224,12 @@ kbd {
 	background: var(--ts-kbd);
 }
 
+/* a change of look crossfades the page, as the theme's menu starts it */
+::view-transition-old(root),
+::view-transition-new(root) {
+	animation-duration: 0.3s;
+}
+
 /* The reader's look, picked from the theme's menu: the design's two themes,
    paper and black under them, and editors' themes, each a whole set of the
    tokens above. On the root it is the page's; on any element, as a swatch of
