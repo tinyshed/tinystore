@@ -81,12 +81,7 @@
 			<span class="here">{page.title}</span>
 		</p>
 		<div class="title">
-			<h1>
-				{page.title}
-				{#if page.newIn !== undefined}
-					<a class="new-in" href={href(page.newIn.url)}>New in {page.newIn.version}</a>
-				{/if}
-			</h1>
+			<h1>{page.title}</h1>
 			<CopyPage markdown={page.markdown} />
 		</div>
 

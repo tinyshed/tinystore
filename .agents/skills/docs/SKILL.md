@@ -266,10 +266,11 @@ page when the commit it is built from carries `docs/releases/vX.Y.Z.md`.
   then `## Fixes`, `## Faster` and `## Install`, plain lists and the
   install line of each language.
 
-Each link of the newest release's page to a guide marks what it brought: a
-heading it links gets a badge, "New in X.Y.Z", back to the release's section,
-and a page it links whole gets one beside its title. Link the guide's section
-that has the details, as the page does anyway, and the badge follows.
+A link of the newest release's page to a guide's heading,
+`aggregates.md#days-in-a-time-zone`, says the release brought that section
+whole: the heading gets a badge, "New in X.Y.Z", back to the release's
+section. Link a heading only for a section that is new; for the details of
+something new inside an older section, link the page.
 
 Only the newest release's calls are checked against the reference: an older
 page shows the API of its own version, and its calls are linked where they
