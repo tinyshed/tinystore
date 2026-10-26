@@ -21,6 +21,9 @@ use crate::asked::{self, Asked, Refused, wrong};
 pub(crate) struct Window {
     pub(crate) from: SystemTime,
     pub(crate) to: Option<SystemTime>,
+    /// The span before now the range covers, when it ends now: a query
+    /// asks for it so, and the page after one reads the same query.
+    pub(crate) since: Option<Duration>,
 }
 
 impl Window {
@@ -34,9 +37,9 @@ impl Window {
         match (span, from) {
             (Some(_), Some(_)) => Err(wrong("--since or --from, not both: each says where the range starts")),
             (Some(_), None) if to.is_some() => Err(wrong("--since reads up to now: --from and --to for another end")),
-            (Some(span), None) => Ok(Window { from: now - span, to: None }),
-            (None, Some(from)) => Ok(Window { from, to }),
-            (None, None) => Ok(Window { from: to.unwrap_or(now) - since, to }),
+            (Some(span), None) => Ok(Window { from: now - span, to: None, since: Some(span) }),
+            (None, Some(from)) => Ok(Window { from, to, since: None }),
+            (None, None) => Ok(Window { from: to.unwrap_or(now) - since, to, since: to.is_none().then_some(since) }),
         }
     }
 

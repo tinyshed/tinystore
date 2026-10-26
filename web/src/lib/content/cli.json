@@ -303,12 +303,17 @@
           "value": "<span>"
         },
         {
-          "means": "how many samples to print at most; 1000 by default",
+          "means": "how many samples a page holds; 1000 by default, 100000 at most",
           "name": "--limit",
           "value": "<count>"
         },
         {
-          "means": "one JSON object a sample, the time in UTC",
+          "means": "the page after this one, as the end of the last one says",
+          "name": "--after",
+          "value": "<next>"
+        },
+        {
+          "means": "one JSON object a sample, the time in UTC, and the next page's last",
           "name": "--json",
           "value": ""
         }
@@ -361,7 +366,17 @@
           "value": "<time>"
         },
         {
-          "means": "one JSON object a bucket, the time in UTC",
+          "means": "how many buckets a page holds; 1000 by default, 100000 at most",
+          "name": "--limit",
+          "value": "<count>"
+        },
+        {
+          "means": "the page after this one, as the end of the last one says",
+          "name": "--after",
+          "value": "<next>"
+        },
+        {
+          "means": "one JSON object a bucket, the time in UTC, and the next page's last",
           "name": "--json",
           "value": ""
         }

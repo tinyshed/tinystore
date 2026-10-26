@@ -193,6 +193,46 @@ fn a_metric_is_named_read_and_aggregated_from_a_shell() {
     assert!(said(&table).contains("finland") && said(&table).contains("45"), "{}", said(&table));
 }
 
+// contract: CLI-01
+#[test]
+fn a_read_and_an_aggregate_print_a_page_and_where_the_next_one_begins() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    filled(&data);
+    let mut samples = 0;
+    let mut after: Option<String> = None;
+    loop {
+        let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = vec![&"metrics", &data, &"read", &"ping_rtt_ms"];
+        args.extend([&"--limit" as &dyn AsRef<std::ffi::OsStr>, &"50", &"--json"]);
+        if let Some(next) = &after {
+            args.extend([&"--after" as &dyn AsRef<std::ffi::OsStr>, next]);
+        }
+        let lines = json_lines(&tinystore(&args));
+        let next = lines.last().and_then(|line| line["next"].as_str()).map(str::to_owned);
+        samples += lines.len() - usize::from(next.is_some());
+        let Some(next) = next else { break };
+        after = Some(next);
+    }
+    assert_eq!(samples, 165, "every sample of the three series once, fifty a page");
+    let person = tinystore(&[&"metrics", &data, &"read", &"ping_rtt_ms", &"--limit", &"50"]);
+    assert!(said(&person).contains("--after "), "{}", said(&person));
+    let buckets = tinystore(&[
+        &"metrics",
+        &data,
+        &"aggregate",
+        &"ping_rtt_ms",
+        &"--op",
+        &"max",
+        &"--by",
+        &"target",
+        &"--limit",
+        &"2",
+        &"--json",
+    ]);
+    let lines = json_lines(&buckets);
+    assert!(lines.len() <= 3 && lines.last().unwrap()["next"].is_string(), "{lines:?}");
+}
+
 #[test]
 fn a_store_without_metrics_says_so_and_a_read_beside_makes_none() {
     let dirs = tempfile::tempdir().unwrap();

@@ -57,8 +57,11 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
   for a prefix. Give `--where` again for more labels.
 - `--gaps 5s` marks every place where a series had no sample for longer than
   five seconds. Without it, `read` guesses nothing about a series' step.
-- `read` prints 1000 samples at most, and says on stderr how many more there
-  were. Narrow the range, or raise `--limit`.
+- `read` prints a page of 1000 samples at most. `--limit` changes the page
+  size, up to 100,000. When there are more samples, `read` prints
+  `--after <next> reads on` on stderr. Run the same command with that
+  `--after` to get the next page. The next page reads the same range as the
+  first, even with `--since`.
 
 `--json` prints one object per sample, its time in UTC:
 
@@ -67,8 +70,13 @@ ping_rtt_ms{target="poland"}   26 Oct 14:32–14:33 Europe/Moscow · 46 samples
 ```
 
 A value that JSON can't hold, `NaN` or an infinity, comes as text: `"NaN"`,
-`"+Inf"`, `"-Inf"`. When `--limit` cut the output, the last line says how
-many samples it left out: `{"more":2591000}`.
+`"+Inf"`, `"-Inf"`. When there is another page, the last line is
+`{"next":"…"}`. Pass its value to `--after` to read on:
+
+```sh
+next=$(tinystore metrics ./data read ping_rtt_ms --since 30d --json | tail -1 | jq -r .next)
+tinystore metrics ./data read ping_rtt_ms --since 30d --json --after "$next"
+```
 
 ## Aggregate
 
@@ -90,6 +98,8 @@ ping_rtt_ms max every 10m   26 Oct 13:40–14:40 Europe/Moscow
 - `--by target` makes a group, a column, per value of the label.
 - A terminal gets a table. When the columns don't fit, each bucket gets a line
   of its own. `--json` gives one object per bucket.
+- `aggregate` prints a page of 1000 buckets at most. `--limit` and `--after`
+  work as they do for `read`. A page always ends between two whole buckets.
 
 ## Write a scrape or a file
 

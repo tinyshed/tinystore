@@ -459,8 +459,9 @@ pub(crate) const METRICS_READ: Command = Command {
         FROM,
         TO,
         flag("--gaps", "<span>", "mark where a series had no sample for longer than the span"),
-        flag("--limit", "<count>", "how many samples to print at most; 1000 by default"),
-        flag("--json", "", "one JSON object a sample, the time in UTC"),
+        flag("--limit", "<count>", "how many samples a page holds; 1000 by default, 100000 at most"),
+        flag("--after", "<next>", "the page after this one, as the end of the last one says"),
+        flag("--json", "", "one JSON object a sample, the time in UTC, and the next page's last"),
     ],
     examples: &[
         "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
@@ -482,7 +483,9 @@ pub(crate) const METRICS_AGGREGATE: Command = Command {
         SINCE,
         FROM,
         TO,
-        flag("--json", "", "one JSON object a bucket, the time in UTC"),
+        flag("--limit", "<count>", "how many buckets a page holds; 1000 by default, 100000 at most"),
+        flag("--after", "<next>", "the page after this one, as the end of the last one says"),
+        flag("--json", "", "one JSON object a bucket, the time in UTC, and the next page's last"),
     ],
     examples: &[
         "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",

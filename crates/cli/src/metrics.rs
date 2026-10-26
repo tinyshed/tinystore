@@ -121,29 +121,42 @@ fn read(asked: Asked) -> Done {
     let (_store, Some(metrics)) = beside(&dir)? else {
         return outln!("{} holds no metrics yet", dir.display());
     };
-    let series = query_of(&metrics, name, &asked, window)?.read()?.series;
+    let page = paged(query_of(&metrics, name, &asked, window)?, &asked, most).read()?;
     if asked.has("--json") {
-        return json_samples(&series, most);
+        return json_samples(&page.series, page.next.as_deref());
     }
-    shown_samples(&series, window, most, gaps)
+    shown_samples(&page.series, window, gaps)?;
+    read_on("metrics read", &format!("the first {most} samples"), page.next.as_deref())
+}
+
+/// A query read a page of `most` at a time, from `--after` on when given.
+fn paged(query: Query, asked: &Asked, most: usize) -> Query {
+    let query = query.limit(most);
+    match asked.value("--after") {
+        Some(after) => query.after(after),
+        None => query,
+    }
+}
+
+/// Says how to read the page after this one, when there is one.
+fn read_on(command: &str, page: &str, next: Option<&str>) -> Done {
+    if let Some(next) = next {
+        asked::say(command, format!("{page}; --after {next} reads on"));
+    }
+    Ok(())
 }
 
 /// Each series under a line that names it and the range, a sample a line;
 /// `gaps` marks a silence longer than it.
-fn shown_samples(series: &[Series], window: Window, most: usize, gaps: Option<Duration>) -> Done {
+fn shown_samples(series: &[Series], window: Window, gaps: Option<Duration>) -> Done {
     if series.is_empty() {
         return outln!("no series in {}", window.shown());
     }
     let dated = !window.one_day();
-    let total: usize = series.iter().map(|one| one.samples().len()).sum();
-    let mut left = most;
     for one in series {
-        if left == 0 {
-            break;
-        }
         outln!("{one}   {} · {}", window.shown(), counted(one.samples().len() as u64, "sample"))?;
         let mut last: Option<SystemTime> = None;
-        for sample in one.samples().iter().take(left) {
+        for sample in one.samples() {
             let silence = last.and_then(|last| sample.at.duration_since(last).ok());
             if let Some(silence) = silence.filter(|silence| gaps.is_some_and(|gap| *silence > gap)) {
                 outln!("             · {} without samples", window::span_text(silence))?;
@@ -151,33 +164,31 @@ fn shown_samples(series: &[Series], window: Window, most: usize, gaps: Option<Du
             outln!("  {}   {}", window::clock(sample.at, dated), number(sample.value))?;
             last = Some(sample.at);
         }
-        left = left.saturating_sub(one.samples().len());
-    }
-    if total > most {
-        let narrow = "narrow with --where, --from and --to, aggregate with --every, or raise --limit";
-        asked::say("metrics read", format!("showing {most} of {total} samples: {narrow}"));
     }
     Ok(())
 }
 
-/// A sample a line, and a last line with how many more there were.
-fn json_samples(series: &[Series], most: usize) -> Done {
-    let total: usize = series.iter().map(|one| one.samples().len()).sum();
-    let mut left = most;
+/// A sample a line, and a last line with the page after it when there is
+/// one, which `--after` takes.
+fn json_samples(series: &[Series], next: Option<&str>) -> Done {
     for one in series {
-        if left == 0 {
-            break;
-        }
-        for sample in one.samples().iter().take(left) {
+        for sample in one.samples() {
             let row = json!({
                 "time": window::utc(sample.at), "name": one.name(), "labels": one.labels(),
                 "value": json_number(sample.value),
             });
             outln!("{row}")?;
         }
-        left = left.saturating_sub(one.samples().len());
     }
-    if total > most { outln!("{}", json!({ "more": total - most })) } else { Ok(()) }
+    json_next(next)
+}
+
+/// The JSON's last line when more is there: `{"next": …}`, which `--after` takes.
+fn json_next(next: Option<&str>) -> Done {
+    match next {
+        Some(next) => outln!("{}", json!({ "next": next })),
+        None => Ok(()),
+    }
 }
 
 fn aggregate(asked: Asked) -> Done {
@@ -200,13 +211,17 @@ fn aggregate(asked: Asked) -> Done {
     if !by.is_empty() {
         query = query.by(&by.iter().map(String::as_str).collect::<Vec<_>>());
     }
-    let groups = query.aggregate(op)?.groups;
+    let most = asked.count("--limit", SHOWN)?;
+    let page = paged(query, &asked, most).aggregate(op)?;
+    let groups = page.groups;
     if asked.has("--json") {
-        return json_buckets(&groups);
+        json_buckets(&groups)?;
+        return json_next(page.next.as_deref());
     }
     let every = every.map_or_else(String::new, |every| format!(" every {}", window::span_text(every)));
     outln!("{name} {word}{every}   {}", window.shown())?;
-    shown_buckets(&groups, window)
+    shown_buckets(&groups, window)?;
+    read_on("metrics aggregate", &format!("the first {most} buckets"), page.next.as_deref())
 }
 
 /// The buckets as a table, a row a bucket and a column a group, or a line a
@@ -345,7 +360,11 @@ fn delete(asked: Asked) -> Done {
 }
 
 fn query_of(metrics: &Metrics, name: &str, asked: &Asked, window: Window) -> Result<Query, Refused> {
-    let mut query = metrics.query().name(name).from(window.from);
+    let query = metrics.query().name(name);
+    let mut query = match window.since {
+        Some(span) => query.since(span),
+        None => query.from(window.from),
+    };
     if let Some(to) = window.to {
         query = query.to(to);
     }
