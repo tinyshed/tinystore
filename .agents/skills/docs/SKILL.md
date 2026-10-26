@@ -48,6 +48,7 @@ greyed out. To add a page:
 | Production         | `docs/handbook/production/`       | what TinyStore promises by contract, every limit, running it                                   |
 | an engine's guides | `docs/<engine>/`                  | after the book: `README.md` the overview, then one page per feature a reader would search for  |
 | Reference          | `docs/reference/`, `docs/wire.md` | the generated API pages, and the wire protocol last, for people who write a client             |
+| Releases           | `docs/releases/`                  | the index, then a page per version, newest first: what it adds and renames, with code          |
 
 A feature gets its own page if a reader would search for it by name, such as
 Sessions, Quotas, Once or Steps. If a page needs more than six sections, split
@@ -232,6 +233,30 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   means milliseconds in Bun and seconds in Python.
 - **Run the code if you can.** A complete program on a page, like the one in
   Getting started, should be one you have run in all four languages.
+
+## A release's page
+
+A version gets its page before its release is dispatched, written from what
+`bun tools/release.ts --version vX.Y.Z --notes-only --out dist` lists, in the
+commit that adds its item to the Releases part of `docs/README.md`, under the
+index and above the version before. The release's notes on GitHub link to the
+page when the commit it is built from carries `docs/releases/vX.Y.Z.md`.
+
+- **`# TinyStore X.Y.Z`**, then a lead that says when it came out and what it
+  brings, in a few plain sentences.
+- **A list of what it brings**, an item each: `` - `engine` **[Title](#section)**\ ``
+  and a line under it. The site draws the list as cards, each a link to its
+  section, the engine above its title.
+- **A `WARNING` callout** when a change can break a build, and what to change.
+- **A section for each item**, its shortest code in four languages and a
+  link to the guide that has the details.
+- **`## Changed names`**, the old call above the new one in each language;
+  then `## Fixes`, `## Faster` and `## Install`, plain lists and the
+  install line of each language.
+
+Only the newest release's calls are checked against the reference: an older
+page shows the API of its own version, and its calls are linked where they
+still exist.
 
 ## Scenes
 

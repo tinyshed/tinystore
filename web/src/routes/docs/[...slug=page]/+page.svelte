@@ -110,6 +110,8 @@
 		<div
 			class="prose"
 			class:api={page.api !== undefined}
+			class:release={page.kind === 'release'}
+			class:releases={page.url.endsWith('/releases')}
 			{@attach codeBlocks}
 			{@attach scenes(page.html)}
 			{@attach diagrams(page.html)}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 681 270" width="681" height="270" role="img" aria-labelledby="title">
+  <title id="title">Two stick figures cheer inside a box, with confetti around it: TinyStore 0.1.0 is out.</title>
+  <style>
+    text { font: 20px ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; white-space: pre; fill: #8a8697; }
+    .box { fill: #e29a36; font-weight: 600; }
+    .a { fill: #e29a36; animation: twinkle 2.4s ease-in-out infinite; }
+    .b { fill: #4fb37c; animation: twinkle 3.1s ease-in-out infinite 0.6s; }
+    .c { fill: #6f8fe8; animation: twinkle 2.7s ease-in-out infinite 1.2s; }
+    .caption { font: 600 17px ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; fill: #8a8697; }
+    @keyframes twinkle { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+    @media (prefers-reduced-motion: reduce) { .a, .b, .c { animation: none; } }
+  </style>
+  <text x="24" y="34">      <tspan class="a">*        </tspan><tspan class="c">.          </tspan><tspan class="b">+        </tspan><tspan class="c">.       </tspan><tspan class="a">*    </tspan></text>
+  <text x="24" y="58">  <tspan class="c">.        </tspan><tspan class="b">+       </tspan><tspan class="a">*           </tspan><tspan class="c">.       </tspan><tspan class="b">+        </tspan></text>
+  <text x="24" y="82">      <tspan class="c">.     .</tspan><tspan class="box">--------------------</tspan><tspan class="c">.      </tspan><tspan class="a">*    </tspan><tspan class="c">.  </tspan></text>
+  <text x="24" y="106">   <tspan class="b">+        </tspan><tspan class="box">|    \o/      \o/    |     </tspan><tspan class="c">.        </tspan></text>
+  <text x="24" y="130">        <tspan class="a">*   </tspan><tspan class="box">|     |        |     |         </tspan><tspan class="b">+    </tspan></text>
+  <text x="24" y="154">    <tspan class="c">.       </tspan><tspan class="box">|    / \      / \    |   </tspan><tspan class="a">*          </tspan></text>
+  <text x="24" y="178">       <tspan class="b">+    </tspan><tspan class="box">'--------------------'        </tspan><tspan class="c">.     </tspan></text>
+  <text x="24" y="202">  <tspan class="a">*       </tspan><tspan class="c">.        </tspan><tspan class="a">*        </tspan><tspan class="b">+         </tspan><tspan class="c">.      </tspan><tspan class="a">*  </tspan></text>
+  <text class="caption" x="340" y="248" text-anchor="middle">TinyStore 0.1.0 is out. We shipped it.</text>
+</svg>

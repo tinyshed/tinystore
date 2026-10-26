@@ -215,6 +215,7 @@ function sums(out: string): void {
 function notes(built: Target[], version: string, out: string): void {
 	const lines = [
 		`TinyStore ${version}`,
+		...releasePage(version),
 		'',
 		'```sh',
 		`bun add @tinyshed/tinystore@${version}`,
@@ -228,6 +229,14 @@ function notes(built: Target[], version: string, out: string): void {
 		...changes(version),
 	]
 	writeFileSync(join(out, 'NOTES.md'), `${lines.join('\n')}\n`)
+}
+
+/** The docs' page of the release, what it adds and renames with code, when the commit carries one. */
+function releasePage(version: string): string[] {
+	if (!existsSync(join(root, 'docs', 'releases', `v${version}.md`))) {
+		return []
+	}
+	return ['', `**What's new, with code in every language:** https://tinyshed.org/tinystore/docs/releases/v${version}`]
 }
 
 const sections: [type: string, heading: string][] = [

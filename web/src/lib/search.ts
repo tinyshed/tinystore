@@ -3,7 +3,7 @@ export interface Entry {
 	page: string
 	heading: string
 	url: string
-	kind: 'guide' | 'reference' | 'design'
+	kind: 'guide' | 'reference' | 'design' | 'release'
 	text: string
 	code: string
 }

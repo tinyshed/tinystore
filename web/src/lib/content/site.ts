@@ -15,7 +15,7 @@ import { outline, type Section, sections } from './outline'
 import { checkout, editUrl, exists, headCommit, lastChanged, sourceUrl } from './repo'
 
 /** What kind of page a section of the index holds, which the search filters by. */
-export type Kind = 'guide' | 'reference' | 'design'
+export type Kind = 'guide' | 'reference' | 'design' | 'release'
 
 export interface Neighbour {
 	title: string
@@ -80,6 +80,8 @@ interface Entry {
 	kind: Kind
 	hidden?: boolean
 	unlisted?: boolean
+	/** A release's page other than the newest's, whose calls were the API of its own version. */
+	past?: boolean
 }
 
 let cached: { stamp: string; site: Promise<Site> } | undefined
@@ -171,9 +173,15 @@ function entriesOf(index: Index, root: string): Entry[] {
 				: [],
 		),
 	)
+	// the newest release is the first after their index: an older one's calls were its own version's API
+	const isRelease = (entry: Entry) => entry.kind === 'release' && !entry.file.endsWith('/README.md')
+	const newest = linked.find(isRelease)
+	const marked = linked.map(entry =>
+		isRelease(entry) && entry !== newest ? { ...entry, past: true } : entry,
+	)
 	return [
 		{ file: indexFile, slug: '', section: '', book: '', kind: 'guide' },
-		...linked,
+		...marked,
 		...apiEntries(root),
 		{ file: kitchenSink, slug: 'kitchen-sink', section: '', book: '', kind: 'guide', hidden: true },
 	]
@@ -215,9 +223,11 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiInd
 		throw new Error(`${entry.file} has no title: its first line should be a # heading`)
 	}
 
-	// a reference page's blocks are the signatures themselves
-	const calls =
+	// a reference page's blocks are the signatures themselves, and a past release's
+	// calls may be gone: they are linked where they still exist, and checked nowhere
+	const checked =
 		entry.kind === 'reference' ? { highlight, problems: [] } : pageCalls(api, entry.file, highlight)
+	const calls = entry.past === true ? { ...checked, problems: [] } : checked
 
 	return {
 		...entry,
@@ -291,6 +301,9 @@ function kindOf(section: string): Kind {
 	const name = section.toLowerCase()
 	if (name === 'reference') {
 		return 'reference'
+	}
+	if (name === 'releases') {
+		return 'release'
 	}
 	return name === 'design' ? 'design' : 'guide'
 }

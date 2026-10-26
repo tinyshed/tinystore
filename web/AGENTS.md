@@ -10,8 +10,8 @@ particular to the site. How a page is written is the `docs` skill.
 
 Built: the landing page, a page for every file `docs/README.md` links, search, scenes, diagrams,
 both themes, the language switch, a markdown copy of each page, `llms.txt`,
-`llms-full.txt`, the API pages with `llms-<language>.txt`, the sitemap, and
-the server with its analytics. The docs
+`llms-full.txt`, the API pages with `llms-<language>.txt`, a page per release, the sitemap,
+and the server with its analytics. The docs
 are written for Rust: the Handbook's
 five parts in `docs/handbook/`, and the Guides in `docs/guides/`, every engine page by page, the command line by its overview.
 

@@ -6,7 +6,7 @@ directory on its own disk. The core is written in Rust. Rust programs call it
 directly, and Bun, Node, Python and Go programs reach the same core through
 their SDK.
 
-The documentation has three parts, each for a different moment:
+The documentation has four parts, each for a different moment:
 
 - **[Learn from scratch](handbook/README.md)**: the Handbook builds one
   application, an AI chat, chapter by chapter, from a first store to copies
@@ -16,6 +16,8 @@ The documentation has three parts, each for a different moment:
   in Jobs, filters in Search.
 - **[Browse the API](reference/api.md)**: the Reference lists every call of
   every SDK, generated from the source.
+- **[See what changed](releases/README.md)**: the Releases show what each
+  version added and renamed, with code.
 
 Every example is shown in TypeScript, Python, Go and Rust.
 
@@ -204,3 +206,10 @@ and the voice: .agents/skills/docs/SKILL.md.
 
 - [API reference](reference/api.md)
 - [Wire protocol](wire.md)
+
+## Releases
+
+- [All releases](releases/README.md)
+- [0.2.0](releases/v0.2.0.md)
+- [0.1.1](releases/v0.1.1.md)
+- [0.1.0](releases/v0.1.0.md)

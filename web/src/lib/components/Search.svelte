@@ -12,6 +12,7 @@
 		guide: 'Guide',
 		reference: 'Reference',
 		design: 'Design',
+		release: 'Release',
 	}
 
 	let dialog: HTMLDialogElement | undefined = $state()
@@ -23,7 +24,7 @@
 
 	const filters = $derived<Filter[]>([
 		'all',
-		...(['guide', 'reference', 'design'] as const).filter(kind =>
+		...(['guide', 'reference', 'design', 'release'] as const).filter(kind =>
 			entries.some(entry => entry.kind === kind),
 		),
 		'code',
@@ -33,7 +34,7 @@
 
 	// in the order the groups show them, so that the arrows walk what the eye sees
 	const groups = $derived(
-		(['guide', 'reference', 'design'] as const)
+		(['guide', 'reference', 'design', 'release'] as const)
 			.map(kind => ({ kind, hits: hits.filter(hit => hit.entry.kind === kind) }))
 			.filter(group => group.hits.length > 0),
 	)

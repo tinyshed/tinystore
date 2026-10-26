@@ -95,8 +95,10 @@ A release is one run of `.github/workflows/release.yml`, dispatched from
    plain, with `node` and with `python`, into `native/<target>/`. Linux's run
    in `manylinux_2_28` and `alpine` through `docker run`.
 4. `package`: `tools/release.ts` packs `native/` into `dist/`: the archives,
-   `npm/*.tgz`, `pypi/*.whl`, `SHA256SUMS`, `NOTES.md`. The notes are the
-   install lines, then the commits since the release before, from their
+   `npm/*.tgz`, `pypi/*.whl`, `SHA256SUMS`, `NOTES.md`. The notes are a link
+   to the release's page in `docs/releases/` when the commit carries one (the
+   docs skill says how one is written), the install lines, then the commits
+   since the release before, from their
    subjects: those marked `!` first under Changed names, then Features, Fixes
    and Performance from `feat:`, `fix:` and `perf:`; every other type is left
    out.
