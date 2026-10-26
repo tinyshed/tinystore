@@ -149,10 +149,10 @@ impl Configs {
 
     /// Ends every follow: the server is closing, and the client follows
     /// again on another connection.
-    pub(crate) fn go_away(&self) {
+    pub(crate) fn go_away(&self, why: &str) {
         let follows: Vec<_> = lock(&self.follows).drain().map(|(_, following)| following).collect();
         for following in follows {
-            following.close(Err(Failure::unavailable("the server is closing; follow again on another connection")));
+            following.close(Err(Failure::unavailable(format!("{why}; follow again on another connection"))));
         }
     }
 

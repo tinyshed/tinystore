@@ -108,10 +108,10 @@ impl Handles {
     }
 
     /// Ends every tail: the server is closing. A writer runs to its end.
-    pub(crate) fn go_away(&self) {
+    pub(crate) fn go_away(&self, why: &str) {
         let tails: Vec<_> = lock(&self.tails).drain().map(|(_, tailing)| tailing).collect();
         for tailing in tails {
-            tailing.close(Err(Failure::unavailable("the server is closing; tail again on another connection")));
+            tailing.close(Err(Failure::unavailable(format!("{why}; tail again on another connection"))));
         }
     }
 

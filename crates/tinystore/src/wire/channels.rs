@@ -283,10 +283,10 @@ impl Subscriptions {
 
     /// Ends every subscription: the server is closing, and the client
     /// subscribes again on another connection, told it may have missed some.
-    pub(crate) fn go_away(&self) {
+    pub(crate) fn go_away(&self, why: &str) {
         let all: Vec<_> = lock(&self.by_stream).drain().map(|(_, subscribed)| subscribed).collect();
         for subscribed in all {
-            subscribed.close(Err(Failure::unavailable("the server is closing; subscribe again on another connection")));
+            subscribed.close(Err(Failure::unavailable(format!("{why}; subscribe again on another connection"))));
         }
     }
 

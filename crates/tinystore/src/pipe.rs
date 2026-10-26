@@ -172,6 +172,14 @@ impl Pipe {
         self.session.go_away();
     }
 
+    /// Tells the session its client closed its side, as a socket's end of
+    /// file says: the streams that run until the client cancels them end,
+    /// since it can cancel nothing more, and the calls running finish, their
+    /// answers left for a client that may read on.
+    pub fn client_closed(&self) {
+        self.session.client_closed();
+    }
+
     /// Whether the connection owes its client so much that it reads no frame
     /// more until the host takes some: bytes handed to it meanwhile wait
     /// unread, so a host that reads them from a socket stops reading until a

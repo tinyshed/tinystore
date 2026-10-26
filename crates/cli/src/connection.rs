@@ -40,6 +40,7 @@ where
     let done = Arc::new(AtomicBool::new(false));
     let writing = tokio::spawn(write_frames(Arc::clone(&pipe), Arc::clone(&output), Arc::clone(&done)));
     read_frames(reader, &pipe, &output, closing).await;
+    pipe.client_closed();
     drain(&pipe, &output).await;
     done.store(true, Ordering::Release);
     output.ready.notify_one();
@@ -178,8 +179,10 @@ where
 }
 
 /// Waits for the streams running, so that a client that closed its side, as
-/// a private child's parent does, still gets what it asked for. A client gone
-/// takes nothing more, and the calls that wait for it to read never start.
+/// a private child's parent and a Node socket's `end()` do, still gets what it
+/// asked for; the streams only its cancel would end were ended as it closed.
+/// A client gone takes nothing more, and the calls that wait for it to read
+/// never start.
 async fn drain<W>(pipe: &Pipe, output: &Output<W>) {
     let deadline = Instant::now() + DRAIN;
     while pipe.streams() > 0 && !pipe.finished() && !output.gone.load(Ordering::Acquire) && Instant::now() < deadline {
@@ -336,6 +339,39 @@ mod tests {
     }
 
     /// A REQUEST of `method` on `stream`, the client's only frame there.
+    /// A client that closes its side while it listens on a channel: the
+    /// subscription, which only its cancel would end, ends with a last frame
+    /// it still reads, and the connection ends at once rather than after the
+    /// drain's ten seconds.
+    #[test]
+    fn a_client_that_closes_its_side_while_it_listens_ends_its_connection_at_once() {
+        const SUBSCRIBE: u16 = 0x0a02;
+        const END: u8 = 1;
+        const ERROR: u8 = 2;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+        runtime().block_on(async {
+            let (mut from_server, mut to_server, serving) = welcomed(&store).await;
+            // channels.subscribe {name: "chat", under: [], recursive: false}
+            let subscribe = [0x83, 0x01, 0xa4, b'c', b'h', b'a', b't', 0x02, 0x90, 0x03, 0xc2];
+            to_server.write_all(&request(1, SUBSCRIBE, &subscribe)).await.unwrap();
+            let mut head = [0u8; 12];
+            from_server.read_exact(&mut head).await.unwrap();
+            assert_eq!(head[5] & END, 0, "listening, its stream open");
+            let mut answer = vec![0; usize::try_from(u32::from_le_bytes(head[..4].try_into().unwrap())).unwrap()];
+            from_server.read_exact(&mut answer).await.unwrap();
+            to_server.shutdown().await.unwrap();
+            let began = std::time::Instant::now();
+            let ended = tokio::time::timeout(Duration::from_secs(5), serving).await;
+            assert!(ended.is_ok() && began.elapsed() < Duration::from_secs(5), "{:?}", began.elapsed());
+            let mut last = Vec::new();
+            from_server.read_to_end(&mut last).await.unwrap();
+            assert!(last.len() >= 12 && last[5] == END | ERROR, "the subscription's last frame: {last:?}");
+            assert!(String::from_utf8_lossy(&last).contains("the client closed its side"));
+        });
+        store.close().unwrap();
+    }
+
     fn request(stream: u32, method: u16, body: &[u8]) -> Vec<u8> {
         const REQUEST: u8 = 3;
         const END: u8 = 1;

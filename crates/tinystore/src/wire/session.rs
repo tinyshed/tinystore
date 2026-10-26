@@ -328,19 +328,34 @@ impl Session {
         input.going_away = true;
         let body = GoAway { code: "unavailable".to_owned(), message: "the server is closing".to_owned() }.encode();
         self.shared.send(&[Frame::new(Kind::GoAway, 0, body)]);
+        self.end_open("the server is closing");
+    }
+
+    /// The client closed its side: no frame comes from it any more, so the
+    /// streams only its cancel would end, its subscriptions, follows, tails
+    /// and watches, end, and its workers take no job more. The calls running
+    /// finish and their answers still leave, for a client that reads on, as
+    /// a private child's parent does once it closed stdin.
+    pub(crate) fn client_closed(&self) {
+        self.end_open("the client closed its side");
+    }
+
+    /// Ends the streams that run until their client cancels them, saying why.
+    fn end_open(&self, why: &str) {
         #[cfg(feature = "jobs")]
         {
             self.shared.jobs.halt_works();
             for watch in self.shared.jobs.take_watches() {
-                watch.close(Err(Failure::unavailable("the server is closing; watch again on another connection")));
+                watch.close(Err(Failure::unavailable(format!("{why}; watch again on another connection"))));
             }
         }
         #[cfg(feature = "records")]
-        self.shared.records.go_away();
+        self.shared.records.go_away(why);
         #[cfg(feature = "config")]
-        self.shared.config.go_away();
+        self.shared.config.go_away(why);
         #[cfg(feature = "channels")]
-        self.shared.channels.go_away();
+        self.shared.channels.go_away(why);
+        let _ = why;
     }
 
     pub(crate) fn streams(&self) -> usize {
