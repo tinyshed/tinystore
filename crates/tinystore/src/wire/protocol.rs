@@ -1466,6 +1466,8 @@ pub(crate) struct ConfigOpen {
     pub(crate) layers: String,
     /// A kept change that no longer fits refuses the open.
     pub(crate) strict: bool,
+    /// As kv.db keeps it, for a command: the last declaration a program opened it with,.
+    pub(crate) kept: bool,
 }
 
 #[cfg(feature = "config")]
@@ -1481,6 +1483,7 @@ impl Message for ConfigOpen {
                 2 => message.declaration = codec::str(r, "declaration")?,
                 3 => message.layers = codec::str(r, "layers")?,
                 4 => message.strict = codec::bool(r, "strict")?,
+                5 => message.kept = codec::bool(r, "kept")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -1505,6 +1508,10 @@ impl Message for ConfigOpen {
             map.field(out, 4);
             codec::write_bool(out, &self.strict);
         }
+        if self.kept {
+            map.field(out, 5);
+            codec::write_bool(out, &self.kept);
+        }
         map.close(out);
     }
 
@@ -1514,6 +1521,7 @@ impl Message for ConfigOpen {
             + 1 + 5 + self.declaration.len()
             + 1 + 5 + self.layers.len()
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -1521,6 +1529,7 @@ impl Message for ConfigOpen {
             && self.declaration.is_empty()
             && self.layers.is_empty()
             && !self.strict
+            && !self.kept
     }
 }
 

@@ -1665,6 +1665,8 @@ export const ConfigOpen = message(
 		layers: [3, str],
 		/** a kept change that no longer fits refuses the open */
 		strict: [4, bool],
+		/** as kv.db keeps it, for a command: the last declaration a program opened it with, */
+		kept: [5, bool],
 	},
 	{
 		write(w, v) {
@@ -1690,6 +1692,11 @@ export const ConfigOpen = message(
 				w.bool(v.strict)
 				n++
 			}
+			if (v.kept !== undefined) {
+				w.field(5)
+				w.bool(v.kept)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -1697,6 +1704,7 @@ export const ConfigOpen = message(
 			let $declaration: string | undefined
 			let $layers: string | undefined
 			let $strict: boolean | undefined
+			let $kept: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -1711,12 +1719,21 @@ export const ConfigOpen = message(
 					case 4:
 						$strict = r.bool()
 						break
+					case 5:
+						$kept = r.bool()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, declaration: $declaration, layers: $layers, strict: $strict }
+			return {
+				name: $name,
+				declaration: $declaration,
+				layers: $layers,
+				strict: $strict,
+				kept: $kept,
+			}
 		},
 	},
 )

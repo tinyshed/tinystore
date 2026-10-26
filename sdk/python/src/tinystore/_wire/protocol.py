@@ -1390,6 +1390,10 @@ def _write_config_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(4)
         w.bool(x)
         n += 1
+    if (x := v.get("kept")) is not None:
+        w.uint(5)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1406,6 +1410,8 @@ def _read_config_open(r: Reader) -> dict[str, Any]:
                 read["layers"] = r.str()
             case 4:
                 read["strict"] = r.bool()
+            case 5:
+                read["kept"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -1426,6 +1432,8 @@ ConfigOpen = Message(
         "layers": (3, str_),
         # a kept change that no longer fits refuses the open
         "strict": (4, bool_),
+        # as kv.db keeps it, for a command: the last declaration a program opened it with,
+        "kept": (5, bool_),
     },
     _write_config_open,
     _read_config_open,

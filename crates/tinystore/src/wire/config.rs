@@ -60,8 +60,19 @@ pub(crate) fn call(store: &Store, configs: &Configs, called: u16, body: &[u8], r
 }
 
 /// Opens a config on this connection; one that may only read keeps no
-/// declaration in kv.db.
+/// declaration in kv.db. One opened as kv.db keeps it, for a command, takes
+/// the declaration kept there and no layer.
 fn open(store: &Store, configs: &Configs, open: &ConfigOpen, read_only: bool) -> Answered {
+    if open.kept {
+        let config = store.config_kept(&open.name)?.ok_or_else(|| {
+            crate::Error::new(
+                crate::ErrorKind::NotFound,
+                format!("config {}: no program opened it in this store, so it keeps no declaration", open.name),
+            )
+        })?;
+        let handle = configs.open.keep(config.clone());
+        return Ok(value(handle, &config));
+    }
     let (declaration, layers) = (json(&open.declaration, "declaration")?, json(&open.layers, "layers")?);
     let sent = Sent {
         name: &open.name,

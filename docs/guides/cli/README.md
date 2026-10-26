@@ -33,6 +33,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 | Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                           |
 |         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                      |
 |         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one             |
+|         | `config <dir> update <cfg> <p=v>`     | change a config's live settings; `reset`, and `explain` beside    |
 |         | `channels <dir> publish <ch> <json>`  | hand a message to whoever listens; `subscribe <ch>` listens       |
 |         | `metrics <dir> ingest`                | the Prometheus text on stdin, or a stream with `-f`               |
 |         | `events <dir> append <stream>`        | an event, or each line of a program's output                      |
@@ -103,6 +104,7 @@ waits for no server (contract CLI-07).
 | [files](files.md)                      | files put, got, listed and deleted                       |
 | [channels](channels.md)                | a message published, a channel listened to               |
 | [lock](lock.md)                        | a command run while it holds a key                       |
+| [config](config.md)                    | a config explained, its live settings changed            |
 | [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
 | [events](events.md)                    | an event or a program's output appended, a stream listed |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |

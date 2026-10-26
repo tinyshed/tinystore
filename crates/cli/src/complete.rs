@@ -155,6 +155,8 @@ fn named(group: &str, verb: &str, given: &[String], dir: &Path) -> Vec<String> {
         ("files", _, 0) => names().files,
         ("files", "put" | "get", 2) => vec!["@files".to_owned()],
         ("events", _, 0) => names().streams,
+        ("config", _, 0) => names().configs,
+        ("config", "update" | "reset", _) => settings_of(dir, &given[0], verb == "update"),
         ("metrics", "read" | "aggregate" | "delete", 0) => names().metrics,
         ("metrics", "delete", _) => labels_of(dir, &given[0]).into_iter().map(|label| format!("{label}=")).collect(),
         _ => Vec::new(),
@@ -207,6 +209,15 @@ fn metric_of(before: &[String]) -> Option<String> {
     let words = positional(&before[1..]);
     let at = words.iter().position(|word| word == "read" || word == "aggregate" || word == "delete")?;
     words.get(at + 1).cloned()
+}
+
+/// The settings of the config `name` as the store keeps it, each with an
+/// `=` after it when a value follows.
+fn settings_of(dir: &Path, name: &str, valued: bool) -> Vec<String> {
+    let Some(store) = beside(dir) else { return Vec::new() };
+    let Ok(Some(config)) = tinystore::client::config_kept(&store, name) else { return Vec::new() };
+    let paths = config.explain().settings.into_iter().map(|line| line.path);
+    paths.map(|path| if valued { format!("{path}=") } else { path }).collect()
 }
 
 fn labels_of(dir: &Path, name: &str) -> Vec<String> {

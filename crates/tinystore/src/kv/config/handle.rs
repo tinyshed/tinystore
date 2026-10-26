@@ -129,6 +129,9 @@ pub(super) struct Opening<T> {
     /// Whether kv.db keeps the declaration: not for a connection that may
     /// only read.
     pub(super) remember: bool,
+    /// Opened as the store keeps it, for a command: a required setting no
+    /// layer gave is left out rather than refused.
+    pub(super) kept: bool,
 }
 
 /// Opens the config a Rust program's builder describes.
@@ -145,7 +148,7 @@ where
     let (store, name, layers, validate, strict) =
         (builder.store, builder.name, builder.layers, builder.validate, builder.strict);
     let remember = store.is_some();
-    open_with(Opening { store, name, declaration, layers, validate, strict, view: View::Rust, remember })
+    open_with(Opening { store, name, declaration, layers, validate, strict, view: View::Rust, remember, kept: false })
 }
 
 /// Refuses a declaration with a live setting, for a config loaded without
@@ -159,6 +162,17 @@ fn refuse_live(declaration: &Declaration) -> Result<()> {
     }
 }
 
+/// The declaration kv.db keeps of the config `name`, the last a program
+/// opened it with; none when no program opened it, or the store has no kv.db
+/// yet, which a store opened beside would otherwise try to make.
+#[cfg(feature = "wire")]
+pub(super) fn kept_declaration(store: &Store, name: &str) -> Result<Option<String>> {
+    if !store.dir().join("kv.db").exists() {
+        return Ok(None);
+    }
+    Ok(Hub::of(&Kv::of(store)?, name)?.remembered())
+}
+
 /// Opens a config: its layers read, its value made and checked, then the
 /// changes kept in kv.db applied.
 pub(super) fn open_with<T>(opening: Opening<T>) -> Result<Config<T>>
@@ -169,7 +183,8 @@ where
     let within = |error: Error| error.within(&shown);
     check_name(&opening.name).map_err(within)?;
     let making = Making { declaration: &opening.declaration, validate: opening.validate.as_ref(), view: opening.view };
-    let base = Base::read(&opening.declaration, &opening.layers).map_err(|problems| within(refused(problems)))?;
+    let base = Base::read(&opening.declaration, &opening.layers, !opening.kept)
+        .map_err(|problems| within(refused(problems)))?;
     let (value, tree) = making.layered(&base).map_err(|problems| within(refused(problems)))?;
     let hub = match &opening.store {
         Some(store) => Hub::of(&Kv::of(store).map_err(within)?, &opening.name).map_err(within)?,
@@ -300,6 +315,21 @@ where
     #[cfg(feature = "async")]
     pub(crate) fn detached(&self) -> bool {
         self.inner.hub.keeps_nothing()
+    }
+
+    /// What `text` gives the setting at `path`, read as the environment's
+    /// text is, by the setting's kind: `2048` an integer, `30s` a span, `a,b`
+    /// a list. A path the declaration has no setting at is refused, naming
+    /// its nearest.
+    #[cfg(feature = "client")]
+    pub(crate) fn value_of_text(&self, path: &str, text: &str) -> Result<Value> {
+        let declared = self.inner.declaration.settings();
+        let Some(setting) = self.inner.declaration.setting(path) else {
+            let near = super::declaration::meant(path, declared.iter().map(|(path, _)| path));
+            let hint = super::declaration::did_you_mean(near);
+            return Err(Error::invalid(format!("config {}: no setting {path}{hint}", self.inner.name)));
+        };
+        rules::parse(setting, text).map_err(|why| Error::invalid(format!("config {}: {path}: {why}", self.inner.name)))
     }
 
     /// Changes the live settings `changes` names, a partial value in the
@@ -544,6 +574,7 @@ where
             }
         }
         let mut notes: Vec<String> = self.base.absent.iter().map(|file| format!("{file}: absent")).collect();
+        notes.extend(self.base.left_out.iter().map(|path| format!("{path}: required, given by the program alone")));
         notes.extend(self.base.unused.iter().map(ToString::to_string));
         notes.extend(resolved.ignored.iter().map(|(path, change, why)| ignored(path, change, why)));
         notes.extend(

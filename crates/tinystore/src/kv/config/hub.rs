@@ -21,6 +21,8 @@ use crate::sync::lock;
 use crate::{Error, ErrorKind, Result};
 
 const SELECT_CONFIG: &str = "select version, declaration from _tinystore_kv_configs where name = ?1";
+#[cfg(feature = "client")]
+const SELECT_NAMES: &str = "select name from _tinystore_kv_configs where declaration is not null order by name";
 const SELECT_CHANGES: &str = "select path, value, version, at from _tinystore_kv_config_changes where name = ?1";
 const KEEP_VERSION: &str = "insert into _tinystore_kv_configs (name, version) values (?1, ?2)
     on conflict (name) do update set version = excluded.version";
@@ -162,6 +164,12 @@ impl Hub {
 
     pub(super) fn kept(&self) -> Arc<Kept> {
         Arc::clone(&lock(&self.state).kept)
+    }
+
+    /// The declaration kv.db keeps, the last a program opened the config with.
+    #[cfg(feature = "wire")]
+    pub(super) fn remembered(&self) -> Option<String> {
+        lock(&self.state).remembered.clone()
     }
 
     pub(super) fn join(&self, follower: Weak<dyn Follower>) {
@@ -429,3 +437,17 @@ fn refuse_past_bound(connection: &Connection, name: &str) -> Result<()> {
 }
 
 use crate::sqlite::execute_cached as execute;
+
+/// The configs kv.db keeps a declaration of, by name, for the command line's
+/// completion and `status --json`: none while the store has no kv.db.
+#[cfg(feature = "client")]
+pub(crate) fn names(store: &crate::Store) -> Result<Vec<String>> {
+    if !store.dir().join("kv.db").exists() {
+        return Ok(Vec::new());
+    }
+    Kv::of(store)?.file().read(|connection| {
+        let mut select = connection.prepare_cached(SELECT_NAMES).map_err(|error| sql_error("its configs", error))?;
+        let rows = select.query_map([], |row| row.get(0));
+        rows.and_then(Iterator::collect).map_err(|error| sql_error("its configs", error))
+    })
+}

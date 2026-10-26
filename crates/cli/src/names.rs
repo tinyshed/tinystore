@@ -1,6 +1,6 @@
 //! What a store holds by name, read beside whoever holds it: its buckets,
-//! queues, sets of files, streams, metrics, databases and search indexes,
-//! for `status --json` and for Tab's completion. A store that lacks an
+//! queues, sets of files, streams, metrics, databases, search indexes and
+//! configs, for `status --json` and for Tab's completion. A store that lacks an
 //! engine's file holds none of its names, and an engine whose names do not
 //! read gives none: a read beside makes nothing, and neither use may fail.
 
@@ -24,6 +24,7 @@ pub(crate) struct Names {
     pub(crate) metrics: Vec<String>,
     pub(crate) databases: Vec<String>,
     pub(crate) indexes: Vec<String>,
+    pub(crate) configs: Vec<String>,
 }
 
 impl Names {
@@ -41,6 +42,7 @@ impl Names {
             metrics: metrics(&store),
             databases: on_disk::databases(dir),
             indexes: indexes(&store),
+            configs: tinystore::client::configs(&store).unwrap_or_default(),
         }
     }
 
@@ -55,6 +57,7 @@ impl Names {
             "metrics": self.metrics,
             "databases": self.databases,
             "indexes": self.indexes,
+            "configs": self.configs,
         })
     }
 }

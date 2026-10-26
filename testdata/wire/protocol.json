@@ -722,6 +722,9 @@
         "declaration": {
           "str": "{\"a\":1}"
         },
+        "kept": {
+          "bool": true
+        },
         "layers": {
           "str": "{\"a\":1}"
         },
@@ -732,7 +735,7 @@
           "bool": true
         }
       },
-      "hex": "8401a46e616d6502a77b2261223a317d03a77b2261223a317d04c3",
+      "hex": "8501a46e616d6502a77b2261223a317d03a77b2261223a317d04c305c3",
       "message": "config.Open",
       "name": "config.Open with every field"
     },

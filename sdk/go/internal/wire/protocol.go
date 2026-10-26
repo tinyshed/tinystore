@@ -2167,6 +2167,8 @@ type ConfigOpen struct {
 	Layers string `wire:"3,layers"`
 	// a kept change that no longer fits refuses the open
 	Strict bool `wire:"4,strict"`
+	// as kv.db keeps it, for a command: the last declaration a program opened it with,
+	Kept bool `wire:"5,kept"`
 }
 
 func (m ConfigOpen) Write(w *Writer) {
@@ -2192,6 +2194,11 @@ func (m ConfigOpen) Write(w *Writer) {
 		w.Bool(m.Strict)
 		n++
 	}
+	if m.Kept {
+		w.Uint(5)
+		w.Bool(m.Kept)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -2208,6 +2215,8 @@ func (m *ConfigOpen) Read(r *Reader) {
 			m.Layers = r.Str()
 		case 4:
 			m.Strict = r.Bool()
+		case 5:
+			m.Kept = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -2220,7 +2229,8 @@ func (m ConfigOpen) IsZero() bool {
 	return m.Name == "" &&
 		m.Declaration == "" &&
 		m.Layers == "" &&
-		!m.Strict
+		!m.Strict &&
+		!m.Kept
 }
 
 // ConfigValue is the schema's config.Value.

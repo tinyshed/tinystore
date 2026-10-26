@@ -6,6 +6,8 @@ message config.Open {
   2 declaration: json      # each setting's kind, rules, default and marks
   3 layers: json           # objects, files and the environment, in the order written
   4 strict: bool           # a kept change that no longer fits refuses the open
+  5 kept: bool             # as kv.db keeps it, for a command: the last declaration a program opened it with,
+  # no layer, a required setting none gave left out; declaration and layers are empty
 }
 
 # A config's value at a version of its changes, and where each setting's

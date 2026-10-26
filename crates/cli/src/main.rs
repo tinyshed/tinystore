@@ -3,8 +3,8 @@
 //! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
 //! beside whoever holds it; `migrate` and `search drop` change one nothing
 //! holds, and `sql --write` one nothing holds or through its server; `kv`,
-//! `jobs`, `files`, `channels`, `metrics` and `events` write through the
-//! server that holds one, or a sidecar they start, and `lock` holds a key of
+//! `jobs`, `files`, `channels`, `config`, `metrics` and `events` write
+//! through the server that holds one, or a sidecar they start, and `lock` holds a key of
 //! one while a command runs; `stop` ends a server and `token`
 //! makes its tokens; `backup` and `restore` keep a store; `node` and
 //! `witness` run the nodes of a network. `help` lists them all, and
@@ -36,6 +36,7 @@ mod banner;
 mod channels;
 mod client;
 mod complete;
+mod config;
 mod connection;
 mod events;
 mod files;
@@ -100,6 +101,7 @@ fn main() -> ExitCode {
         Some("files") => files::run(rest),
         Some("channels") => channels::run(rest),
         Some("lock") => lock::run(rest),
+        Some("config") => config::run(rest),
         Some("metrics") => metrics::run(rest),
         Some("events") => events::run(rest),
         Some("sql") => sql::run(rest),

@@ -565,6 +565,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &JOBS_LIST,
             &FILES_LIST,
             &FILES_GET,
+            &CONFIG_EXPLAIN,
             &SQL,
             &SEARCH,
             &METRICS_NAMES,
@@ -584,6 +585,8 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &FILES_DELETE,
             &CHANNELS_PUBLISH,
             &CHANNELS_SUBSCRIBE,
+            &CONFIG_UPDATE,
+            &CONFIG_RESET,
             &METRICS_INGEST,
             &METRICS_DELETE,
             &EVENTS_APPEND,
@@ -716,6 +719,43 @@ pub(crate) fn print_command(command: &Command) -> Done {
 }
 
 /// Prints the help of every command of a group, `metrics`, one after another.
+pub(crate) const CONFIG_EXPLAIN: Command = Command {
+    name: "config explain",
+    takes: "[dir] explain <config>",
+    does: "a config's settings as the store keeps them, and where each came from",
+    flags: &[JSON],
+    examples: &["tinystore config ./data explain chat"],
+    more: "It reads beside the program or server that holds the directory: the last declaration a program opened \
+           the config with, its defaults, and the changes made to its live settings. The program's own files and \
+           environment are its own, so its value may differ; a required setting they give is said as such. A \
+           secret shows as ***.",
+};
+
+pub(crate) const CONFIG_UPDATE: Command = Command {
+    name: "config update",
+    takes: "<dir> update <config> <path=value>…",
+    does: "change a config's live settings, which its programs take at once",
+    flags: &[],
+    examples: &[
+        "tinystore config ./data update chat model.max_tokens=2048",
+        "tinystore config ./data update chat limits.window=30s 'model.stop:=[\"\\n\"]'",
+    ],
+    more: "A value is read by its setting's kind, as an environment variable is: 2048 an integer, 30s a span, a,b \
+           a list. path:=json gives JSON as it is. Only a live setting changes, checked against its rules, as the \
+           store keeps it. It goes through the server that holds the directory, or one it starts, so that every \
+           program holding the config takes the change at once.",
+};
+
+pub(crate) const CONFIG_RESET: Command = Command {
+    name: "config reset",
+    takes: "<dir> reset <config> [path]",
+    does: "drop the changes of a setting, a group, or every one",
+    flags: &[],
+    examples: &["tinystore config ./data reset chat model.max_tokens", "tinystore config ./data reset chat"],
+    more: "A setting it resets goes back to what the program's own declaration, files and environment give. It goes \
+           through the server that holds the directory, or one it starts.",
+};
+
 pub(crate) const LOCK_HOLD: Command = Command {
     name: "lock hold",
     takes: "<dir> hold <lock> <key> -- <command>",

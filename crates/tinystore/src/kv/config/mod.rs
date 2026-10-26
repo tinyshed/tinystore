@@ -203,9 +203,38 @@ impl Store {
             strict: sent.strict,
             view: resolve::View::Data,
             remember: sent.remember,
+            kept: false,
         })
     }
+
+    /// The config `name` as the store keeps it, for a command: the last
+    /// declaration a program opened it with and the changes kv.db keeps,
+    /// with no layer of the program's own, its required settings left out;
+    /// nothing is remembered. None when no program opened it here.
+    #[cfg(feature = "wire")]
+    pub(crate) fn config_kept(&self, name: &str) -> Result<Option<Config<serde_json::Value>>> {
+        let within = |why: String| crate::Error::corrupt(why).within(format!("config {name}"));
+        let Some(text) = handle::kept_declaration(self, name)? else { return Ok(None) };
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|error| within(format!("its kept declaration: {error}")))?;
+        let declaration = data::declaration(&value).map_err(within)?;
+        let opened = handle::open_with(handle::Opening {
+            store: Some(self.clone()),
+            name: name.to_owned(),
+            declaration,
+            layers: Vec::new(),
+            validate: None,
+            strict: false,
+            view: resolve::View::Data,
+            remember: false,
+            kept: true,
+        });
+        opened.map(Some)
+    }
 }
+
+#[cfg(feature = "client")]
+pub(crate) use hub::names;
 
 impl<T> fmt::Debug for ConfigBuilder<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -202,6 +202,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [files](guides/cli/files.md)
 - [channels](guides/cli/channels.md)
 - [lock](guides/cli/lock.md)
+- [config](guides/cli/config.md)
 - [metrics](guides/cli/metrics.md)
 - [events](guides/cli/events.md)
 - [Backup and restore](guides/cli/backup.md)

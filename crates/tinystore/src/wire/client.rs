@@ -52,6 +52,9 @@ pub use locks::{Hold, Lease};
 #[cfg(feature = "channels")]
 #[path = "client_channels.rs"]
 mod channels;
+#[cfg(feature = "config")]
+#[path = "client_config.rs"]
+mod config;
 #[cfg(feature = "blobs")]
 #[path = "client_files.rs"]
 mod files;
@@ -68,6 +71,31 @@ mod locks;
 /// whoever holds it, for the command line's completion and `status --json`.
 pub fn buckets(store: &crate::Store) -> Result<Vec<(String, String)>> {
     crate::kv::buckets(store)
+}
+
+/// The configs a store keeps a declaration of, read as `buckets` is.
+#[cfg(feature = "config")]
+pub fn configs(store: &crate::Store) -> Result<Vec<String>> {
+    crate::config::names(store)
+}
+
+/// The config `name` as the store keeps it, read beside whoever holds it:
+/// the last declaration a program opened it with and the changes kv.db
+/// keeps, no layer of the program's own; none when no program opened it.
+#[cfg(feature = "config")]
+pub fn config_kept(store: &crate::Store, name: &str) -> Result<Option<crate::config::Config<serde_json::Value>>> {
+    store.config_kept(name)
+}
+
+/// What `text` gives the setting at `path` of the config, read as the
+/// environment's text is, by the setting's kind.
+#[cfg(feature = "config")]
+pub fn config_value(
+    config: &crate::config::Config<serde_json::Value>,
+    path: &str,
+    text: &str,
+) -> Result<serde_json::Value> {
+    config.value_of_text(path, text)
 }
 
 /// The queues a store's jobs.db holds, read as `buckets` is.

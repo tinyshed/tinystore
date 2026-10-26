@@ -15,8 +15,13 @@ fn declaration() -> String {
 }
 
 fn open(client: &mut Client, layers: &Value) -> ConfigValue {
-    let open =
-        ConfigOpen { name: "app".to_owned(), declaration: declaration(), layers: layers.to_string(), strict: false };
+    let open = ConfigOpen {
+        name: "app".to_owned(),
+        declaration: declaration(),
+        layers: layers.to_string(),
+        strict: false,
+        kept: false,
+    };
     client.call(method::CONFIG_OPEN, &open).unwrap()
 }
 
@@ -36,11 +41,38 @@ fn a_config_opened_over_the_wire_reads_the_layers_its_program_sent() {
     assert_eq!(value(&opened)["port"], json!(9000));
     let port = opened.lines.iter().find(|line| line.path == "port").unwrap();
     assert_eq!((port.value.as_str(), port.from.as_str()), ("9000", "APP_PORT"));
-    let broken =
-        ConfigOpen { name: "app".to_owned(), declaration: "{".to_owned(), layers: "[]".to_owned(), strict: false };
+    let broken = ConfigOpen {
+        name: "app".to_owned(),
+        declaration: "{".to_owned(),
+        layers: "[]".to_owned(),
+        strict: false,
+        kept: false,
+    };
     assert_eq!(client.call::<ConfigValue>(method::CONFIG_OPEN, &broken).unwrap_err().code, "invalid");
     let unknown = ConfigReset { handle: 99, path: String::new() };
     assert_eq!(client.call::<ConfigValue>(method::CONFIG_RESET, &unknown).unwrap_err().code, "invalid");
+}
+
+#[test]
+fn a_config_opened_as_kv_db_keeps_it_takes_the_declaration_kept_there_and_changes_its_live_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let kept = ConfigOpen { name: "app".to_owned(), kept: true, ..ConfigOpen::default() };
+    let none = client.call::<ConfigValue>(method::CONFIG_OPEN, &kept).unwrap_err();
+    assert!(none.code == "not_found" && none.message.contains("keeps no declaration"), "{none:?}");
+    let required = json!({ "kind": "text", "required": true });
+    let live = json!({ "kind": "integer", "default": 100, "live": true });
+    let declared = json!({ "region": required, "limits": { "group": { "rps": live } } }).to_string();
+    let layers = json!([{ "env": { "prefix": "APP", "variables": { "APP_REGION": "eu" } } }]).to_string();
+    let program = ConfigOpen { name: "app".to_owned(), declaration: declared, layers, strict: false, kept: false };
+    client.call::<ConfigValue>(method::CONFIG_OPEN, &program).unwrap();
+    let opened: ConfigValue = client.call(method::CONFIG_OPEN, &kept).unwrap();
+    assert_eq!(value(&opened).get("region"), None, "the program's environment is its own");
+    assert!(opened.notes.iter().any(|note| note.starts_with("region: required")), "{:?}", opened.notes);
+    let changes = json!({ "limits": { "rps": 250 } }).to_string();
+    let update = ConfigUpdate { handle: opened.handle, version: opened.version, changes };
+    let changed: ConfigValue = client.call(method::CONFIG_UPDATE, &update).unwrap();
+    assert_eq!((rps(&changed), changed.version), (json!(250), opened.version + 1));
 }
 
 // contract: CFG-09

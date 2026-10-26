@@ -45,12 +45,16 @@ pub(super) struct Base {
     pub(super) absent: Vec<String>,
     /// The variables with the prefix that name no setting.
     pub(super) unused: Vec<env::Unused>,
+    /// The required settings no layer gave, of a config opened as the store
+    /// keeps it, whose program gives them from its own files or environment.
+    pub(super) left_out: Vec<String>,
 }
 
 impl Base {
     /// What `layers` give the settings of `declaration`, or every problem
-    /// with them: each layer's, and every required setting none gave.
-    pub(super) fn read(declaration: &Declaration, layers: &[Layer]) -> Result<Base, Vec<String>> {
+    /// with them: each layer's, and every required setting none gave unless
+    /// `required` is false, when those are left out.
+    pub(super) fn read(declaration: &Declaration, layers: &[Layer], required: bool) -> Result<Base, Vec<String>> {
         let mut base = Base::default();
         for (path, setting) in declaration.settings() {
             let defaults =
@@ -63,7 +67,14 @@ impl Base {
                 problems.extend(found);
             }
         }
-        problems.extend(base.missing(declaration, layers));
+        if required {
+            problems.extend(base.missing(declaration, layers));
+        } else {
+            let given = |path: &String| base.stacks.get(path).is_some_and(|stack| !stack.is_empty());
+            let settings = declaration.settings().into_iter();
+            base.left_out =
+                settings.filter(|(path, setting)| setting.required && !given(path)).map(|(path, _)| path).collect();
+        }
         if problems.is_empty() { Ok(base) } else { Err(problems) }
     }
 
