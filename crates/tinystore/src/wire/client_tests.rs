@@ -1,0 +1,104 @@
+use std::collections::VecDeque;
+use std::io::{self, Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, SystemTime};
+
+use super::Client;
+use crate::metrics::Series;
+use crate::pipe::{Connect, Pipe};
+use crate::{ErrorKind, Options, Store};
+
+/// A pipe to a store as the client reads and writes a socket. Once `deaf`,
+/// what the client sends still reaches the store, and the client reads the
+/// end of the stream: an answer lost on the way.
+struct Piped {
+    pipe: Pipe,
+    ready: VecDeque<u8>,
+    deaf: Arc<AtomicBool>,
+}
+
+impl Write for Piped {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let answered = self.pipe.send(bytes);
+        self.ready.extend(answered);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Read for Piped {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        if self.deaf.load(Ordering::Acquire) {
+            return Ok(0);
+        }
+        if self.ready.is_empty() {
+            self.ready.extend(self.pipe.recv(Duration::from_secs(10)));
+        }
+        let count = into.len().min(self.ready.len());
+        for (slot, byte) in into.iter_mut().zip(self.ready.drain(..count)) {
+            *slot = byte;
+        }
+        Ok(count)
+    }
+}
+
+fn welcomed(store: &Store) -> (Client<Piped>, Arc<AtomicBool>) {
+    let deaf = Arc::new(AtomicBool::new(false));
+    let pipe = Pipe::connect(store, Connect::default()).unwrap();
+    let piped = Piped { pipe, ready: VecDeque::new(), deaf: Arc::clone(&deaf) };
+    let (client, welcome) = Client::hello(piped, "test/0", None).unwrap();
+    assert_eq!(welcome.server, env!("CARGO_PKG_VERSION"));
+    (client, deaf)
+}
+
+fn samples_of(store: &Store, name: &str) -> usize {
+    let read = store.metrics().unwrap().query().name(name).since(Duration::from_secs(3600)).read().unwrap();
+    read.iter().map(|series| series.samples().len()).sum()
+}
+
+#[test]
+fn series_written_through_a_server_read_back_from_its_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let at = SystemTime::now() - Duration::from_secs(5);
+    let rtt = Series::gauge("ping_rtt_ms").label("target", "poland").sample(at, 23.1).keep(Duration::from_secs(86_400));
+    client.ingest(std::slice::from_ref(&rtt)).unwrap();
+    client.ingest(&[rtt]).unwrap();
+    assert_eq!(samples_of(&store, "ping_rtt_ms"), 1, "an ingest sent again changes nothing");
+}
+
+#[test]
+fn a_refusal_keeps_its_kind_and_reads_as_the_server_said_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let too_old = Series::gauge("cpu").sample(SystemTime::now() - Duration::from_secs(400 * 86_400), 0.4);
+    let refused = client.ingest(&[too_old]).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::TooOld, "{refused}");
+    assert!(!refused.to_string().ends_with("too_old: too_old"), "{refused}");
+    assert!(refused.to_string().contains("cpu"), "{refused}");
+}
+
+#[test]
+fn a_write_whose_answer_was_lost_is_outcome_unknown_and_sent_again_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, deaf) = welcomed(&store);
+    let rtt = Series::gauge("ping_rtt_ms").sample(SystemTime::now() - Duration::from_secs(5), 23.1);
+    deaf.store(true, Ordering::Release);
+    let lost = client.ingest(std::slice::from_ref(&rtt)).unwrap_err();
+    assert_eq!(lost.kind(), ErrorKind::OutcomeUnknown, "{lost}");
+    let waited = Instant::now();
+    while samples_of(&store, "ping_rtt_ms") == 0 && waited.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(samples_of(&store, "ping_rtt_ms"), 1, "the write committed though its answer was lost");
+    let (mut again, _) = welcomed(&store);
+    again.ingest(&[rtt]).unwrap();
+    assert_eq!(samples_of(&store, "ping_rtt_ms"), 1);
+}

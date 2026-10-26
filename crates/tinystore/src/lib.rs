@@ -83,6 +83,10 @@ pub mod typos;
 #[cfg(feature = "wire")]
 pub(crate) mod wire;
 
+#[cfg(feature = "client")]
+#[doc(hidden)]
+pub use wire::client;
+
 #[cfg(any(feature = "metrics", feature = "records"))]
 pub use calendar::Calendar;
 #[cfg(feature = "store")]

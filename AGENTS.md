@@ -144,9 +144,12 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   the command line uses it through config. `wire`, the protocol's session
   and the pipe that the server, the FFI and every SDK speak, is a default
   feature that turns on kv, and a Rust program that calls the engines
-  directly leaves it out. `just lint` builds the library with each engine,
-  the console and the wire alone, `async` alone and beside each engine,
-  and every engine with `async` and without the wire. An
+  directly leaves it out. `client`, the protocol's client side, which the
+  command line writes through a server with, turns on the wire, and like
+  `fuzzing` promises nothing to a program. `just lint` builds the library with each engine,
+  the console, the wire and its client alone, the client beside metrics,
+  `async` alone and beside each engine, and every engine with `async` and
+  without the wire. An
   engine adds its calls to `Store` from its own module
   (`impl Store { pub fn bucket… }`): the store's own code names no engine.
 - **Engines never import each other.** They use the root, `engine`,
@@ -159,13 +162,15 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
-- **`unsafe` lives in six places**: `sqlite::memory`, `sqlite::mutex`,
+- **`unsafe` lives in seven places**: `sqlite::memory`, `sqlite::mutex`,
   `space`, which asks the system for the disk's free space, `crates/ffi`,
   the command line's `owner_only`, which gives what a Windows server
   keeps to its user, `server\`, `SERVE` and the pipe, a DACL of that user's
-  alone, and the test `metrics_memory`, whose allocator counts the heap an
+  alone, its `own_handles`, which keeps a command's stdio from the sidecar
+  it starts on Windows, since std's `inherit_handles` is not stable, and the
+  test `metrics_memory`, whose allocator counts the heap an
   ingest holds against what it reserves. The workspace denies
-  `unsafe_code` everywhere else, each of the six allows it at its module's
+  `unsafe_code` everywhere else, each of the seven allows it at its module's
   top, and clippy's `undocumented_unsafe_blocks` makes every block carry a
   `SAFETY:` comment saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for

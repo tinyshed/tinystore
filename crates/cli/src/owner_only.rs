@@ -2,8 +2,8 @@
 //! What a local server keeps to the user it runs as, on Windows: `server\`,
 //! `SERVE` and the named pipe, each with a DACL that grants that user every
 //! right and nobody else any. Unix says as much with a mode; Windows takes a
-//! security descriptor, which only its C API builds, so this module is the
-//! command line's one home of `unsafe`.
+//! security descriptor, which only its C API builds, so this module is one of
+//! the command line's two homes of `unsafe`, beside `own_handles`.
 //!
 //! The DACL is protected: `server\` inherits nothing of the store's directory,
 //! which may let every user in, as a folder at a drive's root does, and what

@@ -2,7 +2,8 @@
 //! store's directory to other processes and machines over the wire protocol;
 //! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
 //! beside whoever holds it; `sql --write`, `migrate` and `search drop` change
-//! one nothing holds; `stop` ends a server and `token` makes its tokens;
+//! one nothing holds; `metrics ingest` writes through the server that holds
+//! one, or a sidecar it starts; `stop` ends a server and `token` makes its tokens;
 //! `backup` and `restore` keep a store; `node` and `witness` run the nodes of
 //! a network. `help` lists them all, and docs/guides/cli/README.md is their guide.
 
@@ -38,10 +39,14 @@ mod lines;
 mod local;
 mod logs;
 mod mcp;
+mod metrics;
 mod node;
 mod node_config;
 #[cfg(windows)]
+mod own_handles;
+#[cfg(windows)]
 mod owner_only;
+mod reach;
 mod remote;
 mod search;
 mod serve;
@@ -74,6 +79,7 @@ fn main() -> ExitCode {
         Some("status") => status::run(rest),
         Some("logs") => logs::run(rest),
         Some("kv") => kv::run(rest),
+        Some("metrics") => metrics::run(rest),
         Some("sql") => sql::run(rest),
         Some("search") => search::run(rest),
         Some("serve") => serve::run(rest),
@@ -94,6 +100,7 @@ fn main() -> ExitCode {
             match help::command(&name).or_else(|| help::command(&rest[0])) {
                 Some(command) => asked::exit("help", help::print_command(command)),
                 None if rest[0] == "node" => node::run(&["--help".to_owned()]),
+                None if rest[0] == "metrics" => asked::exit("help", help::print_group("metrics")),
                 None => asked::end(
                     "help",
                     asked::wrong(format!("no command {name}{}", meant(&rest[0], &help::first_words()))),

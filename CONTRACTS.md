@@ -253,6 +253,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-02** A misspelt command, flag or setting MUST be told the nearest one.
 - **CLI-03** `stop` MUST return once `SERVE` is gone, and fail when no server runs.
 - **CLI-04** A command whose reader closes stdout, as `| head` does, MUST end quietly with exit 0, and MUST NOT panic.
+- **CLI-05** A command that writes MUST write through the server that holds the directory, or a sidecar it starts, and MUST refuse a directory that a program holds inside its own process, or that holds no store, making nothing in it.
 
 ## 10. What TinyStore does not promise
 

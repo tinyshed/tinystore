@@ -50,6 +50,33 @@ impl From<Error> for Failure {
     }
 }
 
+/// The kind a code names, as `code_of` writes it; none for a code that names
+/// no kind of the core's, as `permission`.
+#[cfg(feature = "client")]
+pub(crate) fn kind_of(code: &str) -> Option<ErrorKind> {
+    // internal first, since a disk's error is said with its code too
+    [
+        ErrorKind::Internal,
+        ErrorKind::Invalid,
+        ErrorKind::NotFound,
+        ErrorKind::Conflict,
+        ErrorKind::TooOld,
+        ErrorKind::TooNew,
+        ErrorKind::Limit,
+        ErrorKind::Closed,
+        ErrorKind::Corrupt,
+        ErrorKind::InUse,
+        ErrorKind::Suspended,
+        ErrorKind::Unavailable,
+        ErrorKind::Cancelled,
+        ErrorKind::OutcomeUnknown,
+        ErrorKind::CommittedLocally,
+        ErrorKind::Lost,
+    ]
+    .into_iter()
+    .find(|kind| code_of(*kind) == code)
+}
+
 /// An error kind's code, the same in every SDK's error classes.
 pub(crate) fn code_of(kind: ErrorKind) -> &'static str {
     match kind {

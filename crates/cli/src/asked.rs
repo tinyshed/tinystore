@@ -86,6 +86,13 @@ pub(crate) fn unwritten(error: io::Error) -> Refused {
     }
 }
 
+/// Says something beside a command's answer, on stderr and named after the
+/// command, so that it reads apart from the answer in `2>&1`; never a panic
+/// on a pipe nobody reads.
+pub(crate) fn say(command: &str, message: impl fmt::Display) {
+    let _ = writeln!(io::stderr(), "tinystore {command}: {message}");
+}
+
 /// Runs `command` on `args`: its help for `--help`, the line that says what
 /// is wrong for a mistake, and what `run` makes of what was asked otherwise.
 pub(crate) fn run(command: &'static Command, args: &[String], run: impl FnOnce(Asked) -> Done) -> ExitCode {

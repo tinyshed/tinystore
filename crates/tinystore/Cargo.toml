@@ -50,6 +50,10 @@ search = ["store", "typos", "dep:unicode-normalization", "dep:unicode-segmentati
 # the protocol's session and the pipe, which the server, the FFI and every SDK
 # speak, for the engines built beside it; its session answers kv in every call
 wire = ["kv"]
+# the protocol's client side, which the command line writes through a server
+# with: the protocol's own messages, so its bytes keep one writer; it
+# promises nothing to a program, and the documentation leaves it out
+client = ["wire"]
 # the Rust async API, tinystore::aio, for the engines built beside it: futures
 # that wake through a Waker, so that any executor runs them, and no runtime
 async = ["store", "dep:futures-core"]

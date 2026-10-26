@@ -8,6 +8,8 @@ mod backup;
 mod blobs;
 #[cfg(feature = "channels")]
 mod channels;
+#[cfg(feature = "client")]
+pub mod client;
 pub(crate) mod codec;
 #[cfg(feature = "config")]
 mod config;

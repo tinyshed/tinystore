@@ -113,6 +113,12 @@ impl Series {
         &self.name
     }
 
+    /// The keep given with [`Series::keep`], which a client sends with it.
+    #[cfg(feature = "client")]
+    pub(crate) fn keep_given(&self) -> Option<Duration> {
+        self.keep
+    }
+
     pub fn kind(&self) -> Kind {
         self.kind
     }

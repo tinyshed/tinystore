@@ -262,9 +262,25 @@ pub(crate) const SCHEMA: Command = Command {
     more: "Without a database it lists the store's databases.",
 };
 
+pub(crate) const METRICS_INGEST: Command = Command {
+    name: "metrics ingest",
+    takes: "<dir> ingest",
+    does: "write the Prometheus text on stdin to the store's metrics",
+    flags: &[
+        flag("--label", "<name=value>", "a label every series of the text gets; again for more"),
+        flag("--keep", "<span>", "how long each name of the text keeps its samples, as 30d; 30d when never given"),
+    ],
+    examples: &[
+        "curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1",
+        "tinystore metrics ./data ingest --keep 30d < scrape.txt",
+    ],
+    more: "Every series of the text is written, or none. It writes through the server that holds the directory, or            starts one that stops 30 s after its last client; a directory a program holds inside its own process is            refused. A sample the text gives no time takes the time the text was read.",
+};
+
 /// The commands by what a person does with them.
-pub(crate) const GROUPS: [(&str, &[&Command]); 4] = [
+pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
     ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH]),
+    ("Write", &[&METRICS_INGEST]),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
@@ -315,9 +331,14 @@ pub(crate) fn text(colours: bool) -> String {
 }
 
 /// The name as the list shows it: a group's command with its word after it
-/// among what it takes, `node` then `status [dir]`, so that the columns line up.
+/// among what it takes, `node` then `status [dir]`, so that the columns line up;
+/// a word that follows the directory is spelled where it goes, `metrics` then
+/// `<dir> ingest`.
 fn split_name(command: &Command) -> (String, String) {
     match command.name.split_once(' ') {
+        Some((group, word)) if command.takes.split(' ').any(|taken| taken == word) => {
+            (group.to_owned(), command.takes.to_owned())
+        }
         Some((group, word)) => (group.to_owned(), format!("{word} {}", command.takes)),
         None => (command.name.to_owned(), command.takes.to_owned()),
     }
@@ -329,13 +350,9 @@ pub(crate) fn of_command(colours: bool, command: &Command) -> String {
     let paint = |style: Style, text: &str| paint(colours, style, text);
     let (bold, dim, named, takes) =
         (Style::new().bold(), Style::new().dimmed(), Color::Green.bold(), Color::Cyan.normal());
-    let mut help = format!(
-        "{} {} {}\n{}\n",
-        paint(bold, "tinystore"),
-        paint(named, command.name),
-        paint(takes, command.takes),
-        command.does
-    );
+    let (name, args) = split_name(command);
+    let mut help =
+        format!("{} {} {}\n{}\n", paint(bold, "tinystore"), paint(named, &name), paint(takes, &args), command.does);
     let shown: Vec<&Flag> = command.flags.iter().filter(|flag| flag.heading != HIDDEN).collect();
     let width = shown.iter().map(|flag| flag.name.len() + 1 + flag.value.len()).max().unwrap_or(0);
     let mut heading = None;
@@ -387,6 +404,16 @@ pub(crate) fn print() -> Done {
 /// Prints one command's help to stdout, coloured on a terminal.
 pub(crate) fn print_command(command: &Command) -> Done {
     out!("{}", of_command(Terminal::of_stdout().colours(), command))
+}
+
+/// Prints the help of every command of a group, `metrics`, one after another.
+pub(crate) fn print_group(group: &str) -> Done {
+    let commands = GROUPS.iter().flat_map(|(_, commands)| commands.iter());
+    for command in commands.filter(|command| command.name.split(' ').next() == Some(group)) {
+        print_command(command)?;
+        outln!()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

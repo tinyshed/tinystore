@@ -65,6 +65,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 | [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs |
 | [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs   |
 | [kv, sql and schema](kv-sql-schema.md) | reading values and rows, `--write`, migrations         |
+| [metrics](metrics.md)                  | writing Prometheus text from a shell, through a server |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte     |
 | [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness        |
 | [AI agents](mcp.md)                    | `tinystore mcp` and its read-only tools                |
