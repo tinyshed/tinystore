@@ -28,6 +28,25 @@ const PROTOCOL: u64 = 1;
 const FIRST_BODY: usize = 1 << 20;
 /// The bytes read from the stream at once.
 const READ: usize = 64 << 10;
+/// The most bytes a DATA of another program's output carries: a transfer
+/// shares the connection a frame of 64 KiB at a time.
+#[cfg(feature = "records")]
+const PIECE: usize = 64 << 10;
+
+/// An event to append: its name, and what it carries.
+#[cfg(feature = "records")]
+#[derive(Debug, Default)]
+pub struct Event {
+    pub name: String,
+    /// A JSON object.
+    pub fields: Option<String>,
+    /// As slog counts: -4 debug, 0 info, 4 warn, 8 error.
+    pub level: Option<i64>,
+    /// When it happened: when it is appended, unless given.
+    pub at: Option<std::time::SystemTime>,
+    /// What names it in its stream: an id the stream holds writes nothing.
+    pub id: Option<String>,
+}
 
 /// What the server says of itself as it takes the connection.
 #[derive(Debug)]
@@ -47,8 +66,10 @@ pub struct Client<S> {
     frames: frame::Reader,
     read: Vec<u8>,
     max_body: usize,
-    /// The REQUEST bytes the server takes before it gives credit back.
+    /// The REQUEST and DATA bytes the server takes before it gives credit back.
     credit: u64,
+    /// The DATA bytes a stream may send before the server grants more.
+    stream_credit: u64,
     last_stream: u32,
 }
 
@@ -69,6 +90,7 @@ impl<S: Read + Write> Client<S> {
             read: vec![0; READ],
             max_body: FIRST_BODY,
             credit: 0,
+            stream_credit: 0,
             last_stream: 0,
         };
         let hello = Hello {
@@ -84,6 +106,7 @@ impl<S: Read + Write> Client<S> {
                 let welcome = wire::Welcome::decode(&answer.body).map_err(|failure| error_of(failure, ""))?;
                 client.max_body = usize::try_from(welcome.max_body).unwrap_or(usize::MAX);
                 client.credit = welcome.connection_credit;
+                client.stream_credit = welcome.stream_credit;
                 Ok((client, Welcome { server: welcome.server, proof: welcome.proof, durability: welcome.durability }))
             }
             Kind::GoAway => Err(gone(&answer.body)),
@@ -138,10 +161,105 @@ impl<S: Read + Write> Client<S> {
         Ok(deleted.found)
     }
 
+    /// Appends the events to `stream`, every one or none, as
+    /// `Events::append_all` does: how many were written as nothing, the
+    /// stream holding their ids.
+    #[cfg(feature = "records")]
+    pub fn append(&mut self, stream: &str, events: &[Event]) -> Result<u64> {
+        let handle = self.events(stream)?;
+        let events = events.iter().map(new_event).collect();
+        let answer = self.call(method::RECORDS_APPEND, &wire::RecordsAppend { handle, events })?;
+        let appended =
+            wire::RecordsAppended::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
+        Ok(appended.held)
+    }
+
+    /// Writes another program's output to `stream` as `Events::lines` does,
+    /// read from `output` until it ends: a line an event, a stack trace
+    /// joined into one. What the writer dropped comes back; `output`'s own
+    /// failure is said as `output_failed` says it.
+    #[cfg(feature = "records")]
+    pub fn append_lines(
+        &mut self,
+        stream: &str,
+        output: &mut impl Read,
+        output_failed: impl Fn(io::Error) -> Error,
+    ) -> Result<u64> {
+        let handle = self.events(stream)?;
+        let mut piece = vec![0; PIECE];
+        let answer = self.exchange(method::RECORDS_LINES, &wire::Handle { handle }, || {
+            let read = output.read(&mut piece).map_err(&output_failed)?;
+            Ok((read > 0).then(|| wire::RecordsPiece { bytes: piece[..read].to_vec() }.encode()))
+        })?;
+        let dropped =
+            wire::RecordsDropped::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
+        Ok(dropped.dropped)
+    }
+
+    /// The handle of the stream named `stream`, made with its first event.
+    #[cfg(feature = "records")]
+    fn events(&mut self, stream: &str) -> Result<u64> {
+        let open = wire::RecordsOpen { stream: stream.to_owned(), keep: None };
+        let answer = self.call(method::RECORDS_OPEN, &open)?;
+        Ok(wire::Handle::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?.handle)
+    }
+
     /// Sends one call and waits for its answer. A connection lost before the
     /// request went is `unavailable`; after, `outcome_unknown`, since the
     /// server may have run it.
     fn call(&mut self, called: u16, request: &impl Message) -> Result<Vec<u8>> {
+        let stream = self.request(called, request, true)?;
+        loop {
+            let frame = self.receive().map_err(unanswered)?;
+            match frame.kind {
+                Kind::Response if frame.stream == stream => return ended(frame),
+                _ => self.take(frame).map_err(unanswered)?,
+            }
+        }
+    }
+
+    /// Opens a stream with `request`, sends what `next` gives as its DATA,
+    /// each within the credit the server grants, ends it, and gives the
+    /// server's last message on it: an upload's answer, or why it stopped.
+    #[cfg(feature = "records")]
+    fn exchange(
+        &mut self,
+        called: u16,
+        request: &impl Message,
+        mut next: impl FnMut() -> Result<Option<Vec<u8>>>,
+    ) -> Result<Vec<u8>> {
+        let stream = self.request(called, request, false)?;
+        loop {
+            let frame = self.receive().map_err(unanswered)?;
+            match frame.kind {
+                Kind::Response if frame.stream == stream && frame.flags & frame::END != 0 => return ended(frame),
+                Kind::Response if frame.stream == stream => break,
+                _ => self.take(frame).map_err(unanswered)?,
+            }
+        }
+        let mut granted = self.stream_credit;
+        while let Some(body) = next()? {
+            let length = body.len() as u64;
+            if let Some(end) = self.room(stream, length, &mut granted).map_err(unanswered)? {
+                return ended(end);
+            }
+            self.send(&Frame::new(Kind::Data, stream, body)).map_err(unanswered)?;
+            self.credit -= length;
+            granted -= length;
+        }
+        self.send(&Frame::new(Kind::Data, stream, Vec::new()).ending()).map_err(unanswered)?;
+        loop {
+            let frame = self.receive().map_err(unanswered)?;
+            if frame.stream == stream && frame.flags & frame::END != 0 {
+                return ended(frame);
+            }
+            self.take_granted(frame, stream, &mut granted).map_err(unanswered)?;
+        }
+    }
+
+    /// Sends a REQUEST once the connection's credit takes it, ending its
+    /// stream when `ends`, and gives the stream's number.
+    fn request(&mut self, called: u16, request: &impl Message, ends: bool) -> Result<u32> {
         let body = request.encode();
         if body.len() > self.max_body {
             return Err(Error::limit(format!(
@@ -151,31 +269,40 @@ impl<S: Read + Write> Client<S> {
             )));
         }
         let length = body.len() as u64;
-        self.wait_for_credit(length).map_err(unreachable)?;
+        while self.credit < length {
+            let frame = self.receive().map_err(unreachable)?;
+            self.take(frame).map_err(unreachable)?;
+        }
         self.last_stream = self.last_stream.checked_add(1).unwrap_or(1);
         let stream = self.last_stream;
-        let request = Frame { method: called, ..Frame::new(Kind::Request, stream, body) }.ending();
-        self.send(&request).map_err(unreachable)?;
+        let frame = Frame { method: called, ..Frame::new(Kind::Request, stream, body) };
+        self.send(&if ends { frame.ending() } else { frame }).map_err(unreachable)?;
         self.credit -= length;
-        loop {
-            let frame = self.receive().map_err(unanswered)?;
-            match frame.kind {
-                Kind::Response if frame.stream == stream && frame.flags & frame::ERROR != 0 => {
-                    return Err(failed(&frame.body));
-                }
-                Kind::Response if frame.stream == stream => return Ok(frame.body),
-                _ => self.take(frame).map_err(unanswered)?,
-            }
-        }
+        Ok(stream)
     }
 
-    /// Reads frames until the connection's credit covers `length` bytes.
-    fn wait_for_credit(&mut self, length: u64) -> io::Result<()> {
-        while self.credit < length {
+    /// Reads frames until the connection and `stream` take `length` more
+    /// bytes; the server's end of the stream, should it come first.
+    #[cfg(feature = "records")]
+    fn room(&mut self, stream: u32, length: u64, granted: &mut u64) -> io::Result<Option<Frame>> {
+        while self.credit < length || *granted < length {
             let frame = self.receive()?;
-            self.take(frame)?;
+            if frame.stream == stream && frame.flags & frame::END != 0 {
+                return Ok(Some(frame));
+            }
+            self.take_granted(frame, stream, granted)?;
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// `take`, and credit granted to `stream` counted.
+    #[cfg(feature = "records")]
+    fn take_granted(&mut self, frame: Frame, stream: u32, granted: &mut u64) -> io::Result<()> {
+        if frame.kind == Kind::Credit && frame.stream == stream {
+            *granted += credit_of(&frame.body);
+            return Ok(());
+        }
+        self.take(frame)
     }
 
     /// What a frame that answers no call does: credit is counted, a PING
@@ -184,8 +311,7 @@ impl<S: Read + Write> Client<S> {
     fn take(&mut self, frame: Frame) -> io::Result<()> {
         match frame.kind {
             Kind::Credit if frame.stream == 0 => {
-                let granted: [u8; 4] = frame.body.get(..4).and_then(|bytes| bytes.try_into().ok()).unwrap_or_default();
-                self.credit += u64::from(u32::from_le_bytes(granted));
+                self.credit += credit_of(&frame.body);
                 Ok(())
             }
             Kind::Ping => self.send(&Frame::new(Kind::Pong, 0, frame.body)),
@@ -216,6 +342,18 @@ impl<S: Read + Write> Client<S> {
     }
 }
 
+/// The bytes a CREDIT grants.
+fn credit_of(body: &[u8]) -> u64 {
+    let granted: [u8; 4] = body.get(..4).and_then(|bytes| bytes.try_into().ok()).unwrap_or_default();
+    u64::from(u32::from_le_bytes(granted))
+}
+
+/// The answer a frame that ends its stream gives: its body, or the failure
+/// it says.
+fn ended(frame: Frame) -> Result<Vec<u8>> {
+    if frame.flags & frame::ERROR != 0 { Err(failed(&frame.body)) } else { Ok(frame.body) }
+}
+
 /// A series as `metrics.ingest` carries it: its samples as two columns of
 /// eight bytes a sample.
 #[cfg(feature = "metrics")]
@@ -230,6 +368,19 @@ fn new_series(series: &crate::metrics::Series) -> wire::MetricsNewSeries {
         times,
         values,
         keep: series.keep_given().map(|keep| u64::try_from(keep.as_millis()).unwrap_or(u64::MAX)),
+    }
+}
+
+/// An event as `records.append` carries it.
+#[cfg(feature = "records")]
+fn new_event(event: &Event) -> wire::RecordsNewEvent {
+    wire::RecordsNewEvent {
+        name: event.name.clone(),
+        at: event.at.map(crate::unix_nanos),
+        level: event.level,
+        fields: event.fields.clone(),
+        id: event.id.clone(),
+        ..wire::RecordsNewEvent::default()
     }
 }
 

@@ -60,15 +60,16 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 
 ## In these guides
 
-| Page                                   | Covers                                                 |
-|----------------------------------------|--------------------------------------------------------|
-| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs |
-| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs   |
-| [kv, sql and schema](kv-sql-schema.md) | reading values and rows, `--write`, migrations         |
-| [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete       |
-| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte     |
-| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness        |
-| [AI agents](mcp.md)                    | `tinystore mcp` and its read-only tools                |
+| Page                                   | Covers                                                   |
+|----------------------------------------|----------------------------------------------------------|
+| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs   |
+| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs     |
+| [kv, sql and schema](kv-sql-schema.md) | reading values and rows, `--write`, migrations           |
+| [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
+| [events](events.md)                    | an event or a program's output appended, a stream listed |
+| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |
+| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness          |
+| [AI agents](mcp.md)                    | `tinystore mcp` and its read-only tools                  |
 
 In the Handbook, [Your first store](../../handbook/start/first-store.md#look-inside)
 looks inside a store, and [Running it](../../handbook/production/running-it.md)

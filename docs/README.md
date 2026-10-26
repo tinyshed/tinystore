@@ -199,6 +199,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [status and logs](guides/cli/status-and-logs.md)
 - [kv, sql and schema](guides/cli/kv-sql-schema.md)
 - [metrics](guides/cli/metrics.md)
+- [events](guides/cli/events.md)
 - [Backup and restore](guides/cli/backup.md)
 - [Nodes](guides/cli/nodes.md)
 - [AI agents](guides/cli/mcp.md)

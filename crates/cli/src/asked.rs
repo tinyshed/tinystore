@@ -72,6 +72,32 @@ impl From<tinystore::Error> for Refused {
 
 pub(crate) type Done = Result<(), Refused>;
 
+/// A verb of a group of commands, `metrics read`: its word, its help and
+/// what runs it.
+pub(crate) struct Verb {
+    pub(crate) word: &'static str,
+    pub(crate) command: &'static Command,
+    pub(crate) run: fn(Asked) -> Done,
+}
+
+/// Runs the verb of `group` that `args` names. Alone or with `--help`, the
+/// group prints every verb's help; a verb it does not know is told its
+/// nearest.
+pub(crate) fn run_verb(group: &str, verbs: &[Verb], args: &[String]) -> ExitCode {
+    if let Some(verb) = args.iter().find_map(|arg| verbs.iter().find(|verb| verb.word == arg)) {
+        return run(verb.command, args, verb.run);
+    }
+    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return exit(group, help::print_group(group));
+    }
+    let words: Vec<&str> = verbs.iter().map(|verb| verb.word).collect();
+    let why = match args.iter().filter(|arg| !arg.starts_with('-')).nth(1) {
+        Some(word) => format!("no command {group} {word}{}", crate::meant(word, &words)),
+        None => format!("a verb after the directory: {}", words.join(", ")),
+    };
+    end(group, wrong(why))
+}
+
 /// Writes what a command answers to stdout, as `out!` and `outln!` ask.
 pub(crate) fn out(text: fmt::Arguments<'_>) -> Done {
     io::stdout().write_fmt(text).map_err(unwritten)
@@ -193,6 +219,28 @@ impl Asked {
             (None, count) if count == wanted + 1 => Ok((PathBuf::from(&self.words[0]), self.words[1..].to_vec())),
             (None, _) => Ok((PathBuf::from("."), self.words.clone())),
         }
+    }
+
+    /// The directory before a group's verb and the words after it, as
+    /// `metrics ./data read cpu` gives them. A verb that only reads takes the
+    /// current directory when none comes before it.
+    pub(crate) fn placed(&self, group: &str, verb: &str, reads: bool) -> Result<(PathBuf, Vec<String>), Refused> {
+        let at = self.words.iter().position(|word| word == verb).unwrap_or_default();
+        let after = self.words.get(at + 1..).unwrap_or_default().to_vec();
+        match (&self.dir, at) {
+            (Some(_), 1) => Err(wrong("a directory given twice: --dir, and a word before the verb")),
+            (Some(dir), 0) => Ok((dir.clone(), after)),
+            (None, 1) => Ok((PathBuf::from(&self.words[0]), after)),
+            (None, 0) if reads => Ok((PathBuf::from("."), after)),
+            (None, 0) => Err(wrong(format!("a store's directory before the verb: tinystore {group} ./data {verb}"))),
+            _ => Err(wrong(format!("one directory before {verb}, not {}", self.words[..at].join(" ")))),
+        }
+    }
+
+    /// A count a flag gives, `otherwise` when it is not given.
+    pub(crate) fn count(&self, flag: &str, otherwise: usize) -> Result<usize, Refused> {
+        self.value(flag)
+            .map_or(Ok(otherwise), |given| given.parse().map_err(|_| wrong(format!("{flag} {given}: a count"))))
     }
 
     /// The directory of a command that changes one: `--dir`, or its first word.

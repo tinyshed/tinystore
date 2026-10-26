@@ -32,6 +32,7 @@ mod backup;
 mod banner;
 mod client;
 mod connection;
+mod events;
 mod files;
 mod help;
 mod kv;
@@ -81,6 +82,7 @@ fn main() -> ExitCode {
         Some("logs") => logs::run(rest),
         Some("kv") => kv::run(rest),
         Some("metrics") => metrics::run(rest),
+        Some("events") => events::run(rest),
         Some("sql") => sql::run(rest),
         Some("search") => search::run(rest),
         Some("serve") => serve::run(rest),
@@ -101,7 +103,9 @@ fn main() -> ExitCode {
             match help::command(&name).or_else(|| help::command(&rest[0])) {
                 Some(command) => asked::exit("help", help::print_command(command)),
                 None if rest[0] == "node" => node::run(&["--help".to_owned()]),
-                None if rest[0] == "metrics" => asked::exit("help", help::print_group("metrics")),
+                None if ["metrics", "events"].contains(&rest[0].as_str()) => {
+                    asked::exit("help", help::print_group(&rest[0]))
+                }
                 None => asked::end(
                     "help",
                     asked::wrong(format!("no command {name}{}", meant(&rest[0], &help::first_words()))),

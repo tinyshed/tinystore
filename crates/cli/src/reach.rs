@@ -58,6 +58,16 @@ pub(crate) fn write<T: Send + 'static>(
     }
 }
 
+/// Streams through the server of `dir` with `call`, once: what it sent is
+/// gone from its input, so a lost connection is the command's failure.
+pub(crate) fn stream<T>(
+    dir: &Path,
+    command: &str,
+    call: impl FnOnce(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T>,
+) -> Result<T, Refused> {
+    connected(dir, command)?.run(call).map_err(failed)
+}
+
 fn lost(kind: ErrorKind) -> bool {
     matches!(kind, ErrorKind::OutcomeUnknown | ErrorKind::Unavailable)
 }

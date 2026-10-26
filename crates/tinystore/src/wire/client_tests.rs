@@ -102,3 +102,47 @@ fn a_write_whose_answer_was_lost_is_outcome_unknown_and_sent_again_changes_nothi
     again.ingest(&[rtt]).unwrap();
     assert_eq!(samples_of(&store, "ping_rtt_ms"), 1);
 }
+
+#[cfg(feature = "records")]
+fn events_of(store: &Store, stream: &str) -> Vec<crate::records::Event> {
+    let events = store.events(stream).open().unwrap();
+    events.list().since(Duration::from_secs(3600)).page().unwrap().events
+}
+
+#[cfg(feature = "records")]
+#[test]
+fn an_event_appended_through_a_server_is_written_once_by_its_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let changed = || super::Event {
+        name: "role.changed".to_owned(),
+        fields: Some(r#"{"user":42,"role":"admin"}"#.to_owned()),
+        id: Some("delivery-1".to_owned()),
+        ..super::Event::default()
+    };
+    assert_eq!(client.append("audit", &[changed()]).unwrap(), 0);
+    assert_eq!(client.append("audit", &[changed()]).unwrap(), 1, "the stream holds its id");
+    let written = events_of(&store, "audit");
+    assert_eq!(written.len(), 1);
+    assert_eq!((written[0].name.as_str(), written[0].id.as_deref()), ("role.changed", Some("delivery-1")));
+}
+
+#[cfg(feature = "records")]
+#[test]
+fn another_programs_output_becomes_events_through_a_server_however_long() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let output = "level=warn msg=\"slow request\" ms=1200\n{\"level\":30,\"msg\":\"ok\"}\nthe last line";
+    let failed = |error: io::Error| crate::Error::io("the output", error);
+    assert_eq!(client.append_lines("worker", &mut output.as_bytes(), failed).unwrap(), 0);
+    let names: Vec<String> = events_of(&store, "worker").into_iter().map(|event| event.name).collect();
+    assert_eq!(names, ["logfmt", "json", "log"]);
+    // past a stream's credit, so that the server's grants must come back
+    let long: String = (0..60_000).map(|line| format!("line {line} of a worker's long output, padded out\n")).collect();
+    assert!(long.len() > 2 << 20);
+    let dropped = client.append_lines("long", &mut long.as_bytes(), failed).unwrap();
+    let kept = store.events("long").open().unwrap().list().since(Duration::from_secs(3600)).count().unwrap();
+    assert_eq!(kept + dropped, 60_000);
+}

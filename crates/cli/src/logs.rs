@@ -66,7 +66,7 @@ fn logs(asked: Asked) -> Done {
         follow: asked.has("-f"),
         json: asked.has("--json"),
     };
-    let printer = Printer { colours: Terminal::of_stdout().colours(), json: wanted.json, today: today() };
+    let printer = Printer::new(wanted.json);
     let mut printed = Printed::default();
     match read(&dir, |events| first(&narrowed(events.list(), &wanted, None), &wanted))? {
         Some(events) => {
@@ -229,7 +229,7 @@ fn today() -> String {
 }
 
 /// How a line prints: as the console's pretty line, or one JSON object.
-struct Printer {
+pub(crate) struct Printer {
     colours: bool,
     json: bool,
     /// A line of another day says its date.
@@ -237,7 +237,12 @@ struct Printer {
 }
 
 impl Printer {
-    fn print(&self, event: &Event) -> Done {
+    /// A printer for this terminal, or of JSON lines when `json`.
+    pub(crate) fn new(json: bool) -> Printer {
+        Printer { colours: Terminal::of_stdout().colours(), json, today: today() }
+    }
+
+    pub(crate) fn print(&self, event: &Event) -> Done {
         if self.json { outln!("{}", json(event)) } else { outln!("{}", self.pretty(event)) }
     }
 

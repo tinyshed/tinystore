@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 use std::io::{IsTerminal as _, Read as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime};
 
@@ -20,17 +20,10 @@ use serde_json::json;
 use tinystore::metrics::{Aggregate, Condition, Labels, Metrics, Not, Op, Prefix, Query, Series, Value};
 use tinystore::{ErrorKind, Store};
 
-use crate::asked::{self, Asked, Done, Refused, failed, wrong};
-use crate::help::{self, Command};
+use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
+use crate::help;
 use crate::reach;
 use crate::window::{self, Window};
-
-/// A verb of `metrics`: its word, its help and what runs it.
-struct Verb {
-    word: &'static str,
-    command: &'static Command,
-    run: fn(Asked) -> Done,
-}
 
 const VERBS: [Verb; 5] = [
     Verb { word: "names", command: &help::METRICS_NAMES, run: names },
@@ -51,39 +44,7 @@ const TABLE_WIDTH: usize = 120;
 const OPS: &str = "count, sum, avg, min, max, increase, rate, delta, first, last, or p and a rank, as p95";
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
-    let Some(verb) = args.iter().find_map(|arg| VERBS.iter().find(|verb| verb.word == arg)) else {
-        return given_no_verb(args);
-    };
-    asked::run(verb.command, args, verb.run)
-}
-
-/// `metrics` alone or with `--help`: every metrics command's help; with a
-/// verb it does not know, that verb's nearest.
-fn given_no_verb(args: &[String]) -> ExitCode {
-    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        return asked::exit("metrics", help::print_group("metrics"));
-    }
-    let verbs: Vec<&str> = VERBS.iter().map(|verb| verb.word).collect();
-    let why = match args.iter().filter(|arg| !arg.starts_with('-')).nth(1) {
-        Some(word) => format!("no command metrics {word}{}", crate::meant(word, &verbs)),
-        None => format!("a verb after the directory: {}", verbs.join(", ")),
-    };
-    asked::end("metrics", wrong(why))
-}
-
-/// The directory before the verb and the words after it. A verb that only
-/// reads takes the current directory when none comes before it.
-fn placed(asked: &Asked, verb: &str, reads: bool) -> Result<(PathBuf, Vec<String>), Refused> {
-    let at = asked.words.iter().position(|word| word == verb).unwrap_or_default();
-    let after = asked.words.get(at + 1..).unwrap_or_default().to_vec();
-    match (&asked.dir, at) {
-        (Some(_), 1) => Err(wrong("a directory given twice: --dir, and a word before the verb")),
-        (Some(dir), 0) => Ok((dir.clone(), after)),
-        (None, 1) => Ok((PathBuf::from(&asked.words[0]), after)),
-        (None, 0) if reads => Ok((PathBuf::from("."), after)),
-        (None, 0) => Err(wrong(format!("a store's directory before the verb: tinystore metrics ./data {verb}"))),
-        _ => Err(wrong(format!("one directory before {verb}, not {}", asked.words[..at].join(" ")))),
-    }
+    asked::run_verb("metrics", &VERBS, args)
 }
 
 /// The store beside whoever holds it, and its metrics; none while it keeps
@@ -100,7 +61,7 @@ fn beside(dir: &Path) -> Result<(Store, Option<Metrics>), Refused> {
 }
 
 fn names(asked: Asked) -> Done {
-    let (dir, rest) = placed(&asked, "names", true)?;
+    let (dir, rest) = asked.placed("metrics", "names", true)?;
     let prefix = match &rest[..] {
         [] => String::new(),
         [prefix] => prefix.clone(),
@@ -144,12 +105,12 @@ fn names(asked: Asked) -> Done {
 }
 
 fn read(asked: Asked) -> Done {
-    let (dir, rest) = placed(&asked, "read", true)?;
+    let (dir, rest) = asked.placed("metrics", "read", true)?;
     let [name] = &rest[..] else {
         return Err(wrong("read takes a metric's name: read ping_rtt_ms"));
     };
     let window = Window::asked(&asked, LAST_HOUR)?;
-    let most = count(&asked, "--limit", SHOWN)?;
+    let most = asked.count("--limit", SHOWN)?;
     let gaps = asked.value("--gaps").map(asked::span).transpose().map_err(wrong)?;
     let (_store, Some(metrics)) = beside(&dir)? else {
         return outln!("{} holds no metrics yet", dir.display());
@@ -214,7 +175,7 @@ fn json_samples(series: &[Series], most: usize) -> Done {
 }
 
 fn aggregate(asked: Asked) -> Done {
-    let (dir, rest) = placed(&asked, "aggregate", true)?;
+    let (dir, rest) = asked.placed("metrics", "aggregate", true)?;
     let [name] = &rest[..] else {
         return Err(wrong("aggregate takes a metric's name: aggregate ping_rtt_ms --op max"));
     };
@@ -307,7 +268,7 @@ fn json_buckets(groups: &[Aggregate]) -> Done {
 
 /// Writes the text on stdin, read to its end: every series of it or none.
 fn ingest(asked: Asked) -> Done {
-    let (dir, rest) = placed(&asked, "ingest", false)?;
+    let (dir, rest) = asked.placed("metrics", "ingest", false)?;
     if let Some(word) = rest.first() {
         return Err(wrong(format!("{word}: ingest reads Prometheus text on stdin and takes no words")));
     }
@@ -330,7 +291,7 @@ fn ingest(asked: Asked) -> Done {
 
 /// Deletes one series, named by its exact labels.
 fn delete(asked: Asked) -> Done {
-    let (dir, rest) = placed(&asked, "delete", false)?;
+    let (dir, rest) = asked.placed("metrics", "delete", false)?;
     let Some((name, pairs)) = rest.split_first() else {
         return Err(wrong("delete takes a name and its series' labels: delete ping_rtt_ms target=poland"));
     };
@@ -427,12 +388,6 @@ fn counted(count: u64, what: &str) -> String {
         (1, _) | (_, "series") => format!("{count} {what}"),
         _ => format!("{count} {what}s"),
     }
-}
-
-fn count(asked: &Asked, flag: &str, otherwise: usize) -> Result<usize, Refused> {
-    asked
-        .value(flag)
-        .map_or(Ok(otherwise), |given| given.parse().map_err(|_| wrong(format!("{flag} {given}: a count"))))
 }
 
 /// `--label`'s pairs, and a series' labels: `instance=web-1`.

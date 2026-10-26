@@ -330,6 +330,45 @@ pub(crate) const METRICS_DELETE: Command = Command {
            the directory, or starts one.",
 };
 
+pub(crate) const EVENTS_LIST: Command = Command {
+    name: "events list",
+    takes: "[dir] list <stream>",
+    does: "a stream's events, oldest first",
+    flags: &[
+        flag("--where", "<field=text|field:=json>", "events whose field holds the value; again for more"),
+        flag("--level", "<level>", "trace, debug, info, warn or error, and above"),
+        SINCE,
+        FROM,
+        TO,
+        flag("--limit", "<count>", "how many events a page holds; 100 by default"),
+        flag("--after", "<next>", "the page after one, as its end says"),
+        flag("--json", "", "one JSON object an event, as logs --json prints"),
+    ],
+    examples: &[
+        "tinystore events ./data list audit --since 1h",
+        "tinystore events ./data list audit --where user:=42 --where role=admin",
+    ],
+    more: "It reads beside the program or server that holds the directory, and prints each event as logs does.",
+};
+
+pub(crate) const EVENTS_APPEND: Command = Command {
+    name: "events append",
+    takes: "<dir> append <stream> [name] [field=text|field:=json]...",
+    does: "write an event, or another program's output on stdin, to a stream",
+    flags: &[
+        flag("--id", "<id>", "what names the event in its stream: an id it holds writes nothing"),
+        flag("--at", "<time>", "when it happened: 14:30 today, 2026-10-25T03:00, or one with its offset"),
+        flag("--level", "<level>", "trace, debug, info, warn or error"),
+    ],
+    examples: &[
+        "tinystore events ./data append audit role.changed user:=42 role=admin",
+        "my-worker 2>&1 | tinystore events ./data append worker",
+    ],
+    more: "With a name it writes one event, field=text a text and field:=json any JSON value. Without one it writes \
+           stdin a line an event, a stack trace joined into one, JSON and logfmt lines kept as their fields. It \
+           writes through the server that holds the directory, or starts one.",
+};
+
 pub(crate) const METRICS_INGEST: Command = Command {
     name: "metrics ingest",
     takes: "<dir> ingest",
@@ -349,8 +388,8 @@ pub(crate) const METRICS_INGEST: Command = Command {
 
 /// The commands by what a person does with them.
 pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
-    ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH, &METRICS_NAMES, &METRICS_READ, &METRICS_AGGREGATE]),
-    ("Write", &[&METRICS_INGEST, &METRICS_DELETE]),
+    ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH, &METRICS_NAMES, &METRICS_READ, &METRICS_AGGREGATE, &EVENTS_LIST]),
+    ("Write", &[&METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),

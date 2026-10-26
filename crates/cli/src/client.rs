@@ -101,6 +101,16 @@ impl Connection {
         answered_within("server.stop", move || connection.client.stop().map_err(|error| error.to_string()))
     }
 
+    /// Runs `call` on the connection with no bound on its wait: a stream as
+    /// long as its input, which a server gone ends with an error.
+    pub(crate) fn run<T>(
+        self,
+        call: impl FnOnce(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T>,
+    ) -> tinystore::Result<T> {
+        let mut connection = self;
+        call(&mut connection.client)
+    }
+
     /// Runs `call` on the connection and gives the connection back for the
     /// next. A server that does not answer within the wait may have run the
     /// call: its outcome is unknown.

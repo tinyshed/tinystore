@@ -147,7 +147,7 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   directly leaves it out. `client`, the protocol's client side, which the
   command line writes through a server with, turns on the wire, and like
   `fuzzing` promises nothing to a program. `just lint` builds the library with each engine,
-  the console, the wire and its client alone, the client beside metrics,
+  the console, the wire and its client alone, the client beside metrics and records,
   `async` alone and beside each engine, and every engine with `async` and
   without the wire. An
   engine adds its calls to `Store` from its own module
