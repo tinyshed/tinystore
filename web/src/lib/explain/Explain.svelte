@@ -1,7 +1,7 @@
 <script lang="ts">
 	import cli from '../content/cli.json'
 	import prints from '../content/cli-prints.json'
-	import { explain, type Help, type Role } from './explain'
+	import { explain, type Help, type Role, type Word } from './explain'
 
 	/**
 	 * A command a reader types and sees read word by word, as the command line
@@ -22,6 +22,22 @@
 		value: 'value',
 		unknown: 'not read',
 	}
+
+	/** What each word means, a flag and its value as one, the program's own left out. */
+	const meanings = $derived.by(() => {
+		const said: { text: string; role: Role; means: string }[] = []
+		read.words.forEach((word: Word, index: number) => {
+			if (word.role === 'program' || word.role === 'value') return
+			const next = read.words[index + 1]
+			const valued = word.role === 'flag' && next?.role === 'value' && next.stands === word.stands
+			said.push({
+				text: valued ? `${word.text} ${next.text}` : word.text,
+				role: word.role,
+				means: word.means,
+			})
+		})
+		return said
+	})
 </script>
 
 <div class="explain">
@@ -30,24 +46,33 @@
 		<input bind:value={line} spellcheck="false" autocomplete="off" aria-label="a tinystore command" />
 	</label>
 
-	<ol class="words">
+	<div class="line" aria-hidden="true">
 		{#each read.words as word, index (index)}
-			<li class={word.role}>
+			<span class="token {word.role}">
 				<code>{word.text}</code>
-				<span class="role">{word.stands ?? labels[word.role]}</span>
-				<span class="means">{word.means}</span>
-			</li>
+				<small>{word.stands ?? labels[word.role]}</small>
+			</span>
 		{/each}
-	</ol>
+	</div>
+
+	<dl class="meanings">
+		{#each meanings as meaning, index (index)}
+			<div class={meaning.role}>
+				<dt><code>{meaning.text}</code></dt>
+				<dd>{meaning.means}</dd>
+			</div>
+		{/each}
+	</dl>
 
 	{#if read.problem}
 		<p class="problem">{read.problem}</p>
 	{/if}
 
 	{#if read.command}
-		<p class="does">
-			<strong>tinystore {read.command.name}</strong> — {read.command.does}. {read.command.more}
-		</p>
+		<p class="does"><strong>tinystore {read.command.name}</strong> — {read.command.does}.</p>
+		{#if read.command.more}
+			<p class="more">{read.command.more}</p>
+		{/if}
 	{/if}
 
 	{#if read.prints}
@@ -62,7 +87,7 @@
 	.explain {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
-		gap: 12px;
+		gap: 14px;
 		margin: 22px 0 28px;
 		padding: 14px;
 		border: 1px solid var(--ts-border-2);
@@ -95,24 +120,22 @@
 		font: inherit;
 	}
 
-	/* one grid for every word, so that the columns line up */
-	.words {
-		display: grid;
-		grid-template-columns: minmax(0, max-content) max-content minmax(0, 1fr);
-		gap: 6px 14px;
-		align-items: baseline;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		font-size: 14px;
+	/* the command once, each word over what it is */
+	.line {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 6px;
 	}
 
-	.words li {
-		display: contents;
+	.token {
+		display: inline-grid;
+		justify-items: start;
+		gap: 2px;
+		min-width: 0;
 	}
 
-	.words code {
-		justify-self: start;
+	.token code {
+		max-width: 100%;
 		padding: 1px 6px;
 		border-radius: 5px;
 		background: var(--ts-chip);
@@ -120,13 +143,10 @@
 		overflow-wrap: anywhere;
 	}
 
-	.role {
-		color: var(--ts-muted);
-		font: 12px/1.6 var(--ts-mono);
-	}
-
-	.means {
-		color: var(--ts-text-body);
+	.token small {
+		padding-left: 6px;
+		color: var(--ts-faint);
+		font: 11px/1.3 var(--ts-mono);
 	}
 
 	.command code,
@@ -144,6 +164,32 @@
 		color: var(--ts-danger);
 	}
 
+	/* what each word means: the word, then its meaning beside it, or under it on a phone */
+	.meanings {
+		display: grid;
+		grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+		gap: 6px 14px;
+		margin: 0;
+		font-size: 14px;
+	}
+
+	.meanings div {
+		display: contents;
+	}
+
+	.meanings dt code {
+		padding: 0;
+		border: 0;
+		background: none;
+		font: 600 13px/1.6 var(--ts-mono);
+		overflow-wrap: anywhere;
+	}
+
+	.meanings dd {
+		margin: 0;
+		color: var(--ts-text-body);
+	}
+
 	.problem,
 	.does {
 		margin: 0;
@@ -152,6 +198,12 @@
 
 	.does {
 		color: var(--ts-text-body);
+	}
+
+	.more {
+		margin: -8px 0 0;
+		color: var(--ts-muted);
+		font-size: 13px;
 	}
 
 	.prints {
@@ -171,17 +223,44 @@
 		border-radius: 8px;
 		background: var(--ts-bg);
 		border: 1px solid var(--ts-border);
-		font: 13px/1.6 var(--ts-mono);
+		font: 12.5px/1.6 var(--ts-mono);
 	}
 
 	@media (max-width: 640px) {
-		.words {
-			grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+		.explain {
+			gap: 12px;
+			padding: 12px;
 		}
 
-		.means {
-			grid-column: 1 / -1;
-			margin-bottom: 4px;
+		.field {
+			padding: 7px 10px;
+			font-size: 13px;
+		}
+
+		/* a word and its meaning on one line, as a sentence wraps */
+		.meanings {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr);
+			gap: 6px;
+			font-size: 13.5px;
+			line-height: 1.5;
+		}
+
+		.meanings div {
+			display: block;
+		}
+
+		.meanings dt,
+		.meanings dd {
+			display: inline;
+		}
+
+		.meanings dt {
+			margin-right: 8px;
+		}
+
+		.does {
+			font-size: 13.5px;
 		}
 	}
 </style>
