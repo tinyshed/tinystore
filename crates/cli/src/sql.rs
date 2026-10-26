@@ -65,8 +65,7 @@ fn query(asked: Asked) -> Done {
             failed(error)
         }
     })?;
-    print_rows(&rows, json);
-    Ok(())
+    print_rows(&rows, json)
 }
 
 /// Runs a statement that may write, on the store this process holds.
@@ -77,13 +76,13 @@ fn write(store: &Store, database: &str, statement: &str, json: bool) -> Done {
         .any(|word| statement.trim_start().to_lowercase().starts_with(word));
     if reads || statement.to_lowercase().contains("returning") {
         let rows: Vec<Row> = db.all(statement)?;
-        print_rows(&rows, json);
+        print_rows(&rows, json)?;
     } else {
         let done = db.exec(statement)?;
         if json {
-            println!("{}", serde_json::json!({ "changes": done.changes, "last_insert_rowid": done.last_insert_rowid }));
+            outln!("{}", serde_json::json!({ "changes": done.changes, "last_insert_rowid": done.last_insert_rowid }))?;
         } else {
-            println!("{} rows changed", done.changes);
+            outln!("{} rows changed", done.changes)?;
         }
     }
     Ok(())
@@ -135,12 +134,9 @@ fn apply(asked: Asked) -> Done {
     closed?;
     let new: Vec<&String> = after.iter().filter(|name| !before.contains(name)).collect();
     match new.len() {
-        0 => println!("● {database}  up to date: {} migrations applied", after.len()),
-        _ => {
-            println!("● {database}  applied {}", new.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", "));
-        }
+        0 => outln!("● {database}  up to date: {} migrations applied", after.len()),
+        _ => outln!("● {database}  applied {}", new.iter().map(|name| name.as_str()).collect::<Vec<_>>().join(", ")),
     }
-    Ok(())
 }
 
 /// The migrations a database applied, by their names: its own, not those of
@@ -169,12 +165,12 @@ fn tables(asked: Asked) -> Done {
         [] => {
             let databases = files::databases(&dir);
             if json {
-                println!("{}", serde_json::json!(databases));
+                outln!("{}", serde_json::json!(databases))?;
             } else if databases.is_empty() {
-                println!("{} holds no database: a program opens one with store.database(\"app\")", dir.display());
+                outln!("{} holds no database: a program opens one with store.database(\"app\")", dir.display())?;
             } else {
                 for database in databases {
-                    println!("{database}");
+                    outln!("{database}")?;
                 }
             }
             Ok(())
@@ -187,12 +183,12 @@ fn tables(asked: Asked) -> Done {
                     .iter()
                     .map(|(kind, name, sql)| serde_json::json!({ "type": kind, "name": name, "sql": sql }))
                     .collect();
-                println!("{}", serde_json::Value::Array(shown));
+                outln!("{}", serde_json::Value::Array(shown))?;
             } else if made.is_empty() {
-                println!("{database} holds no table yet");
+                outln!("{database} holds no table yet")?;
             } else {
                 let statements: Vec<String> = made.iter().map(|(_, _, sql)| format!("{sql};")).collect();
-                println!("{}", statements.join("\n\n"));
+                outln!("{}", statements.join("\n\n"))?;
             }
             Ok(())
         }
@@ -220,18 +216,17 @@ pub(crate) fn rows_json(
 }
 
 /// Prints rows as a table a person reads, or one JSON object a row.
-fn print_rows(rows: &[Row], json: bool) {
+fn print_rows(rows: &[Row], json: bool) -> Done {
     if json {
         for row in rows {
             let object: serde_json::Map<String, serde_json::Value> =
                 row.0.iter().map(|(column, cell)| (column.clone(), cell.json())).collect();
-            println!("{}", serde_json::Value::Object(object));
+            outln!("{}", serde_json::Value::Object(object))?;
         }
-        return;
+        return Ok(());
     }
     let Some(first) = rows.first() else {
-        println!("no rows");
-        return;
+        return outln!("no rows");
     };
     let colours = Terminal::of_stdout().colours();
     let columns: Vec<&String> = first.0.iter().map(|(column, _)| column).collect();
@@ -252,13 +247,14 @@ fn print_rows(rows: &[Row], json: bool) {
         let padded: Vec<String> = cells.iter().zip(&widths).map(|(cell, width)| format!("{cell:width$}")).collect();
         padded.join("  ").trim_end().to_owned()
     };
-    println!("{}", paint(colours, Style::new().bold(), line(columns.iter().map(|column| (*column).clone()).collect())));
+    outln!("{}", paint(colours, Style::new().bold(), line(columns.iter().map(|column| (*column).clone()).collect())))?;
     for cells in shown {
-        println!("{}", line(cells));
+        outln!("{}", line(cells))?;
     }
     if rows.len() > 20 {
-        println!("{}", paint(colours, Style::new().dimmed(), format!("{} rows", rows.len())));
+        outln!("{}", paint(colours, Style::new().dimmed(), format!("{} rows", rows.len())))?;
     }
+    Ok(())
 }
 
 /// A row by its columns in their order.

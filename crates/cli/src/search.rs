@@ -48,13 +48,12 @@ fn list(dir: &Path) -> Done {
         listed => listed?,
     };
     if listed.is_empty() {
-        println!("● {}  holds no index", dir.display());
-        return Ok(());
+        return outln!("● {}  holds no index", dir.display());
     }
     let indexes = if listed.len() == 1 { "1 index".to_owned() } else { format!("{} indexes", listed.len()) };
-    println!("● {}  {indexes}", dir.display());
+    outln!("● {}  {indexes}", dir.display())?;
     for index in &listed {
-        println!("  {}", line(index));
+        outln!("  {}", line(index))?;
     }
     Ok(())
 }
@@ -92,7 +91,7 @@ fn drop_index(dir: &Path, name: &str) -> Done {
     if !dropped {
         return Err(failed(format!("{} holds no index {name}", dir.display())));
     }
-    println!("● {}  dropped {name}", dir.display());
+    outln!("● {}  dropped {name}", dir.display())?;
     Ok(())
 }
 

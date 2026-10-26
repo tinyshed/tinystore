@@ -6,6 +6,7 @@
 
 use nu_ansi_term::{Color, Style};
 
+use crate::asked::Done;
 use crate::lines::{Terminal, paint};
 
 /// A command as help shows it and the parser reads it.
@@ -379,13 +380,13 @@ fn wrapped(text: &str, width: usize) -> String {
 }
 
 /// Prints the help to stdout, coloured on a terminal.
-pub(crate) fn print() {
-    print!("{}", text(Terminal::of_stdout().colours()));
+pub(crate) fn print() -> Done {
+    out!("{}", text(Terminal::of_stdout().colours()))
 }
 
 /// Prints one command's help to stdout, coloured on a terminal.
-pub(crate) fn print_command(command: &Command) {
-    print!("{}", of_command(Terminal::of_stdout().colours(), command));
+pub(crate) fn print_command(command: &Command) -> Done {
+    out!("{}", of_command(Terminal::of_stdout().colours(), command))
 }
 
 #[cfg(test)]

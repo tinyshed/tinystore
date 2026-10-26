@@ -37,7 +37,7 @@ fn stop(asked: Asked) -> Done {
             LETTING_GO.as_secs()
         )));
     }
-    println!("● {}  stopped in {:.1}s · pid {}", dir.display(), started.elapsed().as_secs_f64(), found.pid);
+    outln!("● {}  stopped in {:.1}s · pid {}", dir.display(), started.elapsed().as_secs_f64(), found.pid)?;
     Ok(())
 }
 

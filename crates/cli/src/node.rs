@@ -38,11 +38,10 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         Some("promote") => asked::run(&help::NODE_PROMOTE, rest, promote),
         Some("demote") => asked::run(&help::NODE_DEMOTE, rest, demote),
         Some("--help" | "-h") | None => {
-            for command in [&help::NODE_STATUS, &help::NODE_PROMOTE, &help::NODE_DEMOTE] {
-                help::print_command(command);
-                println!();
-            }
-            ExitCode::SUCCESS
+            let printed = [&help::NODE_STATUS, &help::NODE_PROMOTE, &help::NODE_DEMOTE]
+                .into_iter()
+                .try_for_each(|command| help::print_command(command).and_then(|()| outln!()));
+            asked::exit("node", printed)
         }
         Some(other) => asked::end(
             "node",
@@ -76,43 +75,41 @@ fn status(asked: Asked) -> Done {
                 .collect();
             json!({ "written": links.written, "from": links.from, "followers": followers, "unheld": links.unheld })
         });
-        println!("{}", json!({ "files": shown, "links": links }));
-        return Ok(());
+        return outln!("{}", json!({ "files": shown, "links": links }));
     }
     if files.is_empty() {
-        println!("{} keeps no log: it is no node, or wrote nothing as one", dir.display());
+        outln!("{} keeps no log: it is no node, or wrote nothing as one", dir.display())?;
     } else {
         let width = files.iter().map(|file| file.file.len()).max().unwrap_or(4).max(4);
-        println!("{:width$}  this node  entries          epoch  applied", "file");
+        outln!("{:width$}  this node  entries          epoch  applied", "file")?;
         for file in &files {
-            println!("{}", line(file, width));
+            outln!("{}", line(file, width))?;
         }
     }
-    print_links(&dir, &files);
-    Ok(())
+    print_links(&dir, &files)
 }
 
 /// What the node running in `dir` last wrote of its links, and how far behind
 /// this node's log each follower is; nothing for a node that does not run.
-fn print_links(dir: &Path, files: &[FileStatus]) {
+fn print_links(dir: &Path, files: &[FileStatus]) -> Done {
     let links = match tinystore::replication::links(dir) {
         Ok(Some(links)) => links,
-        Ok(None) => return,
+        Ok(None) => return Ok(()),
         Err(error) => {
             eprintln!("tinystore node status: {error}");
-            return;
+            return Ok(());
         }
     };
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64);
     let age = now.saturating_sub(links.written) / 1000;
     let stale = if age > 15 { ": the node may have stopped without removing them" } else { "" };
-    println!();
-    println!("running   links written {age} s ago{stale}");
+    outln!()?;
+    outln!("running   links written {age} s ago{stale}")?;
     if let Some(from) = &links.from {
-        println!("from      {from}");
+        outln!("from      {from}")?;
     }
     if links.unheld > 0 {
-        println!("unheld    {} synchronous commits answered with no copy holding them", links.unheld);
+        outln!("unheld    {} synchronous commits answered with no copy holding them", links.unheld)?;
     }
     for follower in &links.followers {
         let held: Vec<String> = follower
@@ -126,8 +123,9 @@ fn print_links(dir: &Path, files: &[FileStatus]) {
                 }
             })
             .collect();
-        println!("{}", format!("follower  {}  {}", follower.address, held.join(", ")).trim_end());
+        outln!("{}", format!("follower  {}  {}", follower.address, held.join(", ")).trim_end())?;
     }
+    Ok(())
 }
 
 /// A file's line: what this node does with it, its log's entries, their epoch
@@ -156,7 +154,7 @@ fn promote(asked: Asked) -> Done {
         return Err(failed(format!("{} holds no copy", dir.display())));
     }
     for one in promoted {
-        println!("● {}  this node's own from commit {}, epoch {}", one.file, one.sequence + 1, one.epoch);
+        outln!("● {}  this node's own from commit {}, epoch {}", one.file, one.sequence + 1, one.epoch)?;
     }
     Ok(())
 }
@@ -212,15 +210,15 @@ fn demote(asked: Asked) -> Done {
     }
     for one in demoted {
         match one.last {
-            Some((sequence, epoch)) => println!(
+            Some((sequence, epoch)) => outln!(
                 "● {}  a copy again; its log stood at commit {sequence}, epoch {epoch}, and what its new home never \
                  had of it is lost",
                 one.file
-            ),
-            None => println!("● {}  a copy again", one.file),
+            )?,
+            None => outln!("● {}  a copy again", one.file)?,
         }
     }
-    println!("start the node with --from its new home to take each file again");
+    outln!("start the node with --from its new home to take each file again")?;
     Ok(())
 }
 

@@ -10,6 +10,7 @@
 //! ```
 
 use std::fmt;
+use std::io::{self, Write as _};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -28,18 +29,22 @@ pub(crate) struct Asked {
     flags: Vec<(&'static str, String)>,
 }
 
-/// How a command ended other than done: the command line was wrong, or the
-/// command failed while it ran.
+/// How a command ended other than done: the command line was wrong, the
+/// command failed while it ran, or the reader of its stdout went away first.
 #[derive(Debug)]
 pub(crate) enum Refused {
     Wrong(String),
     Failed(String),
+    /// `| head` closes the pipe once it has its lines: the command ends as
+    /// done, saying nothing.
+    ReaderGone,
 }
 
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refused::Wrong(why) | Refused::Failed(why) => f.write_str(why),
+            Refused::ReaderGone => f.write_str("the reader of stdout has gone"),
         }
     }
 }
@@ -67,25 +72,42 @@ impl From<tinystore::Error> for Refused {
 
 pub(crate) type Done = Result<(), Refused>;
 
+/// Writes what a command answers to stdout, as `out!` and `outln!` ask.
+pub(crate) fn out(text: fmt::Arguments<'_>) -> Done {
+    io::stdout().write_fmt(text).map_err(unwritten)
+}
+
+/// What a command ends with when stdout takes no more: done once its reader
+/// has gone, a failure otherwise.
+pub(crate) fn unwritten(error: io::Error) -> Refused {
+    match error.kind() {
+        io::ErrorKind::BrokenPipe => Refused::ReaderGone,
+        _ => failed(format!("stdout: {error}")),
+    }
+}
+
 /// Runs `command` on `args`: its help for `--help`, the line that says what
 /// is wrong for a mistake, and what `run` makes of what was asked otherwise.
 pub(crate) fn run(command: &'static Command, args: &[String], run: impl FnOnce(Asked) -> Done) -> ExitCode {
-    let asked = match read(command, args) {
-        Ok(Some(asked)) => asked,
-        Ok(None) => {
-            help::print_command(command);
-            return ExitCode::SUCCESS;
-        }
-        Err(why) => return end(command.name, Refused::Wrong(why)),
-    };
-    match run(asked) {
+    match read(command, args) {
+        Ok(Some(asked)) => exit(command.name, run(asked)),
+        Ok(None) => exit(command.name, help::print_command(command)),
+        Err(why) => end(command.name, Refused::Wrong(why)),
+    }
+}
+
+/// The exit of a command that ended as `done` says.
+pub(crate) fn exit(name: &str, done: Done) -> ExitCode {
+    match done {
         Ok(()) => ExitCode::SUCCESS,
-        Err(refused) => end(command.name, refused),
+        Err(refused) => end(name, refused),
     }
 }
 
 /// Says why a command ended and gives its exit: 2 for a command line that
-/// was wrong, 1 for a failure.
+/// was wrong, 1 for a failure, 0 for a reader gone. The line goes to stderr
+/// as `writeln!` writes it, since `2>&1 | head` may have closed stderr too,
+/// and `eprintln!` would panic.
 pub(crate) fn end(name: &str, refused: Refused) -> ExitCode {
     let colours = Terminal::of_stderr().colours();
     let spelled = if name.is_empty() { "tinystore:".to_owned() } else { format!("tinystore {name}:") };
@@ -97,13 +119,14 @@ pub(crate) fn end(name: &str, refused: Refused) -> ExitCode {
                 name => (format!("tinystore help {name}"), "shows how it is called"),
             };
             let hint = paint(colours, nu_ansi_term::Style::new().dimmed(), help);
-            eprintln!("{named} {why}\n  {hint} {does}");
+            let _ = writeln!(io::stderr(), "{named} {why}\n  {hint} {does}");
             ExitCode::from(2)
         }
         Refused::Failed(why) => {
-            eprintln!("{named} {why}");
+            let _ = writeln!(io::stderr(), "{named} {why}");
             ExitCode::FAILURE
         }
+        Refused::ReaderGone => ExitCode::SUCCESS,
     }
 }
 

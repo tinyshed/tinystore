@@ -71,14 +71,13 @@ fn logs(asked: Asked) -> Done {
     match read(&dir, |events| first(&narrowed(events.list(), &wanted, None), &wanted))? {
         Some(events) => {
             for event in events {
-                printer.print(&event);
+                printer.print(&event)?;
                 printed.add(&event);
             }
         }
-        None => println!(
-            "{} holds no logs yet: a program's logger keeps them, as store.logger(\"api\") does",
-            dir.display()
-        ),
+        None => {
+            outln!("{} holds no logs yet: a program's logger keeps them, as store.logger(\"api\") does", dir.display())?
+        }
     }
     if wanted.follow {
         follow(&dir, &wanted, &printer, printed)?;
@@ -99,7 +98,7 @@ fn follow(dir: &Path, wanted: &Wanted, printer: &Printer, mut printed: Printed) 
         })?;
         for event in found.unwrap_or_default() {
             if printed.add(&event) && (!first || event.at > started) {
-                printer.print(&event);
+                printer.print(&event)?;
             }
         }
         first = false;
@@ -238,12 +237,8 @@ struct Printer {
 }
 
 impl Printer {
-    fn print(&self, event: &Event) {
-        if self.json {
-            println!("{}", json(event));
-        } else {
-            println!("{}", self.pretty(event));
-        }
+    fn print(&self, event: &Event) -> Done {
+        if self.json { outln!("{}", json(event)) } else { outln!("{}", self.pretty(event)) }
     }
 
     /// `11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200`

@@ -26,7 +26,7 @@ fn token(asked: Asked) -> Done {
     };
     let mut random = [0; 32];
     getrandom::fill(&mut random).map_err(failed)?;
-    println!("{capability} {}", crate::local::base64url(&random));
+    outln!("{capability} {}", crate::local::base64url(&random))?;
     Ok(())
 }
 

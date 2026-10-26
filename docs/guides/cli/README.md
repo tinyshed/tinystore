@@ -52,6 +52,9 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 - **A mistake names the next command.** A misspelt command or flag is told
   the nearest one, `did you mean backup?` (contract CLI-02), and exits 2; a
   failure while running exits 1.
+- **A pipe may close early.** When the program reading the output stops, as
+  `| head -5` does once it has its lines, the command stops too, quietly, and
+  exits 0 (contract CLI-04).
 - **A dangerous step refuses when unsure.** `node promote` refuses while a
   node it took its files from still serves them, unless `--force`.
 

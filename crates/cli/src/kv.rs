@@ -62,9 +62,9 @@ fn get(at: &Kept, bucket: &str, key: &str, json: bool) -> Done {
         return Err(failed(format!("kv bucket {bucket}: no key {key}")));
     };
     if json {
-        println!("{}", shown(key, &value, expires));
+        outln!("{}", shown(key, &value, expires))?;
     } else {
-        println!("{value:#}");
+        outln!("{value:#}")?;
     }
     Ok(())
 }
@@ -81,15 +81,14 @@ fn list(at: &Kept, bucket: &str, branch: Option<&String>, json: bool) -> Done {
     })?;
     if entries.is_empty() {
         let under = branch.map_or_else(String::new, |branch| format!(" under {branch}"));
-        println!("kv bucket {bucket} holds no key{under}");
-        return Ok(());
+        return outln!("kv bucket {bucket} holds no key{under}");
     }
     let width = entries.iter().take(MOST).map(|(key, ..)| key.chars().count()).max().unwrap_or(0).min(40);
     for (key, value, expires) in entries.iter().take(MOST) {
         if json {
-            println!("{}", shown(key, value, *expires));
+            outln!("{}", shown(key, value, *expires))?;
         } else {
-            println!("{key:width$}  {value}");
+            outln!("{key:width$}  {value}")?;
         }
     }
     if entries.len() > MOST {

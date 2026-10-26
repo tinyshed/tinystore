@@ -43,9 +43,9 @@ fn status(asked: Asked) -> Done {
     }
     let report = Report::of(&dir)?;
     if asked.has("--json") {
-        println!("{}", report.json());
+        outln!("{}", report.json())?;
     } else {
-        print!("{}", report.text(Terminal::of_stdout().colours()));
+        out!("{}", report.text(Terminal::of_stdout().colours()))?;
     }
     Ok(())
 }

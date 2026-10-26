@@ -6,6 +6,25 @@
 //! `backup` and `restore` keep a store; `node` and `witness` run the nodes of
 //! a network. `help` lists them all, and docs/guides/cli/README.md is their guide.
 
+/// `print!` for what a command answers on stdout. It gives the command's
+/// `Done`, so that `?` ends the command quietly once the reader has gone, as
+/// `| head` does when it has its lines, where `print!` panics.
+macro_rules! out {
+    ($($arg:tt)*) => {
+        $crate::asked::out(format_args!($($arg)*))
+    };
+}
+
+/// `println!` as `out!` is `print!`.
+macro_rules! outln {
+    () => {
+        $crate::asked::out(format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::asked::out(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
 mod args;
 mod asked;
 mod backup;
@@ -67,25 +86,13 @@ fn main() -> ExitCode {
         Some("witness") => witness::run(rest),
         Some("migrate") => sql::migrate(rest),
         Some("schema") => sql::schema(rest),
-        Some("version" | "--version" | "-V") => {
-            println!("tinystore {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        None => {
-            help::print();
-            ExitCode::SUCCESS
-        }
-        Some("help" | "--help" | "-h") if rest.is_empty() => {
-            help::print();
-            ExitCode::SUCCESS
-        }
+        Some("version" | "--version" | "-V") => asked::exit("", outln!("tinystore {}", env!("CARGO_PKG_VERSION"))),
+        None => asked::exit("", help::print()),
+        Some("help" | "--help" | "-h") if rest.is_empty() => asked::exit("help", help::print()),
         Some("help") => {
             let name = rest.join(" ");
             match help::command(&name).or_else(|| help::command(&rest[0])) {
-                Some(command) => {
-                    help::print_command(command);
-                    ExitCode::SUCCESS
-                }
+                Some(command) => asked::exit("help", help::print_command(command)),
                 None if rest[0] == "node" => node::run(&["--help".to_owned()]),
                 None => asked::end(
                     "help",

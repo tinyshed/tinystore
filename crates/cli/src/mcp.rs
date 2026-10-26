@@ -42,7 +42,7 @@ fn serve(asked: Asked) -> Done {
             continue;
         }
         let Some(answer) = answer(&dir, &line) else { continue };
-        writeln!(stdout, "{answer}").and_then(|()| stdout.flush()).map_err(asked::failed)?;
+        writeln!(stdout, "{answer}").and_then(|()| stdout.flush()).map_err(asked::unwritten)?;
     }
     Ok(())
 }

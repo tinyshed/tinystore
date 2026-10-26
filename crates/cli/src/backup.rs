@@ -58,20 +58,20 @@ fn back_up(asked: Asked) -> Done {
         backup = backup.include_encryption_key();
     }
     let written = backup.write(&zip).and_then(|backup| store.close().map(|()| backup)).map_err(failed)?;
-    println!(
+    outln!(
         "● {}  backed up to {} · {} files, {}",
         dir.display(),
         zip.display(),
         written.files,
         crate::files::bytes(written.bytes)
-    );
+    )?;
     if written.key_left_out {
         // beside its holder, a key kept apart is not the backup's to take
         let or_include = if key_apart.is_some() { "" } else { ", or include it with --include-encryption-key" };
-        println!(
+        outln!(
             "  the store seals values with its encryption key, which the backup leaves out: keep the key \
              apart{or_include}"
-        );
+        )?;
     }
     Ok(())
 }
@@ -81,9 +81,9 @@ fn put_back(asked: Asked) -> Done {
         return Err(wrong("a zip and an empty directory: restore backup.zip ./data2"));
     };
     let restored = tinystore::backup::restore(zip, dir)?;
-    println!("● {dir}  restored from {zip} · {} files, {}", restored.files, crate::files::bytes(restored.bytes));
+    outln!("● {dir}  restored from {zip} · {} files, {}", restored.files, crate::files::bytes(restored.bytes))?;
     if restored.key_left_out {
-        println!("  its encrypted buckets open with the store's key, which the backup left out: put it back first");
+        outln!("  its encrypted buckets open with the store's key, which the backup left out: put it back first")?;
     }
     Ok(())
 }
