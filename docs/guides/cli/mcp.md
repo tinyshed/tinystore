@@ -1,12 +1,14 @@
 # AI agents
 
 `tinystore mcp` lets an AI agent read a store through the Model Context
-Protocol, on stdin and stdout. Its tools only read: an agent can find why a
-job failed, which lines a request logged and what a row holds, and it can
-change nothing.
+Protocol, on stdin and stdout. By default its tools only read: an agent can
+find why a job failed, which lines a request logged and what a row holds, and
+it can change nothing. `--write` adds the tools that write, one operation
+each, only those it names.
 
 ```sh
 claude mcp add tinystore -- tinystore mcp ./data
+claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add
 ```
 
 Any MCP client takes it the same way: the command is `tinystore`, its
@@ -45,12 +47,41 @@ last error, reads the request's log lines around that time by `grep`, and the
 message's row by `sql_query`. Each step is a read; none needs a person to copy
 anything into the chat.
 
-## Why read-only
+## Writing
 
-An agent that can write can also write the wrong thing, confidently. Reading
-is enough to explain what happened; a fix goes through the program's own code
-and a person's review. A token or a flag that let `mcp` write would make every
-prompt injection in a log line a write to production.
+An agent that can write can also write the wrong thing, confidently, and a
+prompt injection in a log line it reads can ask it to. So `mcp` reads unless
+told otherwise, and writing is given an operation at a time:
+
+```sh
+tinystore mcp ./data --write kv_set,jobs_add   # these two, and no other
+tinystore mcp ./data --write all               # every tool below
+```
+
+| Tool               | Takes                                                  | Removes or replaces |
+|--------------------|--------------------------------------------------------|---------------------|
+| `kv_set`           | `bucket`, `key`, `value`, `as`, `ttl`, `database`      | no                  |
+| `kv_delete`        | `bucket`, `key`, `database`                            | yes                 |
+| `jobs_add`         | `queue`, `job`, `id`, `delay`, `database`              | no                  |
+| `jobs_cancel`      | `queue`, `id`, `database`                              | yes                 |
+| `files_put`        | `set`, `path`, `text`, `type`                          | yes                 |
+| `files_delete`     | `set`, `path`                                          | yes                 |
+| `events_append`    | `stream`, `name`, `fields`, `level`, `id`              | no                  |
+| `channels_publish` | `channel`, `message`, `under`                          | no                  |
+| `config_update`    | `config`, `changes`, as `{"model.max_tokens": "2048"}` | no                  |
+| `config_reset`     | `config`, `path`                                       | yes                 |
+| `sql_exec`         | `database`, `statement`                                | yes                 |
+
+- Each tool is one operation and is marked as writing, and as destructive
+  where it removes or replaces something, so the agent's host asks its person
+  for each, as Claude Code does for any tool not yet allowed.
+- A tool `--write` doesn't name is not offered, and a call of it is refused.
+- They write as the command line's writes do: through the server that holds
+  the directory, or a sidecar they start. A directory a program opened
+  `embedded` is refused.
+- A flag is no boundary for an agent that also has a shell: it can run
+  `tinystore kv set` itself. Give an agent `--write` where its host decides
+  what it may run, not as a sandbox.
 
 ## See also
 

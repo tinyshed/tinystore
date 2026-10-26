@@ -337,18 +337,22 @@ end
 complete -c tinystore -f -a '(__tinystore_complete)'
 "#;
 
-const POWERSHELL: &str = r#"# tinystore's Tab completion for PowerShell: tinystore completion powershell | Out-String | Invoke-Expression
+const POWERSHELL: &str = r#"# tinystore's Tab completion for PowerShell:
+#   tinystore completion powershell | Out-String | Invoke-Expression
 Register-ArgumentCompleter -Native -CommandName tinystore -ScriptBlock {
     param($current, $ast, $cursor)
-    $elements = @($ast.CommandElements | Select-Object -Skip 1 | Where-Object { $_.Extent.EndOffset -le $cursor })
+    $elements = @($ast.CommandElements | Select-Object -Skip 1 |
+        Where-Object { $_.Extent.EndOffset -le $cursor })
     if ($current -ne '') { $elements = @($elements | Select-Object -SkipLast 1) }
     $before = @($elements | ForEach-Object { $_.Extent.Text })
     $result = [System.Management.Automation.CompletionResult]
     & tinystore __complete @before "+$current" 2>$null | ForEach-Object {
         if ($_ -eq '@dirs') {
-            Get-ChildItem -Directory -Path "$current*" -ErrorAction SilentlyContinue | ForEach-Object { $result::new($_.Name, $_.Name, 'ProviderContainer', $_.Name) }
+            Get-ChildItem -Directory -Path "$current*" -ErrorAction SilentlyContinue |
+                ForEach-Object { $result::new($_.Name, $_.Name, 'ProviderContainer', $_.Name) }
         } elseif ($_ -eq '@files') {
-            Get-ChildItem -Path "$current*" -ErrorAction SilentlyContinue | ForEach-Object { $result::new($_.Name, $_.Name, 'ProviderItem', $_.Name) }
+            Get-ChildItem -Path "$current*" -ErrorAction SilentlyContinue |
+                ForEach-Object { $result::new($_.Name, $_.Name, 'ProviderItem', $_.Name) }
         } else {
             $result::new($_, $_, 'ParameterValue', $_)
         }

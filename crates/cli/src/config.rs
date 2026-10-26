@@ -70,13 +70,12 @@ fn update(asked: Asked) -> Done {
         return Err(wrong("update takes a config and its settings: update chat model.max_tokens=2048"));
     };
     reach::store_at(&dir)?;
-    let (_store, config) = kept(&dir, name)?;
-    let mut changes = Map::new();
+    let mut paths = Map::new();
     for pair in pairs {
-        let (path, value) = given(&config, pair)?;
-        nested(&mut changes, &path, value)?;
+        let (path, value) = given(pair)?;
+        paths.insert(path, value);
     }
-    let (named, sent) = (name.clone(), Value::Object(changes).to_string());
+    let (named, sent) = (name.clone(), changes_of(&dir, name, &paths)?);
     let version = reach::write(&dir, "config update", move |client| {
         let (config, version) = client.config(&named)?;
         client.update_config(config, version, &sent)
@@ -124,9 +123,9 @@ fn kept(dir: &Path, name: &str) -> Result<(Store, Config<Value>), Refused> {
     }
 }
 
-/// A setting and its value as `update` was given them: `path=text` by the
-/// setting's kind, `path:=json` as it is.
-fn given(config: &Config<Value>, pair: &str) -> Result<(String, Value), Refused> {
+/// A setting and its value as `update` was given them: `path=text`, its
+/// text, or `path:=json`, its JSON.
+fn given(pair: &str) -> Result<(String, Value), Refused> {
     if let Some((path, json)) = pair.split_once(":=") {
         let value = serde_json::from_str(json).map_err(|error| wrong(format!("{pair}: JSON after :=, {error}")))?;
         return Ok((path.to_owned(), value));
@@ -134,8 +133,24 @@ fn given(config: &Config<Value>, pair: &str) -> Result<(String, Value), Refused>
     let Some((path, text)) = pair.split_once('=') else {
         return Err(wrong(format!("{pair}: a setting and its value, as model.max_tokens=2048")));
     };
-    let value = tinystore::client::config_value(config, path, text).map_err(wrong)?;
-    Ok((path.to_owned(), value))
+    Ok((path.to_owned(), Value::String(text.to_owned())))
+}
+
+/// The changes `paths` names, each setting's path and its value, as
+/// `config.update` takes them: text read by the setting's kind, as an
+/// environment variable is, other JSON as it is, each in its groups. The
+/// config is read beside whoever holds `dir`, as the store keeps it.
+pub(crate) fn changes_of(dir: &Path, name: &str, paths: &Map<String, Value>) -> Result<String, Refused> {
+    let (_store, config) = kept(dir, name)?;
+    let mut changes = Map::new();
+    for (path, value) in paths {
+        let value = match value {
+            Value::String(text) => tinystore::client::config_value(&config, path, text).map_err(wrong)?,
+            other => other.clone(),
+        };
+        nested(&mut changes, path, value)?;
+    }
+    Ok(Value::Object(changes).to_string())
 }
 
 /// Puts `value` at `path` of the changes, each of its groups an object.

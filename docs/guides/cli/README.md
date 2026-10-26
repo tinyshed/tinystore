@@ -41,7 +41,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 |         | `stop <dir>`                          | stop the server of a directory, its work finished                 |
 |         | `backup <dir> <zip>`                  | the whole store in one checked zip, while it runs                 |
 |         | `restore <zip> <dir>`                 | a backup into an empty directory                                  |
-|         | `mcp [dir]`                           | let an AI agent read the store                                    |
+|         | `mcp [dir]`                           | let an AI agent read the store, and write what `--write` names    |
 |         | `token new [admin\|data\|read]`       | a token line for `serve`'s `--tokens`                             |
 |         | `lock <dir> hold <lock> <key> -- <c>` | run a command while it holds a key of a lock                      |
 |         | `completion <shell>`                  | the lines that give bash, zsh, fish or PowerShell Tab completion  |
@@ -95,21 +95,21 @@ waits for no server (contract CLI-07).
 
 ## In these guides
 
-| Page                                   | Covers                                                   |
-|----------------------------------------|----------------------------------------------------------|
-| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs   |
-| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs     |
-| [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations     |
-| [jobs](jobs.md)                        | jobs added, listed and cancelled                         |
-| [files](files.md)                      | files put, got, listed and deleted                       |
-| [channels](channels.md)                | a message published, a channel listened to               |
-| [lock](lock.md)                        | a command run while it holds a key                       |
-| [config](config.md)                    | a config explained, its live settings changed            |
-| [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
-| [events](events.md)                    | an event or a program's output appended, a stream listed |
-| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |
-| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness          |
-| [AI agents](mcp.md)                    | `tinystore mcp` and its read-only tools                  |
+| Page                                   | Covers                                                    |
+|----------------------------------------|-----------------------------------------------------------|
+| [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs    |
+| [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs      |
+| [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations      |
+| [jobs](jobs.md)                        | jobs added, listed and cancelled                          |
+| [files](files.md)                      | files put, got, listed and deleted                        |
+| [channels](channels.md)                | a message published, a channel listened to                |
+| [lock](lock.md)                        | a command run while it holds a key                        |
+| [config](config.md)                    | a config explained, its live settings changed             |
+| [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete          |
+| [events](events.md)                    | an event or a program's output appended, a stream listed  |
+| [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte        |
+| [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness           |
+| [AI agents](mcp.md)                    | `tinystore mcp`, its tools that read and those that write |
 
 In the Handbook, [Your first store](../../handbook/start/first-store.md#look-inside)
 looks inside a store, and [Running it](../../handbook/production/running-it.md)

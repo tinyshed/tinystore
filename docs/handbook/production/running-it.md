@@ -89,7 +89,8 @@ claude mcp add tinystore -- tinystore mcp ./data
 tools that only read: `status`, `logs`, `kv_get`, `kv_list`, `jobs_list`,
 `sql_query` and `search_list`. An agent can answer "why did the reply to
 message 41 fail?" by reading the job's error, the request's log lines and the
-row, and it can change nothing.
+row, and it can change nothing. `--write kv_set,jobs_add` gives it those
+writes alone, each a tool its host asks for; see [AI agents](../../guides/cli/mcp.md#writing).
 
 ## A checklist
 

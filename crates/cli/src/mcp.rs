@@ -1,10 +1,11 @@
 //! `tinystore mcp`: the Model Context Protocol on stdin and stdout, a JSON-RPC
-//! message a line, with tools that only read a store, beside the program or
-//! server that holds it. Each call opens the store again, so it sees what was
-//! committed since the last.
+//! message a line, with tools that read a store, beside the program or
+//! server that holds it, and the tools that write that `--write` names. Each
+//! call opens the store again, so it sees what was committed since the last.
 //!
 //! ```text
 //! claude mcp add tinystore -- tinystore mcp ./data
+//! claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add
 //! ```
 
 use std::io::{self, BufRead, Write};
@@ -34,6 +35,7 @@ fn serve(asked: Asked) -> Done {
         return Err(wrong(format!("one directory, not {} too", rest.join(" "))));
     }
     let dir = std::path::absolute(&dir).unwrap_or(dir);
+    let writes = crate::mcp_writes::allowed(asked.value("--write"))?;
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -41,14 +43,15 @@ fn serve(asked: Asked) -> Done {
         if line.trim().is_empty() {
             continue;
         }
-        let Some(answer) = answer(&dir, &line) else { continue };
+        let Some(answer) = answer(&dir, &writes, &line) else { continue };
         writeln!(stdout, "{answer}").and_then(|()| stdout.flush()).map_err(asked::unwritten)?;
     }
     Ok(())
 }
 
-/// The answer to one message; none to a notification.
-fn answer(dir: &Path, line: &str) -> Option<Value> {
+/// The answer to one message; none to a notification. `writes` are the
+/// tools that write it offers.
+fn answer(dir: &Path, writes: &[&str], line: &str) -> Option<Value> {
     let message: Value = match serde_json::from_str(line) {
         Ok(message) => message,
         Err(error) => return Some(failure(Value::Null, -32700, &format!("not JSON: {error}"))),
@@ -62,16 +65,12 @@ fn answer(dir: &Path, line: &str) -> Option<Value> {
                 "protocolVersion": version,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "tinystore", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": format!(
-                    "Read the TinyStore store in {}: its status, logs, kv values, jobs, SQL databases and search \
-                     indexes. Nothing here writes.",
-                    dir.display()
-                ),
+                "instructions": instructions(dir, writes),
             })
         }
         Some("ping") => json!({}),
-        Some("tools/list") => json!({ "tools": tools() }),
-        Some("tools/call") => call(dir, &params),
+        Some("tools/list") => json!({ "tools": tools(writes) }),
+        Some("tools/call") => call(dir, writes, &params),
         Some(other) => return Some(failure(id, -32601, &format!("no method {other}"))),
         None => return Some(failure(id, -32600, "a request names its method")),
     };
@@ -82,9 +81,23 @@ fn failure(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The tools, each with what it takes.
-fn tools() -> Value {
-    Value::Array([store_tools(), data_tools()].concat())
+/// What the agent is told it may do with the store.
+fn instructions(dir: &Path, writes: &[&str]) -> String {
+    let reads = "its status, logs, kv values, jobs, SQL databases and search indexes";
+    match writes {
+        [] => format!("Read the TinyStore store in {}: {reads}. Nothing here writes.", dir.display()),
+        writes => format!(
+            "Read the TinyStore store in {}: {reads}; and write to it with {} alone, each a change the program sees.",
+            dir.display(),
+            writes.join(", ")
+        ),
+    }
+}
+
+/// The tools, each with what it takes: those that read, then those that
+/// write that `writes` names.
+fn tools(writes: &[&str]) -> Value {
+    Value::Array([store_tools(), data_tools(), crate::mcp_writes::tools(writes)].concat())
 }
 
 fn described(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -92,6 +105,7 @@ fn described(name: &str, description: &str, properties: Value, required: &[&str]
         "name": name,
         "description": description,
         "inputSchema": { "type": "object", "properties": properties, "required": required },
+        "annotations": { "readOnlyHint": true, "openWorldHint": false },
     })
 }
 
@@ -180,10 +194,12 @@ fn data_tools() -> Vec<Value> {
 }
 
 /// A tool's answer: its text, or what went wrong as the tool's own error.
-fn call(dir: &Path, params: &Value) -> Value {
+fn call(dir: &Path, writes: &[&str], params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-    match tool(dir, name, &arguments) {
+    let answered =
+        crate::mcp_writes::call(dir, writes, name, &arguments).unwrap_or_else(|| tool(dir, name, &arguments));
+    match answered {
         Ok(answer) => json!({ "content": [{ "type": "text", "text": answer.to_string() }] }),
         Err(why) => json!({ "content": [{ "type": "text", "text": why }], "isError": true }),
     }
@@ -272,7 +288,7 @@ mod tests {
     use tinystore::Options;
 
     fn asked(dir: &Path, message: Value) -> Value {
-        answer(dir, &message.to_string()).unwrap()
+        answer(dir, &[], &message.to_string()).unwrap()
     }
 
     #[test]
@@ -283,7 +299,7 @@ mod tests {
         let started = asked(dir.path(), json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }));
         assert_eq!(started["result"]["serverInfo"]["name"], "tinystore");
         assert!(
-            answer(dir.path(), &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string())
+            answer(dir.path(), &[], &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string())
                 .is_none()
         );
         let listed = asked(dir.path(), json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));

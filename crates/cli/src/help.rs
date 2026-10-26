@@ -340,11 +340,22 @@ pub(crate) const RESTORE: Command = Command {
 pub(crate) const MCP: Command = Command {
     name: "mcp",
     takes: "[dir]",
-    does: "let an AI agent read the store",
-    flags: &[],
-    examples: &["claude mcp add tinystore -- tinystore mcp ./data"],
-    more: "The Model Context Protocol on stdin and stdout, with tools that only read: status, logs, kv_get, kv_list, \
-           jobs_list, sql_query and search_list.",
+    does: "let an AI agent read the store, and write what --write names",
+    flags: &[flag(
+        "--write",
+        "<tools>",
+        "the tools that write it offers, as kv_set,jobs_add, or all; none when absent",
+    )],
+    examples: &[
+        "claude mcp add tinystore -- tinystore mcp ./data",
+        "claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add",
+    ],
+    more: "The Model Context Protocol on stdin and stdout. Its tools that read: status, logs, kv_get, kv_list, \
+           jobs_list, sql_query and search_list. Those that write, a tool an operation, only as --write names them: \
+           kv_set, kv_delete, jobs_add, jobs_cancel, files_put, files_delete, events_append, channels_publish, \
+           config_update, config_reset and sql_exec. Each is marked as writing, and as destructive where it removes \
+           or replaces something, so that the agent's host asks for each; they write through the server that holds \
+           the directory, or one they start.",
 };
 
 pub(crate) const TOKEN: Command = Command {

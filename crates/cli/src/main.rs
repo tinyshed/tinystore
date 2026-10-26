@@ -49,6 +49,7 @@ mod local;
 mod lock;
 mod logs;
 mod mcp;
+mod mcp_writes;
 mod metrics;
 mod names;
 mod node;
