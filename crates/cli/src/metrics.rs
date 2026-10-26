@@ -103,7 +103,7 @@ fn names(asked: Asked) -> Done {
         )?;
     }
     match page.next {
-        Some(next) => asked::say("metrics names", format!("the first {PAGE} names; --after {next} reads on")),
+        Some(next) => read_on("metrics names", &format!("{PAGE} names"), Some(&next))?,
         None if page.names.is_empty() => outln!("{} holds no metric whose name starts with that", dir.display())?,
         None => {}
     }
@@ -126,7 +126,7 @@ fn read(asked: Asked) -> Done {
         return json_samples(&page.series, page.next.as_deref());
     }
     shown_samples(&page.series, window, gaps)?;
-    read_on("metrics read", &format!("the first {most} samples"), page.next.as_deref())
+    read_on("metrics read", &format!("{most} samples"), page.next.as_deref())
 }
 
 /// A query read a page of `most` at a time, from `--after` on when given.
@@ -138,10 +138,11 @@ fn paged(query: Query, asked: &Asked, most: usize) -> Query {
     }
 }
 
-/// Says how to read the page after this one, when there is one.
-fn read_on(command: &str, page: &str, next: Option<&str>) -> Done {
+/// Says how to read the page after this one, when there is one: `most` is
+/// what a page holds at most, the same words on the first page and the tenth.
+fn read_on(command: &str, most: &str, next: Option<&str>) -> Done {
     if let Some(next) = next {
-        asked::say(command, format!("{page}; --after {next} reads on"));
+        asked::say(command, format!("a page of {most} at most; --after {next} reads on"));
     }
     Ok(())
 }
@@ -221,7 +222,7 @@ fn aggregate(asked: Asked) -> Done {
     let every = every.map_or_else(String::new, |every| format!(" every {}", window::span_text(every)));
     outln!("{name} {word}{every}   {}", window.shown())?;
     shown_buckets(&groups, window)?;
-    read_on("metrics aggregate", &format!("the first {most} buckets"), page.next.as_deref())
+    read_on("metrics aggregate", &format!("{most} buckets"), page.next.as_deref())
 }
 
 /// The buckets as a table, a row a bucket and a column a group, or a line a

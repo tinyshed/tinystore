@@ -338,7 +338,6 @@ mod tests {
         store.close().unwrap();
     }
 
-    /// A REQUEST of `method` on `stream`, the client's only frame there.
     /// A client that closes its side while it listens on a channel: the
     /// subscription, which only its cancel would end, ends with a last frame
     /// it still reads, and the connection ends at once rather than after the
@@ -372,6 +371,7 @@ mod tests {
         store.close().unwrap();
     }
 
+    /// A REQUEST of `method` on `stream`, the client's only frame there.
     fn request(stream: u32, method: u16, body: &[u8]) -> Vec<u8> {
         const REQUEST: u8 = 3;
         const END: u8 = 1;

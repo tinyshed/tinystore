@@ -75,12 +75,14 @@ fn hold(asked: &Asked, ended: &Cell<Option<u8>>) -> Done {
     let Some(lease) = client.hold(&asking).map_err(failed)? else {
         return Err(failed(format!("lock {lock}: key {key} is held by another; --wait stands in line longer")));
     };
+    // the lease runs from the server's answer, not from the command's start, which takes a while
+    let held = Instant::now();
     let child = Command::new(program)
         .args(arguments)
         .env("TINYSTORE_FENCE", &lease.fence)
         .spawn()
         .map_err(|error| failed(format!("{program}: {error}")))?;
-    let keeping = Keeping::start(client, lease, asking.ttl);
+    let keeping = Keeping::start(client, lease, asking.ttl, held);
     let status = watched(child, &keeping)?;
     keeping.release();
     ended.set(Some(status.code().map_or(1, |code| u8::try_from(code).unwrap_or(1))));
@@ -123,7 +125,7 @@ fn stop(child: &mut Child) {
 
 /// A lease kept on a thread of its own, renewed every third of its `ttl`, so
 /// that a renewal that waits on the server never holds the command's watch;
-/// past `ttl` from its last renewal, it counts as lost.
+/// past `ttl` from when it was `held` or last renewed, it counts as lost.
 struct Keeping {
     lost: Arc<AtomicBool>,
     stop: mpsc::Sender<()>,
@@ -131,12 +133,12 @@ struct Keeping {
 }
 
 impl Keeping {
-    fn start(mut client: Client<Box<dyn Stream>>, lease: Lease, ttl: Duration) -> Keeping {
+    fn start(mut client: Client<Box<dyn Stream>>, lease: Lease, ttl: Duration, held: Instant) -> Keeping {
         let lost = Arc::new(AtomicBool::new(false));
         let (stop, stopped) = mpsc::channel();
         let (done, released) = mpsc::channel();
         let losing = Arc::clone(&lost);
-        let deadline = Arc::new(std::sync::Mutex::new(Instant::now() + ttl));
+        let deadline = Arc::new(std::sync::Mutex::new(held + ttl));
         let watched = Arc::clone(&deadline);
         let watching = Arc::clone(&lost);
         // the renewal below may wait on the server; this counts its deadline
