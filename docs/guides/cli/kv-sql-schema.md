@@ -74,8 +74,12 @@ id  email            plan
 
 - Without `--write`, a statement runs on a read-only connection: a write is
   refused, so a typo cannot change data.
-- `--write` lets it write, and needs the directory that no program holds: a
-  running program's writer is its own. Stop the program, or write through it.
+- `--write` lets it write. When no program holds the directory, it opens the
+  store itself. When `tinystore serve` or an SDK's sidecar holds it, the
+  statement goes through that server, once, since a statement sent again may
+  write twice; there, a statement that gives rows back, a read or a
+  `returning`, is refused. A program that opened the store `embedded` keeps
+  its writer to itself: stop it, or write from it.
 - `--json` gives one document, the rows by their columns' names.
 
 ## schema

@@ -69,10 +69,12 @@ impl<S: Read + Write> Client<S> {
         self.handle(method::SQL_OPEN, &wire::SqlOpen { name: name.to_owned(), ..wire::SqlOpen::default() })
     }
 
-    /// Runs a statement that writes on the database: the rows it changed.
+    /// Runs a statement that writes on the database: the rows it changed,
+    /// and the last row it inserted.
     #[cfg(feature = "sql")]
-    pub fn exec(&mut self, database: u64, statement: &str) -> Result<u64> {
+    pub fn exec(&mut self, database: u64, statement: &str) -> Result<(u64, i64)> {
         let statement = wire::SqlStatement { handle: database, text: statement.to_owned(), values: Vec::new() };
-        Ok(self.answer::<wire::SqlDone>(method::SQL_EXEC, &statement)?.changes)
+        let done = self.answer::<wire::SqlDone>(method::SQL_EXEC, &statement)?;
+        Ok((done.changes, done.last_insert_rowid))
     }
 }

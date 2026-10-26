@@ -10,7 +10,7 @@
 //! ```
 
 use std::fmt;
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -251,6 +251,24 @@ impl Asked {
             (None, None) => Err(wrong(format!("a store's directory: tinystore {command} <dir>"))),
         }
     }
+}
+
+/// JSON a command was given as a word, or on stdin for `-`, written again
+/// on one line; `what` names it in the refusal of anything else.
+pub(crate) fn json_given(given: &str, what: &str) -> Result<String, Refused> {
+    let text = if given == "-" {
+        if io::stdin().is_terminal() {
+            return Err(wrong(format!("- reads {what} on stdin, and stdin is a terminal")));
+        }
+        let mut text = String::new();
+        io::stdin().read_to_string(&mut text).map_err(|error| failed(format!("stdin: {error}")))?;
+        text
+    } else {
+        given.to_owned()
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| wrong(format!("{what} is JSON: {error}")))?;
+    Ok(value.to_string())
 }
 
 /// A span as `--since` and `--idle` take it: a number and its unit.

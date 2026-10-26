@@ -10,7 +10,8 @@
 //! ```
 //!
 //! A query reads beside the program or server that holds the directory; a
-//! statement that writes needs `--write`, and the directory no one else holds.
+//! statement that writes needs `--write`, and runs on the store this command
+//! holds when no one else does, or through the server that holds it.
 
 use std::fmt;
 use std::path::Path;
@@ -46,7 +47,12 @@ fn query(asked: Asked) -> Done {
     };
     let json = asked.has("--json");
     if asked.has("--write") {
-        let store = held(&dir)?;
+        asked::existing(&dir)?;
+        let store = match Store::open(&dir, Options { background: false, ..Options::default() }) {
+            Ok(store) => store,
+            Err(error) if error.kind() == ErrorKind::InUse => return written_through(&dir, database, statement, json),
+            Err(error) => return Err(error.into()),
+        };
         let written = write(&store, database, statement, json);
         // The write's own failure is the answer; a close that fails after it
         // succeeded is.
@@ -71,21 +77,47 @@ fn query(asked: Asked) -> Done {
 /// Runs a statement that may write, on the store this process holds.
 fn write(store: &Store, database: &str, statement: &str, json: bool) -> Done {
     let db = opened(store, database)?;
-    let reads = ["select", "with", "values", "explain"]
-        .iter()
-        .any(|word| statement.trim_start().to_lowercase().starts_with(word));
-    if reads || statement.to_lowercase().contains("returning") {
+    if gives_rows(statement) {
         let rows: Vec<Row> = db.all(statement)?;
-        print_rows(&rows, json)?;
-    } else {
-        let done = db.exec(statement)?;
-        if json {
-            outln!("{}", serde_json::json!({ "changes": done.changes, "last_insert_rowid": done.last_insert_rowid }))?;
-        } else {
-            outln!("{} rows changed", done.changes)?;
-        }
+        return print_rows(&rows, json);
     }
-    Ok(())
+    let done = db.exec(statement)?;
+    print_done(done.changes, done.last_insert_rowid, json)
+}
+
+/// Runs a statement that writes through the server that holds the
+/// directory, once, since a statement sent again may write twice. One that
+/// gives rows back is refused: the server answers it with its rows, which
+/// this command does not read.
+fn written_through(dir: &Path, database: &str, statement: &str, json: bool) -> Done {
+    if gives_rows(statement) {
+        return Err(failed(format!(
+            "a program or a server holds {}, and a statement that gives rows back writes through it from a program \
+             alone; one without returning runs here",
+            dir.display()
+        )));
+    }
+    database_held(dir, database)?;
+    let (named, text) = (database.to_owned(), statement.to_owned());
+    let (changes, last) = crate::reach::write_once(dir, "sql", move |client| {
+        let database = client.database(&named)?;
+        client.exec(database, &text)
+    })?;
+    print_done(changes, last, json)
+}
+
+/// Whether a statement gives rows back: a read, or a write with `returning`.
+fn gives_rows(statement: &str) -> bool {
+    let lower = statement.trim_start().to_lowercase();
+    ["select", "with", "values", "explain"].iter().any(|word| lower.starts_with(word)) || lower.contains("returning")
+}
+
+fn print_done(changes: u64, last_insert_rowid: i64, json: bool) -> Done {
+    if json {
+        outln!("{}", serde_json::json!({ "changes": changes, "last_insert_rowid": last_insert_rowid }))
+    } else {
+        outln!("{changes} rows changed")
+    }
 }
 
 /// The store, held by this process alone: a write and a migration need the

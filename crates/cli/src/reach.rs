@@ -45,6 +45,17 @@ pub(crate) fn write<T: Send + 'static>(
     Writer::new(dir, command).write(call)
 }
 
+/// Writes through the server of `dir` with `call`, once: a call that, sent
+/// again, would do what it does twice, as a message published.
+pub(crate) fn write_once<T: Send + 'static>(
+    dir: &Path,
+    command: &'static str,
+    call: impl FnOnce(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + 'static,
+) -> Result<T, Refused> {
+    let (_, answer) = connected(dir, command)?.call(command, call);
+    answer.map_err(failed)
+}
+
 /// Writes through the server of `dir` one call after another on one
 /// connection, made again when it is lost, as a stream that does not end
 /// writes each of its batches.

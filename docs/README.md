@@ -200,6 +200,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [kv, sql and schema](guides/cli/kv-sql-schema.md)
 - [jobs](guides/cli/jobs.md)
 - [files](guides/cli/files.md)
+- [channels](guides/cli/channels.md)
 - [metrics](guides/cli/metrics.md)
 - [events](guides/cli/events.md)
 - [Backup and restore](guides/cli/backup.md)

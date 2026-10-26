@@ -1,9 +1,10 @@
 //! The tinystore command: the one command a person types. `serve` gives a
 //! store's directory to other processes and machines over the wire protocol;
 //! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
-//! beside whoever holds it; `sql --write`, `migrate` and `search drop` change
-//! one nothing holds; `kv`, `jobs`, `files`, `metrics` and `events` write
-//! through the server that holds one, or a sidecar they start; `stop` ends a server and `token`
+//! beside whoever holds it; `migrate` and `search drop` change one nothing
+//! holds, and `sql --write` one nothing holds or through its server; `kv`,
+//! `jobs`, `files`, `channels`, `metrics` and `events` write through the
+//! server that holds one, or a sidecar they start; `stop` ends a server and `token`
 //! makes its tokens; `backup` and `restore` keep a store; `node` and
 //! `witness` run the nodes of a network. `help` lists them all, and
 //! docs/guides/cli/README.md is their guide.
@@ -31,6 +32,7 @@ mod args;
 mod asked;
 mod backup;
 mod banner;
+mod channels;
 mod client;
 mod connection;
 mod events;
@@ -87,6 +89,7 @@ fn main() -> ExitCode {
         Some("kv") => kv::run(rest),
         Some("jobs") => jobs::run(rest),
         Some("files") => files::run(rest),
+        Some("channels") => channels::run(rest),
         Some("metrics") => metrics::run(rest),
         Some("events") => events::run(rest),
         Some("sql") => sql::run(rest),

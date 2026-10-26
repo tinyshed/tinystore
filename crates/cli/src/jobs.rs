@@ -9,7 +9,6 @@
 //! tinystore jobs ./data cancel emails welcome-42
 //! ```
 
-use std::io::{IsTerminal as _, Read as _};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
@@ -17,7 +16,7 @@ use tinystore::Store;
 use tinystore::client::NewJob;
 use tinystore::jobs::{Filter, Job, Page, State};
 
-use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
+use crate::asked::{self, Asked, Done, Verb, failed, wrong};
 use crate::window::{self};
 use crate::{help, reach};
 
@@ -47,7 +46,7 @@ fn add(asked: Asked) -> Done {
         crate::sql::database_held(&dir, database)?;
     }
     let job = NewJob {
-        value: json_of(given)?,
+        value: asked::json_given(given, "a job")?,
         id: asked.value("--id").map(str::to_owned),
         delay: asked.value("--delay").map(asked::span).transpose().map_err(wrong)?,
         at: asked.value("--at").map(window::time).transpose().map_err(wrong)?,
@@ -136,22 +135,6 @@ fn list(asked: Asked) -> Done {
         asked::say("jobs list", format!("more jobs; --after {next} reads on"));
     }
     Ok(())
-}
-
-/// The value of a job as given, which is JSON; `-` reads it from stdin.
-fn json_of(given: &str) -> Result<String, Refused> {
-    let text = if given == "-" {
-        if std::io::stdin().is_terminal() {
-            return Err(wrong("- reads the job's JSON on stdin, and stdin is a terminal"));
-        }
-        let mut text = String::new();
-        std::io::stdin().read_to_string(&mut text).map_err(|error| failed(format!("stdin: {error}")))?;
-        text
-    } else {
-        given.to_owned()
-    };
-    let value: Value = serde_json::from_str(&text).map_err(|error| wrong(format!("a job is JSON: {error}")))?;
-    Ok(value.to_string())
 }
 
 /// The queue `list` and the MCP's `jobs_list` read, and which of its jobs.

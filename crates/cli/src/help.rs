@@ -211,6 +211,35 @@ pub(crate) const FILES_DELETE: Command = Command {
     more: WRITES,
 };
 
+pub(crate) const CHANNELS_PUBLISH: Command = Command {
+    name: "channels publish",
+    takes: "<dir> publish <channel> <json>",
+    does: "hand a message to whoever listens now",
+    flags: &[flag("--under", "<branch>", "the branch it goes to, its owners as 42/devices")],
+    examples: &[
+        "tinystore channels ./data publish chat-events '{\"kind\": \"reload\"}'",
+        "tinystore channels ./data publish chat-events '{\"seen\": 7}' --under room-42",
+    ],
+    more: "A message is JSON; - reads it from stdin. A subscription listening now receives it, and no one else ever \
+           will. It is sent once, never again after a lost answer, since a second would be delivered too. It goes \
+           through the server that holds the directory, or starts one that stops 30 s after its last client.",
+};
+
+pub(crate) const CHANNELS_SUBSCRIBE: Command = Command {
+    name: "channels subscribe",
+    takes: "<dir> subscribe <channel>",
+    does: "print each message published from now on",
+    flags: &[
+        flag("--for", "<span>", "stop after this long, as 1m; never when not given"),
+        flag("--under", "<branch>", "listen to this branch, its owners as 42/devices"),
+        flag("--recursive", "", "and to every branch below it"),
+        flag("--json", "", "each message with its branch, as JSON"),
+    ],
+    examples: &["tinystore channels ./data subscribe chat-events --for 1m"],
+    more: "A channel lives in the process that holds the store, so it listens through the server that holds the \
+           directory, or one it starts. stderr says when it listens; a message published before is not received.",
+};
+
 pub(crate) const KV_DELETE: Command = Command {
     name: "kv delete",
     takes: "<dir> delete <bucket> <key>",
@@ -224,12 +253,12 @@ pub(crate) const SQL: Command = Command {
     name: "sql",
     takes: "[dir] <db> \"<query>\"",
     does: "a query's rows; reads only unless --write",
-    flags: &[flag("--write", "", "let the statement write: needs the directory no program holds"), JSON],
+    flags: &[flag("--write", "", "let the statement write, here or through the server that holds the directory"), JSON],
     examples: &[
         "tinystore sql ./data app \"select count(*) from users\"",
         "tinystore sql ./data app \"delete from users where id = 7\" --write",
     ],
-    more: "Without --write it reads beside the program or server that holds the directory.",
+    more: "Without --write it reads beside the program or server that holds the directory. With it, a store no one            holds is opened here; one a server holds is written through it, once, and there a statement that gives            rows back is refused; one a program holds inside its own process is refused.",
 };
 
 pub(crate) const SEARCH: Command = Command {
@@ -553,6 +582,8 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &JOBS_CANCEL,
             &FILES_PUT,
             &FILES_DELETE,
+            &CHANNELS_PUBLISH,
+            &CHANNELS_SUBSCRIBE,
             &METRICS_INGEST,
             &METRICS_DELETE,
             &EVENTS_APPEND,
