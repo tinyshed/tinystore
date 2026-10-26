@@ -6,6 +6,7 @@ import { calloutsFromAlerts } from './alerts'
 import { apiEngines, apiFile, apiLanguages } from './api'
 import { type ApiIndex, pageCalls, readApiIndex } from './calls'
 import { groupFences } from './code'
+import { linkContracts, readContracts } from './contracts'
 import { createHighlight, type Highlight } from './highlight'
 import { landingFile, landingSummary } from './landing'
 import type { Links, Target } from './links'
@@ -105,6 +106,7 @@ async function buildSite(root: string): Promise<Site> {
 	const origin = siteOrigin()
 	const highlight = await createHighlight()
 	const api = readApiIndex(root)
+	const contracts = readContracts(root)
 
 	const indexTree = parse(read(root, indexFile))
 	const index = readIndex(indexTree, root, commit)
@@ -115,7 +117,7 @@ async function buildSite(root: string): Promise<Site> {
 				entry,
 				entry.file === indexFile ? indexTree : parse(read(root, entry.file)),
 				highlight,
-				api,
+				{ api, contracts },
 			),
 		),
 	)
@@ -218,7 +220,12 @@ function apiFiles(): string[] {
 
 type Draft = Awaited<ReturnType<typeof draft>>
 
-async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiIndex) {
+async function draft(
+	entry: Entry,
+	tree: Root,
+	highlight: Highlight,
+	{ api, contracts }: { api: ApiIndex; contracts: Map<string, string> },
+) {
 	// the exported markdown is the file as written: its title, its alerts, its fences
 	const exported = structuredClone(tree)
 
@@ -226,6 +233,9 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiInd
 	const { title, lead, headings, ids } = outline(tree)
 	const found = sections(tree)
 	groupFences(tree)
+	if (entry.kind !== 'reference') {
+		linkContracts(tree, contracts, entry.file)
+	}
 
 	if (title === '') {
 		throw new Error(`${entry.file} has no title: its first line should be a # heading`)

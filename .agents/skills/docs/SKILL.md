@@ -469,6 +469,9 @@ page. The example tests compile and run, so they are the safest to copy from.
   ```
 
   The kinds are GitHub's: NOTE, TIP, IMPORTANT, WARNING and CAUTION.
+- A contract's id in the prose, `(contract STORE-05)`, is drawn as a link to
+  `CONTRACTS.md` that shows the promise on a hover: write the id, and the
+  site does the rest. An id in code, a link or a heading stays text.
 - Align every table, its cells padded so that the pipes line up: `just
   tables` does it, and the site's tests fail on a table that is not aligned.
 - A table with an empty header row, `| | |`, is drawn as rows without a

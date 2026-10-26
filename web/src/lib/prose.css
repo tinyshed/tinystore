@@ -934,3 +934,33 @@ dialog.diagram-zoom svg {
 .prose div[data-for*=" "]::before {
 	content: none;
 }
+
+/* a contract's id in the prose: its promise on a hover, CONTRACTS.md on a click */
+.prose a.contract {
+	position: relative;
+	color: var(--ts-accent-text);
+	font: 500 0.86em var(--ts-mono);
+	text-decoration: underline dotted;
+	text-underline-offset: 4px;
+}
+
+.prose a.contract:hover::after,
+.prose a.contract:focus-visible::after {
+	content: attr(data-contract);
+	position: absolute;
+	left: 0;
+	bottom: calc(100% + 8px);
+	z-index: 10;
+	width: max-content;
+	max-width: min(360px, 80vw);
+	padding: 10px 12px;
+	color: var(--ts-text-note);
+	background: var(--ts-dialog);
+	border: 1px solid var(--ts-border);
+	border-radius: 10px;
+	box-shadow: 0 8px 24px var(--ts-shadow);
+	font: 400 13.5px / 1.5 var(--ts-sans);
+	text-align: left;
+	white-space: normal;
+	pointer-events: none;
+}
