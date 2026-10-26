@@ -16,6 +16,7 @@ import type { Highlight } from './highlight'
 import { type Links, resolveLink } from './links'
 import { languageNames } from './names'
 import { renderScene } from './scene'
+import { renderTree } from './tree'
 
 const parser = unified().use(remarkParse).use(remarkGfm)
 
@@ -42,6 +43,7 @@ export async function toHast(
 					languageNames(node.value) ?? defaultHandlers.inlineCode(state, node),
 				code: (state, node) => {
 					if (node.lang === 'scene') return renderScene(node.value, highlight, problems)
+					if (node.lang === 'tree') return renderTree(node.value)
 					const drawn = node.lang === 'mermaid' ? diagrams.get(node.value) : undefined
 					return drawn ?? defaultHandlers.code(state, node)
 				},

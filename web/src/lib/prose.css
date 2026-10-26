@@ -985,3 +985,59 @@ dialog.diagram-zoom svg {
 		opacity: 1;
 	}
 }
+
+/* a ```tree fence: a directory, a folder's or a file's icon, each note dimmed */
+.prose figure.tree {
+	margin: 22px 0 26px;
+	padding: 18px 22px;
+	background: var(--ts-surface);
+	border: 1px solid var(--ts-border);
+	border-radius: 12px;
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+
+.prose figure.tree ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.prose figure.tree ul ul {
+	margin-left: 7px;
+	padding-left: 16px;
+	border-left: 1px solid var(--ts-line);
+}
+
+.prose figure.tree li {
+	margin: 0;
+}
+
+.prose figure.tree .tree-entry {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 3px 0;
+}
+
+.prose figure.tree .tree-icon {
+	flex: none;
+	align-self: center;
+	color: var(--ts-faint);
+}
+
+.prose figure.tree .tree-icon.folder {
+	color: var(--ts-accent-text);
+}
+
+.prose figure.tree .tree-name {
+	flex: none;
+	min-width: 15ch;
+	color: var(--ts-text);
+	font-family: var(--ts-mono);
+}
+
+.prose figure.tree .tree-note {
+	color: var(--ts-muted);
+	font-size: 14px;
+}

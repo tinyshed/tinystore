@@ -94,7 +94,7 @@ after it started (contract WIRE-11).
 
 ## What is in the directory
 
-```text
+```tree
 data/
 ├── LOCK              held by the one process that owns the store
 ├── server/SERVE      the sidecar's address, so other programs find it

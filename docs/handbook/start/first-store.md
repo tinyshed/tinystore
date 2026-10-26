@@ -365,7 +365,7 @@ all, along with `tinystore mcp`, which lets an AI agent read the store.
 
 The directory now contains a file for each engine the program used:
 
-```text
+```tree
 data/
 ├── LOCK               held by the process that serves the store
 ├── kv.db              the bucket

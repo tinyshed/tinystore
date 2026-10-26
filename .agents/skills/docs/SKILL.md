@@ -410,8 +410,11 @@ flowchart TB
   the source's order. Break a long label with `<br>`, or draw it `TB`.
 - **The sentence before or after says what it shows**: an agent and a screen
   reader get its boxes and arrows as text, not its meaning.
-- A file tree, a byte layout, a terminal's output and an annotated log stay
-  `text` fences: they are not diagrams.
+- A file tree is a ` ```tree ` fence, drawn with `├──`, `└──` and `│` or
+  indented two spaces a level; a name ends at two spaces, and what follows is
+  its note. GitHub shows it as text, and the site as folders and files with
+  their notes beside them. A byte layout, a terminal's output and an
+  annotated log stay `text` fences: they are not diagrams.
 
 ## The API pages
 

@@ -30,7 +30,7 @@ these services were built for. They pay for it anyway.
 TinyStore replaces the stack with a directory that belongs to the
 application:
 
-```text
+```tree
 data/
 ├── sql/chat.db    your SQL databases, one file each
 ├── kv.db          sessions, codes, counters, limits, settings
