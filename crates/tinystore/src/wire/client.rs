@@ -127,6 +127,17 @@ impl<S: Read + Write> Client<S> {
         self.call(method::METRICS_INGEST_PROMETHEUS, &exposition).map(drop)
     }
 
+    /// Deletes the series of `name` whose labels are `labels`, exactly, as
+    /// `Metrics::delete` does: whether the store held it.
+    #[cfg(feature = "metrics")]
+    pub fn delete_series(&mut self, name: &str, labels: &crate::metrics::Labels) -> Result<bool> {
+        let named = wire::MetricsSeriesNamed { name: name.to_owned(), labels: labels.clone() };
+        let answer = self.call(method::METRICS_DELETE, &named)?;
+        let deleted =
+            wire::MetricsDeleted::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
+        Ok(deleted.found)
+    }
+
     /// Sends one call and waits for its answer. A connection lost before the
     /// request went is `unavailable`; after, `outcome_unknown`, since the
     /// server may have run it.

@@ -262,6 +262,74 @@ pub(crate) const SCHEMA: Command = Command {
     more: "Without a database it lists the store's databases.",
 };
 
+const WHERE: Flag =
+    flag("--where", "<label=value>", "series whose label matches: a,b for either, != for neither, a* for a prefix");
+const SINCE: Flag = flag("--since", "<span>", "the last span, as 15m, 1h or 2d; the last hour by default");
+const FROM: Flag = flag("--from", "<time>", "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset");
+const TO: Flag = flag("--to", "<time>", "up to a time, now by default");
+
+pub(crate) const METRICS_NAMES: Command = Command {
+    name: "metrics names",
+    takes: "[dir] names [prefix]",
+    does: "the metrics a store holds: kind, series, keep, newest sample",
+    flags: &[flag("--after", "<name>", "the page after this name, as the end of the last one says"), JSON],
+    examples: &["tinystore metrics ./data names", "tinystore metrics ./data names http_"],
+    more: "It reads beside the program or server that holds the directory.",
+};
+
+pub(crate) const METRICS_READ: Command = Command {
+    name: "metrics read",
+    takes: "[dir] read <name>",
+    does: "a metric's samples, a series at a time",
+    flags: &[
+        WHERE,
+        SINCE,
+        FROM,
+        TO,
+        flag("--gaps", "<span>", "mark where a series had no sample for longer than the span"),
+        flag("--limit", "<count>", "how many samples to print at most; 1000 by default"),
+        flag("--json", "", "one JSON object a sample, the time in UTC"),
+    ],
+    examples: &[
+        "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
+        "tinystore metrics ./data read ping_rtt_ms --from 14:30 --to 14:35 --gaps 5s",
+    ],
+    more: "It reads beside the program or server that holds the directory. A time without its offset is this \
+           machine's, and the range is printed first with its zone.",
+};
+
+pub(crate) const METRICS_AGGREGATE: Command = Command {
+    name: "metrics aggregate",
+    takes: "[dir] aggregate <name> --op <op>",
+    does: "a metric's samples in buckets: max, rate, p95 and more",
+    flags: &[
+        flag("--op", "<op>", "count, sum, avg, min, max, increase, rate, delta, first, last, or p95 and any rank"),
+        flag("--every", "<span>", "a bucket a span, as 1m; one bucket for the range when absent"),
+        flag("--by", "<label>", "a group a value of the label; again for more"),
+        WHERE,
+        SINCE,
+        FROM,
+        TO,
+        flag("--json", "", "one JSON object a bucket, the time in UTC"),
+    ],
+    examples: &[
+        "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
+        "tinystore metrics ./data aggregate http_requests_total --since 24h --every 1h --op increase",
+    ],
+    more: "It reads beside the program or server that holds the directory. A terminal gets a table, a row a \
+           bucket and a column a group.",
+};
+
+pub(crate) const METRICS_DELETE: Command = Command {
+    name: "metrics delete",
+    takes: "<dir> delete <name> [label=value]...",
+    does: "delete one series, named by all its labels",
+    flags: &[],
+    examples: &["tinystore metrics ./data delete ping_rtt_ms target=poland"],
+    more: "It deletes the one series whose labels are exactly these, and writes through the server that holds \
+           the directory, or starts one.",
+};
+
 pub(crate) const METRICS_INGEST: Command = Command {
     name: "metrics ingest",
     takes: "<dir> ingest",
@@ -274,13 +342,15 @@ pub(crate) const METRICS_INGEST: Command = Command {
         "curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1",
         "tinystore metrics ./data ingest --keep 30d < scrape.txt",
     ],
-    more: "Every series of the text is written, or none. It writes through the server that holds the directory, or            starts one that stops 30 s after its last client; a directory a program holds inside its own process is            refused. A sample the text gives no time takes the time the text was read.",
+    more: "Every series of the text is written, or none. It writes through the server that holds the directory, or \
+           starts one that stops 30 s after its last client; a directory a program holds inside its own process is \
+           refused. A sample the text gives no time takes the time the text was read.",
 };
 
 /// The commands by what a person does with them.
 pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
-    ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH]),
-    ("Write", &[&METRICS_INGEST]),
+    ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH, &METRICS_NAMES, &METRICS_READ, &METRICS_AGGREGATE]),
+    ("Write", &[&METRICS_INGEST, &METRICS_DELETE]),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),

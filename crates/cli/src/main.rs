@@ -54,6 +54,7 @@ mod sql;
 mod status;
 mod stop;
 mod token;
+mod window;
 mod witness;
 
 use std::process::ExitCode;
