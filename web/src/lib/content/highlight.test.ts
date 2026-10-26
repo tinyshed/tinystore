@@ -49,3 +49,42 @@ describe('a log fence', () => {
 		expect(streams('11:02:14.502 INFO  api')).toEqual(['api'])
 	})
 })
+
+describe('a shell fence', () => {
+	// each piece of a line with the dark theme's colour it was given
+	function shell(code: string): Map<string, string> {
+		const html = toHtml(highlight(code, 'sh'))
+		const pieces = [...html.matchAll(/--shiki-dark:(#[0-9a-f]+)[^>]*>([^<]*)</gi)]
+		return new Map(
+			pieces.map(([, colour, text]) => [(text ?? '').trim(), (colour ?? '').toLowerCase()]),
+		)
+	}
+
+	test('colours a tinystore command by what each word is, as its help names them', () => {
+		const pieces = shell('tinystore kv ./data set flags beta on --ttl 1h')
+		const plain = pieces.get('flags')
+		expect(pieces.get('tinystore')).not.toBe(plain)
+		expect(pieces.get('kv')).toBe(pieces.get('set'))
+		expect(pieces.get('kv')).not.toBe(plain)
+		expect(pieces.get('--ttl')).not.toBe(plain)
+		expect(pieces.get('./data')).not.toBe(plain)
+	})
+
+	test('colours a field before its equals, and leaves another program alone', () => {
+		const pieces = shell(
+			'tinystore events ./data append audit role.changed user:=42 role=admin | head -1',
+		)
+		expect(pieces.get('user')).toBe(pieces.get('role'))
+		expect(pieces.get('user')).not.toBe(pieces.get('audit'))
+		const other = shell('kubectl get pods')
+		expect(other.get('get')).toBe(other.get('pods'))
+	})
+
+	test('ends a command at its comment, an apostrophe in it taking no line after', () => {
+		const block = shell(
+			"tinystore logs ./data -f   # the application's warnings\ntinystore kv ./data get sessions 42",
+		)
+		expect(block.get('kv')).toBe(block.get('logs'))
+		expect(block.get("# the application's warnings")).not.toBe(block.get('kv'))
+	})
+})

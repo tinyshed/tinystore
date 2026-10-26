@@ -12,6 +12,7 @@ import { SKIP, visit } from 'unist-util-visit'
 
 import { type CodeGroup, renderGroup } from './code'
 import { drawDiagrams } from './diagram'
+import { renderExplain } from './explain'
 import type { Highlight } from './highlight'
 import { type Links, resolveLink } from './links'
 import { languageNames } from './names'
@@ -43,6 +44,7 @@ export async function toHast(
 					languageNames(node.value) ?? defaultHandlers.inlineCode(state, node),
 				code: (state, node) => {
 					if (node.lang === 'scene') return renderScene(node.value, highlight, problems)
+					if (node.lang === 'explain') return renderExplain(node.value, highlight)
 					if (node.lang === 'tree') return renderTree(node.value)
 					const drawn = node.lang === 'mermaid' ? diagrams.get(node.value) : undefined
 					return drawn ?? defaultHandlers.code(state, node)

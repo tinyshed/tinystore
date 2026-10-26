@@ -6,6 +6,7 @@
 	import Pager from '$lib/components/Pager.svelte'
 	import Seo from '$lib/components/Seo.svelte'
 	import { diagrams } from '$lib/diagrams'
+	import { explains } from '$lib/explains'
 	import { href, rebase } from '$lib/href'
 	import { setLanguage } from '$lib/prefs'
 	import { scenes } from '$lib/scenes'
@@ -114,6 +115,7 @@
 			class:releases={page.url.endsWith('/releases')}
 			{@attach codeBlocks}
 			{@attach scenes(page.html)}
+			{@attach explains(page.html)}
 			{@attach diagrams(page.html)}
 		>
 			{@html rebase(page.html)}

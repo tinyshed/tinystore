@@ -49,6 +49,7 @@ show as noise. What the site adds it reads from what GitHub already ignores:
 | `store.bucket('sessions')` in a fence         | plain code            | a link to `Store.bucket`, its signature on a click |
 | a ` ```scene ` fence                          | its text              | an animation beside its code, from `src/lib/scene` |
 | a ` ```mermaid ` flowchart                    | Mermaid's drawing     | an SVG laid out at build, from `src/lib/diagram`   |
+| a ` ```explain ` fence, a `tinystore` command | the command           | a field that reads a typed command word by word    |
 
 **A link that leads nowhere fails the build.** Every relative link and image
 is resolved at build time against the repository, and a heading against the
@@ -76,6 +77,13 @@ diagram gets a `TB` twin that a phone shows instead, a tap enlarges either
 (`diagrams.ts`), and a diagram that does not parse fails the page.
 `diagram.test.ts` lays out every diagram of the docs and checks its width,
 overlaps, crossings and order.
+
+**The command line is read from its own help.** `just cli-json` writes
+`src/lib/content/cli.json`, the help's table in `crates/cli/src/help.rs`, which
+the CLI's tests hold the file to, and `cli-prints.json`, what each command's
+example printed on a demo store. A shell fence colours a `tinystore` command's
+words by them, and an explain (`src/lib/explain`) reads a typed command with
+them, loaded only on a page that has one.
 
 **Code is highlighted once, when the site is built.** Shiki writes both
 themes' colours into each token, so the page highlights and changes theme with

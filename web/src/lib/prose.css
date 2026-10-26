@@ -683,6 +683,12 @@
 	margin: 26px 0 30px;
 }
 
+/* a figure's own side margins would push the explain past a phone's edge */
+.prose figure.explain {
+	min-width: 0;
+	margin: 0;
+}
+
 .prose figure.scene.playing {
 	margin: 0;
 }

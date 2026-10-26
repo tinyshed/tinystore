@@ -9,6 +9,8 @@ import {
 	type ThemeRegistration,
 } from 'shiki'
 
+import cli from './cli.json'
+
 // what a fence may say, and the grammar it means; anything else is shown as plain text
 const grammars: Record<string, string> = {
 	go: 'go',
@@ -71,6 +73,56 @@ const consoleLog: LanguageRegistration = {
 	],
 }
 
+/** Each word a command line's command or verb is, read from the help it prints. */
+const cliWords = (at: 0 | 1) => [
+	...new Set(cli.commands.flatMap(command => command.name.split(' ')[at] ?? [])),
+]
+
+/**
+ * A `tinystore` command in a shell fence, coloured by what each word is, as
+ * the help names them: the command and its verb, a flag, a field's name
+ * before its `=` or `:=`, and a path. The words come from `cli.json`, the
+ * help the binary prints, so that a command added is coloured at once.
+ *
+ *     tinystore kv ./data set flags beta on --ttl 1h
+ *     function  keyword path keyword        parameter
+ */
+const commandLine: LanguageRegistration = {
+	name: 'tinystore-cli',
+	scopeName: 'source.tinystore-cli',
+	injectTo: ['source.shell'],
+	injectionSelector: 'L:source.shell -comment -string',
+	patterns: [{ include: '#command' }],
+	repository: {
+		command: {
+			begin: '(?<![\\w./-])(tinystore)(?=\\s|$)',
+			beginCaptures: { 1: { name: 'entity.name.function.tinystore' } },
+			// a comment, a pipe or the line's end ends it; a line that ends in a backslash goes on in the next
+			end: '(?=[|;&)]|\\s+#|(?<!\\\\)$)',
+			patterns: [
+				{
+					match: `(?<=\\s)(?:${[...cliWords(0), ...cliWords(1)].join('|')})(?=\\s|$)`,
+					name: 'keyword.control.tinystore',
+				},
+				{ match: '(?<=\\s)--?[A-Za-z][\\w-]*', name: 'variable.parameter.tinystore' },
+				{
+					match: '(?<=\\s)([A-Za-z_][\\w.]*)(:?=)',
+					captures: {
+						// GitHub's theme colours a property's name, and an editor's look a property
+						1: { name: 'variable.other.property.tinystore meta.property-name.tinystore' },
+						2: { name: 'keyword.operator.tinystore' },
+					},
+				},
+				{ match: '(?<=\\s)(?:\\.{1,2}|~)?/[^\\s]*', name: 'string.unquoted.path.tinystore' },
+				// the shell's strings and variables, and none of its statements, which would take the rest
+				{ include: 'source.shell#string' },
+				{ include: 'source.shell#variable' },
+				{ include: 'source.shell#interpolation' },
+			],
+		},
+	},
+}
+
 // the colours console.go writes, as the theme's terminal shows them
 const terminalColour = {
 	blue: 'terminal.ansiBlue',
@@ -106,6 +158,7 @@ export async function createHighlight(): Promise<Highlight> {
 		langs: [
 			...new Set(Object.values(grammars).filter(name => name !== consoleLog.name)),
 			consoleLog,
+			commandLine,
 		],
 	})
 

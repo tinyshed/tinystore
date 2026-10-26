@@ -17,6 +17,15 @@ tinystore backup ./data backups/now.zip        # the whole store, while it runs
 claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the store
 ```
 
+## Read a command
+
+Type a command and see what each word of it is, what it does and what a call
+like it prints. Every word's meaning comes from the command line's own help.
+
+```explain
+tinystore kv ./data set flags beta on --ttl 1h
+```
+
 ## Every command
 
 | Group   | Command                               | Does                                                              |
@@ -55,7 +64,9 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 `tinystore` alone prints this list; `tinystore help <command>` or
 `<command> --help` prints one command with its flags and an example, and
 `tinystore help --all` prints every command's at once, for an AI agent that
-learns the command line in one call.
+learns the command line in one call, and `help --all --json` gives the same as
+data: each command, its flags and examples, and what each word it takes
+stands for.
 
 ## Tab completion
 
