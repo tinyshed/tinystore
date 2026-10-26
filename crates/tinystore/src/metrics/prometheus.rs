@@ -201,15 +201,63 @@ pub(super) fn parse(text: &[u8], given: &Labels, at: i64) -> Result<Vec<Series>>
 /// sink refuses refuses the text, naming the line.
 fn read(text: &[u8], given: &Labels, at: i64, sink: &mut dyn FnMut(Series) -> Result<()>) -> Result<Described> {
     let text = text.strip_prefix(b"\xef\xbb\xbf").unwrap_or(text);
-    let mut reader = Reader::new(given, at, is_open_metrics(text), sink);
+    let mut reader = Reader::new(given.clone(), at, is_open_metrics(text));
     for (index, line) in text.split(|byte| *byte == b'\n').enumerate() {
         let number = index + 1;
         let line =
             std::str::from_utf8(line).map_err(|_| Error::invalid(format!("metrics: line {number}: not UTF-8")))?;
         let line = line.trim_ascii();
-        reader.line(line).map_err(|error| error.within(format!("metrics: line {number}, `{}`", excerpt(line))))?;
+        let named = |error: Error| error.within(format!("metrics: line {number}, `{}`", excerpt(line)));
+        if let Some(series) = reader.line(line).map_err(named)? {
+            sink(series).map_err(named)?;
+        }
     }
     Ok(reader.described())
+}
+
+/// Prometheus' text as a stream that does not end brings it, a line at a
+/// time, for the command line's `metrics ingest -f`. What a line declares
+/// holds for the lines after it, and a `# TYPE` given again with its type,
+/// as each scrape of a loop gives it, is no second one. Unlike a text read
+/// whole, a line that does not read is refused alone, and the stream reads
+/// on. It promises nothing to a program.
+#[cfg(feature = "client")]
+#[derive(Debug)]
+pub struct PrometheusStream {
+    reader: Reader,
+}
+
+#[cfg(feature = "client")]
+impl PrometheusStream {
+    /// A stream whose every series gets `labels` beside its own.
+    pub fn new(labels: Labels) -> PrometheusStream {
+        let mut reader = Reader::new(labels, 0, false);
+        reader.following = true;
+        PrometheusStream { reader }
+    }
+
+    /// Gives the samples of `name` the type `word`, as a `# TYPE` line does.
+    pub fn declare(&mut self, name: &str, word: &str) -> Result<()> {
+        self.reader.declare(name, word)
+    }
+
+    /// The series of one line, its sample at `at` unless the line gives its
+    /// time; none for a blank, a comment or a sample left out.
+    pub fn line(&mut self, line: &[u8], at: SystemTime) -> Result<Option<Series>> {
+        let line = std::str::from_utf8(line).map_err(|_| Error::invalid("a line that is not UTF-8"))?.trim_ascii();
+        self.reader.at = unix_millis(at);
+        self.reader.line(line).map_err(|error| error.within(format!("`{}`", excerpt(line))))
+    }
+
+    /// Whether `name` came with no `# TYPE`, and so is a gauge.
+    pub fn untyped(&self, name: &str) -> bool {
+        self.reader.untyped.contains(name)
+    }
+
+    /// What the stream's families describe of `name`.
+    pub fn description(&self, name: &str) -> Option<Description> {
+        self.reader.description_of(name)
+    }
 }
 
 /// Each name a text wrote that its family describes, with what it gives it.
@@ -295,18 +343,21 @@ impl Type {
     }
 }
 
-/// A text as it is read, a line at a time, each sample line's series handed
-/// to `sink`.
-struct Reader<'a> {
-    given: &'a Labels,
+/// A text as it is read, a line at a time, each sample line giving its
+/// series.
+#[derive(Debug)]
+struct Reader {
+    given: Labels,
     at: i64,
     open_metrics: bool,
+    /// Whether the lines come as a stream that does not end rather than a
+    /// text read whole: no bound of one text, and a `# TYPE` again is none.
+    following: bool,
     families: HashMap<String, Type>,
     /// Each family's `# HELP` and `# UNIT`, by its name.
     descriptions: HashMap<String, Description>,
     /// The names of the samples read before any `# TYPE` of their family.
     untyped: HashSet<String>,
-    sink: &'a mut dyn FnMut(Series) -> Result<()>,
     /// The series read, against one text's samples.
     series: usize,
     /// The names the series were written under.
@@ -317,26 +368,32 @@ struct Reader<'a> {
     ended: bool,
 }
 
-impl<'a> Reader<'a> {
-    fn new(given: &'a Labels, at: i64, open_metrics: bool, sink: &'a mut dyn FnMut(Series) -> Result<()>) -> Self {
+impl Reader {
+    fn new(given: Labels, at: i64, open_metrics: bool) -> Self {
         let (families, descriptions, untyped) = (HashMap::new(), HashMap::new(), HashSet::new());
         let (series, names, bytes, ended) = (0, BTreeSet::new(), 0, false);
-        Reader { given, at, open_metrics, families, descriptions, untyped, sink, series, names, bytes, ended }
+        let following = false;
+        Reader { given, at, open_metrics, following, families, descriptions, untyped, series, names, bytes, ended }
     }
 
-    fn line(&mut self, line: &str) -> Result<()> {
+    /// The series of a line; none for a blank, a comment or a sample left
+    /// out.
+    fn line(&mut self, line: &str) -> Result<Option<Series>> {
         if line.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         if self.ended {
             return Err(Error::invalid("a line after `# EOF`, which ends the text"));
         }
         match line.strip_prefix('#') {
+            Some(_) if line == EOF && self.following => {
+                Err(Error::invalid("`# EOF`, which ends an OpenMetrics text: a stream is Prometheus' text alone"))
+            }
             Some(_) if line == EOF => {
                 self.ended = true;
-                Ok(())
+                Ok(None)
             }
-            Some(comment) => self.comment(comment),
+            Some(comment) => self.comment(comment).map(|()| None),
             None => self.sample(line),
         }
     }
@@ -380,23 +437,26 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Each name the text writes that its family describes, with its
-    /// family's help, and its unit where the name's values are in it:
+    /// Each name the text writes that its family describes, with what it
+    /// describes.
+    fn described(&self) -> Described {
+        self.names.iter().filter_map(|name| Some((name.clone(), self.description_of(name)?))).collect()
+    }
+
+    /// What the family of `name` describes of it: the family's help, and its
+    /// unit where the name's values are in it.
     ///
     /// ```text
     /// # UNIT rpc_seconds seconds    rpc_seconds_sum  seconds
     ///                               rpc_seconds_bucket, rpc_seconds_count  none: they count observations
     /// ```
-    fn described(&self) -> Described {
-        let of_family = |name: &str| {
-            let family = self.family_of(name).map_or(name, |(family, _)| family);
-            let given = self.descriptions.get(family)?;
-            let in_unit = matches!(&name[family.len()..], "" | "_total" | "_sum" | "_gsum");
-            let unit = if in_unit { given.unit.clone() } else { String::new() };
-            let described = Description { unit, help: given.help.clone() };
-            (described != Description::default()).then(|| (name.to_owned(), described))
-        };
-        self.names.iter().map(String::as_str).filter_map(of_family).collect()
+    fn description_of(&self, name: &str) -> Option<Description> {
+        let family = self.family_of(name).map_or(name, |(family, _)| family);
+        let given = self.descriptions.get(family)?;
+        let in_unit = matches!(&name[family.len()..], "" | "_total" | "_sum" | "_gsum");
+        let unit = if in_unit { given.unit.clone() } else { String::new() };
+        let described = Description { unit, help: given.help.clone() };
+        (described != Description::default()).then_some(described)
     }
 
     fn declare(&mut self, name: &str, word: &str) -> Result<()> {
@@ -406,8 +466,10 @@ impl<'a> Reader<'a> {
                  or OpenMetrics' gaugehistogram, info, stateset or unknown"
             ))
         })?;
-        if self.families.contains_key(name) {
-            return Err(Error::invalid(format!("a second `# TYPE` of {name}")));
+        match self.families.get(name) {
+            Some(&before) if self.following && before == family => return Ok(()),
+            Some(_) => return Err(Error::invalid(format!("a second `# TYPE` of {name}"))),
+            None => {}
         }
         let written_before =
             |suffix: &&&str| family.role(suffix) != Role::Stranger && self.untyped.contains(&format!("{name}{suffix}"));
@@ -418,7 +480,7 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn sample(&mut self, line: &str) -> Result<()> {
+    fn sample(&mut self, line: &str) -> Result<Option<Series>> {
         let (classic, rest) = name_at(line, true);
         let (quoted, labels, rest) = labels_of(rest)?;
         let name = match (classic, quoted) {
@@ -433,17 +495,19 @@ impl<'a> Reader<'a> {
         };
         let name = name.as_str();
         let (value, at) = self.value_and_time(rest)?;
-        let Some(kind) = self.kind_of(name)? else { return Ok(()) };
+        let Some(kind) = self.kind_of(name)? else { return Ok(None) };
         let labels = self.with_given(labels)?;
-        self.bytes += NAME.len() + name.len() + SAMPLE_BYTES;
-        self.bytes += labels.iter().map(|(label, value)| label.len() + value.len()).sum::<usize>();
-        within(ONE_TEXT, "a text", self.series + 1, self.bytes)?;
-        self.series += 1;
-        if !self.names.contains(name) {
-            self.names.insert(name.to_owned());
+        if !self.following {
+            self.bytes += NAME.len() + name.len() + SAMPLE_BYTES;
+            self.bytes += labels.iter().map(|(label, value)| label.len() + value.len()).sum::<usize>();
+            within(ONE_TEXT, "a text", self.series + 1, self.bytes)?;
+            self.series += 1;
+            if !self.names.contains(name) {
+                self.names.insert(name.to_owned());
+            }
         }
         let samples = vec![Sample { at: from_unix_millis(at), value }];
-        (self.sink)(Series { name: name.to_owned(), kind, labels, samples, keep: None })
+        Ok(Some(Series { name: name.to_owned(), kind, labels, samples, keep: None }))
     }
 
     /// The kind of the series a sample called `name` writes, of the family
@@ -483,7 +547,7 @@ impl<'a> Reader<'a> {
     /// A sample's labels with the call's beside them; one given by both is
     /// refused rather than chosen between.
     fn with_given(&self, mut labels: Labels) -> Result<Labels> {
-        for (label, value) in self.given {
+        for (label, value) in &self.given {
             if labels.contains_key(label) {
                 return Err(Error::invalid(format!("label {label}, which the call gives every series")));
             }

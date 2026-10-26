@@ -55,7 +55,7 @@ mod matching;
 mod names;
 mod own;
 mod pack;
-mod prometheus;
+pub(crate) mod prometheus;
 mod publish;
 mod query;
 mod rank;

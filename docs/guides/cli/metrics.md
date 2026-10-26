@@ -3,14 +3,15 @@
 `tinystore metrics` reads and writes a store's metrics from a shell, with no
 SDK. `names`, `read` and `aggregate` read beside the program or server that
 holds the directory. `ingest` writes the Prometheus text that an exporter
-serves, or that a script prints, and `delete` removes a series; both write
-through the server that holds the directory, or start one.
+serves, or that a script keeps printing, and `delete` removes a series; both
+write through the server that holds the directory, or start one.
 
 ```sh
 tinystore metrics ./data names
 tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
 curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
+ping … | awk '…' | tinystore metrics ./data ingest -f
 tinystore metrics ./data delete ping_rtt_ms target=poland
 ```
 
@@ -103,8 +104,13 @@ wrote 1834 samples to ./data
 
 - `ingest` reads stdin to its end and writes every series of the text, or
   none. A line it cannot read fails the whole text, and the error names the
-  line.
-- A sample that the text gives no time gets the time the text was read.
+  line. It reads Prometheus' text and OpenMetrics', whose last line is
+  `# EOF`.
+- A sample that the text gives no time gets the time the text was read. A
+  write whose answer was lost is sent again with the same times, so it
+  changes nothing the second time.
+- If stdin is still open after 5 seconds, `ingest` says that a stream that
+  does not end needs `-f`.
 - A name's kind comes from the text's `# TYPE` line. A name with no
   `# TYPE` is a gauge.
 - `--label instance=web-1` adds a label to every series. Give it again for
@@ -118,6 +124,37 @@ and, if you have one, a time in milliseconds:
 ```sh
 printf 'ping_rtt_ms{target="poland"} 23.1 1793014320000\n' | tinystore metrics ./data ingest
 ```
+
+## Write a stream that does not end
+
+`-f` follows a stream, as `tail -f` follows a file: a ping, a loop that
+scrapes, any script that prints a line whenever it has a number. It writes
+what came every second, or every 10,000 lines, until stdin ends.
+
+```sh
+ping -i 1 poland.example.com \
+  | awk -F'time=' '/time=/ { split($2, ms, " "); print "ping_rtt_ms{target=\"poland\"}", ms[1]; fflush() }' \
+  | tinystore metrics ./data ingest -f --keep 30d
+```
+
+```text
+tinystore metrics ingest: started a server for ./data; it stops 30 s after the last client
+tinystore metrics ingest: ping_rtt_ms came with no # TYPE, so it is a gauge; --kind ping_rtt_ms=counter says otherwise
+```
+
+- A line gets the time it was read, unless it gives its own.
+- A `# TYPE`, `# HELP` or `# UNIT` line holds for the lines after it. A loop
+  that scrapes the same exporter repeats them, and that is fine.
+- `--kind ping_lost_total=counter` gives a name its type when the stream has
+  no `# TYPE` line for it. A name with neither is a gauge, and `-f` says so
+  once.
+- A line it cannot read, or one the store refuses, is skipped, and stderr
+  names its number. The rest is written. When stdin ends, `-f` prints how
+  many samples it wrote and exits 1 if it skipped any line.
+- `-f` reads Prometheus' text only. OpenMetrics' times are seconds and its
+  text ends with `# EOF`, so it has to be read whole, without `-f`.
+- Restarting the same stream is safe only when its lines carry their own
+  times. A line without one gets a new time when it is read again.
 
 ## Delete a series
 
@@ -160,12 +197,13 @@ program or `tinystore serve` there once to make the store.
 
 ## Limits and defaults
 
-| What                           | Value                                       |
-|--------------------------------|---------------------------------------------|
-| a name's keep, when none given | 30 days                                     |
-| the largest text               | 2 MiB, the largest message the server takes |
-| a sidecar's idle time          | 30 seconds after its last client            |
-| the wait for a server          | 15 seconds to start, 10 for an answer       |
+| What                           | Value                                                |
+|--------------------------------|------------------------------------------------------|
+| a name's keep, when none given | 30 days                                              |
+| the largest text               | 32 MiB or 100,000 samples, sent in pieces past 2 MiB |
+| a batch of `-f`                | a second of lines, or 10,000 lines                   |
+| a sidecar's idle time          | 30 seconds after its last client                     |
+| the wait for a server          | 15 seconds to start, 10 for an answer                |
 
 ## See also
 

@@ -1,6 +1,7 @@
-//! `tinystore metrics ingest` as a shell runs it: a text on stdin written
-//! through the server that holds the directory, or a sidecar the command
-//! starts, and refused where no other process can write.
+//! `tinystore metrics` as a shell runs it: a text on stdin, or a stream that
+//! does not end, written through the server that holds the directory, or a
+//! sidecar the command starts, and refused where no other process can
+//! write; and the store's series read, aggregated and deleted.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -47,19 +48,24 @@ fn stop(dir: &Path) {
     assert!(stopped.status.success(), "{}", said(&stopped));
 }
 
-/// The targets of `ping_rtt_ms` in the store, once the server that held it
-/// has let it go: on Windows a process holds its files until it has exited.
-fn targets(dir: &Path) -> Vec<String> {
+/// The store, once the server that held it has let it go: on Windows a
+/// process holds its files until it has exited.
+fn opened(dir: &Path) -> Store {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let store = loop {
+    loop {
         match Store::open(dir, Options::default()) {
-            Ok(store) => break store,
+            Ok(store) => return store,
             Err(error) if error.kind() == ErrorKind::InUse && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(error) => panic!("{error}"),
         }
-    };
+    }
+}
+
+/// The targets of `ping_rtt_ms` in the store, once its server let it go.
+fn targets(dir: &Path) -> Vec<String> {
+    let store = opened(dir);
     let read = store.metrics().unwrap().query().name("ping_rtt_ms").since(Duration::from_secs(3600)).read().unwrap();
     let mut targets: Vec<String> = read.iter().map(|series| series.labels()["target"].clone()).collect();
     targets.sort();
@@ -208,4 +214,67 @@ fn a_series_is_deleted_by_its_exact_labels_through_a_server() {
     assert!(said(&deleted).contains(r#"deleted ping_rtt_ms{target="poland"}"#), "{}", said(&deleted));
     stop(&data);
     assert_eq!(targets(&data), ["finland", "sweden"]);
+}
+
+// contract: CLI-05
+#[test]
+fn a_text_past_one_message_is_written_whole() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    made(&data);
+    let pad = "p".repeat(80);
+    let text: String = (0..30_000).map(|n| format!("wide{{n=\"{n}\",pad=\"{pad}\"}} {n}\n")).collect();
+    let written = ingest(&data, &text);
+    assert!(written.status.success() && said(&written).contains("wrote 30000 samples"), "{}", said(&written));
+    stop(&data);
+    let names = opened(&data).metrics().unwrap().names().prefix("wide").page().unwrap().names;
+    assert_eq!(names[0].series_count, 30_000);
+}
+
+/// The samples of `name` read beside whoever holds the store, once there are
+/// `count` of them, or what there are after ten seconds.
+fn samples_beside(dir: &Path, name: &str, count: usize) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let store = Store::open_beside(dir).unwrap();
+        let read = store.metrics().map(|metrics| metrics.query().name(name).since(Duration::from_secs(3600)).read());
+        let seen = read.ok().and_then(Result::ok).map_or(0, |read| read.iter().map(|one| one.samples().len()).sum());
+        if seen >= count || Instant::now() > deadline {
+            return seen;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// contract: CLI-06
+#[test]
+fn a_stream_is_written_as_it_comes_and_a_line_it_cannot_read_is_skipped() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    made(&data);
+    let mut command = Command::new(BINARY)
+        .arg("metrics")
+        .arg(&data)
+        .args(["ingest", "-f", "--kind", "ping_lost_total=counter"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stream = command.stdin.take().unwrap();
+    stream.write_all(b"ping_rtt_ms{target=\"poland\"} 23.1\nping_rtt_ms{target=\"poland\"} time=22.9\n").unwrap();
+    stream.flush().unwrap();
+    assert_eq!(samples_beside(&data, "ping_rtt_ms", 1), 1, "written while the stream is still open");
+    stream.write_all(b"ping_rtt_ms{target=\"poland\"} 24.0\nping_lost_total{target=\"poland\"} 1\n").unwrap();
+    drop(stream);
+    let followed = command.wait_with_output().unwrap();
+    let text = said(&followed);
+    assert_eq!(followed.status.code(), Some(1), "a line was skipped: {text}");
+    assert!(text.contains("line 2, ") && text.contains("skipped 1 line"), "{text}");
+    assert!(text.contains("ping_rtt_ms came with no # TYPE, so it is a gauge"), "{text}");
+    assert!(String::from_utf8_lossy(&followed.stdout).contains("wrote 3 samples"), "{text}");
+    stop(&data);
+    let names = opened(&data).metrics().unwrap().names().page().unwrap().names;
+    let kinds: Vec<(&str, &str)> = names.iter().map(|info| (info.name.as_str(), info.kind.as_str())).collect();
+    assert_eq!(kinds, [("ping_lost_total", "counter"), ("ping_rtt_ms", "gauge")]);
 }

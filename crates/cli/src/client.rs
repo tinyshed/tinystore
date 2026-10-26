@@ -111,17 +111,24 @@ impl Connection {
         call(&mut connection.client)
     }
 
-    /// Runs `call` on the connection and gives the connection back for the
-    /// next. A server that does not answer within the wait may have run the
-    /// call: its outcome is unknown.
+    /// Runs `call` on the connection, and gives the connection back for the
+    /// next unless the call lost it. A server that does not answer within the
+    /// wait may have run the call: its outcome is unknown.
     pub(crate) fn call<T: Send + 'static>(
         self,
         what: &str,
         call: impl FnOnce(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + 'static,
-    ) -> tinystore::Result<(Connection, T)> {
+    ) -> (Option<Connection>, tinystore::Result<T>) {
         let mut connection = self;
         let timed_out = |why: String| Error::new(ErrorKind::OutcomeUnknown, why);
-        within(what, timed_out, move || call(&mut connection.client).map(|answer| (connection, answer)))
+        let answered = within(what, timed_out, move || {
+            let answer = call(&mut connection.client);
+            let lost = answer.as_ref().is_err_and(|error| {
+                matches!(error.kind(), ErrorKind::OutcomeUnknown | ErrorKind::Unavailable | ErrorKind::Corrupt)
+            });
+            Ok((if lost { None } else { Some(connection) }, answer))
+        });
+        answered.unwrap_or_else(|error| (None, Err(error)))
     }
 }
 

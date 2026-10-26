@@ -7,6 +7,7 @@
 //! tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 //! tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
 //! curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
+//! ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter
 //! tinystore metrics ./data delete ping_rtt_ms target=poland
 //! ```
 
@@ -14,6 +15,7 @@ use std::collections::BTreeSet;
 use std::io::{IsTerminal as _, Read as _};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, SystemTime};
 
 use serde_json::json;
@@ -21,9 +23,9 @@ use tinystore::metrics::{Aggregate, Condition, Labels, Metrics, Not, Op, Prefix,
 use tinystore::{ErrorKind, Store};
 
 use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
-use crate::help;
 use crate::reach;
 use crate::window::{self, Window};
+use crate::{following, help};
 
 const VERBS: [Verb; 5] = [
     Verb { word: "names", command: &help::METRICS_NAMES, run: names },
@@ -42,6 +44,10 @@ const LAST_HOUR: Duration = Duration::from_secs(3600);
 /// The width past which `aggregate` gives a line a bucket rather than a table.
 const TABLE_WIDTH: usize = 120;
 const OPS: &str = "count, sum, avg, min, max, increase, rate, delta, first, last, or p and a rank, as p95";
+/// How long `ingest` reads stdin before it says a stream needs `-f`.
+const STILL_READING: Duration = Duration::from_secs(5);
+/// The longest text one ingest takes.
+const ONE_TEXT: usize = 32 << 20;
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     asked::run_verb("metrics", &VERBS, args)
@@ -266,7 +272,8 @@ fn json_buckets(groups: &[Aggregate]) -> Done {
     Ok(())
 }
 
-/// Writes the text on stdin, read to its end: every series of it or none.
+/// Writes the text on stdin, read to its end, every series of it or none;
+/// with `-f`, a stream that does not end, a batch at a time.
 fn ingest(asked: Asked) -> Done {
     let (dir, rest) = asked.placed("metrics", "ingest", false)?;
     if let Some(word) = rest.first() {
@@ -274,19 +281,54 @@ fn ingest(asked: Asked) -> Done {
     }
     let labels = labels(&asked.values("--label"))?;
     let keep = asked.value("--keep").map(asked::span).transpose().map_err(wrong)?;
+    let kinds = asked.values("--kind").iter().map(|given| kind_of(given)).collect::<Result<Vec<_>, _>>()?;
+    reach::store_at(&dir)?;
     if std::io::stdin().is_terminal() {
         return Err(wrong(
             "it reads Prometheus text on stdin, and stdin is a terminal\n  curl -s localhost:9100/metrics | \
              tinystore metrics ./data ingest",
         ));
     }
-    let mut text = Vec::new();
-    std::io::stdin().read_to_end(&mut text).map_err(|error| failed(format!("stdin: {error}")))?;
+    if asked.has("-f") {
+        return following::run(&dir, labels, keep, &kinds);
+    }
+    if !kinds.is_empty() {
+        return Err(wrong("--kind names a type for a stream, -f; a whole text gives its own with # TYPE"));
+    }
+    let text = whole_stdin()?;
     let samples = samples_in(&text);
     // the time of a sample the text gives none, the same if it is sent again
     let at = SystemTime::now();
     reach::write(&dir, "metrics ingest", move |client| client.ingest_prometheus(&text, &labels, at, keep))?;
     outln!("wrote {} to {}", counted(samples as u64, "sample"), dir.display())
+}
+
+/// Stdin read to its end, saying after a while that a stream that does not
+/// end needs `-f`, and refusing a text past what one ingest takes before a
+/// server is reached.
+fn whole_stdin() -> Result<Vec<u8>, Refused> {
+    let (reading, read) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if read.recv_timeout(STILL_READING) == Err(RecvTimeoutError::Timeout) {
+            asked::say("metrics ingest", "still reading stdin: a stream that does not end needs -f");
+        }
+    });
+    let mut text = Vec::new();
+    let read = std::io::stdin().take(ONE_TEXT as u64 + 1).read_to_end(&mut text);
+    drop(reading);
+    read.map_err(|error| failed(format!("stdin: {error}")))?;
+    if text.len() > ONE_TEXT {
+        return Err(failed("a text past the 32 MiB one ingest takes; a stream goes in a batch at a time with -f"));
+    }
+    Ok(text)
+}
+
+/// `--kind`'s name and type: `ping_lost_total=counter`.
+fn kind_of(given: &str) -> Result<(String, String), Refused> {
+    match given.split_once('=') {
+        Some((name, word)) if !name.is_empty() && !word.is_empty() => Ok((name.to_owned(), word.to_owned())),
+        _ => Err(wrong(format!("--kind {given}: a name and its type, as ping_lost_total=counter"))),
+    }
 }
 
 /// Deletes one series, named by its exact labels.

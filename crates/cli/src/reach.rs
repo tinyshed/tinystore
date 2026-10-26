@@ -36,24 +36,69 @@ const ATTEMPTS: usize = 3;
 /// The most of a sidecar's stderr kept to say why it stopped.
 const SAID: usize = 8 << 10;
 
-/// Writes through the server of `dir` with `call`, sending it again on a new
-/// connection when the connection was lost: a call written to change nothing
-/// the second time, such as an ingest whose samples carry their times.
+/// Writes through the server of `dir` with `call`, as `Writer::write` does.
 pub(crate) fn write<T: Send + 'static>(
     dir: &Path,
-    command: &str,
+    command: &'static str,
     call: impl Fn(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + Sync + 'static,
 ) -> Result<T, Refused> {
-    let call = Arc::new(call);
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        let connection = connected(dir, command)?;
-        let sent = Arc::clone(&call);
-        match connection.call(command, move |client| sent(client)) {
-            Ok((_, answer)) => return Ok(answer),
-            Err(error) if lost(error.kind()) && attempt < ATTEMPTS => continue,
-            Err(error) => return Err(failed(error)),
+    Writer::new(dir, command).write(call)
+}
+
+/// Writes through the server of `dir` one call after another on one
+/// connection, made again when it is lost, as a stream that does not end
+/// writes each of its batches.
+pub(crate) struct Writer {
+    dir: PathBuf,
+    command: &'static str,
+    connection: Option<Connection>,
+}
+
+impl Writer {
+    pub(crate) fn new(dir: &Path, command: &'static str) -> Writer {
+        Writer { dir: dir.to_owned(), command, connection: None }
+    }
+
+    /// Reaches the server before the first write, so that a directory no
+    /// write can reach is refused before a stream is read.
+    pub(crate) fn reach(&mut self) -> Result<(), Refused> {
+        if self.connection.is_none() {
+            self.connection = Some(connected(&self.dir, self.command)?);
+        }
+        Ok(())
+    }
+
+    /// Writes with `call`, the server's refusal a failure of the command.
+    pub(crate) fn write<T: Send + 'static>(
+        &mut self,
+        call: impl Fn(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + Sync + 'static,
+    ) -> Result<T, Refused> {
+        self.try_write(call)?.map_err(failed)
+    }
+
+    /// Writes with `call`, sending it again on a new connection when the
+    /// connection was lost: a call written to change nothing the second
+    /// time, such as an ingest whose samples carry their times. What the
+    /// server answered, a refusal among them, once it was reached.
+    pub(crate) fn try_write<T: Send + 'static>(
+        &mut self,
+        call: impl Fn(&mut Client<Box<dyn Stream>>) -> tinystore::Result<T> + Send + Sync + 'static,
+    ) -> Result<tinystore::Result<T>, Refused> {
+        let call = Arc::new(call);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let connection = match self.connection.take() {
+                Some(connection) => connection,
+                None => connected(&self.dir, self.command)?,
+            };
+            let sent = Arc::clone(&call);
+            let (kept, answer) = connection.call(self.command, move |client| sent(client));
+            self.connection = kept;
+            match answer {
+                Err(error) if lost(error.kind()) && attempt < ATTEMPTS => continue,
+                answer => return Ok(answer),
+            }
         }
     }
 }
@@ -72,16 +117,20 @@ fn lost(kind: ErrorKind) -> bool {
     matches!(kind, ErrorKind::OutcomeUnknown | ErrorKind::Unavailable)
 }
 
+/// Refuses a directory that holds no store, before anything is read or
+/// started: a write makes no store of a typo.
+pub(crate) fn store_at(dir: &Path) -> Result<(), Refused> {
+    if dir.join("LOCK").is_file() {
+        return Ok(());
+    }
+    let shown = dir.display();
+    Err(failed(format!("{shown}: no store is there; a program, or `tinystore serve {shown}`, makes one")))
+}
+
 /// A connection to the server of `dir`: the one `SERVE` names, or a sidecar
 /// started for it.
 fn connected(dir: &Path, command: &str) -> Result<Connection, Refused> {
-    if !dir.join("LOCK").is_file() {
-        return Err(failed(format!(
-            "{}: no store is there; a program, or `tinystore serve {}`, makes one",
-            dir.display(),
-            dir.display()
-        )));
-    }
+    store_at(dir)?;
     if let Some(connection) = served(dir)? {
         return Ok(connection);
     }

@@ -374,16 +374,22 @@ pub(crate) const METRICS_INGEST: Command = Command {
     takes: "<dir> ingest",
     does: "write the Prometheus text on stdin to the store's metrics",
     flags: &[
+        flag("-f", "", "follow a stream that does not end, written every second; a line it cannot read is skipped"),
+        flag("--kind", "<name=type>", "a name's type where the stream gives no # TYPE, as x_total=counter; with -f"),
         flag("--label", "<name=value>", "a label every series of the text gets; again for more"),
         flag("--keep", "<span>", "how long each name of the text keeps its samples, as 30d; 30d when never given"),
     ],
     examples: &[
         "curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1",
         "tinystore metrics ./data ingest --keep 30d < scrape.txt",
+        "ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter",
     ],
-    more: "Every series of the text is written, or none. It writes through the server that holds the directory, or \
-           starts one that stops 30 s after its last client; a directory a program holds inside its own process is \
-           refused. A sample the text gives no time takes the time the text was read.",
+    more: "Every series of the text is written, or none, in Prometheus' format or OpenMetrics'. With -f, Prometheus' \
+           text alone is read a line at a time and written every second or 10,000 lines; a line it cannot read, or \
+           the store refuses, is said and skipped, and the command ends 1. A name with no type is a gauge. It writes \
+           through the server that holds the directory, or starts one that stops 30 s after its last client; a \
+           directory a program holds inside its own process is refused. A sample given no time takes the time it \
+           was read, the same when a lost write is sent again.",
 };
 
 /// The commands by what a person does with them.

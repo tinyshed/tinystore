@@ -146,3 +146,20 @@ fn another_programs_output_becomes_events_through_a_server_however_long() {
     let kept = store.events("long").open().unwrap().list().since(Duration::from_secs(3600)).count().unwrap();
     assert_eq!(kept + dropped, 60_000);
 }
+
+#[test]
+fn a_text_past_one_message_goes_up_in_pieces_and_is_written_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let pad = "p".repeat(80);
+    let text: String = (0..30_000).map(|n| format!("wide{{n=\"{n}\",pad=\"{pad}\"}} {n}\n")).collect();
+    assert!(text.len() > 2 << 20, "past the body a server agrees");
+    let labels = crate::metrics::Labels::from([("instance".to_owned(), "web-1".to_owned())]);
+    client.ingest_prometheus(text.as_bytes(), &labels, SystemTime::now(), None).unwrap();
+    let names = store.metrics().unwrap().names().prefix("wide").page().unwrap().names;
+    assert_eq!(names[0].series_count, 30_000);
+    let broken = format!("{text}wide{{n=\"x\"}} not-a-number\n");
+    let refused = client.ingest_prometheus(broken.as_bytes(), &labels, SystemTime::now(), None).unwrap_err();
+    assert!(refused.to_string().contains("line 30001"), "{refused}");
+}

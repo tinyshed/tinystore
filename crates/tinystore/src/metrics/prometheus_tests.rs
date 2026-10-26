@@ -254,3 +254,28 @@ fn timing_one_text_of_a_hundred_thousand_series() {
         println!("ten texts, scrape {scrape}: {:?}, the longest {longest:?}", started.elapsed());
     }
 }
+
+#[cfg(feature = "client")]
+#[test]
+fn a_stream_keeps_what_its_lines_declare_and_refuses_a_line_alone() {
+    let at = UNIX_EPOCH + Duration::from_millis(1_790_000_000_000);
+    let mut stream = super::PrometheusStream::new(Labels::from([("host".to_owned(), "a".to_owned())]));
+    stream.declare("ping_lost_total", "counter").unwrap();
+    let mut read = |line: &str| stream.line(line.as_bytes(), at).map(|series| series.as_ref().map(seen));
+    assert_eq!(read("# HELP rtt_ms The round trip.").unwrap(), None);
+    assert_eq!(read("# TYPE rtt_ms gauge").unwrap(), None);
+    let host = Labels::from([("host".to_owned(), "a".to_owned())]);
+    let rtt = ("rtt_ms".to_owned(), "gauge", host.clone(), vec![(1_790_000_000_000, 23.1f64.to_bits())]);
+    assert_eq!(read("rtt_ms 23.1").unwrap(), Some(rtt), "a line without a time takes the time it was read");
+    assert_eq!(read("# TYPE rtt_ms gauge").unwrap(), None, "a scrape again declares it again");
+    assert_eq!(read("# TYPE rtt_ms counter").unwrap_err().kind(), ErrorKind::Invalid);
+    let alone = read("rtt_ms").unwrap_err();
+    assert!(alone.to_string().contains("`rtt_ms`") && alone.to_string().contains("without its value"), "{alone}");
+    let lost = ("ping_lost_total".to_owned(), "counter", host, vec![(1_789_999_999_000, 3f64.to_bits())]);
+    assert_eq!(read("ping_lost_total 3 1789999999000").unwrap(), Some(lost), "--kind declares as # TYPE does");
+    assert_eq!(read("temperature 20").unwrap().unwrap().1, "gauge");
+    assert_eq!(read("# EOF").unwrap_err().kind(), ErrorKind::Invalid, "OpenMetrics' seconds are read whole");
+    assert!(stream.untyped("temperature") && !stream.untyped("rtt_ms"));
+    let described = stream.description("rtt_ms").unwrap();
+    assert_eq!(described, Description { unit: String::new(), help: "The round trip.".to_owned() });
+}

@@ -28,10 +28,19 @@ const PROTOCOL: u64 = 1;
 const FIRST_BODY: usize = 1 << 20;
 /// The bytes read from the stream at once.
 const READ: usize = 64 << 10;
-/// The most bytes a DATA of another program's output carries: a transfer
-/// shares the connection a frame of 64 KiB at a time.
-#[cfg(feature = "records")]
+/// The most bytes a DATA of another program's output or of a text carries:
+/// a transfer shares the connection a frame of 64 KiB at a time.
+#[cfg(any(feature = "records", feature = "metrics"))]
 const PIECE: usize = 64 << 10;
+/// What a text's exposition carries beside its text and its labels, at most.
+#[cfg(feature = "metrics")]
+const EXPOSITION_FIELDS: usize = 64;
+/// What a label of an exposition carries beside its name and its value.
+#[cfg(feature = "metrics")]
+const LABEL_FIELDS: usize = 10;
+
+#[cfg(feature = "metrics")]
+pub use crate::metrics::prometheus::PrometheusStream;
 
 /// An event to append: its name, and what it carries.
 #[cfg(feature = "records")]
@@ -132,7 +141,8 @@ impl<S: Read + Write> Client<S> {
 
     /// Writes the series of a text an exporter serves, every one or none, as
     /// `Prometheus::ingest` does: each with `labels` beside its own, a sample
-    /// the text gives no time at `at`, each name kept `keep` when given.
+    /// the text gives no time at `at`, each name kept `keep` when given. A
+    /// text past what one message carries goes up in pieces.
     #[cfg(feature = "metrics")]
     pub fn ingest_prometheus(
         &mut self,
@@ -141,13 +151,28 @@ impl<S: Read + Write> Client<S> {
         at: std::time::SystemTime,
         keep: Option<std::time::Duration>,
     ) -> Result<()> {
-        let exposition = wire::MetricsExposition {
-            text: text.to_vec(),
-            labels: labels.clone(),
-            at: Some(crate::unix_millis(at)),
-            keep: keep.map(|keep| u64::try_from(keep.as_millis()).unwrap_or(u64::MAX)),
-        };
+        let (at, keep) = (Some(crate::unix_millis(at)), keep.map(millis_of));
+        let fields: usize = labels.iter().map(|(name, value)| name.len() + value.len() + LABEL_FIELDS).sum();
+        if text.len() + EXPOSITION_FIELDS + fields > self.max_body {
+            let upload = wire::MetricsUpload { size: text.len() as u64, labels: labels.clone(), at, keep };
+            let mut pieces = text.chunks(PIECE);
+            let mut next = || Ok(pieces.next().map(|piece| wire::MetricsPiece { bytes: piece.to_vec() }.encode()));
+            return self.exchange(method::METRICS_UPLOAD_PROMETHEUS, &upload, &mut next).map(drop);
+        }
+        let exposition = wire::MetricsExposition { text: text.to_vec(), labels: labels.clone(), at, keep };
         self.call(method::METRICS_INGEST_PROMETHEUS, &exposition).map(drop)
+    }
+
+    /// Gives `name` the unit and the help described, as `Metrics::describe`
+    /// does.
+    #[cfg(feature = "metrics")]
+    pub fn describe(&mut self, name: &str, description: &crate::metrics::Description) -> Result<()> {
+        let described = wire::MetricsDescription {
+            name: name.to_owned(),
+            unit: description.unit.clone(),
+            help: description.help.clone(),
+        };
+        self.call(method::METRICS_DESCRIBE, &described).map(drop)
     }
 
     /// Deletes the series of `name` whose labels are `labels`, exactly, as
@@ -187,7 +212,7 @@ impl<S: Read + Write> Client<S> {
     ) -> Result<u64> {
         let handle = self.events(stream)?;
         let mut piece = vec![0; PIECE];
-        let answer = self.exchange(method::RECORDS_LINES, &wire::Handle { handle }, || {
+        let answer = self.exchange(method::RECORDS_LINES, &wire::Handle { handle }, &mut || {
             let read = output.read(&mut piece).map_err(&output_failed)?;
             Ok((read > 0).then(|| wire::RecordsPiece { bytes: piece[..read].to_vec() }.encode()))
         })?;
@@ -221,12 +246,12 @@ impl<S: Read + Write> Client<S> {
     /// Opens a stream with `request`, sends what `next` gives as its DATA,
     /// each within the credit the server grants, ends it, and gives the
     /// server's last message on it: an upload's answer, or why it stopped.
-    #[cfg(feature = "records")]
+    #[cfg(any(feature = "records", feature = "metrics"))]
     fn exchange(
         &mut self,
         called: u16,
         request: &impl Message,
-        mut next: impl FnMut() -> Result<Option<Vec<u8>>>,
+        next: &mut dyn FnMut() -> Result<Option<Vec<u8>>>,
     ) -> Result<Vec<u8>> {
         let stream = self.request(called, request, false)?;
         loop {
@@ -283,7 +308,7 @@ impl<S: Read + Write> Client<S> {
 
     /// Reads frames until the connection and `stream` take `length` more
     /// bytes; the server's end of the stream, should it come first.
-    #[cfg(feature = "records")]
+    #[cfg(any(feature = "records", feature = "metrics"))]
     fn room(&mut self, stream: u32, length: u64, granted: &mut u64) -> io::Result<Option<Frame>> {
         while self.credit < length || *granted < length {
             let frame = self.receive()?;
@@ -296,7 +321,7 @@ impl<S: Read + Write> Client<S> {
     }
 
     /// `take`, and credit granted to `stream` counted.
-    #[cfg(feature = "records")]
+    #[cfg(any(feature = "records", feature = "metrics"))]
     fn take_granted(&mut self, frame: Frame, stream: u32, granted: &mut u64) -> io::Result<()> {
         if frame.kind == Kind::Credit && frame.stream == stream {
             *granted += credit_of(&frame.body);
@@ -348,6 +373,12 @@ fn credit_of(body: &[u8]) -> u64 {
     u64::from(u32::from_le_bytes(granted))
 }
 
+/// A span as the protocol carries one, in milliseconds.
+#[cfg(feature = "metrics")]
+fn millis_of(span: std::time::Duration) -> u64 {
+    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// The answer a frame that ends its stream gives: its body, or the failure
 /// it says.
 fn ended(frame: Frame) -> Result<Vec<u8>> {
@@ -367,7 +398,7 @@ fn new_series(series: &crate::metrics::Series) -> wire::MetricsNewSeries {
         labels: series.labels().clone(),
         times,
         values,
-        keep: series.keep_given().map(|keep| u64::try_from(keep.as_millis()).unwrap_or(u64::MAX)),
+        keep: series.keep_given().map(millis_of),
     }
 }
 
