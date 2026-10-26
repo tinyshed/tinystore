@@ -49,7 +49,7 @@ if !answer.ok {
 | `reset(key)`    | forgets the key, so its next request starts with a full burst |
 
 `allow` returns `ok`, how many more would pass now as `left`, and when a
-refused request may try again as `retryAt` (`retry_at`, `RetryAt`).
+refused request may try again as `retryAt / retry_at / RetryAt / retry_at`.
 
 ## How it behaves
 

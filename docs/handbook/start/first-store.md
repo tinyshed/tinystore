@@ -246,7 +246,7 @@ puts a job in the queue and returns after the job is on the disk. A worker
 runs a handler on each job. If the handler returns, the job is done. If it
 throws or returns an error, the job runs again after a pause.
 
-This program uses `runDue` (`run_due`, `RunDue`), which runs the jobs that
+This program uses `runDue / run_due / RunDue / run_due`, which runs the jobs that
 are due and then returns. That suits a script or a test. A server calls
 `work` instead, which keeps running jobs as they come due until the store
 closes:

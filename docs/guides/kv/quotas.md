@@ -55,8 +55,8 @@ messages.refund(user_id)?; // the model failed: give the use back
              weekly:  { used: 212, limit: 300, left: 88, resetsAt: … } } }
 ```
 
-Each window's `used`, `limit`, `left` and `resetsAt` (`resets_at`,
-`ResetsAt`) let a page say "88 messages left this week, resets on Monday".
+Each window's `used`, `limit`, `left` and
+`resetsAt / resets_at / ResetsAt / resets_at` let a page say "88 messages left this week, resets on Monday".
 
 ## How it behaves
 

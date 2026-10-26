@@ -227,7 +227,10 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   its Go block with `// errors left out`.
 - **In the text, describe the idea instead of one language's spelling**, because
   `with` and `labels` are the same idea. Where the page introduces an option,
-  give its spellings once: `defaultTtl`, `default_ttl`, `DefaultTTL`, `default_ttl`.
+  give its spellings once, in one inline code in the switch's order:
+  `` `defaultTtl / default_ttl / DefaultTTL / default_ttl` ``. The site shows
+  the spelling of the reader's language and the others on a hover; GitHub
+  and the markdown copy show all four.
 - **Write durations the way each language does**: `15*time.Minute` in Go,
   `Duration::from_mins(15)` in Rust, `'15m'` in Bun and Python. A bare number
   means milliseconds in Bun and seconds in Python.

@@ -840,3 +840,25 @@ dialog.diagram-zoom svg {
 .prose .callout .code {
 	margin: 14px 0 0;
 }
+
+/* a name spelled in each language: the spelling of the language the reader
+   picked shows, Bun's until one is, and the title holds all four */
+.prose code.names {
+	text-decoration: underline dotted var(--ts-faint);
+	text-underline-offset: 4px;
+	cursor: help;
+}
+
+.prose code.names > span,
+:root[data-lang="python"] .prose code.names > [data-lang="bun"],
+:root[data-lang="go"] .prose code.names > [data-lang="bun"],
+:root[data-lang="rust"] .prose code.names > [data-lang="bun"] {
+	display: none;
+}
+
+.prose code.names > [data-lang="bun"],
+:root[data-lang="python"] .prose code.names > [data-lang="python"],
+:root[data-lang="go"] .prose code.names > [data-lang="go"],
+:root[data-lang="rust"] .prose code.names > [data-lang="rust"] {
+	display: inline;
+}
