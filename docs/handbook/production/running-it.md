@@ -12,7 +12,7 @@ tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.1.1 · pid 37420 · up 12m · durability full
+● ./data  served by tinystore 0.3.0 · pid 37420 · up 12m · durability full
 
   kv         36 KiB
   jobs       60 KiB

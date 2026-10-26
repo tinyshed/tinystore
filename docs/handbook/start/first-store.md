@@ -6,9 +6,9 @@ store with the `tinystore` command. It takes about ten minutes, in
 TypeScript, Python, Go or Rust.
 
 > [!NOTE]
-> **Version 0.1**
-> TinyStore's first release. Until `1.0`, a minor release may still change
-> the API, and its notes say what changed.
+> **Version 0.3**
+> Until `1.0`, a minor release may still change the API, and
+> [its notes](../../releases/README.md) say what changed.
 
 ## Install
 
@@ -345,7 +345,7 @@ tinystore status ./data
 ```
 
 ```text
-● ./data  served by tinystore 0.1.1 · pid 15865 · up 4s · durability not set: full, os for records and metrics
+● ./data  served by tinystore 0.3.0 · pid 15865 · up 4s · durability not set: full, os for records and metrics
 
   kv        76 KiB
   jobs     125 KiB

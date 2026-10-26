@@ -17,7 +17,7 @@ waits returns a future, and you run a transaction and close the store with
 
 ```toml
 [dependencies]
-tinystore = { version = "0.1", features = ["async"] }
+tinystore = { version = "0.3", features = ["async"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

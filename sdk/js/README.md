@@ -13,8 +13,8 @@ one. Every call, by engine, is in docs/reference/bun.md.
 
 <!-- /landing:headline -->
 
-> **Version 0.1, the first release.** Until `1.0`, a minor release may still
-> change the API, and its notes say what changed.
+> **Version 0.3.** Until `1.0`, a minor release may still change the API,
+> and its notes say what changed.
 
 The SDK starts a small `tinystore` server next to your program, called the
 sidecar, and talks to it over a local connection, so that several processes

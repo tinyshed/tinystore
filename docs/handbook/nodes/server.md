@@ -62,7 +62,7 @@ The release publishes an image, `ghcr.io/tinyshed/tinystore`, with the
 `tinystore` executable for amd64 and arm64:
 
 ```sh
-docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.1 \
+docker run -v /srv/chat:/data -p 7443:7443 ghcr.io/tinyshed/tinystore:0.3 \
   serve /data --listen tls://0.0.0.0:7443 --tls-cert /data/cert.pem --tls-key /data/key.pem --tokens /data/tokens.txt
 ```
 
