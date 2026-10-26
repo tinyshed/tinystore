@@ -1205,7 +1205,9 @@ dialog.diagram-zoom svg {
 	letter-spacing: 0;
 }
 
-.prose [data-steps] > :not(h2) {
+/* a playing scene's own `margin: 0` would otherwise pull it over the line */
+.prose [data-steps] > :not(h2),
+.prose [data-steps] > figure.scene.playing {
 	margin-left: 52px;
 }
 
@@ -1214,7 +1216,8 @@ dialog.diagram-zoom svg {
 		padding-left: 46px;
 	}
 
-	.prose [data-steps] > :not(h2) {
+	.prose [data-steps] > :not(h2),
+	.prose [data-steps] > figure.scene.playing {
 		margin-left: 0;
 	}
 
