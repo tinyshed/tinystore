@@ -24,11 +24,13 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 | Look    | `status [dir]`                       | what the store holds, who serves it, how its node stands          |
 |         | `logs [dir]`                         | the application's logs; new ones as they arrive with `-f`         |
 |         | `kv [dir] get <bucket> <key>`        | one value; `list <bucket> [branch]` for a bucket's keys           |
+|         | `jobs [dir] list <queue>`            | a queue's jobs that have ids, with their state                    |
 |         | `sql [dir] <db> "<query>"`           | a query's rows; reads only unless `--write`                       |
 |         | `search list [dir]`                  | the store's search indexes; `drop <dir> <name>` drops one         |
 |         | `metrics [dir] read <name>`          | a metric's samples; `names` and `aggregate` beside it             |
 |         | `events [dir] list <stream>`         | a stream's events                                                 |
 | Write   | `kv <dir> set <bucket> <key> <v>`    | set a key's value; `delete` deletes one                           |
+|         | `jobs <dir> add <queue> <json>`      | add a job; `cancel <queue> <id>` cancels one                      |
 |         | `metrics <dir> ingest`               | the Prometheus text on stdin, or a stream with `-f`               |
 |         | `events <dir> append <stream>`       | an event, or each line of a program's output                      |
 | Run     | `serve <dir>`                        | share the store with programs here and elsewhere                  |
@@ -74,6 +76,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 | [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs   |
 | [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs     |
 | [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations     |
+| [jobs](jobs.md)                        | jobs added, listed and cancelled                         |
 | [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
 | [events](events.md)                    | an event or a program's output appended, a stream listed |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |

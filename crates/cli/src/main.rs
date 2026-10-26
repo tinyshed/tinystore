@@ -2,8 +2,8 @@
 //! store's directory to other processes and machines over the wire protocol;
 //! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
 //! beside whoever holds it; `sql --write`, `migrate` and `search drop` change
-//! one nothing holds; `kv`, `metrics` and `events` write through the server
-//! that holds one, or a sidecar they start; `stop` ends a server and `token`
+//! one nothing holds; `kv`, `jobs`, `metrics` and `events` write through the
+//! server that holds one, or a sidecar they start; `stop` ends a server and `token`
 //! makes its tokens; `backup` and `restore` keep a store; `node` and
 //! `witness` run the nodes of a network. `help` lists them all, and
 //! docs/guides/cli/README.md is their guide.
@@ -37,6 +37,7 @@ mod events;
 mod files;
 mod following;
 mod help;
+mod jobs;
 mod kv;
 mod lines;
 mod local;
@@ -83,6 +84,7 @@ fn main() -> ExitCode {
         Some("status") => status::run(rest),
         Some("logs") => logs::run(rest),
         Some("kv") => kv::run(rest),
+        Some("jobs") => jobs::run(rest),
         Some("metrics") => metrics::run(rest),
         Some("events") => events::run(rest),
         Some("sql") => sql::run(rest),

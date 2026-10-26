@@ -13,10 +13,10 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 use tinystore::Store;
-use tinystore::jobs::{Filter, State};
 
 use crate::asked::{self, Asked, Done, wrong};
 use crate::help;
+use crate::jobs::Listing;
 use crate::kv::Reading;
 
 /// The protocol's version this server speaks when a client names none.
@@ -213,8 +213,14 @@ fn tool(dir: &Path, name: &str, arguments: &Value) -> Result<Value, String> {
             Ok(Value::Array(crate::kv::entries(&store, &reading, limit(MOST))?))
         }
         "jobs_list" => {
-            let listing = Listing { queue: needed("queue")?, database: text("database"), prefix: text("prefix") };
-            jobs(&store, &listing, text("state"), limit(MOST))
+            let listing = Listing {
+                queue: needed("queue")?,
+                database: text("database"),
+                prefix: text("prefix"),
+                state: text("state"),
+            };
+            let page = crate::jobs::listed(&store, &listing, limit(MOST), None)?;
+            Ok(Value::Array(page.jobs.iter().map(crate::jobs::shown).collect()))
         }
         "sql_query" => crate::sql::rows_json(&store, needed("database")?, needed("query")?, MOST),
         "search_list" => {
@@ -258,54 +264,6 @@ fn logs(
     let lines: Vec<Value> =
         page.iter().map(|event| serde_json::from_str(&crate::logs::json(event)).unwrap_or(Value::Null)).collect();
     Ok(Value::Array(lines))
-}
-
-/// The queue `jobs_list` reads, and the jobs of it by their ids.
-struct Listing<'a> {
-    queue: &'a str,
-    database: Option<&'a str>,
-    prefix: Option<&'a str>,
-}
-
-fn jobs(store: &Store, listing: &Listing, state: Option<&str>, limit: usize) -> Result<Value, String> {
-    let opened = match listing.database {
-        Some(database) => {
-            crate::sql::opened(store, database).map_err(|refused| refused.to_string())?.queue(listing.queue)
-        }
-        None if !store.dir().join("jobs.db").exists() => {
-            return Err(crate::files::none_kept(store.dir(), "jobs.db", "queue"));
-        }
-        None => store.queue::<Value>(listing.queue),
-    };
-    let opened = opened.open().map_err(|error| error.to_string())?;
-    let mut filter = Filter::prefix(listing.prefix.unwrap_or_default()).limit(limit);
-    if let Some(state) = state {
-        filter = filter.state(match state {
-            "scheduled" => State::Scheduled,
-            "waiting" => State::Waiting,
-            "running" => State::Running,
-            "done" => State::Done,
-            "failed" => State::Failed,
-            other => return Err(format!("no state {other}: scheduled, waiting, running, done or failed")),
-        });
-    }
-    let page = opened.list(&filter).map_err(|error| error.to_string())?;
-    let shown: Vec<Value> = page
-        .jobs
-        .iter()
-        .map(|job| {
-            json!({
-                "id": job.id,
-                "state": format!("{:?}", job.state).to_lowercase(),
-                "at": jiff::Timestamp::try_from(job.at).map(|at| at.to_string()).ok(),
-                "attempt": job.attempt,
-                "error": job.error,
-                "group": job.group,
-                "value": job.value,
-            })
-        })
-        .collect();
-    Ok(Value::Array(shown))
 }
 
 #[cfg(test)]

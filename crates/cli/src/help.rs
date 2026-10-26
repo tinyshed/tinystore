@@ -118,6 +118,51 @@ pub(crate) const KV_SET: Command = Command {
            refused.",
 };
 
+pub(crate) const JOBS_ADD: Command = Command {
+    name: "jobs add",
+    takes: "<dir> add <queue> <json>",
+    does: "add a job to a queue",
+    flags: &[
+        flag("--id", "<id>", "what names the job: a queue that holds it adds nothing, and cancel needs it"),
+        flag("--delay", "<span>", "run it this long from now, as 1m"),
+        flag("--at", "<time>", "run it at this time, as 14:30 or 2026-10-27T09:00:00Z"),
+        flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"),
+    ],
+    examples: &[
+        "tinystore jobs ./data add emails '{\"to\": \"ada@example.com\"}' --id welcome-42 --delay 1m",
+        "echo '{\"to\": \"ada@example.com\"}' | tinystore jobs ./data add emails -",
+    ],
+    more: "A job is JSON; - reads it from stdin. It runs in the program whose worker takes the queue, with that \
+           worker's attempts and timeout. With --id, sending the same add again adds nothing. It writes through the \
+           server that holds the directory, or starts one that stops 30 s after its last client; a directory a \
+           program holds inside its own process is refused.",
+};
+
+pub(crate) const JOBS_LIST: Command = Command {
+    name: "jobs list",
+    takes: "[dir] list <queue> [prefix]",
+    does: "a queue's jobs that have ids, with their state",
+    flags: &[
+        flag("--state", "<state>", "scheduled, waiting, running, done or failed alone"),
+        flag("--limit", "<count>", "the jobs a page holds, 100 when not given, 1000 at most"),
+        flag("--after", "<id>", "the page after this id, as the end of the last one says"),
+        flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db"),
+        JSON,
+    ],
+    examples: &["tinystore jobs ./data list emails --state failed", "tinystore jobs ./data list emails welcome-"],
+    more: "It reads beside the program or server that holds the directory. --json gives a line a job, and a last \
+           line {\"next\": …} when there are more.",
+};
+
+pub(crate) const JOBS_CANCEL: Command = Command {
+    name: "jobs cancel",
+    takes: "<dir> cancel <queue> <id>",
+    does: "cancel a job by its id",
+    flags: &[flag("--database", "<db>", "a queue the program opened from this database, kept in sql/<db>.db")],
+    examples: &["tinystore jobs ./data cancel emails welcome-42"],
+    more: WRITES,
+};
+
 pub(crate) const KV_DELETE: Command = Command {
     name: "kv delete",
     takes: "<dir> delete <bucket> <key>",
@@ -440,6 +485,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &LOGS,
             &KV_GET,
             &KV_LIST,
+            &JOBS_LIST,
             &SQL,
             &SEARCH,
             &METRICS_NAMES,
@@ -448,7 +494,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &EVENTS_LIST,
         ],
     ),
-    ("Write", &[&KV_SET, &KV_DELETE, &METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
+    ("Write", &[&KV_SET, &KV_DELETE, &JOBS_ADD, &JOBS_CANCEL, &METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
