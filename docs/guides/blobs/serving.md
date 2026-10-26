@@ -57,8 +57,12 @@ The ETag is the quoted SHA-256 of the bytes, `"2cf24dba…"`: it depends on
 the bytes alone, so two files with the same bytes share one, and a cache that
 holds it holds the right version.
 
+<div data-for="go">
+
 In Go a `StoredFile` is an `io.ReadSeekCloser`, so `http.ServeContent`
 answers ranges, `If-None-Match` and `If-Modified-Since` itself.
+
+</div>
 
 ## A file stays what it was at `get`
 

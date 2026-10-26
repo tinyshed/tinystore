@@ -106,9 +106,13 @@ expects, or it does not start.
 the columns' names: Go's `ChatID` is the column `chat_id`. It costs nothing
 until its first call.
 
+<div data-for="go">
+
 In Go, `os.DirFS` reads the files from the working directory. To build them
 into the binary, embed them with `//go:embed migrations/*.sql` and pass
 `fs.Sub(migrations, "migrations")`.
+
+</div>
 
 ## Save a message
 

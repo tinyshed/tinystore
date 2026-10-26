@@ -862,3 +862,37 @@ dialog.diagram-zoom svg {
 :root[data-lang="rust"] .prose code.names > [data-lang="rust"] {
 	display: inline;
 }
+
+/* text for some languages alone, `<div data-for="go">` or a `<span>` in a
+   sentence: shown when the reader picked one of them, as Bun until one is */
+.prose [data-for] {
+	display: none;
+}
+
+:root:not([data-lang]) .prose [data-for~="bun"],
+:root[data-lang="bun"] .prose [data-for~="bun"],
+:root[data-lang="python"] .prose [data-for~="python"],
+:root[data-lang="go"] .prose [data-for~="go"],
+:root[data-lang="rust"] .prose [data-for~="rust"] {
+	display: revert;
+}
+
+.prose div[data-for] {
+	margin: 0 0 24px;
+	padding-left: 16px;
+	border-left: 2px solid var(--ts-accent-line);
+}
+
+.prose div[data-for]::before {
+	content: attr(data-for);
+	display: block;
+	margin-bottom: 4px;
+	color: var(--ts-accent-text);
+	font: 500 11.5px / 1.4 var(--ts-mono);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.prose div[data-for] > :last-child {
+	margin-bottom: 0;
+}

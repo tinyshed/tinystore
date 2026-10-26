@@ -41,9 +41,13 @@ let watching = config.watch(move |next, _previous| limiter.set_rate(*next.limits
 - A connection that was lost reads the config again when it is back, and
   calls its watchers if the config changed meanwhile.
 
+<div data-for="rust">
+
 In Rust the function runs on the thread that made the change, once it is
 committed, and must not block. A watcher that changes the config itself is
 called again after it returns, with each version in order.
+
+</div>
 
 ## Reading without watching
 

@@ -79,10 +79,14 @@ for query in queries {
 token.cancel(); // every query still running stops with ErrorKind::Cancelled
 ```
 
+<div data-for="rust">
+
 In Rust, a call is blocking, so a program under tokio runs it with
 `spawn_blocking`. Aborting the task does not stop the thread: cancel the token
 instead. `token.run` covers every read the closure makes on its thread, of any
 engine.
+
+</div>
 
 ## What a cancelled query returns
 

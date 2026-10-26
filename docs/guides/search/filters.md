@@ -109,8 +109,12 @@ A range is of numbers only: `gt`, `gte`, `lt`, `lte`, any of them. Numbers
 compare as 64-bit floats in a range and exactly in `eq`. Text is matched
 whole: a filter is a key, not a search, so `brand: 'nor'` finds nothing.
 
+<div data-for="rust">
+
 In Rust, `eq(field, &None)` is `invalid`: an id that went missing must not
 quietly ask for every document without one. `missing(field)` asks for those.
+
+</div>
 
 ## Filters and words
 

@@ -165,6 +165,8 @@ words.
 
 ## Searching inside a transaction
 
+<div data-for="rust">
+
 In Rust, a transaction searches the index through `tx.with(&index)`, and sees
 what the transaction wrote, before it commits:
 
@@ -174,6 +176,8 @@ let found = db.tx(|tx| -> tinystore::Result<usize> {
     Ok(tx.with(&articles).search("дрожжей").run()?.hits.len()) // 1: the transaction's own write
 })?;
 ```
+
+</div>
 
 The SDKs search outside transactions.
 

@@ -231,6 +231,13 @@ let ai = store.quota("ai").window("daily", 100, Duration::from_hours(24)).open()
   `` `defaultTtl / default_ttl / DefaultTTL / default_ttl` ``. The site shows
   the spelling of the reader's language and the others on a hover; GitHub
   and the markdown copy show all four.
+- **Text about one language goes in a block for it**: `<div data-for="rust">`,
+  a blank line, the paragraphs and their code, a blank line and `</div>`, or
+  `<span data-for="go">` inside a sentence; `data-for="go rust"` names
+  several. The site shows it only to a reader who picked one of them, Bun
+  until one is, under the language's name; GitHub and the markdown copy show
+  it to everyone, so it still starts "In Rust, …". Keep a sentence that every
+  reader needs outside it.
 - **Write durations the way each language does**: `15*time.Minute` in Go,
   `Duration::from_mins(15)` in Rust, `'15m'` in Bun and Python. A bare number
   means milliseconds in Bun and seconds in Python.
