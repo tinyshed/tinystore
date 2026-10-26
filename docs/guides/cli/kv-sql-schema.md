@@ -4,7 +4,7 @@ Three commands look inside a store's data while its program runs: `kv` reads a
 bucket, `sql` runs a query on a database, `schema` shows a database's tables.
 `migrate` applies a database's migrations from a shell. Each reads beside the
 program or server that holds the directory, without writing a byte, unless
-told to write.
+told to write. `kv set` and `kv delete` write a key.
 
 ## kv
 
@@ -28,6 +28,34 @@ tinystore kv ./data list drafts --database app   # a bucket kept in sql/app.db
 values are read with the key the directory holds. A bucket the program opened
 from a database, `db.bucket("drafts")`, lives in that database's file, and
 `--database` names it.
+
+### Write a key
+
+```sh
+tinystore kv ./data set flags beta on --ttl 1h
+tinystore kv ./data set counts hits 42 --as int
+echo '{"theme": "dark"}' | tinystore kv ./data set settings 42 - --as json
+tinystore kv ./data delete sessions 42
+```
+
+```text
+set beta in bucket flags, expiring in 1h
+deleted 42 from bucket sessions
+```
+
+- A value is text unless `--as int` or `--as json` says otherwise. Nothing is
+  guessed from how it looks, so `02134` stays text.
+- `-` reads the value from stdin, without the line end `echo` adds. Use it for
+  JSON in Windows PowerShell 5.1, which drops the quotes inside an argument.
+- `--ttl 1h` expires the key an hour from now.
+- An encrypted bucket is written encrypted, and `--database` writes a bucket
+  kept in a database's file.
+- A set or a delete sent twice leaves the same as once.
+
+They write through the server that holds the directory, or start a sidecar
+that stops 30 seconds after its last client, as
+[metrics ingest](metrics.md#who-writes) does. A directory that a program opened
+`embedded` is refused, since no other process can write to it.
 
 ## sql
 

@@ -1,11 +1,15 @@
 //! `tinystore kv`: a bucket's value by its key, and a bucket's keys, read
-//! beside the program or server that holds the directory.
+//! beside the program or server that holds the directory; a key set or
+//! deleted through that server, or a sidecar the command starts.
 //!
 //! ```text
 //! tinystore kv ./data get sessions 42          {"user": 42, "seen": "2026-10-18"}
 //! tinystore kv ./data list sessions            every key of the bucket's root, with its value
 //! tinystore kv ./data list sessions 42         the keys under the branch 42
 //! tinystore kv ./data list drafts --database app   a bucket kept in sql/app.db
+//! tinystore kv ./data set flags beta on --ttl 1h
+//! tinystore kv ./data set counts hits 42 --as int
+//! tinystore kv ./data delete sessions 42
 //! ```
 //!
 //! A bucket keeps a value of any type its program chose: an integer as one,
@@ -13,47 +17,126 @@
 //! value shows as what its bytes read as: JSON, then text, then hex.
 
 use std::fmt;
+use std::io::{IsTerminal as _, Read as _};
 use std::process::ExitCode;
 use std::time::SystemTime;
 
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use tinystore::Store;
+use tinystore::client::KvValue;
 use tinystore::kv::{Bucket, BucketBuilder};
 use tinystore::sql::Database;
 
-use crate::asked::{self, Asked, Done, failed, wrong};
-use crate::help;
+use crate::asked::{self, Asked, Done, Refused, Verb, failed, wrong};
+use crate::{help, reach, window};
+
+const VERBS: [Verb; 4] = [
+    Verb { word: "get", command: &help::KV_GET, run: get },
+    Verb { word: "list", command: &help::KV_LIST, run: list },
+    Verb { word: "set", command: &help::KV_SET, run: set },
+    Verb { word: "delete", command: &help::KV_DELETE, run: delete },
+];
 
 /// The keys `list` prints at most.
 const MOST: usize = 1000;
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
-    asked::run(&help::KV, args, kv)
+    asked::run_verb("kv", &VERBS, args)
 }
 
-fn kv(asked: Asked) -> Done {
-    let at = asked.words.iter().position(|word| word == "get" || word == "list");
-    let (dir, verb, rest) = match (at, &asked.dir) {
-        (Some(1), Some(_)) => return Err(wrong("a directory given twice: --dir, and a word before the verb")),
-        (Some(at @ (0 | 1)), dir) => {
-            let dir = dir.clone().or_else(|| asked.words.get(..at).and_then(|words| words.first()).map(Into::into));
-            (dir.unwrap_or_else(|| ".".into()), asked.words[at].as_str(), &asked.words[at + 1..])
-        }
-        _ => return Err(wrong("get <bucket> <key> or list <bucket> [branch]")),
+fn get(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("kv", "get", true)?;
+    let [bucket, key] = &rest[..] else {
+        return Err(wrong("get takes a bucket and a key: get sessions 42"));
     };
     let store = Store::open_beside(&dir).map_err(failed)?;
-    let at = Kept::at(&store, asked.value("--database"))?;
-    let json = asked.has("--json");
-    match (verb, rest) {
-        ("get", [bucket, key]) => get(&at, bucket, key, json),
-        ("get", _) => Err(wrong("get takes a bucket and a key: get sessions 42")),
-        ("list", [bucket, branch @ ..]) if branch.len() <= 1 => list(&at, bucket, branch.first(), json),
-        _ => Err(wrong("list takes a bucket and a branch at most: list sessions 42")),
+    show_one(&Kept::at(&store, asked.value("--database"))?, bucket, key, asked.has("--json"))
+}
+
+fn list(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("kv", "list", true)?;
+    let (Some(bucket), branch, None) = (rest.first(), rest.get(1), rest.get(2)) else {
+        return Err(wrong("list takes a bucket and a branch at most: list sessions 42"));
+    };
+    let store = Store::open_beside(&dir).map_err(failed)?;
+    show_all(&Kept::at(&store, asked.value("--database"))?, bucket, branch, asked.has("--json"))
+}
+
+/// Sets a key through the server that holds the directory, to text unless
+/// `--as` says an integer or JSON; `-` reads the value from stdin.
+fn set(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("kv", "set", false)?;
+    let [bucket, key, given] = &rest[..] else {
+        return Err(wrong("set takes a bucket, a key and a value: set flags beta on"));
+    };
+    let ttl = asked.value("--ttl").map(asked::span).transpose().map_err(wrong)?;
+    let database = asked.value("--database").map(str::to_owned);
+    reach::store_at(&dir)?;
+    if let Some(database) = &database {
+        crate::sql::database_held(&dir, database)?;
+    }
+    let value = value_of(given, asked.value("--as"))?;
+    let (named, keyed) = (bucket.clone(), key.clone());
+    reach::write(&dir, "kv set", move |client| {
+        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let bucket = client.bucket(&named, database)?;
+        client.set(bucket, &keyed, &value, ttl)
+    })?;
+    let expiring = ttl.map_or_else(String::new, |ttl| format!(", expiring in {}", window::span_text(ttl)));
+    outln!("set {key} in bucket {bucket}{expiring}")
+}
+
+/// Deletes a key through the server that holds the directory.
+fn delete(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("kv", "delete", false)?;
+    let [bucket, key] = &rest[..] else {
+        return Err(wrong("delete takes a bucket and a key: delete sessions 42"));
+    };
+    let database = asked.value("--database").map(str::to_owned);
+    reach::store_at(&dir)?;
+    if let Some(database) = &database {
+        crate::sql::database_held(&dir, database)?;
+    }
+    let (named, keyed) = (bucket.clone(), key.clone());
+    let found = reach::write(&dir, "kv delete", move |client| {
+        let database = database.as_deref().map(|database| client.database(database)).transpose()?;
+        let bucket = client.bucket(&named, database)?;
+        client.delete(bucket, &keyed)
+    })?;
+    if found { outln!("deleted {key} from bucket {bucket}") } else { outln!("bucket {bucket} holds no key {key}") }
+}
+
+/// A value as `set` was given it: text unless `--as` says otherwise, and
+/// stdin's when `-`.
+fn value_of(given: &str, kind: Option<&str>) -> Result<KvValue, Refused> {
+    let text = if given == "-" { stdin_value()? } else { given.to_owned() };
+    match kind {
+        None | Some("text") => Ok(KvValue::Text(text)),
+        Some("int") => {
+            text.trim().parse().map(KvValue::Int).map_err(|_| wrong(format!("{text:?}: --as int takes an integer")))
+        }
+        Some("json") => serde_json::from_str::<serde_json::Value>(&text)
+            .map(|json| KvValue::Json(json.to_string()))
+            .map_err(|error| wrong(format!("--as json: {error}"))),
+        Some(other) => Err(wrong(format!("--as {other}: text, int or json"))),
     }
 }
 
-fn get(at: &Kept, bucket: &str, key: &str, json: bool) -> Done {
+/// The value on stdin, its last line's end left out, as `echo` adds one.
+fn stdin_value() -> Result<String, Refused> {
+    if std::io::stdin().is_terminal() {
+        return Err(wrong(
+            "- reads the value on stdin, and stdin is a terminal\n  echo on | tinystore kv ./data set flags beta -",
+        ));
+    }
+    let mut text = String::new();
+    std::io::stdin().read_to_string(&mut text).map_err(|error| failed(format!("stdin: {error}")))?;
+    let ended = text.strip_suffix('\n').map(|text| text.strip_suffix('\r').unwrap_or(text));
+    Ok(ended.map(str::to_owned).unwrap_or(text))
+}
+
+fn show_one(at: &Kept, bucket: &str, key: &str, json: bool) -> Done {
     let found = read(at, bucket, |bucket| {
         let Some(entry) = bucket.entry(key)? else { return Ok(Vec::new()) };
         Ok(vec![(entry.key, entry.value, entry.expires_at)])
@@ -69,7 +152,7 @@ fn get(at: &Kept, bucket: &str, key: &str, json: bool) -> Done {
     Ok(())
 }
 
-fn list(at: &Kept, bucket: &str, branch: Option<&String>, json: bool) -> Done {
+fn show_all(at: &Kept, bucket: &str, branch: Option<&String>, json: bool) -> Done {
     let entries = read(at, bucket, |opened| {
         let opened = under(opened, branch.map(String::as_str));
         let mut entries = Vec::new();

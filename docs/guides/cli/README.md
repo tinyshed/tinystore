@@ -26,6 +26,11 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 |         | `kv [dir] get <bucket> <key>`        | one value; `list <bucket> [branch]` for a bucket's keys           |
 |         | `sql [dir] <db> "<query>"`           | a query's rows; reads only unless `--write`                       |
 |         | `search list [dir]`                  | the store's search indexes; `drop <dir> <name>` drops one         |
+|         | `metrics [dir] read <name>`          | a metric's samples; `names` and `aggregate` beside it             |
+|         | `events [dir] list <stream>`         | a stream's events                                                 |
+| Write   | `kv <dir> set <bucket> <key> <v>`    | set a key's value; `delete` deletes one                           |
+|         | `metrics <dir> ingest`               | the Prometheus text on stdin, or a stream with `-f`               |
+|         | `events <dir> append <stream>`       | an event, or each line of a program's output                      |
 | Run     | `serve <dir>`                        | share the store with programs here and elsewhere                  |
 |         | `stop <dir>`                         | stop the server of a directory, its work finished                 |
 |         | `backup <dir> <zip>`                 | the whole store in one checked zip, while it runs                 |
@@ -52,6 +57,10 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 - **A mistake names the next command.** A misspelt command or flag is told
   the nearest one, `did you mean backup?` (contract CLI-02), and exits 2; a
   failure while running exits 1.
+- **A write goes through a server.** `kv set`, `metrics ingest` and every
+  other write go through the server that holds the directory, or a sidecar
+  the command starts, and are refused where a program holds the directory
+  inside its own process (contract CLI-05).
 - **A pipe may close early.** When the program reading the output stops, as
   `| head -5` does once it has its lines, the command stops too, quietly, and
   exits 0 (contract CLI-04).
@@ -64,7 +73,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 |----------------------------------------|----------------------------------------------------------|
 | [serve](serve.md)                      | local, remote with TLS and tokens, nodes, limits, logs   |
 | [status and logs](status-and-logs.md)  | what a store holds, following and filtering its logs     |
-| [kv, sql and schema](kv-sql-schema.md) | reading values and rows, `--write`, migrations           |
+| [kv, sql and schema](kv-sql-schema.md) | values read and written, rows, `--write`, migrations     |
 | [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
 | [events](events.md)                    | an event or a program's output appended, a stream listed |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |

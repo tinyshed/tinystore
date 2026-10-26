@@ -2,10 +2,11 @@
 //! store's directory to other processes and machines over the wire protocol;
 //! `status`, `logs`, `kv`, `sql`, `schema`, `search` and `mcp` read a store
 //! beside whoever holds it; `sql --write`, `migrate` and `search drop` change
-//! one nothing holds; `metrics` and `events` write through the server that
-//! holds one, or a sidecar they start; `stop` ends a server and `token` makes its tokens;
-//! `backup` and `restore` keep a store; `node` and `witness` run the nodes of
-//! a network. `help` lists them all, and docs/guides/cli/README.md is their guide.
+//! one nothing holds; `kv`, `metrics` and `events` write through the server
+//! that holds one, or a sidecar they start; `stop` ends a server and `token`
+//! makes its tokens; `backup` and `restore` keep a store; `node` and
+//! `witness` run the nodes of a network. `help` lists them all, and
+//! docs/guides/cli/README.md is their guide.
 
 /// `print!` for what a command answers on stdout. It gives the command's
 /// `Done`, so that `?` ends the command quietly once the reader has gone, as
@@ -104,9 +105,7 @@ fn main() -> ExitCode {
             match help::command(&name).or_else(|| help::command(&rest[0])) {
                 Some(command) => asked::exit("help", help::print_command(command)),
                 None if rest[0] == "node" => node::run(&["--help".to_owned()]),
-                None if ["metrics", "events"].contains(&rest[0].as_str()) => {
-                    asked::exit("help", help::print_group(&rest[0]))
-                }
+                None if help::is_group(&rest[0]) => asked::exit("help", help::print_group(&rest[0])),
                 None => asked::end(
                     "help",
                     asked::wrong(format!("no command {name}{}", meant(&rest[0], &help::first_words()))),

@@ -28,9 +28,9 @@ const PROTOCOL: u64 = 1;
 const FIRST_BODY: usize = 1 << 20;
 /// The bytes read from the stream at once.
 const READ: usize = 64 << 10;
-/// The most bytes a DATA of another program's output or of a text carries:
-/// a transfer shares the connection a frame of 64 KiB at a time.
-#[cfg(any(feature = "records", feature = "metrics"))]
+/// The most bytes a DATA of another program's output, a text or a file
+/// carries: a transfer shares the connection a frame of 64 KiB at a time.
+#[cfg(any(feature = "records", feature = "metrics", feature = "blobs"))]
 const PIECE: usize = 64 << 10;
 /// What a text's exposition carries beside its text and its labels, at most.
 #[cfg(feature = "metrics")]
@@ -41,6 +41,25 @@ const LABEL_FIELDS: usize = 10;
 
 #[cfg(feature = "metrics")]
 pub use crate::metrics::prometheus::PrometheusStream;
+#[cfg(feature = "channels")]
+pub use channels::Heard;
+#[cfg(feature = "blobs")]
+pub use files::FileInfo;
+#[cfg(feature = "jobs")]
+pub use jobs::NewJob;
+pub use kv::KvValue;
+
+#[cfg(feature = "channels")]
+#[path = "client_channels.rs"]
+mod channels;
+#[cfg(feature = "blobs")]
+#[path = "client_files.rs"]
+mod files;
+#[cfg(feature = "jobs")]
+#[path = "client_jobs.rs"]
+mod jobs;
+#[path = "client_kv.rs"]
+mod kv;
 
 /// An event to append: its name, and what it carries.
 #[cfg(feature = "records")]
@@ -180,10 +199,7 @@ impl<S: Read + Write> Client<S> {
     #[cfg(feature = "metrics")]
     pub fn delete_series(&mut self, name: &str, labels: &crate::metrics::Labels) -> Result<bool> {
         let named = wire::MetricsSeriesNamed { name: name.to_owned(), labels: labels.clone() };
-        let answer = self.call(method::METRICS_DELETE, &named)?;
-        let deleted =
-            wire::MetricsDeleted::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
-        Ok(deleted.found)
+        Ok(self.answer::<wire::MetricsDeleted>(method::METRICS_DELETE, &named)?.found)
     }
 
     /// Appends the events to `stream`, every one or none, as
@@ -193,10 +209,7 @@ impl<S: Read + Write> Client<S> {
     pub fn append(&mut self, stream: &str, events: &[Event]) -> Result<u64> {
         let handle = self.events(stream)?;
         let events = events.iter().map(new_event).collect();
-        let answer = self.call(method::RECORDS_APPEND, &wire::RecordsAppend { handle, events })?;
-        let appended =
-            wire::RecordsAppended::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
-        Ok(appended.held)
+        Ok(self.answer::<wire::RecordsAppended>(method::RECORDS_APPEND, &wire::RecordsAppend { handle, events })?.held)
     }
 
     /// Writes another program's output to `stream` as `Events::lines` does,
@@ -216,17 +229,23 @@ impl<S: Read + Write> Client<S> {
             let read = output.read(&mut piece).map_err(&output_failed)?;
             Ok((read > 0).then(|| wire::RecordsPiece { bytes: piece[..read].to_vec() }.encode()))
         })?;
-        let dropped =
-            wire::RecordsDropped::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?;
-        Ok(dropped.dropped)
+        Ok(decoded::<wire::RecordsDropped>(&answer)?.dropped)
     }
 
     /// The handle of the stream named `stream`, made with its first event.
     #[cfg(feature = "records")]
     fn events(&mut self, stream: &str) -> Result<u64> {
-        let open = wire::RecordsOpen { stream: stream.to_owned(), keep: None };
-        let answer = self.call(method::RECORDS_OPEN, &open)?;
-        Ok(wire::Handle::decode(&answer).map_err(|failure| error_of(failure, "the server's answer"))?.handle)
+        self.handle(method::RECORDS_OPEN, &wire::RecordsOpen { stream: stream.to_owned(), keep: None })
+    }
+
+    /// Sends one call and reads its answer as an `M`.
+    fn answer<M: Message>(&mut self, called: u16, request: &impl Message) -> Result<M> {
+        decoded(&self.call(called, request)?)
+    }
+
+    /// Sends a call that opens something, and gives its handle.
+    fn handle(&mut self, called: u16, request: &impl Message) -> Result<u64> {
+        Ok(self.answer::<wire::Handle>(called, request)?.handle)
     }
 
     /// Sends one call and waits for its answer. A connection lost before the
@@ -246,7 +265,7 @@ impl<S: Read + Write> Client<S> {
     /// Opens a stream with `request`, sends what `next` gives as its DATA,
     /// each within the credit the server grants, ends it, and gives the
     /// server's last message on it: an upload's answer, or why it stopped.
-    #[cfg(any(feature = "records", feature = "metrics"))]
+    #[cfg(any(feature = "records", feature = "metrics", feature = "blobs"))]
     fn exchange(
         &mut self,
         called: u16,
@@ -308,7 +327,7 @@ impl<S: Read + Write> Client<S> {
 
     /// Reads frames until the connection and `stream` take `length` more
     /// bytes; the server's end of the stream, should it come first.
-    #[cfg(any(feature = "records", feature = "metrics"))]
+    #[cfg(any(feature = "records", feature = "metrics", feature = "blobs"))]
     fn room(&mut self, stream: u32, length: u64, granted: &mut u64) -> io::Result<Option<Frame>> {
         while self.credit < length || *granted < length {
             let frame = self.receive()?;
@@ -321,7 +340,7 @@ impl<S: Read + Write> Client<S> {
     }
 
     /// `take`, and credit granted to `stream` counted.
-    #[cfg(any(feature = "records", feature = "metrics"))]
+    #[cfg(any(feature = "records", feature = "metrics", feature = "blobs"))]
     fn take_granted(&mut self, frame: Frame, stream: u32, granted: &mut u64) -> io::Result<()> {
         if frame.kind == Kind::Credit && frame.stream == stream {
             *granted += credit_of(&frame.body);
@@ -373,8 +392,12 @@ fn credit_of(body: &[u8]) -> u64 {
     u64::from(u32::from_le_bytes(granted))
 }
 
+/// A message the server answered with, read.
+fn decoded<M: Message>(body: &[u8]) -> Result<M> {
+    M::decode(body).map_err(|failure| error_of(failure, "the server's answer"))
+}
+
 /// A span as the protocol carries one, in milliseconds.
-#[cfg(feature = "metrics")]
 fn millis_of(span: std::time::Duration) -> u64 {
     u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
 }

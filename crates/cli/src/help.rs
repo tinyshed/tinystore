@@ -70,22 +70,61 @@ pub(crate) const LOGS: Command = Command {
     more: "It reads beside the program or server that holds the directory, and writes nothing.",
 };
 
-pub(crate) const KV: Command = Command {
-    name: "kv",
+/// `--database`, which every kv verb takes.
+const DATABASE: Flag =
+    flag("--database", "<db>", "a bucket the program opened from this database, kept in sql/<db>.db");
+
+/// What a command that writes through a server says of it.
+const WRITES: &str = "It writes through the server that holds the directory, or starts one that stops 30 s after its \
+                      last client; a directory a program holds inside its own process is refused.";
+
+pub(crate) const KV_GET: Command = Command {
+    name: "kv get",
     takes: "[dir] get <bucket> <key>",
-    does: "one value; list <bucket> [branch] for a bucket's keys",
-    flags: &[
-        flag("--database", "<db>", "a bucket the program opened from this database, kept in sql/<db>.db"),
-        flag("--json", "", "each value with its key and expiry, as JSON"),
-    ],
-    examples: &[
-        "tinystore kv ./data get sessions 42",
-        "tinystore kv ./data list sessions",
-        "tinystore kv ./data list sessions 42",
-        "tinystore kv ./data list drafts --database app",
-    ],
+    does: "one value of a bucket",
+    flags: &[DATABASE, flag("--json", "", "the value with its key and expiry, as JSON")],
+    examples: &["tinystore kv ./data get sessions 42", "tinystore kv ./data get drafts 7 --database app"],
     more: "It reads beside the program or server that holds the directory, and an encrypted bucket's values with the \
            key the directory holds.",
+};
+
+pub(crate) const KV_LIST: Command = Command {
+    name: "kv list",
+    takes: "[dir] list <bucket> [branch]",
+    does: "a bucket's keys and their values, or a branch's",
+    flags: &[DATABASE, flag("--json", "", "each value with its key and expiry, as JSON")],
+    examples: &["tinystore kv ./data list sessions", "tinystore kv ./data list sessions 42/devices"],
+    more: "It reads beside the program or server that holds the directory, the first 1000 keys.",
+};
+
+pub(crate) const KV_SET: Command = Command {
+    name: "kv set",
+    takes: "<dir> set <bucket> <key> <value>",
+    does: "set a key's value",
+    flags: &[
+        flag("--as", "<type>", "text, int or json: what the value is, text when not given"),
+        flag("--ttl", "<span>", "expire the key this long from now, as 1h"),
+        DATABASE,
+    ],
+    examples: &[
+        "tinystore kv ./data set flags beta on --ttl 1h",
+        "tinystore kv ./data set counts hits 42 --as int",
+        "echo '{\"theme\": \"dark\"}' | tinystore kv ./data set settings 42 - --as json",
+    ],
+    more: "A value is text unless --as says otherwise, and nothing is guessed from how it looks, so 02134 stays \
+           text. - reads the value from stdin, as Windows PowerShell 5.1 drops the quotes inside a JSON argument. \
+           Sending the same set again changes nothing. It writes through the server that holds the directory, or \
+           starts one that stops 30 s after its last client; a directory a program holds inside its own process is \
+           refused.",
+};
+
+pub(crate) const KV_DELETE: Command = Command {
+    name: "kv delete",
+    takes: "<dir> delete <bucket> <key>",
+    does: "delete a key",
+    flags: &[DATABASE],
+    examples: &["tinystore kv ./data delete sessions 42"],
+    more: WRITES,
 };
 
 pub(crate) const SQL: Command = Command {
@@ -394,8 +433,22 @@ pub(crate) const METRICS_INGEST: Command = Command {
 
 /// The commands by what a person does with them.
 pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
-    ("Look", &[&STATUS, &LOGS, &KV, &SQL, &SEARCH, &METRICS_NAMES, &METRICS_READ, &METRICS_AGGREGATE, &EVENTS_LIST]),
-    ("Write", &[&METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
+    (
+        "Look",
+        &[
+            &STATUS,
+            &LOGS,
+            &KV_GET,
+            &KV_LIST,
+            &SQL,
+            &SEARCH,
+            &METRICS_NAMES,
+            &METRICS_READ,
+            &METRICS_AGGREGATE,
+            &EVENTS_LIST,
+        ],
+    ),
+    ("Write", &[&KV_SET, &KV_DELETE, &METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
@@ -522,6 +575,14 @@ pub(crate) fn print_command(command: &Command) -> Done {
 }
 
 /// Prints the help of every command of a group, `metrics`, one after another.
+/// Whether `word` names a group of commands, as `metrics` does.
+pub(crate) fn is_group(word: &str) -> bool {
+    GROUPS
+        .iter()
+        .flat_map(|(_, commands)| commands.iter())
+        .any(|command| command.name.split_once(' ').is_some_and(|(group, _)| group == word))
+}
+
 pub(crate) fn print_group(group: &str) -> Done {
     let commands = GROUPS.iter().flat_map(|(_, commands)| commands.iter());
     for command in commands.filter(|command| command.name.split(' ').next() == Some(group)) {

@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(read(&help::LOGS, &args("--level")).unwrap_err(), "--level takes <level>");
         assert_eq!(read(&help::LOGS, &args("-f=1")).unwrap_err(), "-f takes no value");
         assert!(read(&help::LOGS, &args("./data --help")).unwrap().is_none(), "help");
-        let negative = read(&help::KV, &args("get counts -1")).unwrap().unwrap();
+        let negative = read(&help::KV_GET, &args("get counts -1")).unwrap().unwrap();
         assert_eq!(negative.words, ["get", "counts", "-1"], "a negative number is a word");
     }
 

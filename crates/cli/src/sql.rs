@@ -104,17 +104,24 @@ fn held(dir: &Path) -> Result<Store, asked::Refused> {
 /// A database as it is, without migrations: one the store does not hold is
 /// named, rather than made.
 pub(crate) fn opened(store: &Store, database: &str) -> Result<Database, asked::Refused> {
-    if !store.dir().join("sql").join(format!("{database}.db")).exists() {
-        let known = files::databases(store.dir());
-        let names: Vec<&str> = known.iter().map(String::as_str).collect();
-        let held = if known.is_empty() { "none".to_owned() } else { known.join(", ") };
-        return Err(failed(format!(
-            "{} holds no database {database}{}; it holds {held}",
-            store.dir().display(),
-            crate::meant(database, &names)
-        )));
-    }
+    database_held(store.dir(), database)?;
     Ok(store.database(database).open()?)
+}
+
+/// Refuses a database the store does not hold, naming the nearest it does:
+/// opening one makes it, so a typo would otherwise make an empty one.
+pub(crate) fn database_held(dir: &Path, database: &str) -> Result<(), asked::Refused> {
+    if dir.join("sql").join(format!("{database}.db")).exists() {
+        return Ok(());
+    }
+    let known = files::databases(dir);
+    let names: Vec<&str> = known.iter().map(String::as_str).collect();
+    let held = if known.is_empty() { "none".to_owned() } else { known.join(", ") };
+    Err(failed(format!(
+        "{} holds no database {database}{}; it holds {held}",
+        dir.display(),
+        crate::meant(database, &names)
+    )))
 }
 
 fn apply(asked: Asked) -> Done {
