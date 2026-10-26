@@ -1042,6 +1042,65 @@ dialog.diagram-zoom svg {
 	font-size: 14px;
 }
 
+/* a tour's sections as numbered steps, `<div data-steps>` around them: a
+   number beside each heading, a line from one to the next */
+.prose [data-steps] {
+	position: relative;
+	counter-reset: step;
+}
+
+.prose [data-steps]::before {
+	content: "";
+	position: absolute;
+	top: 76px;
+	bottom: 0;
+	left: 17px;
+	border-left: 1px solid var(--ts-line);
+}
+
+.prose [data-steps] > h2 {
+	position: relative;
+	margin-top: 56px;
+	padding: 2px 0 0 52px;
+	border-bottom: 0;
+	counter-increment: step;
+}
+
+.prose [data-steps] > h2::before {
+	content: counter(step);
+	position: absolute;
+	top: 0;
+	left: 0;
+	display: grid;
+	place-items: center;
+	width: 35px;
+	height: 35px;
+	color: var(--ts-accent-text);
+	background: var(--ts-bg);
+	border: 1px solid var(--ts-accent-line);
+	border-radius: 50%;
+	font: 500 15px / 1 var(--ts-mono);
+	letter-spacing: 0;
+}
+
+.prose [data-steps] > :not(h2) {
+	margin-left: 52px;
+}
+
+@media (max-width: 720px) {
+	.prose [data-steps] > h2 {
+		padding-left: 46px;
+	}
+
+	.prose [data-steps] > :not(h2) {
+		margin-left: 0;
+	}
+
+	.prose [data-steps]::before {
+		content: none;
+	}
+}
+
 /* a nested name's column narrows by its indent, so that every note lines up */
 .prose figure.tree ul ul .tree-name {
 	min-width: calc(15ch - 23px);

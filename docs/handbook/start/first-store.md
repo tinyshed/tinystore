@@ -214,6 +214,8 @@ Run it, and it prints the user and one log line:
 
 The rest of this chapter goes through the program a piece at a time.
 
+<div data-steps>
+
 ## Open the store
 
 `open` takes a directory and creates it if it is missing. Everything the
@@ -360,6 +362,8 @@ tinystore logs ./data -f          # every new line as it arrives, until Ctrl+C
 
 `tinystore` alone lists every command. Chapter 28, Running it, covers them
 all, along with `tinystore mcp`, which lets an AI agent read the store.
+
+</div>
 
 ## How the store runs
 

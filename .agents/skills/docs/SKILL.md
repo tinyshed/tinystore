@@ -279,6 +279,14 @@ Only the newest release's calls are checked against the reference: an older
 page shows the API of its own version, and its calls are linked where they
 still exist.
 
+## A tour in steps
+
+A page that walks through one program a piece at a time, as Your first store
+does, wraps those sections in `<div data-steps>`, a blank line, the sections,
+a blank line and `</div>`. GitHub shows the sections as they are; the site
+numbers their `##` headings and joins them with a line. Its anchors and its
+"On this page" stay the same.
+
 ## Scenes
 
 A scene is a short animation of a real situation, played beside the code that
