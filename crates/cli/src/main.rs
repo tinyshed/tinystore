@@ -72,14 +72,19 @@ use std::process::ExitCode;
 /// flag: the nearest of `names`, one edit away for three to six letters and
 /// two for more. It is only said: no word is read as another.
 pub(crate) fn meant(given: &str, names: &[&str]) -> String {
-    let edits = match given.chars().count() {
+    tinystore::typos::Dictionary::new(names)
+        .nearest(given, typo_edits(given) as u8)
+        .map_or_else(String::new, |near| format!("; did you mean {}?", near.word))
+}
+
+/// The edits a typo of `given` may hold: none in a word of fewer than three
+/// letters, where every short word is near, one up to six and two past.
+pub(crate) fn typo_edits(given: &str) -> usize {
+    match given.chars().count() {
         0..3 => 0,
         3..7 => 1,
         _ => 2,
-    };
-    tinystore::typos::Dictionary::new(names)
-        .nearest(given, edits)
-        .map_or_else(String::new, |near| format!("; did you mean {}?", near.word))
+    }
 }
 
 fn main() -> ExitCode {

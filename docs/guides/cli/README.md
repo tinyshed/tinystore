@@ -66,8 +66,10 @@ tinystore completion powershell | Out-String | Invoke-Expression   # in $PROFILE
 
 Tab then offers commands, verbs, flags and their values, and the names a
 store holds, read beside it: `kv ./data get se` and Tab gives `sessions`,
-`metrics ./data read ping_rtt_ms --where t` gives `target=`. It makes no store,
-writes nothing and waits for no server (contract CLI-07).
+`metrics ./data read ping_rtt_ms --where t` gives `target=`. When nothing
+starts with what was typed, Tab offers what it is a typo of: `sesion` gives
+`sessions`, `metircs` gives `metrics`. It makes no store, writes nothing and
+waits for no server (contract CLI-07).
 
 ## How it behaves
 

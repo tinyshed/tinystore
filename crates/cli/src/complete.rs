@@ -13,7 +13,9 @@
 //!
 //! The word being completed comes last, after a `+`, since Windows
 //! PowerShell 5.1 drops an empty argument. `@dirs` and `@files` ask the
-//! shell for its own directories or files.
+//! shell for its own directories or files. When no word starts with what
+//! was typed, the words it is a typo of are offered instead, as a misspelt
+//! command is told its nearest: `get sesions` gives `sessions`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -43,16 +45,56 @@ fn script(asked: Asked) -> Done {
 pub(crate) fn run(args: &[String]) -> ExitCode {
     let Some((current, before)) = args.split_last() else { return ExitCode::SUCCESS };
     let current = current.strip_prefix('+').unwrap_or(current);
-    for word in candidates(before, current) {
-        if (word.starts_with('@') || word.starts_with(current)) && outln!("{word}").is_err() {
+    for word in shown(before, current) {
+        if outln!("{word}").is_err() {
             break;
         }
     }
     ExitCode::SUCCESS
 }
 
-/// The words that may come after `before`, every one, the caller keeping
-/// those that start with what was typed.
+/// What Tab offers after `before`: the words that start with `current`, or,
+/// when none does, those whose start it is a typo of; and the shell's own
+/// directories or files when they may come.
+fn shown(before: &[String], current: &str) -> Vec<String> {
+    let (asked, words): (Vec<String>, Vec<String>) =
+        candidates(before, current).into_iter().partition(|word| word.starts_with('@'));
+    let mut starting: Vec<String> = words.iter().filter(|word| word.starts_with(current)).cloned().collect();
+    if starting.is_empty() {
+        let edits = crate::typo_edits(current);
+        starting = words.into_iter().filter(|word| edits > 0 && typo_of(current, word, edits)).collect();
+    }
+    starting.into_iter().chain(asked).collect()
+}
+
+/// Whether `typed` is within `edits` of the start of `word`: of a start one
+/// character shorter or longer too, since a typo may drop or add one.
+fn typo_of(typed: &str, word: &str, edits: usize) -> bool {
+    let (typed, word): (Vec<char>, Vec<char>) = (typed.chars().collect(), word.chars().collect());
+    let shortest = typed.len().saturating_sub(edits);
+    (shortest..=(typed.len() + edits).min(word.len())).any(|end| distance(&typed, &word[..end]) <= edits)
+}
+
+/// The edits that make `a` into `b`: a character added, dropped, changed,
+/// or two side by side swapped.
+fn distance(a: &[char], b: &[char]) -> usize {
+    let mut rows = vec![(0..=b.len()).collect::<Vec<usize>>()];
+    for (i, &left) in a.iter().enumerate() {
+        let mut row = vec![i + 1; b.len() + 1];
+        for (j, &right) in b.iter().enumerate() {
+            let changed = rows[i][j] + usize::from(left != right);
+            row[j + 1] = changed.min(rows[i][j + 1] + 1).min(row[j] + 1);
+            if i > 0 && j > 0 && left == b[j - 1] && a[i - 1] == right {
+                row[j + 1] = row[j + 1].min(rows[i - 1][j - 1] + 1);
+            }
+        }
+        rows.push(row);
+    }
+    rows[a.len()][b.len()]
+}
+
+/// The words that may come after `before`, every one, `shown` keeping those
+/// that fit what was typed.
 fn candidates(before: &[String], current: &str) -> Vec<String> {
     let Some(first) = before.first() else {
         let mut words = help::first_words();
@@ -260,7 +302,7 @@ _tinystore() {
             *) found+=("$line") ;;
         esac
     done
-    (( ${#found} )) && compadd -Q -- "${found[@]}"
+    (( ${#found} )) && compadd -U -Q -- "${found[@]}"
 }
 compdef _tinystore tinystore
 "#;
@@ -311,10 +353,7 @@ mod tests {
 
     fn offered(words: &str, current: &str) -> Vec<String> {
         let before: Vec<String> = words.split_whitespace().map(str::to_owned).collect();
-        candidates(&before, current)
-            .into_iter()
-            .filter(|word| word.starts_with('@') || word.starts_with(current))
-            .collect()
+        shown(&before, current)
     }
 
     #[test]
@@ -355,6 +394,9 @@ mod tests {
         assert_eq!(offered(&format!("metrics {data} read"), ""), ["rtt"]);
         assert_eq!(offered(&format!("metrics {data} read rtt --where"), ""), ["target="]);
         assert_eq!(offered(&format!("metrics {data} read rtt --where"), "target=s"), ["target=sweden"]);
+        assert_eq!(offered(&format!("kv {data} get"), "sesions"), ["sessions"], "a typo is told its word");
+        assert_eq!(offered(&format!("kv {data} get"), "sesi"), ["sessions"], "and a typo of its start");
+        assert_eq!(offered(&format!("kv {data} get"), "sx"), Vec::<String>::new(), "two letters are no typo");
         let empty = tempfile::tempdir().unwrap();
         assert!(offered(&format!("kv {} get", empty.path().display()), "").is_empty());
         assert!(!empty.path().join("kv.db").exists() && !empty.path().join("LOCK").exists(), "it makes nothing");
