@@ -38,7 +38,10 @@ given. `lock hold` renews it every third of `--ttl` while the command runs.
 
 - A lease that is lost, revoked at `--max-hold` or not renewed in time
   because the server went away, stops the command, since another may hold the
-  key now, and exits 1:
+  key now, and exits 1. On Linux and macOS the command gets `SIGTERM`, then
+  `SIGKILL` five seconds later; a script that starts other programs should
+  `exec` the last one, or trap `TERM` and stop them. On Windows it is ended at
+  once.
 
 ```text
 tinystore lock hold: the lease was lost, so the command was stopped: another may hold the key now

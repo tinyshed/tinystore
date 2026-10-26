@@ -31,6 +31,9 @@ const WAIT: Duration = Duration::from_secs(10);
 const LOOK: Duration = Duration::from_millis(50);
 /// How long the key's release may take once the command ended.
 const RELEASE_WAIT: Duration = Duration::from_secs(5);
+/// How long a command a TERM asked to stop has before it is killed.
+#[cfg(unix)]
+const STOP_WAIT: Duration = Duration::from_secs(5);
 
 /// The group's one verb, for its help and a misspelt verb's nearest: `hold`
 /// itself runs apart, since its exit is the command's.
@@ -91,12 +94,31 @@ fn watched(mut child: Child, keeping: &Keeping) -> Result<ExitStatus, Refused> {
             return Ok(status);
         }
         if keeping.lost.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop(&mut child);
             return Err(failed("the lease was lost, so the command was stopped: another may hold the key now"));
         }
         std::thread::sleep(LOOK);
     }
+}
+
+/// Stops the command: on Unix a TERM first, which a script can trap to end
+/// what it started, then a KILL once `STOP_WAIT` has passed; on Windows at
+/// once, which has no TERM. Only the process started is signalled: it shares
+/// this command's group, so that a Ctrl+C reaches it too.
+fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+        let until = Instant::now() + STOP_WAIT;
+        while Instant::now() < until {
+            if let Ok(Some(_)) = child.try_wait() {
+                return;
+            }
+            std::thread::sleep(LOOK);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// A lease kept on a thread of its own, renewed every third of its `ttl`, so

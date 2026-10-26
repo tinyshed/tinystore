@@ -13,10 +13,16 @@ fn said(output: &Output) -> String {
     format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
 }
 
-/// A command that prints its fence, sleeps `seconds` and exits 7.
+/// A command that prints its fence, sleeps `seconds` and exits 7; or, past
+/// a minute, one that only sleeps, as the process `sh` started, which a TERM
+/// ends: a `sleep` left running would hold the test's pipes.
 #[cfg(unix)]
 fn sleeping(seconds: u32) -> Vec<String> {
-    let script = format!("echo fence $TINYSTORE_FENCE; sleep {seconds}; exit 7");
+    let script = if seconds < 60 {
+        format!("echo fence $TINYSTORE_FENCE; sleep {seconds}; exit 7")
+    } else {
+        format!("exec sleep {seconds}")
+    };
     vec!["sh".into(), "-c".into(), script]
 }
 
