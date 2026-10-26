@@ -154,6 +154,58 @@ pub struct Description {
 
 A name's unit and help, empty when nothing gave them.
 
+## ExactSum
+
+```rust
+pub struct ExactSum { /* private fields */ }
+```
+
+A sum of floats kept exactly and rounded once, as an aggregate of the
+store sums its samples: for a program that sums what it never writes and
+wants the number a query of the same samples gives.
+
+```rust
+use tinystore::metrics::ExactSum;
+let tenths: ExactSum = [0.1; 10].into_iter().collect();
+assert_eq!(tenths.value(), 1.0, "where a float sum gives 0.9999999999999999");
+let mut sum = ExactSum::default();
+[1e308, 1e308, -1e308].into_iter().for_each(|value| sum.add(value));
+assert_eq!(sum.value(), 1e308, "and no infinity on the way");
+```
+
+An infinity or a NaN added makes the sum what a float sum makes it, since
+it has no exact value; past what a float holds the value is an infinity.
+
+### ExactSum.add
+
+```rust
+pub fn add(&mut self, value: f64)
+```
+
+### ExactSum.sub
+
+```rust
+pub fn sub(&mut self, value: f64)
+```
+
+Takes `value` away, exactly: a sum less what one series gave it.
+
+### ExactSum.merge
+
+```rust
+pub fn merge(&mut self, other: &ExactSum)
+```
+
+Adds another sum, exactly: a group's sum of its series' sums.
+
+### ExactSum.value
+
+```rust
+pub fn value(&self) -> f64
+```
+
+The float nearest the sum, a tie to the even one.
+
 ## Exceeds
 
 ```rust
@@ -178,6 +230,81 @@ pub struct Plan {
 ```
 
 What a call would spend of a query's bounds.
+
+## SeriesQuery
+
+```rust
+pub struct SeriesQuery<'a> { /* private fields */ }
+```
+
+An aggregate of series a program holds, its range and its buckets as a
+store's [`Query`](super::Query) says them. Without `from` and `to` the
+range is the samples', from the first to the last.
+
+### SeriesQuery.from
+
+```rust
+pub fn from(self, from: SystemTime) -> Self
+```
+
+The range from this time on; a sample before it is where a step into
+the first bucket begins, as in a store's query.
+
+### SeriesQuery.to
+
+```rust
+pub fn to(self, to: SystemTime) -> Self
+```
+
+The range until this time, not at it.
+
+### SeriesQuery.every
+
+```rust
+pub fn every(self, span: Duration) -> Self
+```
+
+Buckets of this span, counted from 1970 in UTC; without them the
+range is one bucket.
+
+### SeriesQuery.calendar
+
+```rust
+pub fn calendar(self, unit: Calendar, zone: &str) -> Self
+```
+
+Buckets of a calendar's days, weeks or months in the time zone of its
+IANA name, as long as each is there.
+
+### SeriesQuery.estimate
+
+```rust
+pub fn estimate(self) -> Self
+```
+
+A timer's or a histogram's percentile gives a point between its
+bounds too, as Prometheus' `histogram_quantile` interpolates one.
+
+### SeriesQuery.aggregate
+
+```rust
+pub fn aggregate(&self, op: Op) -> Result<Aggregate>
+```
+
+The group's buckets, each one exact value of `op`, rounded once, with
+`samples`, `resets`, `gap` and `partial` as a query gives them; a
+bucket without a sample is left out. An `op` the series' kind has
+not is `invalid`, and so is a bucket over a NaN, an infinity or a
+counter below zero, or two samples of one series at one millisecond.
+
+## query
+
+```rust
+pub fn query(series: &[Series]) -> SeriesQuery<'_>
+```
+
+An aggregate of the series a program holds, one group, as a query of the
+store answers one for the same samples: `series` share a name and a kind.
 
 ## Builder
 
@@ -1024,6 +1151,15 @@ let at = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
 let cpu = Series::gauge("cpu").label("host", "web-1").sample(at, 0.42);
 assert_eq!(cpu.to_string(), r#"cpu{host="web-1"}"#);
 ```
+
+### Series.query
+
+```rust
+pub fn query(&self) -> SeriesQuery<'_>
+```
+
+An aggregate of this series alone, as a query of the store answers
+one for the same samples, and with no store.
 
 ### Series.gauge
 
