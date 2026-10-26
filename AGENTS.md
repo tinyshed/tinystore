@@ -520,7 +520,10 @@ which tags and publishes and never writes the branch it builds; nothing is
 tagged by hand. The `release` skill has its seven targets, what each package
 carries and how it reaches its registry. One version covers the executable,
 the libraries, npm, PyPI, crates.io, the image and the Go SDK's tag. The
-format's and the schemas' versions are not the release's.
+format's and the schemas' versions are not the release's. A version that is
+not a candidate gets its page in `docs/releases/`, what it adds and renames
+with code, in a commit before its release is dispatched, and its notes on
+GitHub link to it.
 
 ## Research rounds
 

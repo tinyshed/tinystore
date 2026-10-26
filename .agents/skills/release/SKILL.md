@@ -85,7 +85,10 @@ feature set, each copied out before the next writes over it:
 ## The run
 
 A release is one run of `.github/workflows/release.yml`, dispatched from
-`main` with the version and publish.
+`main` with the version and publish. A version that is not a candidate has
+its page, `docs/releases/vX.Y.Z.md`, pushed before it is dispatched, as the
+docs skill says, so that its notes link to the page and the page is on the
+site when the release is.
 
 1. `version` refuses a version npm, PyPI, crates.io or a tag has already, and one
    published from another branch.
