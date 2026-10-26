@@ -83,6 +83,13 @@ Each line cost a debugging session once. The fix named is the one in the code.
 - **Rust's stdout holds what it is given until a newline**: frames have none,
   so a private child's parent waited for its `WELCOME` for ever. Flush after
   every write (`write_frames` in `crates/cli/src/connection.rs`).
+- **A private child's frames leave through a file on its stdout's handle,
+  never std's `Stdout`** (`frames_out` in `crates/cli/src/serve.rs`). Tokio's
+  `stdout()` writes through std's line-buffered, locked `Stdout` on its
+  blocking pool, and on Windows, under Node's pipes, such a write now and then
+  never finished: an answer stopped part way, one run in ten of Node's metrics
+  suite, and every time within thirty answers of 400 KiB in a row. A Rust
+  parent's pipes never showed it, so the test that does is the SDK's.
 - **tracing's `LevelFilter` parses an empty string as `ERROR`**: read an
   empty or unknown `LOG_LEVEL` as `info` (`level_named` in
   `crates/cli/src/lines.rs`).

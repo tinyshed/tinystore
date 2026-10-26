@@ -152,6 +152,22 @@ for (const way of ways) {
 			expect(await last(store, 'bytes_given')).toEqual({ '{}': 1 })
 		})
 
+		// a private child's answers once left through std's Stdout, where on
+		// Windows under Node, once a text had come in pieces, one now and then
+		// stopped part way and its read waited for good: within thirty reads
+		test('after a text that came in pieces, answers of 400 KiB arrive whole, however many in a row', async () => {
+			const long = 'x'.repeat(640)
+			const lines = Array.from(
+				{ length: 6000 },
+				(_, n) => `wide_answer_${n % 10}{n="${n}",long="${long}"} ${n}`,
+			)
+			await store.metrics.ingestPrometheus(`${lines.join('\n')}\n`)
+			for (let read = 0; read < 200; read++) {
+				const answered = await store.metrics.read({ name: `wide_answer_${read % 10}`, since: '1h' })
+				expect([read, answered.length]).toEqual([read, 600])
+			}
+		})
+
 		// contract: MET-15
 		test('a text past one message goes in pieces and is written whole, and one past 32 MiB is a limit', async () => {
 			const long = 'x'.repeat(640)

@@ -168,8 +168,27 @@ fn open(dir: &Path, options: Options) -> Result<Store, (ExitCode, String)> {
 async fn stdio(store: &Store, clock: Option<Arc<TestClock>>) -> io::Result<()> {
     let (closing, closed) = watch::channel(false);
     let connect = Connect { stop: Some(stop_by(closing)), clock, ..Connect::default() };
-    connection::serve(tokio::io::stdin(), tokio::io::stdout(), store, connect, closed).await;
+    connection::serve(tokio::io::stdin(), frames_out()?, store, connect, closed).await;
     Ok(())
+}
+
+/// Where a private child's frames go: a file on its stdout's handle. Tokio's
+/// `stdout()` writes through std's `Stdout`, a line buffer behind a lock
+/// that cuts frames at their newline bytes, and on Windows, under Node's
+/// pipes, a write through it now and then never finished: an answer stopped
+/// part way, and the parent waited for good.
+fn frames_out() -> io::Result<tokio::fs::File> {
+    #[cfg(windows)]
+    let handle = {
+        use std::os::windows::io::AsHandle as _;
+        io::stdout().as_handle().try_clone_to_owned()?
+    };
+    #[cfg(unix)]
+    let handle = {
+        use std::os::fd::AsFd as _;
+        io::stdout().as_fd().try_clone_to_owned()?
+    };
+    Ok(tokio::fs::File::from_std(std::fs::File::from(handle)))
 }
 
 /// How a local server runs: whether its clients started it, how long it
