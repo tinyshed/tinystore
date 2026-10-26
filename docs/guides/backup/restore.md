@@ -105,18 +105,19 @@ that opens a zip opens:
 
 ```text
 manifest.json         { format: 1, created, files: [{ engine, name, size, sha256 }], keyLeftOut }
-kv.db                 each engine's file, one moment of it
+kv.db                 each engine's file, all at one moment
 jobs.db
 sql/chat.db
 blobs/blobs.db        and every file blobs keeps
 app.json              a file of the program's, when included
 ```
 
-Each engine's SQLite file is copied through `vacuum into` while the store
-keeps working, so it holds every row and no free page. Two engines are two
-moments, which is safe, since no write spans two files. A file blobs keeps is
-linked into the snapshot rather than copied, so a large file costs the
-snapshot a directory entry until the zip is written.
+Every SQLite file is copied at one moment of the store. For that instant the
+backup holds every file's commits back and begins a read of each, which takes
+microseconds; the commits then go on, and no commit waits for the copies, each
+made from its file's read with every row and no free page. A file blobs keeps is linked into the snapshot rather than copied,
+so a large file costs the snapshot a directory entry until the zip is
+written.
 
 ## See also
 

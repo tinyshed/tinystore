@@ -73,6 +73,7 @@ pub(crate) struct Group {
     capture: Logged,
     checkpoints: Arc<Checkpoints>,
     probe: Option<FileProbe>,
+    gate: Option<Arc<super::Gate>>,
 }
 
 #[derive(Default)]
@@ -137,6 +138,7 @@ impl Group {
             capture,
             checkpoints,
             probe: config.probe.clone(),
+            gate: config.gate.clone(),
         }
     }
 
@@ -250,6 +252,9 @@ impl Group {
     /// leads, when it has one.
     fn lead(&self, writer: &Mutex<Connection>, own: Option<&Arc<Write>>) {
         loop {
+            if let Some(gate) = &self.gate {
+                gate.pass();
+            }
             let connection = writer.lock().unwrap_or_else(PoisonError::into_inner);
             let batch = self.gather();
             let started = Instant::now();

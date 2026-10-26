@@ -37,6 +37,7 @@ mod given;
 mod group;
 mod memory;
 mod migrate;
+mod moment;
 mod mutex;
 mod pages;
 mod prefix;
@@ -57,7 +58,7 @@ pub(crate) use config::{CatchUp, Config, GroupLimits};
 #[cfg(feature = "kv")]
 pub(crate) use connection::read_file;
 pub(crate) use connection::{
-    copy, execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
+    execute_cached, given_sql_error, query_cached, quote_ident, read_copy, sql_error, unheard_warnings,
 };
 pub(crate) use constraint::named as name_constraint;
 #[cfg(feature = "replication")]
@@ -67,6 +68,7 @@ pub(crate) use given::given;
 #[cfg(test)]
 pub(crate) use memory::used as memory_used;
 pub(crate) use migrate::Migration;
+pub(crate) use moment::{Gate, Source, copy_at_one_moment};
 pub(crate) use mutex::{give as give_mutexes, given as mutexes_given};
 pub(crate) use pages::{Chunk, Pages, Snapshot};
 pub(crate) use prefix::{TextBytes, prefix_end};

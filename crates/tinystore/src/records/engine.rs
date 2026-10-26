@@ -98,10 +98,10 @@ impl Engine for Records {
         self.file.close().and(flushed)
     }
 
-    /// Writes what loggers and writers of lines hold, then copies records.db.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+    /// Writes what loggers and writers of lines hold, then names records.db.
+    fn snapshot(&self) -> Result<crate::engine::Copying<'_>> {
         self.flush_held(false)?;
-        Ok(vec![crate::engine::copy_file(&self.file, FILE, "records", into)?])
+        crate::engine::to_copy(&self.file, FILE, "records")
     }
 
     /// The streams a copy knows are those its home had made when it last

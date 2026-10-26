@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockWriteGuard};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::ids::Ids;
@@ -39,8 +39,10 @@ pub(crate) struct Disk {
     durable: bool,
     made: Mutex<HashSet<i64>>,
     syncs: Mutex<HashMap<PathBuf, Arc<DirSync>>>,
-    /// Held by every removal of a content's file, and alone by a snapshot.
-    removals: RwLock<()>,
+    /// The snapshots under way that link the files their copies name, which
+    /// no removal that begins meanwhile takes.
+    paused: Mutex<usize>,
+    resumed: Condvar,
 }
 
 impl Disk {
@@ -54,7 +56,8 @@ impl Disk {
             durable,
             made: Mutex::new(HashSet::new()),
             syncs: Mutex::new(HashMap::new()),
-            removals: RwLock::new(()),
+            paused: Mutex::new(0),
+            resumed: Condvar::new(),
         }
     }
 
@@ -158,14 +161,24 @@ impl Disk {
 
     /// Removes a content's file, which no file names any more; one already
     /// gone counts as removed. It waits while a snapshot links files.
+    ///
+    /// One that began before the snapshot's moment goes on: the commit that
+    /// left its content unnamed was before it, so the copy names it no more.
     pub(crate) fn remove_object(&self, id: i64) -> Result<()> {
-        let _removing = self.removals.read().unwrap_or_else(PoisonError::into_inner);
+        let mut paused = lock(&self.paused);
+        while *paused > 0 {
+            paused = self.resumed.wait(paused).unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(paused);
         remove(&self.object_path(id))
     }
 
-    /// Keeps every content's file where it is until the guard is dropped.
-    pub(crate) fn hold_removals(&self) -> RwLockWriteGuard<'_, ()> {
-        self.removals.write().unwrap_or_else(PoisonError::into_inner)
+    /// Keeps every content's file where it is from the snapshot's moment
+    /// until the guard is dropped. It waits for no removal under way, which a
+    /// thread may run holding a writer that the moment holds too.
+    pub(crate) fn pause_removals(&self) -> PausedRemovals<'_> {
+        *lock(&self.paused) += 1;
+        PausedRemovals(self)
     }
 
     /// Puts content `id`'s file into `into` at the path it has under the
@@ -328,4 +341,14 @@ pub(crate) fn read_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io
 #[cfg(windows)]
 pub(crate) fn read_at(file: &std::fs::File, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
     std::os::windows::fs::FileExt::seek_read(file, bytes, offset)
+}
+
+/// The removals of a content's file held back while a snapshot links files.
+pub(crate) struct PausedRemovals<'a>(&'a Disk);
+
+impl Drop for PausedRemovals<'_> {
+    fn drop(&mut self) {
+        *lock(&self.0.paused) -= 1;
+        self.0.resumed.notify_all();
+    }
 }

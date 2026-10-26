@@ -310,6 +310,54 @@ fn a_backup_copies_while_a_writer_writes_and_holds_a_moment_of_it() {
     assert!((held..300).all(|n| counted.get(format!("k{n:03}")).unwrap().is_none()), "a moment: nothing after a gap");
 }
 
+/// A collector's cursor in the program's database, saying how far its samples
+/// in metrics.db go.
+const CURSOR: &str = "create table cursor (id integer primary key, upto integer not null) strict; \
+                      insert into cursor values (1, -1)";
+
+// contract: BAK-01
+#[test]
+fn a_backup_is_one_moment_of_the_store_so_a_cursor_names_only_samples_it_holds() {
+    for metrics_first in [false, true] {
+        let f = fixture();
+        let store = f.open(&f.data);
+        // the files were copied in the order their engines opened
+        let early = metrics_first.then(|| store.metrics().unwrap());
+        let db = store.database("app").migrations([("0001_cursor.sql", CURSOR)]).open().unwrap();
+        let stats = early.unwrap_or_else(|| store.metrics().unwrap());
+        let base = store.now() - Duration::from_secs(3600);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for i in 0_i64.. {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let at = base + Duration::from_millis(i as u64);
+                    stats.ingest(&[Series::gauge("reading").sample(at, i as f64)]).unwrap();
+                    db.exec(sql!("update cursor set upto = ? where id = 1", i)).unwrap();
+                }
+            });
+            for n in 0..4 {
+                std::thread::sleep(Duration::from_millis(30));
+                let (zip, restored) = (f.zip.with_extension(format!("{n}.zip")), f.restored.join(n.to_string()));
+                store.backup().write(&zip).unwrap();
+                restore(&zip, &restored).unwrap();
+                let again = f.open(&restored);
+                let app = again.database("app").migrations([("0001_cursor.sql", CURSOR)]).open().unwrap();
+                let cursor: i64 = app.scalar(sql!("select upto from cursor where id = 1")).unwrap();
+                let read = again.metrics().unwrap().query().name("reading").since(Duration::from_secs(7200)).read();
+                let kept = read.unwrap().series.iter().flat_map(|series| series.samples().to_vec()).count() as i64;
+                assert!(
+                    kept == cursor + 1 || kept == cursor + 2,
+                    "metrics first {metrics_first}, backup {n}: the cursor says {cursor}, and {kept} samples are kept"
+                );
+            }
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+}
+
 // contract: BAK-02
 #[test]
 fn a_file_whose_sha256_is_not_its_manifests_is_refused_though_its_crc_is_the_zips() {

@@ -8,7 +8,7 @@ use super::policy::Policy;
 use super::rows;
 use super::state::{Kind, QueueState};
 use super::work::Running;
-use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
+use crate::engine::{Claim, Copying, Engine, Home, Host, to_copy};
 use crate::sqlite::{Config, File, Migration};
 use crate::sync::lock;
 use crate::{Clock, Error, Result, Store, unix_millis};
@@ -281,12 +281,12 @@ impl Engine for Jobs {
         }
     }
 
-    /// Copies jobs.db; jobs in a database's file are the database's to copy.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
+    /// Names jobs.db; jobs in a database's file are the database's to copy.
+    fn snapshot(&self) -> Result<Copying<'_>> {
         if self.lent_by.is_some() {
-            return Ok(Vec::new());
+            return Ok(Copying::default());
         }
-        Ok(vec![copy_file(&self.file, FILE, "jobs", into)?])
+        to_copy(&self.file, FILE, "jobs")
     }
 
     /// A queue's registration is its home's, and a copy taken again may hold

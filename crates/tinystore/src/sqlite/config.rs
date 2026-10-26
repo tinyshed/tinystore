@@ -32,6 +32,9 @@ pub(crate) struct Config {
     pub(crate) memory: Option<std::sync::Arc<crate::Memory>>,
     /// What the file tells of its commits, when the store measures itself.
     pub(crate) probe: Option<crate::probe::FileProbe>,
+    /// The store's, which holds every file of it still while a backup's
+    /// reads begin: a commit waits at it before it takes the writer.
+    pub(crate) gate: Option<std::sync::Arc<super::Gate>>,
     /// How the file, while a copy, reaches where its home stands now: what a
     /// migration's check runs before it says a step has not arrived.
     pub(crate) catch_up: Option<CatchUp>,
@@ -63,6 +66,7 @@ impl Default for Config {
             keep_wal: false,
             memory: None,
             probe: None,
+            gate: None,
             catch_up: None,
         }
     }

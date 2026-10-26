@@ -295,7 +295,7 @@ impl File {
         }
         let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
         let waiting = self.wait_for_the_writer("a transaction")?;
-        let connection = lock(&self.writer);
+        let connection = self.take_writer();
         drop(waiting);
         let waited = queued.map(|queued| queued.elapsed());
         let outcome = self.transaction_on(&connection, waited, work);
@@ -401,7 +401,7 @@ impl File {
         }
         let queued = self.config.probe.as_ref().and_then(FileProbe::queued);
         let waiting = self.wait_for_the_writer("a transaction")?;
-        let connection = lock(&self.writer);
+        let connection = self.take_writer();
         drop(waiting);
         let holding = Holding::enter(self.address());
         let waited = queued.map(|queued| queued.elapsed());
@@ -466,7 +466,7 @@ impl File {
         self.refuse_inside_a_transaction("a vacuum", "would wait for the writer the transaction holds")?;
         self.refuse_while_polled("a vacuum")?;
         let waiting = self.wait_for_the_writer("a vacuum")?;
-        let _writing = lock(&self.writer);
+        let _writing = self.take_writer();
         drop(waiting);
         // close takes the writer after it refuses new work
         self.refuse_when_closed("a vacuum")?;
@@ -477,11 +477,21 @@ impl File {
         vacuumed.map_err(|error| error.within(self.describe()))
     }
 
-    /// Copies the file into `target` as one moment of it, its writer and
-    /// readers going on meanwhile.
-    pub(crate) fn copy_into(&self, target: &Path) -> Result<()> {
-        self.refuse_when_closed("a copy")?;
-        connection::copy(&self.path, target)
+    /// The file as a snapshot copies it at the store's moment: its writer,
+    /// which the moment holds, unless the file is a copy, which its home
+    /// writes.
+    pub(crate) fn source(&self) -> Result<super::Source> {
+        self.refuse_when_closed("a snapshot")?;
+        let writer = (!self.is_copy()).then(|| Arc::clone(&self.writer));
+        Ok(super::Source { path: self.path.clone(), writer })
+    }
+
+    /// The writer, once the store's gate lets this thread take it.
+    fn take_writer(&self) -> MutexGuard<'_, Connection> {
+        if let Some(gate) = &self.config.gate {
+            gate.pass();
+        }
+        lock(&self.writer)
     }
 
     pub(crate) fn migrate(&self, history: &str, migrations: &[Migration]) -> Result<()> {
@@ -540,7 +550,7 @@ impl File {
             return Ok(());
         }
         let waiting = self.wait_for_the_writer("a migration")?;
-        let connection = lock(&self.writer);
+        let connection = self.take_writer();
         drop(waiting);
         let what = || format!("{}: {history}: foreign keys", self.describe());
         // foreign_keys cannot change inside a transaction, so it changes around one.

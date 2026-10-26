@@ -105,12 +105,12 @@ impl crate::engine::Engine for Engine {
         written.and(closed)
     }
 
-    /// Writes the instruments' totals, then copies metrics.db.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+    /// Writes the instruments' totals, then names metrics.db.
+    fn snapshot(&self) -> Result<crate::engine::Copying<'_>> {
         if !self.file.is_copy() {
             self.write_totals()?;
         }
-        Ok(vec![crate::engine::copy_file(&self.file, FILE, "metrics", into)?])
+        crate::engine::to_copy(&self.file, FILE, "metrics")
     }
 
     /// A name a copy's home made after the copy read its names is read once

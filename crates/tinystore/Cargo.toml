@@ -67,7 +67,7 @@ fuzzing = ["records", "metrics"]
 [dependencies]
 # The SQLite build is pinned: the bundled amalgamation of this exact release, the
 # flags in .cargo/config.toml, and nothing loaded at run time.
-rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "cache", "column_decltype", "hooks", "limits"], optional = true }
+rusqlite = { version = "=0.40.2", default-features = false, features = ["backup", "bundled", "cache", "column_decltype", "hooks", "limits"], optional = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # a logger is a layer of the registry every tracing program already has
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"], optional = true }

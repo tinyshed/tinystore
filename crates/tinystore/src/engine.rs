@@ -41,12 +41,12 @@ pub trait Engine: Send + Sync + 'static {
         let _ = file;
     }
 
-    /// Copies the engine's files into `into`, each at the path it has in the
-    /// store's directory, as one moment of the engine while it keeps working.
-    /// An engine whose file another lends copies nothing: the lender does.
-    fn snapshot(&self, into: &Path) -> Result<Vec<Copied>> {
-        let _ = into;
-        Ok(Vec::new())
+    /// Readies the engine for a snapshot of the store, which copies the files
+    /// every engine names at one moment of them all, while they keep working:
+    /// it writes what it holds in memory first, and names its SQLite files.
+    /// An engine whose file another lends names none: the lender does.
+    fn snapshot(&self) -> Result<Copying<'_>> {
+        Ok(Copying::default())
     }
 }
 
@@ -59,8 +59,47 @@ pub struct Copied {
     pub engine: &'static str,
 }
 
-/// Copies an SQLite file of an engine's, `name` inside the store, into the
-/// snapshot at `into`, its directory made.
+/// What a snapshot copies of an engine: its SQLite files, at the moment, and
+/// what the engine copies beside them once they are.
+#[derive(Default)]
+#[cfg_attr(not(feature = "backup"), expect(dead_code, reason = "a backup alone takes a snapshot"))]
+pub struct Copying<'a> {
+    pub(crate) files: Vec<(Copied, crate::sqlite::Source)>,
+    pub(crate) at_the_moment: Option<AtTheMoment<'a>>,
+}
+
+impl fmt::Debug for Copying<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let files: Vec<&str> = self.files.iter().map(|(copied, _)| copied.name.as_str()).collect();
+        f.debug_struct("Copying").field("files", &files).finish_non_exhaustive()
+    }
+}
+
+/// What an engine does at the moment, every writer held: it gives back what
+/// it does once the files are copied, into the snapshot's directory, as blobs
+/// links the objects its copy names, none of which goes meanwhile.
+pub(crate) type AtTheMoment<'a> = Box<dyn FnOnce() -> Then<'a> + 'a>;
+pub(crate) type Then<'a> = Box<dyn FnOnce(&Path) -> Result<Vec<Copied>> + 'a>;
+
+/// An SQLite file of an engine's, `name` inside the store, as a snapshot
+/// copies it.
+#[cfg_attr(
+    not(any(
+        feature = "kv",
+        feature = "jobs",
+        feature = "sql",
+        feature = "blobs",
+        feature = "records",
+        feature = "metrics",
+        feature = "search"
+    )),
+    expect(dead_code, reason = "every engine copies its files with it, and a store of none has none")
+)]
+pub(crate) fn to_copy<'a>(file: &crate::sqlite::File, name: &str, engine: &'static str) -> Result<Copying<'a>> {
+    let copied = Copied { name: name.to_owned(), engine };
+    Ok(Copying { files: vec![(copied, file.source()?)], at_the_moment: None })
+}
+
 /// Rows one maintenance transaction removes, so that no pass holds the
 /// writer long, and transactions of each kind one pass runs at most.
 #[cfg(any(feature = "jobs", feature = "blobs"))]
@@ -93,27 +132,6 @@ pub(crate) const DATABASES: &str = "sql";
 #[cfg(any(feature = "sql", feature = "replication"))]
 pub(crate) fn database_file(name: &str) -> String {
     format!("{DATABASES}/{name}.db")
-}
-
-#[cfg_attr(
-    not(any(
-        feature = "kv",
-        feature = "jobs",
-        feature = "sql",
-        feature = "blobs",
-        feature = "records",
-        feature = "metrics",
-        feature = "search"
-    )),
-    expect(dead_code, reason = "every engine copies its files with it, and a store of none has none")
-)]
-pub(crate) fn copy_file(file: &crate::sqlite::File, name: &str, engine: &'static str, into: &Path) -> Result<Copied> {
-    let target = into.join(name);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| crate::Error::io(format!("snapshot {name}"), error))?;
-    }
-    file.copy_into(&target).map_err(|error| error.within(format!("snapshot {name}")))?;
-    Ok(Copied { name: name.to_owned(), engine })
 }
 
 /// The store's calls for the engines opened against it.

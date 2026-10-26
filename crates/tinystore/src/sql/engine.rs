@@ -129,11 +129,15 @@ impl Engine for Databases {
         first_failure.map_or(Ok(()), Err)
     }
 
-    /// Copies each database open, the buckets and queues it keeps with it.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+    /// Names each database open, the buckets and queues it keeps with it.
+    fn snapshot(&self) -> Result<crate::engine::Copying<'_>> {
         let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
-        let copy = |base: &Arc<Base>| crate::engine::copy_file(base.file(), &file_of(&base.name), "sql", into);
-        open.iter().map(copy).collect()
+        let mut copying = crate::engine::Copying::default();
+        for base in &open {
+            let copied = crate::engine::Copied { name: file_of(&base.name), engine: "sql" };
+            copying.files.push((copied, base.file().source()?));
+        }
+        Ok(copying)
     }
 }
 

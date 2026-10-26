@@ -177,30 +177,7 @@ fn configure_shared(connection: &Connection, config: &Config) -> rusqlite::Resul
     connection.pragma_update(None, "cache_size", -i64::from(config.cache_kib))
 }
 
-/// Copies the SQLite file at `source` into `target`, a file not there yet,
-/// as one moment of it while its writer keeps going: `vacuum into`, through
-/// a connection of its own, since it attaches its target, which no
-/// connection of the store's may, and writes it, which a reader's
-/// `query_only` refuses. The copy holds every row and no free page.
-pub(crate) fn copy(source: &Path, target: &Path) -> Result<()> {
-    let what = || format!("copy {} to {}", source.display(), target.display());
-    let into = target.to_str().ok_or_else(|| Error::invalid(format!("{}: a path that is no UTF-8", what())))?;
-    super::give_mutexes();
-    let connection =
-        Connection::open_with_flags(source, flags(Role::Reader)).map_err(|error| sql_error(what(), error))?;
-    // The file's only connection, when no engine holds it, would checkpoint at
-    // its close commits a node's log lacks until the engine opens the file.
-    connection
-        .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
-        .map_err(|error| sql_error(what(), error))?;
-    connection.busy_timeout(Config::default().busy_timeout).map_err(|error| sql_error(what(), error))?;
-    connection.execute(COPY, [into]).map_err(|error| sql_error(what(), error))?;
-    Ok(())
-}
-
-const COPY: &str = "vacuum into ?1";
-
-/// Reads a copy [`copy`] made, which nothing else has open.
+/// Reads a copy a snapshot made, which nothing else has open.
 pub(crate) fn read_copy<T>(path: &Path, read: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T> {
     let what = || format!("read the copy {}", path.display());
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_EXRESCODE;

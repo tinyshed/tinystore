@@ -17,7 +17,7 @@ use rusqlite::{OptionalExtension, params};
 use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
 use super::scrub::Scrubbing;
-use crate::engine::{Claim, Copied, Engine, Host, copy_file};
+use crate::engine::{Claim, Copied, Copying, Engine, Host, Then, to_copy};
 use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
@@ -115,31 +115,47 @@ impl Engine for Blobs {
         self.file.close()
     }
 
-    /// Copies blobs.db and links beside the copy every file it names: a link
-    /// copies no byte and keeps the bytes after the engine lets its own name
-    /// go, so a film costs the snapshot a directory entry. No file is removed
-    /// meanwhile, so that none the copy names goes before it is linked.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
-        let _removals = self.disk.hold_removals();
-        let mut copied = vec![copy_file(&self.file, &format!("{DIR}/{FILE}"), "blobs", into)?];
-        let named = crate::sqlite::read_copy(&into.join(DIR).join(FILE), |connection| {
-            let mut statement = connection.prepare(SELECT_NAMED)?;
-            let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
-            ids.collect::<rusqlite::Result<Vec<i64>>>()
-        })
-        .map_err(|error| error.within("snapshot blobs: the files the copy names"))?;
-        for id in named {
-            if let Some(name) = self.disk.link_object(id, &into.join(DIR))? {
-                copied.push(Copied { name: format!("{DIR}/{name}"), engine: "blobs" });
-            }
-        }
-        Ok(copied)
+    /// Names blobs.db, and once it is copied links beside the copy every
+    /// file it names: a link copies no byte and keeps the bytes after the
+    /// engine lets its own name go, so a film costs the snapshot a directory
+    /// entry. No removal begins from the moment on, so that none the copy
+    /// names goes before it is linked.
+    fn snapshot(&self) -> Result<Copying<'_>> {
+        let mut copying = to_copy(&self.file, &format!("{DIR}/{FILE}"), "blobs")?;
+        copying.at_the_moment = Some(Box::new(move || {
+            let paused = self.disk.pause_removals();
+            let then: Then<'_> = Box::new(move |into| {
+                let _paused = paused;
+                self.link_named(into)
+            });
+            then
+        }));
+        Ok(copying)
     }
 
     /// A set's name and id are its home's, read again on a copy once its
     /// home's commits arrive.
     fn applied(&self, _: &str) {
         lock(&self.sets).clear();
+    }
+}
+
+impl Blobs {
+    /// Links into the snapshot at `into` every file its copy of blobs.db names.
+    fn link_named(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
+        let named = crate::sqlite::read_copy(&into.join(DIR).join(FILE), |connection| {
+            let mut statement = connection.prepare(SELECT_NAMED)?;
+            let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
+            ids.collect::<rusqlite::Result<Vec<i64>>>()
+        })
+        .map_err(|error| error.within("snapshot blobs: the files the copy names"))?;
+        let mut linked = Vec::new();
+        for id in named {
+            if let Some(name) = self.disk.link_object(id, &into.join(DIR))? {
+                linked.push(Copied { name: format!("{DIR}/{name}"), engine: "blobs" });
+            }
+        }
+        Ok(linked)
     }
 }
 

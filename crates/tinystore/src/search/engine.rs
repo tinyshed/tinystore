@@ -90,12 +90,12 @@ impl Engine for Search {
         self.file.close()
     }
 
-    /// Copies search.db; a table's indexes are copied with their database.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<crate::engine::Copied>> {
+    /// Names search.db; a table's indexes are copied with their database.
+    fn snapshot(&self) -> Result<crate::engine::Copying<'_>> {
         if self.lent_by.is_some() {
-            return Ok(Vec::new());
+            return Ok(crate::engine::Copying::default());
         }
-        Ok(vec![crate::engine::copy_file(&self.file, FILE, "search", into)?])
+        crate::engine::to_copy(&self.file, FILE, "search")
     }
 }
 

@@ -1,7 +1,7 @@
 # Backup
 
-A backup is the whole store as one zip: every engine's files, each copied as
-one moment of itself while the store keeps working, with a manifest of each
+A backup is the whole store as one zip: every engine's files, all copied as
+one moment of the store while it keeps working, with a manifest of each
 file's size and SHA-256. A restore puts it back into an empty directory,
 checking every byte, or leaves nothing.
 
@@ -28,8 +28,10 @@ tinystore restore backups/chat-2026-10-19.zip ./restored
 
 ## What it guarantees
 
-- A backup holds one moment of each engine while the store keeps working
-  (contract BAK-01).
+- A backup holds one moment of the whole store, every engine's file at the
+  same instant, while the store keeps working (contract BAK-01). A row that
+  names what another file holds, such as a cursor saying how far a series'
+  samples go, is restored with what it names.
 - A restore checks every byte against the manifest and the zip, writes only
   into an empty directory, and leaves nothing when it fails (contract
   BAK-02).

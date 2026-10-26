@@ -9,7 +9,7 @@ use super::once::Runs;
 use super::renewals::Renewals;
 use super::scope::Kind;
 use crate::encryption::EncryptionKey;
-use crate::engine::{Claim, Copied, Engine, Home, Host, copy_file};
+use crate::engine::{Claim, Copying, Engine, Home, Host, to_copy};
 use crate::sqlite::{Config, File, Left, Migration, Settle, Tx, own_work};
 use crate::store::WeakStore;
 use crate::sync::lock;
@@ -443,15 +443,15 @@ impl Engine for Kv {
     }
 
     /// Writes what memory holds, so that the copy has every counter and
-    /// renewal, then copies kv.db; kv in a database's file is the database's
-    /// to copy.
-    fn snapshot(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
-        if self.lent_by.is_some() {
-            return Ok(Vec::new());
-        }
+    /// renewal, then names kv.db; kv in a database's file is the database's
+    /// to copy, with its counters written all the same.
+    fn snapshot(&self) -> Result<Copying<'_>> {
         self.renewals.flush(&self.file)?;
         self.flush_buffers()?;
-        Ok(vec![copy_file(&self.file, FILE, "kv", into)?])
+        if self.lent_by.is_some() {
+            return Ok(Copying::default());
+        }
+        to_copy(&self.file, FILE, "kv")
     }
 
     /// A bucket's name and id are its home's, and a copy forgets those it

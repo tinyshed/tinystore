@@ -243,7 +243,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 
 ## 8. Backup and recovery
 
-- **BAK-01** A backup MUST hold one moment of each engine while the store keeps working.
+- **BAK-01** A backup MUST hold one moment of the whole store, every engine's file at the same instant, while the store keeps working.
 - **BAK-02** A restore MUST check every byte against the manifest and the zip, write only into an empty directory, and leave nothing when it fails.
 - **BAK-03** The store's encryption key and the program's own files MUST be left out unless asked for, and a backup without the key MUST say so.
 - **BAK-04** A backup that fails MUST leave no zip and no snapshot.

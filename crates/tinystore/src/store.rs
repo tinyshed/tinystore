@@ -196,6 +196,8 @@ struct Inner {
     open: Mutex<Engines>,
     /// Shared with each claim's release, which must not keep the store open.
     claims: Arc<Mutex<HashSet<String>>>,
+    /// Every file's, which a backup shuts while the reads of its moment begin.
+    gate: Arc<crate::sqlite::Gate>,
     /// The engines' own files, kv.db and jobs.db, which the store's
     /// transaction is a transaction of one of.
     #[cfg(any(feature = "kv", feature = "jobs"))]
@@ -281,6 +283,7 @@ impl Store {
             engines: Mutex::new(Vec::new()),
             open: Mutex::new(HashMap::new()),
             claims: Arc::default(),
+            gate: Arc::default(),
             #[cfg(any(feature = "kv", feature = "jobs"))]
             files: Mutex::new(Vec::new()),
             durability: options.durability,
@@ -339,7 +342,8 @@ impl Store {
     pub(crate) fn open_file(&self, name: &str, config: crate::sqlite::Config) -> Result<crate::sqlite::File> {
         let path = self.inner.dir.join(name);
         let probe = Some(self.inner.probe.for_file(crate::probe::label(name)));
-        let config = crate::sqlite::Config { memory: Some(Arc::clone(&self.inner.memory)), probe, ..config };
+        let (memory, gate) = (Some(Arc::clone(&self.inner.memory)), Some(Arc::clone(&self.inner.gate)));
+        let config = crate::sqlite::Config { memory, probe, gate, ..config };
         if self.inner.beside {
             if !path.exists() {
                 return Err(Error::not_found(format!("{}: it holds no {name}", self.describe())));
@@ -626,6 +630,12 @@ impl Store {
         self.refuse_when_closed("a snapshot")?;
         let _opening = lock(&self.inner.open);
         Ok((lock(&self.inner.engines).clone(), lock(&self.inner.claims).clone()))
+    }
+
+    /// What holds every file of the store still for a snapshot's moment.
+    #[cfg(feature = "backup")]
+    pub(crate) fn gate(&self) -> &crate::sqlite::Gate {
+        &self.inner.gate
     }
 
     fn describe(&self) -> String {

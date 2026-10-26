@@ -34,8 +34,8 @@ tinystore backup ./data backups/chat-2026-10-19.zip
 
 The backup is one zip of every engine's files, with a `manifest.json` that
 lists each file's size and SHA-256. The chat keeps answering while it is
-made: each engine copies its files as one moment of itself, without stopping
-its writer or its readers. The zip appears under its name only once it is
+made: every file is copied as it stood at one moment, and the writers stop
+only for the instant it takes to begin a read of each. The zip appears under its name only once it is
 whole, so a backup that fails leaves no half zip behind. The folder it goes
 into must exist.
 
@@ -190,17 +190,18 @@ so tests run in parallel without sharing a sidecar.
 
 **Why not copy the directory.** A file that SQLite is writing has a
 write-ahead log beside it, and a copy taken mid-write can hold half a commit.
-A backup instead asks each engine for one moment of its files: SQLite's
-`vacuum into` for a database, a link for each stored file, so a large
-attachment costs the backup a directory entry and no copy until the zip is
-written. Engines that hold numbers in memory, such as counters and the
-logger's buffer, write them first, so the backup has them.
+A backup instead begins a read of every file at one moment and copies each
+from its read: SQLite's own backup of the pages, and a link for each stored
+file, so a large attachment costs the backup a directory entry and no copy
+until the zip is written. Engines that hold numbers in memory, such as
+counters and the logger's buffer, write them first, so the backup has them.
 
-**Why each engine is its own moment.** The store has no moment shared by all
-its files, because no write spans two files. Each engine's copy is
-consistent with itself, which is all a write could ever rely on. When two
-things must be in one moment, such as a message and its reply job, they live
-in one file, and that file is copied as one moment.
+**Why one moment for every file.** No write spans two files, but a program's
+rows often name what another file holds: a message's row names its
+attachment, a cursor says how far the samples it collected go. Copied at two
+moments, a restore could hold the name without the thing. So the backup
+holds every file's commits back for the instant it takes to begin a read of
+each, and a restore is the store as it stood then.
 
 **Why a restore checks every byte.** A backup is the copy you use on your
 worst day. A restore that finds a damaged file and stops halfway would leave
