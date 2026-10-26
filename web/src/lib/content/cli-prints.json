@@ -1,0 +1,166 @@
+{
+  "status": {
+    "example": "tinystore status ./data",
+    "prints": "● ./data  served by tinystore 0.0.0 · pid 33612 · up 0s · durability not set: full, os for records and metrics\n\n  kv        80 KiB\n  jobs     129 KiB\n  blobs    133 KiB\n  sql/app   16 KiB\n  records   53 KiB\n  metrics  173 KiB\n  ────────────────\n  total    584 KiB"
+  },
+  "logs": {
+    "example": "tinystore logs ./data -f",
+    "prints": "11:02:14.502 WARN  api  slow request  requestId=7f3a ms=1200\n11:02:15.911 ERROR api  payment failed  orderId=981"
+  },
+  "kv get": {
+    "example": "tinystore kv ./data get sessions 42",
+    "prints": "{\n  \"seen\": \"2026-10-18\",\n  \"user\": 42\n}"
+  },
+  "kv list": {
+    "example": "tinystore kv ./data list sessions",
+    "prints": "42  {\"seen\":\"2026-10-18\",\"user\":42}\n43  {\"seen\":\"2026-10-19\",\"user\":43}"
+  },
+  "jobs list": {
+    "example": "tinystore jobs ./data list emails welcome-",
+    "prints": "welcome-40  scheduled  26 Oct 21:32:09.172  attempt 0\nwelcome-41  scheduled  26 Oct 22:32:09.187  attempt 0"
+  },
+  "files list": {
+    "example": "tinystore files ./data list avatars",
+    "prints": "users/42/avatar.png        8 B  26 Oct 20:32:09.224  image/png\nusers/43/avatar.png        8 B  26 Oct 20:32:09.240  image/png"
+  },
+  "files get": {
+    "example": "tinystore files ./data get avatars users/42/avatar.png ./avatar.png",
+    "prints": "wrote ./avatar.png, 8 B"
+  },
+  "config explain": {
+    "example": "tinystore config ./data explain chat",
+    "prints": "config chat · version 3\n  model.max_tokens  2048     a change, version 3, 2026-10-26 14:03:05 UTC  over 1024 from the declaration\n  model.name        \"small\"  the declaration\n  region: required, given by the program alone"
+  },
+  "sql": {
+    "example": "tinystore sql ./data app \"select count(*) from users\"",
+    "prints": "count(*)\n2"
+  },
+  "search": {
+    "example": "tinystore search list ./data",
+    "prints": "● ./data  1 index\n  articles  1204 documents"
+  },
+  "metrics names": {
+    "example": "tinystore metrics ./data names",
+    "prints": "http_requests_total  counter      1 series  keep 30d    newest 0s ago\nping_rtt_ms          gauge      3 series  keep 30d    newest 0s ago"
+  },
+  "metrics read": {
+    "example": "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
+    "prints": "ping_rtt_ms{target=\"poland\"}   26 Oct 19:32–20:32 Europe/Moscow · 60 samples\n  19:33:09.309   24.6\n  19:34:09.309   23.8\n  19:35:09.309   23\n  19:36:09.309   24.2\n  19:37:09.309   23.4\n  19:38:09.309   24.6\n  19:39:09.309   23.8\n  19:40:09.309   23\n  19:41:09.309   24.2\n  19:42:09.309   23.4\n  19:43:09.309   24.6\n…"
+  },
+  "metrics aggregate": {
+    "example": "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
+    "prints": "ping_rtt_ms max every 10m   26 Oct 19:32–20:32 Europe/Moscow\n             finland   poland   sweden\n  19:30:00      32.6     24.6     41.6\n  19:40:00      32.6     24.6     41.6\n  19:50:00      32.6     24.6     41.6\n  20:00:00      32.6     24.6     41.6\n  20:10:00      32.6     24.6     41.6\n  20:20:00      32.6     24.6     41.6\n  20:30:00      32.6     24.2     41.2"
+  },
+  "events list": {
+    "example": "tinystore events ./data list audit --since 1h",
+    "prints": "20:32:09.274 EVENT audit  role.changed  role=admin user=42\n20:32:09.287 EVENT audit  login  user=43"
+  },
+  "kv set": {
+    "example": "tinystore kv ./data set flags beta on --ttl 1h",
+    "prints": "set beta in bucket flags, expiring in 1h"
+  },
+  "kv delete": {
+    "example": "tinystore kv ./data delete sessions 42",
+    "prints": "deleted 42 from bucket sessions"
+  },
+  "jobs add": {
+    "example": "tinystore jobs ./data add emails '{\"to\": \"ada@example.com\"}' --id welcome-42 --delay 1m",
+    "prints": "added welcome-42 to queue emails, due in 1m"
+  },
+  "jobs cancel": {
+    "example": "tinystore jobs ./data cancel emails welcome-42",
+    "prints": "cancelled welcome-42 in queue emails"
+  },
+  "files put": {
+    "example": "tinystore files ./data put avatars users/42/avatar.png ./avatar.png",
+    "prints": "put users/42/avatar.png in files avatars, 8 B image/png"
+  },
+  "files delete": {
+    "example": "tinystore files ./data delete avatars users/42/avatar.png",
+    "prints": "deleted users/42/avatar.png from files avatars"
+  },
+  "channels publish": {
+    "example": "tinystore channels ./data publish chat-events '{\"kind\": \"reload\"}'",
+    "prints": "published to chat-events"
+  },
+  "channels subscribe": {
+    "example": "tinystore channels ./data subscribe chat-events --for 1m",
+    "prints": "tinystore channels subscribe: listening on chat-events\n{\"kind\":\"reload\"}\nroom-42  {\"seen\":7}"
+  },
+  "config update": {
+    "example": "tinystore config ./data update chat model.max_tokens=2048",
+    "prints": "updated config chat to version 4: model.max_tokens=2048"
+  },
+  "config reset": {
+    "example": "tinystore config ./data reset chat model.max_tokens",
+    "prints": "reset model.max_tokens of config chat: version 5"
+  },
+  "metrics ingest": {
+    "example": "tinystore metrics ./data ingest --keep 30d < scrape.txt",
+    "prints": "wrote 240 samples to ./data"
+  },
+  "metrics delete": {
+    "example": "tinystore metrics ./data delete ping_rtt_ms target=poland",
+    "prints": "deleted ping_rtt_ms{target=\"poland\"}"
+  },
+  "events append": {
+    "example": "tinystore events ./data append audit role.changed user:=42 role=admin",
+    "prints": "appended role.changed to audit"
+  },
+  "serve": {
+    "example": "tinystore serve ./data",
+    "prints": "  tinystore 0.2.0 · ./data\n\n  ● local    programs on this machine     pipe tinystore-5434ed53 · found through data/server/SERVE\n  ○ remote   off                          --listen tls://<host>:<port> serves other machines\n\n  ready in 14 ms · Ctrl+C stops · tinystore logs ./data -f · tinystore status ./data"
+  },
+  "stop": {
+    "example": "tinystore stop ./data",
+    "prints": "● ./data  stopped in 0.1s · pid 33612"
+  },
+  "backup": {
+    "example": "tinystore backup ./data backup.zip",
+    "prints": "● ./data  backed up to backup.zip · 6 files, 345 KiB"
+  },
+  "restore": {
+    "example": "tinystore restore backup.zip ./data2",
+    "prints": "● ./data2  restored from backup.zip · 6 files, 345 KiB"
+  },
+  "mcp": {
+    "example": "claude mcp add tinystore -- tinystore mcp ./data",
+    "prints": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"serverInfo\":{\"name\":\"tinystore\"}}}"
+  },
+  "token": {
+    "example": "tinystore token new admin >> tokens.txt",
+    "prints": "admin mx_62fU0LHv4raKg6ITMOB3wy0rfa8CPfk4vv9AYjg8"
+  },
+  "lock hold": {
+    "example": "tinystore lock ./data hold cron nightly-backup -- ./backup.sh",
+    "prints": "(./backup.sh's own output, while the key is held, TINYSTORE_FENCE=33075587763424675636468537884673)"
+  },
+  "completion": {
+    "example": "eval \"$(tinystore completion bash)\"     # in ~/.bashrc",
+    "prints": "# tinystore's Tab completion for bash: eval \"$(tinystore completion bash)\"\n_tinystore() {\n    …"
+  },
+  "node status": {
+    "example": "tinystore node status ./data",
+    "prints": "file        this node  entries  epoch  applied\nkv.db       home       1-412    3      412"
+  },
+  "node promote": {
+    "example": "tinystore node promote ./data",
+    "prints": "● ./data  kv.db is the home now, at epoch 4"
+  },
+  "node demote": {
+    "example": "tinystore node demote ./data",
+    "prints": "● ./data  kv.db is a copy again, of epoch 4"
+  },
+  "witness": {
+    "example": "tinystore witness ./witness --listen 0.0.0.0:7445 --token-file token",
+    "prints": "● witness  listening on 0.0.0.0:7445 · 3 nodes"
+  },
+  "migrate": {
+    "example": "tinystore migrate ./data app ./migrations",
+    "prints": "● app  applied 0002_orders.sql"
+  },
+  "schema": {
+    "example": "tinystore schema ./data app",
+    "prints": "CREATE TABLE orders (id integer primary key, user_id integer not null, total integer not null);\n\nCREATE TABLE users (id integer primary key, email text);"
+  }
+}

@@ -1,0 +1,1088 @@
+{
+  "commands": [
+    {
+      "does": "what the store holds, who serves it, how its node stands",
+      "examples": [
+        "tinystore status ./data",
+        "tinystore status ./data --json"
+      ],
+      "flags": [
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "A directory no server holds says so and exits 0.",
+      "name": "status",
+      "takes": "[dir]"
+    },
+    {
+      "does": "the application's logs, and new ones as they arrive with -f",
+      "examples": [
+        "tinystore logs ./data -f",
+        "tinystore logs ./data --since 1h --level warn"
+      ],
+      "flags": [
+        {
+          "means": "follow new lines as they come, until Ctrl+C",
+          "name": "-f",
+          "value": ""
+        },
+        {
+          "means": "how many of the last lines to print first; 20 unless --since",
+          "name": "-n",
+          "value": "<count>"
+        },
+        {
+          "means": "trace, debug, info, warn or error, and above",
+          "name": "--level",
+          "value": "<level>"
+        },
+        {
+          "means": "lines from the last span, as 30s, 15m, 1h or 2d",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "lines that hold the text, in any case",
+          "name": "--grep",
+          "value": "<text>"
+        },
+        {
+          "means": "one stream, as api",
+          "name": "--stream",
+          "value": "<name>"
+        },
+        {
+          "means": "one JSON object a line",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, and writes nothing.",
+      "name": "logs",
+      "takes": "[dir]"
+    },
+    {
+      "does": "one value of a bucket",
+      "examples": [
+        "tinystore kv ./data get sessions 42",
+        "tinystore kv ./data get drafts 7 --database app"
+      ],
+      "flags": [
+        {
+          "means": "a bucket the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        },
+        {
+          "means": "the value with its key and expiry, as JSON",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, and an encrypted bucket's values with the key the directory holds.",
+      "name": "kv get",
+      "takes": "[dir] get <bucket> <key>"
+    },
+    {
+      "does": "a bucket's keys and their values, or a branch's",
+      "examples": [
+        "tinystore kv ./data list sessions",
+        "tinystore kv ./data list sessions 42/devices"
+      ],
+      "flags": [
+        {
+          "means": "a bucket the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        },
+        {
+          "means": "each value with its key and expiry, as JSON",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, the first 1000 keys.",
+      "name": "kv list",
+      "takes": "[dir] list <bucket> [branch]"
+    },
+    {
+      "does": "a queue's jobs that have ids, with their state",
+      "examples": [
+        "tinystore jobs ./data list emails --state failed",
+        "tinystore jobs ./data list emails welcome-"
+      ],
+      "flags": [
+        {
+          "means": "scheduled, waiting, running, done or failed alone",
+          "name": "--state",
+          "value": "<state>"
+        },
+        {
+          "means": "the jobs a page holds, 100 when not given, 1000 at most",
+          "name": "--limit",
+          "value": "<count>"
+        },
+        {
+          "means": "the page after this id, as the end of the last one says",
+          "name": "--after",
+          "value": "<id>"
+        },
+        {
+          "means": "a queue the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        },
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory. --json gives a line a job, and a last line {\"next\": …} when there are more.",
+      "name": "jobs list",
+      "takes": "[dir] list <queue> [prefix]"
+    },
+    {
+      "does": "a set's files, their size, time and type",
+      "examples": [
+        "tinystore files ./data list avatars",
+        "tinystore files ./data list avatars users/42/"
+      ],
+      "flags": [
+        {
+          "means": "the files a page holds, 100 when not given, 1000 at most",
+          "name": "--limit",
+          "value": "<count>"
+        },
+        {
+          "means": "the page after this path, as the end of the last one says",
+          "name": "--after",
+          "value": "<path>"
+        },
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, in the byte order of the paths.",
+      "name": "files list",
+      "takes": "[dir] list <set> [prefix]"
+    },
+    {
+      "does": "write a set's file to a local path",
+      "examples": [
+        "tinystore files ./data get avatars users/42/avatar.png ./avatar.png"
+      ],
+      "flags": [
+        {
+          "means": "write over a file that is there",
+          "name": "--force",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, checks the bytes against their SHA-256, and writes beside the path before it renames, never to stdout, since PowerShell's > writes bytes back as text.",
+      "name": "files get",
+      "takes": "[dir] get <set> <path> <file>"
+    },
+    {
+      "does": "a config's settings as the store keeps them, and where each came from",
+      "examples": [
+        "tinystore config ./data explain chat"
+      ],
+      "flags": [
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory: the last declaration a program opened the config with, its defaults, and the changes made to its live settings. The program's own files and environment are its own, so its value may differ; a required setting they give is said as such. A secret shows as ***.",
+      "name": "config explain",
+      "takes": "[dir] explain <config>"
+    },
+    {
+      "does": "a query's rows; reads only unless --write",
+      "examples": [
+        "tinystore sql ./data app \"select count(*) from users\"",
+        "tinystore sql ./data app \"delete from users where id = 7\" --write"
+      ],
+      "flags": [
+        {
+          "means": "let the statement write, here or through the server that holds the directory",
+          "name": "--write",
+          "value": ""
+        },
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "Without --write it reads beside the program or server that holds the directory. With it, a store no one            holds is opened here; one a server holds is written through it, once, and there a statement that gives            rows back is refused; one a program holds inside its own process is refused.",
+      "name": "sql",
+      "takes": "[dir] <db> \"<query>\""
+    },
+    {
+      "does": "the store's search indexes; drop <dir> <name> drops one",
+      "examples": [
+        "tinystore search list ./data",
+        "tinystore search drop ./data posts"
+      ],
+      "flags": [],
+      "group": "Look",
+      "more": "An index no program opens any more is kept until it is dropped, since another version may open it again.",
+      "name": "search",
+      "takes": "list [dir]"
+    },
+    {
+      "does": "the metrics a store holds: kind, series, keep, newest sample",
+      "examples": [
+        "tinystore metrics ./data names",
+        "tinystore metrics ./data names http_"
+      ],
+      "flags": [
+        {
+          "means": "the page after this name, as the end of the last one says",
+          "name": "--after",
+          "value": "<name>"
+        },
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory.",
+      "name": "metrics names",
+      "takes": "[dir] names [prefix]"
+    },
+    {
+      "does": "a metric's samples, a series at a time",
+      "examples": [
+        "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
+        "tinystore metrics ./data read ping_rtt_ms --from 14:30 --to 14:35 --gaps 5s"
+      ],
+      "flags": [
+        {
+          "means": "series whose label matches: a,b for either, != for neither, a* for a prefix",
+          "name": "--where",
+          "value": "<label=value>"
+        },
+        {
+          "means": "the last span, as 15m, 1h or 2d; the last hour by default",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--from",
+          "value": "<time>"
+        },
+        {
+          "means": "up to a time, now by default",
+          "name": "--to",
+          "value": "<time>"
+        },
+        {
+          "means": "mark where a series had no sample for longer than the span",
+          "name": "--gaps",
+          "value": "<span>"
+        },
+        {
+          "means": "how many samples to print at most; 1000 by default",
+          "name": "--limit",
+          "value": "<count>"
+        },
+        {
+          "means": "one JSON object a sample, the time in UTC",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory. A time without its offset is this machine's, and the range is printed first with its zone.",
+      "name": "metrics read",
+      "takes": "[dir] read <name>"
+    },
+    {
+      "does": "a metric's samples in buckets: max, rate, p95 and more",
+      "examples": [
+        "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
+        "tinystore metrics ./data aggregate http_requests_total --since 24h --every 1h --op increase"
+      ],
+      "flags": [
+        {
+          "means": "count, sum, avg, min, max, increase, rate, delta, first, last, or p95 and any rank",
+          "name": "--op",
+          "value": "<op>"
+        },
+        {
+          "means": "a bucket a span, as 1m; one bucket for the range when absent",
+          "name": "--every",
+          "value": "<span>"
+        },
+        {
+          "means": "a group a value of the label; again for more",
+          "name": "--by",
+          "value": "<label>"
+        },
+        {
+          "means": "series whose label matches: a,b for either, != for neither, a* for a prefix",
+          "name": "--where",
+          "value": "<label=value>"
+        },
+        {
+          "means": "the last span, as 15m, 1h or 2d; the last hour by default",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--from",
+          "value": "<time>"
+        },
+        {
+          "means": "up to a time, now by default",
+          "name": "--to",
+          "value": "<time>"
+        },
+        {
+          "means": "one JSON object a bucket, the time in UTC",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory. A terminal gets a table, a row a bucket and a column a group.",
+      "name": "metrics aggregate",
+      "takes": "[dir] aggregate <name> --op <op>"
+    },
+    {
+      "does": "a stream's events, oldest first",
+      "examples": [
+        "tinystore events ./data list audit --since 1h",
+        "tinystore events ./data list audit --where user:=42 --where role=admin"
+      ],
+      "flags": [
+        {
+          "means": "events whose field holds the value; again for more",
+          "name": "--where",
+          "value": "<field=text|field:=json>"
+        },
+        {
+          "means": "trace, debug, info, warn or error, and above",
+          "name": "--level",
+          "value": "<level>"
+        },
+        {
+          "means": "the last span, as 15m, 1h or 2d; the last hour by default",
+          "name": "--since",
+          "value": "<span>"
+        },
+        {
+          "means": "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--from",
+          "value": "<time>"
+        },
+        {
+          "means": "up to a time, now by default",
+          "name": "--to",
+          "value": "<time>"
+        },
+        {
+          "means": "how many events a page holds; 100 by default",
+          "name": "--limit",
+          "value": "<count>"
+        },
+        {
+          "means": "the page after one, as its end says",
+          "name": "--after",
+          "value": "<next>"
+        },
+        {
+          "means": "one JSON object an event, as logs --json prints",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Look",
+      "more": "It reads beside the program or server that holds the directory, and prints each event as logs does.",
+      "name": "events list",
+      "takes": "[dir] list <stream>"
+    },
+    {
+      "does": "set a key's value",
+      "examples": [
+        "tinystore kv ./data set flags beta on --ttl 1h",
+        "tinystore kv ./data set counts hits 42 --as int",
+        "echo '{\"theme\": \"dark\"}' | tinystore kv ./data set settings 42 - --as json"
+      ],
+      "flags": [
+        {
+          "means": "text, int or json: what the value is, text when not given",
+          "name": "--as",
+          "value": "<type>"
+        },
+        {
+          "means": "expire the key this long from now, as 1h",
+          "name": "--ttl",
+          "value": "<span>"
+        },
+        {
+          "means": "a bucket the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        }
+      ],
+      "group": "Write",
+      "more": "A value is text unless --as says otherwise, and nothing is guessed from how it looks, so 02134 stays text. - reads the value from stdin, as Windows PowerShell 5.1 drops the quotes inside a JSON argument. Sending the same set again changes nothing. It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "kv set",
+      "takes": "<dir> set <bucket> <key> <value>"
+    },
+    {
+      "does": "delete a key",
+      "examples": [
+        "tinystore kv ./data delete sessions 42"
+      ],
+      "flags": [
+        {
+          "means": "a bucket the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        }
+      ],
+      "group": "Write",
+      "more": "It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "kv delete",
+      "takes": "<dir> delete <bucket> <key>"
+    },
+    {
+      "does": "add a job to a queue",
+      "examples": [
+        "tinystore jobs ./data add emails '{\"to\": \"ada@example.com\"}' --id welcome-42 --delay 1m",
+        "echo '{\"to\": \"ada@example.com\"}' | tinystore jobs ./data add emails -"
+      ],
+      "flags": [
+        {
+          "means": "what names the job: a queue that holds it adds nothing, and cancel needs it",
+          "name": "--id",
+          "value": "<id>"
+        },
+        {
+          "means": "run it this long from now, as 1m",
+          "name": "--delay",
+          "value": "<span>"
+        },
+        {
+          "means": "run it at this time, as 14:30 or 2026-10-27T09:00:00Z",
+          "name": "--at",
+          "value": "<time>"
+        },
+        {
+          "means": "a queue the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        }
+      ],
+      "group": "Write",
+      "more": "A job is JSON; - reads it from stdin. It runs in the program whose worker takes the queue, with that worker's attempts and timeout. With --id, sending the same add again adds nothing. It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "jobs add",
+      "takes": "<dir> add <queue> <json>"
+    },
+    {
+      "does": "cancel a job by its id",
+      "examples": [
+        "tinystore jobs ./data cancel emails welcome-42"
+      ],
+      "flags": [
+        {
+          "means": "a queue the program opened from this database, kept in sql/<db>.db",
+          "name": "--database",
+          "value": "<db>"
+        }
+      ],
+      "group": "Write",
+      "more": "It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "jobs cancel",
+      "takes": "<dir> cancel <queue> <id>"
+    },
+    {
+      "does": "write a local file at a path of a set",
+      "examples": [
+        "tinystore files ./data put avatars users/42/avatar.png ./avatar.png",
+        "pg_dump app | tinystore files ./data put dumps app.sql -"
+      ],
+      "flags": [
+        {
+          "means": "its content type, as image/png; from its extension when not given",
+          "name": "--type",
+          "value": "<type>"
+        }
+      ],
+      "group": "Write",
+      "more": "It replaces whatever the path held, so sending it again leaves the same. - reads the bytes from stdin. A file without --type takes the type of its extension when it is a common one, and is bytes otherwise. It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "files put",
+      "takes": "<dir> put <set> <path> <file>"
+    },
+    {
+      "does": "delete a set's file",
+      "examples": [
+        "tinystore files ./data delete avatars users/42/avatar.png"
+      ],
+      "flags": [],
+      "group": "Write",
+      "more": "It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused.",
+      "name": "files delete",
+      "takes": "<dir> delete <set> <path>"
+    },
+    {
+      "does": "hand a message to whoever listens now",
+      "examples": [
+        "tinystore channels ./data publish chat-events '{\"kind\": \"reload\"}'",
+        "tinystore channels ./data publish chat-events '{\"seen\": 7}' --under room-42"
+      ],
+      "flags": [
+        {
+          "means": "the branch it goes to, its owners as 42/devices",
+          "name": "--under",
+          "value": "<branch>"
+        }
+      ],
+      "group": "Write",
+      "more": "A message is JSON; - reads it from stdin. A subscription listening now receives it, and no one else ever will. It is sent once, never again after a lost answer, since a second would be delivered too. It goes through the server that holds the directory, or starts one that stops 30 s after its last client.",
+      "name": "channels publish",
+      "takes": "<dir> publish <channel> <json>"
+    },
+    {
+      "does": "print each message published from now on",
+      "examples": [
+        "tinystore channels ./data subscribe chat-events --for 1m"
+      ],
+      "flags": [
+        {
+          "means": "stop after this long, as 1m; never when not given",
+          "name": "--for",
+          "value": "<span>"
+        },
+        {
+          "means": "listen to this branch, its owners as 42/devices",
+          "name": "--under",
+          "value": "<branch>"
+        },
+        {
+          "means": "and to every branch below it",
+          "name": "--recursive",
+          "value": ""
+        },
+        {
+          "means": "each message with its branch, as JSON",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Write",
+      "more": "A channel lives in the process that holds the store, so it listens through the server that holds the directory, or one it starts. stderr says when it listens; a message published before is not received.",
+      "name": "channels subscribe",
+      "takes": "<dir> subscribe <channel>"
+    },
+    {
+      "does": "change a config's live settings, which its programs take at once",
+      "examples": [
+        "tinystore config ./data update chat model.max_tokens=2048",
+        "tinystore config ./data update chat limits.window=30s 'model.stop:=[\"\\n\"]'"
+      ],
+      "flags": [],
+      "group": "Write",
+      "more": "A value is read by its setting's kind, as an environment variable is: 2048 an integer, 30s a span, a,b a list. path:=json gives JSON as it is. Only a live setting changes, checked against its rules, as the store keeps it. It goes through the server that holds the directory, or one it starts, so that every program holding the config takes the change at once.",
+      "name": "config update",
+      "takes": "<dir> update <config> <path=value>…"
+    },
+    {
+      "does": "drop the changes of a setting, a group, or every one",
+      "examples": [
+        "tinystore config ./data reset chat model.max_tokens",
+        "tinystore config ./data reset chat"
+      ],
+      "flags": [],
+      "group": "Write",
+      "more": "A setting it resets goes back to what the program's own declaration, files and environment give. It goes through the server that holds the directory, or one it starts.",
+      "name": "config reset",
+      "takes": "<dir> reset <config> [path]"
+    },
+    {
+      "does": "write the Prometheus text on stdin to the store's metrics",
+      "examples": [
+        "curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1",
+        "tinystore metrics ./data ingest --keep 30d < scrape.txt",
+        "ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter"
+      ],
+      "flags": [
+        {
+          "means": "follow a stream that does not end, written every second; a line it cannot read is skipped",
+          "name": "-f",
+          "value": ""
+        },
+        {
+          "means": "a name's type where the stream gives no # TYPE, as x_total=counter; with -f",
+          "name": "--kind",
+          "value": "<name=type>"
+        },
+        {
+          "means": "a label every series of the text gets; again for more",
+          "name": "--label",
+          "value": "<name=value>"
+        },
+        {
+          "means": "how long each name of the text keeps its samples, as 30d; 30d when never given",
+          "name": "--keep",
+          "value": "<span>"
+        }
+      ],
+      "group": "Write",
+      "more": "Every series of the text is written, or none, in Prometheus' format or OpenMetrics'. With -f, Prometheus' text alone is read a line at a time and written every second or 10,000 lines; a line it cannot read, or the store refuses, is said and skipped, and the command ends 1. A name with no type is a gauge. It writes through the server that holds the directory, or starts one that stops 30 s after its last client; a directory a program holds inside its own process is refused. A sample given no time takes the time it was read, the same when a lost write is sent again.",
+      "name": "metrics ingest",
+      "takes": "<dir> ingest"
+    },
+    {
+      "does": "delete one series, named by all its labels",
+      "examples": [
+        "tinystore metrics ./data delete ping_rtt_ms target=poland"
+      ],
+      "flags": [],
+      "group": "Write",
+      "more": "It deletes the one series whose labels are exactly these, and writes through the server that holds the directory, or starts one.",
+      "name": "metrics delete",
+      "takes": "<dir> delete <name> [label=value]..."
+    },
+    {
+      "does": "write an event, or another program's output on stdin, to a stream",
+      "examples": [
+        "tinystore events ./data append audit role.changed user:=42 role=admin",
+        "my-worker 2>&1 | tinystore events ./data append worker"
+      ],
+      "flags": [
+        {
+          "means": "what names the event in its stream: an id it holds writes nothing",
+          "name": "--id",
+          "value": "<id>"
+        },
+        {
+          "means": "when it happened: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--at",
+          "value": "<time>"
+        },
+        {
+          "means": "trace, debug, info, warn or error",
+          "name": "--level",
+          "value": "<level>"
+        }
+      ],
+      "group": "Write",
+      "more": "With a name it writes one event, field=text a text and field:=json any JSON value. Without one it writes stdin a line an event, a stack trace joined into one, JSON and logfmt lines kept as their fields. It writes through the server that holds the directory, or starts one.",
+      "name": "events append",
+      "takes": "<dir> append <stream> [name] [field=text|field:=json]..."
+    },
+    {
+      "does": "share the store with programs here and elsewhere, until Ctrl+C",
+      "examples": [
+        "tinystore serve ./data",
+        "tinystore serve ./data --listen tls://0.0.0.0:7443 --tls-cert cert.pem --tls-key key.pem --tokens tokens.txt",
+        "tinystore serve ./data --node-listen 0.0.0.0:7444 --from us.internal:7444 --node-config node.toml"
+      ],
+      "flags": [
+        {
+          "means": "one client on stdin and stdout, for a program that starts the server itself",
+          "name": "--stdio",
+          "value": ""
+        },
+        {
+          "means": "serve other machines over TLS",
+          "name": "--listen",
+          "value": "tls://<host>:<port>"
+        },
+        {
+          "means": "the certificate chain it answers with",
+          "name": "--tls-cert",
+          "value": "<pem>"
+        },
+        {
+          "means": "its private key",
+          "name": "--tls-key",
+          "value": "<pem>"
+        },
+        {
+          "means": "who may connect: admin, data and read tokens, a line each",
+          "name": "--tokens",
+          "value": "<file>"
+        },
+        {
+          "means": "where other nodes copy from this one",
+          "name": "--node-listen",
+          "value": "<host>:<port>"
+        },
+        {
+          "means": "a node it copies from; again for the next to try",
+          "name": "--from",
+          "value": "<host>:<port>"
+        },
+        {
+          "means": "the rest of what the node is",
+          "name": "--node-config",
+          "value": "<file.toml>"
+        },
+        {
+          "means": "what the engines may hold at once, as 512MiB; 1GiB with --listen",
+          "name": "--memory",
+          "value": "<size>"
+        },
+        {
+          "means": "stop once no client has been connected this long; never by default",
+          "name": "--idle",
+          "value": "<span>"
+        },
+        {
+          "means": "how far a commit goes before it returns; each engine's own",
+          "name": "--durability",
+          "value": "full|os"
+        },
+        {
+          "means": "the disk the store keeps free; 1GiB by default",
+          "name": "--keep-free",
+          "value": "<size>"
+        },
+        {
+          "means": "the store's key, kept apart from its data",
+          "name": "--encryption-key-file",
+          "value": "<file>"
+        },
+        {
+          "means": "measure the store into its own metrics, as tinystore_ names",
+          "name": "--self-metrics",
+          "value": ""
+        },
+        {
+          "means": "with --self-metrics, leave out the machine it runs on",
+          "name": "--no-system-metrics",
+          "value": ""
+        },
+        {
+          "means": "the metrics series the store holds at most; 100000 by default",
+          "name": "--max-series",
+          "value": "<count>"
+        },
+        {
+          "means": "JSON lines to a file as well",
+          "name": "--log-file",
+          "value": "<file>"
+        },
+        {
+          "means": "the banner, warnings and errors only",
+          "name": "--quiet",
+          "value": ""
+        }
+      ],
+      "group": "Run",
+      "more": "Programs on this machine find it through <dir>/server/SERVE. A node's rarer settings live in its --node-config file: files, token-file, catalog, advertise, synchronous, synchronous-with, failover, insecure and [tls] cert, key and roots.",
+      "name": "serve",
+      "takes": "<dir>"
+    },
+    {
+      "does": "stop the server of a directory, its work finished",
+      "examples": [
+        "tinystore stop ./data"
+      ],
+      "flags": [],
+      "group": "Run",
+      "more": "The clients are told to leave and the streams running finish. With no server it says so and exits 1.",
+      "name": "stop",
+      "takes": "<dir>"
+    },
+    {
+      "does": "the whole store in one checked zip, while it runs",
+      "examples": [
+        "tinystore backup ./data backup.zip"
+      ],
+      "flags": [
+        {
+          "means": "a file of the program's own in the directory; again for more",
+          "name": "--include",
+          "value": "<name>"
+        },
+        {
+          "means": "the store's key too, which a backup leaves out by default",
+          "name": "--include-encryption-key",
+          "value": ""
+        },
+        {
+          "means": "where the store's key is, when not in the directory",
+          "name": "--encryption-key-file",
+          "value": "<file>"
+        }
+      ],
+      "group": "Run",
+      "more": "It reads beside a server or program that holds the directory, and alone when none does.",
+      "name": "backup",
+      "takes": "<dir> <zip>"
+    },
+    {
+      "does": "a backup into an empty directory",
+      "examples": [
+        "tinystore restore backup.zip ./data2"
+      ],
+      "flags": [],
+      "group": "Run",
+      "more": "Every byte is checked against the backup's manifest, or nothing is left behind.",
+      "name": "restore",
+      "takes": "<zip> <dir>"
+    },
+    {
+      "does": "let an AI agent read the store, and write what --write names",
+      "examples": [
+        "claude mcp add tinystore -- tinystore mcp ./data",
+        "claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add"
+      ],
+      "flags": [
+        {
+          "means": "the tools that write it offers, as kv_set,jobs_add, or all; none when absent",
+          "name": "--write",
+          "value": "<tools>"
+        }
+      ],
+      "group": "Run",
+      "more": "The Model Context Protocol on stdin and stdout. Its tools that read: status, logs, kv_get, kv_list, jobs_list, sql_query and search_list. Those that write, a tool an operation, only as --write names them: kv_set, kv_delete, jobs_add, jobs_cancel, files_put, files_delete, events_append, channels_publish, config_update, config_reset and sql_exec. Each is marked as writing, and as destructive where it removes or replaces something, so that the agent's host asks for each; they write through the server that holds the directory, or one they start.",
+      "name": "mcp",
+      "takes": "[dir]"
+    },
+    {
+      "does": "a token line for serve's --tokens",
+      "examples": [
+        "tinystore token new admin >> tokens.txt"
+      ],
+      "flags": [],
+      "group": "Run",
+      "more": "admin may do anything, data reads and writes the store, read only reads it.",
+      "name": "token",
+      "takes": "new [admin|data|read]"
+    },
+    {
+      "does": "run a command while it holds a key of a lock",
+      "examples": [
+        "tinystore lock ./data hold cron nightly-backup -- ./backup.sh",
+        "tinystore lock ./data hold cron nightly-backup --wait 0 -- ./backup.sh"
+      ],
+      "flags": [
+        {
+          "means": "stand in line this long for the key, 10s when not given; 0 takes it only if free",
+          "name": "--wait",
+          "value": "<span>"
+        },
+        {
+          "means": "how long the lease lasts from each renewal, 30s when not given",
+          "name": "--ttl",
+          "value": "<span>"
+        },
+        {
+          "means": "let the key go this long after it was given, however it is renewed",
+          "name": "--max-hold",
+          "value": "<span>"
+        }
+      ],
+      "group": "Run",
+      "more": "The key is held through the server that holds the directory, or one it starts, and its lease renewed every third of --ttl while the command runs. The command gets the lease's fence in TINYSTORE_FENCE, is stopped if the lease is lost, and the key is let go once it ends; the command's exit is this one's. A key held by another past --wait exits 1 and runs nothing.",
+      "name": "lock hold",
+      "takes": "<dir> hold <lock> <key> -- <command>"
+    },
+    {
+      "does": "the lines that give a shell Tab's completion",
+      "examples": [
+        "eval \"$(tinystore completion bash)\"     # in ~/.bashrc",
+        "eval \"$(tinystore completion zsh)\"      # in ~/.zshrc",
+        "tinystore completion fish | source        # in ~/.config/fish/config.fish",
+        "tinystore completion powershell | Out-String | Invoke-Expression   # in $PROFILE"
+      ],
+      "flags": [],
+      "group": "Run",
+      "more": "bash, zsh, fish or powershell. Tab then offers commands, verbs, flags and their values, and the names a store holds, read beside it: buckets, queues, sets of files, streams, metrics and their labels. It makes no store and writes nothing.",
+      "name": "completion",
+      "takes": "<shell>"
+    },
+    {
+      "does": "the node's files, its links and how far behind its copies are",
+      "examples": [
+        "tinystore node status ./data"
+      ],
+      "flags": [
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Nodes",
+      "more": "",
+      "name": "node status",
+      "takes": "[dir]"
+    },
+    {
+      "does": "make a copy the home, once its old home is gone",
+      "examples": [
+        "tinystore node promote ./data",
+        "tinystore node promote ./data sql/app.db --from us.internal:7444"
+      ],
+      "flags": [
+        {
+          "means": "a node the copy took its files from, asked first; again for more",
+          "name": "--from",
+          "value": "<host>:<port>"
+        },
+        {
+          "means": "the node's settings, for the token and TLS that reach them",
+          "name": "--node-config",
+          "value": "<file.toml>"
+        },
+        {
+          "means": "promote though a node it took from still answers",
+          "name": "--force",
+          "value": ""
+        }
+      ],
+      "group": "Nodes",
+      "more": "The node must be stopped. Each node named by --from is asked first: one that still serves the file would make a second home, so the promotion is refused unless --force.",
+      "name": "node promote",
+      "takes": "<dir> [file]"
+    },
+    {
+      "does": "make an old home's files copies again",
+      "examples": [
+        "tinystore node demote ./data"
+      ],
+      "flags": [],
+      "group": "Nodes",
+      "more": "The node must be stopped. Start it again with --from its new home to take each file again.",
+      "name": "node demote",
+      "takes": "<dir> [file]"
+    },
+    {
+      "does": "decide which node writes a file when its home goes quiet",
+      "examples": [
+        "tinystore witness ./witness --listen 0.0.0.0:7445 --token-file token"
+      ],
+      "flags": [
+        {
+          "means": "where nodes reach it",
+          "name": "--listen",
+          "value": "<host>:<port>"
+        },
+        {
+          "means": "the token nodes say to it",
+          "name": "--token-file",
+          "value": "<file>"
+        },
+        {
+          "means": "the certificate chain it answers with",
+          "name": "--tls-cert",
+          "value": "<pem>"
+        },
+        {
+          "means": "its private key",
+          "name": "--tls-key",
+          "value": "<pem>"
+        },
+        {
+          "means": "plain TCP beyond this machine, which anyone on the way reads",
+          "name": "--insecure",
+          "value": ""
+        },
+        {
+          "means": "warnings and errors only",
+          "name": "--quiet",
+          "value": ""
+        }
+      ],
+      "group": "Nodes",
+      "more": "A witness keeps each file's lease and no data; nodes name it as failover in their node config.",
+      "name": "witness",
+      "takes": "<dir> --listen <host>:<port>"
+    },
+    {
+      "does": "apply a database's migration files",
+      "examples": [
+        "tinystore migrate ./data app ./migrations"
+      ],
+      "flags": [],
+      "group": "Develop",
+      "more": "It applies the files the database has not applied, in one transaction, and refuses one that applied an edited, renamed or missing file. No program may hold the directory meanwhile.",
+      "name": "migrate",
+      "takes": "<dir> <db> <migrations>"
+    },
+    {
+      "does": "a database's tables, columns and indexes",
+      "examples": [
+        "tinystore schema ./data app",
+        "tinystore schema ./data"
+      ],
+      "flags": [
+        {
+          "means": "one JSON document, for scripts",
+          "name": "--json",
+          "value": ""
+        }
+      ],
+      "group": "Develop",
+      "more": "Without a database it lists the store's databases.",
+      "name": "schema",
+      "takes": "<dir> [db]"
+    }
+  ],
+  "words": {
+    "<bucket>": "a kv bucket's name",
+    "<channel>": "a channel's name",
+    "<command>": "the command to run, with its own arguments",
+    "<config>": "a config's name, as its program opened it",
+    "<db>": "one of the application's databases, kept in sql/<db>.db",
+    "<dir>": "the store's directory",
+    "<file>": "a file on this machine",
+    "<host>": "a host name or an address",
+    "<id>": "a job's id",
+    "<json>": "JSON: an object, a list, a string or a number; - reads it from stdin",
+    "<key>": "a key of the bucket",
+    "<lock>": "a lock's name",
+    "<migrations>": "a directory of migration files, 0001_users.sql and on",
+    "<name>": "the name of what the command reads or changes: a metric, or an index",
+    "<op>": "what an aggregate computes: count, sum, avg, min, max, increase, rate, or p and a rank, as p95",
+    "<path=value>": "a live setting's path and its value, as model.max_tokens=2048; path:=json for JSON",
+    "<path>": "a file's path in its set",
+    "<port>": "a port number",
+    "<query>": "one SQL statement, quoted",
+    "<queue>": "a queue's name",
+    "<set>": "a set of files' name",
+    "<shell>": "bash, zsh, fish or powershell",
+    "<stream>": "a stream of events' name",
+    "<value>": "the value: text unless --as says int or json; - reads it from stdin",
+    "<zip>": "a backup's zip file",
+    "[admin|data|read]": "what a token lets its client do: everything, data alone, or read",
+    "[branch]": "the keys under a branch, its owners as 42/devices",
+    "[db]": "one of the application's databases; every one when left out",
+    "[dir]": "the store's directory; the current one when left out",
+    "[field=text|field:=json]": "what an event carries: field=text for text, field:=json for JSON",
+    "[file]": "one file of the store, as sql/app.db; every one when left out",
+    "[label=value]": "the series' labels, exactly",
+    "[name]": "the event's name; without one, each line of stdin is an event",
+    "[path]": "a setting or a group; every change when left out",
+    "[prefix]": "only the names, ids or paths that start with it"
+  }
+}

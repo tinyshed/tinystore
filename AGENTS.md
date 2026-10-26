@@ -74,8 +74,9 @@ What has cost time before, so that it does not again:
   and `docs/wire.md`'s tables of methods from `protocol/*.wire` (`just
   protocol`), the API pages in `docs/reference/` from the doc comments (`cd
   web && bun run reference`), the README's headline, sample and engines from
-  `web/landing.md` (`task readme`). Each has a check that fails when they
-  differ.
+  `web/landing.md` (`task readme`), the site's copy of the command line's
+  help and what its examples print (`just cli-json`). Each has a check that
+  fails when they differ, except the printed examples, which hold a run's times.
 - **Windows is the slowest platform and the strictest**: files held open,
   paths, pipes, processes and their exit. Read the `platform-traps` skill
   before touching files, processes, stdio or sockets.

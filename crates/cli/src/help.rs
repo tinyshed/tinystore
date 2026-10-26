@@ -564,6 +564,47 @@ pub(crate) const METRICS_INGEST: Command = Command {
            was read, the same when a lost write is sent again.",
 };
 
+/// What each word a command takes stands for, as `help --json` and the
+/// site's explain say it: every `<word>` and `[word]` of a command's `takes`
+/// is here, and nothing else.
+pub(crate) const WORDS: [(&str, &str); 35] = [
+    ("<bucket>", "a kv bucket's name"),
+    ("<channel>", "a channel's name"),
+    ("<command>", "the command to run, with its own arguments"),
+    ("<config>", "a config's name, as its program opened it"),
+    ("<db>", "one of the application's databases, kept in sql/<db>.db"),
+    ("<dir>", "the store's directory"),
+    ("<file>", "a file on this machine"),
+    ("<host>", "a host name or an address"),
+    ("<id>", "a job's id"),
+    ("<json>", "JSON: an object, a list, a string or a number; - reads it from stdin"),
+    ("<key>", "a key of the bucket"),
+    ("<lock>", "a lock's name"),
+    ("<migrations>", "a directory of migration files, 0001_users.sql and on"),
+    ("<name>", "the name of what the command reads or changes: a metric, or an index"),
+    ("<op>", "what an aggregate computes: count, sum, avg, min, max, increase, rate, or p and a rank, as p95"),
+    ("<path=value>", "a live setting's path and its value, as model.max_tokens=2048; path:=json for JSON"),
+    ("<path>", "a file's path in its set"),
+    ("<port>", "a port number"),
+    ("<query>", "one SQL statement, quoted"),
+    ("<queue>", "a queue's name"),
+    ("<set>", "a set of files' name"),
+    ("<shell>", "bash, zsh, fish or powershell"),
+    ("<stream>", "a stream of events' name"),
+    ("<value>", "the value: text unless --as says int or json; - reads it from stdin"),
+    ("<zip>", "a backup's zip file"),
+    ("[admin|data|read]", "what a token lets its client do: everything, data alone, or read"),
+    ("[branch]", "the keys under a branch, its owners as 42/devices"),
+    ("[db]", "one of the application's databases; every one when left out"),
+    ("[dir]", "the store's directory; the current one when left out"),
+    ("[field=text|field:=json]", "what an event carries: field=text for text, field:=json for JSON"),
+    ("[file]", "one file of the store, as sql/app.db; every one when left out"),
+    ("[label=value]", "the series' labels, exactly"),
+    ("[name]", "the event's name; without one, each line of stdin is an event"),
+    ("[path]", "a setting or a group; every change when left out"),
+    ("[prefix]", "only the names, ids or paths that start with it"),
+];
+
 /// The commands by what a person does with them.
 pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
     (
@@ -702,6 +743,38 @@ pub(crate) fn of_command(colours: bool, command: &Command) -> String {
     help
 }
 
+/// Every command as data, for `help --all --json`: what an agent learns the
+/// whole command line from, and what the site's highlighting and explain read,
+/// from `web/src/lib/content/cli.json`, which `just cli-json` writes.
+pub(crate) fn json() -> serde_json::Value {
+    let flag = |flag: &Flag| serde_json::json!({ "name": flag.name, "value": flag.value, "means": flag.means });
+    let commands: Vec<serde_json::Value> = GROUPS
+        .iter()
+        .flat_map(|(group, commands)| commands.iter().map(move |command| (*group, *command)))
+        .map(|(group, command)| {
+            let flags: Vec<serde_json::Value> =
+                command.flags.iter().filter(|known| known.heading != HIDDEN).map(flag).collect();
+            serde_json::json!({
+                "name": command.name,
+                "group": group,
+                "takes": command.takes,
+                "does": command.does,
+                "flags": flags,
+                "examples": command.examples,
+                "more": command.more,
+            })
+        })
+        .collect();
+    let words: serde_json::Map<String, serde_json::Value> =
+        WORDS.iter().map(|(word, means)| ((*word).to_owned(), (*means).into())).collect();
+    serde_json::json!({ "commands": commands, "words": words })
+}
+
+/// `json` as the site keeps it: indented, a line end last.
+pub(crate) fn json_text() -> String {
+    format!("{}\n", serde_json::to_string_pretty(&json()).expect("the help is JSON"))
+}
+
 /// Text broken into lines of at most `width` columns, at spaces.
 fn wrapped(text: &str, width: usize) -> String {
     let mut lines = vec![String::new()];
@@ -832,6 +905,35 @@ pub(crate) fn print_group(group: &str) -> Done {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each `<word>` and `[word]` of a command's `takes`: `<host>:<port>`
+    /// is two, `"<query>"` one.
+    fn bracketed(takes: &str) -> Vec<&str> {
+        let mut found = Vec::new();
+        let mut rest = takes;
+        while let Some(start) = rest.find(['<', '[']) {
+            let close = if rest[start..].starts_with('<') { '>' } else { ']' };
+            let Some(end) = rest[start..].find(close) else { break };
+            found.push(&rest[start..start + end + 1]);
+            rest = &rest[start + end + 1..];
+        }
+        found
+    }
+
+    #[test]
+    fn every_word_a_command_takes_says_what_it_stands_for() {
+        let commands = GROUPS.iter().flat_map(|(_, commands)| commands.iter());
+        let taken: std::collections::BTreeSet<&str> = commands.flat_map(|command| bracketed(command.takes)).collect();
+        let said: std::collections::BTreeSet<&str> = WORDS.iter().map(|(word, _)| *word).collect();
+        assert_eq!(taken, said, "a word of a command's takes and WORDS");
+    }
+
+    #[test]
+    fn the_sites_copy_of_the_help_is_the_help() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/src/lib/content/cli.json");
+        let kept = std::fs::read_to_string(path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(kept == json_text(), "web/src/lib/content/cli.json is not the help: just cli-json writes it again");
+    }
 
     #[test]
     fn the_help_groups_every_command_and_lines_up_what_each_does() {

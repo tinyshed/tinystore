@@ -158,6 +158,10 @@ web-dev:
 contracts:
     bun tools/contracts.ts
 
+# the command line's help as data, which the site's highlighting and explain read
+cli-json:
+    bun tools/cli-json.ts
+
 # align every markdown table of the repository as an IDE formats it
 [working-directory: 'web']
 tables:

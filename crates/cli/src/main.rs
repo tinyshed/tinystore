@@ -123,6 +123,9 @@ fn main() -> ExitCode {
         None => asked::exit("", help::print()),
         Some("help" | "--help" | "-h") if rest.is_empty() => asked::exit("help", help::print()),
         Some("help" | "--help" | "-h") if rest == ["--all"] => asked::exit("help", help::print_all()),
+        Some("help") if rest.contains(&"--all".to_owned()) && rest.contains(&"--json".to_owned()) => {
+            asked::exit("help", out!("{}", help::json_text()))
+        }
         Some("help") => {
             let name = rest.join(" ");
             match help::command(&name).or_else(|| help::command(&rest[0])) {
