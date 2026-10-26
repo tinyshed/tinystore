@@ -122,3 +122,30 @@ fn sums_compare_as_the_numbers_they_are() {
     order.sort();
     assert_eq!(order, sorted);
 }
+
+// contract: MET-04
+#[test]
+fn a_programs_exact_sum_rounds_once_and_merges_as_a_group_adds_its_series() {
+    let values = floats(2000);
+    let whole: ExactSum = values.iter().copied().collect();
+    assert_eq!(whole.value().to_bits(), sum(&values).round().to_bits(), "what an aggregate's sum gives");
+    let (mut first, second): (ExactSum, ExactSum) =
+        (values[..700].iter().copied().collect(), values[700..].iter().copied().collect());
+    first.merge(&second);
+    assert_eq!(first.value().to_bits(), whole.value().to_bits(), "two halves merged");
+    first.sub(values[0]);
+    let rest: ExactSum = values[1..].iter().copied().collect();
+    assert_eq!(first.value().to_bits(), rest.value().to_bits(), "one taken away");
+}
+
+#[test]
+fn an_infinity_or_a_nan_makes_the_sum_what_a_float_sum_makes_it() {
+    let infinite: ExactSum = [1.0, f64::INFINITY, -1e308].into_iter().collect();
+    assert_eq!(infinite.value(), f64::INFINITY);
+    let both: ExactSum = [f64::INFINITY, 2.0, f64::NEG_INFINITY].into_iter().collect();
+    assert!(both.value().is_nan());
+    assert!([f64::NAN, 1.0].into_iter().collect::<ExactSum>().value().is_nan());
+    let past: ExactSum = [f64::MAX, f64::MAX].into_iter().collect();
+    assert_eq!(past.value(), f64::INFINITY, "past what a float holds");
+    assert_eq!(ExactSum::default().value().to_bits(), 0.0_f64.to_bits(), "an empty sum is +0");
+}

@@ -63,6 +63,8 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
   repeated after a lost connection counts once.
 - An ingest sent again changes nothing, even after the store packed its
   samples (MET-16).
+- An aggregate of series that you hold in memory, in Rust, gives what a query
+  of the same samples in a store gives (MET-18).
 - Not promised: a sample with a new value behind its series' sealed frontier
   is refused (NOT-08).
 

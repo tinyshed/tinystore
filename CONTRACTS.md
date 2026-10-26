@@ -187,6 +187,7 @@ These contracts are what does not.
 - **MET-15** A text in Prometheus' format or OpenMetrics' MUST be written whole, each sample as the kind its family's type gives and its value bit for bit, or refused whole, naming the line it cannot read; a family's `# HELP` MUST give each name it writes a help, and its `# UNIT` the names whose values are in that unit, where the name has none, never replacing what `describe` gave.
 - **MET-16** An ingest sent again MUST change nothing, packed or not: a sample behind what its series has packed that is bit for bit the one packed at its time MUST be taken as nothing, and any other MUST refuse the ingest whole, naming the sample's time, `at`, and the time its series has packed before, `packed`.
 - **MET-17** A read or an aggregate given `limit` MUST answer a page that stopped before passing `limit` or any bound of a query, with `next` unless it is the last, each `next` past the `after` it went on from; the pages `next` leads to MUST give, for data unchanged between them, exactly the samples or the buckets one call without `limit` gives, each once and in order; a page MUST NOT split a bucket nor make one `partial`, and a bucket that alone passes a bound MUST be `limit`; a cursor MUST be refused with another query.
+- **MET-18** An aggregate of series a program holds MUST answer, bucket for bucket, what a query of the same samples in a store answers for the same range and buckets.
 
 ### Search
 

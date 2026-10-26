@@ -271,11 +271,47 @@ for group in page.all() {
 - `next`, walking a page and what happens to writes between pages work as
   for [a read in pages](reading.md#read-a-long-range-in-pages).
 
+## Samples you don't store
+
+A Rust program that reads numbers live and never keeps them, such as rows of
+another database or a payments API, can aggregate them without a store. Call
+`query` on a `Series` you built in memory. It returns the same buckets that a
+store's query returns for the same samples, because the same code counts
+them, and it writes nothing to disk.
+
+```rust
+use tinystore::metrics::{self, ExactSum, Op, Series};
+
+let requests = Series::counter("requests").sample(t0, 100.0).sample(t0 + Duration::from_secs(10), 150.0)
+    .sample(t0 + Duration::from_secs(20), 20.0); // the process restarted
+let minute = requests.query().from(t0).to(t0 + Duration::from_mins(1)).aggregate(Op::Increase)?;
+// minute.buckets[0]: value 70, resets 1, as a store's query of these samples gives
+
+let fleet = metrics::query(&[web1, web2]).calendar(Calendar::Day, "Europe/Moscow").aggregate(Op::Sum)?;
+// one group: each series summed exactly, then the group, rounded once
+
+let total: ExactSum = amounts.iter().copied().collect();
+let paid = total.value(); // 1.0 for ten amounts of 0.1, where a float sum gives 0.9999999999999999
+```
+
+- `query` takes `from`, `to`, `every`, `calendar` and `estimate`, as a store's
+  query does. Without `from` and `to`, the range runs from the first sample to
+  the last.
+- The series that you pass are one group, which you choose. They must share a
+  name and a kind. The answer's labels are the ones that every series has.
+- A bucket is `partial` against your machine's clock, as a store's query is
+  against the store's.
+- `ExactSum` is the sum alone: `add`, `sub`, `merge` for a group of sums, and
+  `value`, rounded once.
+- Only Rust has it so far. Bun, Node, Python and Go reach the metrics engine
+  through a store.
+
 ## Errors
 
 | Error     | When                                                                                                                                 |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding a NaN or an infinity; a counter below zero |
+| `invalid` | samples you hold: series of two names or kinds, or two samples of one series in the same millisecond                                 |
 | `limit`   | without `limit`, past 100,000 buckets; a bound of the query, which it names; one bucket that alone passes a bound                    |
 
 ## See also

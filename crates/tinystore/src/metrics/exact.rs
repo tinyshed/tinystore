@@ -268,6 +268,72 @@ impl Ord for Exact {
     }
 }
 
+/// A sum of floats kept exactly and rounded once, as an aggregate of the
+/// store sums its samples: for a program that sums what it never writes and
+/// wants the number a query of the same samples gives.
+///
+/// ```
+/// use tinystore::metrics::ExactSum;
+/// let tenths: ExactSum = [0.1; 10].into_iter().collect();
+/// assert_eq!(tenths.value(), 1.0, "where a float sum gives 0.9999999999999999");
+/// let mut sum = ExactSum::default();
+/// [1e308, 1e308, -1e308].into_iter().for_each(|value| sum.add(value));
+/// assert_eq!(sum.value(), 1e308, "and no infinity on the way");
+/// ```
+///
+/// An infinity or a NaN added makes the sum what a float sum makes it, since
+/// it has no exact value; past what a float holds the value is an infinity.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct ExactSum {
+    finite: Exact,
+    /// The infinities and NaNs added, summed as floats: 0 while there is none.
+    beyond: f64,
+}
+
+impl ExactSum {
+    pub fn add(&mut self, value: f64) {
+        if !self.finite.add_float(value) {
+            self.beyond += value;
+        }
+    }
+
+    /// Takes `value` away, exactly: a sum less what one series gave it.
+    pub fn sub(&mut self, value: f64) {
+        self.add(-value);
+    }
+
+    /// Adds another sum, exactly: a group's sum of its series' sums.
+    pub fn merge(&mut self, other: &ExactSum) {
+        self.finite.add(&other.finite);
+        self.beyond += other.beyond;
+    }
+
+    /// The float nearest the sum, a tie to the even one.
+    pub fn value(&self) -> f64 {
+        if self.beyond != 0.0 { self.beyond } else { self.finite.round() }
+    }
+}
+
+impl std::fmt::Debug for ExactSum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ExactSum({})", self.value())
+    }
+}
+
+impl Extend<f64> for ExactSum {
+    fn extend<I: IntoIterator<Item = f64>>(&mut self, values: I) {
+        values.into_iter().for_each(|value| self.add(value));
+    }
+}
+
+impl FromIterator<f64> for ExactSum {
+    fn from_iter<I: IntoIterator<Item = f64>>(values: I) -> ExactSum {
+        let mut sum = ExactSum::default();
+        sum.extend(values);
+        sum
+    }
+}
+
 /// A finite float's mantissa and where it stands in units: a normal float's
 /// 53 bits shifted by its exponent less one, a subnormal's as they are.
 fn units(value: f64) -> Option<(u64, u32)> {

@@ -17,7 +17,9 @@ use super::codec::Point;
 use super::directory::Block;
 use super::engine::Engine;
 use super::grid::Bin;
+use super::held::Held;
 use super::labels::BIN;
+use super::matching::Found;
 use super::page::{GroupPlace, Paging};
 use super::query::Asked;
 use super::read::PATIENCE;
@@ -108,7 +110,7 @@ impl Counting<'_> {
         let mut joining = Joining::new(self.shape);
         for series in &members {
             crate::cancel::check(|| "an aggregate".to_owned())?;
-            let counted = joining.begin(series).and_then(|()| self.series(series, &mut joining));
+            let counted = joining.begin(&series.found).and_then(|()| self.series(series, &mut joining));
             counted.map_err(|error| self.engine.met(&series.found, error))?;
         }
         let buckets = joining.answer()?;
@@ -156,6 +158,24 @@ impl Counting<'_> {
     }
 }
 
+/// One group's buckets from series a program holds rather than a store: each
+/// folded and joined as a query's series are, in the order a query takes them.
+pub(super) fn count_held(shape: &Shape, members: &mut [Held], window: Window, asked: &Asked) -> Result<Vec<Bucket>> {
+    members.sort_by_cached_key(|member| shape.order_of(&member.found));
+    let mut joining = Joining::new(shape);
+    for member in members.iter() {
+        joining.begin(&member.found)?;
+        let mut fold = Fold::over(shape, &member.found, window, asked);
+        let folded = member.points.iter().try_for_each(|point| fold.sample(*point));
+        folded.map_err(|error| error.within(&member.found.kept))?;
+        fold.close();
+        for bucket in fold.closed.drain(..) {
+            joining.join(bucket)?;
+        }
+    }
+    joining.answer()
+}
+
 /// A group's buckets being joined, and what the series being folded gives
 /// them.
 struct Joining<'s> {
@@ -195,8 +215,7 @@ impl<'s> Joining<'s> {
 
     /// Takes the next series: what it is to the query, and for a timer's
     /// spread its member and what it counts.
-    fn begin(&mut self, series: &Taken) -> Result<()> {
-        let found = &series.found;
+    fn begin(&mut self, found: &Found) -> Result<()> {
         self.part = self.shape.part(found);
         self.counts = None;
         if !self.shape.spreads(found) {
@@ -289,14 +308,18 @@ struct Fold<'a> {
 
 impl<'a> Fold<'a> {
     fn new(shape: &'a Shape, series: &Taken, asked: &Asked) -> Fold<'a> {
-        let window = series.window;
+        Fold { trimmed: series.trimmed, ..Fold::over(shape, &series.found, series.window, asked) }
+    }
+
+    /// A fold of a series no retention has taken samples of.
+    fn over(shape: &'a Shape, found: &Found, window: Window, asked: &Asked) -> Fold<'a> {
         Fold {
             shape,
-            op: shape.series_op(&series.found),
-            kind: series.found.kind,
+            op: shape.series_op(found),
+            kind: found.kind,
             window,
             range_from: if asked.from == i64::MIN { window.cutoff } else { asked.from },
-            trimmed: series.trimmed,
+            trimmed: false,
             now: asked.now,
             open: None,
             carried: None,
