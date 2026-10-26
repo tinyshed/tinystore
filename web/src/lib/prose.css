@@ -897,6 +897,34 @@ dialog.diagram-zoom svg {
 	margin-bottom: 0;
 }
 
+/* what the newest release brought, beside the heading or the title that
+   describes it: a link back to the release */
+.new-in {
+	display: inline-block;
+	margin-left: 10px;
+	padding: 3px 8px;
+	vertical-align: 0.35em;
+	color: var(--ts-accent-text);
+	background: var(--ts-accent-soft);
+	border-radius: 999px;
+	font: 500 11px / 1.4 var(--ts-mono);
+	letter-spacing: 0.06em;
+	text-decoration: none;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.prose a.new-in:not(.anchor) {
+	color: var(--ts-accent-text);
+	text-decoration: none;
+}
+
+@media (hover: hover) {
+	.new-in:hover {
+		background: var(--ts-accent-line);
+	}
+}
+
 /* text for several languages reads as any paragraph: its reader picked one of them */
 .prose div[data-for*=" "] {
 	padding-left: 0;

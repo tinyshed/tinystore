@@ -11,6 +11,7 @@ import { landingFile, landingSummary } from './landing'
 import type { Links, Target } from './links'
 import { exportMarkdown, finish, type Problem, parse, toHast } from './markdown'
 import { type Index, indexFile, type NavSection, readIndex, slugOf, urlOf } from './nav'
+import { markNew, type NewIn } from './news'
 import { outline, type Section, sections } from './outline'
 import { checkout, editUrl, exists, headCommit, lastChanged, sourceUrl } from './repo'
 
@@ -49,6 +50,8 @@ export interface Page {
 	/** the page as markdown that stands on its own: links absolute, the site's comments gone */
 	markdown: string
 	sections: Section[]
+	/** the newest release, when it brought the whole page */
+	newIn?: NewIn
 }
 
 export interface Site {
@@ -118,6 +121,13 @@ async function buildSite(root: string): Promise<Site> {
 			),
 		),
 	)
+
+	const newest = drafts.find(
+		page => page.kind === 'release' && page.past !== true && !page.file.endsWith('/README.md'),
+	)
+	if (newest !== undefined) {
+		markNew(drafts, newest)
+	}
 
 	const links: Links = {
 		root,
@@ -240,6 +250,7 @@ async function draft(entry: Entry, tree: Root, highlight: Highlight, api: ApiInd
 		tree: exported,
 		hast: await toHast(tree, calls.highlight, calls.problems),
 		callProblems: calls.problems,
+		newIn: undefined as NewIn | undefined,
 	}
 }
 
@@ -275,6 +286,7 @@ function finishPage(
 			sections: page.sections,
 			...(page.hidden === true ? { hidden: true as const } : {}),
 			...(page.unlisted === true ? { unlisted: true as const } : {}),
+			...(page.newIn === undefined ? {} : { newIn: page.newIn }),
 		},
 	}
 }
