@@ -56,7 +56,9 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 - An aggregate is exact and rounded once, whatever blocks the samples were
   packed into; buckets of any width add up to the range.
 - A query is bounded before it starts, and fails `limit` rather than answer
-  less.
+  less. Given `limit`, it answers a page and `next` instead. For data that
+  doesn't change between them, the pages give exactly the whole answer
+  (MET-17).
 - Processes that count into one counter count into one total, and a send
   repeated after a lost connection counts once.
 - An ingest sent again changes nothing, even after the store packed its
@@ -69,7 +71,7 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 | Page                                       | Covers                                                     |
 |--------------------------------------------|------------------------------------------------------------|
 | [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
-| [Reading](reading.md)                      | `read`, `latest`, names, labels                            |
+| [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels     |
 | [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
 | [Ingesting](ingesting.md)                  | samples from elsewhere, `keep`, Prometheus exporters' text |
 | [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |

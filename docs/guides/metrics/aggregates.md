@@ -218,12 +218,65 @@ summaries, so a month drawn by the hour decodes almost nothing; a bucket finer
 than a block, and a gauge's percentile always, decode its samples.
 [`explain`](reading.md#cost-before-it-runs) says what a query will cost.
 
+## Aggregate in pages
+
+A year of one-minute buckets is 525,600 buckets per group, more than one
+aggregate may answer. Give `limit`, and `aggregate` returns a page of that many
+buckets at most, with `next` when there is more:
+
+```ts
+const query = { name: 'requests_total', since: '365d', every: '1m', op: 'rate', limit: 10_000 } as const
+const page = await store.metrics.aggregate(query)
+const more = await store.metrics.aggregate({ ...query, after: page.next })
+
+for await (const group of page) chart.appendBuckets(group.labels, group.buckets) // this page, then every page after it
+```
+
+```python
+page = await store.metrics.aggregate(name="requests_total", since="365d", every="1m", op="rate", limit=10_000)
+
+async for group in page:  # this page, then every page after it
+    chart.append_buckets(group.labels, group.buckets)
+```
+
+```go
+q := metrics.Query{Name: "requests_total", Since: 365 * 24 * time.Hour, Every: time.Minute, Op: metrics.Rate, Limit: 10_000}
+page, err := metrics.Aggregate(ctx, store, q)
+
+for group, err := range page.All(ctx) { // this page, then every page after it
+	chart.AppendBuckets(group.Labels, group.Buckets)
+}
+```
+
+```rust
+let year = stats.query().name("requests_total").since(Duration::from_hours(365 * 24)).every(Duration::from_mins(1));
+let page = year.limit(10_000).aggregate(Op::Rate)?;
+for group in page.all() {
+    chart.append_buckets(&group?); // this page, then every page after it
+}
+```
+
+- The answer goes group by group, each group's buckets in time order. A page
+  ends only between two whole buckets. A group that a page cuts has
+  `more: true`, and the next page starts with the rest of its buckets.
+- Each bucket is computed from every series of its group, as without
+  `limit`. A `rate` or an `increase` in the first bucket of a page starts from
+  the sample before it, and the edge of a page never makes a bucket
+  `partial`.
+- A bucket is never split. If one bucket alone passes a bound, such as a
+  percentile over a year without `every`, the aggregate fails with a `limit`
+  error.
+- Pages don't lift the 1,000 series that a query may find, because a bucket
+  needs every series of its group at once. Use `where` to find fewer.
+- `next`, walking a page and what happens to writes between pages work as
+  for [a read in pages](reading.md#read-a-long-range-in-pages).
+
 ## Errors
 
 | Error     | When                                                                                                                                 |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `invalid` | an `op` the kind has not; a percentile of a timer without buckets; a gauge bucket holding a NaN or an infinity; a counter below zero |
-| `limit`   | past 100,000 buckets, or a bound of the query, which it names                                                                        |
+| `limit`   | without `limit`, past 100,000 buckets; a bound of the query, which it names; one bucket that alone passes a bound                    |
 
 ## See also
 

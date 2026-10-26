@@ -171,8 +171,8 @@ let plan = stats.query().name("cpu").since(Duration::from_hours(30 * 24)).every(
 ```
 
 A query is bounded before it starts: series, bytes read, samples decoded and
-the size of the answer are separate budgets, and a query past one is `limit`,
-naming it, never a smaller answer. `explain` says how many series, bytes and
+the size of the answer are separate budgets. Without `limit`, a query past one
+fails with a `limit` error that names it, never a smaller answer. `explain` says how many series, bytes and
 decoded samples a `read` or an `aggregate` would spend, and in `exceeds` the
 bound it would stop at, `answer` included.
 
@@ -182,6 +182,122 @@ bound it would stop at, `answer` included.
 | bytes read      | 16 MiB                     |
 | samples decoded | 1,048,576                  |
 | an answer       | 100,000 samples or buckets |
+
+To read past these bounds, read in pages.
+
+## Read a long range in pages
+
+Thirty days of one sample per second is 2.6 million samples per series, more
+than one read may answer. Give `limit`, and `read` returns a page of that many
+samples at most, with `next` when there is more:
+
+```ts
+const query = { name: 'ping_rtt_ms', since: '30d', limit: 10_000 }
+const page = await store.metrics.read(query)
+const more = await store.metrics.read({ ...query, after: page.next })
+
+for await (const part of page) chart.append(part.labels, part.times, part.values) // this page, then every page after it
+```
+
+```python
+page = await store.metrics.read(name="ping_rtt_ms", since="30d", limit=10_000)
+more = await store.metrics.read(name="ping_rtt_ms", since="30d", limit=10_000, after=page.next)
+
+async for part in page:  # this page, then every page after it
+    chart.append(part.labels, part.times, part.values)
+```
+
+```go
+q := metrics.Query{Name: "ping_rtt_ms", Since: 30 * 24 * time.Hour, Limit: 10_000}
+page, err := metrics.Read(ctx, store, q)
+q.After = page.Next
+more, err := metrics.Read(ctx, store, q)
+
+for part, err := range page.All(ctx) { // this page, then every page after it
+	chart.Append(part.Labels, part.Samples)
+}
+```
+
+```rust
+let month = stats.query().name("ping_rtt_ms").since(Duration::from_hours(30 * 24)).limit(10_000);
+let page = month.read()?;
+if let Some(next) = &page.next {
+    let more = month.clone().after(next).read()?;
+}
+for part in page.all() {
+    chart.append(&part?); // this page, then every page after it
+}
+```
+
+- Without `limit`, `read` works as before: the whole answer, or a `limit`
+  error. With it, a page holds 1 to 100,000 samples.
+- The answer goes series by series, each series' samples in time order. A
+  long series is split across pages. Its last part on a page has
+  `more: true`, and the next page starts with the rest of it.
+- A page can hold fewer samples than `limit` and still have `next`, when it
+  reached another bound first. Only the last page has no `next`.
+- Walking a page reads the pages after it one at a time, so only one page is
+  in memory. In async Rust, `page.all()` is a `Stream`.
+- `next` keeps the range of the first page, so `since: '30d'` means the same
+  30 days on every page. Pass `next` with the same query and `limit`: another
+  query is refused as `invalid`.
+- `aggregate` takes `limit` and `after` too, and its page holds buckets. See
+  [Aggregates](aggregates.md#aggregate-in-pages).
+
+Each page is read on its own, not from one snapshot. If samples are written
+between pages, a page sees those written ahead of where the last page ended,
+and misses those written behind it. A series deleted between pages is missing
+from the pages after.
+
+To export a range and resume after a crash, save `next` after you write each
+page. The last page has no `next`, so also save that the export is done.
+Otherwise a restart reads everything again:
+
+```ts
+let saved = await loadCursor() // { after: undefined, done: false } on the first run
+while (!saved.done) {
+	const page = await store.metrics.read({ name: 'ping_rtt_ms', since: '30d', limit: 10_000, after: saved.after })
+	await writeOut(page.series)
+	saved = { after: page.next, done: page.next === undefined }
+	await saveCursor(saved)
+}
+```
+
+```python
+saved = load_cursor()  # {"after": None, "done": False} on the first run
+while not saved["done"]:
+    page = await store.metrics.read(name="ping_rtt_ms", since="30d", limit=10_000, after=saved["after"])
+    write_out(page.series)
+    saved = {"after": page.next, "done": page.next is None}
+    save_cursor(saved)
+```
+
+```go
+saved := loadCursor() // {After: "", Done: false} on the first run
+for !saved.Done {
+	page, err := metrics.Read(ctx, store, metrics.Query{Name: "ping_rtt_ms", Since: 30 * 24 * time.Hour, Limit: 10_000, After: saved.After})
+	if err != nil {
+		return err
+	}
+	writeOut(page.Series)
+	saved = Saved{After: page.Next, Done: page.Next == ""}
+	saveCursor(saved)
+}
+```
+
+```rust
+let mut saved = load_cursor(); // Saved { after: None, done: false } on the first run
+while !saved.done {
+    let mut query = stats.query().name("ping_rtt_ms").since(Duration::from_hours(30 * 24)).limit(10_000);
+    if let Some(after) = &saved.after {
+        query = query.after(after);
+    }
+    let page = query.read()?;
+    write_out(&page.series);
+    saved = Saved { done: page.next.is_none(), after: page.next };
+    save_cursor(&saved);
+}
+```
 
 ## Removing a series
 
