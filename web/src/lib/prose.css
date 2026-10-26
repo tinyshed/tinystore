@@ -398,6 +398,39 @@
 	color: var(--shiki-dark);
 }
 
+/* an editor's look colours the code as that editor does */
+:root[data-look="github-light"] .shiki span {
+	color: var(--shiki-github-light);
+}
+
+:root[data-look="solarized-light"] .shiki span {
+	color: var(--shiki-solarized-light);
+}
+
+:root[data-look="rose-pine-dawn"] .shiki span {
+	color: var(--shiki-rose-pine-dawn);
+}
+
+:root[data-look="github-dark"] .shiki span {
+	color: var(--shiki-github-dark);
+}
+
+:root[data-look="dracula"] .shiki span {
+	color: var(--shiki-dracula);
+}
+
+:root[data-look="nord"] .shiki span {
+	color: var(--shiki-nord);
+}
+
+:root[data-look="tokyo-night"] .shiki span {
+	color: var(--shiki-tokyo-night);
+}
+
+:root[data-look="catppuccin-mocha"] .shiki span {
+	color: var(--shiki-catppuccin-mocha);
+}
+
 @media (max-width: 720px) {
 	.prose {
 		font-size: 16.5px;

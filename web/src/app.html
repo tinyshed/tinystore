@@ -12,8 +12,8 @@
 				const root = document.documentElement
 				const theme = localStorage.getItem('docs.theme')
 				if (theme === 'light' || theme === 'dark') root.dataset.theme = theme
-				const tone = localStorage.getItem('docs.tone')
-				if (tone === 'paper' || tone === 'black') root.dataset.tone = tone
+				const look = localStorage.getItem('docs.look')
+				if (look && /^[a-z-]+$/.test(look)) root.dataset.look = look
 				const language = localStorage.getItem('docs.language')
 				if (language) root.dataset.lang = language
 			} catch {}

@@ -3,11 +3,26 @@
 
 export type Theme = 'light' | 'dark'
 
-/** A theme and its tone: warm paper under the light one, true black under the dark one. */
-export type Look = Theme | 'paper' | 'black'
+/** The looks a reader picks from the theme's menu, each on a base theme. */
+export const looks = {
+	light: { label: 'TinyStore', theme: 'light' },
+	paper: { label: 'Paper', theme: 'light' },
+	'github-light': { label: 'GitHub Light', theme: 'light' },
+	'solarized-light': { label: 'Solarized Light', theme: 'light' },
+	'rose-pine-dawn': { label: 'Rosé Pine Dawn', theme: 'light' },
+	dark: { label: 'TinyStore', theme: 'dark' },
+	black: { label: 'Black', theme: 'dark' },
+	'github-dark': { label: 'GitHub Dark', theme: 'dark' },
+	dracula: { label: 'Dracula', theme: 'dark' },
+	nord: { label: 'Nord', theme: 'dark' },
+	'tokyo-night': { label: 'Tokyo Night', theme: 'dark' },
+	'catppuccin-mocha': { label: 'Catppuccin Mocha', theme: 'dark' },
+} as const satisfies Record<string, { label: string; theme: Theme }>
+
+export type Look = keyof typeof looks
 
 const themeKey = 'docs.theme'
-const toneKey = 'docs.tone'
+const lookKey = 'docs.look'
 const languageKey = 'docs.language'
 
 export function currentTheme(): Theme {
@@ -24,24 +39,20 @@ export function setTheme(theme: Theme): void {
 }
 
 export function currentLook(): Look {
-	const theme = currentTheme()
-	const tone = document.documentElement.dataset.tone
-	if (theme === 'light' && tone === 'paper') {
-		return 'paper'
-	}
-	return theme === 'dark' && tone === 'black' ? 'black' : theme
+	const look = document.documentElement.dataset.look
+	return look !== undefined && look in looks ? (look as Look) : currentTheme()
 }
 
-/** Sets the theme, and the tone over it, or none. */
+/** Sets the look and the theme it is drawn on; the design's own two need no look. */
 export function setLook(look: Look): void {
-	setTheme(look === 'paper' ? 'light' : look === 'black' ? 'dark' : look)
+	setTheme(looks[look].theme)
 	const root = document.documentElement
-	if (look === 'paper' || look === 'black') {
-		root.dataset.tone = look
-		keep(toneKey, look)
+	if (look === 'light' || look === 'dark') {
+		delete root.dataset.look
+		forget(lookKey)
 	} else {
-		delete root.dataset.tone
-		forget(toneKey)
+		root.dataset.look = look
+		keep(lookKey, look)
 	}
 }
 

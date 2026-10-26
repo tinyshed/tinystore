@@ -9,7 +9,7 @@ particular to the site. How a page is written is the `docs` skill.
 ## Status
 
 Built: the landing page, a page for every file `docs/README.md` links, search, scenes, diagrams,
-both themes, the language switch, a markdown copy of each page, `llms.txt`,
+both themes and the looks a reader picks over them, the language switch, a markdown copy of each page, `llms.txt`,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, a page per release, the sitemap,
 and the server with its analytics. The docs
 are written for Rust: the Handbook's
@@ -134,7 +134,10 @@ private child.
   `rebase()`, `$lib/href.ts`, so that a build opens from any folder: a
   preview's, or a project page's base path.
 - The tokens in `src/app.css` are the design system: a component reads
-  `--ts-*` and nothing else. Both themes are the design's own.
+  `--ts-*` and nothing else. Both themes are the design's own; each look of
+  the theme's menu, paper, black and an editor's theme such as Dracula, is a
+  whole set of those tokens under `[data-look]`, and an editor's look colours
+  code with that editor's own shiki theme, `--shiki-<look>` on every token.
 - Fonts are installed, never fetched from a CDN: the site makes no request a
   reader did not ask for, analytics included.
 - `src/lib/content/` runs at build time only and imports no `$app` module, so

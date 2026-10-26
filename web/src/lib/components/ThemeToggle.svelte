@@ -1,15 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte'
 
-	import { currentLook, type Look, setLook } from '$lib/prefs'
+	import { currentLook, type Look, looks, setLook } from '$lib/prefs'
 	import { track } from '$lib/track'
 
-	const looks: { key: Look; label: string }[] = [
-		{ key: 'light', label: 'Light' },
-		{ key: 'paper', label: 'Paper' },
-		{ key: 'dark', label: 'Dark' },
-		{ key: 'black', label: 'Black' },
-	]
+	const groups = (['light', 'dark'] as const).map(theme => ({
+		theme,
+		label: theme === 'light' ? 'Light' : 'Dark',
+		looks: (Object.keys(looks) as Look[]).filter(look => looks[look].theme === theme),
+	}))
 
 	let open = $state(false)
 	let current: Look = $state('light')
@@ -64,16 +63,20 @@
 	</button>
 	{#if open}
 		<div class="looks" role="menu">
-			{#each looks as look (look.key)}
-				<button
-					type="button"
-					role="menuitemradio"
-					aria-checked={current === look.key}
-					onclick={() => pick(look.key)}
-				>
-					<span class="swatch {look.key}">Aa</span>
-					<span>{look.label}</span>
-				</button>
+			{#each groups as group (group.theme)}
+				<p class="group">{group.label}</p>
+				{#each group.looks as look (look)}
+					<button
+						type="button"
+						role="menuitemradio"
+						aria-checked={current === look}
+						onclick={() => pick(look)}
+					>
+						<!-- the swatch is the look itself: its tokens, whatever the page's -->
+						<span class="swatch" data-look={look}><span class="ink">Aa</span><span class="dot"></span></span>
+						<span>{looks[look].label}</span>
+					</button>
+				{/each}
 			{/each}
 		</div>
 	{/if}
@@ -123,7 +126,9 @@
 		z-index: 40;
 		display: grid;
 		gap: 2px;
-		min-width: 150px;
+		min-width: 200px;
+		max-height: min(560px, 80vh);
+		overflow-y: auto;
 		padding: 6px;
 		background: var(--ts-dialog);
 		border: 1px solid var(--ts-border);
@@ -150,33 +155,36 @@
 		background: var(--ts-pill);
 	}
 
+	.group {
+		margin: 6px 10px 2px;
+		color: var(--ts-faint);
+		font: 500 11px / 1.4 var(--ts-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
 	.swatch {
-		display: grid;
-		place-items: center;
-		width: 26px;
-		height: 20px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 4px;
+		width: 34px;
+		height: 22px;
+		padding: 0 5px;
+		background: var(--ts-bg);
 		border: 1px solid var(--ts-border-strong);
-		border-radius: 5px;
+		border-radius: 6px;
+	}
+
+	.ink {
+		color: var(--ts-text);
 		font: 600 10px var(--ts-sans);
 	}
 
-	.swatch.light {
-		color: var(--ts-swatch-ink-light);
-		background: var(--ts-swatch-light);
-	}
-
-	.swatch.paper {
-		color: var(--ts-swatch-ink-light);
-		background: var(--ts-swatch-paper);
-	}
-
-	.swatch.dark {
-		color: var(--ts-swatch-ink-dark);
-		background: var(--ts-swatch-dark);
-	}
-
-	.swatch.black {
-		color: var(--ts-swatch-ink-dark);
-		background: var(--ts-swatch-black);
+	.dot {
+		width: 7px;
+		height: 7px;
+		background: var(--ts-accent);
+		border-radius: 50%;
 	}
 </style>

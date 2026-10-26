@@ -224,15 +224,68 @@ kbd {
 	background: var(--ts-kbd);
 }
 
-/* two tones beside the themes, which a reader picks from the theme's menu:
-   warm paper under the light one, and true black under the dark one, for an
-   OLED screen. Each changes the surfaces alone; text, accent and code stay. */
-:root[data-theme="light"][data-tone="paper"] {
+/* The reader's look, picked from the theme's menu: the design's two themes,
+   paper and black under them, and editors' themes, each a whole set of the
+   tokens above. On the root it is the page's; on any element, as a swatch of
+   the menu, it shows that look there alone. A look's base, light or dark, is
+   the root's data-theme, which the code's colours and the scrollbars follow. */
+
+:root[data-look="light"],
+[data-look="light"] {
+	--ts-bg: #f7f6f9;
+	--ts-text: #23212b;
+	--ts-text-body: #3b3946;
+	--ts-text-lead: #5d5a67;
+	--ts-text-note: #2b2933;
+	--ts-muted: #6b6775;
+	--ts-muted-2: #6f6b7d;
+	--ts-faint: #6b6775;
+	--ts-dim: #716d80;
+	--ts-line: #e2dfe9;
+	--ts-border: #dcd9e4;
+	--ts-border-2: #d9d6e1;
+	--ts-border-3: #cdc9d6;
+	--ts-border-strong: #b4b0c0;
+	--ts-surface: #efedf3;
+	--ts-surface-2: #e7e4ed;
+	--ts-hover: #ebe8f0;
+	--ts-pill: #e9e6ee;
+	--ts-chip: #e2dfe9;
+	--ts-kbd: #e9e6ee;
+	--ts-row-hover: #f1eff5;
+	--ts-dialog: #ffffff;
+	--ts-dialog-foot: #f1eff5;
+	--ts-accent: #e29a36;
+	--ts-accent-text: #a85f0b;
+	--ts-accent-ink: #17130a;
+	--ts-accent-line: #e3c28e;
+	--ts-logo-top: #c97a12;
+	--ts-danger: #b5311f;
+	--ts-ok: #2f7d4f;
+	--ts-accent-soft: #f6e3c4;
+	--ts-danger-soft: #f6dcd7;
+	--ts-overlay: rgb(236 233 242 / 0.74);
+	--ts-shadow: rgb(35 33 43 / 0.28);
+
+	color-scheme: light;
+}
+
+:root[data-look="paper"],
+[data-look="paper"] {
 	--ts-bg: #f8f4ec;
+	--ts-text: #23212b;
+	--ts-text-body: #3b3946;
+	--ts-text-lead: #5d5a67;
+	--ts-text-note: #2b2933;
+	--ts-muted: #6b6775;
+	--ts-muted-2: #6f6b7d;
+	--ts-faint: #6b6775;
+	--ts-dim: #716d80;
 	--ts-line: #e7dfcf;
 	--ts-border: #e1d8c6;
 	--ts-border-2: #ddd3c0;
 	--ts-border-3: #d2c6b1;
+	--ts-border-strong: #b4b0c0;
 	--ts-surface: #f1ebdf;
 	--ts-surface-2: #eae2d3;
 	--ts-hover: #eee7da;
@@ -242,15 +295,197 @@ kbd {
 	--ts-row-hover: #f3eee4;
 	--ts-dialog: #fffcf6;
 	--ts-dialog-foot: #f3eee4;
+	--ts-accent: #e29a36;
+	--ts-accent-text: #a85f0b;
+	--ts-accent-ink: #17130a;
+	--ts-accent-line: #e3c28e;
+	--ts-logo-top: #c97a12;
+	--ts-danger: #b5311f;
+	--ts-ok: #2f7d4f;
+	--ts-accent-soft: #f6e3c4;
+	--ts-danger-soft: #f6dcd7;
 	--ts-overlay: rgb(240 233 220 / 0.74);
+	--ts-shadow: rgb(35 33 43 / 0.28);
+
+	color-scheme: light;
 }
 
-:root[data-theme="dark"][data-tone="black"] {
+:root[data-look="github-light"],
+[data-look="github-light"] {
+	--ts-bg: #ffffff;
+	--ts-text: #1f2328;
+	--ts-text-body: #1f2328;
+	--ts-text-lead: color-mix(in srgb, #1f2328 55%, #59636e);
+	--ts-text-note: #1f2328;
+	--ts-muted: #59636e;
+	--ts-muted-2: #59636e;
+	--ts-faint: #818b98;
+	--ts-dim: #818b98;
+	--ts-line: #d8dee4;
+	--ts-border: #d0d7de;
+	--ts-border-2: #d0d7de;
+	--ts-border-3: color-mix(in srgb, #d0d7de 60%, #afb8c1);
+	--ts-border-strong: #afb8c1;
+	--ts-surface: #f6f8fa;
+	--ts-surface-2: #eff2f5;
+	--ts-hover: color-mix(in srgb, #f6f8fa 50%, #eff2f5);
+	--ts-pill: #eff2f5;
+	--ts-chip: #eff2f5;
+	--ts-kbd: #f6f8fa;
+	--ts-row-hover: #f6f8fa;
+	--ts-dialog: #ffffff;
+	--ts-dialog-foot: #f6f8fa;
+	--ts-accent: #0969da;
+	--ts-accent-text: #0969da;
+	--ts-accent-ink: #ffffff;
+	--ts-accent-line: color-mix(in srgb, #0969da 45%, #ffffff);
+	--ts-logo-top: #0969da;
+	--ts-danger: #cf222e;
+	--ts-ok: #1a7f37;
+	--ts-accent-soft: color-mix(in srgb, #0969da 16%, #ffffff);
+	--ts-danger-soft: color-mix(in srgb, #cf222e 16%, #ffffff);
+	--ts-overlay: color-mix(in srgb, #ffffff 74%, transparent);
+	--ts-shadow: rgb(31 35 40 / 0.2);
+
+	color-scheme: light;
+}
+
+:root[data-look="solarized-light"],
+[data-look="solarized-light"] {
+	--ts-bg: #fdf6e3;
+	--ts-text: #073642;
+	--ts-text-body: #3f5560;
+	--ts-text-lead: color-mix(in srgb, #3f5560 55%, #657b83);
+	--ts-text-note: #3f5560;
+	--ts-muted: #657b83;
+	--ts-muted-2: #657b83;
+	--ts-faint: #93a1a1;
+	--ts-dim: #93a1a1;
+	--ts-line: #e5dcc3;
+	--ts-border: #ddd6c1;
+	--ts-border-2: #ddd6c1;
+	--ts-border-3: color-mix(in srgb, #ddd6c1 60%, #b9b29f);
+	--ts-border-strong: #b9b29f;
+	--ts-surface: #eee8d5;
+	--ts-surface-2: #e6dfca;
+	--ts-hover: color-mix(in srgb, #eee8d5 50%, #e6dfca);
+	--ts-pill: #e6dfca;
+	--ts-chip: #e6dfca;
+	--ts-kbd: #eee8d5;
+	--ts-row-hover: #eee8d5;
+	--ts-dialog: #fffbf0;
+	--ts-dialog-foot: #eee8d5;
+	--ts-accent: #268bd2;
+	--ts-accent-text: #1f6fa8;
+	--ts-accent-ink: #fdf6e3;
+	--ts-accent-line: color-mix(in srgb, #268bd2 45%, #fdf6e3);
+	--ts-logo-top: #268bd2;
+	--ts-danger: #c4291f;
+	--ts-ok: #5f6f00;
+	--ts-accent-soft: color-mix(in srgb, #268bd2 16%, #fdf6e3);
+	--ts-danger-soft: color-mix(in srgb, #c4291f 16%, #fdf6e3);
+	--ts-overlay: color-mix(in srgb, #fdf6e3 74%, transparent);
+	--ts-shadow: rgb(31 35 40 / 0.2);
+
+	color-scheme: light;
+}
+
+:root[data-look="rose-pine-dawn"],
+[data-look="rose-pine-dawn"] {
+	--ts-bg: #faf4ed;
+	--ts-text: #575279;
+	--ts-text-body: #575279;
+	--ts-text-lead: color-mix(in srgb, #575279 55%, #797593);
+	--ts-text-note: #575279;
+	--ts-muted: #797593;
+	--ts-muted-2: #797593;
+	--ts-faint: #9893a5;
+	--ts-dim: #9893a5;
+	--ts-line: #f2e9e1;
+	--ts-border: #dfdad9;
+	--ts-border-2: #dfdad9;
+	--ts-border-3: color-mix(in srgb, #dfdad9 60%, #cecacd);
+	--ts-border-strong: #cecacd;
+	--ts-surface: #fffaf3;
+	--ts-surface-2: #f2e9e1;
+	--ts-hover: color-mix(in srgb, #fffaf3 50%, #f2e9e1);
+	--ts-pill: #f2e9e1;
+	--ts-chip: #f2e9e1;
+	--ts-kbd: #fffaf3;
+	--ts-row-hover: #fffaf3;
+	--ts-dialog: #fffaf3;
+	--ts-dialog-foot: #fffaf3;
+	--ts-accent: #907aa9;
+	--ts-accent-text: #7a6497;
+	--ts-accent-ink: #faf4ed;
+	--ts-accent-line: color-mix(in srgb, #907aa9 45%, #faf4ed);
+	--ts-logo-top: #907aa9;
+	--ts-danger: #b4637a;
+	--ts-ok: #3f7f89;
+	--ts-accent-soft: color-mix(in srgb, #907aa9 16%, #faf4ed);
+	--ts-danger-soft: color-mix(in srgb, #b4637a 16%, #faf4ed);
+	--ts-overlay: color-mix(in srgb, #faf4ed 74%, transparent);
+	--ts-shadow: rgb(31 35 40 / 0.2);
+
+	color-scheme: light;
+}
+
+:root[data-look="dark"],
+[data-look="dark"] {
+	--ts-bg: #141318;
+	--ts-text: #eceaf3;
+	--ts-text-body: #cfccda;
+	--ts-text-lead: #a29fb0;
+	--ts-text-note: #d8d5e2;
+	--ts-muted: #9a97a8;
+	--ts-muted-2: #8f8c9e;
+	--ts-faint: #7d7a8b;
+	--ts-dim: #6f6b7d;
+	--ts-line: #26242d;
+	--ts-border: #2a2832;
+	--ts-border-2: #2d2b35;
+	--ts-border-3: #33303c;
+	--ts-border-strong: #4d4a58;
+	--ts-surface: #1b1a21;
+	--ts-surface-2: #201e27;
+	--ts-hover: #1d1b23;
+	--ts-pill: #1f1d25;
+	--ts-chip: #26242d;
+	--ts-kbd: #16151b;
+	--ts-row-hover: #18171d;
+	--ts-dialog: #1b1a21;
+	--ts-dialog-foot: #17161c;
+	--ts-accent: #e29a36;
+	--ts-accent-text: #e29a36;
+	--ts-accent-ink: #17130a;
+	--ts-accent-line: #5a4320;
+	--ts-logo-top: #e29a36;
+	--ts-danger: #f0857a;
+	--ts-ok: #6fcf97;
+	--ts-accent-soft: #3a2b14;
+	--ts-danger-soft: #3a1c19;
+	--ts-overlay: rgb(10 9 13 / 0.72);
+	--ts-shadow: rgb(0 0 0 / 0.7);
+
+	color-scheme: dark;
+}
+
+:root[data-look="black"],
+[data-look="black"] {
 	--ts-bg: #000000;
+	--ts-text: #eceaf3;
+	--ts-text-body: #cfccda;
+	--ts-text-lead: #a29fb0;
+	--ts-text-note: #d8d5e2;
+	--ts-muted: #9a97a8;
+	--ts-muted-2: #8f8c9e;
+	--ts-faint: #7d7a8b;
+	--ts-dim: #6f6b7d;
 	--ts-line: #1b1a20;
 	--ts-border: #201f26;
 	--ts-border-2: #24222a;
 	--ts-border-3: #2b2932;
+	--ts-border-strong: #4d4a58;
 	--ts-surface: #0c0c0f;
 	--ts-surface-2: #111014;
 	--ts-hover: #111014;
@@ -260,15 +495,217 @@ kbd {
 	--ts-row-hover: #0b0b0e;
 	--ts-dialog: #0e0d11;
 	--ts-dialog-foot: #0a0a0d;
+	--ts-accent: #e29a36;
+	--ts-accent-text: #e29a36;
+	--ts-accent-ink: #17130a;
+	--ts-accent-line: #5a4320;
+	--ts-logo-top: #e29a36;
+	--ts-danger: #f0857a;
+	--ts-ok: #6fcf97;
+	--ts-accent-soft: #3a2b14;
+	--ts-danger-soft: #3a1c19;
 	--ts-overlay: rgb(0 0 0 / 0.75);
+	--ts-shadow: rgb(0 0 0 / 0.7);
+
+	color-scheme: dark;
 }
 
-/* each look as the theme's menu shows it, whatever the page's own */
-:root {
-	--ts-swatch-light: #f7f6f9;
-	--ts-swatch-paper: #f8f4ec;
-	--ts-swatch-dark: #141318;
-	--ts-swatch-black: #000000;
-	--ts-swatch-ink-light: #23212b;
-	--ts-swatch-ink-dark: #eceaf3;
+:root[data-look="github-dark"],
+[data-look="github-dark"] {
+	--ts-bg: #0d1117;
+	--ts-text: #f0f6fc;
+	--ts-text-body: #d1d7e0;
+	--ts-text-lead: color-mix(in srgb, #d1d7e0 55%, #9198a1);
+	--ts-text-note: #d1d7e0;
+	--ts-muted: #9198a1;
+	--ts-muted-2: #9198a1;
+	--ts-faint: #6e7681;
+	--ts-dim: #6e7681;
+	--ts-line: #21262d;
+	--ts-border: #30363d;
+	--ts-border-2: #30363d;
+	--ts-border-3: color-mix(in srgb, #30363d 60%, #484f58);
+	--ts-border-strong: #484f58;
+	--ts-surface: #151b23;
+	--ts-surface-2: #212830;
+	--ts-hover: color-mix(in srgb, #151b23 50%, #212830);
+	--ts-pill: #212830;
+	--ts-chip: #212830;
+	--ts-kbd: #151b23;
+	--ts-row-hover: #151b23;
+	--ts-dialog: #151b23;
+	--ts-dialog-foot: #151b23;
+	--ts-accent: #4493f8;
+	--ts-accent-text: #4493f8;
+	--ts-accent-ink: #0d1117;
+	--ts-accent-line: color-mix(in srgb, #4493f8 45%, #0d1117);
+	--ts-logo-top: #4493f8;
+	--ts-danger: #f85149;
+	--ts-ok: #3fb950;
+	--ts-accent-soft: color-mix(in srgb, #4493f8 16%, #0d1117);
+	--ts-danger-soft: color-mix(in srgb, #f85149 16%, #0d1117);
+	--ts-overlay: color-mix(in srgb, #0d1117 74%, transparent);
+	--ts-shadow: rgb(0 0 0 / 0.6);
+
+	color-scheme: dark;
+}
+
+:root[data-look="dracula"],
+[data-look="dracula"] {
+	--ts-bg: #282a36;
+	--ts-text: #f8f8f2;
+	--ts-text-body: #e6e6e0;
+	--ts-text-lead: color-mix(in srgb, #e6e6e0 55%, #b0b8d1);
+	--ts-text-note: #e6e6e0;
+	--ts-muted: #b0b8d1;
+	--ts-muted-2: #b0b8d1;
+	--ts-faint: #8592bd;
+	--ts-dim: #8592bd;
+	--ts-line: #343746;
+	--ts-border: #44475a;
+	--ts-border-2: #44475a;
+	--ts-border-3: color-mix(in srgb, #44475a 60%, #6272a4);
+	--ts-border-strong: #6272a4;
+	--ts-surface: #21222c;
+	--ts-surface-2: #343746;
+	--ts-hover: color-mix(in srgb, #21222c 50%, #343746);
+	--ts-pill: #343746;
+	--ts-chip: #343746;
+	--ts-kbd: #21222c;
+	--ts-row-hover: #21222c;
+	--ts-dialog: #21222c;
+	--ts-dialog-foot: #21222c;
+	--ts-accent: #bd93f9;
+	--ts-accent-text: #bd93f9;
+	--ts-accent-ink: #282a36;
+	--ts-accent-line: color-mix(in srgb, #bd93f9 45%, #282a36);
+	--ts-logo-top: #bd93f9;
+	--ts-danger: #ff5555;
+	--ts-ok: #50fa7b;
+	--ts-accent-soft: color-mix(in srgb, #bd93f9 16%, #282a36);
+	--ts-danger-soft: color-mix(in srgb, #ff5555 16%, #282a36);
+	--ts-overlay: color-mix(in srgb, #282a36 74%, transparent);
+	--ts-shadow: rgb(0 0 0 / 0.6);
+
+	color-scheme: dark;
+}
+
+:root[data-look="nord"],
+[data-look="nord"] {
+	--ts-bg: #2e3440;
+	--ts-text: #eceff4;
+	--ts-text-body: #d8dee9;
+	--ts-text-lead: color-mix(in srgb, #d8dee9 55%, #a3adbf);
+	--ts-text-note: #d8dee9;
+	--ts-muted: #a3adbf;
+	--ts-muted-2: #a3adbf;
+	--ts-faint: #8a96ad;
+	--ts-dim: #8a96ad;
+	--ts-line: #3b4252;
+	--ts-border: #434c5e;
+	--ts-border-2: #434c5e;
+	--ts-border-3: color-mix(in srgb, #434c5e 60%, #4c566a);
+	--ts-border-strong: #4c566a;
+	--ts-surface: #3b4252;
+	--ts-surface-2: #434c5e;
+	--ts-hover: color-mix(in srgb, #3b4252 50%, #434c5e);
+	--ts-pill: #434c5e;
+	--ts-chip: #434c5e;
+	--ts-kbd: #3b4252;
+	--ts-row-hover: #3b4252;
+	--ts-dialog: #3b4252;
+	--ts-dialog-foot: #3b4252;
+	--ts-accent: #88c0d0;
+	--ts-accent-text: #88c0d0;
+	--ts-accent-ink: #2e3440;
+	--ts-accent-line: color-mix(in srgb, #88c0d0 45%, #2e3440);
+	--ts-logo-top: #88c0d0;
+	--ts-danger: #d08770;
+	--ts-ok: #a3be8c;
+	--ts-accent-soft: color-mix(in srgb, #88c0d0 16%, #2e3440);
+	--ts-danger-soft: color-mix(in srgb, #d08770 16%, #2e3440);
+	--ts-overlay: color-mix(in srgb, #2e3440 74%, transparent);
+	--ts-shadow: rgb(0 0 0 / 0.6);
+
+	color-scheme: dark;
+}
+
+:root[data-look="tokyo-night"],
+[data-look="tokyo-night"] {
+	--ts-bg: #1a1b26;
+	--ts-text: #c0caf5;
+	--ts-text-body: #a9b1d6;
+	--ts-text-lead: color-mix(in srgb, #a9b1d6 55%, #8189b0);
+	--ts-text-note: #a9b1d6;
+	--ts-muted: #8189b0;
+	--ts-muted-2: #8189b0;
+	--ts-faint: #6b739c;
+	--ts-dim: #6b739c;
+	--ts-line: #292e42;
+	--ts-border: #2f334d;
+	--ts-border-2: #2f334d;
+	--ts-border-3: color-mix(in srgb, #2f334d 60%, #3b4261);
+	--ts-border-strong: #3b4261;
+	--ts-surface: #16161e;
+	--ts-surface-2: #1f2335;
+	--ts-hover: color-mix(in srgb, #16161e 50%, #1f2335);
+	--ts-pill: #1f2335;
+	--ts-chip: #1f2335;
+	--ts-kbd: #16161e;
+	--ts-row-hover: #16161e;
+	--ts-dialog: #16161e;
+	--ts-dialog-foot: #16161e;
+	--ts-accent: #7aa2f7;
+	--ts-accent-text: #7aa2f7;
+	--ts-accent-ink: #1a1b26;
+	--ts-accent-line: color-mix(in srgb, #7aa2f7 45%, #1a1b26);
+	--ts-logo-top: #7aa2f7;
+	--ts-danger: #f7768e;
+	--ts-ok: #9ece6a;
+	--ts-accent-soft: color-mix(in srgb, #7aa2f7 16%, #1a1b26);
+	--ts-danger-soft: color-mix(in srgb, #f7768e 16%, #1a1b26);
+	--ts-overlay: color-mix(in srgb, #1a1b26 74%, transparent);
+	--ts-shadow: rgb(0 0 0 / 0.6);
+
+	color-scheme: dark;
+}
+
+:root[data-look="catppuccin-mocha"],
+[data-look="catppuccin-mocha"] {
+	--ts-bg: #1e1e2e;
+	--ts-text: #cdd6f4;
+	--ts-text-body: #bac2de;
+	--ts-text-lead: color-mix(in srgb, #bac2de 55%, #a6adc8);
+	--ts-text-note: #bac2de;
+	--ts-muted: #a6adc8;
+	--ts-muted-2: #a6adc8;
+	--ts-faint: #8a8fa8;
+	--ts-dim: #8a8fa8;
+	--ts-line: #313244;
+	--ts-border: #45475a;
+	--ts-border-2: #45475a;
+	--ts-border-3: color-mix(in srgb, #45475a 60%, #585b70);
+	--ts-border-strong: #585b70;
+	--ts-surface: #181825;
+	--ts-surface-2: #313244;
+	--ts-hover: color-mix(in srgb, #181825 50%, #313244);
+	--ts-pill: #313244;
+	--ts-chip: #313244;
+	--ts-kbd: #181825;
+	--ts-row-hover: #181825;
+	--ts-dialog: #181825;
+	--ts-dialog-foot: #181825;
+	--ts-accent: #cba6f7;
+	--ts-accent-text: #cba6f7;
+	--ts-accent-ink: #1e1e2e;
+	--ts-accent-line: color-mix(in srgb, #cba6f7 45%, #1e1e2e);
+	--ts-logo-top: #cba6f7;
+	--ts-danger: #f38ba8;
+	--ts-ok: #a6e3a1;
+	--ts-accent-soft: color-mix(in srgb, #cba6f7 16%, #1e1e2e);
+	--ts-danger-soft: color-mix(in srgb, #f38ba8 16%, #1e1e2e);
+	--ts-overlay: color-mix(in srgb, #1e1e2e 74%, transparent);
+	--ts-shadow: rgb(0 0 0 / 0.6);
+
+	color-scheme: dark;
 }

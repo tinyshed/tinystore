@@ -101,7 +101,7 @@ export type Highlight = (code: string, lang: string, decorations?: DecorationIte
  */
 export async function createHighlight(): Promise<Highlight> {
 	const highlighter = await createHighlighter({
-		themes: [themes.dark, themes.light],
+		themes: [themes.dark, themes.light, ...Object.values(editorThemes)],
 		// Oniguruma, the grammars' own engine: the JavaScript one tokenized a first fence wrongly
 		langs: [
 			...new Set(Object.values(grammars).filter(name => name !== consoleLog.name)),
@@ -112,8 +112,10 @@ export async function createHighlight(): Promise<Highlight> {
 	return (code, lang, decorations = []) => {
 		const root = highlighter.codeToHast(code, {
 			lang: grammars[lang] ?? 'text',
-			themes: { light: 'tinystore-light', dark: 'tinystore-dark' },
+			themes: { light: 'tinystore-light', dark: 'tinystore-dark', ...editorThemes },
 			defaultColor: false,
+			// each theme tokenizes the line again: a slow first compile of a grammar must not cut it short
+			tokenizeTimeLimit: 10_000,
 			decorations,
 			transformers: lang === 'diff' ? [diffLines(code)] : [],
 		})
@@ -126,6 +128,22 @@ export async function createHighlight(): Promise<Highlight> {
 		return pre
 	}
 }
+
+/**
+ * The code's colours of each look that is an editor's theme, by the look's
+ * name: each token carries them all, `--shiki-dracula`, and the stylesheet
+ * picks the reader's look's. The design's looks keep its own two.
+ */
+export const editorThemes = {
+	'github-light': 'github-light-default',
+	'solarized-light': 'solarized-light',
+	'rose-pine-dawn': 'rose-pine-dawn',
+	'github-dark': 'github-dark-default',
+	dracula: 'dracula',
+	nord: 'nord',
+	'tokyo-night': 'tokyo-night',
+	'catppuccin-mocha': 'catppuccin-mocha',
+} as const
 
 /** A diff's lines marked by their first character, so that the stylesheet tints a whole row. */
 function diffLines(code: string): ShikiTransformer {
