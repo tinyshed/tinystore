@@ -63,7 +63,7 @@ fn back_up(asked: Asked) -> Done {
         dir.display(),
         zip.display(),
         written.files,
-        crate::files::bytes(written.bytes)
+        crate::on_disk::bytes(written.bytes)
     )?;
     if written.key_left_out {
         // beside its holder, a key kept apart is not the backup's to take
@@ -81,7 +81,7 @@ fn put_back(asked: Asked) -> Done {
         return Err(wrong("a zip and an empty directory: restore backup.zip ./data2"));
     };
     let restored = tinystore::backup::restore(zip, dir)?;
-    outln!("● {dir}  restored from {zip} · {} files, {}", restored.files, crate::files::bytes(restored.bytes))?;
+    outln!("● {dir}  restored from {zip} · {} files, {}", restored.files, crate::on_disk::bytes(restored.bytes))?;
     if restored.key_left_out {
         outln!("  its encrypted buckets open with the store's key, which the backup left out: put it back first")?;
     }

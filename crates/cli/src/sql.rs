@@ -23,9 +23,9 @@ use tinystore::sql::Database;
 use tinystore::{ErrorKind, Options, Store};
 
 use crate::asked::{self, Asked, Done, failed, wrong};
-use crate::files;
 use crate::help;
 use crate::lines::{Terminal, paint};
+use crate::on_disk;
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     asked::run(&help::SQL, args, query)
@@ -114,7 +114,7 @@ pub(crate) fn database_held(dir: &Path, database: &str) -> Result<(), asked::Ref
     if dir.join("sql").join(format!("{database}.db")).exists() {
         return Ok(());
     }
-    let known = files::databases(dir);
+    let known = on_disk::databases(dir);
     let names: Vec<&str> = known.iter().map(String::as_str).collect();
     let held = if known.is_empty() { "none".to_owned() } else { known.join(", ") };
     Err(failed(format!(
@@ -170,7 +170,7 @@ fn tables(asked: Asked) -> Done {
     let json = asked.has("--json");
     match &rest[..] {
         [] => {
-            let databases = files::databases(&dir);
+            let databases = on_disk::databases(&dir);
             if json {
                 outln!("{}", serde_json::json!(databases))?;
             } else if databases.is_empty() {

@@ -19,8 +19,8 @@ use std::time::Duration;
 use nu_ansi_term::{Color, Style};
 
 use crate::args;
-use crate::files;
 use crate::lines::paint;
+use crate::on_disk;
 
 /// What the banner says beyond where the server listens: what the person
 /// typed and asked for, taken before the store opened.
@@ -219,12 +219,12 @@ fn row_more(row: &mut impl FnMut(bool, &str, String, String), what: String, how:
 /// 60 KiB · sql/app 1.2 MiB`, or `empty`.
 fn files_line(colours: bool, store: &Path) -> String {
     let dim = Style::new().dimmed();
-    let found = files::of(store);
+    let found = on_disk::of(store);
     if found.is_empty() {
         return paint(colours, dim, "empty: each engine makes its file the first time a program opens it");
     }
     let shown: Vec<String> =
-        found.iter().map(|file| format!("{} {}", file.name, paint(colours, dim, files::bytes(file.bytes)))).collect();
+        found.iter().map(|file| format!("{} {}", file.name, paint(colours, dim, on_disk::bytes(file.bytes)))).collect();
     shown.join(&paint(colours, dim, " · "))
 }
 

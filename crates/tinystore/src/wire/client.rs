@@ -43,8 +43,6 @@ const LABEL_FIELDS: usize = 10;
 pub use crate::metrics::prometheus::PrometheusStream;
 #[cfg(feature = "channels")]
 pub use channels::Heard;
-#[cfg(feature = "blobs")]
-pub use files::FileInfo;
 #[cfg(feature = "jobs")]
 pub use jobs::NewJob;
 pub use kv::KvValue;

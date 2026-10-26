@@ -163,6 +163,54 @@ pub(crate) const JOBS_CANCEL: Command = Command {
     more: WRITES,
 };
 
+pub(crate) const FILES_PUT: Command = Command {
+    name: "files put",
+    takes: "<dir> put <set> <path> <file>",
+    does: "write a local file at a path of a set",
+    flags: &[flag("--type", "<type>", "its content type, as image/png; from its extension when not given")],
+    examples: &[
+        "tinystore files ./data put avatars users/42/avatar.png ./avatar.png",
+        "pg_dump app | tinystore files ./data put dumps app.sql -",
+    ],
+    more: "It replaces whatever the path held, so sending it again leaves the same. - reads the bytes from stdin. A \
+           file without --type takes the type of its extension when it is a common one, and is bytes otherwise. It \
+           writes through the server that holds the directory, or starts one that stops 30 s after its last client; \
+           a directory a program holds inside its own process is refused.",
+};
+
+pub(crate) const FILES_GET: Command = Command {
+    name: "files get",
+    takes: "[dir] get <set> <path> <file>",
+    does: "write a set's file to a local path",
+    flags: &[flag("--force", "", "write over a file that is there")],
+    examples: &["tinystore files ./data get avatars users/42/avatar.png ./avatar.png"],
+    more: "It reads beside the program or server that holds the directory, checks the bytes against their SHA-256, \
+           and writes beside the path before it renames, never to stdout, since PowerShell's > writes bytes back as \
+           text.",
+};
+
+pub(crate) const FILES_LIST: Command = Command {
+    name: "files list",
+    takes: "[dir] list <set> [prefix]",
+    does: "a set's files, their size, time and type",
+    flags: &[
+        flag("--limit", "<count>", "the files a page holds, 100 when not given, 1000 at most"),
+        flag("--after", "<path>", "the page after this path, as the end of the last one says"),
+        JSON,
+    ],
+    examples: &["tinystore files ./data list avatars", "tinystore files ./data list avatars users/42/"],
+    more: "It reads beside the program or server that holds the directory, in the byte order of the paths.",
+};
+
+pub(crate) const FILES_DELETE: Command = Command {
+    name: "files delete",
+    takes: "<dir> delete <set> <path>",
+    does: "delete a set's file",
+    flags: &[],
+    examples: &["tinystore files ./data delete avatars users/42/avatar.png"],
+    more: WRITES,
+};
+
 pub(crate) const KV_DELETE: Command = Command {
     name: "kv delete",
     takes: "<dir> delete <bucket> <key>",
@@ -486,6 +534,8 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &KV_GET,
             &KV_LIST,
             &JOBS_LIST,
+            &FILES_LIST,
+            &FILES_GET,
             &SQL,
             &SEARCH,
             &METRICS_NAMES,
@@ -494,7 +544,20 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &EVENTS_LIST,
         ],
     ),
-    ("Write", &[&KV_SET, &KV_DELETE, &JOBS_ADD, &JOBS_CANCEL, &METRICS_INGEST, &METRICS_DELETE, &EVENTS_APPEND]),
+    (
+        "Write",
+        &[
+            &KV_SET,
+            &KV_DELETE,
+            &JOBS_ADD,
+            &JOBS_CANCEL,
+            &FILES_PUT,
+            &FILES_DELETE,
+            &METRICS_INGEST,
+            &METRICS_DELETE,
+            &EVENTS_APPEND,
+        ],
+    ),
     ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),

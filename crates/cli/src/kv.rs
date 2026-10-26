@@ -224,7 +224,7 @@ impl<'a> Kept<'a> {
         match database {
             Some(database) => Ok(Kept::Database(crate::sql::opened(store, database)?)),
             None if !store.dir().join("kv.db").exists() => {
-                Err(failed(crate::files::none_kept(store.dir(), "kv.db", "bucket")))
+                Err(failed(crate::on_disk::none_kept(store.dir(), "kv.db", "bucket")))
             }
             None => Ok(Kept::Store(store)),
         }

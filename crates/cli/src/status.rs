@@ -25,9 +25,9 @@ use tinystore::replication::{FileStatus, Links};
 
 use crate::asked::{self, Asked, Done, failed};
 use crate::client;
-use crate::files::{self, StoreFile};
 use crate::help;
 use crate::lines::{Terminal, paint};
+use crate::on_disk::{self, StoreFile};
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     asked::run(&help::STATUS, args, status)
@@ -95,7 +95,7 @@ impl Report {
         };
         let logged = tinystore::replication::status(dir)?;
         let node = dir.join("log").is_dir();
-        let files = files::of(dir)
+        let files = on_disk::of(dir)
             .into_iter()
             .map(|file| {
                 let status = logged.iter().find(|status| status.file == file.file).cloned();
@@ -141,8 +141,8 @@ impl Report {
             return text;
         }
         let name_width = self.files.iter().map(|(file, _)| file.name.len()).max().unwrap_or(0).max(5);
-        let sizes: Vec<String> = self.files.iter().map(|(file, _)| files::bytes(file.bytes)).collect();
-        let total = files::bytes(self.files.iter().map(|(file, _)| file.bytes).sum());
+        let sizes: Vec<String> = self.files.iter().map(|(file, _)| on_disk::bytes(file.bytes)).collect();
+        let total = on_disk::bytes(self.files.iter().map(|(file, _)| file.bytes).sum());
         let size_width = sizes.iter().map(String::len).chain([total.len()]).max().unwrap_or(0);
         for ((file, status), size) in self.files.iter().zip(&sizes) {
             let role = if self.node { role(file, status.as_ref(), self.links.as_ref()) } else { String::new() };

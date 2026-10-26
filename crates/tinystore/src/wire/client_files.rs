@@ -3,21 +3,14 @@
 use std::io::{Read, Write};
 
 use super::{Client, PIECE};
+use crate::blobs::FileInfo;
+use crate::clock::from_unix_millis;
 use crate::wire::codec::Message as _;
 use crate::wire::protocol::{self as wire, method};
 use crate::{Error, Result};
 
 /// What a write carries beside its path and its bytes.
 const WRITE_FIELDS: usize = 256;
-
-/// What a file the store holds carries, as `files put` says it.
-#[derive(Clone, Debug)]
-pub struct FileInfo {
-    pub size: u64,
-    /// The SHA-256 of its bytes in hex, quoted.
-    pub etag: String,
-    pub content_type: String,
-}
 
 impl<S: Read + Write> Client<S> {
     /// The handle of the set of files `name`, made the first time.
@@ -53,7 +46,15 @@ impl<S: Read + Write> Client<S> {
         };
         let written = super::decoded::<wire::BlobsWritten>(&answer)?;
         let info = written.info.ok_or_else(|| Error::corrupt("a put the server answered with no file"))?;
-        Ok(FileInfo { size: info.size, etag: info.etag, content_type: info.content_type })
+        Ok(FileInfo {
+            path: info.path,
+            size: info.size,
+            etag: info.etag,
+            content_type: info.content_type,
+            last_modified: from_unix_millis(info.last_modified),
+            expires: info.expires.map(from_unix_millis),
+            meta: info.meta.unwrap_or_default(),
+        })
     }
 
     /// Deletes the file at `path`: whether there was one.

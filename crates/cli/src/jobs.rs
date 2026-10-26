@@ -175,7 +175,7 @@ pub(crate) fn listed(
             crate::sql::opened(store, database).map_err(|refused| refused.to_string())?.queue(listing.queue)
         }
         None if !store.dir().join("jobs.db").exists() => {
-            return Err(crate::files::none_kept(store.dir(), "jobs.db", "queue"));
+            return Err(crate::on_disk::none_kept(store.dir(), "jobs.db", "queue"));
         }
         None => store.queue::<Value>(listing.queue),
     };
