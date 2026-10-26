@@ -63,6 +63,35 @@ OpenGaugeFunc is a gauge whose value read gives every 15 seconds and at Flush, o
 
 	err = metrics.OpenGaugeFunc(store, "queue_depth", emails.Depth, metrics.Labels{"queue": "emails"})
 
+## AggregatePage
+
+```go
+type AggregatePage struct {
+	Groups []Group
+	// Next is where the page after it begins; empty on the last.
+	Next string
+	// contains filtered or unexported fields
+}
+```
+
+AggregatePage is one page of an aggregate: its groups, and Next while there is more, walked as a SeriesPage is. A page ends between two whole buckets of a group.
+
+### Aggregate
+
+```go
+func Aggregate(ctx context.Context, store *tinystore.Store, q Query) (AggregatePage, error)
+```
+
+Aggregate is the buckets of each group of the series the query finds, each one exact value of its Op, rounded once: without Limit whole, or a Limit error naming its bound; with Limit a page, which ends between two whole buckets of a group.
+
+### AggregatePage.All
+
+```go
+func (p AggregatePage) All(ctx context.Context) iter.Seq2[Group, error]
+```
+
+All is the page's groups, then those of each page after it, read one page at a time as the walk reaches the end of the one it holds.
+
 ## Bucket
 
 ```go
@@ -277,18 +306,13 @@ type Group struct {
 	// Labels is the labels By kept or Without left.
 	Labels  Labels
 	Buckets []Bucket
+	// More says a page of an aggregate cut the group here: the page its Next
+	// reads begins with the rest of its buckets.
+	More bool
 }
 ```
 
 Group is the buckets of a group of series: a bucket without samples is left out.
-
-### Aggregate
-
-```go
-func Aggregate(ctx context.Context, store *tinystore.Store, q Query) ([]Group, error)
-```
-
-Aggregate is the buckets of each group of the series the query finds, each one exact value of its Op, rounded once.
 
 ## Histogram
 
@@ -559,6 +583,12 @@ type Query struct {
 	// From is the range's start, included, and To its end, excluded: now,
 	// a sample taken now in the range, when zero.
 	From, To time.Time
+	// Limit makes a Read or an Aggregate a page of this many samples or
+	// buckets at most, 100,000 at most; without it, the whole answer.
+	Limit int
+	// After is the page after the one whose Next this is, read with the
+	// same query and Limit.
+	After string
 
 	// Every is the buckets' span, counted from 1970 in UTC; the range is one bucket without it.
 	Every time.Duration
@@ -603,18 +633,42 @@ type Series struct {
 	// Keep is how long the name's samples stay, its own, kept in the file;
 	// what it keeps already unless given.
 	Keep time.Duration
+	// More says a page of a read cut the series here: the page its Next
+	// reads begins with the rest of it.
+	More bool
 }
 ```
 
 Series is a series: what Ingest writes, and what a read gives back. Ingest takes its samples as Samples, or as Times and Values, two columns of one length; a read gives Samples.
 
+## SeriesPage
+
+```go
+type SeriesPage struct {
+	Series []Series
+	// Next is where the page after it begins; empty on the last.
+	Next string
+	// contains filtered or unexported fields
+}
+```
+
+SeriesPage is one page of a read: its series, and Next while there is more. All walks it and every page after it. Without Limit it is the whole answer.
+
 ### Read
 
 ```go
-func Read(ctx context.Context, store *tinystore.Store, q Query) ([]Series, error)
+func Read(ctx context.Context, store *tinystore.Store, q Query) (SeriesPage, error)
 ```
 
-Read is the samples of each series the query finds, in its range: whole, or a Limit error naming its bound, never fewer.
+Read is the samples of each series the query finds, in its range: without Limit whole, or a Limit error naming its bound, never fewer; with Limit a page, which may hold fewer samples than Limit and still have Next.
+
+### SeriesPage.All
+
+```go
+func (p SeriesPage) All(ctx context.Context) iter.Seq2[Series, error]
+```
+
+All is the page's series, then those of each page after it, read one page at a time as the walk reaches the end of the one it holds.
 
 ## TextPage
 

@@ -2725,8 +2725,14 @@
     },
     {
       "fields": {
+        "after": {
+          "str": "after"
+        },
         "from": {
           "int": "1790000000000"
+        },
+        "limit": {
+          "uint": "607"
         },
         "name": {
           "str": "name"
@@ -2759,7 +2765,7 @@
           }
         }
       },
-      "hex": "8501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c00",
+      "hex": "8701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a56166746572",
       "message": "metrics.Query",
       "name": "metrics.Query with every field"
     },
@@ -2806,6 +2812,9 @@
     },
     {
       "fields": {
+        "next": {
+          "str": "next"
+        },
         "series": {
           "list": [
             {
@@ -2837,7 +2846,7 @@
           ]
         }
       },
-      "hex": "8101918601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06c3",
+      "hex": "8201918601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06c302a46e657874",
       "message": "metrics.Read",
       "name": "metrics.Read with every field"
     },
@@ -2936,8 +2945,14 @@
         },
         "query": {
           "fields": {
+            "after": {
+              "str": "after"
+            },
             "from": {
               "int": "1790000000000"
+            },
+            "limit": {
+              "uint": "607"
             },
             "name": {
               "str": "name"
@@ -2982,7 +2997,7 @@
           ]
         }
       },
-      "hex": "88018501a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0002cd05dc03a26f700491a262790591a7776974686f757406c307a863616c656e64617208a874696d655a6f6e65",
+      "hex": "88018701a46e616d650281a161830191a676616c75657302c303a670726566697803cd05dc04cf000001a0c4506c0005cf000001a0c4506c0006cd025f07a5616674657202cd05dc03a26f700491a262790591a7776974686f757406c307a863616c656e64617208a874696d655a6f6e65",
       "message": "metrics.AggregateAsked",
       "name": "metrics.AggregateAsked with every field"
     },
@@ -3150,9 +3165,12 @@
               }
             }
           ]
+        },
+        "next": {
+          "str": "next"
         }
       },
-      "hex": "8101918401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c3",
+      "hex": "8201918401a46e616d650281a161a66c6162656c7303918901cf000001a0c4506c0002cb3ff800000000000003cb3ff800000000000004cb3ff800000000000005cb3ff800000000000006cd025f07cd02c308c309c304c302a46e657874",
       "message": "metrics.Aggregates",
       "name": "metrics.Aggregates with every field"
     },

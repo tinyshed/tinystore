@@ -6,19 +6,19 @@ samples, every value bit for bit. `latest` gives each series' newest sample.
 menus of a dashboard, without reading a sample.
 
 ```ts
-const series = await store.metrics.read({ name: 'cpu', where: { host: 'web-1' }, since: '1h' })
+const { series } = await store.metrics.read({ name: 'cpu', where: { host: 'web-1' }, since: '1h' })
 for (const { labels, times, values } of series) chart.line(labels.host, times, values)
 ```
 
 ```python
-series = await store.metrics.read(name="cpu", where={"host": "web-1"}, since="1h")
+series = (await store.metrics.read(name="cpu", where={"host": "web-1"}, since="1h")).series
 for s in series:
     chart.line(s.labels["host"], s.times, s.values)
 ```
 
 ```go
-series, err := metrics.Read(ctx, store, metrics.Query{Name: "cpu", Where: metrics.Where{"host": "web-1"}, Since: time.Hour})
-for _, s := range series {
+page, err := metrics.Read(ctx, store, metrics.Query{Name: "cpu", Where: metrics.Where{"host": "web-1"}, Since: time.Hour})
+for _, s := range page.Series {
 	chart.Line(s.Labels["host"], s.Samples)
 }
 ```
@@ -37,21 +37,21 @@ value that was stored, never a missing one.
 ## Conditions
 
 ```ts
-const failing = await store.metrics.read({
+const { series: failing } = await store.metrics.read({
 	name: 'http_requests_total',
 	since: '1h',
 	where: { status: ['500', '502'], env: { not: 'dev' }, host: { prefix: 'api-' } },
 })
-const host = await store.metrics.read({ where: { host: 'web-1' }, since: '10m' }) // every name of one host
+const { series: host } = await store.metrics.read({ where: { host: 'web-1' }, since: '10m' }) // every name of one host
 ```
 
 ```python
-failing = await store.metrics.read(
+failing = (await store.metrics.read(
     name="http_requests_total",
     since="1h",
     where={"status": ["500", "502"], "env": {"not": "dev"}, "host": {"prefix": "api-"}},
-)
-host = await store.metrics.read(where={"host": "web-1"}, since="10m")
+)).series
+host = (await store.metrics.read(where={"host": "web-1"}, since="10m")).series
 ```
 
 ```go

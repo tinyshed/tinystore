@@ -104,6 +104,7 @@ export type {
 export { type ConsoleOut, type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
+	type AggregatePage,
 	type AggregateQuery,
 	type Bucket as MetricsBucket,
 	type Buckets,
@@ -135,6 +136,7 @@ export {
 	type Series,
 	type SeriesInput,
 	type SeriesKind,
+	type SeriesPage,
 	type Timer,
 	type TimerOptions,
 	type Timing,

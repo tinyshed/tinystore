@@ -4760,6 +4760,14 @@ def _write_metrics_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(5)
         w.int(x)
         n += 1
+    if (x := v.get("limit")) is not None:
+        w.uint(6)
+        w.uint(x)
+        n += 1
+    if (x := v.get("after")) is not None:
+        w.uint(7)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -4784,6 +4792,10 @@ def _read_metrics_query(r: Reader) -> dict[str, Any]:
                 read["from"] = r.int()
             case 5:
                 read["to"] = r.int()
+            case 6:
+                read["limit"] = r.uint()
+            case 7:
+                read["after"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -4800,6 +4812,10 @@ MetricsQuery = Message(
         "from": (4, int_),
         # excluded; now, a sample taken now in the range, unless given
         "to": (5, int_),
+        # a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+        "limit": (6, uint),
+        # a page's next, with limit
+        "after": (7, str_),
     },
     _write_metrics_query,
     _read_metrics_query,
@@ -4881,7 +4897,7 @@ MetricsSeries = Message(
         "times": (4, bin_),
         # a float64 a sample
         "values": (5, bin_),
-        # the next part goes on with this series
+        # the next part goes on with this series; on a page's last, the next page's first
         "more": (6, bool_),
     },
     _write_metrics_series,
@@ -4898,6 +4914,10 @@ def _write_metrics_read(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             MetricsSeries.write(w, item0)
         n += 1
+    if (x := v.get("next")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -4910,6 +4930,8 @@ def _read_metrics_read(r: Reader) -> dict[str, Any]:
                 items0 = [MetricsSeries.read(r) for _ in range(r.array())]
                 r.leave()
                 read["series"] = items0
+            case 2:
+                read["next"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -4920,6 +4942,8 @@ MetricsRead = Message(
     "metrics.Read",
     {
         "series": (1, list_(MetricsSeries)),
+        # on the last part of a page that has more, to a request that gave limit
+        "next": (2, str_),
     },
     _write_metrics_read,
     _read_metrics_read,
@@ -5281,6 +5305,7 @@ MetricsGroup = Message(
         "name": (1, str_),
         "labels": (2, names(str_)),
         "buckets": (3, list_(MetricsBucket)),
+        # the next part goes on with this group; on a page's last, the next page's first
         "more": (4, bool_),
     },
     _write_metrics_group,
@@ -5297,6 +5322,10 @@ def _write_metrics_aggregates(w: Writer, v: Mapping[str, Any]) -> None:
         for item0 in x:
             MetricsGroup.write(w, item0)
         n += 1
+    if (x := v.get("next")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -5309,6 +5338,8 @@ def _read_metrics_aggregates(r: Reader) -> dict[str, Any]:
                 items0 = [MetricsGroup.read(r) for _ in range(r.array())]
                 r.leave()
                 read["groups"] = items0
+            case 2:
+                read["next"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -5319,6 +5350,8 @@ MetricsAggregates = Message(
     "metrics.Aggregates",
     {
         "groups": (1, list_(MetricsGroup)),
+        # on the last part of a page that has more, to a request that gave limit
+        "next": (2, str_),
     },
     _write_metrics_aggregates,
     _read_metrics_aggregates,

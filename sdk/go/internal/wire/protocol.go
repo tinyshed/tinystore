@@ -6477,6 +6477,10 @@ type MetricsQuery struct {
 	From  *int64                      `wire:"4,from"`
 	// excluded; now, a sample taken now in the range, unless given
 	To *int64 `wire:"5,to"`
+	// a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+	Limit *uint64 `wire:"6,limit"`
+	// a page's next, with limit
+	After *string `wire:"7,after"`
 }
 
 func (m MetricsQuery) Write(w *Writer) {
@@ -6511,6 +6515,16 @@ func (m MetricsQuery) Write(w *Writer) {
 		w.Int(*m.To)
 		n++
 	}
+	if m.Limit != nil {
+		w.Uint(6)
+		w.Uint(*m.Limit)
+		n++
+	}
+	if m.After != nil {
+		w.Uint(7)
+		w.Str(*m.After)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -6542,6 +6556,12 @@ func (m *MetricsQuery) Read(r *Reader) {
 		case 5:
 			v := r.Int()
 			m.To = &v
+		case 6:
+			v := r.Uint()
+			m.Limit = &v
+		case 7:
+			v := r.Str()
+			m.After = &v
 		default:
 			r.Skip()
 		}
@@ -6555,7 +6575,9 @@ func (m MetricsQuery) IsZero() bool {
 		len(m.Where) == 0 &&
 		m.Since == nil &&
 		m.From == nil &&
-		m.To == nil
+		m.To == nil &&
+		m.Limit == nil &&
+		m.After == nil
 }
 
 // MetricsSeries is the schema's metrics.Series.
@@ -6571,7 +6593,7 @@ type MetricsSeries struct {
 	Times []byte `wire:"4,times"`
 	// a float64 a sample
 	Values []byte `wire:"5,values"`
-	// the next part goes on with this series
+	// the next part goes on with this series; on a page's last, the next page's first
 	More bool `wire:"6,more"`
 }
 
@@ -6660,6 +6682,8 @@ func (m MetricsSeries) IsZero() bool {
 // MetricsRead is the schema's metrics.Read.
 type MetricsRead struct {
 	Series []MetricsSeries `wire:"1,series"`
+	// on the last part of a page that has more, to a request that gave limit
+	Next *string `wire:"2,next"`
 }
 
 func (m MetricsRead) Write(w *Writer) {
@@ -6671,6 +6695,11 @@ func (m MetricsRead) Write(w *Writer) {
 		for _, item0 := range m.Series {
 			item0.Write(w)
 		}
+		n++
+	}
+	if m.Next != nil {
+		w.Uint(2)
+		w.Str(*m.Next)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -6690,6 +6719,9 @@ func (m *MetricsRead) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Series = v
+		case 2:
+			v := r.Str()
+			m.Next = &v
 		default:
 			r.Skip()
 		}
@@ -6699,7 +6731,8 @@ func (m *MetricsRead) Read(r *Reader) {
 
 // IsZero says whether MetricsRead writes as no field at all.
 func (m MetricsRead) IsZero() bool {
-	return len(m.Series) == 0
+	return len(m.Series) == 0 &&
+		m.Next == nil
 }
 
 // MetricsNewest is the schema's metrics.Newest.
@@ -7077,7 +7110,8 @@ type MetricsGroup struct {
 	Name    string            `wire:"1,name"`
 	Labels  map[string]string `wire:"2,labels"`
 	Buckets []MetricsBucket   `wire:"3,buckets"`
-	More    bool              `wire:"4,more"`
+	// the next part goes on with this group; on a page's last, the next page's first
+	More bool `wire:"4,more"`
 }
 
 func (m MetricsGroup) Write(w *Writer) {
@@ -7159,6 +7193,8 @@ func (m MetricsGroup) IsZero() bool {
 // MetricsAggregates is the schema's metrics.Aggregates.
 type MetricsAggregates struct {
 	Groups []MetricsGroup `wire:"1,groups"`
+	// on the last part of a page that has more, to a request that gave limit
+	Next *string `wire:"2,next"`
 }
 
 func (m MetricsAggregates) Write(w *Writer) {
@@ -7170,6 +7206,11 @@ func (m MetricsAggregates) Write(w *Writer) {
 		for _, item0 := range m.Groups {
 			item0.Write(w)
 		}
+		n++
+	}
+	if m.Next != nil {
+		w.Uint(2)
+		w.Str(*m.Next)
 		n++
 	}
 	w.CloseMap(head, n)
@@ -7189,6 +7230,9 @@ func (m *MetricsAggregates) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Groups = v
+		case 2:
+			v := r.Str()
+			m.Next = &v
 		default:
 			r.Skip()
 		}
@@ -7198,7 +7242,8 @@ func (m *MetricsAggregates) Read(r *Reader) {
 
 // IsZero says whether MetricsAggregates writes as no field at all.
 func (m MetricsAggregates) IsZero() bool {
-	return len(m.Groups) == 0
+	return len(m.Groups) == 0 &&
+		m.Next == nil
 }
 
 // MetricsPlan is the schema's metrics.Plan.

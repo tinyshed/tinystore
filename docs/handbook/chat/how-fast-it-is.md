@@ -133,7 +133,7 @@ refused.
 How many replies failed in the last hour, by outcome:
 
 ```ts
-const outcomes = await store.metrics.aggregate({
+const { groups: outcomes } = await store.metrics.aggregate({
 	name: 'chat_replies_total',
 	since: '1h',
 	op: 'increase',
@@ -143,7 +143,7 @@ const outcomes = await store.metrics.aggregate({
 ```
 
 ```python
-outcomes = await store.metrics.aggregate(name="chat_replies_total", since="1h", op="increase", by=["outcome"])
+outcomes = (await store.metrics.aggregate(name="chat_replies_total", since="1h", op="increase", by=["outcome"])).groups
 ```
 
 ```go
@@ -159,14 +159,14 @@ let outcomes = stats.query().name("chat_replies_total").since(Duration::from_hou
 How slow the model is, every five minutes:
 
 ```ts
-const p95 = await store.metrics.aggregate({ name: 'chat_model_ms', since: '1h', every: '5m', op: 'p95' })
+const { groups: p95 } = await store.metrics.aggregate({ name: 'chat_model_ms', since: '1h', every: '5m', op: 'p95' })
 // [{ labels: {}, buckets: [{ at, lower: 1000, upper: 2500, samples: 312 }, …] }]
-const mean = await store.metrics.aggregate({ name: 'chat_model_ms', since: '1h', op: 'avg' })
+const { groups: mean } = await store.metrics.aggregate({ name: 'chat_model_ms', since: '1h', op: 'avg' })
 ```
 
 ```python
-p95 = await store.metrics.aggregate(name="chat_model_ms", since="1h", every="5m", op="p95")
-mean = await store.metrics.aggregate(name="chat_model_ms", since="1h", op="avg")
+p95 = (await store.metrics.aggregate(name="chat_model_ms", since="1h", every="5m", op="p95")).groups
+mean = (await store.metrics.aggregate(name="chat_model_ms", since="1h", op="avg")).groups
 ```
 
 ```go

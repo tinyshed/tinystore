@@ -1279,6 +1279,57 @@ pub fn query(&self) -> Query
 A query of series by name and labels, over a range of time, which
 `read`, `aggregate`, `latest` or `explain` then runs.
 
+## aio::metrics::AggregatePage
+
+```rust
+pub struct AggregatePage {
+    pub groups: Vec<Aggregate>,
+    pub next: Option<String>,
+}
+```
+
+One page of an awaited aggregate: its groups, and `next` while there is
+more.
+
+### aio::metrics::AggregatePage.all
+
+```rust
+pub fn all(self) -> All<Aggregate>
+```
+
+The page's groups, then those of each page after it, as a stream.
+
+## aio::metrics::All
+
+```rust
+pub struct All<T> { /* private fields */ }
+```
+
+The series or the groups of a page and of every page after it, a
+`Stream` holding one page at a time. Dropped while a page is read, that
+read stops as a dropped read does.
+
+`Stream`: futures_core::Stream
+
+## aio::metrics::SeriesPage
+
+```rust
+pub struct SeriesPage {
+    pub series: Vec<Series>,
+    pub next: Option<String>,
+}
+```
+
+One page of an awaited read: its series, and `next` while there is more.
+
+### aio::metrics::SeriesPage.all
+
+```rust
+pub fn all(self) -> All<Series>
+```
+
+The page's series, then those of each page after it, as a stream.
+
 ## aio::metrics::Metrics
 
 ```rust

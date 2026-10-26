@@ -16,7 +16,7 @@ from __future__ import annotations
 import struct
 import sys
 from array import array
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, cast
@@ -71,6 +71,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Aggregate",
     "AggregateBucket",
+    "AggregatePage",
     "AggregateQuery",
     "Counter",
     "Description",
@@ -85,6 +86,7 @@ __all__ = [
     "Plan",
     "Point",
     "Series",
+    "SeriesPage",
     "SeriesQuery",
     "Timer",
     "Timing",
@@ -134,6 +136,10 @@ class SeriesQuery(TypedDict, total=False):
     """the range's start, included"""
     to: datetime
     """the range's end, excluded; now, a sample taken now in the range, unless given"""
+    limit: int
+    """a page of read or aggregate, this many samples or buckets at most, 100,000 at most; without it, the whole"""
+    after: str
+    """the page after the one whose next this is, read with the same query and limit"""
 
 
 class AggregateQuery(SeriesQuery, total=False):
@@ -173,6 +179,8 @@ class Series:
     values: Sequence[float] | None = None
     keep: Duration | None = None
     """how long the name's samples stay: its own, kept in the file; unless given, what it keeps already"""
+    more: bool = False
+    """a page cut the series here: the page its next reads begins with the rest of it"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +215,53 @@ class Aggregate:
     """the labels by kept or without left"""
     buckets: list[AggregateBucket]
     """a bucket without samples is left out"""
+    more: bool = False
+    """a page cut the group here: the page its next reads begins with the rest of its buckets"""
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesPage:
+    """One page of a read: its series, and next while there is more.
+
+    ``async for`` over it gives its series, then those of each page after it,
+    one page held at a time. Without limit it is the whole answer.
+    """
+
+    series: list[Series]
+    next: str | None
+    """where the page after it begins; none on the last"""
+    _read_on: Callable[[str], Awaitable[SeriesPage]] = field(repr=False, compare=False)
+
+    async def __aiter__(self) -> AsyncIterator[Series]:
+        page = self
+        while True:
+            for series in page.series:
+                yield series
+            if page.next is None:
+                return
+            page = await page._read_on(page.next)
+
+
+@dataclass(frozen=True, slots=True)
+class AggregatePage:
+    """One page of an aggregate: its groups, and next while there is more, walked as a SeriesPage is.
+
+    A page ends between two whole buckets.
+    """
+
+    groups: list[Aggregate]
+    next: str | None
+    """where the page after it begins; none on the last"""
+    _read_on: Callable[[str], Awaitable[AggregatePage]] = field(repr=False, compare=False)
+
+    async def __aiter__(self) -> AsyncIterator[Aggregate]:
+        page = self
+        while True:
+            for group in page.groups:
+                yield group
+            if page.next is None:
+                return
+            page = await page._read_on(page.next)
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,12 +392,18 @@ class Metrics:
 
         await self._link.run("write", attempt)
 
-    async def read(self, **query: Unpack[SeriesQuery]) -> list[Series]:
-        """The samples of each series the query finds, in its range: whole, or a LimitError naming its bound."""
-        parts = await self._download("metrics.read", MetricsQuery.encode(_query_of(query)))
+    async def read(self, **query: Unpack[SeriesQuery]) -> SeriesPage:
+        """The samples of each series the query finds, in its range: whole, or a LimitError naming its bound.
+
+        With limit, a page, which may hold fewer samples than limit and still have next.
+        """
+        parts = [
+            MetricsRead.decode(part)
+            for part in await self._download("metrics.read", MetricsQuery.encode(_query_of(query)))
+        ]
         series: list[Series] = []
         more = False
-        for piece in (each for part in parts for each in MetricsRead.decode(part).get("series", [])):
+        for piece in (each for part in parts for each in part.get("series", [])):
             times, values = _times_of(piece.get("times", b"")), _values_of(piece.get("values", b""))
             if more and series:
                 cast("array[int]", series[-1].times).extend(times)
@@ -351,7 +412,12 @@ class Metrics:
                 kind = piece.get("kind", "gauge")
                 series.append(Series(piece.get("name", ""), kind, dict(piece.get("labels", {})), None, times, values))
             more = piece.get("more", False)
-        return series
+            series[-1].more = more
+
+        async def read_on(after: str) -> SeriesPage:
+            return await self.read(**{**query, "after": after})
+
+        return SeriesPage(series, parts[-1].get("next") if parts else None, read_on)
 
     async def latest(self, **query: Unpack[SeriesQuery]) -> list[Point]:
         """The newest sample of each series the query finds, when it has one in the range."""
@@ -364,23 +430,30 @@ class Metrics:
             for each in MetricsLatest.decode(part).get("series", [])
         ]
 
-    async def aggregate(self, **query: Unpack[AggregateQuery]) -> list[Aggregate]:
-        """The buckets of each group of the series the query finds, each one exact value of op, rounded once."""
+    async def aggregate(self, **query: Unpack[AggregateQuery]) -> AggregatePage:
+        """The buckets of each group of the series the query finds, each one exact value of op, rounded once.
+
+        With limit, a page, which ends between two whole buckets of a group.
+        """
         if "op" not in query:
             raise InvalidError(
                 "an aggregate takes an op: count, sum, avg, min, max, increase, rate, delta, first, last, p95"
             )
-        parts = await self._download("metrics.aggregate", MetricsAggregateAsked.encode(_aggregate_of(query)))
+        asked = MetricsAggregateAsked.encode(_aggregate_of(query))
+        parts = [MetricsAggregates.decode(part) for part in await self._download("metrics.aggregate", asked)]
         groups: list[Aggregate] = []
         more = False
-        for piece in (each for part in parts for each in MetricsAggregates.decode(part).get("groups", [])):
+        for piece in (each for part in parts for each in part.get("groups", [])):
             buckets = [_bucket_of(bucket) for bucket in piece.get("buckets", [])]
             if more and groups:
-                groups[-1].buckets.extend(buckets)
-            else:
-                groups.append(Aggregate(piece.get("name", ""), dict(piece.get("labels", {})), buckets))
+                buckets = groups.pop().buckets + buckets
             more = piece.get("more", False)
-        return groups
+            groups.append(Aggregate(piece.get("name", ""), dict(piece.get("labels", {})), buckets, more))
+
+        async def read_on(after: str) -> AggregatePage:
+            return await self.aggregate(**{**query, "after": after})
+
+        return AggregatePage(groups, parts[-1].get("next") if parts else None, read_on)
 
     async def explain(self, **query: Unpack[AggregateQuery]) -> Plan:
         """What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample."""
@@ -548,6 +621,8 @@ def _query_of(query: Mapping[str, Any]) -> dict[str, Any]:
         "since": None if since is None else ms(since, "a query's since"),
         "from": None if from_ is None else unix_ms(from_, "a query's from_"),
         "to": None if to is None else unix_ms(to, "a query's to"),
+        "limit": query.get("limit"),
+        "after": query.get("after"),
     }
 
 

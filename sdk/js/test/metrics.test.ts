@@ -78,7 +78,7 @@ function seen(series: Series): string {
 
 /** The last value of each series of a name, by the labels given. */
 async function last(store: Store, name: string): Promise<Record<string, number>> {
-	const read = await store.metrics.read({ name, since: '1h' })
+	const { series: read } = await store.metrics.read({ name, since: '1h' })
 	return Object.fromEntries(
 		read.map(series => [JSON.stringify(series.labels), series.values.at(-1)!]),
 	)
@@ -112,7 +112,9 @@ for (const way of ways) {
 				times,
 				values,
 			})
-			const [cpu] = await store.metrics.read({ name: 'cpu', where: { host: 'web-1' }, since: '1h' })
+			const {
+				series: [cpu],
+			} = await store.metrics.read({ name: 'cpu', where: { host: 'web-1' }, since: '1h' })
 			expect(cpu?.labels).toEqual({ host: 'web-1' })
 			expect(Array.from(cpu?.times ?? [])).toEqual(times)
 			expect(new Uint8Array(cpu?.values.buffer ?? new ArrayBuffer(0))).toEqual(
@@ -122,6 +124,48 @@ for (const way of ways) {
 			expect(newest.map(sample => [sample.at.getTime(), sample.labels.host])).toEqual([
 				[at + 3000, 'web-1'],
 			])
+		})
+
+		// contract: MET-17
+		test('a read and an aggregate given limit come in pages that walk on to the whole answer', async () => {
+			const at = Date.now() - 600_000
+			const samples = Array.from({ length: 500 }, (_, i) => [at + i * 1000, i] as const)
+			for (const host of ['a', 'b']) {
+				await store.metrics.ingest({ name: 'paged', kind: 'gauge', labels: { host }, samples })
+			}
+			const query = { name: 'paged', since: '1h' } as const
+			const whole = await store.metrics.read(query)
+			expect([whole.series.length, whole.next]).toEqual([2, undefined])
+			const first = await store.metrics.read({ ...query, limit: 300 })
+			expect([first.series.at(-1)?.more, first.next === undefined]).toEqual([true, false])
+			const more = await store.metrics.read({ ...query, limit: 300, after: first.next })
+			expect(more.series[0]?.labels).toEqual(first.series.at(-1)?.labels)
+			const walked: Series[] = []
+			for await (const part of first) {
+				walked.push(part)
+			}
+			const read: Record<string, number> = {}
+			for (const part of walked) {
+				read[part.labels.host ?? ''] = (read[part.labels.host ?? ''] ?? 0) + part.times.length
+			}
+			expect(read).toEqual({ a: 500, b: 500 })
+			expect(walked.every(part => part.times.length <= 300)).toBe(true)
+			const groups = []
+			for await (const group of await store.metrics.aggregate({
+				...query,
+				every: '1m',
+				op: 'avg',
+				limit: 3,
+			})) {
+				groups.push(group)
+			}
+			const buckets = groups.reduce((sum, group) => sum + group.buckets.length, 0)
+			const once = await store.metrics.aggregate({ ...query, every: '1m', op: 'avg' })
+			expect(buckets).toBe(once.groups[0]?.buckets.length ?? -1)
+			expect(JSON.parse(JSON.stringify(first))).toEqual({
+				series: expect.any(Array),
+				next: first.next,
+			})
 		})
 
 		test('every text of testdata/metrics/prometheus.json writes its series or is refused whole', async () => {
@@ -142,7 +186,7 @@ for (const way of ways) {
 				})
 				const got: string[] = []
 				for (const name of new Set(series.map(one => one.name))) {
-					const read = await store.metrics.read({ name, since: prometheus.keep })
+					const { series: read } = await store.metrics.read({ name, since: prometheus.keep })
 					got.push(...read.map(one => seen({ ...one, labels: sorted(one.labels) })))
 				}
 				expect([each.name, ...got.sort()]).toEqual([each.name, ...want.sort()])
@@ -163,7 +207,10 @@ for (const way of ways) {
 			)
 			await store.metrics.ingestPrometheus(`${lines.join('\n')}\n`)
 			for (let read = 0; read < 200; read++) {
-				const answered = await store.metrics.read({ name: `wide_answer_${read % 10}`, since: '1h' })
+				const { series: answered } = await store.metrics.read({
+					name: `wide_answer_${read % 10}`,
+					since: '1h',
+				})
 				expect([read, answered.length]).toEqual([read, 600])
 			}
 		})
@@ -179,7 +226,7 @@ for (const way of ways) {
 			expect(text.length).toBeGreaterThan(3 << 20)
 			await store.metrics.ingestPrometheus(text, { labels: { instance: 'web-1' } })
 			for (let name = 0; name < 10; name++) {
-				const read = await store.metrics.read({ name: `wide_${name}`, since: '1h' })
+				const { series: read } = await store.metrics.read({ name: `wide_${name}`, since: '1h' })
 				const wrong = read.filter(
 					series =>
 						series.labels.instance !== 'web-1' ||
@@ -203,7 +250,9 @@ for (const way of ways) {
 				from: new Date(midnight),
 				to: new Date(midnight + 86_400_000),
 			}
-			const [local] = await store.metrics.aggregate({
+			const {
+				groups: [local],
+			} = await store.metrics.aggregate({
 				...range,
 				op: 'sum',
 				calendar: 'day',
@@ -212,7 +261,9 @@ for (const way of ways) {
 			expect(local?.buckets.map(bucket => [bucket.at.getTime(), bucket.value])).toEqual([
 				[midnight, 2],
 			])
-			const [utc] = await store.metrics.aggregate({ ...range, op: 'sum', every: '1d' })
+			const {
+				groups: [utc],
+			} = await store.metrics.aggregate({ ...range, op: 'sum', every: '1d' })
 			expect(utc?.buckets.map(bucket => bucket.value)).toEqual([1, 1])
 		})
 
@@ -225,7 +276,7 @@ for (const way of ways) {
 				samples: values.map((value, i) => [at + i * 1000, value] as const),
 			})
 			await store.metrics.ingest([route('/a', [0, 10, 25]), route('/b', [0, 3, 1])])
-			const traffic = await store.metrics.aggregate({
+			const { groups: traffic } = await store.metrics.aggregate({
 				name: 'requests_total',
 				since: '1h',
 				op: 'increase',
@@ -237,7 +288,11 @@ for (const way of ways) {
 			expect(byRoute['/a']).toMatchObject({ value: 25, resets: 0 })
 			expect(byRoute['/b']).toMatchObject({ value: 4, resets: 1 })
 			const routes = async (where: NonNullable<MetricsQuery['where']>) => {
-				const read = await store.metrics.read({ name: 'requests_total', where, since: '1h' })
+				const { series: read } = await store.metrics.read({
+					name: 'requests_total',
+					where,
+					since: '1h',
+				})
 				return read.map(series => series.labels.route).sort()
 			}
 			expect(await routes({ route: { not: '/a' } })).toEqual(['/b'])
@@ -248,9 +303,13 @@ for (const way of ways) {
 				latency.record(took)
 			}
 			await store.metrics.flush()
-			const [p50] = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'p50' })
+			const {
+				groups: [p50],
+			} = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'p50' })
 			expect(p50?.buckets[0]).toMatchObject({ lower: 5, upper: 10, samples: 4 })
-			const [p99] = await store.metrics.aggregate({
+			const {
+				groups: [p99],
+			} = await store.metrics.aggregate({
 				name: 'db_ms',
 				since: '1h',
 				op: 'p99.9',
@@ -261,7 +320,9 @@ for (const way of ways) {
 				upper: Number.POSITIVE_INFINITY,
 				estimate: 25,
 			})
-			const [mean] = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'avg' })
+			const {
+				groups: [mean],
+			} = await store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'avg' })
 			expect(mean?.buckets[0]?.value).toBe(32.5)
 			const unranked = store.metrics.aggregate({ name: 'db_ms', since: '1h', op: 'p' as 'p95' })
 			expect(await caught(unranked)).toBeInstanceOf(InvalidError)
@@ -498,9 +559,13 @@ test('what a program writes wrong does not compile: a duration, an op, a label i
 		await metrics.read({ name: 'cpu', since: '1hr' })
 		// @ts-expect-error: mean is no op; avg is
 		await metrics.aggregate({ name: 'cpu', op: 'mean' })
-		const [mean] = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'avg' })
+		const {
+			groups: [mean],
+		} = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'avg' })
 		const exact: number | undefined = mean?.buckets[0]?.value
-		const [p95] = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'p95' })
+		const {
+			groups: [p95],
+		} = await metrics.aggregate({ name: 'cpu', since: '1h', op: 'p95' })
 		// @ts-expect-error: a percentile may have bounds in place of a value
 		const ranked: number = p95!.buckets[0]!.value
 		const valued = (bucket: ValueBucket): number => bucket.value

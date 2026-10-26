@@ -45,6 +45,10 @@ interface Query {
     from?: Time | undefined
     /** the range's end, excluded; now, a sample taken now in the range, unless given */
     to?: Time | undefined
+    /** a page of read or aggregate: this many samples or buckets at most, 100,000 at most; without it, the whole answer or a limit error */
+    limit?: number | undefined
+    /** the page after the one whose next this is, read with the same query and limit */
+    after?: string | undefined
 }
 ```
 
@@ -94,10 +98,26 @@ interface Series {
     times: Float64Array
     /** the values, whose bytes keep each one's bits: -0 and a NaN's payload survive */
     values: Float64Array
+    /** a page cut the series here: the page its next reads begins with the rest of it */
+    more: boolean
 }
 ```
 
 A series as a read gives it: its samples as two columns.
+
+## SeriesPage
+
+```ts
+interface SeriesPage extends AsyncIterable<Series> {
+    series: Series[]
+    /** where the page after it begins; absent on the last */
+    next?: string
+}
+```
+
+One page of a read: its series, and next while there is more. Walking it
+with for await gives its series, then those of each page after it, one
+page held at a time. Without limit it is the whole answer.
 
 ## Percentile
 
@@ -180,8 +200,23 @@ interface Aggregate<O extends Op = Op> {
     labels: Labels
     /** a bucket without samples is left out */
     buckets: Bucket<O>[]
+    /** a page cut the group here: the page its next reads begins with the rest of its buckets */
+    more: boolean
 }
 ```
+
+## AggregatePage
+
+```ts
+interface AggregatePage<O extends Op = Op> extends AsyncIterable<Aggregate<O>> {
+    groups: Aggregate<O>[]
+    /** where the page after it begins; absent on the last */
+    next?: string
+}
+```
+
+One page of an aggregate: its groups, and next while there is more,
+walked as a SeriesPage is. A page ends between two whole buckets.
 
 ## Newest
 
@@ -330,10 +365,12 @@ histogram. A line it cannot read is refused, naming the line.
 ### Metrics.read
 
 ```ts
-read(query: Query): Promise<Series[]>
+read(query: Query): Promise<SeriesPage>
 ```
 
-The samples of each series the query finds, in its range: whole, or a limit error naming its bound.
+The samples of each series the query finds, in its range: without limit
+the whole answer, or a limit error naming its bound; with limit a page,
+which may hold fewer samples than limit and still have next.
 
 ### Metrics.latest
 
@@ -346,7 +383,7 @@ The newest sample of each series the query finds, when it has one in the range.
 ### Metrics.aggregate
 
 ```ts
-aggregate<O extends Op>(query: AggregateQuery<O>): Promise<Aggregate<O>[]>
+aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>>
 ```
 
 The buckets of each group of the series the query finds, each one exact

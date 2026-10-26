@@ -11,6 +11,8 @@ class SeriesQuery(TypedDict, total=False):
     since: Duration  # the span before now the range covers; or from_ and to
     from_: datetime  # the range's start, included
     to: datetime  # the range's end, excluded; now, a sample taken now in the range, unless given
+    limit: int  # a page of read or aggregate, this many samples or buckets at most, 100,000 at most; without it, the whole
+    after: str  # the page after the one whose next this is, read with the same query and limit
 ```
 
 The series a call finds and its range; a condition given as None is InvalidError, never left out.
@@ -42,6 +44,7 @@ class Series:
     times: Sequence[Time] | None = None
     values: Sequence[float] | None = None
     keep: Duration | None = None  # how long the name's samples stay: its own, kept in the file; unless given, what it keeps already
+    more: bool = False  # a page cut the series here: the page its next reads begins with the rest of it
 ```
 
 A series: what ingest writes, and what a read gives back.
@@ -82,6 +85,7 @@ class Aggregate:
     name: str
     labels: dict[str, str]  # the labels by kept or without left
     buckets: list[AggregateBucket]  # a bucket without samples is left out
+    more: bool = False  # a page cut the group here: the page its next reads begins with the rest of its buckets
 ```
 
 ## Point
@@ -190,10 +194,12 @@ cannot read is an InvalidError naming the line:
 ### Metrics.read
 
 ```python
-async def read(**query: Unpack[SeriesQuery]) -> list[Series]: ...
+async def read(**query: Unpack[SeriesQuery]) -> SeriesPage: ...
 ```
 
 The samples of each series the query finds, in its range: whole, or a LimitError naming its bound.
+
+With limit, a page, which may hold fewer samples than limit and still have next.
 
 ### Metrics.latest
 
@@ -206,10 +212,12 @@ The newest sample of each series the query finds, when it has one in the range.
 ### Metrics.aggregate
 
 ```python
-async def aggregate(**query: Unpack[AggregateQuery]) -> list[Aggregate]: ...
+async def aggregate(**query: Unpack[AggregateQuery]) -> AggregatePage: ...
 ```
 
 The buckets of each group of the series the query finds, each one exact value of op, rounded once.
+
+With limit, a page, which ends between two whole buckets of a group.
 
 ### Metrics.explain
 

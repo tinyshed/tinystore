@@ -32,7 +32,7 @@ func is(t *testing.T, err error, kind error) {
 // last is the last value of each series of a name, by its labels.
 func last(t *testing.T, store *tinystore.Store, name string) map[string]float64 {
 	t.Helper()
-	read := ways.Must(metrics.Read(context.Background(), store, metrics.Query{Name: name, Since: time.Hour}))
+	read := ways.Must(metrics.Read(context.Background(), store, metrics.Query{Name: name, Since: time.Hour})).Series
 	out := map[string]float64{}
 	for _, series := range read {
 		if len(series.Samples) > 0 {
@@ -51,7 +51,7 @@ func TestASeriesComesBackBitForBit(t *testing.T) {
 		values := []float64{0.42, math.Copysign(0, -1), payload, math.Inf(1)}
 		times := []time.Time{at, at.Add(time.Second), at.Add(2 * time.Second), at.Add(3 * time.Second)}
 		ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "cpu", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": "web-1"}, Times: times, Values: values}))
-		read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "cpu", Where: metrics.Where{"host": "web-1"}, Since: time.Hour}))
+		read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "cpu", Where: metrics.Where{"host": "web-1"}, Since: time.Hour})).Series
 		if len(read) != 1 || read[0].Labels["host"] != "web-1" || len(read[0].Samples) != 4 {
 			t.Fatalf("read %+v", read)
 		}
@@ -64,6 +64,54 @@ func TestASeriesComesBackBitForBit(t *testing.T) {
 		if len(newest) != 1 || !newest[0].At.Equal(times[3]) || newest[0].Labels["host"] != "web-1" {
 			t.Fatalf("latest %+v", newest)
 		}
+	})
+}
+
+// contract: MET-17
+func TestAReadAndAnAggregateGivenLimitComeInPagesThatWalkOn(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		at := time.Now().Add(-10 * time.Minute).Truncate(time.Millisecond)
+		samples := make([]metrics.Sample, 500)
+		for i := range samples {
+			samples[i] = metrics.Sample{At: at.Add(time.Duration(i) * time.Second), Value: float64(i)}
+		}
+		for _, host := range []string{"a", "b"} {
+			ways.Must(0, metrics.Ingest(ctx, store, metrics.Series{Name: "paged", Kind: metrics.KindGauge, Labels: metrics.Labels{"host": host}, Samples: samples}))
+		}
+		query := metrics.Query{Name: "paged", Since: time.Hour}
+		if whole := ways.Must(metrics.Read(ctx, store, query)); len(whole.Series) != 2 || whole.Next != "" {
+			t.Fatalf("whole %d series, next %q", len(whole.Series), whole.Next)
+		}
+		query.Limit = 300
+		first := ways.Must(metrics.Read(ctx, store, query))
+		if first.Next == "" || !first.Series[len(first.Series)-1].More {
+			t.Fatalf("first page %+v", first.Next)
+		}
+		read := map[string]int{}
+		for part, err := range first.All(ctx) {
+			if err != nil || len(part.Samples) > 300 {
+				t.Fatalf("part of %d samples: %v", len(part.Samples), err)
+			}
+			read[part.Labels["host"]] += len(part.Samples)
+		}
+		if read["a"] != 500 || read["b"] != 500 {
+			t.Fatalf("walked %v", read)
+		}
+		buckets := 0
+		paged := metrics.Query{Name: "paged", Since: time.Hour, Every: time.Minute, Op: metrics.Avg, Limit: 3}
+		for group, err := range ways.Must(metrics.Aggregate(ctx, store, paged)).All(ctx) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			buckets += len(group.Buckets)
+		}
+		paged.Limit = 0
+		if once := ways.Must(metrics.Aggregate(ctx, store, paged)); buckets != len(once.Groups[0].Buckets) {
+			t.Fatalf("walked %d buckets, once %d", buckets, len(once.Groups[0].Buckets))
+		}
+		_, err := metrics.Read(ctx, store, metrics.Query{Name: "paged", Since: time.Hour, Op: metrics.Avg})
+		is(t, err, tinystore.ErrInvalid)
 	})
 }
 
@@ -146,7 +194,7 @@ func TestEveryTextOfTheVectorsWritesItsSeriesOrIsRefusedWhole(t *testing.T) {
 				names[series.Name] = true
 			}
 			for name := range names {
-				for _, series := range ways.Must(metrics.Read(ctx, store, metrics.Query{Name: name, Since: keep})) {
+				for _, series := range ways.Must(metrics.Read(ctx, store, metrics.Query{Name: name, Since: keep})).Series {
 					samples := make([][2]int64, len(series.Samples))
 					for i, sample := range series.Samples {
 						samples[i] = [2]int64{sample.At.UnixMilli(), int64(math.Float64bits(sample.Value))}
@@ -183,7 +231,7 @@ func TestATextPastOneMessageGoesInPiecesAndIsWrittenWhole(t *testing.T) {
 			t.Fatal(err)
 		}
 		for name := range 10 {
-			read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: fmt.Sprintf("wide_%d", name), Since: time.Hour}))
+			read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: fmt.Sprintf("wide_%d", name), Since: time.Hour})).Series
 			var wrong []metrics.Labels
 			for _, series := range read {
 				n := ways.Must(strconv.ParseFloat(series.Labels["n"], 64))
@@ -211,13 +259,13 @@ func TestACalendarsBucketsBeginAtTheLocalMidnightOfTheirTimeZone(t *testing.T) {
 		query := metrics.Query{Name: "orders", From: midnight, To: midnight.Add(24 * time.Hour), Op: metrics.Sum}
 		local := query
 		local.Calendar, local.TimeZone = tinystore.Day, "Europe/Moscow"
-		days := ways.Must(metrics.Aggregate(ctx, store, local))
+		days := ways.Must(metrics.Aggregate(ctx, store, local)).Groups
 		if buckets := days[0].Buckets; len(buckets) != 1 || !buckets[0].At.Equal(midnight) || *buckets[0].Value != 2 {
 			t.Fatalf("a Moscow day: %+v", buckets)
 		}
 		utc := query
 		utc.Every = 24 * time.Hour
-		if buckets := ways.Must(metrics.Aggregate(ctx, store, utc))[0].Buckets; len(buckets) != 2 {
+		if buckets := ways.Must(metrics.Aggregate(ctx, store, utc)).Groups[0].Buckets; len(buckets) != 2 {
 			t.Fatalf("days of UTC: %+v", buckets)
 		}
 	})
@@ -235,7 +283,7 @@ func TestAnAggregatesBucketsAreExactByGroupAndATimersPercentileIsItsBounds(t *te
 			return metrics.Series{Name: "requests_total", Kind: metrics.KindCounter, Labels: metrics.Labels{"route": name}, Samples: samples}
 		}
 		ways.Must(0, metrics.Ingest(ctx, store, route("/a", 0, 10, 25), route("/b", 0, 3, 1)))
-		traffic := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "requests_total", Since: time.Hour, Op: metrics.Increase, By: []string{"route"}}))
+		traffic := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "requests_total", Since: time.Hour, Op: metrics.Increase, By: []string{"route"}})).Groups
 		byRoute := map[string]metrics.Bucket{}
 		for _, group := range traffic {
 			byRoute[group.Labels["route"]] = group.Buckets[0]
@@ -247,7 +295,7 @@ func TestAnAggregatesBucketsAreExactByGroupAndATimersPercentileIsItsBounds(t *te
 			t.Fatalf("/b %v %d", *b.Value, b.Resets)
 		}
 		routes := func(where metrics.Where) []string {
-			read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "requests_total", Where: where, Since: time.Hour}))
+			read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "requests_total", Where: where, Since: time.Hour})).Series
 			var out []string
 			for _, series := range read {
 				out = append(out, series.Labels["route"])
@@ -268,15 +316,15 @@ func TestAnAggregatesBucketsAreExactByGroupAndATimersPercentileIsItsBounds(t *te
 			latency.Record(took * time.Millisecond)
 		}
 		ways.Must(0, metrics.Flush(ctx, store))
-		p50 := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Percentile(50)}))
+		p50 := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Percentile(50)})).Groups
 		if b := p50[0].Buckets[0]; *b.Lower != 5 || *b.Upper != 10 || b.Samples != 4 {
 			t.Fatalf("p50 %v %v %d", *b.Lower, *b.Upper, b.Samples)
 		}
-		p999 := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Percentile(99.9), Estimate: true}))
+		p999 := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Percentile(99.9), Estimate: true})).Groups
 		if b := p999[0].Buckets[0]; *b.Lower != 25 || !math.IsInf(*b.Upper, 1) || *b.Estimate != 25 {
 			t.Fatalf("p99.9 %v %v %v", *b.Lower, *b.Upper, *b.Estimate)
 		}
-		mean := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Avg}))
+		mean := ways.Must(metrics.Aggregate(ctx, store, metrics.Query{Name: "db_ms", Since: time.Hour, Op: metrics.Avg})).Groups
 		if *mean[0].Buckets[0].Value != 32.5 {
 			t.Fatalf("avg %v", *mean[0].Buckets[0].Value)
 		}

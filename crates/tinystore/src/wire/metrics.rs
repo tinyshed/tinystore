@@ -29,8 +29,8 @@ use super::{Link, Route};
 use crate::clock::from_unix_millis;
 use crate::memory::PATIENCE;
 use crate::metrics::{
-    Ack, Aggregate, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op, Prometheus,
-    Query, Remote, Series, Set, Value,
+    Ack, AggregatePage, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op,
+    Prometheus, Query, Remote, Series, SeriesPage, Set, Value,
 };
 use crate::sync::lock;
 use crate::{Calendar, Error, Memory, Reservation, Store, unix_millis};
@@ -160,12 +160,12 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> 
 pub(crate) fn parts(store: &Store, called: u16, body: &[u8], bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
     let metrics = store.metrics()?;
     match called {
-        method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?.series, bound)),
+        method::METRICS_READ => Ok(read_parts(query(&metrics, MetricsQuery::decode(body)?)?.read()?, bound)),
         method::METRICS_LATEST => Ok(latest_parts(query(&metrics, MetricsQuery::decode(body)?)?.latest()?, bound)),
         _ => {
             let asked = MetricsAggregateAsked::decode(body)?;
             let op = op_of(asked.op.as_deref())?;
-            Ok(aggregate_parts(aggregating(&metrics, asked)?.aggregate(op)?.groups, bound))
+            Ok(aggregate_parts(aggregating(&metrics, asked)?.aggregate(op)?, bound))
         }
     }
 }
@@ -187,6 +187,12 @@ fn query(metrics: &Metrics, asked: MetricsQuery) -> Result<Query, Failure> {
     }
     if let Some(to) = asked.to {
         query = query.to(from_unix_millis(to));
+    }
+    if let Some(limit) = asked.limit {
+        query = query.limit(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    if let Some(after) = &asked.after {
+        query = query.after(after);
     }
     Ok(query)
 }
@@ -417,9 +423,9 @@ fn delete(metrics: &Metrics, named: MetricsSeriesNamed) -> Answered {
 
 /// A read's series in parts of at most `bound` bytes: a series longer than
 /// what a part leaves goes on in the next, `more` set on the piece before.
-fn read_parts(series: Vec<Series>, bound: usize) -> VecDeque<Vec<u8>> {
+fn read_parts(page: SeriesPage, bound: usize) -> VecDeque<Vec<u8>> {
     let mut parts: Parts<MetricsRead> = Parts::new(bound);
-    for read in series {
+    for read in page.series {
         let head = read.name().len() + labels_weight(read.labels()) + ENVELOPE;
         let samples = read.samples();
         let mut from = 0;
@@ -432,7 +438,7 @@ fn read_parts(series: Vec<Series>, bound: usize) -> VecDeque<Vec<u8>> {
                 labels: read.labels().clone(),
                 times: cut.iter().flat_map(|sample| unix_millis(sample.at).to_le_bytes()).collect(),
                 values: cut.iter().flat_map(|sample| sample.value.to_le_bytes()).collect(),
-                more: from + take < samples.len(),
+                more: from + take < samples.len() || read.more(),
             };
             parts.take(head + take * SAMPLE, |part| part.series.push(piece));
             from += take;
@@ -442,7 +448,8 @@ fn read_parts(series: Vec<Series>, bound: usize) -> VecDeque<Vec<u8>> {
             parts.close();
         }
     }
-    parts.finish()
+    let next = page.next;
+    parts.last(next.as_ref().map_or(0, String::len), |part| part.next = next)
 }
 
 fn latest_parts(latest: Vec<Latest>, bound: usize) -> VecDeque<Vec<u8>> {
@@ -460,24 +467,26 @@ fn latest_parts(latest: Vec<Latest>, bound: usize) -> VecDeque<Vec<u8>> {
 /// An aggregate's groups in parts of at most `bound` bytes: a group longer
 /// than what a part leaves goes on in the next, `more` set on the piece
 /// before.
-fn aggregate_parts(groups: Vec<Aggregate>, bound: usize) -> VecDeque<Vec<u8>> {
+fn aggregate_parts(page: AggregatePage, bound: usize) -> VecDeque<Vec<u8>> {
     let mut parts: Parts<MetricsAggregates> = Parts::new(bound);
-    for group in groups {
+    for group in page.groups {
         let head = group.name.len() + labels_weight(&group.labels) + ENVELOPE;
         let mut buckets = group.buckets.into_iter().map(bucket_of).peekable();
         loop {
             let take = parts.room(head, BUCKET);
             let cut: Vec<MetricsBucket> = buckets.by_ref().take(take).collect();
-            let more = buckets.peek().is_some();
-            let piece = MetricsGroup { name: group.name.clone(), labels: group.labels.clone(), buckets: cut, more };
+            let rest = buckets.peek().is_some();
+            let (name, labels, more) = (group.name.clone(), group.labels.clone(), rest || group.more);
+            let piece = MetricsGroup { name, labels, buckets: cut, more };
             parts.take(head + piece.buckets.len() * BUCKET, |part| part.groups.push(piece));
-            if !more {
+            if !rest {
                 break;
             }
             parts.close();
         }
     }
-    parts.finish()
+    let next = page.next;
+    parts.last(next.as_ref().map_or(0, String::len), |part| part.next = next)
 }
 
 fn bucket_of(bucket: crate::metrics::Bucket) -> MetricsBucket {
@@ -545,6 +554,16 @@ impl<M: Message> Parts<M> {
     fn finish(mut self) -> VecDeque<Vec<u8>> {
         self.done.push_back(self.open.encode());
         self.done
+    }
+
+    /// Every part, with `put` on the last: in a part of its own when the open
+    /// one has no room for its `weight`.
+    fn last(mut self, weight: usize, put: impl FnOnce(&mut M)) -> VecDeque<Vec<u8>> {
+        if self.filled && self.size + weight > self.bound {
+            self.close();
+        }
+        put(&mut self.open);
+        self.finish()
     }
 }
 

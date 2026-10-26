@@ -11,7 +11,7 @@ const latency = store.metrics.timer('http_request_ms', { buckets: [5, 10, 25, 50
 
 requests.with({ route: '/notes' }).inc()
 await latency.measure(() => handle(request))
-const p95 = await store.metrics.aggregate({ name: 'http_request_ms', since: '1h', every: '5m', op: 'p95' })
+const { groups: p95 } = await store.metrics.aggregate({ name: 'http_request_ms', since: '1h', every: '5m', op: 'p95' })
 ```
 
 ```python
@@ -21,7 +21,7 @@ latency = store.metrics.timer("http_request_ms", buckets=[5, 10, 25, 50, 100, 25
 requests.labels(route="/notes").inc()
 async with latency.measure():
     await handle(request)
-p95 = await store.metrics.aggregate(name="http_request_ms", since="1h", every="5m", op="p95")
+p95 = (await store.metrics.aggregate(name="http_request_ms", since="1h", every="5m", op="p95")).groups
 ```
 
 ```go

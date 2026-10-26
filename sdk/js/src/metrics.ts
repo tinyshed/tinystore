@@ -92,6 +92,10 @@ export interface Query {
 	from?: Time | undefined
 	/** the range's end, excluded; now, a sample taken now in the range, unless given */
 	to?: Time | undefined
+	/** a page of read or aggregate: this many samples or buckets at most, 100,000 at most; without it, the whole answer or a limit error */
+	limit?: number | undefined
+	/** the page after the one whose next this is, read with the same query and limit */
+	after?: string | undefined
 }
 
 /** A series to write: its samples as [time, value] pairs, or as times and values columns. */
@@ -125,6 +129,19 @@ export interface Series {
 	times: Float64Array
 	/** the values, whose bytes keep each one's bits: -0 and a NaN's payload survive */
 	values: Float64Array
+	/** a page cut the series here: the page its next reads begins with the rest of it */
+	more: boolean
+}
+
+/**
+ * One page of a read: its series, and next while there is more. Walking it
+ * with for await gives its series, then those of each page after it, one
+ * page held at a time. Without limit it is the whole answer.
+ */
+export interface SeriesPage extends AsyncIterable<Series> {
+	series: Series[]
+	/** where the page after it begins; absent on the last */
+	next?: string
 }
 
 /** p and a rank: 'p95', 'p99.9'. The ranks offered are those asked most; any other is written the same way. */
@@ -209,6 +226,18 @@ export interface Aggregate<O extends Op = Op> {
 	labels: Labels
 	/** a bucket without samples is left out */
 	buckets: Bucket<O>[]
+	/** a page cut the group here: the page its next reads begins with the rest of its buckets */
+	more: boolean
+}
+
+/**
+ * One page of an aggregate: its groups, and next while there is more,
+ * walked as a SeriesPage is. A page ends between two whole buckets.
+ */
+export interface AggregatePage<O extends Op = Op> extends AsyncIterable<Aggregate<O>> {
+	groups: Aggregate<O>[]
+	/** where the page after it begins; absent on the last */
+	next?: string
 }
 
 /** A series' newest sample in the range. */
@@ -348,25 +377,47 @@ export class Metrics {
 		})
 	}
 
-	/** The samples of each series the query finds, in its range: whole, or a limit error naming its bound. */
-	async read(query: Query): Promise<Series[]> {
-		const parts = await this.#download('metrics.read', MetricsQuery.encode(queryOf(query)))
+	/**
+	 * The samples of each series the query finds, in its range: without limit
+	 * the whole answer, or a limit error naming its bound; with limit a page,
+	 * which may hold fewer samples than limit and still have next.
+	 */
+	async read(query: Query): Promise<SeriesPage> {
+		const parts = (await this.#download('metrics.read', MetricsQuery.encode(queryOf(query)))).map(
+			part => MetricsRead.decode(part),
+		)
 		const series: Series[] = []
 		let more = false
-		for (const piece of parts.flatMap(part => MetricsRead.decode(part).series ?? [])) {
+		for (const piece of parts.flatMap(part => part.series ?? [])) {
 			const times = timesOf(piece.times ?? new Uint8Array(0))
 			const values = valuesOf(piece.values ?? new Uint8Array(0))
 			const last = series.at(-1)
 			if (more && last !== undefined) {
 				last.times = joined(last.times, times)
 				last.values = joined(last.values, values)
+				last.more = piece.more === true
 			} else {
 				const kind = (piece.kind ?? 'gauge') as SeriesKind
-				series.push({ name: piece.name ?? '', kind, labels: piece.labels ?? {}, times, values })
+				const labels = piece.labels ?? {}
+				series.push({
+					name: piece.name ?? '',
+					kind,
+					labels,
+					times,
+					values,
+					more: piece.more === true,
+				})
 			}
 			more = piece.more === true
 		}
-		return series
+		const next = parts.at(-1)?.next
+		const page: { series: Series[]; next?: string } =
+			next === undefined ? { series } : { series, next }
+		return walked(
+			page,
+			at => at.series,
+			after => this.read({ ...query, after }),
+		)
 	}
 
 	/** The newest sample of each series the query finds, when it has one in the range. */
@@ -386,24 +437,37 @@ export class Metrics {
 	 * The buckets of each group of the series the query finds, each one exact
 	 * value of op, rounded once; a bucket of count … last has its value.
 	 */
-	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<Aggregate<O>[]> {
-		const parts = await this.#download(
-			'metrics.aggregate',
-			MetricsAggregateAsked.encode(aggregateOf(query)),
+	async aggregate<O extends Op>(query: AggregateQuery<O>): Promise<AggregatePage<O>> {
+		const asked = MetricsAggregateAsked.encode(aggregateOf(query))
+		const parts = (await this.#download('metrics.aggregate', asked)).map(part =>
+			MetricsAggregates.decode(part),
 		)
 		const groups: Aggregate<O>[] = []
 		let more = false
-		for (const piece of parts.flatMap(part => MetricsAggregates.decode(part).groups ?? [])) {
+		for (const piece of parts.flatMap(part => part.groups ?? [])) {
 			const buckets = (piece.buckets ?? []).map(bucket => bucketOf(bucket) as Bucket<O>)
 			const last = groups.at(-1)
 			if (more && last !== undefined) {
 				last.buckets.push(...buckets)
+				last.more = piece.more === true
 			} else {
-				groups.push({ name: piece.name ?? '', labels: piece.labels ?? {}, buckets })
+				groups.push({
+					name: piece.name ?? '',
+					labels: piece.labels ?? {},
+					buckets,
+					more: piece.more === true,
+				})
 			}
 			more = piece.more === true
 		}
-		return groups
+		const next = parts.at(-1)?.next
+		const page: { groups: Aggregate<O>[]; next?: string } =
+			next === undefined ? { groups } : { groups, next }
+		return walked(
+			page,
+			at => at.groups,
+			after => this.aggregate({ ...query, after }),
+		)
 	}
 
 	/** What a read, or an aggregate when given its op, would spend of each bound; it decodes no sample. */
@@ -591,6 +655,28 @@ export class Metrics {
 	}
 }
 
+/**
+ * A page that for await walks: its items, then those of each page after it,
+ * the next page read only once the walk reaches the end of the one it holds.
+ */
+function walked<P extends { next?: string }, T>(
+	page: P,
+	items: (page: P) => readonly T[],
+	readOn: (after: string) => Promise<P>,
+): P & AsyncIterable<T> {
+	return Object.assign(page, {
+		async *[Symbol.asyncIterator](): AsyncGenerator<T> {
+			for (let at = page; ; ) {
+				yield* items(at)
+				if (at.next === undefined) {
+					return
+				}
+				at = await readOn(at.next)
+			}
+		},
+	})
+}
+
 /** A query as the wire carries it; a condition given as undefined is refused, never left out. */
 function queryOf(query: Query): Parameters<typeof MetricsQuery.encode>[0] {
 	const where: Record<string, { values?: string[]; not?: boolean; prefix?: string }> = {}
@@ -606,6 +692,8 @@ function queryOf(query: Query): Parameters<typeof MetricsQuery.encode>[0] {
 		since: query.since === undefined ? undefined : ms(query.since),
 		from: query.from === undefined ? undefined : unixMs(query.from),
 		to: query.to === undefined ? undefined : unixMs(query.to),
+		limit: query.limit,
+		after: query.after,
 	}
 }
 

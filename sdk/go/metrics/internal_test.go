@@ -100,7 +100,7 @@ func (c *cuttable) setDown(down bool) {
 // counted is a counter's total as a store of the directory reads it.
 func counted(t *testing.T, keeper *tinystore.Store, name string) float64 {
 	t.Helper()
-	read := ways.Must(Read(context.Background(), keeper, Query{Name: name, Since: time.Hour}))
+	read := ways.Must(Read(context.Background(), keeper, Query{Name: name, Since: time.Hour})).Series
 	if len(read) != 1 || len(read[0].Samples) == 0 {
 		t.Fatalf("%s read %+v", name, read)
 	}

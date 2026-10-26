@@ -87,7 +87,7 @@ describe('the site in its own store', () => {
 			const visitors = new Set(records.map(record => record.fields.visitor))
 			expect(visitors.size).toBe(1)
 
-			const views = await again.metrics.read({ name: 'site_views_total', since: '1h' })
+			const { series: views } = await again.metrics.read({ name: 'site_views_total', since: '1h' })
 			expect(
 				views
 					.map(series => series.labels)

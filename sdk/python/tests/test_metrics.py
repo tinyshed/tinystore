@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 async def last(metrics: Metrics, name: str) -> dict[str, float]:
     """The last value of each series of a name, by its labels."""
-    read = await metrics.read(name=name, since="1h")
+    read = (await metrics.read(name=name, since="1h")).series
     return {json.dumps(series.labels, sort_keys=True): series.values[-1] for series in read if series.values}
 
 
@@ -44,7 +44,7 @@ async def test_a_series_comes_back_bit_for_bit_its_samples_as_two_columns(store:
     values[2] = struct.unpack("<d", struct.pack("<Q", 0x7FF8_0000_DEAD_BEEF))[0]
     times = [at, at + 1000, at + 2000, at + 3000]
     await store.metrics.ingest(Series(name="cpu", kind="gauge", labels={"host": "web-1"}, times=times, values=values))
-    [cpu] = await store.metrics.read(name="cpu", where={"host": "web-1"}, since="1h")
+    [cpu] = (await store.metrics.read(name="cpu", where={"host": "web-1"}, since="1h")).series
     assert cpu.labels == {"host": "web-1"}
     assert list(cpu.times or []) == times
     assert isinstance(cpu.values, array)
@@ -53,6 +53,31 @@ async def test_a_series_comes_back_bit_for_bit_its_samples_as_two_columns(store:
     assert [(point.at, point.labels["host"]) for point in newest] == [
         (datetime.fromtimestamp((at + 3000) / 1000, UTC), "web-1")
     ]
+
+
+# contract: MET-17
+async def test_a_read_and_an_aggregate_given_limit_come_in_pages_that_walk_on(store: tinystore.Store) -> None:
+    at = now_ms() - 600_000
+    samples = [(at + index * 1000, float(index)) for index in range(500)]
+    for host in ["a", "b"]:
+        await store.metrics.ingest(Series(name="paged", kind="gauge", labels={"host": host}, samples=samples))
+    whole = await store.metrics.read(name="paged", since="1h")
+    assert (len(whole.series), whole.next) == (2, None)
+    first = await store.metrics.read(name="paged", since="1h", limit=300)
+    assert first.series[-1].more and first.next is not None
+    more = await store.metrics.read(name="paged", since="1h", limit=300, after=first.next)
+    assert more.series[0].labels == first.series[-1].labels
+    read: dict[str, int] = {}
+    async for part in first:
+        assert len(part.times or []) <= 300
+        host = str(part.labels["host"])
+        read[host] = read.get(host, 0) + len(part.times or [])
+    assert read == {"a": 500, "b": 500}
+    buckets = 0
+    async for group in await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg", limit=3):
+        buckets += len(group.buckets)
+    once = await store.metrics.aggregate(name="paged", since="1h", every="1m", op="avg")
+    assert buckets == len(once.groups[0].buckets)
 
 
 PROMETHEUS = json.loads(
@@ -99,7 +124,7 @@ async def test_every_text_of_the_vectors_writes_its_series_or_is_refused_whole(s
         )
         got: list[Seen] = []
         for name in {one["name"] for one in case["series"]}:
-            got += [_seen(series) for series in await store.metrics.read(name=name, since=PROMETHEUS["keep"])]
+            got += [_seen(series) for series in (await store.metrics.read(name=name, since=PROMETHEUS["keep"])).series]
         assert (case["name"], sorted(got)) == (case["name"], want)
     await store.metrics.ingest_prometheus(b"# TYPE bytes_given gauge\nbytes_given 1\n", keep="1d")
     assert await last(store.metrics, "bytes_given") == {"{}": 1}
@@ -112,7 +137,7 @@ async def test_a_text_past_one_message_goes_in_pieces_and_is_written_whole(store
     assert len(text) > 3 << 20
     await store.metrics.ingest_prometheus(text, labels={"instance": "web-1"})
     for name in range(10):
-        read = await store.metrics.read(name=f"wide_{name}", since="1h")
+        read = (await store.metrics.read(name=f"wide_{name}", since="1h")).series
         wrong = [
             series.labels
             for series in read
@@ -132,11 +157,13 @@ async def test_a_calendars_buckets_begin_at_the_local_midnight_of_their_time_zon
     samples = [(midnight + timedelta(hours=1), 1.0), (midnight + timedelta(hours=23), 1.0)]
     await store.metrics.ingest(Series(name="orders", kind="gauge", labels={}, samples=samples))
     end = midnight + timedelta(days=1)
-    [local] = await store.metrics.aggregate(
-        name="orders", from_=midnight, to=end, op="sum", calendar="day", time_zone="Europe/Moscow"
-    )
+    [local] = (
+        await store.metrics.aggregate(
+            name="orders", from_=midnight, to=end, op="sum", calendar="day", time_zone="Europe/Moscow"
+        )
+    ).groups
     assert [(bucket.at, bucket.value) for bucket in local.buckets] == [(midnight, 2)]
-    [utc] = await store.metrics.aggregate(name="orders", from_=midnight, to=end, op="sum", every="1d")
+    [utc] = (await store.metrics.aggregate(name="orders", from_=midnight, to=end, op="sum", every="1d")).groups
     assert [bucket.value for bucket in utc.buckets] == [1, 1]
 
 
@@ -151,13 +178,13 @@ async def test_an_aggregates_buckets_are_exact_by_group_and_a_timers_percentile_
         return Series(name="requests_total", kind="counter", labels={"route": name}, samples=samples)
 
     await store.metrics.ingest([route("/a", [0, 10, 25]), route("/b", [0, 3, 1])])
-    traffic = await store.metrics.aggregate(name="requests_total", since="1h", op="increase", by=["route"])
+    traffic = (await store.metrics.aggregate(name="requests_total", since="1h", op="increase", by=["route"])).groups
     by_route = {group.labels["route"]: group.buckets[0] for group in traffic}
     assert (by_route["/a"].value, by_route["/a"].resets) == (25, 0)
     assert (by_route["/b"].value, by_route["/b"].resets) == (4, 1)
 
     async def routes(where: dict[str, tinystore.metrics.Condition]) -> list[str]:
-        read = await store.metrics.read(name="requests_total", where=where, since="1h")
+        read = (await store.metrics.read(name="requests_total", where=where, since="1h")).series
         return sorted(str(series.labels["route"]) for series in read)
 
     assert await routes({"route": {"not": "/a"}}) == ["/b"]
@@ -167,11 +194,11 @@ async def test_an_aggregates_buckets_are_exact_by_group_and_a_timers_percentile_
     for took in (3, 7, 20, 100):
         latency.record(timedelta(milliseconds=took))
     await store.metrics.flush()
-    [p50] = await store.metrics.aggregate(name="db_ms", since="1h", op="p50")
+    [p50] = (await store.metrics.aggregate(name="db_ms", since="1h", op="p50")).groups
     assert (p50.buckets[0].lower, p50.buckets[0].upper, p50.buckets[0].samples) == (5, 10, 4)
-    [p99] = await store.metrics.aggregate(name="db_ms", since="1h", op="p99.9", estimate=True)
+    [p99] = (await store.metrics.aggregate(name="db_ms", since="1h", op="p99.9", estimate=True)).groups
     assert (p99.buckets[0].lower, p99.buckets[0].upper, p99.buckets[0].estimate) == (25, math.inf, 25)
-    [mean] = await store.metrics.aggregate(name="db_ms", since="1h", op="avg")
+    [mean] = (await store.metrics.aggregate(name="db_ms", since="1h", op="avg")).groups
     assert mean.buckets[0].value == 32.5
     with pytest.raises(tinystore.InvalidError):
         await store.metrics.aggregate(name="db_ms", since="1h", op="p")

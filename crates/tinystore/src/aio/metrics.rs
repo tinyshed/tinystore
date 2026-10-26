@@ -64,10 +64,14 @@ use crate::cancel;
 use crate::pool::Pool;
 
 pub use crate::metrics::{
-    Aggregate, AggregatePage, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge,
-    GaugeFunc, Histogram, Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading,
-    Recorder, Sample, Series, SeriesPage, Timer, Timing, Value, ValuePage, Values, exponential_buckets,
+    Aggregate, Bucket, Buckets, Builder, Condition, Counter, Damage, Description, Exceeds, Gauge, GaugeFunc, Histogram,
+    Kind, LabelPage, Labels, Latest, NameInfo, NamePage, Not, Op, Plan, Prefix, Reading, Recorder, Sample, Series,
+    Timer, Timing, Value, ValuePage, Values, exponential_buckets,
 };
+
+mod page;
+
+pub use page::{AggregatePage, All, SeriesPage};
 
 /// What an awaited ingest names in its errors, as its blocking twin names
 /// its wait for memory.
@@ -334,16 +338,18 @@ impl Query {
     /// The samples of each series the query finds, in its range, whole or a
     /// page of them, as [`crate::metrics::Query::read`] gives them.
     pub fn read(&self) -> impl Future<Output = Result<SeriesPage>> + Send + 'static {
-        let query = self.blocking.clone();
-        checked_then_read(&self.pool, "metrics: a read", move || query.checked_read())
+        let (query, walk) = (self.blocking.clone(), self.clone());
+        let read = checked_then_read(&self.pool, "metrics: a read", move || query.checked_read());
+        async move { read.await.map(|page| SeriesPage::of(page, walk)) }
     }
 
     /// The buckets of each group of the series the query finds, each one
     /// exact value of `op`, rounded once, as
     /// [`crate::metrics::Query::aggregate`] gives them.
     pub fn aggregate(&self, op: Op) -> impl Future<Output = Result<AggregatePage>> + Send + 'static {
-        let query = self.blocking.clone();
-        checked_then_read(&self.pool, "metrics: an aggregate", move || query.checked_aggregate(op))
+        let (query, walk) = (self.blocking.clone(), self.clone());
+        let read = checked_then_read(&self.pool, "metrics: an aggregate", move || query.checked_aggregate(op));
+        async move { read.await.map(|page| AggregatePage::of(page, walk, op)) }
     }
 
     /// The newest sample of each series the query finds, when it has one in

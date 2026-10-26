@@ -4,6 +4,8 @@ use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use futures_core::Stream;
+
 use super::*;
 use crate::ErrorKind;
 use crate::aio::Store;
@@ -368,4 +370,48 @@ async fn a_handle_crosses_from_the_blocking_api_and_fails_closed_once_its_store_
     assert_eq!(gone.flush().await.unwrap_err().kind(), ErrorKind::Closed);
     assert_eq!(gone.description("cpu").await.unwrap_err().kind(), ErrorKind::Closed);
     drop(dir);
+}
+
+// contract: MET-17
+#[tokio::test]
+async fn an_awaited_page_walks_on_as_a_stream_as_its_blocking_twin_walks() {
+    let f = fixture();
+    let (_store, stats) = awaited(&f);
+    let now = f.now();
+    let written: Vec<Series> = ["a", "b"]
+        .into_iter()
+        .map(|host| {
+            let mut series = Series::gauge("paged").label("host", host);
+            series.extend((0..500u32).map(|index| (now - Duration::from_secs(u64::from(index)), f64::from(index))));
+            series
+        })
+        .collect();
+    stats.ingest(&written).await.unwrap();
+    let query = || stats.query().name("paged").since(HOUR).limit(300);
+    let mut walk = query().read().await.unwrap().all();
+    let mut walked = Vec::new();
+    while let Some(series) = std::future::poll_fn(|context| Pin::new(&mut walk).poll_next(context)).await {
+        walked.push(series.unwrap());
+    }
+    let blocking: Vec<Series> = stats
+        .blocking()
+        .query()
+        .name("paged")
+        .since(HOUR)
+        .limit(300)
+        .read()
+        .unwrap()
+        .all()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(seen(&walked), seen(&blocking));
+    assert_eq!(walked.iter().map(|series| series.samples().len()).sum::<usize>(), 1000);
+    let groups = query().every(MINUTE).limit(3).aggregate(Op::Avg).await.unwrap();
+    let mut walk = groups.all();
+    let mut buckets = 0;
+    while let Some(group) = std::future::poll_fn(|context| Pin::new(&mut walk).poll_next(context)).await {
+        buckets += group.unwrap().buckets.len();
+    }
+    let once = stats.query().name("paged").since(HOUR).every(MINUTE).aggregate(Op::Avg).await.unwrap();
+    assert_eq!(buckets, once.groups[0].buckets.len());
 }

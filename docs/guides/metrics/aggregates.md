@@ -6,7 +6,7 @@ dashboard draws: requests per minute by route, the p95 latency of each five
 minutes, the average queue depth of each hour.
 
 ```ts
-const traffic = await store.metrics.aggregate({
+const { groups: traffic } = await store.metrics.aggregate({
 	name: 'http_requests_total',
 	since: '24h',
 	every: '1h',
@@ -15,13 +15,13 @@ const traffic = await store.metrics.aggregate({
 })
 // [{ name, labels: { route: '/notes' }, buckets: [{ at, value: 1840, samples: 240, resets: 0 }, …] }, …]
 
-const p95 = await store.metrics.aggregate({ name: 'http_request_ms', since: '1h', every: '5m', op: 'p95' })
+const { groups: p95 } = await store.metrics.aggregate({ name: 'http_request_ms', since: '1h', every: '5m', op: 'p95' })
 // [{ name, labels: {}, buckets: [{ at, lower: 25, upper: 50, samples: 3812 }, …] }]
 ```
 
 ```python
-traffic = await store.metrics.aggregate(name="http_requests_total", since="24h", every="1h", op="increase", by=["route"])
-p95 = await store.metrics.aggregate(name="http_request_ms", since="1h", every="5m", op="p95")
+traffic = (await store.metrics.aggregate(name="http_requests_total", since="24h", every="1h", op="increase", by=["route"])).groups
+p95 = (await store.metrics.aggregate(name="http_request_ms", since="1h", every="5m", op="p95")).groups
 ```
 
 ```go
@@ -83,11 +83,11 @@ Moscow counts its orders from its own midnight, which is 21:00 in UTC. Ask
 for buckets of the calendar instead, with the zone's IANA name:
 
 ```ts
-const days = await store.metrics.aggregate({ name: 'orders', since: '30d', op: 'sum', calendar: 'day', timeZone: 'Europe/Moscow' })
+const { groups: days } = await store.metrics.aggregate({ name: 'orders', since: '30d', op: 'sum', calendar: 'day', timeZone: 'Europe/Moscow' })
 ```
 
 ```python
-days = await store.metrics.aggregate(name="orders", since="30d", op="sum", calendar="day", time_zone="Europe/Moscow")
+days = (await store.metrics.aggregate(name="orders", since="30d", op="sum", calendar="day", time_zone="Europe/Moscow")).groups
 ```
 
 ```go
@@ -173,11 +173,11 @@ the group, or adds a timer's bucket counts before it ranks. `last` adds up
 too: the last of several queues' depths is their total at the bucket's end.
 
 ```ts
-const backlog = await store.metrics.aggregate({ name: 'queue_depth', since: '1d', every: '1h', op: 'last' })
+const { groups: backlog } = await store.metrics.aggregate({ name: 'queue_depth', since: '1d', every: '1h', op: 'last' })
 ```
 
 ```python
-backlog = await store.metrics.aggregate(name="queue_depth", since="1d", every="1h", op="last")
+backlog = (await store.metrics.aggregate(name="queue_depth", since="1d", every="1h", op="last")).groups
 ```
 
 ```go
@@ -191,11 +191,11 @@ let backlog = stats.query().name("queue_depth").since(Duration::from_hours(24)).
 ## A heatmap
 
 ```ts
-const heat = await store.metrics.aggregate({ name: 'http_request_ms_bucket', since: '1h', every: '1m', op: 'increase', by: ['le'] })
+const { groups: heat } = await store.metrics.aggregate({ name: 'http_request_ms_bucket', since: '1h', every: '1m', op: 'increase', by: ['le'] })
 ```
 
 ```python
-heat = await store.metrics.aggregate(name="http_request_ms_bucket", since="1h", every="1m", op="increase", by=["le"])
+heat = (await store.metrics.aggregate(name="http_request_ms_bucket", since="1h", every="1m", op="increase", by=["le"])).groups
 ```
 
 ```go

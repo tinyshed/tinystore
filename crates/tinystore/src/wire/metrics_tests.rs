@@ -576,3 +576,44 @@ fn a_text_cancelled_or_left_mid_upload_holds_nothing_and_writes_nothing() {
     memory_until(&store, |used| used == at_rest);
     assert_eq!(series_counts(&mut client), written(&[]));
 }
+
+// contract: MET-17
+#[test]
+fn a_read_and_an_aggregate_given_limit_answer_a_page_and_its_next_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 4096);
+    let start = now() - 600_000;
+    let samples: Vec<(i64, f64)> = (0..600).map(|n| (start + n * 1000, n as f64)).collect();
+    for chunk in samples.chunks(200) {
+        ingest(&mut client, vec![series("cpu", "gauge", &[("host", "a")], chunk)]);
+    }
+    let mut asked = MetricsQuery { limit: Some(250), ..named("cpu") };
+    let mut read = Vec::new();
+    let mut pages = 0;
+    loop {
+        let parts: Vec<MetricsRead> = downloaded(&mut client, method::METRICS_READ, &asked);
+        assert!(parts[..parts.len() - 1].iter().all(|part| part.next.is_none()), "next on the last part alone");
+        let pieces: Vec<_> = parts.iter().flat_map(|part| &part.series).collect();
+        let last = parts.last().unwrap().next.clone();
+        assert_eq!(pieces.last().unwrap().more, last.is_some(), "a page cut its series where its next goes on");
+        read.extend(
+            pieces.iter().flat_map(|piece| piece.times.as_chunks::<8>().0.iter().map(|at| i64::from_le_bytes(*at))),
+        );
+        pages += 1;
+        let Some(next) = last else { break };
+        asked.after = Some(next);
+    }
+    assert_eq!((pages, read), (3, samples.iter().map(|(at, _)| *at).collect::<Vec<_>>()));
+    let aggregate = MetricsAggregateAsked {
+        query: MetricsQuery { limit: Some(4), ..named("cpu") },
+        every: Some(60_000),
+        op: Some("avg".to_owned()),
+        ..MetricsAggregateAsked::default()
+    };
+    let parts: Vec<MetricsAggregates> = downloaded(&mut client, method::METRICS_AGGREGATE, &aggregate);
+    let buckets: usize = parts.iter().flat_map(|part| &part.groups).map(|group| group.buckets.len()).sum();
+    assert!(buckets <= 4 && parts.last().unwrap().next.is_some(), "{buckets} buckets");
+    let whole: Vec<MetricsRead> = downloaded(&mut client, method::METRICS_READ, &named("cpu"));
+    assert!(whole.iter().all(|part| part.next.is_none()), "no next to a request without limit");
+}

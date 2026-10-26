@@ -33,11 +33,11 @@ tinystore serve ./data --self-metrics
 Then read them as any series:
 
 ```ts
-const slow = await store.metrics.aggregate({ name: 'tinystore_commit_ms', since: '1h', every: '1m', op: 'max', by: ['file'] })
+const { groups: slow } = await store.metrics.aggregate({ name: 'tinystore_commit_ms', since: '1h', every: '1m', op: 'max', by: ['file'] })
 ```
 
 ```python
-slow = await store.metrics.aggregate(name="tinystore_commit_ms", since="1h", every="1m", op="max", by=["file"])
+slow = (await store.metrics.aggregate(name="tinystore_commit_ms", since="1h", every="1m", op="max", by=["file"])).groups
 ```
 
 ```go

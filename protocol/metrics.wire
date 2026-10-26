@@ -20,6 +20,8 @@ message metrics.Query {
   3 since: duration?
   4 from: time?
   5 to: time?           # excluded; now, a sample taken now in the range, unless given
+  6 limit: uint?        # a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take
+  7 after: str?         # a page's next, with limit
 }
 
 # A series and its samples, or a part of them: a series longer than a body
@@ -30,11 +32,12 @@ message metrics.Series {
   3 labels: {str}
   4 times: bin          # an int64 a sample
   5 values: bin         # a float64 a sample
-  6 more: bool          # the next part goes on with this series
+  6 more: bool          # the next part goes on with this series; on a page's last, the next page's first
 }
 
 message metrics.Read {
   1 series: [metrics.Series]
+  2 next: str?          # on the last part of a page that has more, to a request that gave limit
 }
 
 # A series' newest sample in the range.
@@ -82,11 +85,12 @@ message metrics.Group {
   1 name: str
   2 labels: {str}
   3 buckets: [metrics.Bucket]
-  4 more: bool
+  4 more: bool          # the next part goes on with this group; on a page's last, the next page's first
 }
 
 message metrics.Aggregates {
   1 groups: [metrics.Group]
+  2 next: str?          # on the last part of a page that has more, to a request that gave limit
 }
 
 # What a call would spend of each bound, and the bound it would stop at.

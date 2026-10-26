@@ -5842,6 +5842,10 @@ export const MetricsQuery = message(
 		from: [4, int],
 		/** excluded; now, a sample taken now in the range, unless given */
 		to: [5, int],
+		/** a page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take */
+		limit: [6, uint],
+		/** a page's next, with limit */
+		after: [7, str],
 	},
 	{
 		write(w, v) {
@@ -5872,6 +5876,16 @@ export const MetricsQuery = message(
 				w.int(v.to)
 				n++
 			}
+			if (v.limit !== undefined) {
+				w.field(6)
+				w.uint(v.limit)
+				n++
+			}
+			if (v.after !== undefined) {
+				w.field(7)
+				w.str(v.after)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -5880,6 +5894,8 @@ export const MetricsQuery = message(
 			let $since: number | undefined
 			let $from: number | undefined
 			let $to: number | undefined
+			let $limit: number | undefined
+			let $after: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -5897,12 +5913,26 @@ export const MetricsQuery = message(
 					case 5:
 						$to = r.int()
 						break
+					case 6:
+						$limit = r.uint()
+						break
+					case 7:
+						$after = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, where: $where, since: $since, from: $from, to: $to }
+			return {
+				name: $name,
+				where: $where,
+				since: $since,
+				from: $from,
+				to: $to,
+				limit: $limit,
+				after: $after,
+			}
 		},
 	},
 )
@@ -5922,7 +5952,7 @@ export const MetricsSeries = message(
 		times: [4, bin],
 		/** a float64 a sample */
 		values: [5, bin],
-		/** the next part goes on with this series */
+		/** the next part goes on with this series; on a page's last, the next page's first */
 		more: [6, bool],
 	},
 	{
@@ -6009,6 +6039,8 @@ export const MetricsRead = message(
 	'metrics.Read',
 	{
 		series: [1, list(MetricsSeries)],
+		/** on the last part of a page that has more, to a request that gave limit */
+		next: [2, str],
 	},
 	{
 		write(w, v) {
@@ -6022,10 +6054,16 @@ export const MetricsRead = message(
 				}
 				n++
 			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $series: Read<typeof MetricsSeries.fields>[] | undefined
+			let $next: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -6037,12 +6075,15 @@ export const MetricsRead = message(
 						$series = items0
 						break
 					}
+					case 2:
+						$next = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { series: $series }
+			return { series: $series, next: $next }
 		},
 	},
 )
@@ -6435,6 +6476,7 @@ export const MetricsGroup = message(
 		name: [1, str],
 		labels: [2, names(str)],
 		buckets: [3, list(MetricsBucket)],
+		/** the next part goes on with this group; on a page's last, the next page's first */
 		more: [4, bool],
 	},
 	{
@@ -6505,6 +6547,8 @@ export const MetricsAggregates = message(
 	'metrics.Aggregates',
 	{
 		groups: [1, list(MetricsGroup)],
+		/** on the last part of a page that has more, to a request that gave limit */
+		next: [2, str],
 	},
 	{
 		write(w, v) {
@@ -6518,10 +6562,16 @@ export const MetricsAggregates = message(
 				}
 				n++
 			}
+			if (v.next !== undefined) {
+				w.field(2)
+				w.str(v.next)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $groups: Read<typeof MetricsGroup.fields>[] | undefined
+			let $next: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1: {
@@ -6533,12 +6583,15 @@ export const MetricsAggregates = message(
 						$groups = items0
 						break
 					}
+					case 2:
+						$next = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { groups: $groups }
+			return { groups: $groups, next: $next }
 		},
 	},
 )

@@ -5576,6 +5576,10 @@ pub(crate) struct MetricsQuery {
     pub(crate) from: Option<i64>,
     /// Excluded; now, a sample taken now in the range, unless given. Unix milliseconds.
     pub(crate) to: Option<i64>,
+    /// A page's samples or buckets at most, 100,000 at most: a page, which read and aggregate take.
+    pub(crate) limit: Option<u64>,
+    /// A page's next, with limit.
+    pub(crate) after: Option<String>,
 }
 
 #[cfg(feature = "metrics")]
@@ -5592,6 +5596,8 @@ impl Message for MetricsQuery {
                 3 => message.since = Some(codec::uint(r, "since")?),
                 4 => message.from = Some(codec::int(r, "from")?),
                 5 => message.to = Some(codec::int(r, "to")?),
+                6 => message.limit = Some(codec::uint(r, "limit")?),
+                7 => message.after = Some(codec::str(r, "after")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -5620,6 +5626,14 @@ impl Message for MetricsQuery {
             map.field(out, 5);
             codec::write_int(out, to);
         }
+        if let Some(limit) = &self.limit {
+            map.field(out, 6);
+            codec::write_uint(out, limit);
+        }
+        if let Some(after) = &self.after {
+            map.field(out, 7);
+            codec::write_str(out, after);
+        }
         map.close(out);
     }
 
@@ -5630,6 +5644,8 @@ impl Message for MetricsQuery {
             + self.since.map_or(0, |_| 10)
             + self.from.map_or(0, |_| 10)
             + self.to.map_or(0, |_| 10)
+            + self.limit.map_or(0, |_| 10)
+            + self.after.as_ref().map_or(0, |after| 1 + 5 + after.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -5638,6 +5654,8 @@ impl Message for MetricsQuery {
             && self.since.is_none()
             && self.from.is_none()
             && self.to.is_none()
+            && self.limit.is_none()
+            && self.after.is_none()
     }
 }
 
@@ -5654,7 +5672,7 @@ pub(crate) struct MetricsSeries {
     pub(crate) times: Vec<u8>,
     /// A float64 a sample.
     pub(crate) values: Vec<u8>,
-    /// The next part goes on with this series.
+    /// The next part goes on with this series; on a page's last, the next page's first.
     pub(crate) more: bool,
 }
 
@@ -5732,6 +5750,8 @@ impl Message for MetricsSeries {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MetricsRead {
     pub(crate) series: Vec<MetricsSeries>,
+    /// On the last part of a page that has more, to a request that gave limit.
+    pub(crate) next: Option<String>,
 }
 
 #[cfg(feature = "metrics")]
@@ -5744,6 +5764,7 @@ impl Message for MetricsRead {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.series = codec::list(r, "series", codec::message::<MetricsSeries>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -5756,16 +5777,22 @@ impl Message for MetricsRead {
             map.field(out, 1);
             codec::write_list(out, &self.series, codec::write_message);
         }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
         map.close(out);
     }
 
     fn size(&self) -> usize {
         3
             + 1 + codec::list_size(&self.series, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
     }
 
     fn is_zero(&self) -> bool {
         self.series.is_empty()
+            && self.next.is_none()
     }
 }
 
@@ -6101,6 +6128,7 @@ pub(crate) struct MetricsGroup {
     pub(crate) name: String,
     pub(crate) labels: BTreeMap<String, String>,
     pub(crate) buckets: Vec<MetricsBucket>,
+    /// The next part goes on with this group; on a page's last, the next page's first.
     pub(crate) more: bool,
 }
 
@@ -6164,6 +6192,8 @@ impl Message for MetricsGroup {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MetricsAggregates {
     pub(crate) groups: Vec<MetricsGroup>,
+    /// On the last part of a page that has more, to a request that gave limit.
+    pub(crate) next: Option<String>,
 }
 
 #[cfg(feature = "metrics")]
@@ -6176,6 +6206,7 @@ impl Message for MetricsAggregates {
         for _ in 0..codec::fields(r, Self::NAME)? {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.groups = codec::list(r, "groups", codec::message::<MetricsGroup>)?,
+                2 => message.next = Some(codec::str(r, "next")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -6188,16 +6219,22 @@ impl Message for MetricsAggregates {
             map.field(out, 1);
             codec::write_list(out, &self.groups, codec::write_message);
         }
+        if let Some(next) = &self.next {
+            map.field(out, 2);
+            codec::write_str(out, next);
+        }
         map.close(out);
     }
 
     fn size(&self) -> usize {
         3
             + 1 + codec::list_size(&self.groups, codec::message_size)
+            + self.next.as_ref().map_or(0, |next| 1 + 5 + next.len())
     }
 
     fn is_zero(&self) -> bool {
         self.groups.is_empty()
+            && self.next.is_none()
     }
 }
 

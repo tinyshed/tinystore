@@ -14,6 +14,7 @@ package metrics
 import (
 	"context"
 	"encoding/binary"
+	"iter"
 	"math"
 	"time"
 
@@ -54,6 +55,9 @@ type Series struct {
 	// Keep is how long the name's samples stay, its own, kept in the file;
 	// what it keeps already unless given.
 	Keep time.Duration
+	// More says a page of a read cut the series here: the page its Next
+	// reads begins with the rest of it.
+	More bool
 }
 
 // Ingest writes series and their samples, every one or none: a refused
@@ -255,6 +259,12 @@ type Query struct {
 	// From is the range's start, included, and To its end, excluded: now,
 	// a sample taken now in the range, when zero.
 	From, To time.Time
+	// Limit makes a Read or an Aggregate a page of this many samples or
+	// buckets at most, 100,000 at most; without it, the whole answer.
+	Limit int
+	// After is the page after the one whose Next this is, read with the
+	// same query and Limit.
+	After string
 
 	// Every is the buckets' span, counted from 1970 in UTC; the range is one bucket without it.
 	Every time.Duration
@@ -294,6 +304,16 @@ func (q Query) asked() (wire.MetricsQuery, error) {
 	if !q.To.IsZero() {
 		to := q.To.UnixMilli()
 		out.To = &to
+	}
+	if q.Limit < 0 {
+		return out, core.Errorf(core.Invalid, "a page of 1 to 100000 samples or buckets, not %d", q.Limit)
+	}
+	if q.Limit > 0 {
+		limit := uint64(q.Limit)
+		out.Limit = &limit
+	}
+	if q.After != "" {
+		out.After = &q.After
 	}
 	for label, given := range q.Where {
 		switch condition := given.(type) {
@@ -352,35 +372,88 @@ func download(ctx context.Context, store *tinystore.Store, method uint16, body [
 	return parts, err
 }
 
-// Read is the samples of each series the query finds, in its range: whole,
-// or a Limit error naming its bound, never fewer.
-func Read(ctx context.Context, store *tinystore.Store, q Query) ([]Series, error) {
+// SeriesPage is one page of a read: its series, and Next while there is
+// more. All walks it and every page after it. Without Limit it is the whole
+// answer.
+type SeriesPage struct {
+	Series []Series
+	// Next is where the page after it begins; empty on the last.
+	Next  string
+	store *tinystore.Store
+	query Query
+}
+
+// All is the page's series, then those of each page after it, read one page
+// at a time as the walk reaches the end of the one it holds.
+func (p SeriesPage) All(ctx context.Context) iter.Seq2[Series, error] {
+	return func(yield func(Series, error) bool) {
+		for page := p; ; {
+			for _, series := range page.Series {
+				if !yield(series, nil) {
+					return
+				}
+			}
+			if page.Next == "" {
+				return
+			}
+			q := page.query
+			q.After = page.Next
+			next, err := Read(ctx, page.store, q)
+			if err != nil {
+				yield(Series{}, err)
+				return
+			}
+			page = next
+		}
+	}
+}
+
+// Read is the samples of each series the query finds, in its range: without
+// Limit whole, or a Limit error naming its bound, never fewer; with Limit a
+// page, which may hold fewer samples than Limit and still have Next.
+func Read(ctx context.Context, store *tinystore.Store, q Query) (SeriesPage, error) {
+	if err := q.plain("Read"); err != nil {
+		return SeriesPage{}, err
+	}
 	asked, err := q.asked()
 	if err != nil {
-		return nil, err
+		return SeriesPage{}, err
 	}
 	parts, err := download(ctx, store, wire.MethodMetricsRead, wire.Encode(&asked))
 	if err != nil {
-		return nil, err
+		return SeriesPage{}, err
 	}
-	var series []Series
+	page := SeriesPage{store: store, query: q}
 	more := false
 	for _, part := range parts {
 		var read wire.MetricsRead
 		if err := decode(part, &read); err != nil {
-			return nil, err
+			return SeriesPage{}, err
 		}
 		for _, piece := range read.Series {
 			samples := samplesOf(piece.Times, piece.Values)
-			if more && len(series) > 0 {
-				series[len(series)-1].Samples = append(series[len(series)-1].Samples, samples...)
+			if more && len(page.Series) > 0 {
+				last := &page.Series[len(page.Series)-1]
+				last.Samples = append(last.Samples, samples...)
 			} else {
-				series = append(series, Series{Name: piece.Name, Kind: Kind(piece.Kind), Labels: piece.Labels, Samples: samples})
+				page.Series = append(page.Series, Series{Name: piece.Name, Kind: Kind(piece.Kind), Labels: piece.Labels, Samples: samples})
 			}
 			more = piece.More
+			page.Series[len(page.Series)-1].More = more
+		}
+		if read.Next != nil {
+			page.Next = *read.Next
 		}
 	}
-	return series, nil
+	return page, nil
+}
+
+// plain refuses what only an aggregate takes, for a call that is none.
+func (q Query) plain(call string) error {
+	if q.Every != 0 || q.Calendar != "" || q.TimeZone != "" || q.Op != "" || q.By != nil || q.Without != nil || q.Estimate {
+		return core.Errorf(core.Invalid, "Every, Calendar, TimeZone, Op, By, Without and Estimate are an aggregate's: %s takes none", call)
+	}
+	return nil
 }
 
 // samplesOf is two columns as samples, each value's bits as they came.
@@ -455,43 +528,89 @@ type Group struct {
 	// Labels is the labels By kept or Without left.
 	Labels  Labels
 	Buckets []Bucket
+	// More says a page of an aggregate cut the group here: the page its Next
+	// reads begins with the rest of its buckets.
+	More bool
+}
+
+// AggregatePage is one page of an aggregate: its groups, and Next while
+// there is more, walked as a SeriesPage is. A page ends between two whole
+// buckets of a group.
+type AggregatePage struct {
+	Groups []Group
+	// Next is where the page after it begins; empty on the last.
+	Next  string
+	store *tinystore.Store
+	query Query
+}
+
+// All is the page's groups, then those of each page after it, read one page
+// at a time as the walk reaches the end of the one it holds.
+func (p AggregatePage) All(ctx context.Context) iter.Seq2[Group, error] {
+	return func(yield func(Group, error) bool) {
+		for page := p; ; {
+			for _, group := range page.Groups {
+				if !yield(group, nil) {
+					return
+				}
+			}
+			if page.Next == "" {
+				return
+			}
+			q := page.query
+			q.After = page.Next
+			next, err := Aggregate(ctx, page.store, q)
+			if err != nil {
+				yield(Group{}, err)
+				return
+			}
+			page = next
+		}
+	}
 }
 
 // Aggregate is the buckets of each group of the series the query finds,
-// each one exact value of its Op, rounded once.
-func Aggregate(ctx context.Context, store *tinystore.Store, q Query) ([]Group, error) {
+// each one exact value of its Op, rounded once: without Limit whole, or a
+// Limit error naming its bound; with Limit a page, which ends between two
+// whole buckets of a group.
+func Aggregate(ctx context.Context, store *tinystore.Store, q Query) (AggregatePage, error) {
 	if q.Op == "" {
-		return nil, core.Errorf(core.Invalid, "an aggregate takes an op: count, sum, avg, min, max, increase, rate, delta, first, last, a percentile")
+		return AggregatePage{}, core.Errorf(core.Invalid, "an aggregate takes an op: count, sum, avg, min, max, increase, rate, delta, first, last, a percentile")
 	}
 	asked, err := q.aggregate()
 	if err != nil {
-		return nil, err
+		return AggregatePage{}, err
 	}
 	parts, err := download(ctx, store, wire.MethodMetricsAggregate, wire.Encode(&asked))
 	if err != nil {
-		return nil, err
+		return AggregatePage{}, err
 	}
-	var groups []Group
+	page := AggregatePage{store: store, query: q}
 	more := false
 	for _, part := range parts {
 		var read wire.MetricsAggregates
 		if err := decode(part, &read); err != nil {
-			return nil, err
+			return AggregatePage{}, err
 		}
 		for _, piece := range read.Groups {
 			buckets := make([]Bucket, len(piece.Buckets))
 			for i, bucket := range piece.Buckets {
 				buckets[i] = bucketOf(bucket)
 			}
-			if more && len(groups) > 0 {
-				groups[len(groups)-1].Buckets = append(groups[len(groups)-1].Buckets, buckets...)
+			if more && len(page.Groups) > 0 {
+				last := &page.Groups[len(page.Groups)-1]
+				last.Buckets = append(last.Buckets, buckets...)
 			} else {
-				groups = append(groups, Group{Name: piece.Name, Labels: piece.Labels, Buckets: buckets})
+				page.Groups = append(page.Groups, Group{Name: piece.Name, Labels: piece.Labels, Buckets: buckets})
 			}
 			more = piece.More
+			page.Groups[len(page.Groups)-1].More = more
+		}
+		if read.Next != nil {
+			page.Next = *read.Next
 		}
 	}
-	return groups, nil
+	return page, nil
 }
 
 func bucketOf(bucket wire.MetricsBucket) Bucket {
