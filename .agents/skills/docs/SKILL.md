@@ -244,10 +244,12 @@ page when the commit it is built from carries `docs/releases/vX.Y.Z.md`.
 
 - **`# TinyStore X.Y.Z`**, then a lead that says when it came out and what it
   brings, in a few plain sentences.
-- **A list of what it brings**, an item each: `` - `engine` **[Title](#section)**\ ``
-  and a line under it. The site draws the list as cards, each a link to its
-  section, the engine above its title.
-- **A `WARNING` callout** when a change can break a build, and what to change.
+- **A list of what it brings**, grouped by engine: `- **Metrics**`, and under
+  it an item each, `- [Title](#section): what it does`. The site draws a row
+  per engine, its name on the left and each item a line, a link to its
+  section.
+- **A `WARNING` callout** when a change can break a build, and what to change
+  as a ` ```diff ` fence, whose rows the site tints and whose bar it leaves out.
 - **A section for each item**, its shortest code in four languages and a
   link to the guide that has the details.
 - **`## Changed names`**, the old call above the new one in each language;

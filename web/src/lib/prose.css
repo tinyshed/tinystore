@@ -704,23 +704,77 @@ dialog.diagram-zoom svg {
 	font: 11.5px var(--ts-mono);
 }
 
-/* a release's page: what it brings, right under the lead, as cards that each
-   link to their section; the releases' index, one version a row */
+/* a release's page: what it brings, right under the lead, a row per engine
+   and a line per item, each a link to its section */
 
-.prose.release > p.lead + ul {
+.prose.release:not(.releases) > p.lead + ul {
+	margin: 28px 0 36px;
+	padding: 0;
+	list-style: none;
+	border-top: 1px solid var(--ts-line);
+}
+
+.prose.release:not(.releases) > p.lead + ul > li {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: 112px minmax(0, 1fr);
+	gap: 16px;
+	margin: 0;
+	padding: 14px 0;
+	border-bottom: 1px solid var(--ts-line);
+}
+
+.prose.release:not(.releases) > p.lead + ul > li > strong {
+	padding-top: 4px;
+	color: var(--ts-accent-text);
+	font: 500 12px / 1.4 var(--ts-mono);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.prose.release:not(.releases) > p.lead + ul ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.prose.release:not(.releases) > p.lead + ul ul > li {
+	margin: 0;
+	padding: 2px 0;
+	color: var(--ts-muted);
+	font-size: 16px;
+	line-height: 1.6;
+}
+
+.prose.release:not(.releases) > p.lead + ul ul > li > a:first-child {
+	color: var(--ts-text);
+	font-weight: 500;
+	text-decoration: none;
+}
+
+@media (hover: hover) {
+	.prose.release:not(.releases) > p.lead + ul ul > li > a:first-child:hover {
+		color: var(--ts-accent-text);
+	}
+}
+
+@media (max-width: 720px) {
+	.prose.release:not(.releases) > p.lead + ul > li {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 4px;
+	}
+}
+
+/* the releases' index: a card a version, each a link to its page */
+
+.prose.releases > p.lead + ul {
+	display: grid;
 	gap: 12px;
 	margin: 32px 0 40px;
 	padding: 0;
 	list-style: none;
 }
 
-.prose.releases > p.lead + ul {
-	grid-template-columns: minmax(0, 1fr);
-}
-
-.prose.release > p.lead + ul > li {
+.prose.releases > p.lead + ul > li {
 	position: relative;
 	margin: 0;
 	padding: 16px 18px;
@@ -733,7 +787,7 @@ dialog.diagram-zoom svg {
 	transition: border-color 0.15s;
 }
 
-.prose.release > p.lead + ul > li strong {
+.prose.releases > p.lead + ul > li strong {
 	display: inline-block;
 	margin-bottom: 4px;
 	color: var(--ts-text);
@@ -742,13 +796,13 @@ dialog.diagram-zoom svg {
 	letter-spacing: -0.01em;
 }
 
-.prose.release > p.lead + ul > li a {
+.prose.releases > p.lead + ul > li a {
 	color: inherit;
 	text-decoration: none;
 }
 
 /* the whole card follows its link */
-.prose.release > p.lead + ul > li a::after {
+.prose.releases > p.lead + ul > li a::after {
 	content: "";
 	position: absolute;
 	inset: 0;
@@ -756,32 +810,33 @@ dialog.diagram-zoom svg {
 }
 
 @media (hover: hover) {
-	.prose.release > p.lead + ul > li:hover {
+	.prose.releases > p.lead + ul > li:hover {
 		border-color: var(--ts-accent-line);
 	}
 }
 
-@media (max-width: 720px) {
-	.prose.release > p.lead + ul {
-		grid-template-columns: minmax(0, 1fr);
-	}
+/* a diff's rows, tinted whole, as GitHub draws a change */
+.prose .shiki .line.diff-add,
+.prose .shiki .line.diff-remove {
+	display: inline-block;
+	min-width: calc(100% + 44px);
+	margin: 0 -22px;
+	padding: 0 22px;
 }
 
-/* a card's engine, `records` written before its title */
-.prose.release > p.lead + ul > li > code:first-child {
-	display: block;
-	width: fit-content;
-	margin-bottom: 6px;
-	padding: 0;
-	color: var(--ts-accent-text);
-	background: none;
-	border: 0;
-	font: 500 11.5px / 1.4 var(--ts-mono);
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
+.prose .shiki .line.diff-add {
+	background: color-mix(in srgb, var(--ts-ok) 14%, transparent);
 }
 
-/* a last card alone on its row takes the row */
-.prose.release:not(.releases) > p.lead + ul > li:last-child:nth-child(odd) {
-	grid-column: 1 / -1;
+.prose .shiki .line.diff-remove {
+	background: color-mix(in srgb, var(--ts-danger) 14%, transparent);
+}
+
+/* a diff inside a note is the note's example: no bar over it */
+.prose .callout .code-variant[data-variant="diff"] .code-bar {
+	display: none;
+}
+
+.prose .callout .code {
+	margin: 14px 0 0;
 }

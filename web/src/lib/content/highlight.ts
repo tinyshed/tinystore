@@ -5,6 +5,7 @@ import {
 	createHighlighter,
 	type DecorationItem,
 	type LanguageRegistration,
+	type ShikiTransformer,
 	type ThemeRegistration,
 } from 'shiki'
 
@@ -114,6 +115,7 @@ export async function createHighlight(): Promise<Highlight> {
 			themes: { light: 'tinystore-light', dark: 'tinystore-dark' },
 			defaultColor: false,
 			decorations,
+			transformers: lang === 'diff' ? [diffLines(code)] : [],
 		})
 		const pre = root.children[0]
 		if (pre?.type !== 'element') {
@@ -122,6 +124,20 @@ export async function createHighlight(): Promise<Highlight> {
 		// the stylesheet owns the block's background and focus, not the theme
 		pre.properties = { className: ['shiki'] }
 		return pre
+	}
+}
+
+/** A diff's lines marked by their first character, so that the stylesheet tints a whole row. */
+function diffLines(code: string): ShikiTransformer {
+	const marks: Record<string, string> = { '+': 'diff-add', '-': 'diff-remove' }
+	const firsts = code.split('\n').map(line => line[0] ?? '')
+	return {
+		line(node, number) {
+			const mark = marks[firsts[number - 1] ?? '']
+			if (mark !== undefined) {
+				this.addClassToHast(node, mark)
+			}
+		},
 	}
 }
 
