@@ -179,7 +179,12 @@ let found = db.tx(|tx| -> tinystore::Result<usize> {
 
 </div>
 
-The SDKs search outside transactions.
+<div data-for="bun python go">
+
+Bun, Node, Python and Go search outside a transaction. A search finds what a
+transaction wrote once the transaction commits, so search after it returns.
+
+</div>
 
 ## Settings and dropping
 
