@@ -4,7 +4,8 @@
 //! beside whoever holds it; `migrate` and `search drop` change one nothing
 //! holds, and `sql --write` one nothing holds or through its server; `kv`,
 //! `jobs`, `files`, `channels`, `metrics` and `events` write through the
-//! server that holds one, or a sidecar they start; `stop` ends a server and `token`
+//! server that holds one, or a sidecar they start, and `lock` holds a key of
+//! one while a command runs; `stop` ends a server and `token`
 //! makes its tokens; `backup` and `restore` keep a store; `node` and
 //! `witness` run the nodes of a network. `help` lists them all, and
 //! docs/guides/cli/README.md is their guide.
@@ -44,6 +45,7 @@ mod jobs;
 mod kv;
 mod lines;
 mod local;
+mod lock;
 mod logs;
 mod mcp;
 mod metrics;
@@ -97,6 +99,7 @@ fn main() -> ExitCode {
         Some("jobs") => jobs::run(rest),
         Some("files") => files::run(rest),
         Some("channels") => channels::run(rest),
+        Some("lock") => lock::run(rest),
         Some("metrics") => metrics::run(rest),
         Some("events") => events::run(rest),
         Some("sql") => sql::run(rest),

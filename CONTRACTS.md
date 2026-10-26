@@ -256,6 +256,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-05** A command that writes MUST write through the server that holds the directory, or a sidecar it starts, and MUST refuse a directory that a program holds inside its own process, or that holds no store, making nothing in it.
 - **CLI-06** `metrics ingest -f` MUST write a stream's lines while the stream is still open, a batch at most a second after its first line, and MUST skip a line it cannot read, or one the store refuses, saying its number, ending 1 once the stream ends.
 - **CLI-07** Tab completion MUST make no store and write nothing, and MUST offer nothing rather than fail.
+- **CLI-08** `lock hold` MUST run its command only once it holds the key, MUST stop the command once the lease is lost, and MUST let the key go and end with the command's exit once it ends.
 
 ## 10. What TinyStore does not promise
 

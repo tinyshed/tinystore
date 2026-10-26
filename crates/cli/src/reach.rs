@@ -140,7 +140,7 @@ pub(crate) fn store_at(dir: &Path) -> Result<(), Refused> {
 
 /// A connection to the server of `dir`: the one `SERVE` names, or a sidecar
 /// started for it.
-fn connected(dir: &Path, command: &str) -> Result<Connection, Refused> {
+pub(crate) fn connected(dir: &Path, command: &str) -> Result<Connection, Refused> {
     store_at(dir)?;
     if let Some(connection) = served(dir)? {
         return Ok(connection);

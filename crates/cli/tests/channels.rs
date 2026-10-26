@@ -55,6 +55,9 @@ fn a_message_published_from_a_shell_reaches_a_subscription_listening_now() {
     let mut line = String::new();
     stderr.read_line(&mut line).unwrap();
     assert!(line.contains("listening on chat"), "{line}");
+    // a socket that timed its reads out once ended a subscription quiet for ten seconds
+    #[cfg(unix)]
+    std::thread::sleep(Duration::from_secs(11));
     for (message, under) in [(r#"{"n": 1}"#, None), (r#"{"n": 2}"#, Some("room-42"))] {
         let mut args: Vec<&dyn AsRef<std::ffi::OsStr>> = vec![&"channels", &data, &"publish", &"chat", &message];
         if let Some(under) = &under {

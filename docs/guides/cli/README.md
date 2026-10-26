@@ -19,36 +19,37 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 
 ## Every command
 
-| Group   | Command                              | Does                                                              |
-|---------|--------------------------------------|-------------------------------------------------------------------|
-| Look    | `status [dir]`                       | what the store holds, who serves it, how its node stands          |
-|         | `logs [dir]`                         | the application's logs; new ones as they arrive with `-f`         |
-|         | `kv [dir] get <bucket> <key>`        | one value; `list <bucket> [branch]` for a bucket's keys           |
-|         | `jobs [dir] list <queue>`            | a queue's jobs that have ids, with their state                    |
-|         | `files [dir] list <set>`             | a set's files; `get <set> <path> <file>` writes one to a path     |
-|         | `sql [dir] <db> "<query>"`           | a query's rows; reads only unless `--write`                       |
-|         | `search list [dir]`                  | the store's search indexes; `drop <dir> <name>` drops one         |
-|         | `metrics [dir] read <name>`          | a metric's samples; `names` and `aggregate` beside it             |
-|         | `events [dir] list <stream>`         | a stream's events                                                 |
-| Write   | `kv <dir> set <bucket> <key> <v>`    | set a key's value; `delete` deletes one                           |
-|         | `jobs <dir> add <queue> <json>`      | add a job; `cancel <queue> <id>` cancels one                      |
-|         | `files <dir> put <set> <path> <f>`   | write a local file; `delete <set> <path>` deletes one             |
-|         | `channels <dir> publish <ch> <json>` | hand a message to whoever listens; `subscribe <ch>` listens       |
-|         | `metrics <dir> ingest`               | the Prometheus text on stdin, or a stream with `-f`               |
-|         | `events <dir> append <stream>`       | an event, or each line of a program's output                      |
-| Run     | `serve <dir>`                        | share the store with programs here and elsewhere                  |
-|         | `stop <dir>`                         | stop the server of a directory, its work finished                 |
-|         | `backup <dir> <zip>`                 | the whole store in one checked zip, while it runs                 |
-|         | `restore <zip> <dir>`                | a backup into an empty directory                                  |
-|         | `mcp [dir]`                          | let an AI agent read the store                                    |
-|         | `token new [admin\|data\|read]`      | a token line for `serve`'s `--tokens`                             |
-|         | `completion <shell>`                 | the lines that give bash, zsh, fish or PowerShell Tab completion  |
-| Nodes   | `node status [dir]`                  | the node's files, its links and how far behind its copies are     |
-|         | `node promote <dir> [file]`          | make a copy the home, once its old home is gone                   |
-|         | `node demote <dir> [file]`           | make an old home's files copies again                             |
-|         | `witness <dir> --listen <host:port>` | a draft: decide which node writes a file when its home goes quiet |
-| Develop | `migrate <dir> <db> <migrations>`    | apply a database's migration files                                |
-|         | `schema <dir> [db]`                  | a database's tables, columns and indexes                          |
+| Group   | Command                               | Does                                                              |
+|---------|---------------------------------------|-------------------------------------------------------------------|
+| Look    | `status [dir]`                        | what the store holds, who serves it, how its node stands          |
+|         | `logs [dir]`                          | the application's logs; new ones as they arrive with `-f`         |
+|         | `kv [dir] get <bucket> <key>`         | one value; `list <bucket> [branch]` for a bucket's keys           |
+|         | `jobs [dir] list <queue>`             | a queue's jobs that have ids, with their state                    |
+|         | `files [dir] list <set>`              | a set's files; `get <set> <path> <file>` writes one to a path     |
+|         | `sql [dir] <db> "<query>"`            | a query's rows; reads only unless `--write`                       |
+|         | `search list [dir]`                   | the store's search indexes; `drop <dir> <name>` drops one         |
+|         | `metrics [dir] read <name>`           | a metric's samples; `names` and `aggregate` beside it             |
+|         | `events [dir] list <stream>`          | a stream's events                                                 |
+| Write   | `kv <dir> set <bucket> <key> <v>`     | set a key's value; `delete` deletes one                           |
+|         | `jobs <dir> add <queue> <json>`       | add a job; `cancel <queue> <id>` cancels one                      |
+|         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one             |
+|         | `channels <dir> publish <ch> <json>`  | hand a message to whoever listens; `subscribe <ch>` listens       |
+|         | `metrics <dir> ingest`                | the Prometheus text on stdin, or a stream with `-f`               |
+|         | `events <dir> append <stream>`        | an event, or each line of a program's output                      |
+| Run     | `serve <dir>`                         | share the store with programs here and elsewhere                  |
+|         | `stop <dir>`                          | stop the server of a directory, its work finished                 |
+|         | `backup <dir> <zip>`                  | the whole store in one checked zip, while it runs                 |
+|         | `restore <zip> <dir>`                 | a backup into an empty directory                                  |
+|         | `mcp [dir]`                           | let an AI agent read the store                                    |
+|         | `token new [admin\|data\|read]`       | a token line for `serve`'s `--tokens`                             |
+|         | `lock <dir> hold <lock> <key> -- <c>` | run a command while it holds a key of a lock                      |
+|         | `completion <shell>`                  | the lines that give bash, zsh, fish or PowerShell Tab completion  |
+| Nodes   | `node status [dir]`                   | the node's files, its links and how far behind its copies are     |
+|         | `node promote <dir> [file]`           | make a copy the home, once its old home is gone                   |
+|         | `node demote <dir> [file]`            | make an old home's files copies again                             |
+|         | `witness <dir> --listen <host:port>`  | a draft: decide which node writes a file when its home goes quiet |
+| Develop | `migrate <dir> <db> <migrations>`     | apply a database's migration files                                |
+|         | `schema <dir> [db]`                   | a database's tables, columns and indexes                          |
 
 `tinystore` alone prints this list; `tinystore help <command>` or
 `<command> --help` prints one command with its flags and an example, and
@@ -101,6 +102,7 @@ waits for no server (contract CLI-07).
 | [jobs](jobs.md)                        | jobs added, listed and cancelled                         |
 | [files](files.md)                      | files put, got, listed and deleted                       |
 | [channels](channels.md)                | a message published, a channel listened to               |
+| [lock](lock.md)                        | a command run while it holds a key                       |
 | [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete         |
 | [events](events.md)                    | an event or a program's output appended, a stream listed |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte       |

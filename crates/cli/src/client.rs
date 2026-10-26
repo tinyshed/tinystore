@@ -101,6 +101,12 @@ impl Connection {
         answered_within("server.stop", move || connection.client.stop().map_err(|error| error.to_string()))
     }
 
+    /// The connection's client, for calls that outlive one wait, as a lease
+    /// renewed while a command runs.
+    pub(crate) fn into_client(self) -> Client<Box<dyn Stream>> {
+        self.client
+    }
+
     /// Runs `call` on the connection with no bound on its wait: a stream as
     /// long as its input, which a server gone ends with an error.
     pub(crate) fn run<T>(
@@ -156,12 +162,12 @@ fn within<T: Send + 'static, E: Send + 'static>(
     })
 }
 
+/// Connects to the server's socket. Its reads take no timeout: a call's wait
+/// is bounded by `within`, and a subscription may hear nothing for hours.
 #[cfg(unix)]
 fn dial(endpoint: &str) -> io::Result<Box<dyn Stream>> {
     let path = endpoint.strip_prefix("unix://").ok_or_else(|| io::Error::other("not a local socket"))?;
-    let stream = std::os::unix::net::UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    Ok(Box::new(stream))
+    Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?))
 }
 
 /// Opens the server's named pipe, waiting a little while every instance is

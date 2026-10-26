@@ -589,7 +589,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &EVENTS_APPEND,
         ],
     ),
-    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN, &COMPLETION]),
+    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN, &LOCK_HOLD, &COMPLETION]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
 ];
@@ -716,6 +716,25 @@ pub(crate) fn print_command(command: &Command) -> Done {
 }
 
 /// Prints the help of every command of a group, `metrics`, one after another.
+pub(crate) const LOCK_HOLD: Command = Command {
+    name: "lock hold",
+    takes: "<dir> hold <lock> <key> -- <command>",
+    does: "run a command while it holds a key of a lock",
+    flags: &[
+        flag("--wait", "<span>", "stand in line this long for the key, 10s when not given; 0 takes it only if free"),
+        flag("--ttl", "<span>", "how long the lease lasts from each renewal, 30s when not given"),
+        flag("--max-hold", "<span>", "let the key go this long after it was given, however it is renewed"),
+    ],
+    examples: &[
+        "tinystore lock ./data hold cron nightly-backup -- ./backup.sh",
+        "tinystore lock ./data hold cron nightly-backup --wait 0 -- ./backup.sh",
+    ],
+    more: "The key is held through the server that holds the directory, or one it starts, and its lease renewed every \
+           third of --ttl while the command runs. The command gets the lease's fence in TINYSTORE_FENCE, is stopped \
+           if the lease is lost, and the key is let go once it ends; the command's exit is this one's. A key held \
+           by another past --wait exits 1 and runs nothing.",
+};
+
 pub(crate) const COMPLETION: Command = Command {
     name: "completion",
     takes: "<shell>",

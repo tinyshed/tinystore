@@ -46,6 +46,8 @@ pub use channels::Heard;
 #[cfg(feature = "jobs")]
 pub use jobs::NewJob;
 pub use kv::KvValue;
+#[cfg(feature = "locks")]
+pub use locks::{Hold, Lease};
 
 #[cfg(feature = "channels")]
 #[path = "client_channels.rs"]
@@ -58,6 +60,9 @@ mod files;
 mod jobs;
 #[path = "client_kv.rs"]
 mod kv;
+#[cfg(feature = "locks")]
+#[path = "client_locks.rs"]
+mod locks;
 
 /// The buckets a store's kv.db holds and what each is for, read beside
 /// whoever holds it, for the command line's completion and `status --json`.
