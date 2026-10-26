@@ -87,6 +87,10 @@ pub(crate) use {
 #[cfg(any(feature = "wire", feature = "sql", feature = "async"))]
 pub(crate) use queue::Change;
 
+// What the command line lists of a store's names.
+#[cfg(feature = "client")]
+pub(crate) use engine::queues;
+
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod queue_tests;

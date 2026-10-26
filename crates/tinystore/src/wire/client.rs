@@ -59,6 +59,24 @@ mod jobs;
 #[path = "client_kv.rs"]
 mod kv;
 
+/// The buckets a store's kv.db holds and what each is for, read beside
+/// whoever holds it, for the command line's completion and `status --json`.
+pub fn buckets(store: &crate::Store) -> Result<Vec<(String, String)>> {
+    crate::kv::buckets(store)
+}
+
+/// The queues a store's jobs.db holds, read as `buckets` is.
+#[cfg(feature = "jobs")]
+pub fn queues(store: &crate::Store) -> Result<Vec<String>> {
+    crate::jobs::queues(store)
+}
+
+/// The sets of files a store holds, read as `buckets` is.
+#[cfg(feature = "blobs")]
+pub fn file_sets(store: &crate::Store) -> Result<Vec<String>> {
+    crate::blobs::sets(store)
+}
+
 /// An event to append: its name, and what it carries.
 #[cfg(feature = "records")]
 #[derive(Debug, Default)]

@@ -42,6 +42,7 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 |         | `restore <zip> <dir>`                | a backup into an empty directory                                  |
 |         | `mcp [dir]`                          | let an AI agent read the store                                    |
 |         | `token new [admin\|data\|read]`      | a token line for `serve`'s `--tokens`                             |
+|         | `completion <shell>`                 | the lines that give bash, zsh, fish or PowerShell Tab completion  |
 | Nodes   | `node status [dir]`                  | the node's files, its links and how far behind its copies are     |
 |         | `node promote <dir> [file]`          | make a copy the home, once its old home is gone                   |
 |         | `node demote <dir> [file]`           | make an old home's files copies again                             |
@@ -50,7 +51,23 @@ claude mcp add tinystore -- tinystore mcp ./data   # let an AI agent read the st
 |         | `schema <dir> [db]`                  | a database's tables, columns and indexes                          |
 
 `tinystore` alone prints this list; `tinystore help <command>` or
-`<command> --help` prints one command with its flags and an example.
+`<command> --help` prints one command with its flags and an example, and
+`tinystore help --all` prints every command's at once, for an AI agent that
+learns the command line in one call.
+
+## Tab completion
+
+```sh
+eval "$(tinystore completion bash)"                          # in ~/.bashrc
+eval "$(tinystore completion zsh)"                           # in ~/.zshrc
+tinystore completion fish | source                           # in ~/.config/fish/config.fish
+tinystore completion powershell | Out-String | Invoke-Expression   # in $PROFILE
+```
+
+Tab then offers commands, verbs, flags and their values, and the names a
+store holds, read beside it: `kv ./data get se` and Tab gives `sessions`,
+`metrics ./data read ping_rtt_ms --where t` gives `target=`. It makes no store,
+writes nothing and waits for no server (contract CLI-07).
 
 ## How it behaves
 

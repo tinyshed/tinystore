@@ -23,7 +23,18 @@ tinystore status ./data --json
 A served store adds who serves it, its clients and its memory; a node adds its
 files, its links and how far behind its copies are. A directory no server
 holds says so and exits 0. `--json` gives one document, for a health check or
-a script.
+a script, and its `names` lists everything the store holds by name: buckets
+with what each is for, queues, sets of files, streams, metrics, databases and
+search indexes.
+
+```sh
+tinystore status ./data --json | jq '.names'
+```
+
+```json
+{"buckets": [{"name": "sessions", "role": "values"}], "queues": ["emails"], "files": ["avatars"],
+ "streams": ["audit"], "metrics": ["ping_rtt_ms"], "databases": ["app"], "indexes": []}
+```
 
 ## logs
 

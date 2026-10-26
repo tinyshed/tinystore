@@ -474,3 +474,20 @@ impl std::fmt::Debug for Kv {
 #[cfg(all(test, feature = "replication", feature = "sql"))]
 #[path = "engine_tests.rs"]
 mod tests;
+
+/// The buckets kv.db holds and what each is for: values, encrypted values,
+/// counters, a rate limit, a quota or once. None while the store has no
+/// kv.db, which a read beside would otherwise try to make.
+#[cfg(feature = "client")]
+pub(crate) fn buckets(store: &Store) -> Result<Vec<(String, String)>> {
+    const SELECT_BUCKETS: &str = "select name, role from _tinystore_kv_buckets order by name";
+    if !store.dir().join("kv.db").exists() {
+        return Ok(Vec::new());
+    }
+    Kv::of(store)?.file().read(|c| {
+        let mut select =
+            c.prepare_cached(SELECT_BUCKETS).map_err(|error| crate::sqlite::sql_error("kv: its buckets", error))?;
+        let rows = select.query_map([], |row| Ok((row.get(0)?, row.get(1)?)));
+        rows.and_then(Iterator::collect).map_err(|error| crate::sqlite::sql_error("kv: its buckets", error))
+    })
+}

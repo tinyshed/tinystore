@@ -31,6 +31,9 @@ mod read;
 mod scrub;
 mod upload;
 
+// What the command line lists of a store's names.
+#[cfg(feature = "client")]
+pub(crate) use engine::sets;
 #[cfg(feature = "replication")]
 pub(crate) use engine::{FILE_IN_STORE, is_object, objects_after, objects_missing};
 pub use files::{FileCall, Files, FilesBuilder};

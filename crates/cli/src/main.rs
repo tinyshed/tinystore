@@ -34,6 +34,7 @@ mod backup;
 mod banner;
 mod channels;
 mod client;
+mod complete;
 mod connection;
 mod events;
 mod files;
@@ -46,6 +47,7 @@ mod local;
 mod logs;
 mod mcp;
 mod metrics;
+mod names;
 mod node;
 mod node_config;
 mod on_disk;
@@ -104,9 +106,12 @@ fn main() -> ExitCode {
         Some("witness") => witness::run(rest),
         Some("migrate") => sql::migrate(rest),
         Some("schema") => sql::schema(rest),
+        Some("completion") => complete::completion(rest),
+        Some("__complete") => complete::run(rest),
         Some("version" | "--version" | "-V") => asked::exit("", outln!("tinystore {}", env!("CARGO_PKG_VERSION"))),
         None => asked::exit("", help::print()),
         Some("help" | "--help" | "-h") if rest.is_empty() => asked::exit("help", help::print()),
+        Some("help" | "--help" | "-h") if rest == ["--all"] => asked::exit("help", help::print_all()),
         Some("help") => {
             let name = rest.join(" ");
             match help::command(&name).or_else(|| help::command(&rest[0])) {

@@ -589,7 +589,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &EVENTS_APPEND,
         ],
     ),
-    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN]),
+    ("Run", &[&SERVE, &STOP, &BACKUP, &RESTORE, &MCP, &TOKEN, &COMPLETION]),
     ("Nodes", &[&NODE_STATUS, &NODE_PROMOTE, &NODE_DEMOTE, &WITNESS]),
     ("Develop", &[&MIGRATE, &SCHEMA]),
 ];
@@ -607,7 +607,8 @@ pub(crate) fn first_words() -> Vec<&'static str> {
         .map(|command| command.name.split(' ').next().unwrap_or(command.name))
         .collect();
     words.extend(["help", "version"]);
-    words.dedup();
+    let mut seen = std::collections::HashSet::new();
+    words.retain(|word| seen.insert(*word));
     words
 }
 
@@ -715,6 +716,32 @@ pub(crate) fn print_command(command: &Command) -> Done {
 }
 
 /// Prints the help of every command of a group, `metrics`, one after another.
+pub(crate) const COMPLETION: Command = Command {
+    name: "completion",
+    takes: "<shell>",
+    does: "the lines that give a shell Tab's completion",
+    flags: &[],
+    examples: &[
+        "eval \"$(tinystore completion bash)\"     # in ~/.bashrc",
+        "eval \"$(tinystore completion zsh)\"      # in ~/.zshrc",
+        "tinystore completion fish | source        # in ~/.config/fish/config.fish",
+        "tinystore completion powershell | Out-String | Invoke-Expression   # in $PROFILE",
+    ],
+    more: "bash, zsh, fish or powershell. Tab then offers commands, verbs, flags and their values, and the names a \
+           store holds, read beside it: buckets, queues, sets of files, streams, metrics and their labels. It makes \
+           no store and writes nothing.",
+};
+
+/// Every command's help at once, for `help --all`: what an agent reads to
+/// learn the whole command line in one call.
+pub(crate) fn print_all() -> Done {
+    for command in GROUPS.iter().flat_map(|(_, commands)| commands.iter()) {
+        print_command(command)?;
+        outln!()?;
+    }
+    Ok(())
+}
+
 /// Whether `word` names a group of commands, as `metrics` does.
 pub(crate) fn is_group(word: &str) -> bool {
     GROUPS

@@ -341,3 +341,19 @@ impl std::fmt::Debug for Jobs {
         write!(f, "Jobs({})", self.file.path().display())
     }
 }
+
+/// The queues jobs.db holds, by name. None while the store has no jobs.db,
+/// which a read beside would otherwise try to make.
+#[cfg(feature = "client")]
+pub(crate) fn queues(store: &Store) -> Result<Vec<String>> {
+    const SELECT_QUEUES: &str = "select name from _tinystore_jobs_queues order by name";
+    if !store.dir().join("jobs.db").exists() {
+        return Ok(Vec::new());
+    }
+    Jobs::of(store)?.file().read(|c| {
+        let mut select =
+            c.prepare_cached(SELECT_QUEUES).map_err(|error| crate::sqlite::sql_error("jobs: its queues", error))?;
+        let rows = select.query_map([], |row| row.get(0));
+        rows.and_then(Iterator::collect).map_err(|error| crate::sqlite::sql_error("jobs: its queues", error))
+    })
+}

@@ -62,6 +62,7 @@ struct Report {
     files: Vec<(StoreFile, Option<FileStatus>)>,
     node: bool,
     links: Option<Links>,
+    names: crate::names::Names,
 }
 
 enum Served {
@@ -103,7 +104,8 @@ impl Report {
             })
             .collect();
         let links = tinystore::replication::links(dir)?;
-        Ok(Report { dir: dir.display().to_string(), served, files, node, links })
+        let names = crate::names::Names::of(dir);
+        Ok(Report { dir: dir.display().to_string(), served, files, node, links, names })
     }
 
     fn text(&self, colours: bool) -> String {
@@ -225,6 +227,7 @@ impl Report {
             "files": files,
             "bytes": self.files.iter().map(|(file, _)| file.bytes).sum::<u64>(),
             "node": self.node.then(|| json!({ "links": links })),
+            "names": self.names.json(),
         })
     }
 }

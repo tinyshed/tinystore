@@ -389,3 +389,18 @@ impl Blobs {
 }
 
 pub(super) use crate::sqlite::query_cached as rows_of;
+
+/// The sets of files blobs.db holds, by name. None while the store has no
+/// blobs, which a read beside would otherwise try to make.
+#[cfg(feature = "client")]
+pub(crate) fn sets(store: &Store) -> Result<Vec<String>> {
+    const SELECT_SETS: &str = "select name from sets order by name";
+    if !store.dir().join("blobs").join("blobs.db").exists() {
+        return Ok(Vec::new());
+    }
+    Blobs::of(store)?.file.read(|c| {
+        let mut select = c.prepare_cached(SELECT_SETS).map_err(|error| sql_error("blobs: its sets", error))?;
+        let rows = select.query_map([], |row| row.get(0));
+        rows.and_then(Iterator::collect).map_err(|error| sql_error("blobs: its sets", error))
+    })
+}
