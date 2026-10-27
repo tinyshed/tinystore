@@ -199,17 +199,17 @@ fn a_group_of_the_most_blocks_goes_after_every_row_and_one_still_growing_before(
 }
 
 #[test]
-fn a_unit_holding_more_than_240_samples_is_cut_every_240() {
+fn a_unit_holding_more_than_320_samples_is_cut_every_320() {
     let f = fixture();
-    // a sample a day ago, 300 within a second twelve hours ago, and one now: units of eight hours
+    // a sample a day ago, 400 within a second twelve hours ago, and one now: units of eight hours
     let burst = f.now() - 12 * HOUR;
     let mut written = Series::gauge("bursty").sample(f.now() - DAY, -1.0);
-    written.extend((0..300_u32).map(|index| (burst + Duration::from_millis(u64::from(index)), f64::from(index))));
+    written.extend((0..400_u32).map(|index| (burst + Duration::from_millis(u64::from(index)), f64::from(index))));
     let written = written.sample(f.now(), -2.0);
     f.metrics().ingest(std::slice::from_ref(&written)).unwrap();
     maintain(&f.store).unwrap();
     let blocks: Vec<usize> = groups(&f).iter().flat_map(|(_, _, blocks)| blocks.iter().map(|block| block.2)).collect();
-    assert_eq!(blocks, [1, 240, 60]);
+    assert_eq!(blocks, [1, 320, 80]);
     let read = f.metrics().query().name("bursty").read().unwrap().series;
     assert_eq!(bits(&read[0]), bits(&written));
 }

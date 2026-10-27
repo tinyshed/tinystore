@@ -5,7 +5,7 @@
 //! chunk = start | end − start | count | first value, 8 bytes | body's length | body
 //! ```
 //!
-//! A chunk is a run of the codec, 240 samples at most, so that each decodes
+//! A chunk is a run of the codec, 320 samples at most, so that each decodes
 //! within the codec's bound. A write re-encodes only the chunks its samples
 //! touch and copies the others byte for byte; a read decodes only the chunks
 //! its range touches. The checksum binds the head to its series: a head
@@ -136,9 +136,9 @@ pub(super) fn samples_within(chunks: &[Chunk<'_>], from: i64, to: i64) -> usize 
 /// full, and ending before it.
 ///
 /// ```text
-/// chunks          [0 … 239] [240 … 479] [480 … 520]
-/// a write at 300                ↑
-/// kept            [0 … 239]                          copied byte for byte
+/// chunks          [0 … 319] [320 … 639] [640 … 700]
+/// a write at 400                ↑
+/// kept            [0 … 319]                          copied byte for byte
 /// ```
 pub(super) fn kept_before(chunks: &[Chunk<'_>], at: i64) -> usize {
     chunks.iter().take_while(|chunk| chunk.head.count == CHUNK && chunk.head.end < at).count()
@@ -148,9 +148,9 @@ pub(super) fn kept_before(chunks: &[Chunk<'_>], at: i64) -> usize {
 /// are; nothing when both are empty.
 ///
 /// ```text
-/// kept      [240][240]
-/// points              [240][ 57]         encoded now
-/// head      1 │ 777 │ [240][240][240][ 57] │ crc-32
+/// kept      [320][320]
+/// points              [320][ 57]         encoded now
+/// head      1 │ 1017 │ [320][320][320][ 57] │ crc-32
 /// ```
 pub(super) fn encode(zstd: &mut Zstd, series: i64, kept: &[Chunk<'_>], points: &[Point]) -> Result<Vec<u8>> {
     let count = kept.iter().map(|chunk| chunk.head.count).sum::<usize>() + points.len();

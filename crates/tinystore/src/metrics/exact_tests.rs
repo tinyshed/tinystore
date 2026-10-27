@@ -77,7 +77,13 @@ fn zero_is_positive_and_a_cancelled_sum_is_zero() {
 
 #[test]
 fn an_exact_sum_is_written_one_way_and_read_back() {
-    let mut cases = vec![Exact::ZERO, sum(&[1.0]), sum(&[-1.0]), sum(&[0.1, 0.7]), sum(&[f64::MAX; 240])];
+    let mut cases = vec![
+        Exact::ZERO,
+        sum(&[1.0]),
+        sum(&[-1.0]),
+        sum(&[0.1, 0.7]),
+        sum(&[f64::MAX; crate::metrics::codec::MOST_SAMPLES]),
+    ];
     cases.extend(floats(64).iter().map(|value| Exact::of(*value).unwrap()));
     for exact in cases {
         let mut out = Vec::new();
@@ -109,9 +115,10 @@ fn another_spelling_of_the_same_sum_or_one_past_its_bound_is_refused() {
     assert!(!refused(&spelled(&[1], 0, false)), "one, as written");
     assert!(refused(&spelled(&[0, 1], 0, false)), "a leading zero byte");
     assert!(refused(&spelled(&[2], 0, false)), "a trailing zero bit left in");
-    assert!(refused(&spelled(&[1], 2106, true)), "more zero bits than a block's sum holds");
-    assert!(refused(&spelled(&[3], 2105, false)), "two bits shifted past the bound");
-    assert!(!refused(&spelled(&[1], 2105, false)), "one bit at the bound's top");
+    let top = u64::from(BLOCK_BITS) - 1;
+    assert!(refused(&spelled(&[1], top + 1, true)), "more zero bits than a block's sum holds");
+    assert!(refused(&spelled(&[3], top, false)), "two bits shifted past the bound");
+    assert!(!refused(&spelled(&[1], top, false)), "one bit at the bound's top");
 }
 
 #[test]

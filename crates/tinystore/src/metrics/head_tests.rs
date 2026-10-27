@@ -18,22 +18,22 @@ fn same(a: &[Point], b: &[Point]) -> bool {
 }
 
 #[test]
-fn a_head_reads_back_in_chunks_of_240() {
+fn a_head_reads_back_in_chunks_of_320() {
     let written = points(777, 1_000);
     let bytes = encode(&mut zstd(), 7, &[], &written).unwrap();
     let extent = Extent::of(&written);
     let chunks = parse(7, extent, &bytes).unwrap();
-    assert_eq!(chunks.iter().map(|chunk| chunk.head.count).collect::<Vec<_>>(), [240, 240, 240, 57]);
+    assert_eq!(chunks.iter().map(|chunk| chunk.head.count).collect::<Vec<_>>(), [320, 320, 137]);
     assert!(same(&read_all(7, &bytes, extent), &written));
     assert!(encode(&mut zstd(), 7, &[], &[]).unwrap().is_empty());
 }
 
 #[test]
 fn untouched_head_chunks_keep_their_bytes() {
-    let written = points(500, 0);
+    let written = points(700, 0);
     let bytes = encode(&mut zstd(), 7, &[], &written).unwrap();
     let chunks = parse(7, Extent::of(&written), &bytes).unwrap();
-    let later = points(10, 500_000);
+    let later = points(10, 700_000);
     let kept = kept_before(&chunks, later[0].at);
     assert_eq!(kept, 2, "the two full chunks end before the write");
     let mut rest = Vec::new();
@@ -68,15 +68,15 @@ fn a_head_reads_only_as_its_own_series_and_extent() {
 
 #[test]
 fn a_read_decodes_only_the_chunks_its_range_touches() {
-    let written = points(600, 0);
+    let written = points(800, 0);
     let bytes = encode(&mut zstd(), 1, &[], &written).unwrap();
     let chunks = parse(1, Extent::of(&written), &bytes).unwrap();
-    // chunks hold [0, 239 000], [240 000, 479 000], [480 000, 599 000]
-    assert_eq!(samples_within(&chunks, 250_000, 260_000), 240);
-    assert_eq!(samples_within(&chunks, 200_000, 260_000), 480);
+    // chunks hold [0, 319 000], [320 000, 639 000], [640 000, 799 000]
+    assert_eq!(samples_within(&chunks, 330_000, 340_000), 320);
+    assert_eq!(samples_within(&chunks, 300_000, 340_000), 640);
     let mut out = Vec::new();
-    decode(&mut zstd(), &chunks, 479_500, 480_001, &mut out).unwrap();
-    assert_eq!((out.len(), out[0].at), (120, 480_000));
+    decode(&mut zstd(), &chunks, 639_500, 640_001, &mut out).unwrap();
+    assert_eq!((out.len(), out[0].at), (160, 640_000));
 }
 
 #[test]

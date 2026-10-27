@@ -67,16 +67,16 @@ phrase can be anywhere.
 
 ```mermaid
 flowchart LR
-  ingest([ingest or flush]) --> head[head: runs of<br>up to 240 samples]
+  ingest([ingest or flush]) --> head[head: runs of<br>up to 320 samples]
   head --> blocks[blocks on a<br>UTC ladder]
   blocks -->|small groups| next[taken into<br>the next]
 ```
 
-A series' samples arrive in a head of short runs, up to 240 samples each, and
+A series' samples arrive in a head of short runs, up to 320 samples each, and
 a write rewrites only the run it reaches. Runs are packed into blocks where
 the units of a UTC ladder begin, so that a block never crosses an hour or a
-day boundary that an aggregate might ask about. A block holds at most 240
-samples.
+day boundary that an aggregate might ask about. A block holds at most 320
+samples: five minutes of a sample a second.
 
 Each block keeps its samples' times and values with the shortest encoding
 that gives every value back bit for bit:

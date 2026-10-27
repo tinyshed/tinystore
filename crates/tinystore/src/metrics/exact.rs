@@ -22,9 +22,10 @@ const WORDS: usize = 35;
 /// Where the units' point lies: a unit is 2⁻¹⁰⁷⁴, so 1 is 2¹⁰⁷⁴ of them.
 const POINT: u32 = 1074;
 
-/// The bits a block's exact sum of at most 240 finite floats needs: 240 is
-/// under 2⁸, and a float under 2²⁰⁹⁸ units.
-pub(super) const BLOCK_BITS: u32 = 2106;
+/// The bits a block's exact sum of at most 320 finite floats needs: 320 is
+/// under 2⁹, and a float under 2²⁰⁹⁸ units.
+pub(super) const BLOCK_BITS: u32 = 2107;
+const _: () = assert!(super::codec::MOST_SAMPLES < 1 << (BLOCK_BITS - 2098), "a block's sum fits its bits");
 
 /// An integer of units of 2⁻¹⁰⁷⁴, in two's complement, its lowest word first.
 #[derive(Clone, Copy, PartialEq, Eq)]

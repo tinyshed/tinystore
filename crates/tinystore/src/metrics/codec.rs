@@ -1,4 +1,4 @@
-//! The codec of a run of samples: up to 240 times and values packed apart,
+//! The codec of a run of samples: up to 320 times and values packed apart,
 //! the body a head's chunk keeps, and a block's values in their ordinary
 //! representation.
 //!
@@ -35,8 +35,11 @@ use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, fold, put_count, put_int, unfold};
 use crate::{Error, Result};
 
-/// The samples a run holds at most.
-pub(super) const MOST_SAMPLES: usize = 240;
+/// The samples a run holds at most: five minutes of a sample a second, with
+/// room for samples a little early, so that such a series packs a block every
+/// five minutes rather than every minute, where each block's entry, clock
+/// and payload row cost a fifth of what Pingmon's pings took.
+pub(super) const MOST_SAMPLES: usize = 320;
 /// What a body's stream holds at most, before zstd and after it.
 const MOST_STREAM: usize = 8192;
 const VERSION: u8 = 1;
@@ -164,11 +167,14 @@ impl Codecs {
     }
 }
 
-/// Packs a run of 1 to 240 points, their times strictly increasing, and gives
+/// Packs a run of 1 to [`MOST_SAMPLES`] points, their times strictly increasing, and gives
 /// its head and its body.
 pub(super) fn encode(zstd: &mut Zstd, points: &[Point]) -> Result<(Head, Vec<u8>)> {
     if points.is_empty() || points.len() > MOST_SAMPLES {
-        return Err(Error::internal(format!("metrics: a run of {} samples, where 1 to 240 make one", points.len())));
+        return Err(Error::internal(format!(
+            "metrics: a run of {} samples, where 1 to {MOST_SAMPLES} make one",
+            points.len()
+        )));
     }
     if points.windows(2).any(|pair| pair[1].at <= pair[0].at) {
         return Err(Error::internal("metrics: a run's times do not increase"));

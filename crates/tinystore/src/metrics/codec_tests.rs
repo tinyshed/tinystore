@@ -156,7 +156,7 @@ fn a_head_that_does_not_fit_its_body_is_refused() {
         Head { count: head.count - 1, ..head },
         Head { first: 1.0, ..head },
         Head { count: 0, ..head },
-        Head { count: 241, ..head },
+        Head { count: MOST_SAMPLES + 1, ..head },
         Head { end: head.start - 1, ..head },
     ];
     for other in moved {
@@ -169,7 +169,7 @@ fn a_head_that_does_not_fit_its_body_is_refused() {
 #[test]
 fn unordered_or_oversized_input_is_refused() {
     assert!(encode(&mut zstd(), &[]).is_err());
-    assert!(encode(&mut zstd(), &even(241, |_| 1.0)).is_err());
+    assert!(encode(&mut zstd(), &even(MOST_SAMPLES + 1, |_| 1.0)).is_err());
     assert!(encode(&mut zstd(), &points(&[5, 5], &[1.0, 2.0])).is_err());
     assert!(encode(&mut zstd(), &points(&[6, 5], &[1.0, 2.0])).is_err());
 }

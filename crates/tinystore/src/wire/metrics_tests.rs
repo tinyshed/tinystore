@@ -597,14 +597,17 @@ fn a_read_and_an_aggregate_given_limit_answer_a_page_and_its_next_over_the_wire(
         let pieces: Vec<_> = parts.iter().flat_map(|part| &part.series).collect();
         let last = parts.last().unwrap().next.clone();
         assert_eq!(pieces.last().unwrap().more, last.is_some(), "a page cut its series where its next goes on");
+        let before = read.len();
         read.extend(
             pieces.iter().flat_map(|piece| piece.times.as_chunks::<8>().0.iter().map(|at| i64::from_le_bytes(*at))),
         );
+        assert!(read.len() - before <= 250, "a page holds its limit at most");
         pages += 1;
         let Some(next) = last else { break };
         asked.after = Some(next);
     }
-    assert_eq!((pages, read), (3, samples.iter().map(|(at, _)| *at).collect::<Vec<_>>()));
+    assert!(pages >= 3, "{pages} pages");
+    assert_eq!(read, samples.iter().map(|(at, _)| *at).collect::<Vec<_>>());
     let aggregate = MetricsAggregateAsked {
         query: MetricsQuery { limit: Some(4), ..named("cpu") },
         every: Some(60_000),

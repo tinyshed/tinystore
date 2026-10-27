@@ -8,7 +8,7 @@
 //! What may be packed is a prefix: the samples before the newest time the
 //! series has seen, in units of its ladder that end at or before it, so that
 //! a block never crosses its unit and no later sample can enter one; a unit
-//! holding more than 240 samples is cut every 240. A quiet series is never
+//! holding more than 320 samples is cut every 320. A quiet series is never
 //! forced into a block, and its head may expire whole.
 
 use std::sync::atomic::Ordering;
@@ -234,7 +234,7 @@ fn complete_units(points: &[Point], cutoff: i64, watermark: i64) -> Vec<Point> {
 }
 
 /// A candidate's prefix as a group's blocks, cut where its units begin, each
-/// of 240 samples at most, as many as a group holds: 32 blocks, a clock of
+/// of 320 samples at most, as many as a group holds: 32 blocks, a clock of
 /// 64 KiB and a directory of 8 KiB.
 fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
     let unit = unit_of(candidate.points.len(), candidate.points[0].at, candidate.points[candidate.points.len() - 1].at);
@@ -281,7 +281,7 @@ fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
     Ok(Staged { candidate, group, scale, left })
 }
 
-/// The runs of a prefix that blocks take: a unit's samples, every 240 when
+/// The runs of a prefix that blocks take: a unit's samples, every 320 when
 /// it holds more.
 fn cut(points: &[Point], unit: i64) -> impl Iterator<Item = &[Point]> {
     points

@@ -59,8 +59,8 @@ fn latest_reads_one_small_piece_of_each_series_however_long_the_range() {
     f.metrics().ingest(&[written]).unwrap();
     let query = || f.metrics().query().name("cpu");
     assert_eq!(newest(query().since(DAY)), [("a".to_owned(), now, 1920.0)]);
-    assert_eq!(decoded(&f, query().since(DAY)), 1, "the head's newest chunk of its nine");
-    assert_eq!(decoded(&f, query().to(now - 3 * HOUR)), 240, "the chunk the range ends in");
+    assert_eq!(decoded(&f, query().since(DAY)), 1, "the head's newest chunk of its seven");
+    assert_eq!(decoded(&f, query().to(now - 3 * HOUR)), 320, "the chunk the range ends in");
     assert_eq!(maintain(&f.store).unwrap().blocks, 8);
     assert_eq!(newest(query().since(DAY)), [("a".to_owned(), now, 1920.0)]);
     assert_eq!(decoded(&f, query().since(DAY)), 1, "the one sample not packed yet");
