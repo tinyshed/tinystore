@@ -241,11 +241,15 @@ impl Loop {
             let now = self.jobs.now();
             let left = deadline.saturating_duration_since(Instant::now());
             if self.in_hand == 0 || left.is_zero() {
-                return self.write(now, 0).map(drop);
+                return match self.write(now, 0) {
+                    Err(error) if self.stopped_by_close(&error) => Ok(()),
+                    written => written.map(drop),
+                };
             }
             self.extend_due(now);
             let sleep = match self.write(now, 0) {
                 Ok(_) => self.next_extension(now).map_or(LONGEST_SLEEP, |at| span(at - now)),
+                Err(error) if self.stopped_by_close(&error) => return Ok(()),
                 Err(error) if error.kind() == ErrorKind::Closed => return Err(error),
                 Err(error) => {
                     self.queue.writes.observe(&self.queue.name, &error.to_string());
@@ -254,6 +258,13 @@ impl Loop {
             };
             self.inbox.wait_finished(sleep.min(left).min(LONGEST_SLEEP));
         }
+    }
+
+    /// Whether `error` is the store's close reaching a worker's write, which
+    /// ends the worker as a stop does. `run_due` is a call, and fails
+    /// `closed`; so does a write a close did not cause.
+    fn stopped_by_close(&self, error: &Error) -> bool {
+        !self.until_idle && error.kind() == ErrorKind::Closed && self.jobs.closed()
     }
 
     fn cycle(&mut self) -> Result<()> {
@@ -269,6 +280,7 @@ impl Loop {
             self.answer(read, result.as_ref().ok());
             let result = match result {
                 Ok(result) => result,
+                Err(error) if self.stopped_by_close(&error) => return Ok(()),
                 Err(error) if self.until_idle || error.kind() == ErrorKind::Closed => return Err(error),
                 Err(error) => {
                     self.queue.writes.observe(&self.queue.name, &error.to_string());
@@ -761,6 +773,10 @@ pub(crate) fn start_remote(jobs: &Arc<Jobs>, queue: &Arc<QueueState>, work: Remo
 
 /// Starts a worker's loop on a thread of the store's, which the engine stops
 /// at close; `ended` hears how the loop ended.
+///
+/// The engine keeps the worker before its loop starts: a close under way then
+/// either stops it or refuses it, and never closes the file under a loop it
+/// did not see (a schedule's worker spawned as its store closed wrote there).
 fn run_loop(
     mut looped: Loop,
     (handlers, alive): (Vec<JoinHandle<()>>, Alive),
@@ -768,6 +784,18 @@ fn run_loop(
 ) -> Result<Arc<Running>> {
     let (jobs, queue) = (Arc::clone(&looped.jobs), Arc::clone(&looped.queue));
     let (inbox, hand) = (Arc::clone(&looped.inbox), Arc::clone(&looped.hand));
+    let running = Arc::new(Running {
+        inbox,
+        hand: Arc::clone(&hand),
+        looping: Mutex::new(None),
+        handlers: Mutex::new(handlers),
+        alive,
+        stopped: AtomicBool::new(false),
+    });
+    if !jobs.keep_worker(&running) {
+        hand.close();
+        return Err(Error::closed(queue.describe()));
+    }
     let describe = queue.describe();
     let looping = thread::Builder::new()
         .name(format!("tinystore-jobs-{}", queue.name))
@@ -782,17 +810,11 @@ fn run_loop(
         })
         .map_err(|error| {
             hand.close();
+            running.stopped.store(true, Ordering::SeqCst);
             Error::io(format!("{}: a worker's thread", queue.describe()), error)
         })?;
-    let running = Arc::new(Running {
-        inbox,
-        hand,
-        looping: Mutex::new(Some(looping)),
-        handlers: Mutex::new(handlers),
-        alive,
-        stopped: AtomicBool::new(false),
-    });
-    jobs.keep_worker(&running);
+    // a close that stopped the worker meanwhile found no loop to wait for: it ends on its own
+    *running.looping.lock().unwrap_or_else(PoisonError::into_inner) = Some(looping);
     Ok(running)
 }
 

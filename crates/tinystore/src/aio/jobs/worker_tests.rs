@@ -354,6 +354,9 @@ async fn a_schedule_runs_reads_and_cancels_as_the_blocking_one_does() {
 
     let worker = f.store.schedule("report").every(HOUR).work(|_run: Run| async { Ok::<(), String>(()) }).unwrap();
     let worker = tokio::spawn(worker);
+    // the worker's first poll starts it before the close, which then stops it; first polled
+    // after, it fails closed, as a_worker_first_polled_after_its_store_closed_fails_closed says
+    tokio::task::yield_now().await;
     f.store.close().await.unwrap();
     worker.await.unwrap().unwrap();
 }

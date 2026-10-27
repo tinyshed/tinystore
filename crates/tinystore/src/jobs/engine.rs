@@ -230,11 +230,17 @@ impl Jobs {
         lock(&self.queues).values().cloned().collect()
     }
 
-    /// Keeps a worker to stop at close.
-    pub(crate) fn keep_worker(&self, running: &Arc<Running>) {
+    /// Keeps a worker to stop at close; false once the store closes. Close
+    /// sets `closed` before it takes the workers to stop, so a worker kept
+    /// here is one it stops.
+    pub(crate) fn keep_worker(&self, running: &Arc<Running>) -> bool {
         let mut workers = lock(&self.workers);
+        if self.closed() {
+            return false;
+        }
         workers.retain(|worker| !worker.stopped());
         workers.push(Arc::clone(running));
+        true
     }
 
     pub(crate) fn hold_maintenance(&self) -> MutexGuard<'_, ()> {
