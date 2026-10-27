@@ -75,8 +75,11 @@ pub(super) fn take(store: &Store) -> Result<Snapshot> {
     for then in then {
         snapshot.files.extend(then(&snapshot.dir)?);
     }
-    if !claimed.contains("blobs") && snapshot.files.iter().any(|copied| copied.name == BLOBS) {
-        snapshot.files.extend(unopened.objects()?);
+    // the bytes of a blobs no handle opened, beside blobs.db or a database's
+    // file, which nothing removes while it is not open
+    let folders: Vec<String> = snapshot.files.iter().filter_map(|copied| folder_of(&copied.name)).collect();
+    for folder in folders.into_iter().filter(|folder| !claimed.contains(folder)) {
+        snapshot.files.extend(unopened.objects(&folder)?);
     }
     Ok(snapshot)
 }
@@ -91,6 +94,15 @@ fn made_dir(store: &Path) -> Result<PathBuf> {
 
 /// blobs.db, by its path in the store's directory.
 const BLOBS: &str = "blobs/blobs.db";
+
+/// The folder of the bytes blobs keeps beside an SQLite file: `blobs` beside
+/// blobs.db, `sql/app.blobs` beside a database's; none beside any other.
+fn folder_of(file: &str) -> Option<String> {
+    if file == BLOBS {
+        return Some("blobs".to_owned());
+    }
+    file.strip_prefix("sql/").and_then(|name| name.strip_suffix(".db")).map(|name| format!("sql/{name}.blobs"))
+}
 
 /// The engines' files that no engine open holds, copied as they lie: an
 /// SQLite file at the moment beside the others, and once blobs.db is copied,
@@ -128,11 +140,11 @@ impl Unopened<'_> {
         Ok(names.into_iter().filter(unheld).map(source).collect())
     }
 
-    /// Links every file of `objects/`, which nothing removes while blobs is
-    /// not open.
-    fn objects(&self) -> Result<Vec<Copied>> {
+    /// Links every file of the folder's `objects/`, which nothing removes
+    /// while its blobs is not open.
+    fn objects(&self, folder: &str) -> Result<Vec<Copied>> {
         let mut copied = Vec::new();
-        let mut folders = vec!["blobs/objects".to_owned()];
+        let mut folders = vec![format!("{folder}/objects")];
         while let Some(folder) = folders.pop() {
             for name in self.names_in(&folder)? {
                 let path = format!("{folder}/{name}");

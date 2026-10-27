@@ -69,9 +69,10 @@ impl Fixture {
         std::fs::read_dir(self.dir.path().join("blobs/uploads")).unwrap().map(|entry| entry.unwrap().path()).collect()
     }
 
-    /// Rows of a table of blobs.db, counted on a reader.
+    /// Rows of a table of blobs.db, by its name after `_tinystore_blobs_`,
+    /// counted on a reader.
     pub(crate) fn rows(&self, table: &str) -> i64 {
-        let sql = format!("select count(*) from {table}");
+        let sql = format!("select count(*) from _tinystore_blobs_{table}");
         self.blobs().file.read(|connection| Ok(connection.query_row(&sql, [], |row| row.get(0)).unwrap())).unwrap()
     }
 }

@@ -83,7 +83,7 @@ fn an_inline_file_whose_bytes_changed_is_corrupt_when_read() {
     f.blobs()
         .file
         .write(0, |tx| {
-            tx.execute("update bodies set bytes = ?1", params![bytes(999)])
+            tx.execute("update _tinystore_blobs_bodies set bytes = ?1", params![bytes(999)])
                 .map(drop)
                 .map_err(|e| Error::internal(e.to_string()))
         })

@@ -11,7 +11,7 @@ use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
-#[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
 use crate::engine::SharedFile;
 use crate::{Durability, Error, Result, Store, Transaction};
 
@@ -211,9 +211,9 @@ impl Database {
         super::forward::pass_on(&store, &self.base.name, statements, batch)
     }
 
-    /// The file the database lends to the buckets, queues and indexes opened
-    /// from it.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "search"))]
+    /// The file the database lends to the buckets, queues, files and indexes
+    /// opened from it.
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
     pub(crate) fn shared(&self) -> &Arc<SharedFile> {
         &self.base.shared
     }

@@ -227,6 +227,13 @@ impl Disk {
         Ok(removed)
     }
 
+    /// The last directory of `objects/` that holds files, by its fan; none
+    /// when none does.
+    pub(crate) fn last_fan(&self) -> Result<Option<i64>> {
+        let fans = self.names_in(&self.dir.join(OBJECTS))?;
+        Ok(fans.into_iter().filter_map(|(name, _)| i64::from_str_radix(&name, 16).ok()).max())
+    }
+
     /// The ids of the files a directory of `objects/` holds.
     pub(crate) fn ids_in(&self, fan: i64) -> Result<Vec<i64>> {
         Ok(self.names_in(&self.fan_dir(fan))?.into_iter().filter_map(|(_, id)| id).collect())

@@ -24,8 +24,8 @@ const SELECT_OPEN: &str = concat!(
     "select ",
     file_columns!(),
     ", f.content, c.id, c.inline, c.damaged, b.bytes
-    from files as f left join contents as c on c.id = f.content
-        left join bodies as b on c.inline and b.id = f.content
+    from _tinystore_blobs_files as f left join _tinystore_blobs_contents as c on c.id = f.content
+        left join _tinystore_blobs_bodies as b on c.inline and b.id = f.content
     where f.set_id = ?1 and f.path = ?2 and (f.expires is null or f.expires > ?3) and not ",
     hidden!()
 );

@@ -1,4 +1,5 @@
-//! A set of files by path, as a program opens it: `store.files("avatars")`.
+//! A set of files by path, as a program opens it: `store.files("avatars")`,
+//! or `db.files("packages")` in a database's file.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -18,7 +19,7 @@ use crate::memory::Waiting;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Key, Result, Store};
 
-const SET_EXPIRES: &str = "update files set expires = ?3 where set_id = ?1 and path = ?2";
+const SET_EXPIRES: &str = "update _tinystore_blobs_files set expires = ?3 where set_id = ?1 and path = ?2";
 /// A content type's bytes at most.
 const MAX_TYPE: usize = 256;
 /// Meta's names and values together, at most.
@@ -28,15 +29,29 @@ const MAX_META: usize = 2 << 10;
 /// files written in it.
 #[derive(Debug)]
 pub struct FilesBuilder<'s> {
-    store: &'s Store,
+    home: Home<'s>,
     name: String,
     ttl: Option<Duration>,
     max_file_size: Option<u64>,
 }
 
+/// Where a set of files opens: in blobs.db, or in a database's file.
+#[derive(Debug)]
+enum Home<'s> {
+    Store(&'s Store),
+    #[cfg(feature = "sql")]
+    Database(Arc<crate::engine::SharedFile>),
+}
+
 impl<'s> FilesBuilder<'s> {
     pub(crate) fn new(store: &'s Store, name: &str) -> Self {
-        FilesBuilder { store, name: name.to_owned(), ttl: None, max_file_size: None }
+        FilesBuilder { home: Home::Store(store), name: name.to_owned(), ttl: None, max_file_size: None }
+    }
+
+    /// The set of files `name` kept in a database's file.
+    #[cfg(feature = "sql")]
+    pub(crate) fn in_file(shared: Arc<crate::engine::SharedFile>, name: &str) -> FilesBuilder<'static> {
+        FilesBuilder { home: Home::Database(shared), name: name.to_owned(), ttl: None, max_file_size: None }
     }
 
     /// The term of every file written without its own, counted from its
@@ -55,7 +70,11 @@ impl<'s> FilesBuilder<'s> {
 
     pub fn open(self) -> Result<Files> {
         check_name(&self.name)?;
-        let blobs = Blobs::of(self.store)?;
+        let blobs = match &self.home {
+            Home::Store(store) => Blobs::of(store)?,
+            #[cfg(feature = "sql")]
+            Home::Database(shared) => Blobs::in_file(shared)?,
+        };
         let set = blobs.set_id(&self.name)?;
         Ok(Files {
             blobs,
@@ -107,7 +126,7 @@ impl Files {
     /// A call on one path, its options before its verb:
     /// `files.key("a.md").if_match(&etag).put(&text)`.
     pub fn key(&self, path: &str) -> FileCall<'_> {
-        FileCall { files: self, path: path.to_owned(), options: Options::default() }
+        FileCall::new(self, path, Options::default())
     }
 
     /// Writes the file and replaces whatever the path held, at the moment it
@@ -168,7 +187,7 @@ impl Files {
     /// passed on asks it, and as an awaited call makes it in its first poll.
     #[cfg(any(feature = "replication", feature = "async"))]
     pub(crate) fn call(&self, path: &str, options: Options) -> FileCall<'_> {
-        FileCall { files: self, path: path.to_owned(), options }
+        FileCall::new(self, path, options)
     }
 
     /// Whether the set's file is a copy, whose home takes its writes.
@@ -217,19 +236,22 @@ impl Files {
     }
 
     fn head_of(&self, whole: &str) -> Result<Option<FileInfo>> {
+        self.blobs.file.read(|connection| self.head_on(connection, whole))
+    }
+
+    /// What the file at a whole path carries, as `connection` reads it.
+    pub(super) fn head_on(&self, connection: &rusqlite::Connection, whole: &str) -> Result<Option<FileInfo>> {
         const SELECT_HEAD: &str = concat!(
             "select ",
             file_columns!(),
-            " from files as f where f.set_id = ?1 and f.path = ?2 and (f.expires is null or f.expires > ?3) and not ",
+            " from _tinystore_blobs_files as f where f.set_id = ?1 and f.path = ?2 and (f.expires is null or f.expires > ?3) and not ",
             hidden!()
         );
         let now = self.blobs.now();
-        let row = self.blobs.file.read(|connection| {
-            connection
-                .prepare_cached(SELECT_HEAD)
-                .and_then(|mut statement| statement.query_row(params![self.set, whole, now], FileRow::read).optional())
-                .map_err(|error| sql_error("blobs: a file's head", error))
-        })?;
+        let row = connection
+            .prepare_cached(SELECT_HEAD)
+            .and_then(|mut statement| statement.query_row(params![self.set, whole, now], FileRow::read).optional())
+            .map_err(|error| sql_error("blobs: a file's head", error))?;
         row.map(|row| row.info(&self.folder)).transpose()
     }
 
@@ -455,9 +477,25 @@ pub struct FileCall<'f> {
     files: &'f Files,
     path: String,
     options: Options,
+    /// The database's transaction the call runs in, when it runs in one.
+    #[cfg(feature = "sql")]
+    tx: Option<&'f crate::Transaction<'f>>,
 }
 
 impl<'f> FileCall<'f> {
+    fn new(files: &'f Files, path: &str, options: Options) -> Self {
+        #[cfg(feature = "sql")]
+        return FileCall { files, path: path.to_owned(), options, tx: None };
+        #[cfg(not(feature = "sql"))]
+        FileCall { files, path: path.to_owned(), options }
+    }
+
+    /// A call inside a database's transaction.
+    #[cfg(feature = "sql")]
+    pub(super) fn inside(files: &'f Files, tx: &'f crate::Transaction<'f>, path: &str) -> Self {
+        FileCall { tx: Some(tx), ..FileCall::new(files, path, Options::default()) }
+    }
+
     pub fn content_type(mut self, content_type: impl Into<String>) -> Self {
         self.options.content_type = Some(content_type.into());
         self
@@ -505,11 +543,22 @@ impl<'f> FileCall<'f> {
     /// A file written a piece at a time, which appears at its `commit`.
     pub fn upload(self) -> Result<Upload> {
         let whole = self.checked()?;
+        #[cfg(feature = "sql")]
+        if self.tx.is_some() {
+            let refused = Error::invalid("an upload inside a transaction: put its bytes, which commit with it");
+            return Err(self.files.fail(&whole, refused));
+        }
         Upload::start(self.files.clone(), whole, self.options)
     }
 
     pub fn delete(self) -> Result<()> {
         let whole = self.files.whole(&self.path)?;
+        #[cfg(feature = "sql")]
+        if let Some(tx) = self.tx {
+            let deleting = self.files.deleting(&whole, self.options.if_match);
+            let deleted = super::tx::on_file(tx, self.files, |sql| deleting(sql).map(drop));
+            return deleted.map_err(|error| self.files.fail(&whole, error));
+        }
         self.files.delete_at(&whole, self.options.if_match).map_err(|error| self.files.fail(&whole, error))
     }
 
@@ -525,6 +574,14 @@ impl<'f> FileCall<'f> {
 
     fn copied(self, from: &str, rename: bool) -> Result<FileInfo> {
         let (source, target) = (self.files.whole(from)?, self.checked()?);
+        #[cfg(feature = "sql")]
+        if let Some(tx) = self.tx {
+            let copied = refuse_onto_itself(&source, &target).and_then(|()| {
+                let copying = self.files.copying(&source, &target, &self.options, rename);
+                super::tx::on_file(tx, self.files, |sql| copying(sql).map(|(info, _)| info))
+            });
+            return copied.map_err(|error| self.files.fail(&target, error));
+        }
         self.files.copy_to(&source, &target, &self.options, rename).map_err(|error| self.files.fail(&target, error))
     }
 
@@ -613,6 +670,11 @@ impl<'f> FileCall<'f> {
 
     fn write_all(self, bytes: &[u8], condition: Condition) -> Result<Option<FileInfo>> {
         let whole = self.checked()?;
+        #[cfg(feature = "sql")]
+        if let Some(tx) = self.tx {
+            let written = super::tx::write_in(tx, self.files, (&whole, &self.options), bytes, condition);
+            return written.map_err(|error| self.files.fail(&whole, error));
+        }
         let mut upload = Upload::start(self.files.clone(), whole, self.options)?;
         upload.take(bytes)?;
         upload.finish(condition)

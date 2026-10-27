@@ -1,9 +1,10 @@
-//! kv, jobs and search inside an application's database: a bucket or a queue
-//! opened from a database lives in its file, beside its tables, and commits
-//! with its rows in `db.tx`, and a queue's job in `db.batch` too; a table's
-//! index follows a table, changed in the commit that changes a row. This is
-//! the one place two engines meet, so that neither imports the other, and so
-//! the async API's database opens its own here.
+//! kv, jobs, blobs and search inside an application's database: a bucket, a
+//! queue or a set of files opened from a database lives in its file, beside
+//! its tables, and commits with its rows in `db.tx`, and a queue's job in
+//! `db.batch` too; a table's index follows a table, changed in the commit
+//! that changes a row. This is the one place two engines meet, so that
+//! neither imports the other, and so the async API's database opens its own
+//! here.
 
 #[cfg(feature = "jobs")]
 use serde::Serialize;
@@ -83,6 +84,32 @@ where
     }
 }
 
+#[cfg(feature = "blobs")]
+impl Database {
+    /// A set of files kept in this database's file, as
+    /// [`Store::files`](crate::Store::files) keeps one in blobs.db: the same
+    /// handle with the same calls, whose writes commit with the rows in
+    /// [`Database::tx`] through `tx.with(&files)`. The bytes too large to keep
+    /// inline lie in the folder beside the file, `sql/app.blobs/`.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let packages = db.files("packages").open()?;
+    /// db.tx(|tx| {
+    ///     tx.exec(tinystore::sql!("insert into plugins (file) values (?)", "stripe-1.0.0.js"))?;
+    ///     tx.with(&packages).put("stripe-1.0.0.js", b"export const charges = 1")?;
+    ///     Ok::<_, tinystore::Error>(())
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn files(&self, name: &str) -> crate::blobs::FilesBuilder<'static> {
+        crate::blobs::FilesBuilder::in_file(std::sync::Arc::clone(self.shared()), name)
+    }
+}
+
 #[cfg(feature = "search")]
 impl Database {
     /// An index of a table of this database, kept in its file: the table's
@@ -126,6 +153,16 @@ impl crate::aio::sql::Database {
     /// [`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
     pub fn bucket<V: crate::kv::Value>(&self, name: &str) -> crate::aio::kv::BucketBuilder<V> {
         crate::aio::kv::BucketBuilder::new(self.blocking().bucket(name), std::sync::Arc::clone(self.pool()))
+    }
+}
+
+#[cfg(all(feature = "blobs", feature = "async"))]
+impl crate::aio::sql::Database {
+    /// A set of files kept in this database's file, as [`Database::files`]
+    /// opens one, its calls awaited: its writes commit with the rows in
+    /// [`tx`](crate::aio::sql::Database::tx) through `tx.with(&files)`.
+    pub fn files(&self, name: &str) -> crate::aio::blobs::FilesBuilder<'_> {
+        crate::aio::blobs::FilesBuilder::new(self.blocking().files(name), self.pool())
     }
 }
 

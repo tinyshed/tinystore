@@ -19,14 +19,15 @@ const SLICES: i64 = 30 * 24 * 60;
 /// What a slice reads at once, and holds of the store's memory.
 const BUFFER: usize = 1 << 20;
 
-const SELECT_PLACE: &str = "select content, pace from scrub";
-const UPDATE_PLACE: &str = "update scrub set content = ?1, pace = ?2";
-const NAMED_BYTES: &str = "select coalesce(sum(size), 0) from contents where names > 0";
-const NEXT: &str = "select id, size, sha256, inline from contents
+const SELECT_PLACE: &str = "select content, pace from _tinystore_blobs_scrub";
+const UPDATE_PLACE: &str = "update _tinystore_blobs_scrub set content = ?1, pace = ?2";
+const NAMED_BYTES: &str = "select coalesce(sum(size), 0) from _tinystore_blobs_contents where names > 0";
+const NEXT: &str = "select id, size, sha256, inline from _tinystore_blobs_contents
     where id >= ?1 and names > 0 and damaged = 0 order by id limit 1";
-const BODY_OF: &str = "select bytes from bodies where id = ?1";
-const MARK_DAMAGED: &str = "update contents set damaged = 1 where id = ?1 and names > 0";
-const PATHS_OF: &str = "select s.name, f.path from files as f join sets as s on s.id = f.set_id
+const BODY_OF: &str = "select bytes from _tinystore_blobs_bodies where id = ?1";
+const MARK_DAMAGED: &str = "update _tinystore_blobs_contents set damaged = 1 where id = ?1 and names > 0";
+const PATHS_OF: &str =
+    "select s.name, f.path from _tinystore_blobs_files as f join _tinystore_blobs_sets as s on s.id = f.set_id
     where f.content = ?1 limit 16";
 
 /// A content the scrub is part way through: the hash of its bytes before

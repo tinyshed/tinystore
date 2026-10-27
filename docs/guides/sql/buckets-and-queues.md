@@ -80,6 +80,7 @@ db.tx(|tx| -> tinystore::Result<()> {
 | a bucket of the database | `get`, `set`, `delete` and the rest of a bucket's calls | every call             |
 | a queue of the database  | `add`, `set`, `update`, `cancel`, `get`                 | `work`, `watch`, pages |
 | a channel                | `publish`, handed over at the commit                    | subscriptions          |
+| files of the database    | `put`, `create`, `delete`, `copy`, `rename`, `head`     | reads, uploads, lists  |
 
 What the transaction writes through them commits with the rows, or not at
 all, and what it reads sees what the transaction wrote. A worker never sees a
@@ -91,9 +92,10 @@ queue's `adding`. A batch shares its commit with other writes, and a
 transaction does not. See [A row and its job in one
 batch](writes.md#a-row-and-its-job-in-one-batch).
 
-A bucket or a queue of the store, `store.bucket(…)`, lives in `kv.db` or
-`jobs.db`, another file with another writer, so it cannot join a database's
-transaction. Open it from the database instead.
+A bucket, a queue or a set of files of the store, `store.bucket(…)`, lives
+in `kv.db`, `jobs.db` or `blobs/blobs.db`, another file with another writer,
+so it cannot join a database's transaction. Open it from the database
+instead.
 
 ## The same handle, another file
 
@@ -108,6 +110,39 @@ calls: expiry, versions, workers, retries. What differs is where they live:
   application's writes, and the other way round, which is the point and its
   cost;
 - a backup, a copy on another node and a restore carry them with the rows.
+
+## Files in a database
+
+A set of files can live in the database too, so that a file and the row that
+names it commit together. A plugin's package and its row in `plugins`, an
+avatar and its user's row: both written, or neither. Only Rust has it so far.
+
+```rust
+let db = store.database("app").migrations("migrations").open()?;
+let packages = db.files("packages").open()?;
+
+db.tx(|tx| -> tinystore::Result<()> {
+    tx.exec(sql!("insert into plugins (file) values (?)", "stripe-1.0.0.js"))?;
+    tx.with(&packages).put("stripe-1.0.0.js", &package)?; // committed with the row, or not at all
+    Ok(())
+})?;
+let mut file = packages.get("stripe-1.0.0.js")?.expect("committed with its row");
+```
+
+- The files' rows sit in `sql/<name>.db` under names that start with
+  `_tinystore_blobs_`. Bytes past 16 KiB lie in the folder beside the file,
+  `sql/<name>.blobs/`.
+- Inside the transaction, `put` writes the bytes to disk before the row that
+  names them. If the transaction rolls back, the bytes are removed at once.
+  If the process dies before the commit, the bytes stay unnamed, and the next
+  open removes them. A row never names bytes that are not there.
+- An upload streams outside a transaction only. Inside one, pass the bytes to
+  `put`.
+- Outside a transaction, the files have every call of [Blobs](../blobs/README.md),
+  and they share the database's writer.
+- A backup copies the files' bytes with the rows that name them.
+- A node can't keep a database's files yet: `db.files` fails with an
+  `invalid` error on a store that is a node.
 
 ## A table's index
 

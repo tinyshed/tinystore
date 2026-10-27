@@ -157,9 +157,9 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   `sqlite` and `compress`, and nothing of another engine: what two engines
   would both write goes to the root, as `compress` holds the bytes records
   and metrics both pack with. A file one engine lends another,
-  a database's to its buckets and queues, goes through `engine::SharedFile`,
+  a database's to its buckets, queues and files, goes through `engine::SharedFile`,
   and three files alone name two engines: `inside.rs`, `db.bucket`,
-  `db.queue`, `db.search_index` and `queue.adding`, a job of a database's
+  `db.queue`, `db.files`, `db.search_index` and `queue.adding`, a job of a database's
   batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
@@ -205,9 +205,10 @@ how they work.
 **One directory, a file per engine, unless the application joins two.**
 `kv.db`, `jobs.db`, `records.db`, `metrics.db`, `search.db`, `blobs/`, and `sql/<name>.db`
 for databases the application names; a node keeps each file's log in `log/`. No engine waits on another's writer,
-and no write is atomic across two files. A bucket or a queue opened from an
-SQL database, `db.bucket(…)`, lives in that database's file and commits with
-its rows, and a table's index, `db.search_index(…)`, with the rows it
+and no write is atomic across two files. A bucket, a queue or a set of files
+opened from an SQL database, `db.bucket(…)`, lives in that database's file
+and commits with its rows, a set of files' bytes in `sql/<name>.blobs/`
+beside it, and a table's index, `db.search_index(…)`, with the rows it
 follows: what shares a file shares its writer, by the application's choice
 and never by default.
 

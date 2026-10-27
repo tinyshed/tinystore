@@ -208,3 +208,49 @@ fn a_put_that_returned_is_there_after_a_reopen() {
     assert_eq!(docs.get("small").unwrap().unwrap().read_all().unwrap(), small);
     assert_eq!(docs.get("large").unwrap().unwrap().read_all().unwrap(), large);
 }
+
+/// A blobs.db as v0.3.0 wrote it, its tables named before step 2 named them
+/// for a database's file too, holding one file inline.
+fn written_by_0_3_0(dir: &std::path::Path) {
+    use sha2::Digest;
+    let schema = include_str!("migrations/0001_schema.sql");
+    let sha256 = sha2::Sha256::digest(b"hi").to_vec();
+    std::fs::create_dir_all(dir.join("blobs/objects")).unwrap();
+    let connection = rusqlite::Connection::open(dir.join("blobs/blobs.db")).unwrap();
+    connection
+        .execute_batch(
+            "create table _tinystore_migrations (history text not null, version integer not null, \
+             name text not null, sql text not null, primary key (history, version)) strict, without rowid",
+        )
+        .unwrap();
+    connection.execute_batch(schema).unwrap();
+    connection
+        .execute("insert into _tinystore_migrations values ('blobs', 1, '0001_schema.sql', ?1)", [schema])
+        .unwrap();
+    connection
+        .execute_batch("insert into sets (name) values ('notes'); update meta set value = 1 where name = 'ids'")
+        .unwrap();
+    connection
+        .execute("insert into contents (id, names, size, sha256, inline) values (1, 1, 2, ?1, 1)", [&sha256])
+        .unwrap();
+    connection.execute("insert into bodies (id, bytes) values (1, x'6869')", []).unwrap();
+    connection
+        .execute(
+            "insert into files (set_id, path, revision, content, size, sha256, type, modified) \
+             values (1, 'a.txt', 1, 1, 2, ?1, 'text/plain', 0)",
+            [&sha256],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_blobs_db_written_before_its_tables_took_their_names_opens_with_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    written_by_0_3_0(dir.path());
+    let options = crate::Options { background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let notes = store.files("notes").open().unwrap();
+    assert_eq!(notes.get("a.txt").unwrap().unwrap().read_all().unwrap(), b"hi");
+    notes.put("b.txt", b"written after").unwrap();
+    assert_eq!(notes.list().page().unwrap().files.len(), 2);
+}

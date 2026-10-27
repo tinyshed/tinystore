@@ -49,13 +49,13 @@ async fn every_file_streams_once_in_the_byte_order_of_their_paths_across_pages()
             for n in 0..=PAGE_FILES as i64 {
                 let (id, sha) = (1_000_000 + n, Sha256::digest([0_u8]).to_vec());
                 tx.execute(
-                    "insert into contents (id, names, size, sha256, inline) values (?1, 1, 1, ?2, 1)",
+                    "insert into _tinystore_blobs_contents (id, names, size, sha256, inline) values (?1, 1, 1, ?2, 1)",
                     params![id, sha],
                 )
-                .and_then(|_| tx.execute("insert into bodies (id, bytes) values (?1, x'00')", [id]))
+                .and_then(|_| tx.execute("insert into _tinystore_blobs_bodies (id, bytes) values (?1, x'00')", [id]))
                 .and_then(|_| {
                     tx.execute(
-                        "insert into files (set_id, path, revision, content, size, sha256, type, modified)
+                        "insert into _tinystore_blobs_files (set_id, path, revision, content, size, sha256, type, modified)
                                 values (?1, ?2, 0, ?3, 1, ?4, 'application/octet-stream', 0)",
                         params![set, format!("{n:05}.md"), id, sha],
                     )

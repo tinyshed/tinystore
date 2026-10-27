@@ -1,11 +1,15 @@
 //! The blobs engine: `blobs/` in the store's directory, its `blobs.db`, and
-//! the files of the contents too large to keep inline.
+//! the files of the contents too large to keep inline; or in a database's
+//! file, its tables beside the database's and its bytes in the folder beside
+//! the file, so that a file commits with the rows that name it.
 //!
 //! ```text
 //! blobs/
 //! ├── blobs.db            sets, files, contents, inline bodies, marks
 //! ├── uploads/1a3f08      an upload's bytes until its commit; emptied at open
 //! └── objects/1a3/1a3f07  content 0x1a3f07's bytes: renamed here once, never changed
+//! sql/app.db              a database's files: the same tables, _tinystore_blobs_…
+//! sql/app.blobs/          and the same folders
 //! ```
 
 use std::collections::HashMap;
@@ -22,17 +26,31 @@ use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
 
-const SETTLE: &str = "update meta set value = ?1 where name = 'settled' and value < ?1";
-const RESERVE_IDS: &str = "update meta set value = value + ?1 where name = 'ids' returning value";
-const HAS_CONTENT: &str = "select 1 from contents where id = ?1";
-const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+const SETTLE: &str = "update _tinystore_blobs_meta set value = ?1 where name = 'settled' and value < ?1";
+const RESERVE_IDS: &str = "update _tinystore_blobs_meta set value = value + ?1 where name = 'ids' returning value";
+const HAS_CONTENT: &str = "select 1 from _tinystore_blobs_contents where id = ?1";
+const MIGRATIONS: &[Migration] = &[
+    Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
+    Migration::of(2, "0002_names.sql", include_str!("migrations/0002_names.sql")),
+];
+/// A database's files, whose tables are made with blobs.db's names of its
+/// step 2: a step after it goes to both histories, the next of each.
+#[cfg(feature = "sql")]
+const IN_A_DATABASE: &[Migration] =
+    &[Migration::of(1, "0001_in_a_database.sql", include_str!("migrations/0001_in_a_database.sql"))];
+/// A content id taken in a database's transaction, which a rollback gives
+/// back with every row the transaction wrote.
+#[cfg(feature = "sql")]
+const TAKE_ID: &str = "update _tinystore_blobs_meta set value = value + 1 where name = 'ids' returning value";
 
 /// How often maintenance runs: expiry, marked clears, files no row names any
 /// more, what uploads left, and a slice of the scrub.
 const MAINTENANCE: Duration = Duration::from_secs(60);
 
 pub(crate) struct Blobs {
-    pub(crate) file: File,
+    pub(crate) file: Arc<File>,
+    /// Where it is kept: blobs.db, or a database's file.
+    pub(crate) kept: Kept,
     /// What blobs tells the store's own metrics.
     pub(crate) probe: Arc<crate::probe::Probe>,
     pub(crate) disk: Disk,
@@ -110,8 +128,22 @@ pub(crate) fn is_object(path: &str) -> bool {
 #[cfg(feature = "replication")]
 pub(crate) const FILE_IN_STORE: &str = "blobs/blobs.db";
 
+/// Where a blobs engine is kept, by the paths in the store's directory of its
+/// file and of the folder its bytes lie in.
+#[derive(Debug)]
+pub(crate) struct Kept {
+    pub(crate) file: String,
+    pub(crate) folder: String,
+    /// The database that lends its file, as an error names it: `sql app`.
+    pub(crate) lent_by: Option<String>,
+}
+
 impl Engine for Blobs {
+    /// Closes blobs.db; a database's file is the database's to close.
     fn close(&self) -> Result<()> {
+        if self.kept.lent_by.is_some() {
+            return Ok(());
+        }
         self.file.close()
     }
 
@@ -119,9 +151,13 @@ impl Engine for Blobs {
     /// file it names: a link copies no byte and keeps the bytes after the
     /// engine lets its own name go, so a film costs the snapshot a directory
     /// entry. No removal begins from the moment on, so that none the copy
-    /// names goes before it is linked.
+    /// names goes before it is linked. A database's file is the database's
+    /// to name, and its files are linked once it is copied.
     fn snapshot(&self) -> Result<Copying<'_>> {
-        let mut copying = to_copy(&self.file, &format!("{DIR}/{FILE}"), "blobs")?;
+        let mut copying = match self.kept.lent_by {
+            None => to_copy(&self.file, &self.kept.file, "blobs")?,
+            Some(_) => Copying::default(),
+        };
         copying.at_the_moment = Some(Box::new(move || {
             let paused = self.disk.pause_removals();
             let then: Then<'_> = Box::new(move |into| {
@@ -141,9 +177,9 @@ impl Engine for Blobs {
 }
 
 impl Blobs {
-    /// Links into the snapshot at `into` every file its copy of blobs.db names.
+    /// Links into the snapshot at `into` every file its copy of the file names.
     fn link_named(&self, into: &std::path::Path) -> Result<Vec<Copied>> {
-        let named = crate::sqlite::read_copy(&into.join(DIR).join(FILE), |connection| {
+        let named = crate::sqlite::read_copy(&into.join(&self.kept.file), |connection| {
             let mut statement = connection.prepare(SELECT_NAMED)?;
             let ids = statement.query_map([], |row| row.get::<_, i64>(0))?;
             ids.collect::<rusqlite::Result<Vec<i64>>>()
@@ -151,26 +187,88 @@ impl Blobs {
         .map_err(|error| error.within("snapshot blobs: the files the copy names"))?;
         let mut linked = Vec::new();
         for id in named {
-            if let Some(name) = self.disk.link_object(id, &into.join(DIR))? {
-                linked.push(Copied { name: format!("{DIR}/{name}"), engine: "blobs" });
+            if let Some(name) = self.disk.link_object(id, &into.join(&self.kept.folder))? {
+                linked.push(Copied { name: format!("{}/{name}", self.kept.folder), engine: "blobs" });
             }
         }
         Ok(linked)
     }
 }
 
+/// What opens a blobs engine on its file: where it is kept, the name of its
+/// folder it holds, and its file's history.
+struct Opening<'s> {
+    store: &'s Store,
+    file: Arc<File>,
+    kept: Kept,
+    claim: Claim,
+    migrations: &'static [Migration],
+    #[cfg(feature = "async")]
+    pool: Arc<crate::pool::Pool>,
+}
+
+impl Opening<'_> {
+    /// Its folders made, its file migrated, and what a process that died left
+    /// removed before anything is written; then its maintenance started.
+    fn start(self) -> Result<Arc<Blobs>> {
+        let (store, dir) = (self.store, self.claim.path().to_owned());
+        // a store beside its holder makes nothing in the holder's directory
+        if !store.is_beside() {
+            for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
+                std::fs::create_dir_all(&made)
+                    .map_err(|error| Error::io(format!("blobs: create {}", made.display()), error))?;
+            }
+        }
+        self.file.migrate("blobs", self.migrations)?;
+        let durable = self.file.durability() == Durability::Full;
+        let tasks = self.kept.lent_by.as_ref().map_or_else(|| "blobs".to_owned(), |owner| format!("blobs in {owner}"));
+        let blobs = Arc::new(Blobs {
+            file: self.file,
+            kept: self.kept,
+            probe: Arc::clone(store.probe()),
+            disk: Disk::new(dir, durable),
+            ids: Ids::default(),
+            memory: Arc::clone(store.memory()),
+            scrubbing: Mutex::new(None),
+            clock: store.clock(),
+            keep_free: store.keep_free(),
+            sets: Mutex::new(HashMap::new()),
+            #[cfg(feature = "replication")]
+            store: store.downgrade(),
+            #[cfg(feature = "async")]
+            pool: self.pool,
+            _claim: self.claim,
+        });
+        // What a process that died left, and the maintenance after it, are a
+        // copy's home's to clear: each turn asks, since a file's home may
+        // move while it is open.
+        if !blobs.file.is_copy() {
+            blobs.recover()?;
+        }
+        let weak = Arc::downgrade(&blobs);
+        store.every(&format!("{tasks}: maintenance"), MAINTENANCE, move || {
+            weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| {
+                // a burst of reads otherwise keeps its readers open for good
+                blobs.file.sweep();
+                blobs.maintain().map(drop)
+            })
+        })?;
+        Ok(blobs)
+    }
+}
+
 /// blobs' directory in the store's, and its file in it.
 const DIR: &str = "blobs";
 const FILE: &str = "blobs.db";
-const SELECT_NAMED: &str = "select id from contents where inline = 0 and names > 0 order by id";
+const SELECT_NAMED: &str = "select id from _tinystore_blobs_contents where inline = 0 and names > 0 order by id";
 #[cfg(feature = "replication")]
-const SELECT_AFTER: &str = "select id from contents where inline = 0 and id > ?1 order by id";
+const SELECT_AFTER: &str = "select id from _tinystore_blobs_contents where inline = 0 and id > ?1 order by id";
 
-const SELECT_MARKS: &str =
-    "select (select value from meta where name = 'ids'), (select value from meta where name = 'settled')";
-const NEXT_REVISION: &str = "update meta set value = value + 1 where name = 'revision' returning value";
-const SELECT_SET: &str = "select id from sets where name = ?1";
-const INSERT_SET: &str = "insert into sets (name) values (?1) on conflict (name) do nothing";
+const SELECT_MARKS: &str = "select (select value from _tinystore_blobs_meta where name = 'ids'), (select value from _tinystore_blobs_meta where name = 'settled')";
+const NEXT_REVISION: &str =
+    "update _tinystore_blobs_meta set value = value + 1 where name = 'revision' returning value";
+const SELECT_SET: &str = "select id from _tinystore_blobs_sets where name = ?1";
+const INSERT_SET: &str = "insert into _tinystore_blobs_sets (name) values (?1) on conflict (name) do nothing";
 
 impl Blobs {
     /// The store's blobs engine, opened by the first files: its directory
@@ -182,50 +280,44 @@ impl Blobs {
         let pool = crate::pool::Pool::of(store)?;
         store.engine(|store| {
             let claim = store.claim(DIR)?;
-            let dir = claim.path().to_owned();
-            // a store beside its holder makes nothing in the holder's directory:
-            // without blobs.db there, its open is `NotFound`
-            if !store.is_beside() {
-                for made in [dir.clone(), dir.join(UPLOADS), dir.join(OBJECTS)] {
-                    std::fs::create_dir_all(&made)
-                        .map_err(|error| Error::io(format!("blobs: create {}", made.display()), error))?;
-                }
-            }
             let config = Config::committing(store.durability());
-            let durable = config.durability == Durability::Full;
-            let file = store.open_file(&format!("{DIR}/{FILE}"), config)?;
-            file.migrate("blobs", MIGRATIONS)?;
-            let blobs = Arc::new(Blobs {
-                file,
-                probe: Arc::clone(store.probe()),
-                disk: Disk::new(dir, durable),
-                ids: Ids::default(),
-                memory: Arc::clone(store.memory()),
-                scrubbing: Mutex::new(None),
-                clock: store.clock(),
-                keep_free: store.keep_free(),
-                sets: Mutex::new(HashMap::new()),
-                #[cfg(feature = "replication")]
-                store: store.downgrade(),
-                #[cfg(feature = "async")]
-                pool,
-                _claim: claim,
-            });
-            // What a process that died left, and the maintenance after it,
-            // are a copy's home's to clear: each turn asks, since a file's
-            // home may move while it is open.
-            if !blobs.file.is_copy() {
-                blobs.recover()?;
+            let file = Arc::new(store.open_file(&format!("{DIR}/{FILE}"), config)?);
+            let kept = Kept { file: format!("{DIR}/{FILE}"), folder: DIR.to_owned(), lent_by: None };
+            #[cfg(feature = "async")]
+            let opening = Opening { store, file, kept, claim, migrations: MIGRATIONS, pool };
+            #[cfg(not(feature = "async"))]
+            let opening = Opening { store, file, kept, claim, migrations: MIGRATIONS };
+            opening.start()
+        })
+    }
+
+    /// The blobs engine kept in a database's file, which every set of files
+    /// opened from the database shares: its bytes lie in the folder beside
+    /// the file, `sql/app.blobs/` beside `sql/app.db`.
+    #[cfg(feature = "sql")]
+    pub(crate) fn in_file(shared: &Arc<crate::engine::SharedFile>) -> Result<Arc<Blobs>> {
+        shared.engine(|store| {
+            #[cfg(feature = "replication")]
+            if store.node().is_some() {
+                return Err(Error::invalid(format!(
+                    "{}: a database's files on a node, whose copies take no bytes of a database yet",
+                    shared.owner()
+                )));
             }
-            let weak = Arc::downgrade(&blobs);
-            store.every("blobs: maintenance", MAINTENANCE, move || {
-                weak.upgrade().filter(|blobs| !blobs.file.is_copy()).map_or(Ok(()), |blobs| {
-                    // a burst of reads otherwise keeps its readers open for good
-                    blobs.file.sweep();
-                    blobs.maintain().map(drop)
-                })
+            let in_store = shared.file().path().strip_prefix(store.dir()).map_err(|_| {
+                Error::internal(format!("{}: a database's file outside its store's directory", shared.owner()))
             })?;
-            Ok(blobs)
+            let file_name = in_store.to_string_lossy().replace('\\', "/");
+            let folder = format!("{}.blobs", file_name.strip_suffix(".db").unwrap_or(&file_name));
+            let claim = store.claim(&folder)?;
+            let kept = Kept { file: file_name, folder, lent_by: Some(shared.owner().to_owned()) };
+            let file = Arc::clone(shared.file());
+            #[cfg(feature = "async")]
+            let opening =
+                Opening { store, file, kept, claim, migrations: IN_A_DATABASE, pool: crate::pool::Pool::of(store)? };
+            #[cfg(not(feature = "async"))]
+            let opening = Opening { store, file, kept, claim, migrations: IN_A_DATABASE };
+            opening.start()
         })
     }
 
@@ -233,6 +325,22 @@ impl Blobs {
     #[cfg(feature = "replication")]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed("the store"))
+    }
+
+    /// The file as an error names it: `blobs.db`, or `sql app`.
+    #[cfg(feature = "sql")]
+    pub(crate) fn place(&self) -> &str {
+        self.kept.lent_by.as_deref().unwrap_or(FILE)
+    }
+
+    /// A content id taken in a database's transaction: the meta row it moves
+    /// is the transaction's, so that a rollback gives it back and no content
+    /// that committed has an id past what its file reserved.
+    #[cfg(feature = "sql")]
+    pub(crate) fn id_in(&self, tx: &Tx<'_>) -> Result<i64> {
+        tx.prepare_cached(TAKE_ID)
+            .and_then(|mut take| take.query_row([], |row| row.get(0)))
+            .map_err(|error| sql_error("blobs: a content id", error))
     }
 
     /// Refuses `coming` bytes that would leave the disk less free than the
@@ -271,26 +379,29 @@ impl Blobs {
         if let Err(error) = self.disk.sweep_uploads(&self.ids) {
             tracing::warn!(target: "tinystore", %error, "blobs: an upload left by a process that died stays for now");
         }
-        if settled < reserved {
-            for fan in Disk::fan(settled + 1)..=Disk::fan(reserved) {
-                self.remove_unnamed_in(fan, settled, reserved)?;
-            }
+        // A database's transaction takes its ids in its own rows, so that a
+        // file it placed and a crash left lies past the mark: any past it is
+        // no content's, as no upload runs before the store opened.
+        let last = self.disk.last_fan()?.unwrap_or(0).max(Disk::fan(reserved));
+        for fan in Disk::fan(settled + 1)..=last {
+            self.remove_unnamed_in(fan, settled)?;
         }
         self.settle()
     }
 
     /// Removes the files of one directory of `objects/` whose ids lie past
-    /// `settled`, up to `reserved`, and that no content names. One that will
-    /// not go now, as one a scanner holds on Windows, stays in doubt: the
-    /// settled mark stays below it, and maintenance removes it later.
-    fn remove_unnamed_in(&self, fan: i64, settled: i64, reserved: i64) -> Result<()> {
+    /// `settled` and that no content names. One that will not go now, as one
+    /// a scanner holds on Windows, stays in doubt: the settled mark stays
+    /// below it, and maintenance removes it later.
+    fn remove_unnamed_in(&self, fan: i64, settled: i64) -> Result<()> {
         let ids = self.disk.ids_in(fan)?;
         if ids.is_empty() {
             return Ok(());
         }
         let (low, high) = Disk::span(fan);
-        let (low, high) = (low.max(settled + 1), high.min(reserved));
-        let named = ("select id from contents where id >= ?1 and id <= ?2", "blobs: the contents named");
+        let low = low.max(settled + 1);
+        let named =
+            ("select id from _tinystore_blobs_contents where id >= ?1 and id <= ?2", "blobs: the contents named");
         let named: Vec<i64> =
             self.file.read(|connection| rows_of(connection, named, params![low, high], |row| row.get(0)))?;
         for id in ids.into_iter().filter(|id| (low..=high).contains(id) && !named.contains(id)) {
@@ -410,7 +521,7 @@ pub(super) use crate::sqlite::query_cached as rows_of;
 /// blobs, which a read beside would otherwise try to make.
 #[cfg(feature = "client")]
 pub(crate) fn sets(store: &Store) -> Result<Vec<String>> {
-    const SELECT_SETS: &str = "select name from sets order by name";
+    const SELECT_SETS: &str = "select name from _tinystore_blobs_sets order by name";
     if !store.dir().join("blobs").join("blobs.db").exists() {
         return Ok(Vec::new());
     }

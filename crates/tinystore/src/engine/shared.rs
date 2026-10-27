@@ -22,16 +22,23 @@ pub(crate) struct SharedFile {
     owner: String,
     /// Weak, as an engine holds it, so that a handle never keeps it open.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search", feature = "replication", feature = "async")),
+        not(any(
+            feature = "kv",
+            feature = "jobs",
+            feature = "blobs",
+            feature = "search",
+            feature = "replication",
+            feature = "async"
+        )),
         expect(
             dead_code,
-            reason = "read by kv's, jobs' and search's guests, a copy's writes and the async API's databases"
+            reason = "read by kv's, jobs', blobs' and search's guests, a copy's writes and the async API's databases"
         )
     )]
     store: WeakStore,
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
     )]
     guests: Mutex<crate::store::Engines>,
 }
@@ -53,8 +60,8 @@ impl SharedFile {
     }
 
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
     )]
     pub(crate) fn owner(&self) -> &str {
         &self.owner
@@ -63,8 +70,8 @@ impl SharedFile {
     /// The engine of type `E` kept in this file, or the one `open` makes; every
     /// handle opened from the file shares it.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
+        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
     )]
     pub(crate) fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))?;

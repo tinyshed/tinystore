@@ -15,17 +15,18 @@ use crate::{Result, Store};
 
 use crate::engine::{BATCH, BATCHES, in_batches};
 
-const EXPIRE: &str = "delete from files where (set_id, path) in (
-    select set_id, path from files where expires <= ?1 order by expires limit cast(?2 as integer)
+const EXPIRE: &str = "delete from _tinystore_blobs_files where (set_id, path) in (
+    select set_id, path from _tinystore_blobs_files where expires <= ?1 order by expires limit cast(?2 as integer)
 ) returning content";
-const SELECT_CLEARED: &str = "select set_id, prefix, revision from cleared";
-const DROP_HIDDEN: &str = "delete from files where (set_id, path) in (
-    select set_id, path from files where set_id = ?1 and path >= ?2 and path < ?3 and revision <= ?4
+const SELECT_CLEARED: &str = "select set_id, prefix, revision from _tinystore_blobs_cleared";
+const DROP_HIDDEN: &str = "delete from _tinystore_blobs_files where (set_id, path) in (
+    select set_id, path from _tinystore_blobs_files where set_id = ?1 and path >= ?2 and path < ?3 and revision <= ?4
     limit cast(?5 as integer)
 ) returning content";
-const UNMARK: &str = "delete from cleared where set_id = ?1 and prefix = ?2 and revision = ?3";
-const SELECT_UNNAMED: &str = "select id from contents where names = 0 order by id limit cast(?1 as integer)";
-const FORGET: &str = "delete from contents where id = ?1 and names = 0";
+const UNMARK: &str = "delete from _tinystore_blobs_cleared where set_id = ?1 and prefix = ?2 and revision = ?3";
+const SELECT_UNNAMED: &str =
+    "select id from _tinystore_blobs_contents where names = 0 order by id limit cast(?1 as integer)";
+const FORGET: &str = "delete from _tinystore_blobs_contents where id = ?1 and names = 0";
 
 /// What one maintenance did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

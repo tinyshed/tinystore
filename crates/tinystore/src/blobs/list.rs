@@ -24,20 +24,21 @@ pub(crate) const CLEAR_AT_ONCE: usize = 10_000;
 const SELECT_PAGE: &str = concat!(
     "select ",
     file_columns!(),
-    " from files as f where f.set_id = ?1 and f.path >= ?2 and f.path < ?3
+    " from _tinystore_blobs_files as f where f.set_id = ?1 and f.path >= ?2 and f.path < ?3
         and (f.expires is null or f.expires > ?4) and not ",
     hidden!(),
     " order by f.path limit cast(?5 as integer)"
 );
 const SELECT_USAGE: &str = concat!(
-    "select count(*), coalesce(sum(f.size), 0) from files as f where f.set_id = ?1 and f.path >= ?2
+    "select count(*), coalesce(sum(f.size), 0) from _tinystore_blobs_files as f where f.set_id = ?1 and f.path >= ?2
         and f.path < ?3 and (f.expires is null or f.expires > ?4) and not ",
     hidden!()
 );
 const COUNT_UNDER: &str = "select count(*) from (
-    select 1 from files where set_id = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer))";
-const DELETE_UNDER: &str = "delete from files where set_id = ?1 and path >= ?2 and path < ?3 returning content";
-const MARK_CLEARED: &str = "insert into cleared (set_id, prefix, revision) values (?1, ?2, ?3)
+    select 1 from _tinystore_blobs_files where set_id = ?1 and path >= ?2 and path < ?3 limit cast(?4 as integer))";
+const DELETE_UNDER: &str =
+    "delete from _tinystore_blobs_files where set_id = ?1 and path >= ?2 and path < ?3 returning content";
+const MARK_CLEARED: &str = "insert into _tinystore_blobs_cleared (set_id, prefix, revision) values (?1, ?2, ?3)
     on conflict (set_id, prefix) do update set revision = excluded.revision";
 
 /// Past every path: longer than a path may be, of the last character.

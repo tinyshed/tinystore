@@ -144,14 +144,14 @@ A write is atomic within one file, and never across two. So if a request
 inserts a message into `sql/chat.db` and adds a job to `jobs.db`, a crash
 between the two can leave the message without its job.
 
-| What                                                                       | Commits together                                  |
-|----------------------------------------------------------------------------|---------------------------------------------------|
-| buckets of `kv.db`                                                         | yes, in `store.tx`                                |
-| queues of `jobs.db`                                                        | yes, in `store.tx`                                |
-| a database's rows and the buckets, queues and table indexes opened from it | yes, in `db.tx`                                   |
-| a bucket of `kv.db` and a queue of `jobs.db`                               | no: `store.tx` refuses the second file's handle   |
-| a file in `blobs/`, its metadata in a bucket, its document in an index     | no: three files, each written whole on its own    |
-| a backup                                                                   | one moment of the whole store, every file at once |
+| What                                                                        | Commits together                                  |
+|-----------------------------------------------------------------------------|---------------------------------------------------|
+| buckets of `kv.db`                                                          | yes, in `store.tx`                                |
+| queues of `jobs.db`                                                         | yes, in `store.tx`                                |
+| a database's rows and the buckets, queues, files and indexes opened from it | yes, in `db.tx`                                   |
+| a bucket of `kv.db` and a queue of `jobs.db`                                | no: `store.tx` refuses the second file's handle   |
+| a file in `blobs/`, its metadata in a bucket, its document in an index      | no: three files, each written whole on its own    |
+| a backup                                                                    | one moment of the whole store, every file at once |
 
 Where no commit covers them, write in an order a crash can be repaired from:
 the file first, then the metadata that names it, then the index. A crash

@@ -15,7 +15,7 @@ use crate::{Error, ErrorKind, Result};
 /// or older, under the mark's folder.
 macro_rules! hidden {
     () => {
-        "exists (select 1 from cleared as c where c.set_id = f.set_id and f.revision <= c.revision
+        "exists (select 1 from _tinystore_blobs_cleared as c where c.set_id = f.set_id and f.revision <= c.revision
             and substr(f.path, 1, length(c.prefix)) = c.prefix)"
     };
 }
@@ -122,21 +122,23 @@ impl Condition {
 const SELECT_CURRENT: &str = concat!(
     "select f.content, f.size, f.sha256, f.type, f.expires, f.meta, ",
     hidden!(),
-    " from files as f where f.set_id = ?1 and f.path = ?2"
+    " from _tinystore_blobs_files as f where f.set_id = ?1 and f.path = ?2"
 );
-const INSERT_CONTENT: &str = "insert into contents (id, names, size, sha256, inline) values (?1, 1, ?2, ?3, ?4)";
-const INSERT_BODY: &str = "insert into bodies (id, bytes) values (?1, ?2)";
-const NAME_CONTENT: &str = "update contents set names = names + 1 where id = ?1 returning names";
+const INSERT_CONTENT: &str =
+    "insert into _tinystore_blobs_contents (id, names, size, sha256, inline) values (?1, 1, ?2, ?3, ?4)";
+const INSERT_BODY: &str = "insert into _tinystore_blobs_bodies (id, bytes) values (?1, ?2)";
+const NAME_CONTENT: &str = "update _tinystore_blobs_contents set names = names + 1 where id = ?1 returning names";
 const UPSERT_FILE: &str =
-    "insert into files (set_id, path, revision, content, size, sha256, type, modified, expires, meta)
+    "insert into _tinystore_blobs_files (set_id, path, revision, content, size, sha256, type, modified, expires, meta)
     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
     on conflict (set_id, path) do update set revision = excluded.revision, content = excluded.content,
         size = excluded.size, sha256 = excluded.sha256, type = excluded.type, modified = excluded.modified,
         expires = excluded.expires, meta = excluded.meta";
-const DELETE_FILE: &str = "delete from files where set_id = ?1 and path = ?2 returning content";
-const UNNAME_CONTENT: &str = "update contents set names = names - ?2 where id = ?1 returning names, inline";
-const DROP_CONTENT: &str = "delete from contents where id = ?1";
-const DROP_BODY: &str = "delete from bodies where id = ?1";
+const DELETE_FILE: &str = "delete from _tinystore_blobs_files where set_id = ?1 and path = ?2 returning content";
+const UNNAME_CONTENT: &str =
+    "update _tinystore_blobs_contents set names = names - ?2 where id = ?1 returning names, inline";
+const DROP_CONTENT: &str = "delete from _tinystore_blobs_contents where id = ?1";
+const DROP_BODY: &str = "delete from _tinystore_blobs_bodies where id = ?1";
 
 /// One write's transaction, and the files of the contents it left without
 /// names, which go once it commits.

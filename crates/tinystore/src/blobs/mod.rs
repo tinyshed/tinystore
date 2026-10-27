@@ -29,6 +29,8 @@ mod maintain;
 mod paths;
 mod read;
 mod scrub;
+#[cfg(feature = "sql")]
+mod tx;
 mod upload;
 
 // What the command line lists of a store's names.
@@ -45,6 +47,8 @@ pub use maintain::{Maintenance, maintain};
 pub use read::StoredFile;
 #[cfg(feature = "async")]
 pub(crate) use read::{PIECE, position_after};
+#[cfg(feature = "sql")]
+pub use tx::TxFiles;
 pub use upload::Upload;
 
 use crate::Store;

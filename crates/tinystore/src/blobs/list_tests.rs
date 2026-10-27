@@ -65,13 +65,13 @@ fn a_clear_past_its_bound_hides_every_file_at_once_and_maintenance_removes_them(
                 let id = 1_000_000 + n;
                 let sha = Sha256::digest([0_u8]).to_vec();
                 tx.execute(
-                    "insert into contents (id, names, size, sha256, inline) values (?1, 1, 1, ?2, 1)",
+                    "insert into _tinystore_blobs_contents (id, names, size, sha256, inline) values (?1, 1, 1, ?2, 1)",
                     params![id, sha],
                 )
-                .and_then(|_| tx.execute("insert into bodies (id, bytes) values (?1, x'00')", [id]))
+                .and_then(|_| tx.execute("insert into _tinystore_blobs_bodies (id, bytes) values (?1, x'00')", [id]))
                 .and_then(|_| {
                     tx.execute(
-                        "insert into files (set_id, path, revision, content, size, sha256, type, modified)
+                        "insert into _tinystore_blobs_files (set_id, path, revision, content, size, sha256, type, modified)
                                 values (?1, ?2, 0, ?3, 1, ?4, 'application/octet-stream', 0)",
                         params![set, format!("big/{n:05}"), id, sha],
                     )
@@ -104,9 +104,9 @@ fn a_write_after_the_file_moved_under_the_engine_is_newer_than_every_clear_in_it
     f.blobs()
         .file
         .write(0, move |tx| {
-            tx.execute("update meta set value = 90000 where name = 'revision'", [])
+            tx.execute("update _tinystore_blobs_meta set value = 90000 where name = 'revision'", [])
                 .and_then(|_| {
-                    tx.execute("insert into cleared (set_id, prefix, revision) values (?1, 'users/42/', 90000)", [set])
+                    tx.execute("insert into _tinystore_blobs_cleared (set_id, prefix, revision) values (?1, 'users/42/', 90000)", [set])
                 })
                 .map(drop)
                 .map_err(|error| crate::Error::internal(error.to_string()))

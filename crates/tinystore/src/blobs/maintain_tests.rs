@@ -31,8 +31,8 @@ fn bytes_no_file_names_are_removed_when_their_removal_failed_before() {
     f.blobs()
         .file
         .write(0, move |tx| {
-            tx.execute("delete from files", [])
-                .and_then(|_| tx.execute("update contents set names = 0 where id = ?1", [content]))
+            tx.execute("delete from _tinystore_blobs_files", [])
+                .and_then(|_| tx.execute("update _tinystore_blobs_contents set names = 0 where id = ?1", [content]))
                 .map(drop)
                 .map_err(|error| Error::internal(error.to_string()))
         })
@@ -118,9 +118,12 @@ fn a_changed_inline_body_is_found_by_the_scrub() {
     f.blobs()
         .file
         .write(0, |tx| {
-            tx.execute("update bodies set bytes = ?1", params![bytes(1000).iter().map(|b| b ^ 1).collect::<Vec<u8>>()])
-                .map(drop)
-                .map_err(|error| Error::internal(error.to_string()))
+            tx.execute(
+                "update _tinystore_blobs_bodies set bytes = ?1",
+                params![bytes(1000).iter().map(|b| b ^ 1).collect::<Vec<u8>>()],
+            )
+            .map(drop)
+            .map_err(|error| Error::internal(error.to_string()))
         })
         .unwrap();
     assert_eq!(maintain(&f.store).unwrap().damaged, 1);

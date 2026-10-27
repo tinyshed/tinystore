@@ -114,6 +114,12 @@ impl File {
         self.copy.load(Ordering::SeqCst)
     }
 
+    /// How far its commits go, as its engine opened it.
+    #[cfg(feature = "blobs")]
+    pub(crate) fn durability(&self) -> super::Durability {
+        self.config.durability
+    }
+
     /// Opens the file with each commit handed to `observer`, which is first
     /// handed what the WAL holds past the observer's last position.
     pub(crate) fn open_observed(

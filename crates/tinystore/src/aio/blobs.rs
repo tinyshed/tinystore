@@ -89,7 +89,13 @@ pub struct FilesBuilder<'s> {
     pool: &'s Arc<Pool>,
 }
 
-impl FilesBuilder<'_> {
+impl<'s> FilesBuilder<'s> {
+    /// The set of files `builder` opens, its calls run on `pool`.
+    #[cfg(feature = "sql")]
+    pub(crate) fn new(builder: crate::blobs::FilesBuilder<'s>, pool: &'s Arc<Pool>) -> Self {
+        FilesBuilder { builder, pool }
+    }
+
     /// The term of every file written without its own, counted from its
     /// write; not a ceiling.
     pub fn ttl(mut self, ttl: Duration) -> Self {
@@ -517,6 +523,21 @@ fn on_the_pool<T: Send + 'static>(
         Ok(outcome) => answer.send(outcome),
         Err(payload) => answer.panicked(payload),
     }));
+}
+
+#[cfg(feature = "sql")]
+impl crate::transaction::sealed::Sealed for Files {}
+
+/// A set of files whose calls are awaited joins a database's transaction as
+/// the blocking one does: `tx.with(&packages)` inside `db.tx`'s closure gives
+/// its blocking calls there.
+#[cfg(feature = "sql")]
+impl crate::TxHandle for Files {
+    type InTx<'h> = crate::blobs::TxFiles<'h>;
+
+    fn in_tx<'h>(&'h self, tx: &'h crate::Transaction<'h>) -> crate::blobs::TxFiles<'h> {
+        crate::TxHandle::in_tx(&self.blocking, tx)
+    }
 }
 
 #[cfg(test)]
