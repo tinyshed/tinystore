@@ -10,8 +10,9 @@ use super::index::Index;
 use crate::{Durability, Options, Store};
 
 pub(crate) struct Fixture {
-    pub(crate) dir: tempfile::TempDir,
     pub(crate) store: Store,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    pub(crate) dir: tempfile::TempDir,
 }
 
 /// A store without background work, so that a test packs and purges itself.

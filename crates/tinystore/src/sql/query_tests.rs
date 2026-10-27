@@ -195,8 +195,9 @@ fn note(id: &str, author_id: i64, title: &str) -> Note {
 }
 
 struct Fixture {
-    _dir: tempfile::TempDir,
     store: Store,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    _dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {

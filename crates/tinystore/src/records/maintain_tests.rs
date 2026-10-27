@@ -194,13 +194,14 @@ fn the_pages_its_heads_left_go_back_once_no_append_took_them_for_a_while_and_eve
 /// its passes run, and what they cost.
 struct Way {
     name: &'static str,
-    _dir: tempfile::TempDir,
     store: Store,
     api: crate::records::Events,
     pass: fn(&Records) -> Result<()>,
     passes: Vec<Duration>,
     appends: Duration,
     written: u64,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    _dir: tempfile::TempDir,
 }
 
 impl Way {

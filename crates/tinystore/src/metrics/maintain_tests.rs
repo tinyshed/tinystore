@@ -117,12 +117,13 @@ fn heads_a_bulk_load_grew_leave_their_pages_once_packed() {
 /// its passes run, and what they cost.
 struct Way {
     name: &'static str,
-    dir: tempfile::TempDir,
     store: Store,
     pass: fn(&Store) -> crate::Result<()>,
     passes: Vec<Duration>,
     ingests: Duration,
     written: u64,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    dir: tempfile::TempDir,
 }
 
 impl Way {

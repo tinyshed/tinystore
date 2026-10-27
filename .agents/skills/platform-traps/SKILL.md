@@ -14,6 +14,11 @@ Each line cost a debugging session once. The fix named is the one in the code.
   `ERROR_ACCESS_DENIED` or `ERROR_SHARING_VIOLATION`. Try again for a moment,
   as blobs' rename does (`crates/tinystore/src/blobs/disk.rs`); a reader
   opens, reads and closes at once.
+- **A struct's fields drop in the order they are declared**: a test's
+  fixture whose `TempDir` came before its `Store` removed the directory while
+  the store held its files, which Windows refuses and `TempDir`'s drop
+  ignores, and 238,000 stores, 19 GB, stayed in `%TEMP%`. A `TempDir` is a
+  struct's last field; locals drop the other way, last declared first.
 - **A directory's `LOCK` is a file opened with no sharing**; a sharing
   violation means another store holds it, and the system lets go when the
   process dies.

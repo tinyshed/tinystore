@@ -36,9 +36,10 @@ struct Article {
 }
 
 struct Fixture {
-    dir: tempfile::TempDir,
     store: Store,
     db: Database,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {

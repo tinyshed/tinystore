@@ -15,9 +15,10 @@ const PLUGINS: &str = "create table plugins (file text primary key) strict";
 const PACKAGE: usize = 100 << 10;
 
 struct Fixture {
-    dir: tempfile::TempDir,
     store: Store,
     clock: Arc<TestClock>,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {

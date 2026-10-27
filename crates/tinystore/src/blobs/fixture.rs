@@ -12,10 +12,11 @@ use crate::{Durability, Options, Store, TestClock};
 pub(crate) const HOUR: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) struct Fixture {
-    pub(crate) dir: tempfile::TempDir,
     pub(crate) store: Store,
     pub(crate) clock: Arc<TestClock>,
     durability: Option<Durability>,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    pub(crate) dir: tempfile::TempDir,
 }
 
 /// A store without background work, on a clock the test moves.

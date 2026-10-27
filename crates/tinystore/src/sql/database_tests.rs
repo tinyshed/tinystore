@@ -22,9 +22,10 @@ const NOTES: &str = "create table notes (
 const TAGS: &str = "alter table notes add column due text";
 
 struct Fixture {
-    dir: tempfile::TempDir,
     store: Store,
     clock: Arc<TestClock>,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {

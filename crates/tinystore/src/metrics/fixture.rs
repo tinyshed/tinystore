@@ -15,9 +15,10 @@ pub(crate) const HOUR: Duration = Duration::from_hours(1);
 pub(crate) const DAY: Duration = Duration::from_hours(24);
 
 pub(crate) struct Fixture {
-    pub(crate) dir: tempfile::TempDir,
     pub(crate) store: Store,
     pub(crate) clock: Arc<TestClock>,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    pub(crate) dir: tempfile::TempDir,
 }
 
 /// A store without background work, its clock at an hour's start.

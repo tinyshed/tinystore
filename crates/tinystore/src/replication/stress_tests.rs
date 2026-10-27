@@ -41,9 +41,10 @@ const D: usize = 4;
 /// A node of the run: the options it opens with again after each restart.
 struct Peer {
     name: &'static str,
-    dir: tempfile::TempDir,
     node: Node,
     store: RwLock<Option<Store>>,
+    // Last: fields drop in order, and Windows removes no file the store still holds.
+    dir: tempfile::TempDir,
 }
 
 impl Peer {
