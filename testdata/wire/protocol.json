@@ -64,6 +64,9 @@
     },
     {
       "fields": {
+        "database": {
+          "uint": "407"
+        },
         "maxFileSize": {
           "uint": "307"
         },
@@ -74,7 +77,7 @@
           "uint": "1500"
         }
       },
-      "hex": "8301a46e616d6502cd05dc03cd0133",
+      "hex": "8401a46e616d6502cd05dc03cd013304cd0197",
       "message": "blobs.Open",
       "name": "blobs.Open with every field"
     },

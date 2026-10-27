@@ -10,6 +10,7 @@ message blobs.Open {
   1 name: str           # [a-z0-9][a-z0-9_-]{0,63}
   2 ttl: duration?      # the term of every file written without its own
   3 maxFileSize: uint?  # the largest file a write may leave
+  4 database: uint?     # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
 }
 
 # Where a call stands: the files, a folder's segments, a path within it.

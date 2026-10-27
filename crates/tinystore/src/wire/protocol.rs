@@ -170,6 +170,8 @@ pub(crate) struct BlobsOpen {
     pub(crate) ttl: Option<u64>,
     /// The largest file a write may leave.
     pub(crate) max_file_size: Option<u64>,
+    /// A database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent.
+    pub(crate) database: Option<u64>,
 }
 
 #[cfg(feature = "blobs")]
@@ -184,6 +186,7 @@ impl Message for BlobsOpen {
                 1 => message.name = codec::str(r, "name")?,
                 2 => message.ttl = Some(codec::uint(r, "ttl")?),
                 3 => message.max_file_size = Some(codec::uint(r, "maxFileSize")?),
+                4 => message.database = Some(codec::uint(r, "database")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -204,6 +207,10 @@ impl Message for BlobsOpen {
             map.field(out, 3);
             codec::write_uint(out, max_file_size);
         }
+        if let Some(database) = &self.database {
+            map.field(out, 4);
+            codec::write_uint(out, database);
+        }
         map.close(out);
     }
 
@@ -212,12 +219,14 @@ impl Message for BlobsOpen {
             + 1 + 5 + self.name.len()
             + self.ttl.map_or(0, |_| 10)
             + self.max_file_size.map_or(0, |_| 10)
+            + self.database.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
         self.name.is_empty()
             && self.ttl.is_none()
             && self.max_file_size.is_none()
+            && self.database.is_none()
     }
 }
 

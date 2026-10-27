@@ -842,3 +842,41 @@ fn rows_written_as_they_are_read_are_the_message_its_codec_writes() {
         assert_eq!(written.parts(1 << 20).unwrap(), row_parts(kept, 1 << 20).unwrap(), "{text}");
     }
 }
+
+// contract: DUR-06
+#[cfg(feature = "blobs")]
+#[test]
+fn files_opened_from_a_database_write_inside_its_transactions() {
+    use crate::wire::protocol::{BlobsAt, BlobsGot, BlobsHead, BlobsOpen, BlobsWrite, BlobsWritten};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let database = open(&mut client);
+    let files_open = BlobsOpen { name: "packages".to_owned(), database: Some(database), ..BlobsOpen::default() };
+    let packages = client.call::<Handle>(method::BLOBS_OPEN, &files_open).unwrap().handle;
+    let package = vec![7_u8; 40 << 10];
+    let put =
+        BlobsWrite { handle: packages, path: "stripe.js".to_owned(), bytes: package.clone(), ..BlobsWrite::default() };
+    let at = BlobsAt { handle: packages, path: "stripe.js".to_owned(), ..BlobsAt::default() };
+
+    for commit in [false, true] {
+        let stream = begin(&mut client, database);
+        call(&mut client, stream, "insert into notes (id, title) values ('n1', 'a')", Vec::new(), "exec");
+        let written =
+            BlobsWritten::decode(&nested(&mut client, stream, method::BLOBS_PUT, &put).body.unwrap()).unwrap();
+        assert_eq!(written.info.unwrap().size, package.len() as u64);
+        let seen = BlobsHead::decode(&nested(&mut client, stream, method::BLOBS_HEAD, &at).body.unwrap()).unwrap();
+        assert!(seen.info.is_some(), "a head sees the transaction's own file");
+        let refused = nested(&mut client, stream, method::BLOBS_GET, &at).failure.unwrap();
+        assert!(refused.message.contains("does not run inside a transaction"), "{}", refused.message);
+        assert_eq!(end(&mut client, stream, commit).flags, frame::END);
+
+        let got = client.call::<BlobsGot>(method::BLOBS_GET, &at).unwrap();
+        let rows = query(&mut client, database, "select count(*) from notes", "scalar").rows;
+        assert_eq!((got.info.is_some(), rows), (commit, vec![vec![Cell::Int(i64::from(commit))]]), "commit {commit}");
+        if commit {
+            assert_eq!(got.bytes, package);
+        }
+    }
+    assert_eq!(client.pipe.streams(), 0);
+}

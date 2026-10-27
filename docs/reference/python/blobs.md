@@ -45,11 +45,15 @@ The files of a folder and their bytes, as it is now.
 ```python
 class Files:
     name: str
+    opener: Opener  # what opens the files' handle on a connection
+    home: Home | None  # the database whose file keeps the files; the store's own when None
 ```
 
 A named set of files by path, or a folder of it, whose calls are the folder's.
 
-A path in a folder is the folder's segments and then its own.
+A path in a folder is the folder's segments and then its own. Files come
+from ``store.files`` and ``db.files``; inside a database's transaction,
+from ``tx.with_(files)``, whose writes go through the transaction.
 
 ### Files.folder
 
@@ -58,6 +62,14 @@ def folder(*segments: str | int) -> Files: ...
 ```
 
 The folder of these segments, one each: ``folder("users", 42)`` is users/42, never users/420.
+
+### Files.through
+
+```python
+def through(via: Via) -> Files: ...
+```
+
+The same files, their calls through a database's transaction.
 
 ### Files.put
 

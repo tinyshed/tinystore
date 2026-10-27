@@ -152,18 +152,27 @@ func (n limit) list(l *wire.BlobsList) { v := uint64(max(int(n), 0)); l.Limit = 
 
 // Files is a named set of files by path, or a folder of it, whose calls are
 // the folder's: a path in a folder is the folder's segments and then its own.
+// Inside a database's transaction, from In, its writes go through it.
 type Files struct {
 	store  *core.Store
 	name   string
 	opener *core.Opener
 	via    core.Via
 	folder []string
+	home   core.Database
+	// inside says its calls go through a database's transaction
+	inside bool
+	// err is what In refused, which every call answers
+	err error
 }
 
-// OpenFiles opens a named set of files on the store. It opens at its first
-// call; its error is a name or an option it refuses.
+// OpenFiles opens a named set of files on the store, or on a database whose
+// file then keeps it: its writes commit with the database's rows in a
+// transaction, through In. It opens at its first call; its error is a name or
+// an option it refuses.
 //
 //	reports, err := blobs.OpenFiles(store, "reports", blobs.TTL(24*time.Hour), blobs.MaxFileSize(2<<30))
+//	packages, err := blobs.OpenFiles(db, "packages")
 func OpenFiles(home tinystore.Home, name string, opts ...Option) (*Files, error) {
 	var o openOptions
 	for _, opt := range opts {
@@ -181,11 +190,42 @@ func OpenFiles(home tinystore.Home, name string, opts ...Option) (*Files, error)
 		message.Ttl = &ms
 	}
 	of := home.CoreHome()
-	return &Files{
+	files := &Files{
 		store: of.Store, name: name,
 		opener: &core.Opener{Method: wire.MethodBlobsOpen, Body: wire.Encode(&message)},
 		via:    core.ViaLink{Link: of.Store.Link},
-	}, nil
+	}
+	if db := of.Database; db != nil {
+		files.home, files.via = db, db.Via("files "+name)
+		files.opener = db.Keep(wire.MethodBlobsOpen, wire.Encode(&message), func(ctx context.Context, c *core.Connection) ([]byte, error) {
+			handle, err := db.Handle(ctx, c)
+			if err != nil {
+				return nil, err
+			}
+			kept := message
+			kept.Database = &handle
+			return wire.Encode(&kept), nil
+		})
+	}
+	return files, nil
+}
+
+// In is the files inside a database's transaction: their writes, Put,
+// Create, Delete, Copy and Rename, commit with its rows, and Head sees what
+// it wrote. Files kept elsewhere are refused at their first call.
+func (f *Files) In(tx tinystore.InTx) *Files {
+	in := *f
+	of := tx.CoreTx()
+	switch {
+	case of.Database == nil:
+		in.err = core.Errorf(core.Invalid, "files %s: a store's transaction takes in no files: open them from a database", f.name)
+	case f.home == nil || f.home != of.Database.Database():
+		in.err = core.Errorf(core.Invalid, "files %s: kept outside the database, in a transaction of %s: open them from the database",
+			f.name, of.Database.Database().Describe())
+	default:
+		in.via, in.inside = of.Database.Via(), true
+	}
+	return &in
 }
 
 // Name is the set's name.
@@ -208,11 +248,28 @@ func (f *Files) Folder(segments ...any) *Files {
 			folder = append(folder, text)
 		}
 	}
-	return &Files{f.store, f.name, f.opener, f.via, folder}
+	in := *f
+	in.folder = folder
+	return &in
 }
 
 func (f *Files) call(ctx context.Context, method uint16, body func(handle uint64) []byte, idempotence core.Idempotence) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.via.Call(ctx, f.opener, method, body, idempotence)
+}
+
+// outside refuses what streams a file's bytes inside a transaction, which
+// takes a put's bytes whole.
+func (f *Files) outside(what string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if f.inside {
+		return core.Errorf(core.Invalid, "files %s: %s inside a transaction: put a file's bytes whole, and read them after its commit", f.name, what)
+	}
+	return nil
 }
 
 // Put writes the file whole and replaces whatever the path held. It returns

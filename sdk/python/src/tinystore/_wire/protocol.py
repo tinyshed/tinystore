@@ -291,6 +291,10 @@ def _write_blobs_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(3)
         w.uint(x)
         n += 1
+    if (x := v.get("database")) is not None:
+        w.uint(4)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -305,6 +309,8 @@ def _read_blobs_open(r: Reader) -> dict[str, Any]:
                 read["ttl"] = r.uint()
             case 3:
                 read["max_file_size"] = r.uint()
+            case 4:
+                read["database"] = r.uint()
             case _:
                 r.skip()
     r.leave()
@@ -321,6 +327,9 @@ BlobsOpen = Message(
         "ttl": (2, uint),
         # the largest file a write may leave
         "max_file_size": (3, uint),
+        # a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions;
+        # blobs.db when absent
+        "database": (4, uint),
     },
     _write_blobs_open,
     _read_blobs_open,

@@ -779,6 +779,8 @@ type BlobsOpen struct {
 	Ttl *uint64 `wire:"2,ttl"`
 	// the largest file a write may leave
 	MaxFileSize *uint64 `wire:"3,maxFileSize"`
+	// a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent
+	Database *uint64 `wire:"4,database"`
 }
 
 func (m BlobsOpen) Write(w *Writer) {
@@ -799,6 +801,11 @@ func (m BlobsOpen) Write(w *Writer) {
 		w.Uint(*m.MaxFileSize)
 		n++
 	}
+	if m.Database != nil {
+		w.Uint(4)
+		w.Uint(*m.Database)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -815,6 +822,9 @@ func (m *BlobsOpen) Read(r *Reader) {
 		case 3:
 			v := r.Uint()
 			m.MaxFileSize = &v
+		case 4:
+			v := r.Uint()
+			m.Database = &v
 		default:
 			r.Skip()
 		}
@@ -826,7 +836,8 @@ func (m *BlobsOpen) Read(r *Reader) {
 func (m BlobsOpen) IsZero() bool {
 	return m.Name == "" &&
 		m.Ttl == nil &&
-		m.MaxFileSize == nil
+		m.MaxFileSize == nil &&
+		m.Database == nil
 }
 
 // BlobsAt is the schema's blobs.At.

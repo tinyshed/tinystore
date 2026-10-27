@@ -115,7 +115,43 @@ calls: expiry, versions, workers, retries. What differs is where they live:
 
 A set of files can live in the database too, so that a file and the row that
 names it commit together. A plugin's package and its row in `plugins`, an
-avatar and its user's row: both written, or neither. Only Rust has it so far.
+avatar and its user's row: both written, or neither.
+
+```ts
+const packages = db.files('packages')
+
+await db.tx(async tx => {
+	await tx.exec`insert into plugins (file) values (${'stripe-1.0.0.js'})`
+	await tx.with(packages).put('stripe-1.0.0.js', pkg) // committed with the row, or not at all
+})
+const file = await packages.get('stripe-1.0.0.js')
+```
+
+```python
+packages = db.files("packages")
+
+
+async def install(tx: tinystore.SqlTx) -> None:
+    await tx.exec("insert into plugins (file) values (?)", "stripe-1.0.0.js")
+    await tx.with_(packages).put("stripe-1.0.0.js", package)  # committed with the row, or not at all
+
+
+await db.tx(install)
+file = await packages.get("stripe-1.0.0.js")
+```
+
+```go
+packages, err := blobs.OpenFiles(db, "packages")
+
+err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+	if _, err := tx.Exec(ctx, "insert into plugins (file) values (?)", "stripe-1.0.0.js"); err != nil {
+		return err
+	}
+	_, err := packages.In(tx).Put(ctx, "stripe-1.0.0.js", bytes.NewReader(pkg)) // committed with the row, or not at all
+	return err
+})
+file, found, err := packages.Get(ctx, "stripe-1.0.0.js")
+```
 
 ```rust
 let db = store.database("app").migrations("migrations").open()?;
@@ -136,8 +172,10 @@ let mut file = packages.get("stripe-1.0.0.js")?.expect("committed with its row")
   names them. If the transaction rolls back, the bytes are removed at once.
   If the process dies before the commit, the bytes stay unnamed, and the next
   open removes them. A row never names bytes that are not there.
-- An upload streams outside a transaction only. Inside one, pass the bytes to
-  `put`.
+- Inside a transaction, `put`, `create`, `delete`, `copy` and `rename` join
+  it, and `head` sees what it wrote. An upload streams outside a transaction
+  only: inside one, pass the bytes to `put`, which sends them whole. Read a
+  file's bytes after the commit.
 - Outside a transaction, the files have every call of [Blobs](../blobs/README.md),
   and they share the database's writer.
 - A backup copies the files' bytes with the rows that name them.

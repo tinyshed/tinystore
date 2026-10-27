@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { Files, type FilesOptions, filesOpen, filesParts } from './blobs.ts'
 import { type Channel, channelParts, type TxChannel, txChannel } from './channels.ts'
 import type { Connection, Durability, Idempotence, Link } from './connection.ts'
 import { checkDurability, download } from './connection.ts'
@@ -775,6 +776,22 @@ export class Database implements Runner, Home {
 	}
 
 	/**
+	 * A set of files kept in this database's file, as `store.files` keeps one
+	 * in blobs.db: the same calls, and its writes commit with the rows in
+	 * `db.tx`, through `tx.with(files)`. A file's bytes past 16 KiB lie in the
+	 * folder beside the database's file.
+	 *
+	 *     const packages = db.files('packages', { maxFileSize: '10MiB' })
+	 */
+	files(name: string, options?: FilesOptions): Files {
+		const bytes = filesOpen(name, options)
+		const open = this.keep(methods['blobs.open'], bytes, async connection =>
+			filesOpen(name, options, await this.handle(connection)),
+		)
+		return new Files(this.#link, name, open, [], this)
+	}
+
+	/**
 	 * An index of a table of this database, kept in its file: its rows found
 	 * again by their words, vectors or both, each hit's value its row as
 	 * `all` reads it. The table owns the rows and the index follows them:
@@ -1059,9 +1076,10 @@ export class SqlTx implements Runner {
 	with<T>(bucket: Bucket<T>): Bucket<T>
 	with<T>(queue: Queue<T>): TxQueue<T>
 	with<T>(channel: Channel<T>): TxChannel<T>
+	with(files: Files): Files
 	with(
-		handle: Bucket<unknown> | Queue<unknown> | Channel<unknown>,
-	): Bucket<unknown> | TxQueue<unknown> | TxChannel<unknown> {
+		handle: Bucket<unknown> | Queue<unknown> | Channel<unknown> | Files,
+	): Bucket<unknown> | TxQueue<unknown> | TxChannel<unknown> | Files {
 		const channel = channelParts(handle)
 		if (channel !== undefined) {
 			// a message published here is handed over once the transaction commits, at the writer
@@ -1080,8 +1098,13 @@ export class SqlTx implements Runner {
 			this.#takes(queue.source.home, queue.source.open, `jobs queue ${queue.name}`)
 			return queueVia(queue, this.#via)
 		}
+		const files = filesParts(handle)
+		if (files !== undefined) {
+			this.#takes(files.home, files.open, `files ${files.name}`)
+			return files.inside(this.#via)
+		}
 		throw new InvalidError(
-			`${this.describe}: a transaction takes in a bucket or a queue opened from its database`,
+			`${this.describe}: a transaction takes in a bucket, a queue or files opened from its database`,
 		)
 	}
 

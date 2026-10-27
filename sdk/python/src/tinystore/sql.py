@@ -43,6 +43,7 @@ from ._wire.protocol import (
     SqlTxOpen,
     methods,
 )
+from .blobs import Files, Size, files_open
 from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
 from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
@@ -676,6 +677,23 @@ class Database:
         parts = Parts(self._link, name, opener, "kv.bucket.open", (), values_of(of), self)
         return Bucket(parts, self.via(f"kv bucket {name}"))
 
+    def files(self, name: str, *, ttl: Duration | None = None, max_file_size: Size | None = None) -> Files:
+        """A set of files kept in this database's file, as ``store.files`` keeps one in blobs.db.
+
+        The same calls, and its writes commit with the rows in ``db.tx``,
+        through ``tx.with_(files)``. A file's bytes past 16 KiB lie in the
+        folder beside the database's file::
+
+            packages = db.files("packages", max_file_size="10MiB")
+        """
+        body = files_open(name, ttl, max_file_size)
+
+        async def make(connection: Connection) -> bytes:
+            return files_open(name, ttl, max_file_size, await self.handle(connection))
+
+        opener = self.keep(methods["blobs.open"], body, make)
+        return Files(self._link, name, opener, (), self)
+
     @overload
     def search_index[T](
         self,
@@ -1108,8 +1126,12 @@ class SqlTx:
     def with_[T](self, handle: Queue[T]) -> TxQueue[T]: ...
     @overload
     def with_[T](self, handle: Channel[T]) -> TxChannel[T]: ...
-    def with_(self, handle: Bucket[Any] | Queue[Any] | Channel[Any]) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any]:
-        """A bucket or a queue opened from this database, or a channel, inside the transaction.
+    @overload
+    def with_(self, handle: Files) -> Files: ...
+    def with_(
+        self, handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files
+    ) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files:
+        """A bucket, a queue or files opened from this database, or a channel, inside the transaction.
 
         What it writes commits with the rows or not at all, and what it reads
         sees what the transaction wrote; a message is handed over at the commit.
@@ -1124,11 +1146,16 @@ class SqlTx:
             parts = handle.parts
             self._takes(parts.home, parts.opener, f"kv bucket {parts.name}")
             return Bucket(parts, self._via)
-        if isinstance(handle, Queue):  # pyright: ignore[reportUnnecessaryIsInstance]
+        if isinstance(handle, Queue):
             source = handle.source
             self._takes(source.home, source.opener, f"jobs queue {handle.name}")
             return TxQueue(Queue(replace(source, via=self._via), handle.name))
-        raise InvalidError(f"{self.describe}: a transaction takes in a bucket or a queue opened from its database")
+        if isinstance(handle, Files):  # pyright: ignore[reportUnnecessaryIsInstance]
+            self._takes(handle.home, handle.opener, f"files {handle.name}")
+            return handle.through(self._via)
+        raise InvalidError(
+            f"{self.describe}: a transaction takes in a bucket, a queue or files opened from its database"
+        )
 
     @overload
     async def all[T](self, of: type[T], statement: Statement, /, *values: Any) -> list[T]: ...

@@ -16,7 +16,7 @@ use super::protocol::{
     BlobsAt, BlobsDelete, BlobsExpire, BlobsFolder, BlobsFound, BlobsGot, BlobsHead, BlobsInfo, BlobsList, BlobsMove,
     BlobsOpen, BlobsPage, BlobsPiece, BlobsRead, BlobsUsage, BlobsWrite, BlobsWritten, Empty, Failure, Handle, method,
 };
-use super::{Link, Route};
+use super::{Lent, Link, Route};
 use crate::blobs::{FileCall, FileInfo, Files, StoredFile, Upload};
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, unix_millis};
@@ -91,9 +91,16 @@ impl Handles {
 }
 
 /// Answers a call of one message: everything but a read and an upload.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], max_body: usize) -> Answered {
+pub(crate) fn call(
+    store: &Store,
+    handles: &Handles,
+    lent: Lent<'_>,
+    called: u16,
+    body: &[u8],
+    max_body: usize,
+) -> Answered {
     match called {
-        method::BLOBS_OPEN => open(store, handles, BlobsOpen::decode(body)?),
+        method::BLOBS_OPEN => open(store, handles, lent, BlobsOpen::decode(body)?),
         method::BLOBS_PUT => put(handles, BlobsWrite::decode(body)?),
         method::BLOBS_GET => get(handles, &BlobsAt::decode(body)?, max_body),
         method::BLOBS_HEAD => head(handles, &BlobsAt::decode(body)?),
@@ -107,8 +114,70 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], m
     }
 }
 
-fn open(store: &Store, handles: &Handles, asked: BlobsOpen) -> Answered {
-    let mut files = store.files(&asked.name);
+/// Answers a call made inside a database's transaction, on its stream: a
+/// write of files kept in the database's file commits with its rows.
+#[cfg(feature = "sql")]
+pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u16, body: &[u8]) -> Answered {
+    use crate::TxHandle as _;
+    match called {
+        method::BLOBS_PUT => {
+            let mut asked = BlobsWrite::decode(body)?;
+            let files = handles.at(asked.handle, &asked.folder)?;
+            let bytes = std::mem::take(&mut asked.bytes);
+            let call = options(files.in_tx(tx).key(&asked.path), &asked);
+            let info = if asked.create {
+                call.create(&bytes)?.then(|| files.in_tx(tx).head(&asked.path)).transpose()?.flatten()
+            } else {
+                Some(call.put(&bytes)?)
+            };
+            Ok(BlobsWritten { info: info.map(info_of) }.encode())
+        }
+        method::BLOBS_HEAD => {
+            let asked = BlobsAt::decode(body)?;
+            let info = handles.at(asked.handle, &asked.folder)?.in_tx(tx).head(&asked.path)?;
+            Ok(BlobsHead { info: info.map(info_of) }.encode())
+        }
+        method::BLOBS_DELETE => {
+            let asked = BlobsDelete::decode(body)?;
+            let files = handles.at(asked.handle, &asked.folder)?;
+            let mut call = files.in_tx(tx).key(&asked.path);
+            if let Some(etag) = asked.if_match {
+                call = call.if_match(etag);
+            }
+            call.delete()?;
+            Ok(Empty {}.encode())
+        }
+        method::BLOBS_COPY | method::BLOBS_RENAME => {
+            let asked = BlobsMove::decode(body)?;
+            let files = handles.at(asked.handle, &asked.folder)?;
+            let mut call = files.in_tx(tx).key(&asked.to);
+            if let Some(etag) = asked.if_match {
+                call = call.if_match(etag);
+            }
+            let info = if called == method::BLOBS_COPY {
+                call.copy_from(&asked.from)?
+            } else {
+                call.rename_from(&asked.from)?
+            };
+            Ok(info_of(info).encode())
+        }
+        other => Err(Failure::invalid(format!(
+            "method {other:#06x} does not run inside a transaction: files join one with put, head, delete, copy              and rename"
+        ))),
+    }
+}
+
+fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: BlobsOpen) -> Answered {
+    let mut files = match asked.database {
+        #[cfg(feature = "sql")]
+        Some(database) => crate::blobs::FilesBuilder::in_file(lent(database)?, &asked.name),
+        #[cfg(not(feature = "sql"))]
+        Some(database) => {
+            let _ = lent;
+            return Err(Failure::invalid(format!("database {database}: this server keeps no databases")));
+        }
+        None => store.files(&asked.name),
+    };
     if let Some(ttl) = asked.ttl {
         files = files.ttl(Duration::from_millis(ttl));
     }

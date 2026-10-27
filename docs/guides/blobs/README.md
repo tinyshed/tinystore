@@ -51,8 +51,8 @@ avatars.folder("users").folder(42).clear()?; // every file of user 42
 - A copy shares the bytes and outlives its source (contract BLOB-05).
 - A path is its own bytes on every file system: `Photo.jpg` and `photo.jpg`
   are two files everywhere (contract BLOB-08).
-- A set of files opened from a database, `db.files(…)` in Rust, commits with
-  the database's rows in its transaction (contract DUR-06). See
+- A set of files opened from a database, `db.files(…)`, commits with the
+  database's rows in its transaction (contract DUR-06). See
   [Files in a database](../sql/buckets-and-queues.md#files-in-a-database).
 
 ## In these guides

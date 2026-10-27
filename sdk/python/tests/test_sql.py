@@ -475,6 +475,32 @@ async def test_a_bucket_and_a_queue_opened_from_the_database_commit_with_its_row
     assert not await store.bucket("sessions").has("t-1")
 
 
+# contract: DUR-06
+async def test_files_opened_from_the_database_commit_with_its_rows(app: tinystore.Database) -> None:
+    packages = app.files("packages")
+    package = bytes([7]) * (40 << 10)
+
+    async def declined(tx: tinystore.SqlTx) -> None:
+        await tx.exec("insert into notes (id, author_id, title) values ('p1', 5, 'stripe')")
+        written = await tx.with_(packages).put("stripe.js", package)
+        assert written.size == len(package)
+        assert await tx.with_(packages).head("stripe.js") is not None
+        raise RuntimeError("declined")
+
+    with pytest.raises(RuntimeError, match="declined"):
+        await app.tx(declined)
+    assert await packages.head("stripe.js") is None
+
+    async def placed(tx: tinystore.SqlTx) -> None:
+        await tx.exec("insert into notes (id, author_id, title) values ('p1', 5, 'stripe')")
+        await tx.with_(packages).put("stripe.js", package)
+
+    await app.tx(placed)
+    stripe = await packages.get("stripe.js")
+    assert stripe is not None and stripe.size == len(package)
+    assert await app.scalar(int, "select count(*) from notes where id = 'p1'") == 1
+
+
 async def test_a_transaction_refuses_a_handle_kept_elsewhere_or_one_made_after_it_began(
     store: tinystore.Store, app: tinystore.Database
 ) -> None:

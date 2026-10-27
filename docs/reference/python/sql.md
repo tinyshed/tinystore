@@ -124,6 +124,25 @@ rows in ``db.tx``, through ``tx.with_(bucket)``:
 
     sessions = db.bucket("sessions", Session, idle="30d")
 
+### Database.files
+
+```python
+def files(
+    name: str,
+    *,
+    ttl: Duration | None = None,
+    max_file_size: Size | None = None,
+) -> Files: ...
+```
+
+A set of files kept in this database's file, as ``store.files`` keeps one in blobs.db.
+
+The same calls, and its writes commit with the rows in ``db.tx``,
+through ``tx.with_(files)``. A file's bytes past 16 KiB lie in the
+folder beside the database's file:
+
+    packages = db.files("packages", max_file_size="10MiB")
+
 ### Database.search_index
 
 ```python
@@ -443,12 +462,14 @@ def with_[T](handle: Bucket[T]) -> Bucket[T]: ...
 def with_[T](handle: Queue[T]) -> TxQueue[T]: ...
 @overload
 def with_[T](handle: Channel[T]) -> TxChannel[T]: ...
+@overload
+def with_(handle: Files) -> Files: ...
 def with_(
-    handle: Bucket[Any] | Queue[Any] | Channel[Any],
-) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any]: ...
+    handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files,
+) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files: ...
 ```
 
-A bucket or a queue opened from this database, or a channel, inside the transaction.
+A bucket, a queue or files opened from this database, or a channel, inside the transaction.
 
 What it writes commits with the rows or not at all, and what it reads
 sees what the transaction wrote; a message is handed over at the commit.

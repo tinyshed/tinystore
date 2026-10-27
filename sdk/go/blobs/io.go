@@ -29,6 +29,12 @@ func (f *Files) write(ctx context.Context, path string, body io.Reader, opts []W
 			message.Size = &n
 		}
 	}
+	if f.err != nil {
+		return FileInfo{}, false, f.err
+	}
+	if f.inside {
+		return f.writeInside(ctx, path, body, message)
+	}
 	seeker, replayable := body.(io.Seeker)
 	var start int64
 	if replayable {
@@ -167,6 +173,29 @@ type Upload struct {
 	done   bool
 }
 
+// writeInside writes a body whole through a database's transaction, in one
+// call on its stream: its bytes commit with the transaction's rows.
+func (f *Files) writeInside(ctx context.Context, path string, body io.Reader, message wire.BlobsWrite) (FileInfo, bool, error) {
+	whole, err := io.ReadAll(body)
+	if err != nil {
+		return FileInfo{}, false, core.Wrap(core.Invalid, err, "files %s: %s: its body", f.name, path)
+	}
+	message.Bytes = whole
+	answer, err := f.call(ctx, wire.MethodBlobsPut, func(handle uint64) []byte {
+		m := message
+		m.Handle = handle
+		return wire.Encode(&m)
+	}, core.Writing)
+	if err != nil {
+		return FileInfo{}, false, err
+	}
+	var written wire.BlobsWritten
+	if err := decode(answer, &written); err != nil || written.Info == nil {
+		return FileInfo{}, false, err
+	}
+	return infoOf(*written.Info), true, nil
+}
+
 // Upload begins a file written a piece at a time:
 //
 //	upload, err := reports.Upload(ctx, "2026-10/report.csv", blobs.ContentType("text/csv"))
@@ -174,6 +203,9 @@ type Upload struct {
 //	_, err = io.Copy(upload, rows)
 //	info, err := upload.Commit(ctx)
 func (f *Files) Upload(ctx context.Context, path string, opts ...WriteOption) (*Upload, error) {
+	if err := f.outside("an upload"); err != nil {
+		return nil, err
+	}
 	message := wire.BlobsWrite{Folder: f.folder, Path: path}
 	for _, opt := range opts {
 		opt.write(&message)

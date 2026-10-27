@@ -451,6 +451,58 @@ pub fn read_at(&self, bytes: &mut [u8], offset: u64) -> Result<usize>
 Reads at `offset` without moving where the next read begins, from
 several threads at once; like any range it is not checked.
 
+## TxFiles
+
+```rust
+pub struct TxFiles<'a> { /* private fields */ }
+```
+
+A set of files' calls inside a transaction of the database it was opened
+from: what they write commits with the transaction, and what they read
+sees what it wrote.
+
+### TxFiles.put
+
+```rust
+pub fn put(&self, path: &str, bytes: impl AsRef<[u8]>) -> Result<FileInfo>
+```
+
+Writes the file and replaces whatever the path held, once the
+transaction commits.
+
+### TxFiles.create
+
+```rust
+pub fn create(&self, path: &str, bytes: impl AsRef<[u8]>) -> Result<bool>
+```
+
+Writes the file only when the path holds none; says whether it did.
+
+### TxFiles.delete
+
+```rust
+pub fn delete(&self, path: &str) -> Result<()>
+```
+
+Removes the file at the path; nothing to remove is not an error.
+
+### TxFiles.head
+
+```rust
+pub fn head(&self, path: &str) -> Result<Option<FileInfo>>
+```
+
+What the file at the path carries, as the transaction sees it.
+
+### TxFiles.key
+
+```rust
+pub fn key(&self, path: &str) -> FileCall<'a>
+```
+
+A call on one path inside the transaction, its options before its
+verb: `tx.with(&files).key("a.md").content_type("text/markdown").put(&text)`.
+
 ## Upload
 
 ```rust

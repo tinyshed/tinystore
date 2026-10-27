@@ -687,6 +687,33 @@ for (const way of ways) {
 			expect(await store.bucket('sessions').has('t-1')).toBe(false)
 		})
 
+		test('files opened from the database commit with its rows, or roll back with them', async () => {
+			const packages = app.files('packages')
+			const pkg = new Uint8Array(40 << 10).fill(7)
+			const insert = (tx: SqlTx) =>
+				tx.exec`insert into notes (id, author_id, title) values ('p1', 5, 'stripe')`
+			const refused = await caught(
+				app.tx(async tx => {
+					await insert(tx)
+					expect((await tx.with(packages).put('stripe.js', pkg)).size).toBe(pkg.length)
+					expect(await tx.with(packages).head('stripe.js')).toBeDefined()
+					throw new Error('declined')
+				}),
+			)
+			expect((refused as Error).message).toBe('declined')
+			expect(await packages.head('stripe.js')).toBeUndefined()
+
+			await app.tx(async tx => {
+				await insert(tx)
+				await tx.with(packages).put('stripe.js', pkg)
+			})
+			const stripe = await packages.get('stripe.js')
+			expect(stripe?.size).toBe(pkg.length)
+			expect(await app.scalar<number>`select count(*) from notes where id = 'p1'`).toBe(1)
+			const streamed = await caught(app.tx(async tx => tx.with(packages).upload('big.js')))
+			expect(streamed).toBeInstanceOf(InvalidError)
+		})
+
 		test('a transaction refuses a handle kept elsewhere, or one made after it began', async () => {
 			const kept = await caught(app.tx(tx => tx.with(store.bucket<number>('sessions')).set('k', 1)))
 			expect(kept).toBeInstanceOf(InvalidError)

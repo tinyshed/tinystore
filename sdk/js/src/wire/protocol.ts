@@ -333,6 +333,8 @@ export const BlobsOpen = message(
 		ttl: [2, uint],
 		/** the largest file a write may leave */
 		maxFileSize: [3, uint],
+		/** a database's handle: the files live in its file, and put, head, delete, copy and rename join its transactions; blobs.db when absent */
+		database: [4, uint],
 	},
 	{
 		write(w, v) {
@@ -353,12 +355,18 @@ export const BlobsOpen = message(
 				w.uint(v.maxFileSize)
 				n++
 			}
+			if (v.database !== undefined) {
+				w.field(4)
+				w.uint(v.database)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $name: string | undefined
 			let $ttl: number | undefined
 			let $maxFileSize: number | undefined
+			let $database: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -370,12 +378,15 @@ export const BlobsOpen = message(
 					case 3:
 						$maxFileSize = r.uint()
 						break
+					case 4:
+						$database = r.uint()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { name: $name, ttl: $ttl, maxFileSize: $maxFileSize }
+			return { name: $name, ttl: $ttl, maxFileSize: $maxFileSize, database: $database }
 		},
 	},
 )

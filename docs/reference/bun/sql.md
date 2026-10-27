@@ -177,6 +177,19 @@ writer, which is the point and its cost.
 
     const emails = db.queue<Email>('emails', { attempts: 5 })
 
+### Database.files
+
+```ts
+files(name: string, options?: FilesOptions): Files
+```
+
+A set of files kept in this database's file, as `store.files` keeps one
+in blobs.db: the same calls, and its writes commit with the rows in
+`db.tx`, through `tx.with(files)`. A file's bytes past 16 KiB lie in the
+folder beside the database's file.
+
+    const packages = db.files('packages', { maxFileSize: '10MiB' })
+
 ### Database.searchIndex
 
 ```ts
@@ -323,6 +336,7 @@ time, in order.
 with<T>(bucket: Bucket<T>): Bucket<T>
 with<T>(queue: Queue<T>): TxQueue<T>
 with<T>(channel: Channel<T>): TxChannel<T>
+with(files: Files): Files
 ```
 
 A bucket or a queue opened from this database, inside the transaction:

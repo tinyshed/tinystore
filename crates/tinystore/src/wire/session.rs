@@ -1381,7 +1381,7 @@ impl Shared {
             #[cfg(feature = "sql")]
             0x03 => sql::call(&self.store, &self.sql, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "blobs")]
-            0x04 => blobs::call(&self.store, &self.blobs, method, body, max_body),
+            0x04 => blobs::call(&self.store, &self.blobs, &lent, method, body, max_body),
             #[cfg(feature = "records")]
             0x05 => records::call(&self.store, &self.records, method, body, self.read_only.load(Ordering::Relaxed)),
             #[cfg(feature = "metrics")]
@@ -1436,6 +1436,8 @@ impl Shared {
             0x01 => kv::call_in(&self.kv, tx, method, body, max_body),
             #[cfg(feature = "jobs")]
             0x02 => jobs::call_in(&self.jobs, tx, method, body, max_body),
+            #[cfg(feature = "blobs")]
+            0x04 => blobs::call_in(&self.blobs, tx, method, body),
             #[cfg(feature = "channels")]
             0x0a => channels::call_in(&self.store, tx, method, body),
             _ => Err(Failure::invalid(format!("method {method:#06x} does not run inside a transaction"))),

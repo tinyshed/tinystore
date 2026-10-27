@@ -92,6 +92,28 @@ handle with the same calls and workers, whose jobs commit with the rows
 in `Database::tx` through `tx.with(&queue)`. It shares the database's
 writer, which is the point and its cost.
 
+### Database.files
+
+```rust
+pub fn files(&self, name: &str) -> FilesBuilder<'static>
+```
+
+A set of files kept in this database's file, as
+[`Store::files`](crate::Store::files) keeps one in blobs.db: the same
+handle with the same calls, whose writes commit with the rows in
+`Database::tx` through `tx.with(&files)`. The bytes too large to keep
+inline lie in the folder beside the file, `sql/app.blobs/`.
+
+```rust
+let db = store.database("app").open()?;
+let packages = db.files("packages").open()?;
+db.tx(|tx| {
+    tx.exec(tinystore::sql!("insert into plugins (file) values (?)", "stripe-1.0.0.js"))?;
+    tx.with(&packages).put("stripe-1.0.0.js", b"export const charges = 1")?;
+    Ok::<_, tinystore::Error>(())
+})?;
+```
+
 ### Database.search_index
 
 ```rust
@@ -946,6 +968,16 @@ pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V>
 A bucket kept in this database's file, as `Database::bucket` opens
 one, its calls awaited: its writes commit with the rows in
 [`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
+
+### aio::sql::Database.files
+
+```rust
+pub fn files(&self, name: &str) -> FilesBuilder<'_>
+```
+
+A set of files kept in this database's file, as `Database::files`
+opens one, its calls awaited: its writes commit with the rows in
+[`tx`](crate::aio::sql::Database::tx) through `tx.with(&files)`.
 
 ### aio::sql::Database.queue
 

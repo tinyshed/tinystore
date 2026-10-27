@@ -5,7 +5,7 @@
 
 import { type Connection, type Idempotence, type Link, pieceOf } from './connection.ts'
 import { ClosedError, InvalidError, OutcomeUnknownError } from './errors.ts'
-import { checkName, handleOn, type Via, viaLink } from './handles.ts'
+import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { ConnectionLostError, type Stream, watch } from './session.ts'
 import { type Duration, dateOf, ms, unixMs } from './time.ts'
 import {
@@ -96,13 +96,35 @@ const nothing = new Uint8Array(0)
 
 /** Files as `store.files` opens them. */
 export function openFiles(link: Link, name: string, options?: FilesOptions): Files {
+	return new Files(link, name, filesOpen(name, options), [])
+}
+
+/** The open of a set of files, kept in the database of the handle `database` when it is given. */
+export function filesOpen(name: string, options?: FilesOptions, database?: number): Uint8Array {
 	checkName(name, 'files')
-	const open = BlobsOpen.encode({
+	return BlobsOpen.encode({
 		name,
 		ttl: options?.ttl === undefined ? undefined : ms(options.ttl),
 		maxFileSize: options?.maxFileSize === undefined ? undefined : bytesOf(options.maxFileSize),
+		database,
 	})
-	return new Files(link, name, open, [])
+}
+
+/** What a transaction needs of a set of files it takes in. */
+export interface FilesParts {
+	readonly name: string
+	readonly open: Open
+	/** the database whose file keeps the files; the store's own when undefined */
+	readonly home: Home | undefined
+	/** the same files, their calls through the transaction's `via` */
+	inside(via: Via): Files
+}
+
+// a set of files' parts, kept out of its public shape, for db.tx
+const parts = new WeakMap<object, FilesParts>()
+
+export function filesParts(handle: object): FilesParts | undefined {
+	return parts.get(handle)
 }
 
 /**
@@ -113,24 +135,49 @@ export class Files {
 	readonly name: string
 	readonly #link: Link
 	readonly #via: Via
-	readonly #open: Uint8Array
+	readonly #open: Open
 	readonly #folder: string[]
+	readonly #home: Home | undefined
+	/** whether its calls go through a database's transaction */
+	readonly #inside: boolean
 
-	/** Files come from `store.files`. */
-	constructor(link: Link, name: string, open: Uint8Array, folder: string[]) {
+	/**
+	 * Files come from `store.files` and `db.files`; inside a database's
+	 * transaction, from `tx.with(files)`, whose writes go through the
+	 * transaction.
+	 */
+	constructor(link: Link, name: string, open: Open, folder: string[], home?: Home, via?: Via) {
 		this.name = name
 		this.#link = link
-		this.#via = viaLink(link)
+		this.#via = via ?? home?.via(`files ${name}`) ?? viaLink(link)
 		this.#open = open
 		this.#folder = folder
+		this.#home = home
+		this.#inside = via !== undefined
+		const inside = (through: Via) => new Files(link, name, open, folder, home, through)
+		parts.set(this, { name, open, home, inside })
 	}
 
 	/** The folder of these segments, one each: `folder('users', 42)` is users/42, never users/420. */
 	folder(...segments: (string | number | bigint)[]): Files {
-		return new Files(this.#link, this.name, this.#open, [
-			...this.#folder,
-			...segments.map(segmentOf),
-		])
+		const folder = [...this.#folder, ...segments.map(segmentOf)]
+		return new Files(
+			this.#link,
+			this.name,
+			this.#open,
+			folder,
+			this.#home,
+			this.#inside ? this.#via : undefined,
+		)
+	}
+
+	/** Refuses what streams a file's bytes inside a transaction, which takes a put's bytes whole. */
+	#outside(what: string): void {
+		if (this.#inside) {
+			throw new InvalidError(
+				`files ${this.name}: ${what} inside a transaction: put a file's bytes whole, and read them after its commit`,
+			)
+		}
 	}
 
 	/**
@@ -277,6 +324,7 @@ export class Files {
 	 * leaving the block without commit aborts it.
 	 */
 	async upload(path: string, options?: FileOptions): Promise<Upload> {
+		this.#outside('an upload')
 		const connection = await this.#link.connection()
 		const write = BlobsWrite.encode({
 			...this.#fields(path, options),
@@ -395,6 +443,15 @@ export class Files {
 			contentType: options?.contentType ?? source.contentType,
 			size: options?.size ?? source.size,
 			create,
+		}
+		if (this.#inside) {
+			const bytes = await allOf(source)
+			const answer = await this.#call(
+				'blobs.put',
+				handle => BlobsWrite.encode({ ...fields, handle, bytes }),
+				'write',
+			)
+			return writtenOf(answer)
 		}
 		return this.#link.run(
 			'write',
@@ -686,6 +743,26 @@ function sourceOf(body: Body): Source {
 		chunks: () => stream,
 		whole: async () => undefined,
 	}
+}
+
+/** Every byte of a body at once, as a put inside a transaction sends it. */
+async function allOf(source: Source): Promise<Uint8Array> {
+	const chunks: Uint8Array[] = []
+	let size = 0
+	for await (const chunk of source.chunks()) {
+		chunks.push(chunk)
+		size += chunk.length
+	}
+	if (chunks.length === 1) {
+		return chunks[0] as Uint8Array
+	}
+	const all = new Uint8Array(size)
+	let at = 0
+	for (const chunk of chunks) {
+		all.set(chunk, at)
+		at += chunk.length
+	}
+	return all
 }
 
 /**

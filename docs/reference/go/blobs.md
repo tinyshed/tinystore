@@ -101,7 +101,7 @@ type Files struct {
 }
 ```
 
-Files is a named set of files by path, or a folder of it, whose calls are the folder's: a path in a folder is the folder's segments and then its own.
+Files is a named set of files by path, or a folder of it, whose calls are the folder's: a path in a folder is the folder's segments and then its own. Inside a database's transaction, from In, its writes go through it.
 
 ### OpenFiles
 
@@ -109,9 +109,10 @@ Files is a named set of files by path, or a folder of it, whose calls are the fo
 func OpenFiles(home tinystore.Home, name string, opts ...Option) (*Files, error)
 ```
 
-OpenFiles opens a named set of files on the store. It opens at its first call; its error is a name or an option it refuses.
+OpenFiles opens a named set of files on the store, or on a database whose file then keeps it: its writes commit with the database's rows in a transaction, through In. It opens at its first call; its error is a name or an option it refuses.
 
 	reports, err := blobs.OpenFiles(store, "reports", blobs.TTL(24*time.Hour), blobs.MaxFileSize(2<<30))
+	packages, err := blobs.OpenFiles(db, "packages")
 
 ### Files.All
 
@@ -192,6 +193,14 @@ func (f *Files) Head(ctx context.Context, path string) (FileInfo, bool, error)
 ```
 
 Head is what the file at path carries and none of its bytes, and whether there is one.
+
+### Files.In
+
+```go
+func (f *Files) In(tx tinystore.InTx) *Files
+```
+
+In is the files inside a database's transaction: their writes, Put, Create, Delete, Copy and Rename, commit with its rows, and Head sees what it wrote. Files kept elsewhere are refused at their first call.
 
 ### Files.List
 

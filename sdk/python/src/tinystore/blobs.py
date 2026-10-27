@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from ._connection import Connection, Idempotence, Link
+    from ._handles import Home, Opener, Via
 
 Size = int | str
 """A size: bytes, or text in binary units, "64KiB" or "2GiB"; "2GB" is refused, being 10⁹ to some and 2³⁰ to others."""
@@ -141,31 +142,63 @@ def _segment_of(segment: str | int) -> str:
 
 def open_files(link: Link, name: str, ttl: Duration | None, max_file_size: Size | None) -> Files:
     """Files as ``store.files`` opens them."""
+    return Files(link, name, files_open(name, ttl, max_file_size), ())
+
+
+def files_open(name: str, ttl: Duration | None, max_file_size: Size | None, database: int | None = None) -> bytes:
+    """The open of a set of files, kept in the database of the handle ``database`` when it is given."""
     check_name(name, "files")
-    opener = BlobsOpen.encode(
+    return BlobsOpen.encode(
         name=name,
         ttl=None if ttl is None else ms(ttl, f"files {name}: ttl"),
         max_file_size=None if max_file_size is None else bytes_of(max_file_size),
+        database=database,
     )
-    return Files(link, name, opener, ())
 
 
 class Files:
     """A named set of files by path, or a folder of it, whose calls are the folder's.
 
-    A path in a folder is the folder's segments and then its own.
+    A path in a folder is the folder's segments and then its own. Files come
+    from ``store.files`` and ``db.files``; inside a database's transaction,
+    from ``tx.with_(files)``, whose writes go through the transaction.
     """
 
-    def __init__(self, link: Link, name: str, opener: bytes, folder: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        link: Link,
+        name: str,
+        opener: Opener,
+        folder: tuple[str, ...],
+        home: Home | None = None,
+        via: Via | None = None,
+    ) -> None:
         self.name = name
         self._link = link
-        self._via = via_link(link)
-        self._opener = opener
+        self._via = via or (home.via(f"files {name}") if home is not None else via_link(link))
+        self.opener = opener
+        """what opens the files' handle on a connection"""
+        self.home = home
+        """the database whose file keeps the files; the store's own when None"""
         self._folder = folder
+        self._inside = via is not None
 
     def folder(self, *segments: str | int) -> Files:
         """The folder of these segments, one each: ``folder("users", 42)`` is users/42, never users/420."""
-        return Files(self._link, self.name, self._opener, (*self._folder, *(_segment_of(s) for s in segments)))
+        folder = (*self._folder, *(_segment_of(s) for s in segments))
+        return Files(self._link, self.name, self.opener, folder, self.home, self._via if self._inside else None)
+
+    def through(self, via: Via) -> Files:
+        """The same files, their calls through a database's transaction."""
+        return Files(self._link, self.name, self.opener, self._folder, self.home, via)
+
+    def _outside(self, what: str) -> None:
+        """Refuses what streams a file's bytes inside a transaction, which takes a put's bytes whole."""
+        if self._inside:
+            raise InvalidError(
+                f"files {self.name}: {what} inside a transaction: put a file's bytes whole, "
+                "and read them after its commit"
+            )
 
     async def put(
         self,
@@ -309,6 +342,7 @@ class Files:
         ``async with files.upload(path) as upload``, and leaving the block
         without commit aborts it.
         """
+        self._outside("an upload")
         fields = self._fields(path, content_type, meta, ttl, if_match, size)
 
         async def begin() -> tuple[Stream, int]:
@@ -320,10 +354,10 @@ class Files:
         return Upload(begin)
 
     async def _handle(self, connection: Connection) -> int:
-        return await handle_on(connection, methods["blobs.open"], self._opener)
+        return await handle_on(connection, methods["blobs.open"], self.opener)
 
     async def _call(self, method: str, body: Callable[[int], bytes], idempotence: Idempotence = "read") -> bytes:
-        return await self._via.call(methods["blobs.open"], self._opener, methods[method], body, idempotence)
+        return await self._via.call(methods["blobs.open"], self.opener, methods[method], body, idempotence)
 
     async def _read(self, path: str, if_match: str, offset: int | None, length: int | None) -> AsyncIterator[bytes]:
         """A file's bytes as S3's GET reads them with a range and If-Match.
@@ -400,6 +434,12 @@ class Files:
         fields = {**fields, "create": create or None}
         if fields["size"] is None:
             fields["size"] = source.size
+        if self._inside:
+            data = b"".join([chunk async for chunk in source.chunks()])
+            written = await self._call(
+                "blobs.put", lambda handle: BlobsWrite.encode(fields, handle=handle, bytes=data), "write"
+            )
+            return _written_of(written)
 
         async def attempt(connection: Connection) -> FileInfo | None:
             handle = await self._handle(connection)
