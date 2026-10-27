@@ -27,9 +27,10 @@ should be a fact a ten-second grep would answer.
 Every engine is built in the Rust core, over the wire and in the Bun and
 Node, Python and Go SDKs. `v0.1.0`, the first release, was published on
 20 October to npm, PyPI, crates.io, GHCR and GitHub, after the candidates
-`v0.1.0-rc.6` and `rc.7`, `v0.1.1` on 24 October and `v0.2.0` on 26 October. npm and PyPI also hold the Go engine's
-`0.1.0-rc.1` to `rc.5`, the tags of the same names stay, and research's
-submodule is pinned to `v0.1.0-rc.5`.
+`v0.1.0-rc.6` and `rc.7`; then `v0.1.1` on 24 October, `v0.2.0` on 26
+October, and `v0.3.0` and `v0.4.0` on 27 October. npm and PyPI also hold the
+Go engine's `0.1.0-rc.1` to `rc.5`, the tags of the same names stay, and
+research's submodule is pinned to `v0.1.0-rc.5`.
 
 | Part           | What it is                                                                                         | Guide                                                |
 |----------------|----------------------------------------------------------------------------------------------------|------------------------------------------------------|
