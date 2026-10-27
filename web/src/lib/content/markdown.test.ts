@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { Highlight } from './highlight'
 import type { Links } from './links'
-import { exportMarkdown, finish, parse, toHast } from './markdown'
+import { exportMarkdown, finish, markdownFile, parse, toHast } from './markdown'
 import { checkout } from './repo'
 
 const plain: Highlight = code => ({
@@ -73,19 +73,32 @@ describe('a page as HTML', () => {
 })
 
 describe('a page as markdown elsewhere', () => {
-	test("links absolutely and leaves the editors' notes out", () => {
+	test("links absolutely, another page to its markdown, and leaves the editors' notes out", () => {
 		const markdown = exportMarkdown(
-			parse('# Page\n\n<!-- a note -->\n\n[KV](kv.md#expiry), [code](../sdk/js/README.md)\n'),
+			parse(
+				'# Page\n\n<!-- a note -->\n\n[KV](kv.md#expiry), [here](#top), [code](../sdk/js/README.md)\n\n![logo](../.github/assets/logo-light.svg)\n',
+			),
 			links(),
 			from,
-			new Set(),
+			new Set(['top']),
 			'https://docs.example',
 		)
 
-		expect(markdown).toContain('[KV](https://docs.example/docs/kv#expiry)')
+		expect(markdown).toContain('[KV](https://docs.example/docs/kv.md#expiry)')
+		expect(markdown).toContain('[here](#top)')
 		expect(markdown).toContain(
 			'[code](https://github.com/tinyshed/tinystore/blob/abc123/sdk/js/README.md)',
 		)
+		expect(markdown).toContain('![logo](https://docs.example/files/.github/assets/logo-light.svg)')
 		expect(markdown).not.toContain('a note')
+	})
+
+	test('as a file of its own opens with where every other page is listed', () => {
+		expect(markdownFile('# Page\n', 'https://docs.example').split('\n')).toEqual([
+			'> Fetch the index of the TinyStore docs, every page as markdown, at https://docs.example/llms.txt',
+			'',
+			'# Page',
+			'',
+		])
 	})
 })

@@ -48,10 +48,27 @@ describe('the build', () => {
 			page: '/docs/kv',
 		})
 		expect(routeOf('llms.txt')).toEqual({ path: '/llms.txt', kind: 'markdown', page: '/llms.txt' })
+		for (const file of [
+			'llms-full.txt',
+			'llms-go.txt',
+			'.well-known/llms.txt',
+			'skill.md',
+			'.well-known/agent-skills/tinystore/SKILL.md',
+		]) {
+			expect(routeOf(file)).toEqual({ path: `/${file}`, kind: 'markdown', page: `/${file}` })
+		}
+		expect(routeOf('.well-known/agent-skills/index.json')).toMatchObject({ kind: 'asset' })
 		expect(routeOf('favicon.svg')).toEqual({ path: '/favicon.svg', kind: 'asset', page: '' })
 
 		expect([...site.pages].sort()).toEqual(['/', '/404', '/docs', '/docs/kv'])
 		expect(site.find('/index.html.br')).toBeUndefined()
+	})
+
+	test("knows each page's markdown, the landing page's llms.txt, and no address it was not given", () => {
+		expect(site.find('/docs/kv')?.markdown?.path).toBe(join(dir, 'docs', 'kv.md'))
+		expect(site.find('/')?.markdown?.path).toBe(join(dir, 'llms.txt'))
+		expect(site.find('/docs')?.markdown).toBeUndefined()
+		expect(site.origin).toBe('')
 	})
 
 	test('refuses a directory with no index.html', () => {

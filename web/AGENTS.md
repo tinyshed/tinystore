@@ -9,7 +9,12 @@ particular to the site. How a page is written is the `docs` skill.
 ## Status
 
 Built: the landing page, a page for every file `docs/README.md` links, search, scenes, diagrams,
-both themes and the looks a reader picks over them, the language switch, a markdown copy of each page, `llms.txt`,
+both themes and the looks a reader picks over them, the language switch, a markdown copy of each page,
+which links the other pages' copies and opens with a line saying where `llms.txt` is, `llms.txt`,
+also at `/.well-known/llms.txt`, `skill.md`, also at `/.well-known/agent-skills/tinystore/SKILL.md`
+beside the discovery index that lists it with its SHA-256: what TinyStore is, how each language
+installs it and the first examples of each engine's guide, whose calls the build checks,
+a `robots.txt` whose `Content-Signal` lets the docs train a model, be searched and answer a question,
 `llms-full.txt`, the API pages with `llms-<language>.txt`, a page per release, the sitemap,
 and the server with its analytics. The docs
 are written for Rust: the Handbook's
@@ -19,7 +24,9 @@ Not built: a page of the site's own statistics.
 
 It is served at https://tinyshed.org/tinystore: built with
 `SITE_BASE=/tinystore`, behind the Caddy and the Cloudflare Tunnel that the
-private `tinyshed/landing` repository runs on the server.
+private `tinyshed/landing` repository runs on the server. Its `.well-known/`
+is therefore `/tinystore/.well-known/`, not the host's: what tinyshed.org's
+own `/.well-known/` answers is the landing's to route.
 
 ## The docs are the source, the site a reading of them
 
@@ -118,13 +125,20 @@ In `server/`, `config.ts` reads the environment through zod, `bootstrap.ts`
 is the only composition root, and `index.ts` only starts and stops. It serves `build/` from an index made at start, brotli or
 gzip as the build made them, and counts what a reader asked for:
 
-| Kept                                 | Where                     | What                                                                                 |
-|--------------------------------------|---------------------------|--------------------------------------------------------------------------------------|
-| `site_views_total{page, via, agent}` | metrics                   | a page, its data on navigation, or its markdown; a person, a crawler or an agent     |
-| `site_events_total{name}`            | metrics                   | what a page's script reports: copies, searches, the language                         |
-| `view`, `copy-code`, …               | records, stream `readers` | each of those, with the day's visitor id, where the reader came from, their language |
-| the server's own lines               | records, stream `site`    | and on stderr, as JSON in a container                                                |
-| `salt/<day>`, `site-events`          | kv                        | the day's salt, expiring; the limiter a reader's events go through                   |
+| Kept                                           | Where                     | What                                                                                                       |
+|------------------------------------------------|---------------------------|------------------------------------------------------------------------------------------------------------|
+| `site_views_total{page, via, agent, provider}` | metrics                   | a page, its data on navigation, or its markdown; a person, a crawler or an agent, and the agent's provider |
+| `site_events_total{name}`                      | metrics                   | what a page's script reports: copies, searches, the language                                               |
+| `view`, `copy-code`, …                         | records, stream `readers` | each of those, with the day's visitor id, where the reader came from, their language                       |
+| the server's own lines                         | records, stream `site`    | and on stderr, as JSON in a container                                                                      |
+| `salt/<day>`, `site-events`                    | kv                        | the day's salt, expiring; the limiter a reader's events go through                                         |
+
+A page's address is its markdown to a request that would rather read it,
+`Accept: text/markdown`, or `text/plain` and no HTML, with `Vary: Accept`;
+the landing page's markdown is `llms.txt`. A request for markdown, by its
+path or what it accepts, that finds nothing gets `404.md`, which says where
+every page is listed. Every response carries a `Link` to `llms.txt` and
+`llms-full.txt` and an `X-Llms-Txt`, at the address the build's sitemap gives.
 
 No address is kept: a visitor is a hash of the address and the User-Agent under
 a salt that lives a day and a half. No cookie is set. A view is counted when

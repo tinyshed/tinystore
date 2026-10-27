@@ -48,6 +48,11 @@ describe('the site in its own store', () => {
 			{ ...page, kind: 'data' },
 			'10.0.0.1',
 		)
+		await analytics.view(
+			reader({ 'user-agent': 'Claude-User (claude-code/2.1)' }),
+			{ ...page, kind: 'markdown' },
+			'10.0.0.2',
+		)
 		expect(
 			await analytics.event(
 				reader(),
@@ -80,12 +85,20 @@ describe('the site in its own store', () => {
 				expect.objectContaining({ name: 'view', via: 'data', from: '/docs' }),
 			)
 			expect(kept).toContainEqual(
+				expect.objectContaining({
+					name: 'view',
+					via: 'markdown',
+					agent: 'agent',
+					provider: 'anthropic',
+				}),
+			)
+			expect(kept).toContainEqual(
 				expect.objectContaining({ name: 'copy-code', page: '/docs/kv', value: 'go' }),
 			)
 			expect(kept).toContainEqual(expect.objectContaining({ name: 'search', page: 'other' }))
 
-			const visitors = new Set(records.map(record => record.fields.visitor))
-			expect(visitors.size).toBe(1)
+			const person = records.filter(record => record.fields.provider === undefined)
+			expect(new Set(person.map(record => record.fields.visitor)).size).toBe(1)
 
 			const { series: views } = await again.metrics.read({ name: 'site_views_total', since: '1h' })
 			expect(
@@ -94,6 +107,7 @@ describe('the site in its own store', () => {
 					.sort((a, b) => String(a.via).localeCompare(String(b.via))),
 			).toEqual([
 				{ agent: 'person', page: '/docs/kv', via: 'data' },
+				{ agent: 'agent', page: '/docs/kv', provider: 'anthropic', via: 'markdown' },
 				{ agent: 'person', page: '/docs/kv', via: 'page' },
 			])
 		} finally {

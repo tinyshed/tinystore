@@ -56,7 +56,8 @@ const goImport = [
 /**
  * The site's requests, without a port: the API's three routes, and every
  * other GET a file of the build, counted when it is a page, its data or its
- * markdown. Tests call it directly.
+ * markdown. A page is its markdown to a request that would rather read that,
+ * and every response says where llms.txt is. Tests call it directly.
  */
 export function createRouter(
 	site: Site,
@@ -87,27 +88,26 @@ export function createRouter(
 		'POST /api/events': (request, address) => receiveEvent(analytics, request, address),
 	}
 
-	return async (request, address) => {
+	const answer: Handler = async (request, address) => {
 		const url = new URL(request.url)
 		const route = api[`${request.method} ${url.pathname}`]
 		if (route !== undefined) {
-			return secured(await route(request, address))
+			return route(request, address)
 		}
 		if (url.pathname.startsWith('/api/')) {
-			return secured(
-				Response.json({ code: 'NOT_FOUND', message: 'no such route' }, { status: 404 }),
-			)
+			return Response.json({ code: 'NOT_FOUND', message: 'no such route' }, { status: 404 })
 		}
 		if (request.method !== 'GET' && request.method !== 'HEAD') {
-			return secured(new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } }))
+			return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } })
 		}
 		if (url.searchParams.get('go-get') === '1') {
-			return secured(
-				new Response(goImport, { headers: { 'content-type': 'text/html; charset=utf-8' } }),
-			)
+			return new Response(goImport, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 		}
-		return secured(serveFile(site, analytics, request, url, address))
+		return serveFile(site, analytics, request, url, address)
 	}
+
+	const llms = llmsHeaders(site.origin)
+	return async (request, address) => headed(await answer(request, address), llms)
 }
 
 // a reader's event, as a page's script sends it through sendBeacon
@@ -148,7 +148,7 @@ function serveFile(
 	try {
 		pathname = decodeURIComponent(url.pathname)
 	} catch {
-		return notFound(site, request)
+		return notFound(site, request, url.pathname)
 	}
 
 	// one address a page: /docs/ is /docs
@@ -157,27 +157,80 @@ function serveFile(
 	}
 
 	const file = site.find(pathname)
-	if (file === undefined || pathname === '/404') {
-		return notFound(site, request)
+	if (file === undefined || pathname === '/404' || pathname === '/404.md') {
+		return notFound(site, request, pathname)
 	}
 
-	const response = respond(file, request)
-	if (file.kind !== 'asset' && request.method === 'GET') {
-		void analytics.view(request, file, address)
+	const served =
+		file.markdown !== undefined && prefersMarkdown(request.headers.get('accept'))
+			? file.markdown
+			: file
+	const response = respond(served, request)
+	if (file.markdown !== undefined) {
+		// one address, HTML or markdown by what the request accepts
+		response.headers.set('vary', 'accept-encoding, accept')
+	}
+	if (served.kind !== 'asset' && request.method === 'GET') {
+		void analytics.view(request, served, address)
 	}
 	return response
 }
 
-function notFound(site: Site, request: Request): Response {
-	return site.notFound === undefined
-		? new Response('not found', { status: 404 })
-		: respond(site.notFound, request, 404)
+// a request for markdown, by its path or by what it accepts, is told in markdown where the pages are
+function notFound(site: Site, request: Request, pathname: string): Response {
+	const page = site.notFound
+	if (page === undefined) {
+		return new Response('not found', { status: 404 })
+	}
+	const markdown = /\.(md|txt)$/.test(pathname) || prefersMarkdown(request.headers.get('accept'))
+	const response = respond(markdown ? (page.markdown ?? page) : page, request, 404)
+	response.headers.set('vary', 'accept-encoding, accept')
+	return response
 }
 
-function secured(response: Response): Response {
+// Whether a request would rather read markdown than HTML: it names
+// text/markdown at least as high as text/html, or text/plain and no HTML. A
+// browser names neither; an agent's fetch often names markdown first.
+//
+//     text/markdown, text/html, */*          markdown
+//     text/html;q=0.9, text/markdown         markdown
+//     text/plain, */*                        markdown
+//     text/html, text/plain                  HTML
+//     text/html,application/xhtml+xml,…      HTML
+export function prefersMarkdown(accept: string | null): boolean {
+	const weights = new Map<string, number>()
+	for (const range of (accept ?? '').split(',')) {
+		const [type = '', ...parameters] = range.split(';').map(part => part.trim().toLowerCase())
+		const q = parameters.find(parameter => parameter.startsWith('q='))
+		weights.set(type, q === undefined ? 1 : Number(q.slice('q='.length)) || 0)
+	}
+	const markdown = weights.get('text/markdown') ?? 0
+	const html = Math.max(weights.get('text/html') ?? 0, weights.get('application/xhtml+xml') ?? 0)
+	if (markdown > 0) {
+		return markdown >= html
+	}
+	return (weights.get('text/plain') ?? 0) > 0 && html === 0
+}
+
+// where the site's index for agents is, on every response, under the names
+// docs hosts such as Mintlify send: whatever an agent fetched first points to it
+function llmsHeaders(origin: string): [string, string][] {
+	return [
+		[
+			'link',
+			`<${origin}/llms.txt>; rel="llms-txt", <${origin}/llms-full.txt>; rel="llms-full-txt"`,
+		],
+		['x-llms-txt', `${origin}/llms.txt`],
+	]
+}
+
+function headed(response: Response, llms: [string, string][]): Response {
 	response.headers.set('x-content-type-options', 'nosniff')
 	response.headers.set('referrer-policy', 'strict-origin-when-cross-origin')
 	response.headers.set('x-frame-options', 'DENY')
+	for (const [name, value] of llms) {
+		response.headers.set(name, value)
+	}
 	return response
 }
 

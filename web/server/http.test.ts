@@ -6,7 +6,7 @@ import { logger } from '@tinyshed/tinystore'
 
 import type { Analytics, ReaderEventInput } from './analytics.ts'
 import { readSite, type SiteFile } from './files.ts'
-import { createRouter } from './http.ts'
+import { createRouter, prefersMarkdown } from './http.ts'
 
 let dir: string
 const views: { page: string; kind: string; address: string }[] = []
@@ -44,6 +44,9 @@ beforeAll(() => {
 		'docs/kv/__data.json': '{}',
 		'docs/kv.md': '# KV',
 		'404.html': 'missing',
+		'404.md': '# Not found',
+		'llms.txt': '# TinyStore',
+		'sitemap.xml': '<urlset><url><loc>https://docs.example/</loc></url></urlset>',
 		'favicon.svg': '<svg/>',
 	})) {
 		mkdirSync(dirname(join(dir, path)), { recursive: true })
@@ -103,6 +106,76 @@ describe('a page', () => {
 
 		expect(response.headers.get('x-content-type-options')).toBe('nosniff')
 		expect(response.headers.get('x-frame-options')).toBe('DENY')
+	})
+})
+
+describe('an agent', () => {
+	const markdown = { accept: 'text/markdown, text/html, */*' }
+
+	test('that asks for markdown is handed the page in it, at the same address', async () => {
+		views.length = 0
+		const response = await call('/docs/kv', { headers: markdown })
+
+		expect(await response.text()).toBe('# KV')
+		expect(response.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
+		expect(response.headers.get('vary')).toBe('accept-encoding, accept')
+		expect(views).toEqual([{ page: '/docs/kv', kind: 'markdown', address: '10.0.0.1' }])
+
+		const html = await call('/docs/kv')
+		expect(await html.text()).toBe('kv')
+		expect(html.headers.get('vary')).toBe('accept-encoding, accept')
+	})
+
+	test('asking for markdown at the landing page is handed llms.txt', async () => {
+		expect(await (await call('/', { headers: markdown })).text()).toBe('# TinyStore')
+	})
+
+	test('finds where llms.txt is from any response, wherever the site is served', async () => {
+		for (const path of ['/', '/docs/kv.md', '/favicon.svg', '/docs/nowhere', '/api/nope']) {
+			const response = await call(path)
+			expect(response.headers.get('link')).toBe(
+				'<https://docs.example/llms.txt>; rel="llms-txt", <https://docs.example/llms-full.txt>; rel="llms-full-txt"',
+			)
+			expect(response.headers.get('x-llms-txt')).toBe('https://docs.example/llms.txt')
+		}
+	})
+
+	test('that asks for markdown and finds nothing is told in markdown where the pages are', async () => {
+		views.length = 0
+		for (const [path, init] of [
+			['/docs/nowhere.md', undefined],
+			['/llms-cobol.txt', undefined],
+			['/docs/nowhere', { headers: markdown }],
+			['/404.md', undefined],
+		] as const) {
+			const response = await call(path, init)
+			expect(response.status).toBe(404)
+			expect(await response.text()).toBe('# Not found')
+		}
+		expect(await (await call('/docs/nowhere')).text()).toBe('missing')
+		expect(views).toEqual([])
+	})
+
+	test('is told apart from a browser by what it accepts', () => {
+		for (const accept of [
+			'text/markdown',
+			'text/markdown, text/html, */*',
+			'text/html;q=0.9, text/markdown',
+			'text/plain, */*',
+			'text/plain, text/html;q=0',
+		]) {
+			expect(prefersMarkdown(accept)).toBe(true)
+		}
+		for (const accept of [
+			null,
+			'*/*',
+			'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+			'text/html, text/plain',
+			'text/html, text/markdown;q=0.5',
+			'text/markdown;q=0, text/plain;q=0',
+		]) {
+			expect(prefersMarkdown(accept)).toBe(false)
+		}
 	})
 })
 

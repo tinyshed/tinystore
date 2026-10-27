@@ -1,7 +1,7 @@
 import type { Logger, Store } from '@tinyshed/tinystore'
 
 import type { ReaderEvent } from '../src/lib/events.ts'
-import { agentOf } from './agents.ts'
+import { agentOf, providerOf } from './agents.ts'
 import type { SiteFile } from './files.ts'
 import { Visitors } from './visitors.ts'
 
@@ -21,9 +21,12 @@ export interface Analytics {
 /**
  * The site's own analytics, kept in TinyStore as any application's would be.
  *
- *     metrics  site_views_total{page, via, agent}  site_events_total{name}
+ *     metrics  site_views_total{page, via, agent, provider}  site_events_total{name}
  *     records  stream "readers": a view or an event a record, with the day's
  *              visitor id, where the reader came from and their language
+ *
+ * An agent's views carry its provider when its User-Agent names one, and
+ * nobody else's carry the label at all.
  *     kv       the day's salt, and the limiter a reader's events go through
  *
  * Counters live in the process and are written every 15 seconds; a record is
@@ -40,8 +43,10 @@ export function createAnalytics(store: Store, logger: Logger, pages: Set<string>
 		view(request, file, address) {
 			const userAgent = request.headers.get('user-agent')
 			const agent = agentOf(userAgent)
+			const provider = providerOf(userAgent)
+			const whose = provider === undefined ? {} : { provider }
 
-			views.with({ page: file.page, via: file.kind, agent }).inc()
+			views.with({ page: file.page, via: file.kind, agent, ...whose }).inc()
 
 			return visitors.of(address, userAgent ?? '').then(
 				visitor => {
@@ -49,6 +54,7 @@ export function createAnalytics(store: Store, logger: Logger, pages: Set<string>
 						page: file.page,
 						via: file.kind,
 						agent,
+						...whose,
 						visitor,
 						...origin(request),
 						...language(request),

@@ -1,4 +1,4 @@
-import { type ApiLanguage, apiLanguages, apiPageOf } from './api'
+import { type ApiLanguage, apiLanguageNames, apiLanguages, apiPageOf } from './api'
 import type { Site } from './site'
 
 /**
@@ -11,7 +11,8 @@ export function llmsIndex(site: Site): string {
 		'Every guide below is also one file: llms-full.txt. The API pages, every public name',
 		'with its signature, are one file per language instead: ' +
 			apiLanguages.map(language => `${site.origin}/llms-${language}.txt`).join(', ') +
-			'. Add .md to any page of the site for its markdown.',
+			'. Add .md to any page of the site for its markdown, or ask for the page with',
+		'Accept: text/markdown.',
 		'',
 	)
 
@@ -53,6 +54,34 @@ export function llmsApi(site: Site, language: ApiLanguage): string {
 		site,
 		site.pages.filter(page => apiPageOf(page.file)?.language === language),
 	)
+}
+
+/**
+ * 404.md, what the server answers a request for markdown that finds nothing:
+ * where every page is listed, so that an agent's wrong guess is not a dead end.
+ */
+export function llmsNotFound(site: Site): string {
+	return [
+		'# Not found',
+		'',
+		'No page of the TinyStore docs is at this address. It may have moved when the docs were rewritten.',
+		'',
+		...llmsFiles(site),
+		'',
+	].join('\n')
+}
+
+/** The files an agent reads the docs through, a markdown list item each. */
+export function llmsFiles(site: Site): string[] {
+	const api = apiLanguages.map(
+		language => `[${apiLanguageNames[language]}](${site.origin}/llms-${language}.txt)`,
+	)
+	return [
+		`- [llms.txt](${site.origin}/llms.txt): every page with a line on it, each as markdown`,
+		`- [llms-full.txt](${site.origin}/llms-full.txt): every guide in one file`,
+		`- [The docs index](${site.origin}/docs.md): the pages as the site's sidebar lists them`,
+		`- The API, one file per language: ${api.join(', ')}`,
+	]
 }
 
 function joined(site: Site, pages: Site['pages']): string {

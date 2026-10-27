@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, relative, sep } from 'node:path'
 
 /** What a request for a file is, as the server counts it. */
@@ -16,6 +16,8 @@ export interface SiteFile {
 	/** the same bytes compressed, made beside it at build time */
 	br?: string
 	gzip?: string
+	/** a page's markdown, served instead to a request that would rather read it */
+	markdown?: SiteFile
 }
 
 export interface Site {
@@ -24,6 +26,8 @@ export interface Site {
 	notFound: SiteFile | undefined
 	/** every page the build made, the values a view's page label may take */
 	pages: Set<string>
+	/** the address the build was made for, where its llms.txt is read; '' if it says none */
+	origin: string
 }
 
 const types: Record<string, string> = {
@@ -52,6 +56,9 @@ const types: Record<string, string> = {
  *     docs/kv/__data.json                → the same page's data, fetched on navigation
  *     docs/kv.md, llms.txt               → markdown, an agent's or a reader's copy
  *     _app/immutable/…                   → an asset, cached for good
+ *
+ * A page's markdown is the file at its path with .md after it, and the
+ * landing page's is llms.txt, the whole site as an agent reads it.
  */
 export function readSite(dir: string): Site {
 	const files = new Map<string, SiteFile>()
@@ -80,6 +87,16 @@ export function readSite(dir: string): Site {
 		throw new Error(`${dir} holds no index.html: build the site first, bun run build`)
 	}
 
+	for (const file of files.values()) {
+		const markdown =
+			file.kind === 'page'
+				? files.get(file.page === '/' ? '/llms.txt' : `${file.page}.md`)
+				: undefined
+		if (markdown !== undefined) {
+			file.markdown = markdown
+		}
+	}
+
 	const pages = new Set(
 		[...files.values()].filter(file => file.kind === 'page').map(file => file.page),
 	)
@@ -88,7 +105,17 @@ export function readSite(dir: string): Site {
 		find: pathname => files.get(pathname),
 		notFound: files.get('/404'),
 		pages,
+		origin: originOf(files.get('/sitemap.xml')),
 	}
+}
+
+// the sitemap's first address is the landing page's: the site's own, a slash after it
+function originOf(sitemap: SiteFile | undefined): string {
+	if (sitemap === undefined) {
+		return ''
+	}
+	const first = /<loc>([^<]*)<\/loc>/.exec(readFileSync(sitemap.path, 'utf8'))?.[1]
+	return first?.replace(/\/$/, '') ?? ''
 }
 
 export function routeOf(file: string): { path: string; kind: Kind; page: string } {
@@ -103,14 +130,18 @@ export function routeOf(file: string): { path: string; kind: Kind; page: string 
 		const page = `/${file.slice(0, -'__data.json'.length)}`.replace(/\/$/, '') || '/'
 		return { path: `/${file}`, kind: 'data', page }
 	}
+	if (forAgents.test(file)) {
+		return { path: `/${file}`, kind: 'markdown', page: `/${file}` }
+	}
 	if (file.endsWith('.md')) {
 		return { path: `/${file}`, kind: 'markdown', page: `/${file.slice(0, -'.md'.length)}` }
 	}
-	if (file === 'llms.txt' || file === 'llms-full.txt') {
-		return { path: `/${file}`, kind: 'markdown', page: `/${file}` }
-	}
 	return { path: `/${file}`, kind: 'asset', page: '' }
 }
+
+// what an agent reads whole, a view of no page, counted under its own name:
+// llms.txt, llms-full.txt and llms-go.txt's like, skill.md, and their copies under .well-known/
+const forAgents = /^(?:llms(?:-[a-z]+)?\.txt|skill\.md|\.well-known\/.+\.(?:txt|md))$/
 
 /**
  * The file as the request can take it: brotli or gzip when it says so and the

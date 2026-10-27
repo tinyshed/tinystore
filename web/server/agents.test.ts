@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { agentOf } from './agents.ts'
+import { agentOf, providerOf } from './agents.ts'
 
 describe('who asked', () => {
 	test('a browser is a person', () => {
@@ -20,6 +20,19 @@ describe('who asked', () => {
 		]) {
 			expect(agentOf(name)).toBe('agent')
 		}
+	})
+
+	test("an agent is its provider's, by the name it gives itself", () => {
+		expect(providerOf('Claude-User (claude-code/2.1)')).toBe('anthropic')
+		expect(providerOf('Mozilla/5.0 AppleWebKit/537.36; compatible; ChatGPT-User/1.0')).toBe(
+			'openai',
+		)
+		expect(providerOf('Mozilla/5.0 (compatible; PerplexityBot/1.0)')).toBe('perplexity')
+		expect(providerOf('CCBot/2.0 (https://commoncrawl.org/faq/)')).toBe('common-crawl')
+
+		expect(providerOf('Googlebot/2.1')).toBeUndefined()
+		expect(providerOf('Mozilla/5.0 Safari/604.1')).toBeUndefined()
+		expect(providerOf(null)).toBeUndefined()
 	})
 
 	test('any other program is a crawler, and so is a request that says nothing', () => {

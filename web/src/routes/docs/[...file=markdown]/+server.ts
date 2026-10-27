@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit'
 
+import { markdownFile } from '$lib/content/markdown'
 import { loadSite } from '$lib/content/site'
 
 import type { EntryGenerator, RequestHandler } from './$types'
@@ -13,11 +14,12 @@ export const entries: EntryGenerator = async () =>
 
 export const GET: RequestHandler = async ({ params }) => {
 	const slug = params.file.replace(/\.md$/, '')
-	const page = (await loadSite()).pages.find(candidate => candidate.slug === slug)
+	const site = await loadSite()
+	const page = site.pages.find(candidate => candidate.slug === slug)
 	if (page === undefined) {
 		error(404, 'No such page')
 	}
-	return new Response(page.markdown, {
+	return new Response(markdownFile(page.markdown, site.origin), {
 		headers: { 'content-type': 'text/markdown; charset=utf-8' },
 	})
 }

@@ -1,7 +1,7 @@
 import type { Element, ElementContent, Root as HastRoot } from 'hast'
 import { toHtml } from 'hast-util-to-html'
 import { h } from 'hastscript'
-import type { Root } from 'mdast'
+import type { Root, RootContent } from 'mdast'
 import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
@@ -133,8 +133,8 @@ const exporter = unified().use(remarkGfm).use(remarkStringify, {
 
 /**
  * The page's markdown for a reader elsewhere, an agent or a paste: links made
- * absolute so that they still lead somewhere, and the comments the site reads
- * left out.
+ * absolute so that they still lead somewhere, another page's to its markdown,
+ * and the comments the site reads left out.
  */
 export function exportMarkdown(
 	tree: Root,
@@ -144,6 +144,7 @@ export function exportMarkdown(
 	origin: string,
 ): string {
 	const copy = structuredClone(tree)
+	const pages = new Set([...links.pages.values()].map(page => page.url))
 
 	visit(copy, (node, index, parent) => {
 		if (node.type === 'html' && /^<!--[\s\S]*-->$/.test(node.value.trim())) {
@@ -159,13 +160,34 @@ export function exportMarkdown(
 				node.type === 'image' ? 'asset' : 'link',
 			)
 			if ('href' in resolved) {
-				node.url = resolved.href.startsWith('/') ? origin + resolved.href : resolved.href
+				const href = markdownOf(resolved.href, pages)
+				node.url = href.startsWith('/') ? origin + href : href
 			}
 		}
 		return undefined
 	})
 
 	return exporter.stringify(copy)
+}
+
+/** Nodes of a parsed page written back as markdown, as the copies are. */
+export function stringify(nodes: RootContent[]): string {
+	return exporter.stringify({ type: 'root', children: nodes })
+}
+
+/**
+ * A page's markdown as the file `<page>.md`, opened by a line that tells an
+ * agent handed this one page where every other is listed. llms-full.txt
+ * joins the pages without it.
+ */
+export function markdownFile(markdown: string, origin: string): string {
+	return `> Fetch the index of the TinyStore docs, every page as markdown, at ${origin}/llms.txt\n\n${markdown}`
+}
+
+// another page as its markdown, /docs/kv#expiry → /docs/kv.md#expiry; anything else as it is
+function markdownOf(href: string, pages: Set<string>): string {
+	const path = href.split('#', 1)[0] ?? ''
+	return pages.has(path) ? `${path}.md${href.slice(path.length)}` : href
 }
 
 // GitHub's tables need a header row, so a table without one writes it empty: | | |
