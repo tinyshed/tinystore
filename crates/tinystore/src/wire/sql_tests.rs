@@ -869,6 +869,7 @@ fn files_opened_from_a_database_write_inside_its_transactions() {
         assert!(seen.info.is_some(), "a head sees the transaction's own file");
         let refused = nested(&mut client, stream, method::BLOBS_GET, &at).failure.unwrap();
         assert!(refused.message.contains("does not run inside a transaction"), "{}", refused.message);
+        assert!(!refused.message.contains("  "), "one sentence: {}", refused.message);
         assert_eq!(end(&mut client, stream, commit).flags, frame::END);
 
         let got = client.call::<BlobsGot>(method::BLOBS_GET, &at).unwrap();

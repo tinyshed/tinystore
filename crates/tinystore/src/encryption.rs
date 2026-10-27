@@ -163,7 +163,8 @@ impl Keyring {
         let id = sealed_with(sealed).ok_or_else(|| Error::corrupt("its value is not one the store sealed"))?;
         let Some(key) = self.keys().find(|key| key.id == id) else {
             return Err(Error::invalid(format!(
-                "its value was sealed with the key {}, which the store does not hold, and it seals with {}:                  give the store that key among its older encryption keys",
+                "its value was sealed with the key {}, which the store does not hold, and it seals with {}: \
+                 give the store that key among its older encryption keys",
                 crate::text::hex(&id),
                 self.id()
             )));
@@ -288,6 +289,7 @@ mod tests {
         let without = before.open(b"passwords/42", &sealed).unwrap_err();
         assert_eq!(without.kind(), ErrorKind::Invalid, "a store without the new key opens none of its values");
         assert!(without.to_string().contains(&ring.id()), "{without}");
+        assert!(!without.to_string().contains("  "), "one sentence: {without}");
     }
 
     #[test]

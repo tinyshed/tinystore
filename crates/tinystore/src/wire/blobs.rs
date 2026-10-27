@@ -162,7 +162,8 @@ pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u1
             Ok(info_of(info).encode())
         }
         other => Err(Failure::invalid(format!(
-            "method {other:#06x} does not run inside a transaction: files join one with put, head, delete, copy              and rename"
+            "method {other:#06x} does not run inside a transaction: files join one with put, head, delete, copy \
+             and rename"
         ))),
     }
 }
