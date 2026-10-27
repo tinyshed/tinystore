@@ -253,7 +253,9 @@ these losses beside the wins.
 
 v0.1.0 from npm and crates.io, medians of three passes in one Linux container
 on a Ryzen 7 7700, programs in Bun 1.4.2 with Bun's own Redis, PostgreSQL and
-S3 clients. Metrics: TSBS DevOps, 26 million samples. Logs: 13 LogHub
+S3 clients; memory and the start at rest are v0.4.0's, measured again there
+on 27 October
+([report](https://github.com/tinyshed/research/blob/main/tinystore/reports/at-rest-2026-10-27.md)). Metrics: TSBS DevOps, 26 million samples. Logs: 13 LogHub
 datasets, 2.6 GiB. Method, every pass, the raw data and the commands are in
 the [round's report](https://github.com/tinyshed/research/blob/main/tinystore/reports/release-2026-10-23.md).
 

@@ -4,8 +4,8 @@
 <text x="20" y="56" font-size="12" fill="#59636e">from start to every engine open · lower is better</text>
 <text x="20" y="89.0" font-size="14" font-weight="600" fill="#1f2328">TinyStore</text>
 <rect x="152" y="74" width="3.0" height="20" rx="3" fill="#23212B"/>
-<text x="163.0" y="89.0" font-size="14" font-weight="600" fill="#1f2328">133 ms</text>
+<text x="163.0" y="89.0" font-size="14" font-weight="600" fill="#1f2328">135 ms</text>
 <text x="20" y="121.0" font-size="14" font-weight="400" fill="#1f2328">The five services</text>
 <rect x="152" y="106" width="148.0" height="20" rx="3" fill="#d1d9e0"/>
-<text x="308.0" y="121.0" font-size="14" font-weight="400" fill="#1f2328">15.5 s</text>
+<text x="308.0" y="121.0" font-size="14" font-weight="400" fill="#1f2328">15.4 s</text>
 </svg>

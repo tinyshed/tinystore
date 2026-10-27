@@ -32,6 +32,7 @@ describe('the landing page', () => {
 		for (const share of landing.numbers.shares) {
 			expect(share.value).toMatch(/^[\d.]+ MiB$/)
 		}
+		expect(landing.numbers.sharesNote).toContain('<a href="https://')
 		expect(landingSummary()).toStartWith(`${landing.headline.replace(/\.$/, '')}: `)
 	}, 30_000) // the first to build the whole site, every page highlighted
 

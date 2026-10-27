@@ -49,6 +49,8 @@ export interface Numbers {
 	legend: { term: string; text: string }[]
 	/** each of the five services' memory at rest, the table under the caveat */
 	shares: { name: string; value: string }[]
+	/** the paragraph over that table, as HTML: which round measured it */
+	sharesNote: string
 	/** the paragraph under the legend, as HTML, its links resolved */
 	caveat: string
 }
@@ -81,6 +83,7 @@ export async function readLanding(site: Site, root = checkout()): Promise<Landin
 	const links = linksOf(site, root)
 	const headline = headlineOf(intro)
 	const codes = intro.nodes.filter((node): node is Code => node.type === 'code')
+	const sharesNote = sharesNoteOf(numbers)
 
 	return {
 		title: `TinyStore: ${lowerFirst(withoutStop(headline))}`,
@@ -97,6 +100,7 @@ export async function readLanding(site: Site, root = checkout()): Promise<Landin
 			})),
 			caveat: await inline(paragraphOf(numbers), links, highlight),
 			shares: sharesOf(numbers),
+			sharesNote: sharesNote === undefined ? '' : await inline(sharesNote, links, highlight),
 		},
 	}
 }
@@ -155,6 +159,13 @@ function sharesOf(section: Section): { name: string; value: string }[] {
 	return table === undefined
 		? []
 		: rowsOf(table).map(([name, value]) => ({ name: plain(name), value: plain(value) }))
+}
+
+// the paragraph right over that table, which says which round measured it
+function sharesNoteOf(section: Section): Paragraph | undefined {
+	const table = section.nodes.filter((node): node is Table => node.type === 'table')[1]
+	const before = table === undefined ? undefined : section.nodes[section.nodes.indexOf(table) - 1]
+	return before?.type === 'paragraph' ? before : undefined
 }
 
 function tableOf(section: Section): Table {

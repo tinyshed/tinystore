@@ -122,7 +122,8 @@ store.metrics()?.counter("signups_total").open()?.inc();
 | The five services | PostgreSQL 18, Redis 8.10, MinIO, VictoriaMetrics 1.154 and Loki 3.7, each as it ships. |
 
 v0.1.0, medians of three passes in one Linux container on a Ryzen 7 7700,
-driven from Bun 1.4.2 with Bun's own Redis, PostgreSQL and S3 clients. These
+driven from Bun 1.4.2 with Bun's own Redis, PostgreSQL and S3 clients; the
+memory and the start at rest are v0.4.0's, measured again there. These
 are not universal wins: with one to eight clients the services answer twice
 the requests, Redis takes writes that skip the disk sync six times faster, and
 VictoriaMetrics keeps a sample in fewer bytes.
@@ -131,13 +132,14 @@ VictoriaMetrics keeps a sample in fewer bytes.
 
 ### Memory, service by service
 
-Each of the five services' share of the 402 MiB at rest, from the same
-round's [summary](https://github.com/tinyshed/research/blob/main/tinystore/reports/data/release-2026-10-23/summary.md):
+TinyStore 0.4.0 and each of the five services after a minute at rest, every
+engine open, medians of three passes from the
+[at-rest round of 27 October](https://github.com/tinyshed/research/blob/main/tinystore/reports/at-rest-2026-10-27.md).
 
 |                 |           |
 |-----------------|-----------|
-| Loki            | 133.0 MiB |
-| PostgreSQL      | 126.0 MiB |
-| MinIO           | 108.0 MiB |
-| VictoriaMetrics | 26.4 MiB  |
-| Redis           | 8.6 MiB   |
+| Loki            | 132.8 MiB |
+| PostgreSQL      | 125.8 MiB |
+| MinIO           | 109.1 MiB |
+| VictoriaMetrics | 26.0 MiB  |
+| Redis           | 8.8 MiB   |

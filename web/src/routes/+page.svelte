@@ -32,7 +32,12 @@
 	</section>
 
 	{#if rest !== undefined && data.numbers.shares.length > 0}
-		<AtRest card={rest} legend={data.numbers.legend} shares={data.numbers.shares} />
+		<AtRest
+			card={rest}
+			legend={data.numbers.legend}
+			shares={data.numbers.shares}
+			note={data.numbers.sharesNote}
+		/>
 	{/if}
 
 	<section class="engines" aria-label="Engines">

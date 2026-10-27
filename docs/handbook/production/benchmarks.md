@@ -1,9 +1,10 @@
 # Benchmarks
 
 How TinyStore compares with the services it replaces: PostgreSQL, Redis,
-MinIO, VictoriaMetrics and Loki. The numbers come from one machine and one
-round of measurements of the `0.1.0` release. This page shows where TinyStore
-wins, where it loses, and what each test did.
+MinIO, VictoriaMetrics and Loki. The numbers come from one machine: one round
+of measurements of the `0.1.0` release, and the numbers at rest measured again
+on `0.4.0`. This page shows where TinyStore wins, where it loses, and what each
+test did.
 
 TinyStore is not faster than each of these services at its own job. It
 replaces five processes with one, and an application on it uses a fraction
@@ -18,15 +19,21 @@ once, and then rests for a minute.
 
 | At rest                   | TinyStore | The five services                                                         |
 |---------------------------|-----------|---------------------------------------------------------------------------|
-| memory, every engine open | 14.7 MiB  | 402 MiB: Loki 133, PostgreSQL 126, MinIO 108, VictoriaMetrics 26, Redis 9 |
-| ready after start         | 0.13 s    | 15.5 s, Loki's; PostgreSQL 0.07 s, MinIO 0.37 s                           |
-| CPU per minute of rest    | 0.01 s    | 0.6 s                                                                     |
+| memory, every engine open | 16.7 MiB  | 402 MiB: Loki 133, PostgreSQL 126, MinIO 109, VictoriaMetrics 26, Redis 9 |
+| ready after start         | 0.135 s   | 15.4 s, Loki's; PostgreSQL 0.07 s, MinIO 0.38 s                           |
+| CPU per minute of rest    | 0.01 s    | 0.55 s                                                                    |
 | processes                 | 1         | 5 servers, PostgreSQL's background workers and backends among them        |
 
+These are the `0.4.0` release's, measured again on 27 October in the same
+container as the round below. TinyStore's server holds 2 MiB more than
+`0.1.0` did, 16.7 against 14.7, and starts as fast. The
+[at-rest round's report](https://github.com/tinyshed/research/blob/main/tinystore/reports/at-rest-2026-10-27.md)
+compares the two releases figure by figure.
+
 The memory is TinyStore's server, `tinystore serve`. With the core loaded into
-the program instead, `open(dir, { embedded: true })`, a Bun program holds 17
+the program instead, `open(dir, { embedded: true })`, a Bun program holds 19
 MiB more than Bun alone, which holds 38. Valkey alone holds 9 MiB at rest and
-Prometheus 101.
+Prometheus 98.
 
 ## An application
 

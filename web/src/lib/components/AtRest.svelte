@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Card } from '$lib/content/landing'
-	import { href } from '$lib/href'
+	import { href, rebase } from '$lib/href'
 
 	/**
 	 * The memory each stack holds at rest, on one scale: TinyStore's one block
@@ -13,10 +13,13 @@
 		card,
 		legend,
 		shares,
+		note,
 	}: {
 		card: Card
 		legend: { term: string; text: string }[]
 		shares: { name: string; value: string }[]
+		/** which round measured it, as HTML from landing.md */
+		note: string
 	} = $props()
 
 	const rows = $derived(
@@ -148,9 +151,8 @@
 
 		<div class="foot">
 			<p class="note">
-				Each service as it ships, with every engine open, after a minute at rest. The
-				five add up to the stack's own total.
-				<a href={href('/docs/handbook/production/benchmarks#how-it-was-measured')}>How it was measured</a>
+				{@html rebase(note)}
+				<a href={href('/docs/handbook/production/benchmarks#at-rest')}>Every figure at rest</a>
 			</p>
 		</div>
 	</div>
@@ -387,11 +389,12 @@
 		line-height: 1.6;
 	}
 
-	.note a {
+	/* the round's link comes from landing.md, outside the component's scope */
+	.note :global(a) {
 		color: var(--ts-accent-text);
 	}
 
-	.note a:hover {
+	.note :global(a:hover) {
 		text-decoration: underline;
 	}
 
