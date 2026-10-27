@@ -62,7 +62,6 @@ pub struct Copied {
 /// What a snapshot copies of an engine: its SQLite files, at the moment, and
 /// what the engine copies beside them once they are.
 #[derive(Default)]
-#[cfg_attr(not(feature = "backup"), expect(dead_code, reason = "a backup alone takes a snapshot"))]
 pub struct Copying<'a> {
     pub(crate) files: Vec<(Copied, crate::sqlite::Source)>,
     pub(crate) at_the_moment: Option<AtTheMoment<'a>>,
@@ -71,7 +70,8 @@ pub struct Copying<'a> {
 impl fmt::Debug for Copying<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let files: Vec<&str> = self.files.iter().map(|(copied, _)| copied.name.as_str()).collect();
-        f.debug_struct("Copying").field("files", &files).finish_non_exhaustive()
+        let at_the_moment = self.at_the_moment.is_some();
+        f.debug_struct("Copying").field("files", &files).field("at_the_moment", &at_the_moment).finish()
     }
 }
 

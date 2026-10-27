@@ -134,8 +134,7 @@ impl Engine for Databases {
         let open: Vec<Arc<Base>> = lock(&self.open).values().cloned().collect();
         let mut copying = crate::engine::Copying::default();
         for base in &open {
-            let copied = crate::engine::Copied { name: file_of(&base.name), engine: "sql" };
-            copying.files.push((copied, base.file().source()?));
+            copying.files.extend(crate::engine::to_copy(base.file(), &file_of(&base.name), "sql")?.files);
         }
         Ok(copying)
     }
