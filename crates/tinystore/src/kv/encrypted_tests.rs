@@ -201,6 +201,29 @@ fn a_reseal_seals_with_the_new_key_what_the_old_one_did_keeping_each_version_and
     assert_eq!(plain.reseal().unwrap_err().kind(), ErrorKind::Invalid, "a bucket that seals nothing");
 }
 
+#[test]
+fn a_reseal_of_large_values_seals_every_one_across_commits_bound_by_their_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = (key_file(dir.path(), "old.key", "0a"), key_file(dir.path(), "new.key", "0b"));
+    let data = dir.path().join("data");
+    let store = with_keys(&data, &old, &[]);
+    let files = store.bucket::<String>("files").encrypted().open().unwrap();
+    // more than one commit's bytes, and far fewer values than one commit's count
+    let large = |n: u8| char::from(b'a' + n).to_string().repeat(800_000);
+    (0..12).for_each(|n| files.set(format!("f-{n:02}"), &large(n)).unwrap());
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[&old]);
+    assert_eq!(store.bucket::<String>("files").encrypted().open().unwrap().reseal().unwrap(), 12);
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[]);
+    let files = store.bucket::<String>("files").encrypted().open().unwrap();
+    for n in 0..12 {
+        assert_eq!(files.get(format!("f-{n:02}")).unwrap(), Some(large(n)), "f-{n:02} opened without the old key");
+    }
+}
+
 // contract: SEC-04
 #[test]
 fn a_key_lost_is_not_replaced_while_a_bucket_holds_values_sealed_with_it() {

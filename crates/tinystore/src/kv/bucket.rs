@@ -1048,8 +1048,9 @@ impl<V> fmt::Debug for All<V> {
     }
 }
 
-/// The values a reseal's commit seals again at most.
-const RESEAL_BATCH: usize = 1000;
+/// The values a reseal's commit seals again at most, and the bytes past which
+/// it takes no more, since each value may be a mebibyte.
+const RESEAL_BATCH: (usize, usize) = (1000, 8 << 20);
 
 /// One batch of a reseal: the live cells from `from` on, each an older key
 /// sealed opened and sealed with the sealing key, and how many it sealed with
@@ -1063,7 +1064,7 @@ fn reseal_work(
 ) -> impl FnOnce(&Tx<'_>) -> Result<(u64, Option<Vec<u8>>)> + Send + 'static + use<> {
     let (id, now, encrypted) = (scope.id, scope.now(), encrypted.clone());
     move |tx: &Tx<'_>| {
-        let cells = cells::sealed_page(tx, id, (&from, &to), now, RESEAL_BATCH)?;
+        let (cells, more) = cells::sealed_page(tx, id, (&from, &to), now, RESEAL_BATCH)?;
         let mut moved = 0;
         for cell in cells.iter().filter(|cell| !encrypted.sealed_it(&cell.bytes)) {
             let opened = encrypted.open(&cell.path, &Raw::Bytes(cell.bytes.clone()))?;
@@ -1073,7 +1074,7 @@ fn reseal_work(
             cells::reseal(tx, id, cell, &sealed)?;
             moved += 1;
         }
-        if cells.len() == RESEAL_BATCH {
+        if more {
             let mut next = cells.last().map(|cell| cell.path.clone()).unwrap_or_default();
             next.push(0);
             return Ok((moved, Some(next)));

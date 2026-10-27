@@ -433,18 +433,30 @@ pub(crate) struct Sealed {
     pub(crate) bytes: Vec<u8>,
 }
 
-/// The live cells of `[from, to)`, `limit` at most, in the order of their paths.
+/// The live cells of `[from, to)` in the order of their paths, `limit` at
+/// most and none past the one whose bytes reach `bytes`, and whether more
+/// may follow.
 pub(crate) fn sealed_page(
     connection: &Connection,
     bucket: i64,
     (from, to): (&[u8], &[u8]),
     now: i64,
-    limit: usize,
-) -> Result<Vec<Sealed>> {
+    (limit, bytes): (usize, usize),
+) -> Result<(Vec<Sealed>, bool)> {
+    let failed = |error: rusqlite::Error| sql_error("its sealed values", error);
     let read = |row: &rusqlite::Row<'_>| Ok(Sealed { path: row.get(0)?, spill: row.get(1)?, bytes: row.get(2)? });
-    let mut select = connection.prepare_cached(SELECT_SEALED).map_err(|error| sql_error("its sealed values", error))?;
-    let rows = select.query_map(params![bucket, from, to, now, limit as i64], read);
-    rows.and_then(Iterator::collect).map_err(|error| sql_error("its sealed values", error))
+    let mut select = connection.prepare_cached(SELECT_SEALED).map_err(failed)?;
+    let mut rows = select.query_map(params![bucket, from, to, now, limit as i64], read).map_err(failed)?;
+    let (mut cells, mut taken) = (Vec::new(), 0usize);
+    while taken < bytes {
+        let Some(cell) = rows.next().transpose().map_err(failed)? else {
+            let full = cells.len() == limit;
+            return Ok((cells, full));
+        };
+        taken += cell.bytes.len();
+        cells.push(cell);
+    }
+    Ok((cells, true))
 }
 
 /// Writes a value sealed again where the cell keeps it.
