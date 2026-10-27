@@ -4,12 +4,19 @@
 //! hold it.
 //!
 //! ```text
-//! clock = 1 | blocks | each block: start | end − start | samples | steps' length | steps | crc-32
+//! clock = 2 | blocks | each block: start | end − start | samples | steps' length | steps | crc-32
+//!         a start but the first is its distance from the end of the block before
 //! steps = nothing for a block evenly spaced, else the shortest of:
 //!   plain       0 | unit | each step in units
 //!   runs        1 | unit | each run: its length, its step in units
 //!   exceptions  2 | unit | the commonest step | each other: how far after the last, its step
+//!   deviations  3 | unit | the median step | k | each step's distance from it, ZigZag, a rice code of k
 //! ```
+//!
+//! Times taken as answers arrive, as a ping's, lie a few milliseconds either
+//! side of their step, where plain spends two bytes a step and deviations
+//! half of one: Pingmon's pings a second, 1.86 bytes a time against 0.50.
+//! Version 1 kept every start whole, and reads as it was written.
 
 use std::collections::HashMap;
 
@@ -19,8 +26,9 @@ use sha2::{Digest, Sha256};
 use super::binary::{advance, distance};
 use super::codec::{MOST_SAMPLES, Point};
 use super::engine::{execute, query_one};
+use crate::compress::bits::{BitReader, BitWriter, RiceCost, read_rice, write_rice};
 use crate::compress::checksum::Crc32;
-use crate::compress::varint::{Reader, put_count, put_int};
+use crate::compress::varint::{Reader, fold, put_count, put_int, unfold};
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -28,13 +36,15 @@ use crate::{Error, Result};
 pub(super) const MOST_BYTES: usize = 65_536;
 /// The blocks a group holds at most.
 pub(super) const MOST_BLOCKS: usize = 32;
-pub(super) const VERSION: u8 = 1;
+pub(super) const VERSION: u8 = 2;
+const WHOLE_STARTS: u8 = 1;
 /// What a block's steps hold at most: a varint a step and a few bytes more.
 const MOST_STEPS: usize = 10 * MOST_SAMPLES + 32;
 
 const PLAIN: u8 = 0;
 const RUNS: u8 = 1;
 const EXCEPTIONS: u8 = 2;
+const DEVIATIONS: u8 = 3;
 
 /// A block's times as its group's clock keeps them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -140,13 +150,28 @@ fn walk_steps(steps: &[u8], count: usize, step_to: &mut impl FnMut(usize, u64) -
             }
             (1..count).try_for_each(|index| scaled(index, exceptions.get(&index).copied().unwrap_or(step)))?;
         }
+        DEVIATIONS => {
+            let median = reader.uvarint();
+            let k = u32::from(reader.byte());
+            reader.check()?;
+            if k >= 64 {
+                return Err(Error::corrupt("a clock's rice parameter"));
+            }
+            let mut code = BitReader::of(reader.rest());
+            (1..count)
+                .try_for_each(|index| scaled(index, median.wrapping_add(unfold(read_rice(&mut code, k)) as u64)))?;
+            if !code.finished() {
+                return Err(Error::corrupt("a clock's deviations, which end inside a step or before their bytes"));
+            }
+        }
         _ => return Err(Error::corrupt("a clock's mode")),
     }
     reader.finish()
 }
 
 /// A block's steps: nothing when they are all one, else the shortest of
-/// writing them plain, as runs, or as exceptions to the commonest.
+/// writing them plain, as runs, as exceptions to the commonest, or as
+/// deviations from the median.
 fn steps_of(points: &[Point]) -> Vec<u8> {
     if points.len() < 2 {
         return Vec::new();
@@ -180,7 +205,24 @@ fn steps_of(points: &[Point]) -> Vec<u8> {
         put_count(&mut exceptions, delta / unit);
         previous = index + 1;
     }
-    [plain, runs, exceptions].into_iter().min_by_key(Vec::len).unwrap_or_default()
+    [plain, runs, exceptions, deviations(&deltas, unit)].into_iter().min_by_key(Vec::len).unwrap_or_default()
+}
+
+/// Each step as its distance from the median step, in a rice code. The
+/// arithmetic wraps, so that a step of any size comes back.
+fn deviations(deltas: &[u64], unit: u64) -> Vec<u8> {
+    let mut sorted: Vec<u64> = deltas.iter().map(|delta| delta / unit).collect();
+    sorted.sort_unstable();
+    let median = sorted[sorted.len() / 2];
+    let folded: Vec<u64> = deltas.iter().map(|delta| fold((delta / unit).wrapping_sub(median) as i64)).collect();
+    let (k, _) = RiceCost::of(&folded).cheapest();
+    let mut out = vec![DEVIATIONS];
+    put_count(&mut out, unit);
+    put_count(&mut out, median);
+    out.push(k as u8);
+    let mut code = BitWriter::onto(out);
+    folded.iter().for_each(|value| write_rice(&mut code, *value, k));
+    code.finish()
 }
 
 fn common_divisor(mut a: u64, mut b: u64) -> u64 {
@@ -194,8 +236,10 @@ fn common_divisor(mut a: u64, mut b: u64) -> u64 {
 /// checksum.
 pub(super) fn encode(blocks: &[Times]) -> Vec<u8> {
     let mut out = vec![VERSION, blocks.len() as u8];
+    let mut before_end = None;
     for block in blocks {
-        put_int(&mut out, block.start);
+        put_int(&mut out, before_end.map_or(block.start, |end: i64| block.start.wrapping_sub(end)));
+        before_end = Some(block.end);
         put_count(&mut out, distance(block.start, block.end));
         put_count(&mut out, block.count as u64);
         put_count(&mut out, block.steps.len() as u64);
@@ -220,7 +264,8 @@ fn decoded(body: &[u8]) -> Result<Vec<Times>> {
         return Err(Error::corrupt("its checksum"));
     }
     let mut reader = Reader::new(content);
-    if reader.byte() != VERSION {
+    let version = reader.byte();
+    if version != VERSION && version != WHOLE_STARTS {
         return Err(Error::corrupt("its version"));
     }
     let count = usize::from(reader.byte());
@@ -229,7 +274,11 @@ fn decoded(body: &[u8]) -> Result<Vec<Times>> {
     }
     let mut blocks: Vec<Times> = Vec::with_capacity(count);
     for _ in 0..count {
-        let start = reader.int();
+        let given = reader.int();
+        let start = match blocks.last() {
+            Some(before) if version == VERSION => before.end.wrapping_add(given),
+            _ => given,
+        };
         let span = reader.uvarint();
         let samples = reader.count(MOST_SAMPLES);
         let steps = reader.counted(MOST_STEPS).to_vec();
@@ -250,14 +299,18 @@ fn decoded(body: &[u8]) -> Result<Vec<Times>> {
 
 const FIND: &str = "select id, body from clocks where digest = ?1";
 const HOLD: &str = "update clocks set refs = refs + 1 where id = ?1";
-const MAKE: &str = "insert into clocks (digest, refs, body) values (?1, 1, ?2) returning id";
+const MAKE_LASTING: &str = "insert into clocks (id, digest, refs, body)
+    values ((select max(coalesce(max(id), 0), 0) + 1 from clocks), ?1, 1, ?2) returning id";
+const MAKE_GROWING: &str = "insert into clocks (id, digest, refs, body)
+    values ((select min(coalesce(min(id), 0), 0) - 1 from clocks), ?1, 1, ?2) returning id";
 const LET_GO: &str = "update clocks set refs = refs - 1 where id = ?1 and refs > 0";
 const FORGET: &str = "delete from clocks where id = ?1 and refs = 0";
 const LOAD: &str = "select length(body), case when length(body) <= ?2 then body end from clocks where id = ?1";
 
 /// The id of the clock of `body`, one more group holding it: the one the
-/// file has, its bytes compared, or a new one.
-pub(super) fn hold(connection: &Connection, body: &[u8]) -> Result<i64> {
+/// file has, its bytes compared, or a new one, after every clock when its
+/// groups are `lasting` and before every one when they may be merged.
+pub(super) fn hold(connection: &Connection, body: &[u8], lasting: bool) -> Result<i64> {
     let digest: [u8; 32] = Sha256::digest(body).into();
     let failed = |error| sql_error("find a shared clock", error);
     let found: Option<(i64, Vec<u8>)> = connection
@@ -270,7 +323,10 @@ pub(super) fn hold(connection: &Connection, body: &[u8]) -> Result<i64> {
             Ok(id)
         }
         Some(_) => Err(Error::corrupt("two clocks of one digest")),
-        None => query_one(connection, MAKE, params![digest, body], "write a clock"),
+        None => {
+            let make = if lasting { MAKE_LASTING } else { MAKE_GROWING };
+            query_one(connection, make, params![digest, body], "write a clock")
+        }
     }
 }
 

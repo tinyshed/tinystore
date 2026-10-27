@@ -119,7 +119,10 @@ impl<'a> BitReader<'a> {
 }
 
 /// A quotient this large or larger is written as the escape and 64 raw bits.
-#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 const RICE_ESCAPE: u32 = 32;
 
 /// Appends the rice code of `value` at parameter `k`, 63 at most: `value >>
@@ -128,7 +131,10 @@ const RICE_ESCAPE: u32 = 32;
 /// ```text
 /// k=2   5 → 1 0 01     0 → 0 00     13 → 111 0 01
 /// ```
-#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
     let quotient = value >> k;
     if quotient < u64::from(RICE_ESCAPE) {
@@ -141,7 +147,10 @@ pub(crate) fn write_rice(writer: &mut BitWriter, value: u64, k: u32) {
     }
 }
 
-#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
     let mut quotient = 0;
     while quotient < RICE_ESCAPE && reader.read(1) == 1 {
@@ -152,7 +161,10 @@ pub(crate) fn read_rice(reader: &mut BitReader<'_>, k: u32) -> u64 {
 
 /// Integers counted by their length in bits, with the sums that price a
 /// rice code at every parameter exactly, in one pass over them.
-#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) struct RiceCost {
     counts: [u64; 65],
     /// By a length and how many bits above a parameter it stands, one to
@@ -162,7 +174,10 @@ pub(crate) struct RiceCost {
     longest: usize,
 }
 
-#[cfg_attr(all(not(test), not(feature = "records")), expect(dead_code, reason = "only records uses it"))]
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 impl RiceCost {
     pub(crate) fn of(values: &[u64]) -> RiceCost {
         let mut cost = RiceCost { counts: [0; 65], quotients: [[0; 6]; 65], longest: 0 };

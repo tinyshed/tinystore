@@ -11,6 +11,12 @@
 //! blocks than it, so that a group at least doubles each time it is rewritten
 //! and a block's directory entry is rewritten a few times at most. Payloads
 //! keep their ids, so that a merge rewrites directories and no body.
+//!
+//! A group of the most blocks is never taken in again: its row and its clock
+//! go after every row of their tables, so that the pages they fill stay full,
+//! and a group still growing goes below zero, among the rows merges remove.
+//! Written among them, a third of either table's pages was empty, Pingmon's
+//! a second.
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -39,8 +45,10 @@ const NEXT_PAYLOAD: &str = "select next_payload_id from store_state where id = 1
 const TAKE_PAYLOADS: &str = "update store_state set next_payload_id = ?1 where id = 1";
 const INSERT_PAYLOAD: &str = "insert into payloads (id, body) values (?1, ?2)";
 const DROP_GROUP: &str = "delete from groups where id = ?1";
-const INSERT_GROUP: &str =
-    "insert into groups (series_id, start_ts, end_ts, clock, directory) values (?1, ?2, ?3, ?4, ?5)";
+const INSERT_LASTING_GROUP: &str = "insert into groups (id, series_id, start_ts, end_ts, clock, directory)
+    values ((select max(coalesce(max(id), 0), 0) + 1 from groups), ?1, ?2, ?3, ?4, ?5)";
+const INSERT_GROWING_GROUP: &str = "insert into groups (id, series_id, start_ts, end_ts, clock, directory)
+    values ((select min(coalesce(min(id), 0), 0) - 1 from groups), ?1, ?2, ?3, ?4, ?5)";
 const HEAD: &str = "select st.max_seen, st.head_count, st.head_start, st.head_end, h.body
     from series_state st left join heads h on h.series_id = st.series_id where st.series_id = ?1";
 const DROP_HEAD: &str = "delete from heads where series_id = ?1";
@@ -134,7 +142,8 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> 
     }
     let expired = expire_behind(tx, zstd, candidate)?;
     let (mut group, merged) = merge_before(tx, zstd, series.group.clone())?;
-    group.clock = clock::hold(tx, &clock::encode(&times_of(&group)))?;
+    let lasting = group.blocks.len() == MOST_BLOCKS;
+    group.clock = clock::hold(tx, &clock::encode(&times_of(&group)), lasting)?;
     give_payloads(tx, &mut group)?;
     for (row, clock) in merged {
         execute(tx, DROP_GROUP, params![row], "remove a group merged into the next")?;
@@ -142,7 +151,8 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> 
     }
     let directory = group.encode(zstd)?;
     let row = params![group.series, group.start, group.end, group.clock, directory];
-    execute(tx, INSERT_GROUP, row, "write a group")?;
+    let insert = if lasting { INSERT_LASTING_GROUP } else { INSERT_GROWING_GROUP };
+    execute(tx, insert, row, "write a group")?;
     seal(tx, zstd, series)?;
     Ok(expired)
 }

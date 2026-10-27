@@ -172,6 +172,33 @@ fn a_group_takes_in_the_one_before_it_while_that_holds_no_more_blocks() {
 }
 
 #[test]
+fn a_group_of_the_most_blocks_goes_after_every_row_and_one_still_growing_before() {
+    let f = fixture();
+    let start = f.now();
+    for hour in 0..33_u32 {
+        f.pass(HOUR);
+        let mut series = Series::gauge("cpu");
+        series.extend((0..240_u32).map(|index| (start + hour * HOUR + 15 * SECOND * index, f64::from(index % 7))));
+        f.metrics().ingest(&[series, Series::gauge("cpu").sample(f.now(), 0.0)]).unwrap();
+        maintain(&f.store).unwrap();
+    }
+    let sides = |table: &str| -> Vec<i64> {
+        let sql = format!("select id > 0 from {table} order by id desc");
+        f.engine()
+            .file
+            .read(|connection| {
+                let mut select = connection.prepare(&sql).unwrap();
+                Ok(select.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect())
+            })
+            .unwrap()
+    };
+    // 32 hourly blocks in a group no merge takes in again, and the newest hour growing beside it
+    assert_eq!(groups(&f).iter().map(|(_, _, blocks)| blocks.len()).collect::<Vec<_>>(), [32, 1]);
+    assert_eq!(sides("groups"), [1, 0]);
+    assert_eq!(sides("clocks"), [1, 0]);
+}
+
+#[test]
 fn a_unit_holding_more_than_240_samples_is_cut_every_240() {
     let f = fixture();
     // a sample a day ago, 300 within a second twelve hours ago, and one now: units of eight hours

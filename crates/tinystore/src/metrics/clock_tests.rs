@@ -28,22 +28,64 @@ fn a_block_evenly_spaced_keeps_no_steps_and_others_the_shortest_spelling() {
     assert_eq!(times.steps[0], RUNS, "two runs of steps");
     assert_eq!(read_back(&times), halves);
 
-    let wild: Vec<i64> = (0..240).map(|index| index * index * 3 + index).collect();
+    // steps of every order of size, which a rice code escapes for
+    let orders = [1, 200, 40_000, 9_000_000, 2_000_000_000];
+    let wild: Vec<i64> = (0..240).scan(0, |at, index| Some(std::mem::replace(at, *at + orders[index % 5]))).collect();
     let times = Times::of(&points(&wild));
     assert_eq!(times.steps[0], PLAIN);
     assert_eq!(read_back(&times), wild);
+
+    // a ping a second, its time taken when the answer came: 4 bits a step
+    let answered: Vec<i64> = (0..240).map(|index| index * 1000 + (index * 7919) % 9).collect();
+    let times = Times::of(&points(&answered));
+    assert_eq!(times.steps[0], DEVIATIONS);
+    assert!(times.steps.len() < 130, "{} bytes", times.steps.len());
+    assert_eq!(read_back(&times), answered);
 
     let single = Times::of(&points(&[7]));
     assert_eq!(read_back(&single), [7]);
 }
 
 #[test]
+fn deviations_bring_back_steps_of_any_size() {
+    let steps = [1000, 1003, 997, 1_000_000_000_000, 1001, u64::MAX, 1, 999];
+    let encoded = deviations(&steps, 1);
+    let mut read = Vec::new();
+    walk_steps(&encoded, steps.len() + 1, &mut |_, step| {
+        read.push(step);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(read, steps);
+    let mut longer = encoded.clone();
+    longer.push(0);
+    assert!(walk_steps(&longer, steps.len() + 1, &mut |_, _| Ok(())).is_err(), "a byte past the last step");
+}
+
+#[test]
+fn a_clock_of_version_1_reads_as_it_was_written() {
+    let written = [
+        1, 2, 156, 232, 193, 254, 174, 104, 186, 24, 4, 8, 0, 1, 139, 8, 197, 8, 234, 7, 128, 240, 199, 254, 174, 104,
+        176, 234, 1, 3, 0, 66, 228, 49, 118,
+    ];
+    let blocks = [
+        Times::of(&points(&[1_793_013_070_350, 1_793_013_071_385, 1_793_013_072_478, 1_793_013_073_480])),
+        Times::of(&points(&[1_793_013_120_000, 1_793_013_135_000, 1_793_013_150_000])),
+    ];
+    assert_eq!(decode(&written).unwrap(), blocks);
+    assert!(encode(&blocks).len() < written.len(), "version 2 spells the second start shorter");
+}
+
+#[test]
 fn a_clock_reads_back_its_blocks_and_refuses_what_changed() {
+    let answered: Vec<i64> = (0..60).map(|index| 400_000 + index * 1000 + (index * 31) % 7).collect();
     let blocks = vec![
         Times::of(&points(&(0..240).map(|index| index * 1000).collect::<Vec<_>>())),
         Times::of(&points(&[300_000, 300_500, 302_000])),
+        Times::of(&points(&answered)),
         Times::of(&points(&[i64::MAX - 10])),
     ];
+    assert_eq!(blocks[2].steps[0], DEVIATIONS);
     let body = encode(&blocks);
     assert_eq!(decode(&body).unwrap(), blocks);
     for place in 0..body.len() {
