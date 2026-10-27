@@ -27,6 +27,7 @@ import {
 	KvFound,
 	KvList,
 	KvPage,
+	KvResealed,
 	KvWritten,
 	type Method,
 	methods,
@@ -237,6 +238,26 @@ export class Bucket<T> {
 			handle => KvBranch.encode({ handle, under }),
 			'write',
 		)
+	}
+
+	/**
+	 * Seals again with the store's sealing key every value of this branch, and
+	 * of the branches under it, that an older key sealed, and says how many.
+	 * Once every value of the bucket is, the older key can leave the store's
+	 * options. A value sealed with a key the store does not hold stops it with
+	 * an `InvalidError` that names the key, and a reseal after the key is given
+	 * goes on.
+	 */
+	async reseal(): Promise<number> {
+		const under = underField(this.#under)
+		const answer = await this.#via.call(
+			methods['kv.bucket.open'],
+			this.#open,
+			methods['kv.reseal'],
+			handle => KvBranch.encode({ handle, under }),
+			'write',
+		)
+		return KvResealed.decode(answer).count ?? 0
 	}
 
 	/** One page of this branch's own keys, in the byte order of their text: `"10"` before `"9"`. */

@@ -134,6 +134,15 @@ impl<V: Value> Bucket<V> {
         run::write(&self.pool, what, move |answer| bucket.clear_then(move |cleared| answer.send(cleared)))
     }
 
+    /// Seals again with the store's sealing key what an older key sealed, as
+    /// [`crate::kv::Bucket::reseal`] does, on the store's pool: its batches
+    /// commit one after another, and once polled it runs to its end.
+    pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static {
+        let bucket = self.bucket.clone();
+        let what = named(bucket.scope.shown_branch(), "a reseal");
+        run::blocking(&self.pool, None, what, move || bucket.reseal())
+    }
+
     /// One page of this branch's own keys, after `after` when it continues
     /// another, as [`crate::kv::Bucket::list`] reads it.
     pub fn list(&self, limit: usize, after: Option<&str>) -> impl Future<Output = Result<Page<V>>> + Send + 'static {

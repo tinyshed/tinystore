@@ -10,8 +10,8 @@ use std::time::Duration;
 use super::codec::{Message, Row};
 use super::protocol::{
     Empty, Failure, Handle, KvAllowance, KvAnswer, KvBranch, KvBucketOpen, KvCall, KvCheck, KvCount, KvCountersOpen,
-    KvEntry, KvFound, KvList, KvOnceOpen, KvOutcome, KvPage, KvQuotaOpen, KvRateLimitOpen, KvTx, KvTxResults,
-    KvWindowUse, KvWritten, method,
+    KvEntry, KvFound, KvList, KvOnceOpen, KvOutcome, KvPage, KvQuotaOpen, KvRateLimitOpen, KvResealed, KvTx,
+    KvTxResults, KvWindowUse, KvWritten, method,
 };
 use super::{Lent, Route};
 #[cfg(feature = "sql")]
@@ -84,6 +84,10 @@ pub(crate) fn call(
             let branch = KvBranch::decode(body)?;
             handles.counters(branch.handle, &branch.under)?.clear()?;
             Ok(Empty {}.encode())
+        }
+        method::KV_RESEAL => {
+            let branch = KvBranch::decode(body)?;
+            Ok(KvResealed { count: handles.bucket(branch.handle, &branch.under)?.reseal()? }.encode())
         }
         method::KV_PEEK => limit(handles, called, KvCall::decode(body)?),
         method::KV_ONCE_GET => {

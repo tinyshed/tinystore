@@ -238,7 +238,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **SEC-01** A read token MUST read only: a method the protocol calls `write` or `admin`, a write statement, an `ATTACH` or a `PRAGMA` MUST be `permission` and make no file.
 - **SEC-02** A remote connection MUST present its token; a `SERVE` server MUST prove itself to a local challenge, and an endpoint taken after its server left MUST NOT.
 - **SEC-03** An encrypted bucket's file MUST show no value; a sealed value MUST open only at its own place under its own key, and a moved one MUST be `corrupt`.
-- **SEC-04** A store opened with another key MUST read and write nothing of an encrypted bucket until it is cleared; a key lost MUST NOT be replaced while values sealed with it remain.
+- **SEC-04** A value MUST open only with the key that sealed it, one of the store's own or older keys, and a value sealed with a key the store does not hold MUST be `invalid` naming it and stay as it is; a write MUST seal with the store's own key, and `reseal` MUST move every value an older key sealed to it, keeping its version and expiry; the store MUST NOT make a key while values sealed with a lost one remain.
 - **SEC-05** `status`, logs and errors MUST NOT print `SERVE`'s secret, a token or a config secret.
 - **SEC-06** On Linux, macOS and Windows alike, a local user other than the one a local server runs as, short of root or an administrator, MUST NOT read its `SERVE` nor connect to its socket or named pipe, whatever the store's directory lets other users do.
 

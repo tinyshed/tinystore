@@ -78,6 +78,7 @@ export const methods = {
 	'kv.expire': 0x0108,
 	'kv.clear': 0x0109,
 	'kv.list': 0x010a,
+	'kv.reseal': 0x010b,
 	'kv.counters.open': 0x0110,
 	'kv.counters.add': 0x0111,
 	'kv.counters.get': 0x0112,
@@ -2282,6 +2283,8 @@ export const StoreOptions = message(
 		withoutSystem: [14, bool],
 		/** the metrics series the store holds at most; 100,000 when absent */
 		maxSeries: [15, uint],
+		/** the files of the store's older keys, which open the values they sealed and seal none */
+		olderEncryptionKeys: [16, list(str)],
 	},
 	{
 		write(w, v) {
@@ -2371,6 +2374,14 @@ export const StoreOptions = message(
 				w.uint(v.maxSeries)
 				n++
 			}
+			if (v.olderEncryptionKeys !== undefined) {
+				w.field(16)
+				w.array(v.olderEncryptionKeys.length)
+				for (const item0 of v.olderEncryptionKeys) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -2389,6 +2400,7 @@ export const StoreOptions = message(
 			let $selfMetrics: boolean | undefined
 			let $withoutSystem: boolean | undefined
 			let $maxSeries: number | undefined
+			let $olderEncryptionKeys: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -2454,6 +2466,15 @@ export const StoreOptions = message(
 					case 15:
 						$maxSeries = r.uint()
 						break
+					case 16: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$olderEncryptionKeys = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -2475,6 +2496,7 @@ export const StoreOptions = message(
 				selfMetrics: $selfMetrics,
 				withoutSystem: $withoutSystem,
 				maxSeries: $maxSeries,
+				olderEncryptionKeys: $olderEncryptionKeys,
 			}
 		},
 	},
@@ -4455,6 +4477,42 @@ export const KvFound = message(
 			}
 			r.leave()
 			return { found: $found }
+		},
+	},
+)
+
+/**
+ * How many values a reseal sealed again with the sealing key.
+ */
+export const KvResealed = message(
+	'kv.Resealed',
+	{
+		count: [1, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.count !== undefined) {
+				w.field(1)
+				w.uint(v.count)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $count: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$count = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { count: $count }
 		},
 	},
 )

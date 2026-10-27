@@ -2215,6 +2215,8 @@ pub(crate) struct StoreOptions {
     pub(crate) without_system: bool,
     /// The metrics series the store holds at most; 100,000 when absent.
     pub(crate) max_series: Option<u64>,
+    /// The files of the store's older keys, which open the values they sealed and seal none.
+    pub(crate) older_encryption_keys: Vec<String>,
 }
 
 impl Message for StoreOptions {
@@ -2240,6 +2242,7 @@ impl Message for StoreOptions {
                 13 => message.self_metrics = codec::bool(r, "selfMetrics")?,
                 14 => message.without_system = codec::bool(r, "withoutSystem")?,
                 15 => message.max_series = Some(codec::uint(r, "maxSeries")?),
+                16 => message.older_encryption_keys = codec::list(r, "olderEncryptionKeys", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -2308,6 +2311,10 @@ impl Message for StoreOptions {
             map.field(out, 15);
             codec::write_uint(out, max_series);
         }
+        if !self.older_encryption_keys.is_empty() {
+            map.field(out, 16);
+            codec::write_list(out, &self.older_encryption_keys, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -2328,6 +2335,7 @@ impl Message for StoreOptions {
             + 2
             + 2
             + self.max_series.map_or(0, |_| 10)
+            + 1 + codec::list_size(&self.older_encryption_keys, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -2346,6 +2354,7 @@ impl Message for StoreOptions {
             && !self.self_metrics
             && !self.without_system
             && self.max_series.is_none()
+            && self.older_encryption_keys.is_empty()
     }
 }
 
@@ -4241,6 +4250,48 @@ impl Message for KvFound {
 
     fn is_zero(&self) -> bool {
         !self.found
+    }
+}
+
+/// How many values a reseal sealed again with the sealing key.
+#[cfg(feature = "kv")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct KvResealed {
+    pub(crate) count: u64,
+}
+
+#[cfg(feature = "kv")]
+impl Message for KvResealed {
+    const NAME: &'static str = "kv.Resealed";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.count = codec::uint(r, "count")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if self.count != 0 {
+            map.field(out, 1);
+            codec::write_uint(out, &self.count);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.count == 0
     }
 }
 
@@ -11407,6 +11458,8 @@ pub(crate) mod method {
     #[cfg(feature = "kv")]
     pub(crate) const KV_LIST: u16 = 0x010a;
     #[cfg(feature = "kv")]
+    pub(crate) const KV_RESEAL: u16 = 0x010b;
+    #[cfg(feature = "kv")]
     pub(crate) const KV_COUNTERS_OPEN: u16 = 0x0110;
     #[cfg(feature = "kv")]
     pub(crate) const KV_COUNTERS_ADD: u16 = 0x0111;
@@ -11644,6 +11697,8 @@ pub(crate) mod method {
             #[cfg(feature = "kv")]
             KV_LIST => Some(Access::Read),
             #[cfg(feature = "kv")]
+            KV_RESEAL => Some(Access::Write),
+            #[cfg(feature = "kv")]
             KV_COUNTERS_OPEN => Some(Access::Read),
             #[cfg(feature = "kv")]
             KV_COUNTERS_ADD => Some(Access::Write),
@@ -11866,6 +11921,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("kv.clear", 0x0109, "call"),
     #[cfg(feature = "kv")]
     ("kv.list", 0x010a, "call"),
+    #[cfg(feature = "kv")]
+    ("kv.reseal", 0x010b, "call"),
     #[cfg(feature = "kv")]
     ("kv.counters.open", 0x0110, "call"),
     #[cfg(feature = "kv")]
@@ -12119,6 +12176,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "kv.Written" => KvWritten::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
         "kv.Found" => KvFound::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "kv")]
+        "kv.Resealed" => KvResealed::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]
         "kv.Branch" => KvBranch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "kv")]

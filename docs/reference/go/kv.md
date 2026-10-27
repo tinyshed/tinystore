@@ -242,6 +242,14 @@ func (b *Bucket[T]) Name() string
 
 Name is the bucket's name.
 
+### Bucket.Reseal
+
+```go
+func (b *Bucket[T]) Reseal(ctx context.Context) (uint64, error)
+```
+
+Reseal seals again with the store's sealing key every value of this branch, and of the branches under it, that an older key sealed, and says how many. Once every value of the bucket is, the older key can leave the store's options. A value sealed with a key the store does not hold stops it with an Invalid error that names the key, and a reseal after the key is given goes on.
+
 ### Bucket.Set
 
 ```go

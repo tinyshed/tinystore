@@ -293,6 +293,8 @@ export interface Started {
 	durability?: Durability | undefined
 	/** the file of the store's encryption key, when it is not the store's own */
 	encryptionKeyFile?: string | undefined
+	/** the files of the store's older keys, which open what they sealed */
+	olderEncryptionKeys?: string[] | undefined
 	/** the node the store is, when it is one */
 	node?: NodeOptions | undefined
 	/** measures the store into its own metrics, the machine too unless it says system: false */
@@ -319,8 +321,13 @@ function selfMetricsOf(given: SelfMetrics | undefined): { system: boolean } | un
 function storeFlags(started: Started, dir: string): string[] {
 	const committing = started.durability === undefined ? [] : ['--durability', started.durability]
 	const key = started.encryptionKeyFile
-	const keyed =
+	const sealing =
 		key === undefined ? committing : [...committing, '--encryption-key-file', resolve(key)]
+	const older = (started.olderEncryptionKeys ?? []).flatMap(file => [
+		'--older-encryption-key',
+		resolve(file),
+	])
+	const keyed = [...sealing, ...older]
 	const asked = selfMetricsOf(started.selfMetrics)
 	const measured =
 		asked === undefined
@@ -743,6 +750,7 @@ export function embedded(
 	const options = StoreOptions.encode({
 		durability: started.durability,
 		encryptionKeyFile,
+		olderEncryptionKeys: (started.olderEncryptionKeys ?? []).map(file => resolve(file)),
 		node: node !== undefined,
 		from: node?.from ?? [],
 		serve: node?.serve,

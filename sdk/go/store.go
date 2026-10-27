@@ -37,6 +37,7 @@ type options struct {
 	clock             time.Time
 	durability        string
 	encryptionKeyFile string
+	olderKeys         []string
 	selfMetrics       bool
 	withoutSystem     bool
 	maxSeries         int
@@ -90,6 +91,15 @@ func Durability(level string) Option { return func(o *options) { o.durability = 
 // EncryptionKeyFile is the file of the store's encryption key, 64 hex digits,
 // kept apart from the data; the store reads it and never makes it.
 func EncryptionKeyFile(path string) Option { return func(o *options) { o.encryptionKeyFile = path } }
+
+// OlderEncryptionKeys are the files of the store's older keys, which open
+// the values they sealed and seal nothing new: a key being rotated out, until
+// Reseal has sealed every value again, or one found after a restore that left
+// it out. Each file must be there. A sidecar found running keeps the keys it
+// was started with.
+func OlderEncryptionKeys(paths ...string) Option {
+	return func(o *options) { o.olderKeys = append(o.olderKeys, paths...) }
+}
 
 // SelfMetrics measures the store into its own metrics, under names that start
 // with tinystore_: its commits and their waits, its files, its memory and the
@@ -146,7 +156,7 @@ func Open(ctx context.Context, directory string, opts ...Option) (*Store, error)
 	if o.maxSeriesSet && o.maxSeries < 1 {
 		return nil, core.Errorf(core.Invalid, "open: MaxSeries %d: a count above 0", o.maxSeries)
 	}
-	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem, MaxSeries: uint64(max(o.maxSeries, 0))}
+	started := core.Started{Durability: o.durability, EncryptionKeyFile: o.encryptionKeyFile, OlderEncryptionKeys: o.olderKeys, SelfMetrics: o.selfMetrics, WithoutSystem: o.withoutSystem, MaxSeries: uint64(max(o.maxSeries, 0))}
 	if o.idleSet {
 		ms, err := core.Millis(o.idle, "a sidecar's idle")
 		if err != nil {

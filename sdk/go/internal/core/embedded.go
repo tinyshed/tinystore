@@ -73,6 +73,10 @@ func InProcess(directory, library string, started Started) func(context.Context)
 		key, _ := filepath.Abs(started.EncryptionKeyFile)
 		options.EncryptionKeyFile = &key
 	}
+	for _, older := range started.OlderEncryptionKeys {
+		key, _ := filepath.Abs(older)
+		options.OlderEncryptionKeys = append(options.OlderEncryptionKeys, key)
+	}
 	if started.MaxSeries > 0 {
 		options.MaxSeries = &started.MaxSeries
 	}

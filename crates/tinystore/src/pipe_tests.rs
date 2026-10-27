@@ -690,6 +690,35 @@ fn a_pipes_store_reads_its_encryption_key_from_the_file_its_options_name() {
     assert!(other.to_string().contains("another encryption key file"), "{other}");
 }
 
+// contract: SEC-04
+#[test]
+fn a_pipes_store_opens_with_its_older_keys_and_reseals_what_they_sealed() {
+    use crate::wire::protocol::{KvBranch, KvBucketOpen, KvResealed, StoreOptions};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = (dir.path().join("old.key"), dir.path().join("new.key"));
+    std::fs::write(&old, "1a".repeat(32)).unwrap();
+    std::fs::write(&new, "2b".repeat(32)).unwrap();
+    let data = dir.path().join("data");
+    let before = Store::open(&data, Options { encryption_key_file: Some(old.clone()), ..Options::default() }).unwrap();
+    before.bucket::<String>("passwords").encrypted().open().unwrap().set("db", &"hunter2".to_owned()).unwrap();
+    before.close().unwrap();
+
+    let options = StoreOptions {
+        encryption_key_file: Some(new.display().to_string()),
+        older_encryption_keys: vec![old.display().to_string()],
+        ..StoreOptions::default()
+    };
+    let mut client = Client::over(Pipe::open(&data, &options.encode(), None).unwrap());
+    client.hello(1).unwrap();
+    let encrypted = KvBucketOpen { name: "passwords".to_owned(), encrypted: true, ..KvBucketOpen::default() };
+    let handle = client.call::<Handle>(method::KV_BUCKET_OPEN, &encrypted).unwrap().handle;
+    let resealed = client.call::<KvResealed>(method::KV_RESEAL, &KvBranch { handle, under: Vec::new() }).unwrap();
+    assert_eq!(resealed.count, 1, "the value the old key sealed");
+    let key = KvCall { handle, key: "db".to_owned(), ..KvCall::default() };
+    assert!(client.call::<KvEntry>(method::KV_GET, &key).unwrap().found);
+}
+
 /// kv's sets through the pipe, 20 batches of 1000 in flight, the store measured and not in
 /// turns, the median of five passes: what a request costs the store's own
 /// metrics, its count and its time by method.

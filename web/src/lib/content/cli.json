@@ -785,6 +785,11 @@
           "value": "<file>"
         },
         {
+          "means": "an older key, which opens what it sealed; again for more",
+          "name": "--older-encryption-key",
+          "value": "<file>"
+        },
+        {
           "means": "measure the store into its own metrics, as tinystore_ names",
           "name": "--self-metrics",
           "value": ""

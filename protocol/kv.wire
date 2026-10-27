@@ -47,6 +47,11 @@ message kv.Found {
   1 found: bool
 }
 
+# How many values a reseal sealed again with the sealing key.
+message kv.Resealed {
+  1 count: uint
+}
+
 # A branch of a handle, for a clear.
 message kv.Branch {
   1 handle: uint
@@ -176,6 +181,7 @@ write 0x0107 kv.delete(kv.Call)            -> kv.Found
 write 0x0108 kv.expire(kv.Call)            -> kv.Found
 write 0x0109 kv.clear(kv.Branch)           -> Empty
 read  0x010a kv.list(kv.List)              -> kv.Page
+write 0x010b kv.reseal(kv.Branch)          -> kv.Resealed
 
 read  0x0110 kv.counters.open(kv.CountersOpen) -> Handle
 write 0x0111 kv.counters.add(kv.Call)          -> kv.Count

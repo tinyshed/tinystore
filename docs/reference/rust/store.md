@@ -489,6 +489,7 @@ pub struct Options {
     pub durability: Option<Durability>,
     pub keep_free: u64,
     pub encryption_key_file: Option<PathBuf>,
+    pub older_encryption_keys: Vec<PathBuf>,
     pub node: Option<Node>,
     pub self_metrics: Option<SelfMetrics>,
     pub max_series: u64,

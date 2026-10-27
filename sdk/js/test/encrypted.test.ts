@@ -125,5 +125,28 @@ for (const way of opens) {
 				PASSWORD,
 			)
 		})
+
+		test('an older key opens what it sealed, and a reseal moves it to the new one', async () => {
+			const dir = directory()
+			const keys = directory()
+			const [old, rotated] = [join(keys, 'old.key'), join(keys, 'new.key')]
+			writeFileSync(old, `${'1a'.repeat(32)}\n`)
+			writeFileSync(rotated, `${'2b'.repeat(32)}\n`)
+			const before = await opened(dir, { encryptionKeyFile: old })
+			await before.bucket<string>('passwords', { encrypted: true }).set('source-42', PASSWORD)
+			await closed()
+
+			const store = await opened(dir, { encryptionKeyFile: rotated, olderEncryptionKeys: [old] })
+			const passwords = store.bucket<string>('passwords', { encrypted: true })
+			expect(await passwords.get('source-42')).toBe(PASSWORD)
+			expect(await passwords.reseal()).toBe(1)
+			expect(await passwords.reseal()).toBe(0)
+			await closed()
+
+			const after = await opened(dir, { encryptionKeyFile: rotated })
+			expect(await after.bucket<string>('passwords', { encrypted: true }).get('source-42')).toBe(
+				PASSWORD,
+			)
+		})
 	})
 }

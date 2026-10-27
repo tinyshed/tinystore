@@ -110,29 +110,95 @@ fn a_value_copied_under_another_key_does_not_open_and_can_be_deleted() {
     assert!(passwords.delete("mine").unwrap(), "a delete reads no value");
 }
 
+/// A key's file of `digits`, its 64 hex digits.
+fn key_file(dir: &Path, name: &str, digits: &str) -> std::path::PathBuf {
+    let file = dir.join(name);
+    fs::write(&file, digits.repeat(32)).unwrap();
+    file
+}
+
+/// The store of `dir`, sealing with the key of `sealing` and opening with
+/// those of `older` too.
+fn with_keys(dir: &Path, sealing: &Path, older: &[&Path]) -> Store {
+    let older_encryption_keys = older.iter().map(|file| file.to_path_buf()).collect();
+    let options = Options {
+        background: false,
+        encryption_key_file: Some(sealing.to_path_buf()),
+        older_encryption_keys,
+        ..Options::default()
+    };
+    Store::open(dir, options).unwrap()
+}
+
 // contract: SEC-04
 #[test]
-fn a_store_opened_with_another_key_reads_and_writes_nothing_until_the_bucket_is_cleared() {
+fn a_store_opened_with_another_key_keeps_the_values_it_cannot_open_and_seals_new_ones_beside_them() {
     let f = fixture();
     passwords(&f.store).set("source-42", &PASSWORD.to_owned()).unwrap();
     f.store.close().unwrap();
+    // a restore without its key, and a new key put where the store reads it
+    let old = f.dir.path().join("old.key");
+    fs::rename(f.dir.path().join("encryption.key"), &old).unwrap();
     fs::write(f.dir.path().join("encryption.key"), "ab".repeat(32)).unwrap();
     let store = Store::open(f.dir.path(), Options { background: false, ..Options::default() }).unwrap();
 
     let passwords = passwords(&store);
     let read = passwords.get("source-42").unwrap_err();
     assert_eq!(read.kind(), ErrorKind::Invalid, "{read}");
-    assert!(read.to_string().contains("was sealed with the key"), "{read}");
-    // a write under another key would be lost to the key that opens the rest
-    let written = passwords.set("source-43", &"another".to_owned()).unwrap_err();
-    assert_eq!(written.kind(), ErrorKind::Invalid, "{written}");
-    assert!(written.to_string().contains("or clear the bucket"), "{written}");
-    assert!(!passwords.has("source-43").unwrap());
-
-    assert!(passwords.delete("source-42").unwrap(), "a delete needs no key");
-    passwords.clear().unwrap();
+    assert!(read.to_string().contains("which the store does not hold"), "{read}");
     passwords.set("source-43", &"another".to_owned()).unwrap();
-    assert_eq!(passwords.get("source-43").unwrap().as_deref(), Some("another"), "cleared whole, it takes this key");
+    assert_eq!(passwords.get("source-43").unwrap().as_deref(), Some("another"), "sealed with the new key");
+    let left = passwords.reseal().unwrap_err();
+    assert_eq!(left.kind(), ErrorKind::Invalid, "a value no key of the store opens stops a reseal: {left}");
+    store.close().unwrap();
+
+    // the old key found again opens what it sealed, beside what the new one did
+    let new = f.dir.path().join("encryption.key");
+    let store = with_keys(f.dir.path(), &new, &[&old]);
+    let passwords = self::passwords(&store);
+    assert_eq!(passwords.get("source-42").unwrap().as_deref(), Some(PASSWORD));
+    assert_eq!(passwords.get("source-43").unwrap().as_deref(), Some("another"));
+    assert_eq!(passwords.reseal().unwrap(), 1, "the one value the old key sealed");
+    store.close().unwrap();
+
+    let store = with_keys(f.dir.path(), &new, &[]);
+    assert_eq!(self::passwords(&store).get("source-42").unwrap().as_deref(), Some(PASSWORD), "the old key can go");
+}
+
+// contract: SEC-04
+#[test]
+fn a_reseal_seals_with_the_new_key_what_the_old_one_did_keeping_each_version_and_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (old, new) = (key_file(dir.path(), "old.key", "0a"), key_file(dir.path(), "new.key", "0b"));
+    let data = dir.path().join("data");
+    let store = with_keys(&data, &old, &[]);
+    let sessions = store.bucket::<String>("sessions").ttl(HOUR).encrypted().open().unwrap();
+    let large = "x".repeat(2000);
+    store
+        .tx(|tx| -> Result<()> {
+            let sessions = tx.with(&sessions);
+            (0..2500).try_for_each(|n| sessions.set(format!("s-{n:04}"), &format!("token-{n}")))
+        })
+        .unwrap();
+    sessions.under("admin").set("root", &large).unwrap();
+    let before = sessions.entry("s-0007").unwrap().unwrap();
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[&old]);
+    let sessions = store.bucket::<String>("sessions").ttl(HOUR).encrypted().open().unwrap();
+    sessions.set("s-new", &"sealed-new".to_owned()).unwrap();
+    assert_eq!(sessions.reseal().unwrap(), 2501, "every value the old key sealed, past a batch, a branch's too");
+    assert_eq!(sessions.reseal().unwrap(), 0, "and then none");
+    let after = sessions.entry("s-0007").unwrap().unwrap();
+    assert_eq!((after.version, after.expires_at), (before.version, before.expires_at), "the same value");
+    store.close().unwrap();
+
+    let store = with_keys(&data, &new, &[]);
+    let sessions = store.bucket::<String>("sessions").ttl(HOUR).encrypted().open().unwrap();
+    assert_eq!(sessions.get("s-2499").unwrap().as_deref(), Some("token-2499"), "opened without the old key");
+    assert_eq!(sessions.under("admin").get("root").unwrap(), Some(large), "a value kept apart from its cell");
+    let plain = store.bucket::<String>("notes").open().unwrap();
+    assert_eq!(plain.reseal().unwrap_err().kind(), ErrorKind::Invalid, "a bucket that seals nothing");
 }
 
 // contract: SEC-04

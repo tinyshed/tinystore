@@ -564,6 +564,7 @@ they are, so the server reads what any bucket wrote.
 | `0x0108` | kv.expire          | write | `kv.Call`          | `kv.Found`           |
 | `0x0109` | kv.clear           | write | `kv.Branch`        | `Empty`              |
 | `0x010a` | kv.list            | read  | `kv.List`          | `kv.Page`            |
+| `0x010b` | kv.reseal          | write | `kv.Branch`        | `kv.Resealed`        |
 | `0x0110` | kv.counters.open   | read  | `kv.CountersOpen`  | `Handle`             |
 | `0x0111` | kv.counters.add    | write | `kv.Call`          | `kv.Count`           |
 | `0x0112` | kv.counters.get    | read  | `kv.Call`          | `kv.Count`           |

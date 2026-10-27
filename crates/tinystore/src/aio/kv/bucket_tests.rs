@@ -374,3 +374,15 @@ fn an_awaited_call_inside_a_transaction_of_its_file_is_refused_rather_than_wait_
     assert_eq!(stock.blocking().get("sku-1").unwrap(), Some(2), "the transaction around them committed");
     f.store.close().unwrap();
 }
+
+#[tokio::test]
+async fn an_awaited_reseal_answers_how_many_values_it_sealed_again() {
+    let f = fixture();
+    let store = awaited(&f);
+    let passwords = store.bucket::<String>("passwords").encrypted().open().unwrap();
+    passwords.set("db", &"hunter2".to_owned()).await.unwrap();
+    assert_eq!(passwords.reseal().await.unwrap(), 0, "the sealing key sealed it");
+    let plain = store.bucket::<String>("notes").open().unwrap();
+    assert_eq!(said(plain.reseal().await).0, ErrorKind::Invalid);
+    f.store.close().unwrap();
+}

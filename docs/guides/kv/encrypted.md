@@ -81,13 +81,70 @@ is gone while buckets still hold values sealed with it, opening an encrypted
 bucket fails with an `io` error that names the missing key. This includes a
 new, empty bucket, wherever the sealed values are: in `kv.db` or in any
 database of the store's directory, whether the program has opened it yet or
-not. A new key would seal values that the old key cannot open once you put it
-back. Put the key back, and every bucket opens again.
+not. Put the key back, and every bucket opens again. If the key is lost for
+good, put a new one there yourself, as the next section shows.
+
+## Older keys
+
+Each value records which key sealed it. The store seals new values with one
+key, and opens a value with whichever of its keys sealed it. The keys that
+only open are its older keys:
+
+```ts
+const store = await open('./data', {
+	encryptionKeyFile: '/run/secrets/tinystore-2026.key',
+	olderEncryptionKeys: ['/run/secrets/tinystore-2025.key'],
+})
+const moved = await passwords.reseal() // 120: the values the 2025 key sealed, now sealed with the 2026 key
+```
+
+```python
+store = await tinystore.open(
+    "data",
+    encryption_key_file="/run/secrets/tinystore-2026.key",
+    older_encryption_keys=["/run/secrets/tinystore-2025.key"],
+)
+moved = await passwords.reseal()  # 120
+```
+
+```go
+store, err := tinystore.Open(ctx, "data", tinystore.EncryptionKeyFile("/run/secrets/tinystore-2026.key"),
+	tinystore.OlderEncryptionKeys("/run/secrets/tinystore-2025.key"))
+moved, err := passwords.Reseal(ctx) // 120
+```
+
+```rust
+let store = Store::open("data", Options {
+    encryption_key_file: Some("/run/secrets/tinystore-2026.key".into()),
+    older_encryption_keys: vec!["/run/secrets/tinystore-2025.key".into()],
+    ..Options::default()
+})?;
+let moved = passwords.reseal()?; // 120
+```
+
+- **To rotate a key**, make a new one with `openssl rand -hex 32`, give it as
+  the encryption key, and move the old one to the older keys. Call `reseal`
+  on each encrypted bucket. Once every bucket is resealed, remove the old key
+  from the options.
+- **`reseal` writes a batch of values per commit.** Each value keeps its
+  version and its expiry, so a conditional write after it still matches.
+- **After a restore without the key**, put a new key where the store reads
+  it. The old values stay in their buckets: a read of one fails with an
+  `invalid` error that names the key that sealed it. New values are sealed
+  with the new key in the same bucket, so you can enter the secrets again.
+- **If the old key turns up later**, add it to the older keys. Its values
+  open again, beside the ones the new key sealed, and `reseal` moves them to
+  the new key.
+- A value sealed with a key that the store doesn't hold stops `reseal` with
+  an `invalid` error that names the key. The batches before it stay
+  resealed, and a `reseal` after you add the key continues.
 
 > [!CAUTION]
 > **Lose the key and the values are gone**
 > Nothing recovers them. Keep a copy of the key apart from the data. A backup
-> leaves the key out unless asked, and says so with `keyLeftOut`.
+> leaves the key out unless asked, and says so with `keyLeftOut`. A backup
+> takes the sealing key only, so it also says `keyLeftOut` while a value is
+> sealed with an older key.
 
 ## See also
 

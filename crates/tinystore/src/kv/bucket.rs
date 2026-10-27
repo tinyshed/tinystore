@@ -427,6 +427,37 @@ impl<V> Bucket<V> {
         self.scope.kv.file().write(0, move |tx| work(tx, &revision)).map_err(|error| error.within(shown))
     }
 
+    /// Seals again with the store's sealing key every value of this branch,
+    /// and of the branches under it, that an older key sealed, and says how
+    /// many: once every value of the bucket is, an older key can leave the
+    /// store's options. It writes a batch of values a commit, each keeping
+    /// its version and its expiry. A value sealed with a key the store does
+    /// not hold stops it, `Invalid`, naming that key: the batches before it
+    /// stay sealed again, and a reseal after the key is given goes on.
+    pub fn reseal(&self) -> Result<u64> {
+        let shown = self.scope.shown_branch();
+        let Some(encrypted) = self.encrypted.clone() else {
+            return Err(Error::invalid("a bucket that is not encrypted holds nothing sealed").within(shown));
+        };
+        #[cfg(feature = "replication")]
+        if self.is_copy() {
+            return Err(Error::invalid("a copy's values are sealed again by its home").within(shown));
+        }
+        let branch = self.scope.branch()?;
+        let (mut from, to) = branch.everything();
+        let whole = branch.prefix().is_empty();
+        let mut moved = 0;
+        loop {
+            let work = reseal_work(&self.scope, &encrypted, (from, to.clone()), whole);
+            let (count, next) = self.scope.kv.file().write(0, work).map_err(|error| error.within(&shown))?;
+            moved += count;
+            match next {
+                Some(next) => from = next,
+                None => return Ok(moved),
+            }
+        }
+    }
+
     /// `clear` without waiting for its commit.
     #[cfg(any(feature = "wire", feature = "async"))]
     pub(crate) fn clear_then(&self, done: impl FnOnce(Result<()>) + Send + 'static) {
@@ -1014,6 +1045,43 @@ impl<V: Value> Iterator for All<V> {
 impl<V> fmt::Debug for All<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "All({:?})", self.bucket.scope)
+    }
+}
+
+/// The values a reseal's commit seals again at most.
+const RESEAL_BATCH: usize = 1000;
+
+/// One batch of a reseal: the live cells from `from` on, each an older key
+/// sealed opened and sealed with the sealing key, and how many it sealed with
+/// where the next batch begins, none after the last. The last batch of a
+/// bucket resealed whole leaves it the sealing key alone.
+fn reseal_work(
+    scope: &Scope,
+    encrypted: &Encrypted,
+    (from, to): (Vec<u8>, Vec<u8>),
+    whole: bool,
+) -> impl FnOnce(&Tx<'_>) -> Result<(u64, Option<Vec<u8>>)> + Send + 'static + use<> {
+    let (id, now, encrypted) = (scope.id, scope.now(), encrypted.clone());
+    move |tx: &Tx<'_>| {
+        let cells = cells::sealed_page(tx, id, (&from, &to), now, RESEAL_BATCH)?;
+        let mut moved = 0;
+        for cell in cells.iter().filter(|cell| !encrypted.sealed_it(&cell.bytes)) {
+            let opened = encrypted.open(&cell.path, &Raw::Bytes(cell.bytes.clone()))?;
+            let Raw::Bytes(sealed) = encrypted.seal(&cell.path, &opened)? else {
+                return Err(Error::internal("a value sealed as no bytes"));
+            };
+            cells::reseal(tx, id, cell, &sealed)?;
+            moved += 1;
+        }
+        if cells.len() == RESEAL_BATCH {
+            let mut next = cells.last().map(|cell| cell.path.clone()).unwrap_or_default();
+            next.push(0);
+            return Ok((moved, Some(next)));
+        }
+        if whole {
+            cells::keep_bucket_key(tx, id, Some(&encrypted.sealing()))?;
+        }
+        Ok((moved, None))
     }
 }
 

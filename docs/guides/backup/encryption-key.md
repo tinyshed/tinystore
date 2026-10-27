@@ -44,6 +44,10 @@ tinystore backup ./data backups/full.zip --include app.json --include-encryption
   store's directory, or encrypt it where you keep it.
 - `includeEncryptionKey` puts the key in the zip as it is. It does not
   encrypt the zip with it.
+- A backup takes the key that seals, never the
+  [older keys](../kv/encrypted.md#older-keys). While a value is sealed with an
+  older key, a backup with the key still says `keyLeftOut`. Call `reseal` on
+  each encrypted bucket first, or keep the older key beside the backup.
 - While values are sealed, `includeEncryptionKey` fails with `io`, and writes
   no zip, when the key is not where the store reads it. That happens to
   `tinystore backup` beside a server that keeps its key apart with
@@ -63,6 +67,11 @@ Put the key back as `encryption.key` in the restored directory, or open the
 store with `encryptionKeyFile` naming where you keep it. Until then, every
 other bucket, table and file reads; an encrypted bucket's reads fail and say
 the key is missing.
+
+If the key is lost, put a new one there instead (`openssl rand -hex 32`). The
+old values stay in their buckets and fail to read, naming the key that sealed
+them, and new values are sealed with the new key. If the old key turns up
+later, give it to the store as an older key, and its values open again.
 
 > [!CAUTION]
 > **A lost key loses the values**

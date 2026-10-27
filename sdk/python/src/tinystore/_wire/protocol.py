@@ -66,6 +66,7 @@ methods: dict[str, int] = {
     "kv.expire": 0x0108,
     "kv.clear": 0x0109,
     "kv.list": 0x010A,
+    "kv.reseal": 0x010B,
     "kv.counters.open": 0x0110,
     "kv.counters.add": 0x0111,
     "kv.counters.get": 0x0112,
@@ -1894,6 +1895,12 @@ def _write_store_options(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(15)
         w.uint(x)
         n += 1
+    if (x := v.get("older_encryption_keys")) is not None:
+        w.uint(16)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -1938,6 +1945,10 @@ def _read_store_options(r: Reader) -> dict[str, Any]:
                 read["without_system"] = r.bool()
             case 15:
                 read["max_series"] = r.uint()
+            case 16:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["older_encryption_keys"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -1980,6 +1991,8 @@ StoreOptions = Message(
         "without_system": (14, bool_),
         # the metrics series the store holds at most; 100,000 when absent
         "max_series": (15, uint),
+        # the files of the store's older keys, which open the values they sealed and seal none
+        "older_encryption_keys": (16, list_(str_)),
     },
     _write_store_options,
     _read_store_options,
@@ -3595,6 +3608,40 @@ KvFound = Message(
     },
     _write_kv_found,
     _read_kv_found,
+)
+
+
+def _write_kv_resealed(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("count")) is not None:
+        w.uint(1)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_kv_resealed(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["count"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# How many values a reseal sealed again with the sealing key.
+KvResealed = Message(
+    "kv.Resealed",
+    {
+        "count": (1, uint),
+    },
+    _write_kv_resealed,
+    _read_kv_resealed,
 )
 
 
@@ -10144,6 +10191,7 @@ messages: dict[str, Message] = {
     "kv.Entry": KvEntry,
     "kv.Written": KvWritten,
     "kv.Found": KvFound,
+    "kv.Resealed": KvResealed,
     "kv.Branch": KvBranch,
     "kv.List": KvList,
     "kv.Page": KvPage,

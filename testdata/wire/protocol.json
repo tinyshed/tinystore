@@ -1148,6 +1148,13 @@
         "node": {
           "bool": true
         },
+        "olderEncryptionKeys": {
+          "list": [
+            {
+              "str": "olderEncryptionKeys"
+            }
+          ]
+        },
         "selfMetrics": {
           "bool": true
         },
@@ -1171,7 +1178,7 @@
           "bool": true
         }
       },
-      "hex": "8f01aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e08c309c30aa96164766572746973650b91af73796e6368726f6e6f7573576974680cc30dc30ec30fcd05e3",
+      "hex": "de001001aa6475726162696c69747902b1656e6372797074696f6e4b657946696c6503c30491a466726f6d05a573657276650691a566696c657307a5746f6b656e08c309c30aa96164766572746973650b91af73796e6368726f6e6f7573576974680cc30dc30ec30fcd05e31091b36f6c646572456e6372797074696f6e4b657973",
       "message": "store.Options",
       "name": "store.Options with every field"
     },
@@ -2052,6 +2059,22 @@
       "hex": "80",
       "message": "kv.Found",
       "name": "kv.Found with no field"
+    },
+    {
+      "fields": {
+        "count": {
+          "uint": "107"
+        }
+      },
+      "hex": "81016b",
+      "message": "kv.Resealed",
+      "name": "kv.Resealed with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "kv.Resealed",
+      "name": "kv.Resealed with no field"
     },
     {
       "fields": {
@@ -6015,6 +6038,7 @@
     "kv.quota.open": 289,
     "kv.rateLimit.open": 288,
     "kv.refund": 293,
+    "kv.reseal": 267,
     "kv.reset": 292,
     "kv.set": 260,
     "kv.take": 262,

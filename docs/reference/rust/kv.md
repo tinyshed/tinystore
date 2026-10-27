@@ -270,6 +270,20 @@ pub fn clear(&self) -> Result<()>
 Removes every key of this branch and of the branches under it, at once
 for every reader, however many there are.
 
+### Bucket.reseal
+
+```rust
+pub fn reseal(&self) -> Result<u64>
+```
+
+Seals again with the store's sealing key every value of this branch,
+and of the branches under it, that an older key sealed, and says how
+many: once every value of the bucket is, an older key can leave the
+store's options. It writes a batch of values a commit, each keeping
+its version and its expiry. A value sealed with a key the store does
+not hold stops it, `Invalid`, naming that key: the batches before it
+stay sealed again, and a reseal after the key is given goes on.
+
 ### Bucket.add
 
 ```rust
@@ -1082,6 +1096,16 @@ pub fn clear(&self) -> impl Future<Output = Result<()>> + Send + 'static
 
 Removes every key of this branch and of the branches under it, at once
 for every reader, however many there are.
+
+### aio::kv::Bucket.reseal
+
+```rust
+pub fn reseal(&self) -> impl Future<Output = Result<u64>> + Send + 'static
+```
+
+Seals again with the store's sealing key what an older key sealed, as
+`crate::kv::Bucket::reseal` does, on the store's pool: its batches
+commit one after another, and once polled it runs to its end.
 
 ### aio::kv::Bucket.list
 

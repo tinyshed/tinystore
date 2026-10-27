@@ -28,6 +28,7 @@ from ._wire.protocol import (
     KvFound,
     KvList,
     KvPage,
+    KvResealed,
     KvWritten,
     methods,
 )
@@ -224,6 +225,25 @@ class Bucket[T]:
             lambda handle: KvBranch.encode(handle=handle, under=under),
             "write",
         )
+
+    async def reseal(self) -> int:
+        """Seals again with the store's sealing key what an older key sealed, and says how many.
+
+        Every value of this branch, and of the branches under it, that an older
+        key sealed: once every value of the bucket is, the older key can leave
+        the store's options. A value sealed with a key the store does not hold
+        stops it with an InvalidError that names the key, and a reseal after
+        the key is given goes on.
+        """
+        under = under_field(self._parts.under)
+        answer = await self._via.call(
+            methods["kv.bucket.open"],
+            self._parts.opener,
+            methods["kv.reseal"],
+            lambda handle: KvBranch.encode(handle=handle, under=under),
+            "write",
+        )
+        return KvResealed.decode(answer).get("count", 0)
 
     async def list(self, *, limit: int | None = None, after: Key | None = None) -> Page[T]:
         """One page of this branch's own keys, in the byte order of their text: "10" before "9"."""

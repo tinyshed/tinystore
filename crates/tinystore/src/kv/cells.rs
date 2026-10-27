@@ -89,6 +89,19 @@ const ADD: &str = concat!(
     " or typeof(c.value + excluded.value) = 'integer'
     returning value"
 );
+/// The live cells of a range, a value's bytes wherever they lie, for a seal
+/// again: the lower bound kept.
+const SELECT_SEALED: &str = concat!(
+    "select c.path, c.spill, coalesce(s.value, c.value) from _tinystore_kv_cells as c
+        left join _tinystore_kv_spilled as s on s.id = c.spill
+        where c.bucket = ?1 and c.path >= ?2 and c.path < ?3 and (c.expires is null or c.expires > ?4) and not ",
+    hidden!(),
+    " order by c.path limit cast(?5 as integer)"
+);
+/// A value sealed again where it lies, its version and expiry kept: the
+/// same value, so that no reader's version moves.
+const RESEAL_CELL: &str = "update _tinystore_kv_cells set value = ?3 where bucket = ?1 and path = ?2";
+const RESEAL_SPILLED: &str = "update _tinystore_kv_spilled set value = ?2 where id = ?1";
 const INSERT_SPILLED: &str = "insert into _tinystore_kv_spilled (value) values (?1)";
 const DELETE_SPILLED: &str = "delete from _tinystore_kv_spilled where id = ?1";
 const DELETE_CELL: &str = "delete from _tinystore_kv_cells where bucket = ?1 and path = ?2";
@@ -121,6 +134,8 @@ const KEEP_BUCKET_KEY: &str = "update _tinystore_kv_buckets set key = ?2 where i
 const HOLDS_BUCKETS: &str =
     "select count(*) from sqlite_schema where type = 'table' and name = '_tinystore_kv_buckets'";
 const SELECT_A_KEY: &str = "select key from _tinystore_kv_buckets where key is not null limit 1";
+#[cfg(feature = "backup")]
+const SELECT_KEYS: &str = "select distinct key from _tinystore_kv_buckets where key is not null";
 
 /// A live cell as a read finds it.
 #[derive(Debug)]
@@ -411,8 +426,38 @@ pub(crate) fn bucket(connection: &Connection, name: &str, role: &str) -> Result<
     Ok((id, role.to_owned()))
 }
 
-/// The id of the encryption key a bucket's values are sealed with, if it has
-/// taken one.
+/// A live cell of an encrypted bucket as a seal again reads it.
+pub(crate) struct Sealed {
+    pub(crate) path: Vec<u8>,
+    pub(crate) spill: Option<i64>,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// The live cells of `[from, to)`, `limit` at most, in the order of their paths.
+pub(crate) fn sealed_page(
+    connection: &Connection,
+    bucket: i64,
+    (from, to): (&[u8], &[u8]),
+    now: i64,
+    limit: usize,
+) -> Result<Vec<Sealed>> {
+    let read = |row: &rusqlite::Row<'_>| Ok(Sealed { path: row.get(0)?, spill: row.get(1)?, bytes: row.get(2)? });
+    let mut select = connection.prepare_cached(SELECT_SEALED).map_err(|error| sql_error("its sealed values", error))?;
+    let rows = select.query_map(params![bucket, from, to, now, limit as i64], read);
+    rows.and_then(Iterator::collect).map_err(|error| sql_error("its sealed values", error))
+}
+
+/// Writes a value sealed again where the cell keeps it.
+pub(crate) fn reseal(connection: &Connection, bucket: i64, cell: &Sealed, sealed: &[u8]) -> Result<()> {
+    match cell.spill {
+        Some(spill) => execute(connection, RESEAL_SPILLED, params![spill, sealed], "a value sealed again"),
+        None => execute(connection, RESEAL_CELL, params![bucket, cell.path, sealed], "a value sealed again"),
+    }
+    .map(drop)
+}
+
+/// The ids of the encryption keys a bucket's values are sealed with, as one
+/// text, if it has taken one.
 pub(crate) fn bucket_key(connection: &Connection, bucket: i64) -> Result<Option<String>> {
     connection
         .prepare_cached(SELECT_BUCKET_KEY)
@@ -430,8 +475,20 @@ pub(crate) fn a_bucket_key(connection: &Connection) -> rusqlite::Result<Option<S
     connection.prepare_cached(SELECT_A_KEY)?.query_row([], |row| row.get(0)).optional()
 }
 
-/// Keeps the id of the key a bucket's values are sealed with, or none once
-/// the bucket holds no value.
+/// The ids of every key that values of the file's buckets are sealed with.
+#[cfg(feature = "backup")]
+pub(crate) fn bucket_keys(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+    let tables: i64 = connection.prepare_cached(HOLDS_BUCKETS)?.query_row([], |row| row.get(0))?;
+    if tables == 0 {
+        return Ok(Vec::new());
+    }
+    let mut select = connection.prepare_cached(SELECT_KEYS)?;
+    let kept = select.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(kept.iter().flat_map(|ids| ids.split(' ')).map(str::to_owned).collect())
+}
+
+/// Keeps the ids of the keys a bucket's values are sealed with, or none
+/// once the bucket holds no value.
 pub(crate) fn keep_bucket_key(connection: &Connection, bucket: i64, key: Option<&str>) -> Result<()> {
     execute(connection, KEEP_BUCKET_KEY, params![bucket, key], "its bucket's key").map(drop)
 }

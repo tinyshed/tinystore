@@ -1,9 +1,11 @@
-//! The store's encryption key, and the values sealed with it.
+//! The store's encryption keys, and the values sealed with them.
 //!
-//! The key is 32 random bytes, kept as 64 hex digits in a file: `encryption.key`
-//! of the store's directory, which the store makes when an encrypted bucket
-//! opens and no key is there yet, or the file the store's options name, which
-//! it only reads. A value
+//! A key is 32 random bytes, kept as 64 hex digits in a file. The store seals
+//! with one: `encryption.key` of its directory, which the store makes when an
+//! encrypted bucket opens and no key is there yet, or the file the store's
+//! options name, which it only reads. Its older keys, which the options name
+//! too, only open what they sealed before: a key being rotated out, or one
+//! found again after a restore that left it out. A value
 //! is sealed with XChaCha20-Poly1305 under a nonce of its own and bound to its
 //! place, so that it opens nowhere else:
 //!
@@ -12,9 +14,8 @@
 //! ```
 //!
 //! The id is the first bytes of a SHA-256 over the key. It says which key
-//! sealed a value: a store opened with another key says so rather than calling
-//! the value corrupt, and a later format can keep several keys and tell them
-//! apart.
+//! sealed a value, so that the store opens it with that key, and one whose
+//! key the store does not hold says so rather than calling the value corrupt.
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -105,27 +106,92 @@ impl EncryptionKey {
         Ok(sealed)
     }
 
-    /// The value `sealed` holds, which was sealed for `place` with this key.
-    /// Another key's is `Invalid` and names both; bytes changed since, or
-    /// sealed for another place, are `Corrupt`.
-    pub(crate) fn open(&self, place: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
-        if sealed.len() < HEAD + TAG || sealed[0] != FORMAT {
-            return Err(Error::corrupt("its value is not one the store sealed"));
-        }
-        let (id, rest) = sealed[1..].split_at(ID);
-        if id != self.id {
-            return Err(Error::invalid(format!(
-                "its value was sealed with the key {}, and the store's is {}: open the store with the key that sealed it",
-                crate::text::hex(id),
-                self.id()
-            )));
-        }
-        let (nonce, cipher) = rest.split_at(NONCE);
+    /// The value `sealed` holds, which this key sealed for `place`: bytes
+    /// changed since, or sealed for another place, are `Corrupt`.
+    fn open(&self, place: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+        let (nonce, cipher) = sealed[HEAD - NONCE..].split_at(NONCE);
         let nonce = XNonce::try_from(nonce).map_err(|_| Error::internal("a nonce of another length"))?;
         self.cipher
             .decrypt(&nonce, Payload { msg: cipher, aad: place })
             .map_err(|_| Error::corrupt("its value does not open: it was changed, or sealed for another place"))
     }
+}
+
+/// The store's keys: the one that seals every value written, and the older
+/// ones, which only open what they sealed.
+pub(crate) struct Keyring {
+    sealing: EncryptionKey,
+    older: Vec<EncryptionKey>,
+}
+
+impl Keyring {
+    /// The keys, an older one that is the sealing key or given twice kept once.
+    pub(crate) fn of(sealing: EncryptionKey, older: impl IntoIterator<Item = EncryptionKey>) -> Keyring {
+        let mut ring = Keyring { sealing, older: Vec::new() };
+        for key in older {
+            if !ring.holds(&key.id()) {
+                ring.older.push(key);
+            }
+        }
+        ring
+    }
+
+    /// The id of the key that seals.
+    pub(crate) fn id(&self) -> String {
+        self.sealing.id()
+    }
+
+    /// Whether one of the keys is the key of the id `id`.
+    pub(crate) fn holds(&self, id: &str) -> bool {
+        self.keys().any(|key| key.id() == id)
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &EncryptionKey> {
+        std::iter::once(&self.sealing).chain(&self.older)
+    }
+
+    /// `value` sealed with the sealing key for `place`.
+    pub(crate) fn seal(&self, place: &[u8], value: &[u8]) -> Result<Vec<u8>> {
+        self.sealing.seal(place, value)
+    }
+
+    /// The value `sealed` holds, opened with the key that sealed it for
+    /// `place`. One sealed with a key the store does not hold is `Invalid`
+    /// and names it; bytes changed since, or sealed for another place, are
+    /// `Corrupt`.
+    pub(crate) fn open(&self, place: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+        let id = sealed_with(sealed).ok_or_else(|| Error::corrupt("its value is not one the store sealed"))?;
+        let Some(key) = self.keys().find(|key| key.id == id) else {
+            return Err(Error::invalid(format!(
+                "its value was sealed with the key {}, which the store does not hold, and it seals with {}:                  give the store that key among its older encryption keys",
+                crate::text::hex(&id),
+                self.id()
+            )));
+        };
+        key.open(place, sealed)
+    }
+
+    /// Whether `sealed` was sealed with the key that seals now, as nothing
+    /// left to seal again.
+    pub(crate) fn sealed_it(&self, sealed: &[u8]) -> bool {
+        sealed_with(sealed) == Some(self.sealing.id)
+    }
+}
+
+impl fmt::Debug for Keyring {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let older: Vec<String> = self.older.iter().map(EncryptionKey::id).collect();
+        f.debug_struct("Keyring").field("sealing", &self.id()).field("older", &older).finish()
+    }
+}
+
+/// The id of the key that sealed `sealed`, as its head says; none for bytes
+/// that are no value the store sealed.
+fn sealed_with(sealed: &[u8]) -> Option<[u8; ID]> {
+    if sealed.len() < HEAD + TAG || sealed[0] != FORMAT {
+        return None;
+    }
+    sealed[1..=ID].try_into().ok()
 }
 
 impl fmt::Debug for EncryptionKey {
@@ -189,27 +255,45 @@ mod tests {
     // contract: SEC-03
     #[test]
     fn a_value_opens_only_at_its_place_with_its_key_and_unchanged() {
-        let key = key();
-        let sealed = key.seal(b"passwords/42", b"hunter2").unwrap();
-        assert_eq!(key.open(b"passwords/42", &sealed).unwrap(), b"hunter2");
+        let ring = Keyring::of(key(), []);
+        let sealed = ring.seal(b"passwords/42", b"hunter2").unwrap();
+        assert_eq!(ring.open(b"passwords/42", &sealed).unwrap(), b"hunter2");
         assert_eq!(sealed.len(), HEAD + b"hunter2".len() + TAG);
         assert!(!sealed.windows(7).any(|window| window == b"hunter2"));
 
-        assert_eq!(key.open(b"passwords/43", &sealed).unwrap_err().kind(), ErrorKind::Corrupt);
+        assert_eq!(ring.open(b"passwords/43", &sealed).unwrap_err().kind(), ErrorKind::Corrupt);
         let mut changed = sealed.clone();
         *changed.last_mut().unwrap() ^= 1;
-        assert_eq!(key.open(b"passwords/42", &changed).unwrap_err().kind(), ErrorKind::Corrupt);
-        assert_eq!(key.open(b"passwords/42", b"hunter2").unwrap_err().kind(), ErrorKind::Corrupt);
+        assert_eq!(ring.open(b"passwords/42", &changed).unwrap_err().kind(), ErrorKind::Corrupt);
+        assert_eq!(ring.open(b"passwords/42", b"hunter2").unwrap_err().kind(), ErrorKind::Corrupt);
 
-        let other = self::key().open(b"passwords/42", &sealed).unwrap_err();
+        let other = Keyring::of(key(), []).open(b"passwords/42", &sealed).unwrap_err();
         assert_eq!(other.kind(), ErrorKind::Invalid);
-        assert!(other.to_string().contains(&key.id()), "{other}");
+        assert!(other.to_string().contains(&ring.id()), "{other}");
+    }
+
+    // contract: SEC-04
+    #[test]
+    fn a_ring_seals_with_its_one_key_and_opens_with_any() {
+        let (old, new) = (CipherKey::try_generate().unwrap(), CipherKey::try_generate().unwrap());
+        let before = Keyring::of(EncryptionKey::of(&old), []);
+        let sealed_before = before.seal(b"passwords/42", b"hunter2").unwrap();
+        let ring = Keyring::of(EncryptionKey::of(&new), [EncryptionKey::of(&old), EncryptionKey::of(&new)]);
+        assert_eq!(ring.older.len(), 1, "the sealing key given again is kept once");
+        assert_eq!(ring.open(b"passwords/42", &sealed_before).unwrap(), b"hunter2", "an older key opens");
+        assert!(!ring.sealed_it(&sealed_before));
+
+        let sealed = ring.seal(b"passwords/42", b"hunter2").unwrap();
+        assert!(ring.sealed_it(&sealed));
+        let without = before.open(b"passwords/42", &sealed).unwrap_err();
+        assert_eq!(without.kind(), ErrorKind::Invalid, "a store without the new key opens none of its values");
+        assert!(without.to_string().contains(&ring.id()), "{without}");
     }
 
     #[test]
     fn a_value_sealed_twice_is_two_ciphers() {
-        let key = key();
-        assert_ne!(key.seal(b"p", b"hunter2").unwrap(), key.seal(b"p", b"hunter2").unwrap());
+        let ring = Keyring::of(key(), []);
+        assert_ne!(ring.seal(b"p", b"hunter2").unwrap(), ring.seal(b"p", b"hunter2").unwrap());
     }
 
     #[test]

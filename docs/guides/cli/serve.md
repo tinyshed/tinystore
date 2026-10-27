@@ -64,15 +64,16 @@ its local socket.
 
 ## The store
 
-| Flag                           | Does                                                                 |
-|--------------------------------|----------------------------------------------------------------------|
-| `--memory <size>`              | what the engines may hold at once, `512MiB`; 1 GiB with `--listen`   |
-| `--durability full\|os`        | how far a commit goes before it returns                              |
-| `--keep-free <size>`           | the disk the store keeps free; 1 GiB by default                      |
-| `--encryption-key-file <file>` | the store's key, kept apart from its data                            |
-| `--self-metrics`               | measure the store into its own [metrics](../metrics/self-metrics.md) |
-| `--no-system-metrics`          | with `--self-metrics`, leave out the machine                         |
-| `--max-series <count>`         | the metrics series the store holds at most; 100,000 by default       |
+| Flag                            | Does                                                                 |
+|---------------------------------|----------------------------------------------------------------------|
+| `--memory <size>`               | what the engines may hold at once, `512MiB`; 1 GiB with `--listen`   |
+| `--durability full\|os`         | how far a commit goes before it returns                              |
+| `--keep-free <size>`            | the disk the store keeps free; 1 GiB by default                      |
+| `--encryption-key-file <file>`  | the store's key, kept apart from its data                            |
+| `--older-encryption-key <file>` | an older key, which opens what it sealed; again for more             |
+| `--self-metrics`                | measure the store into its own [metrics](../metrics/self-metrics.md) |
+| `--no-system-metrics`           | with `--self-metrics`, leave out the machine                         |
+| `--max-series <count>`          | the metrics series the store holds at most; 100,000 by default       |
 
 ## Output
 

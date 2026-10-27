@@ -8,7 +8,7 @@ use super::cells;
 use super::once::Runs;
 use super::renewals::Renewals;
 use super::scope::Kind;
-use crate::encryption::EncryptionKey;
+use crate::encryption::Keyring;
 use crate::engine::{Claim, Copying, Engine, Home, Host, to_copy};
 use crate::sqlite::{Config, File, Left, Migration, Settle, Tx, own_work};
 use crate::store::WeakStore;
@@ -190,17 +190,18 @@ impl Kv {
         Arc::clone(&self.revision)
     }
 
-    /// The store's encryption key, for a bucket whose values are sealed with
-    /// the key of the id `kept`, or with none yet. A bucket that has a key
-    /// takes no new one: the store makes a key only for a bucket that holds
-    /// nothing sealed, while no bucket of its directory does, open or not, so
-    /// that a key lost is never replaced unseen.
-    pub(crate) fn encryption_key(&self, kept: Option<&str>) -> Result<Arc<EncryptionKey>> {
+    /// The store's encryption keys, for a bucket whose values are sealed
+    /// with the keys of the ids `kept`, or with none yet. A bucket that has a
+    /// key makes the store make none: the store makes a key only for a bucket
+    /// that holds nothing sealed, while no bucket of its directory does, open
+    /// or not, so that a key lost is never replaced unseen.
+    pub(crate) fn encryption_key(&self, kept: Option<&str>) -> Result<Arc<Keyring>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: its store", self.place())))?;
         match kept {
             None => store.encryption_key(super::encrypted::sealed_in),
             Some(kept) => store.encryption_key_there().map_err(|error| {
-                error.within(format!("its values are encrypted with the key {kept}, and the store makes no other"))
+                let kept = super::encrypted::named(kept);
+                error.within(format!("its values are encrypted with {kept}, and the store makes no other"))
             }),
         }
     }

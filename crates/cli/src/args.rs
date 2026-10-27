@@ -50,6 +50,8 @@ pub(crate) struct Serve {
     /// The file of the store's encryption key; `encryption.key` of its directory,
     /// which the store makes, unless said.
     pub(crate) encryption_key_file: Option<PathBuf>,
+    /// The files of the store's older keys, which open what they sealed.
+    pub(crate) older_encryption_keys: Vec<PathBuf>,
     /// Measures the store into its own metrics.db, `--self-metrics`, the
     /// machine left out with `--no-system-metrics`.
     pub(crate) self_metrics: Option<tinystore::metrics::SelfMetrics>,
@@ -136,6 +138,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
     let self_metrics =
         given.self_metrics.then_some(tinystore::metrics::SelfMetrics { system: !given.no_system_metrics });
     let (keep_free, encryption_key_file, max_series) = (given.keep_free, given.encryption_key_file, given.max_series);
+    let older_encryption_keys = given.older_encryption_keys;
     Ok(Serve {
         dir,
         transport,
@@ -148,6 +151,7 @@ pub(crate) fn serve(args: &[String]) -> Result<Serve, String> {
         durability,
         keep_free,
         encryption_key_file,
+        older_encryption_keys,
         self_metrics,
         max_series,
         node,
@@ -172,6 +176,7 @@ struct Given {
     durability: Option<Durability>,
     keep_free: Option<u64>,
     encryption_key_file: Option<PathBuf>,
+    older_encryption_keys: Vec<PathBuf>,
     self_metrics: bool,
     no_system_metrics: bool,
     max_series: Option<u64>,
@@ -201,6 +206,9 @@ impl Given {
                 "--keep-free" => given.keep_free = Some(size(&value("--keep-free")?)?),
                 "--encryption-key-file" => {
                     given.encryption_key_file = Some(PathBuf::from(value("--encryption-key-file")?));
+                }
+                "--older-encryption-key" => {
+                    given.older_encryption_keys.push(PathBuf::from(value("--older-encryption-key")?));
                 }
                 "--self-metrics" => given.self_metrics = true,
                 "--no-system-metrics" => given.no_system_metrics = true,

@@ -69,6 +69,14 @@ interface OpenOptions {
      */
     encryptionKeyFile?: string
     /**
+     * The files of the store's older keys, which open the values they sealed
+     * and seal nothing new: a key being rotated out, until `reseal` has sealed
+     * every value again, or one found after a restore that left it out. Each
+     * file must be there. A sidecar found running keeps the keys it was
+     * started with.
+     */
+    olderEncryptionKeys?: string[]
+    /**
      * Makes the store a node: it keeps a log of each file it writes, serves
      * its files to other nodes, and copies the files of the node it takes
      * from, reading them here and passing their writes to their home. A draft,

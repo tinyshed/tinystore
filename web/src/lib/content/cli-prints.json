@@ -1,7 +1,7 @@
 {
   "status": {
     "example": "tinystore status ./data",
-    "prints": "● ./data  served by tinystore 0.0.0 · pid 17552 · up 0s · durability not set: full, os for records and metrics\n\n  kv        80 KiB\n  jobs     129 KiB\n  blobs    133 KiB\n  sql/app   16 KiB\n  records   53 KiB\n  metrics  217 KiB\n  ────────────────\n  total    628 KiB"
+    "prints": "● ./data  served by tinystore 0.0.0 · pid 26804 · up 0s · durability not set: full, os for records and metrics\n\n  kv        80 KiB\n  jobs     129 KiB\n  blobs    133 KiB\n  sql/app   16 KiB\n  records   53 KiB\n  metrics  217 KiB\n  ────────────────\n  total    628 KiB"
   },
   "logs": {
     "example": "tinystore logs ./data -f",
@@ -17,11 +17,11 @@
   },
   "jobs list": {
     "example": "tinystore jobs ./data list emails welcome-",
-    "prints": "welcome-40  scheduled  27 Oct 00:15:47.407  attempt 0\nwelcome-41  scheduled  27 Oct 01:15:47.423  attempt 0"
+    "prints": "welcome-40  scheduled  27 Oct 04:12:05.768  attempt 0\nwelcome-41  scheduled  27 Oct 05:12:05.783  attempt 0"
   },
   "files list": {
     "example": "tinystore files ./data list avatars",
-    "prints": "users/42/avatar.png        8 B  26 Oct 23:15:47.462  image/png\nusers/43/avatar.png        8 B  26 Oct 23:15:47.478  image/png"
+    "prints": "users/42/avatar.png        8 B  27 Oct 03:12:05.820  image/png\nusers/43/avatar.png        8 B  27 Oct 03:12:05.839  image/png"
   },
   "files get": {
     "example": "tinystore files ./data get avatars users/42/avatar.png ./avatar.png",
@@ -45,15 +45,15 @@
   },
   "metrics read": {
     "example": "tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h",
-    "prints": "ping_rtt_ms{target=\"poland\"}   26 Oct 22:15–23:15 Europe/Moscow · 60 samples\n  22:16:47.548   24.6\n  22:17:47.548   23.8\n  22:18:47.548   23\n  22:19:47.548   24.2\n  22:20:47.548   23.4\n  22:21:47.548   24.6\n  22:22:47.548   23.8\n  22:23:47.548   23\n  22:24:47.548   24.2\n  22:25:47.548   23.4\n  22:26:47.548   24.6\n…"
+    "prints": "ping_rtt_ms{target=\"poland\"}   27 Oct 02:12–03:12 Europe/Moscow · 60 samples\n  02:13:05.906   24.6\n  02:14:05.906   23.8\n  02:15:05.906   23\n  02:16:05.906   24.2\n  02:17:05.906   23.4\n  02:18:05.906   24.6\n  02:19:05.906   23.8\n  02:20:05.906   23\n  02:21:05.906   24.2\n  02:22:05.906   23.4\n  02:23:05.906   24.6\n…"
   },
   "metrics aggregate": {
     "example": "tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target",
-    "prints": "ping_rtt_ms max every 10m   26 Oct 22:15–23:15 Europe/Moscow\n             finland   poland   sweden\n  22:10:00      32.6     24.6     41.6\n  22:20:00      32.6     24.6     41.6\n  22:30:00      32.6     24.6     41.6\n  22:40:00      32.6     24.6     41.6\n  22:50:00      32.6     24.6     41.6\n  23:00:00      32.6     24.6     41.6\n  23:10:00      32.6     24.6     41.6"
+    "prints": "ping_rtt_ms max every 10m   27 Oct 02:12–03:12 Europe/Moscow\n             finland   poland   sweden\n  02:10:00      32.6     24.6     41.6\n  02:20:00      32.6     24.6     41.6\n  02:30:00      32.6     24.6     41.6\n  02:40:00      32.6     24.6     41.6\n  02:50:00      32.6     24.6     41.6\n  03:00:00      32.6     24.6     41.6\n  03:10:00      32.6     24.2     41.2"
   },
   "events list": {
     "example": "tinystore events ./data list audit --since 1h",
-    "prints": "23:15:47.512 EVENT audit  role.changed  role=admin user=42\n23:15:47.526 EVENT audit  login  user=43"
+    "prints": "03:12:05.871 EVENT audit  role.changed  role=admin user=42\n03:12:05.885 EVENT audit  login  user=43"
   },
   "kv set": {
     "example": "tinystore kv ./data set flags beta on --ttl 1h",
@@ -113,7 +113,7 @@
   },
   "stop": {
     "example": "tinystore stop ./data",
-    "prints": "● ./data  stopped in 0.1s · pid 17552"
+    "prints": "● ./data  stopped in 0.1s · pid 26804"
   },
   "backup": {
     "example": "tinystore backup ./data backup.zip",
@@ -129,7 +129,7 @@
   },
   "token": {
     "example": "tinystore token new admin >> tokens.txt",
-    "prints": "admin WdykCDxw_VB6uzV9KRLK_z49Yg5DC65PMoL8xHxCZwg"
+    "prints": "admin rNKCC9K9yWjS5Kh9JWBkcUCw4M_zSiLBuQwu3fxjDcg"
   },
   "lock hold": {
     "example": "tinystore lock ./data hold cron nightly-backup -- ./backup.sh",

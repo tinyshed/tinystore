@@ -288,6 +288,7 @@ pub(crate) const SERVE: Command = Command {
         under("store", "--durability", "full|os", "how far a commit goes before it returns; each engine's own"),
         under("store", "--keep-free", "<size>", "the disk the store keeps free; 1GiB by default"),
         under("store", "--encryption-key-file", "<file>", "the store's key, kept apart from its data"),
+        under("store", "--older-encryption-key", "<file>", "an older key, which opens what it sealed; again for more"),
         under("store", "--self-metrics", "", "measure the store into its own metrics, as tinystore_ names"),
         under("store", "--no-system-metrics", "", "with --self-metrics, leave out the machine it runs on"),
         under("store", "--max-series", "<count>", "the metrics series the store holds at most; 100000 by default"),

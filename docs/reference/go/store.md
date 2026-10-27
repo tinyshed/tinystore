@@ -212,6 +212,14 @@ func MaxSeries(count int) Option
 
 MaxSeries is the metrics series the store holds at most: a new series past them is a limit error. 100,000 unless given; a sidecar found running keeps its own.
 
+### OlderEncryptionKeys
+
+```go
+func OlderEncryptionKeys(paths ...string) Option
+```
+
+OlderEncryptionKeys are the files of the store's older keys, which open the values they sealed and seal nothing new: a key being rotated out, until Reseal has sealed every value again, or one found after a restore that left it out. Each file must be there. A sidecar found running keeps the keys it was started with.
+
 ### Private
 
 ```go

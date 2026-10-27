@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 #[cfg(feature = "kv")]
-use crate::encryption::{self, EncryptionKey, SealedIn};
+use crate::encryption::{self, EncryptionKey, Keyring, SealedIn};
 use crate::engine::{Claim, Engine, Host, Wake};
 use crate::probe::Probe;
 use crate::schedule::Scheduler;
@@ -50,6 +50,11 @@ pub struct Options {
     /// store reads it and never makes it. `None` is `encryption.key` in the
     /// store's directory, which the store makes the first time it needs one.
     pub encryption_key_file: Option<PathBuf>,
+    /// The files of the store's older keys, which open the values they
+    /// sealed and seal nothing new: a key being rotated out, until
+    /// `reseal` has sealed every value again, or one found after a restore
+    /// that left it out. Each file must be there.
+    pub older_encryption_keys: Vec<PathBuf>,
     /// Makes the store a node, which keeps a log of each file it writes for
     /// other nodes to copy; `None` is a store alone.
     #[cfg(feature = "replication")]
@@ -83,6 +88,7 @@ impl Default for Options {
             durability: None,
             keep_free: KEEP_FREE,
             encryption_key_file: None,
+            older_encryption_keys: Vec::new(),
             #[cfg(feature = "replication")]
             node: None,
             #[cfg(feature = "metrics")]
@@ -102,7 +108,8 @@ impl fmt::Debug for Options {
             .field("background", &self.background)
             .field("durability", &self.durability)
             .field("keep_free", &self.keep_free)
-            .field("encryption_key_file", &self.encryption_key_file);
+            .field("encryption_key_file", &self.encryption_key_file)
+            .field("older_encryption_keys", &self.older_encryption_keys);
         #[cfg(feature = "replication")]
         let f = f.field("node", &self.node);
         #[cfg(feature = "metrics")]
@@ -221,10 +228,12 @@ struct Inner {
     max_series: u64,
     #[cfg(feature = "kv")]
     encryption_key_file: Option<PathBuf>,
-    /// The key, once a handle needed it: a store that seals nothing reads no
-    /// key and makes none.
     #[cfg(feature = "kv")]
-    encryption_key: Mutex<Option<Arc<EncryptionKey>>>,
+    older_encryption_keys: Vec<PathBuf>,
+    /// The keys, once a handle needed them: a store that seals nothing reads
+    /// no key and makes none.
+    #[cfg(feature = "kv")]
+    encryption_key: Mutex<Option<Arc<Keyring>>>,
     /// The node the store is, its logs, copies and links; `None` in a store
     /// alone.
     #[cfg(feature = "replication")]
@@ -292,6 +301,8 @@ impl Store {
             max_series: options.max_series,
             #[cfg(feature = "kv")]
             encryption_key_file: options.encryption_key_file,
+            #[cfg(feature = "kv")]
+            older_encryption_keys: options.older_encryption_keys,
             #[cfg(feature = "kv")]
             encryption_key: Mutex::new(None),
             #[cfg(feature = "replication")]
@@ -477,25 +488,27 @@ impl Store {
         self.inner.max_series
     }
 
-    /// The store's encryption key: the one in the file its options named, or
-    /// in `encryption.key` of its directory, which the store makes when it is
-    /// not there and `sealed_in` finds no value of its directory sealed with
-    /// a key. For a bucket that holds nothing sealed yet.
+    /// The store's encryption keys. The one that seals is in the file its
+    /// options named, or in `encryption.key` of its directory, which the
+    /// store makes when it is not there and `sealed_in` finds no value of
+    /// its directory sealed with a key. For a bucket that holds nothing
+    /// sealed yet.
     #[cfg(feature = "kv")]
-    pub(crate) fn encryption_key(&self, sealed_in: SealedIn) -> Result<Arc<EncryptionKey>> {
+    pub(crate) fn encryption_key(&self, sealed_in: SealedIn) -> Result<Arc<Keyring>> {
         self.read_encryption_key(Some(sealed_in))
     }
 
-    /// The store's encryption key, which is there already: a key lost is not
-    /// replaced, since values sealed with it open with no other.
+    /// The store's encryption keys, which are there already: a key lost is
+    /// not replaced, since values sealed with it open with no other.
     #[cfg(feature = "kv")]
-    pub(crate) fn encryption_key_there(&self) -> Result<Arc<EncryptionKey>> {
+    pub(crate) fn encryption_key_there(&self) -> Result<Arc<Keyring>> {
         self.read_encryption_key(None)
     }
 
-    /// The key, made only by a call that says how to find what is sealed.
+    /// The keys, the sealing one made only by a call that says how to find
+    /// what is sealed.
     #[cfg(feature = "kv")]
-    fn read_encryption_key(&self, make: Option<SealedIn>) -> Result<Arc<EncryptionKey>> {
+    fn read_encryption_key(&self, make: Option<SealedIn>) -> Result<Arc<Keyring>> {
         self.refuse_when_closed("its encryption key")?;
         let mut kept = lock(&self.inner.encryption_key);
         if let Some(key) = &*kept {
@@ -504,13 +517,23 @@ impl Store {
         let own = self.inner.dir.join(encryption::FILE);
         // a store opened beside its holder never makes the key file: it reads
         // the key there, as any other file
-        let key = Arc::new(match (&self.inner.encryption_key_file, make) {
+        let sealing = match (&self.inner.encryption_key_file, make) {
             (Some(file), _) => EncryptionKey::read(file)?,
             (None, Some(sealed_in)) if !self.inner.beside => self.read_or_make_key(&own, sealed_in)?,
             (None, _) => EncryptionKey::read(&own)?,
+        };
+        let older = self.inner.older_encryption_keys.iter().map(|file| {
+            EncryptionKey::read(file).map_err(|error| error.within("one of the store's older encryption keys"))
         });
-        *kept = Some(Arc::clone(&key));
-        Ok(key)
+        let ring = Arc::new(Keyring::of(sealing, older.collect::<Result<Vec<_>>>()?));
+        *kept = Some(Arc::clone(&ring));
+        Ok(ring)
+    }
+
+    /// The files of the store's older keys, as its options named them.
+    #[cfg(all(feature = "kv", feature = "wire"))]
+    pub(crate) fn older_encryption_keys(&self) -> &[PathBuf] {
+        &self.inner.older_encryption_keys
     }
 
     /// The key of `own`, made when it is not there, unless values of the
@@ -526,7 +549,8 @@ impl Store {
                 ErrorKind::Io,
                 format!(
                     "the encryption key {}: not there, and values sealed with the key {id} remain: \
-                     put the key back, since the store makes no other while they do",
+                     put the key back, since the store makes no other while they do, or put a new one there, \
+                     which seals new values beside them",
                     own.display()
                 ),
             ));

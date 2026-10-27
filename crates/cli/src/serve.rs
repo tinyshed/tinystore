@@ -133,6 +133,7 @@ fn options_of(
         durability: serve.durability,
         keep_free: serve.keep_free.unwrap_or(Options::default().keep_free),
         encryption_key_file: serve.encryption_key_file.clone(),
+        older_encryption_keys: serve.older_encryption_keys.clone(),
         node,
         self_metrics: serve.self_metrics,
         max_series: serve.max_series.unwrap_or(Options::default().max_series),

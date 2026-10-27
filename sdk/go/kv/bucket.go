@@ -409,6 +409,32 @@ func (b *Bucket[T]) Clear(ctx context.Context) error {
 	return err
 }
 
+// Reseal seals again with the store's sealing key every value of this branch,
+// and of the branches under it, that an older key sealed, and says how many.
+// Once every value of the bucket is, the older key can leave the store's
+// options. A value sealed with a key the store does not hold stops it with an
+// Invalid error that names the key, and a reseal after the key is given goes
+// on.
+func (b *Bucket[T]) Reseal(ctx context.Context) (uint64, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if b.tx != nil {
+		return 0, core.Errorf(core.Invalid, "a reseal commits a batch at a time, never inside a transaction")
+	}
+	answer, err := b.via.Call(ctx, b.opener, wire.MethodKvReseal, func(handle uint64) []byte {
+		return wire.Encode(&wire.KvBranch{Handle: handle, Under: b.under})
+	}, core.Writing)
+	if err != nil {
+		return 0, err
+	}
+	var resealed wire.KvResealed
+	if err := decode(answer, &resealed); err != nil {
+		return 0, err
+	}
+	return resealed.Count, nil
+}
+
 // List is one page of this branch's own keys, in the byte order of their
 // text: "10" before "9".
 func (b *Bucket[T]) List(ctx context.Context, opts ...ListOption) (Page[T], error) {

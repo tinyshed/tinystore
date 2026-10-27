@@ -108,6 +108,8 @@ class Started:
 
     durability: Durability | None = None
     encryption_key_file: str | None = None
+    older_encryption_keys: tuple[str, ...] = ()
+    """the files of the store's older keys, which open what they sealed"""
     idle: str | None = None
     """how long a sidecar stays once its last connection has gone, as tinystore serve --idle takes it"""
     self_metrics: bool = False
@@ -167,6 +169,8 @@ def _store_flags(started: Started) -> list[str]:
         flags += ["--durability", started.durability]
     if started.encryption_key_file is not None:
         flags += ["--encryption-key-file", str(Path(started.encryption_key_file).resolve())]
+    for older in started.older_encryption_keys:
+        flags += ["--older-encryption-key", str(Path(older).resolve())]
     if started.self_metrics:
         flags.append("--self-metrics")
         if not started.system_metrics:
@@ -216,6 +220,7 @@ def in_process(
     options = StoreOptions.encode(
         durability=started.durability,
         encryption_key_file=None if key is None else str(Path(key).resolve()),
+        older_encryption_keys=[str(Path(older).resolve()) for older in started.older_encryption_keys],
         self_metrics=started.self_metrics,
         without_system=started.self_metrics and not started.system_metrics,
         max_series=started.max_series,

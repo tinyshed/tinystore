@@ -377,3 +377,34 @@ async def test_a_handle_of_another_store_is_refused(store: tinystore.Store, way:
         await other.close()
         await way.leave(other_dir)
         await removed(other_dir)
+
+
+# contract: SEC-04
+@pytest.mark.parametrize("way", ["embedded", "private"])
+async def test_an_older_key_opens_what_it_sealed_and_a_reseal_moves_it_to_the_new_one(
+    directory: Path, way: str
+) -> None:
+    from ways import CORE, SERVED
+
+    if not (CORE if way == "embedded" else SERVED):
+        pytest.skip(f"no {way} store here")
+    old, new = directory / "old.key", directory / "new.key"
+    old.write_text("1a" * 32)
+    new.write_text("2b" * 32)
+    data = directory / "data"
+
+    async def opened(key: Path, older: list[Path] | None = None) -> tinystore.Store:
+        embedded = way == "embedded"
+        return await tinystore.open(
+            data, embedded=embedded, private=not embedded, encryption_key_file=key, older_encryption_keys=older or []
+        )
+
+    async with await opened(old) as before:
+        await before.bucket("passwords", str, encrypted=True).set("source-42", "hunter2")
+    async with await opened(new, [old]) as store:
+        passwords = store.bucket("passwords", str, encrypted=True)
+        assert await passwords.get("source-42") == "hunter2"
+        assert await passwords.reseal() == 1
+        assert await passwords.reseal() == 0
+    async with await opened(new) as after:
+        assert await after.bucket("passwords", str, encrypted=True).get("source-42") == "hunter2"

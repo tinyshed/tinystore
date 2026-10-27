@@ -234,6 +234,7 @@ struct Asked {
     #[cfg(feature = "metrics")]
     max_series: Option<u64>,
     encryption_key_file: Option<PathBuf>,
+    older_encryption_keys: Vec<PathBuf>,
     #[cfg(feature = "replication")]
     node: Option<crate::replication::Node>,
 }
@@ -282,6 +283,7 @@ fn asked(options: &[u8]) -> Result<Asked> {
         #[cfg(feature = "metrics")]
         max_series: asked.max_series,
         encryption_key_file: asked.encryption_key_file.map(PathBuf::from),
+        older_encryption_keys: asked.older_encryption_keys.into_iter().map(PathBuf::from).collect(),
         #[cfg(feature = "replication")]
         node,
     })
@@ -311,6 +313,9 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
                 key_file.display()
             )));
         }
+        if !asked.older_encryption_keys.is_empty() && store.older_encryption_keys() != asked.older_encryption_keys {
+            return Err(Error::invalid("pipe: the store is open with other older encryption keys than those asked"));
+        }
         #[cfg(feature = "metrics")]
         if asked.self_metrics.is_some() && !store.probe().listening() {
             return Err(Error::invalid("pipe: the store is open without its own metrics, and asked for them"));
@@ -335,6 +340,7 @@ fn join(dir: &Path, asked: Asked) -> Result<Store> {
     let options = Options {
         durability: asked.durability,
         encryption_key_file: asked.encryption_key_file,
+        older_encryption_keys: asked.older_encryption_keys,
         #[cfg(feature = "replication")]
         node: asked.node,
         #[cfg(feature = "metrics")]

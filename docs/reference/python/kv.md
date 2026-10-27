@@ -166,6 +166,20 @@ async def clear() -> None: ...
 
 Removes this branch's keys and every branch under it, at once however many.
 
+### Bucket.reseal
+
+```python
+async def reseal() -> int: ...
+```
+
+Seals again with the store's sealing key what an older key sealed, and says how many.
+
+Every value of this branch, and of the branches under it, that an older
+key sealed: once every value of the bucket is, the older key can leave
+the store's options. A value sealed with a key the store does not hold
+stops it with an InvalidError that names the key, and a reseal after
+the key is given goes on.
+
 ### Bucket.list
 
 ```python

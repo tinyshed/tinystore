@@ -238,6 +238,25 @@ fn the_encryption_key_is_left_out_unless_asked_for_and_the_backup_says_so() {
 
 // contract: BAK-03
 #[test]
+fn a_backup_with_the_key_says_it_leaves_out_an_older_key_until_a_reseal() {
+    let f = fixture();
+    f.open(&f.data).bucket::<String>("passwords").encrypted().open().unwrap().set("db", &"hunter2".to_owned()).unwrap();
+    let (old, new) = (f.data.join("old.key"), f.data.join("encryption.key"));
+    fs::rename(&new, &old).unwrap();
+    fs::write(&new, "cd".repeat(32)).unwrap();
+    let options = Options { clock: Some(f.clock.clone()), older_encryption_keys: vec![old], ..Options::default() };
+    let store = Store::open(&f.data, Options { background: false, ..options }).unwrap();
+    let passwords = store.bucket::<String>("passwords").encrypted().open().unwrap();
+
+    let before = store.backup().include_encryption_key().write(&f.zip).unwrap();
+    assert!(before.key_left_out, "the old key sealed a value, and a backup takes the sealing key alone");
+    passwords.reseal().unwrap();
+    let after = store.backup().include_encryption_key().write(f.zip.with_extension("resealed")).unwrap();
+    assert!(!after.key_left_out);
+}
+
+// contract: BAK-03
+#[test]
 fn a_backup_beside_a_holder_that_keeps_its_key_apart_says_it_leaves_the_key_out() {
     let f = fixture();
     let key = f.zip.with_file_name("tinystore.key");

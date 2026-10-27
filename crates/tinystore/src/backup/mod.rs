@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 pub use restore::restore;
 
 #[cfg(feature = "kv")]
-use crate::kv::sealed_in;
+use crate::kv::keys_sealed_in;
 use crate::{Error, ErrorKind, Result, Store, unix_millis};
 use manifest::{Listed, MANIFEST, Manifest};
 
@@ -155,18 +155,23 @@ impl BackupBuilder {
     }
 
     /// The store's key when the backup takes it, and whether values of the
-    /// snapshot are sealed with a key it leaves out. What the snapshot seals
-    /// decides it, not a key file found: a store opened beside a server that
-    /// keeps its key apart finds none in its directory, and its buckets are
-    /// sealed all the same.
+    /// snapshot are sealed with a key it leaves out: an older key's too,
+    /// which a backup never takes. What the snapshot seals decides it, not a
+    /// key file found: a store opened beside a server that keeps its key
+    /// apart finds none in its directory, and its buckets are sealed all the
+    /// same.
     fn key(&self, snapshot: &snapshot::Snapshot) -> Result<Key> {
-        let sealed = sealed_in(&snapshot.dir)?;
+        let sealed = keys_sealed_in(&snapshot.dir)?;
         if !self.include_encryption_key {
-            return Ok(Key { file: None, left_out: sealed.is_some() });
+            return Ok(Key { file: None, left_out: !sealed.is_empty() });
         }
         let file = encryption_key_file(&self.store).unwrap_or_default();
-        match sealed {
-            _ if file.exists() => Ok(Key { file: Some((KEY.to_owned(), file, "key")), left_out: false }),
+        match sealed.first() {
+            _ if file.exists() => {
+                let taken = sealing_id(&file)?;
+                let left_out = sealed.iter().any(|id| *id != taken);
+                Ok(Key { file: Some((KEY.to_owned(), file, "key")), left_out })
+            }
             None => Ok(Key { file: None, left_out: false }),
             Some(id) => Err(Error::new(
                 ErrorKind::Io,
@@ -193,8 +198,19 @@ struct Key {
 
 /// A build without kv seals nothing, and reads no bucket's key.
 #[cfg(not(feature = "kv"))]
-fn sealed_in(_snapshot: &Path) -> Result<Option<String>> {
-    Ok(None)
+fn keys_sealed_in(_snapshot: &Path) -> Result<std::collections::BTreeSet<String>> {
+    Ok(std::collections::BTreeSet::new())
+}
+
+/// The id of the key in `file`, which seals the store's values now.
+#[cfg(feature = "kv")]
+fn sealing_id(file: &Path) -> Result<String> {
+    Ok(crate::encryption::EncryptionKey::read(file)?.id())
+}
+
+#[cfg(not(feature = "kv"))]
+fn sealing_id(_file: &Path) -> Result<String> {
+    Ok(String::new())
 }
 
 /// The name a backup gives the store's encryption key, and a restore puts

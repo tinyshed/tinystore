@@ -57,6 +57,7 @@ const (
 	MethodKvExpire         = 0x0108
 	MethodKvClear          = 0x0109
 	MethodKvList           = 0x010a
+	MethodKvReseal         = 0x010b
 	MethodKvCountersOpen   = 0x0110
 	MethodKvCountersAdd    = 0x0111
 	MethodKvCountersGet    = 0x0112
@@ -183,6 +184,7 @@ var methodNames = []struct {
 	{"kv.expire", MethodKvExpire},
 	{"kv.clear", MethodKvClear},
 	{"kv.list", MethodKvList},
+	{"kv.reseal", MethodKvReseal},
 	{"kv.counters.open", MethodKvCountersOpen},
 	{"kv.counters.add", MethodKvCountersAdd},
 	{"kv.counters.get", MethodKvCountersGet},
@@ -387,6 +389,8 @@ func NewMessage(name string) Message {
 		return &KvWritten{}
 	case "kv.Found":
 		return &KvFound{}
+	case "kv.Resealed":
+		return &KvResealed{}
 	case "kv.Branch":
 		return &KvBranch{}
 	case "kv.List":
@@ -2975,6 +2979,8 @@ type StoreOptions struct {
 	WithoutSystem bool `wire:"14,withoutSystem"`
 	// the metrics series the store holds at most; 100,000 when absent
 	MaxSeries *uint64 `wire:"15,maxSeries"`
+	// the files of the store's older keys, which open the values they sealed and seal none
+	OlderEncryptionKeys []string `wire:"16,olderEncryptionKeys"`
 }
 
 func (m StoreOptions) Write(w *Writer) {
@@ -3064,6 +3070,14 @@ func (m StoreOptions) Write(w *Writer) {
 		w.Uint(*m.MaxSeries)
 		n++
 	}
+	if len(m.OlderEncryptionKeys) > 0 {
+		w.Uint(16)
+		w.Array(len(m.OlderEncryptionKeys))
+		for _, item0 := range m.OlderEncryptionKeys {
+			w.Str(item0)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -3126,6 +3140,14 @@ func (m *StoreOptions) Read(r *Reader) {
 		case 15:
 			v := r.Uint()
 			m.MaxSeries = &v
+		case 16:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.OlderEncryptionKeys = v
 		default:
 			r.Skip()
 		}
@@ -3149,7 +3171,8 @@ func (m StoreOptions) IsZero() bool {
 		!m.Insecure &&
 		!m.SelfMetrics &&
 		!m.WithoutSystem &&
-		m.MaxSeries == nil
+		m.MaxSeries == nil &&
+		len(m.OlderEncryptionKeys) == 0
 }
 
 // GoAway is the schema's GoAway.
@@ -5104,6 +5127,43 @@ func (m *KvFound) Read(r *Reader) {
 // IsZero says whether KvFound writes as no field at all.
 func (m KvFound) IsZero() bool {
 	return !m.Found
+}
+
+// KvResealed is the schema's kv.Resealed.
+//
+// How many values a reseal sealed again with the sealing key.
+type KvResealed struct {
+	Count uint64 `wire:"1,count"`
+}
+
+func (m KvResealed) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Count != 0 {
+		w.Uint(1)
+		w.Uint(m.Count)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *KvResealed) Read(r *Reader) {
+	*m = KvResealed{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Count = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether KvResealed writes as no field at all.
+func (m KvResealed) IsZero() bool {
+	return m.Count == 0
 }
 
 // KvBranch is the schema's kv.Branch.

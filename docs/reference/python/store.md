@@ -563,6 +563,7 @@ async def open(
     clock: datetime | None = None,
     durability: Durability | None = None,
     encryption_key_file: str | os.PathLike[str] | None = None,
+    older_encryption_keys: Sequence[str | os.PathLike[str]] = (),
     self_metrics: bool | SelfMetrics = False,
     max_series: int | None = None,
 ) -> Store: ...
@@ -594,6 +595,11 @@ cannot be served fails here. A cancel or a timeout around it, such as
   this asks one, is refused.
 - ``encryption_key_file``: the file of the store's encryption key, 64 hex
   digits, kept apart from the data; the store reads it and never makes it.
+- ``older_encryption_keys``: the files of the store's older keys, which
+  open the values they sealed and seal nothing new: a key being rotated
+  out, until ``reseal`` has sealed every value again, or one found after a
+  restore that left it out. Each file must be there. A sidecar found
+  running keeps the keys it was started with.
 - ``self_metrics``: measures the store into its own metrics, under names
   that start with ``tinystore_``: its commits and their waits, its files,
   its memory and the machine it runs on, which ``{"system": False}``

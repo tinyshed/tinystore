@@ -19,6 +19,9 @@ type Started struct {
 	// Durability is full or os, or "" for the store's own.
 	Durability        string
 	EncryptionKeyFile string
+	// OlderEncryptionKeys are the files of the store's older keys, which
+	// open what they sealed.
+	OlderEncryptionKeys []string
 	// Idle is how long a sidecar stays once its last connection has gone, as
 	// tinystore serve --idle takes it.
 	Idle string
@@ -40,6 +43,10 @@ func (s Started) storeFlags() []string {
 	if s.EncryptionKeyFile != "" {
 		key, _ := filepath.Abs(s.EncryptionKeyFile)
 		flags = append(flags, "--encryption-key-file", key)
+	}
+	for _, older := range s.OlderEncryptionKeys {
+		key, _ := filepath.Abs(older)
+		flags = append(flags, "--older-encryption-key", key)
 	}
 	if s.SelfMetrics {
 		flags = append(flags, "--self-metrics")
