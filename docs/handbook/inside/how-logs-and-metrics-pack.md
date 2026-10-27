@@ -81,11 +81,11 @@ samples.
 Each block keeps its samples' times and values with the shortest encoding
 that gives every value back bit for bit:
 
-| What      | Encodings tried                                                                                             |
-|-----------|-------------------------------------------------------------------------------------------------------------|
-| times     | evenly apart as one step, or the changes between steps; series written together share one clock             |
-| values    | constant; integers in Simple8b words; a decimal grid and how far each value lies off it; Gorilla's XOR; raw |
-| the block | zstd on top, when it is shorter                                                                             |
+| What      | Encodings tried                                                                                                                                                                |
+|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| times     | evenly apart as one step; runs of one step; the commonest step and its exceptions; each step's distance from the median in rice codes. Series written together share one clock |
+| values    | constant; integers in Simple8b words or rice codes; a decimal grid and how far each value lies off it; Gorilla's XOR; raw                                                      |
+| the block | zstd on top, when it is shorter                                                                                                                                                |
 
 Every encoding proves that the original bits come back, value by value, or
 the block takes another. `-0`, NaN payloads and infinities are values, not

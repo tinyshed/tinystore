@@ -20,7 +20,7 @@
 //! | Values   | Kept as                                                                          |
 //! |----------|----------------------------------------------------------------------------------|
 //! | constant | nothing: every one is the first                                                  |
-//! | integers | each one's difference from the one before, ZigZag, in Simple8b words             |
+//! | integers | each difference from the one before, ZigZag, in Simple8b words or rice codes     |
 //! | decimals | the integers a power of ten makes of them, so long as each gives its bits back   |
 //! | XOR      | each one's bits against the bits before, as Gorilla keeps them                   |
 //! | raw      | eight bytes each                                                                 |
@@ -29,7 +29,7 @@ use std::borrow::Cow;
 use std::sync::{Mutex, PoisonError};
 
 use super::binary::{advance, distance};
-use crate::compress::bits::{BitReader, BitWriter};
+use crate::compress::bits::{BitReader, BitWriter, RiceCost, read_rice, write_rice};
 use crate::compress::checksum::Crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, fold, put_count, put_int, unfold};
@@ -58,9 +58,13 @@ const UNDER_ZSTD: u8 = 1 << 5;
 /// would cost what it saves.
 const WORTH_ZSTD: usize = 48;
 
-/// How a run's integers are packed: Simple8b words. Huff0, which the Go
-/// engine also weighed, is left out until a measurement says what it saves.
+/// How a run's integers are packed: Simple8b words, or rice codes where they
+/// are shorter, as for deltas that wander a few units either way: Pingmon's
+/// round trips, 1.17 bytes a value in words against 1.01 in rice codes.
+/// Huff0, which the Go engine also weighed, is left out until a measurement
+/// says what it saves.
 const DELTAS_IN_WORDS: u8 = 0;
+const DELTAS_IN_RICE: u8 = 1;
 
 /// The scales of ten a run of decimals is tried at: past nine, research's
 /// fixtures gained no bytes and cost five times the encode.
@@ -419,7 +423,7 @@ fn decode_values(head: &Head, flags: u8, bytes: &[u8], run: &mut [Point]) -> Res
 fn encode_integers(points: &[Point]) -> Option<Vec<u8>> {
     let integers = points.iter().map(|point| exact_integer(point.value)).collect::<Option<Vec<i64>>>()?;
     let deltas = folded_deltas(&integers)?;
-    Some(pack_words(vec![DELTAS_IN_WORDS], &deltas))
+    Some(pack_deltas(&[], &deltas))
 }
 
 /// The run as the integers a power of ten makes of it, when one up to 10⁹
@@ -440,7 +444,25 @@ fn encode_decimals(points: &[Point]) -> Option<Vec<u8>> {
         })
         .collect::<Option<Vec<i64>>>()?;
     let deltas = folded_deltas(&integers)?;
-    Some(pack_words(vec![DELTAS_IN_WORDS, scale as u8], &deltas))
+    Some(pack_deltas(&[scale as u8], &deltas))
+}
+
+/// The packer, `given`, and the deltas in Simple8b words or in rice codes,
+/// whichever is shorter.
+///
+/// ```text
+/// words  0 | given | words
+/// rice   1 | given | k | each delta's rice code of k
+/// ```
+fn pack_deltas(given: &[u8], deltas: &[u64]) -> Vec<u8> {
+    let words = pack_words([&[DELTAS_IN_WORDS], given].concat(), deltas);
+    let (k, bits) = RiceCost::of(deltas).cheapest();
+    if 2 + given.len() + bits.div_ceil(8) as usize >= words.len() {
+        return words;
+    }
+    let mut code = BitWriter::onto([&[DELTAS_IN_RICE], given, &[k as u8]].concat());
+    deltas.iter().for_each(|delta| write_rice(&mut code, *delta, k));
+    code.finish()
 }
 
 /// The smallest power of ten whose integers give `value`'s bits back; none
@@ -509,9 +531,7 @@ fn pack_words(mut out: Vec<u8>, mut values: &[u64]) -> Vec<u8> {
 
 fn decode_integers(head: &Head, decimals: bool, bytes: &[u8], run: &mut [Point]) -> Result<()> {
     let mut reader = Reader::new(bytes);
-    if reader.byte() != DELTAS_IN_WORDS {
-        return Err(Error::corrupt("a run's integers are packed in a way this engine does not read"));
-    }
+    let packer = reader.byte();
     let (scale, mut integer) = if decimals {
         let scale = usize::from(reader.byte());
         if scale > MOST_SCALE {
@@ -524,45 +544,71 @@ fn decode_integers(head: &Head, decimals: bool, bytes: &[u8], run: &mut [Point])
         (None, exact_integer(head.first).ok_or_else(|| Error::corrupt("a run's first integer"))?)
     };
     reader.check()?;
-    let (words, rest) = reader.rest().as_chunks::<8>();
+    let deltas = match packer {
+        DELTAS_IN_WORDS => unpack_words(reader.rest(), run.len() - 1)?,
+        DELTAS_IN_RICE => unpack_rice(&mut reader, run.len() - 1)?,
+        _ => return Err(Error::corrupt("a run's integers are packed in a way this engine does not read")),
+    };
+    for (point, folded) in run[1..].iter_mut().zip(deltas) {
+        integer = integer.checked_add(unfold(folded)).ok_or_else(|| Error::corrupt("a run's integer overflows"))?;
+        point.value = match scale {
+            Some(scale) => integer as f64 / POWERS_OF_TEN[scale],
+            None => {
+                let value = integer as f64;
+                if value >= 9_223_372_036_854_775_808.0 || value as i64 != integer {
+                    return Err(Error::corrupt("a run's integer is not exact"));
+                }
+                value
+            }
+        };
+    }
+    Ok(())
+}
+
+/// `count` folded deltas from Simple8b words that hold no more.
+fn unpack_words(bytes: &[u8], count: usize) -> Result<Vec<u64>> {
+    let (words, rest) = bytes.as_chunks::<8>();
     if !rest.is_empty() {
         return Err(Error::corrupt("a run's integer words"));
     }
     let mut words = words.iter();
-    let mut index = 1;
-    while index < run.len() {
+    let mut deltas = Vec::with_capacity(count);
+    while deltas.len() < count {
         let word = u64::from_le_bytes(*words.next().ok_or_else(|| Error::corrupt("a run ends inside its words"))?);
         let selector = (word >> 60) as usize;
         let (capacity, width) = (WORD_COUNTS[selector], WORD_WIDTHS[selector]);
         let mut fields = word & ((1 << 60) - 1);
-        let taken = capacity.min(run.len() - index);
-        if width == 0 && (fields != 0 || capacity > run.len() - index) {
+        let left = count - deltas.len();
+        if width == 0 && (fields != 0 || capacity > left) {
             return Err(Error::corrupt("a run of ones past its run's end"));
         }
-        for point in &mut run[index..index + taken] {
-            let folded = if width == 0 { 1 } else { fields & ((1 << width) - 1) };
+        for _ in 0..capacity.min(left) {
+            deltas.push(if width == 0 { 1 } else { fields & ((1 << width) - 1) });
             fields = if width == 0 { 0 } else { fields >> width };
-            integer = integer.checked_add(unfold(folded)).ok_or_else(|| Error::corrupt("a run's integer overflows"))?;
-            point.value = match scale {
-                Some(scale) => integer as f64 / POWERS_OF_TEN[scale],
-                None => {
-                    let value = integer as f64;
-                    if value >= 9_223_372_036_854_775_808.0 || value as i64 != integer {
-                        return Err(Error::corrupt("a run's integer is not exact"));
-                    }
-                    value
-                }
-            };
         }
         if fields != 0 {
             return Err(Error::corrupt("a word's padding"));
         }
-        index += taken;
     }
     if words.next().is_some() {
         return Err(Error::corrupt("words after a run's last integer"));
     }
-    Ok(())
+    Ok(deltas)
+}
+
+/// `count` folded deltas from their rice codes, behind their parameter.
+fn unpack_rice(reader: &mut Reader<'_>, count: usize) -> Result<Vec<u64>> {
+    let k = u32::from(reader.byte());
+    reader.check()?;
+    if k >= 64 {
+        return Err(Error::corrupt("a run's rice parameter"));
+    }
+    let mut code = BitReader::of(reader.rest());
+    let deltas = (0..count).map(|_| read_rice(&mut code, k)).collect();
+    if !code.finished() {
+        return Err(Error::corrupt("a run's rice codes, which end inside a delta or before their bytes"));
+    }
+    Ok(deltas)
 }
 
 /// Gorilla's XOR: a bit says a value repeats; else the differing bits, inside

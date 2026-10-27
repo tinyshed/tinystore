@@ -94,6 +94,33 @@ fn a_decimal_travels_as_the_integer_it_was_written_as() {
 }
 
 #[test]
+fn deltas_that_wander_go_in_rice_codes_and_steady_ones_in_words() {
+    // a round trip in milliseconds, a tenth either way of the one before
+    let wandering = even(240, |index| (234 + (index * 7919 % 9) as i64 - 4) as f64 / 10.0);
+    let (mode, bytes) = encode_values(&wandering);
+    assert_eq!((mode, bytes[0]), (VALUES_DECIMALS, DELTAS_IN_RICE));
+    round_trip(&wandering);
+    // one less each time: 239 deltas in a word of 120 ones and two of 60 bits, against 32 bytes of rice
+    let falling = even(240, |index| 1000.0 - index as f64);
+    let (mode, bytes) = encode_values(&falling);
+    assert_eq!((mode, bytes[0], bytes.len()), (VALUES_INTEGERS, DELTAS_IN_WORDS, 25));
+    round_trip(&falling);
+}
+
+#[test]
+fn rice_codes_that_end_early_or_late_are_refused() {
+    let mut out = vec![Point::default(); 3];
+    let head = Head { start: 0, end: 2, count: 3, first: 5.0 };
+    // k = 1: -1 is folded 1, "0 1"; then -2, folded 3, "1 0 1"; read lowest bit first
+    let fine = [DELTAS_IN_RICE, 1, 0b1_0110];
+    decode_integers(&head, false, &fine, &mut out).unwrap();
+    assert_eq!(out[1..].iter().map(|point| point.value).collect::<Vec<_>>(), [4.0, 2.0]);
+    assert!(decode_integers(&head, false, &[DELTAS_IN_RICE, 1, 0b1_0110, 0], &mut out).is_err(), "a byte past");
+    assert!(decode_integers(&head, false, &[DELTAS_IN_RICE, 1], &mut out).is_err(), "no codes");
+    assert!(decode_integers(&head, false, &[DELTAS_IN_RICE, 64, 0], &mut out).is_err(), "k past 63");
+}
+
+#[test]
 fn a_value_no_scale_reproduces_is_refused_rather_than_rounded() {
     assert_eq!(exact_scale(0.1 + 0.2), None);
     assert_eq!(exact_scale(-0.0), None);
