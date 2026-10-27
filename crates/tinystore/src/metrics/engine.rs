@@ -28,7 +28,10 @@ use crate::store::WeakStore;
 use crate::sync::lock;
 use crate::{Clock, Durability, Memory, Result, Store, unix_millis};
 
-const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+const MIGRATIONS: &[Migration] = &[
+    Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
+    Migration::of(2, "0002_formats.sql", include_str!("migrations/0002_formats.sql")),
+];
 
 /// metrics' file in the store's directory.
 const FILE: &str = "metrics.db";

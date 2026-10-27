@@ -29,6 +29,7 @@ These contracts are what does not.
 - **STORE-08** A time an engine keeps MUST lie inside `[now − retention, now + skew]`, `now` read once a call from the store's clock; outside it MUST be `too_old` or `too_new`, naming the item.
 - **STORE-09** A read whose caller cancelled it, or whose timeout passed, MUST stop where it is, waiting or running, free at once what it held and fail `cancelled`; a cancel MUST NOT stop another caller's read, nor a write that runs.
 - **STORE-10** An awaited call MUST NOT commit, sync the disk or wait on the thread that polls its future, whatever it waits for: a reader, memory, a file's writer, a lock, a run under way, another node's answer. That work runs on the store's own threads, or waits on no thread at all.
+- **STORE-11** A store MUST read every format an earlier release wrote, and MUST refuse at its open a file a later release migrated, naming the step it lacks, rather than read that release's bytes as damage.
 
 ## 2. Durability and transactions
 

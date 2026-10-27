@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use crate::metrics::Series;
+use crate::sqlite::{Config, File};
 use crate::{Options, Store};
 
 // contract: STORE-02
@@ -38,4 +39,18 @@ fn the_engine_imports_no_other_engine() {
             assert!(!names, "{} names {named}", path.display());
         }
     }
+}
+
+// contract: STORE-11
+#[test]
+fn a_file_this_release_wrote_is_refused_by_the_steps_v0_3_0_knows_at_its_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
+    store.metrics().unwrap();
+    store.close().unwrap();
+    // v0.3.0 knows the first step alone, and read clocks of version 2 as damage
+    let file = File::open(dir.path().join(super::FILE), Config::default()).unwrap();
+    let refused = file.migrate("metrics", &super::MIGRATIONS[..1]).unwrap_err();
+    assert!(refused.to_string().contains("a newer program migrated it"), "{refused}");
+    file.close().unwrap();
 }

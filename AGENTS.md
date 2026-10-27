@@ -57,8 +57,14 @@ submodule is pinned to `v0.1.0-rc.5`.
 
 From `v0.1.0` on, a store a release wrote opens in the next: an engine's
 schema changes through a migration of its own after `0001`, and the
-protocol's messages keep their meaning. Names may still change in a minor
-release until `1.0`, and its notes say which.
+protocol's messages keep their meaning. A change of bytes a released reader
+cannot read, a row's new version, a new way inside one or a bound raised,
+adds a step to that file's migrations too, an empty one when no table
+changes: an older release then refuses the file at its open, where it would
+read the new bytes as damage and suspend what holds them. Readers keep every
+version a release wrote, with its bytes in a test; writers write the newest,
+and old rows change only where the engine rewrites them anyway. Names may
+still change in a minor release until `1.0`, and its notes say which.
 
 Do not describe unbuilt behaviour as though it works.
 

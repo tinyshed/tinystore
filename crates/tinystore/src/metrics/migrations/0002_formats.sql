@@ -1,0 +1,4 @@
+-- No table changes. From here on a block may hold 320 samples, a clock may
+-- be of version 2, and a run's integers may be rice codes, none of which a
+-- release before reads: this step, which it does not have, makes it refuse
+-- the file at its open rather than take those bytes for damage.
