@@ -91,7 +91,13 @@ pub(crate) fn objects_after(store_dir: &std::path::Path, after: i64) -> Result<V
 }
 
 /// The content ids `select` reads from the blobs.db in `store_dir`, which
-/// no process need hold; none when there is no blobs.db.
+/// no process need hold; none when there is no blobs.db, or one whose tables
+/// are not made yet.
+///
+/// A home serves its blobs.db from its first commit, before its migrations',
+/// and a copy may hold that commit whole: read as an error, the home's link
+/// ended, and the copy's ended again at each turn, never taking the commit
+/// that made the tables.
 #[cfg(feature = "replication")]
 fn object_ids<const N: usize>(store_dir: &std::path::Path, select: &str, params: [i64; N]) -> Result<Vec<i64>> {
     let db = store_dir.join(DIR).join(FILE);
@@ -99,6 +105,9 @@ fn object_ids<const N: usize>(store_dir: &std::path::Path, select: &str, params:
         return Ok(Vec::new());
     }
     crate::sqlite::read_copy(&db, |connection| {
+        if connection.query_row(HAS_CONTENTS, [], |row| row.get::<_, i64>(0))? == 0 {
+            return Ok(Vec::new());
+        }
         let mut statement = connection.prepare(select)?;
         let ids = statement.query_map(rusqlite::params_from_iter(params), |row| row.get::<_, i64>(0))?;
         ids.collect::<rusqlite::Result<Vec<i64>>>()
@@ -263,6 +272,8 @@ const FILE: &str = "blobs.db";
 const SELECT_NAMED: &str = "select id from _tinystore_blobs_contents where inline = 0 and names > 0 order by id";
 #[cfg(feature = "replication")]
 const SELECT_AFTER: &str = "select id from _tinystore_blobs_contents where inline = 0 and id > ?1 order by id";
+#[cfg(feature = "replication")]
+const HAS_CONTENTS: &str = "select count(*) from sqlite_schema where name = '_tinystore_blobs_contents'";
 
 const SELECT_MARKS: &str = "select (select value from _tinystore_blobs_meta where name = 'ids'), (select value from _tinystore_blobs_meta where name = 'settled')";
 const NEXT_REVISION: &str =
@@ -530,4 +541,21 @@ pub(crate) fn sets(store: &Store) -> Result<Vec<String>> {
         let rows = select.query_map([], |row| row.get(0));
         rows.and_then(Iterator::collect).map_err(|error| sql_error("blobs: its sets", error))
     })
+}
+
+#[cfg(all(test, feature = "replication"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_blobs_db_whose_tables_are_not_made_yet_holds_no_object() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(DIR)).unwrap();
+        // a home's first commit of blobs.db, before its migrations': SQLite's file, none of blobs' tables
+        let first = rusqlite::Connection::open(dir.path().join(DIR).join(FILE)).unwrap();
+        first.execute_batch("create table first (x)").unwrap();
+        drop(first);
+        assert_eq!(objects_after(dir.path(), 0).unwrap(), Vec::<(i64, String)>::new());
+        assert_eq!(objects_missing(dir.path()).unwrap(), Vec::<String>::new());
+    }
 }
