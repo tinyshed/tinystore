@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! shut the gate       a commit waits before it takes its writer, a transaction under way goes on
-//! hold every writer   none waited for while another is held
+//! hold every writer   none waited for while another is held, nor long with the gate shut
 //! begin every read    the moment
 //! open the gate       the commits go on, and each file is copied from its read
 //! ```
@@ -13,6 +13,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, OpenFlags};
@@ -26,6 +28,12 @@ use crate::{Error, Result};
 const BEGIN: &str = own!("begin");
 const END: &str = own!("commit");
 const PAGES: &str = "pragma page_count";
+
+/// How long the moment waits, its gate shut, for a writer a transaction
+/// keeps; past it the gate opens while the wait goes on.
+const PATIENCE: Duration = Duration::from_millis(100);
+/// How often a wait with the gate shut tries the writer again.
+const RETRY: Duration = Duration::from_millis(1);
 
 /// What holds a store's files still for an instant. While a snapshot keeps it
 /// shut, a commit waits before it takes its file's writer, unless its thread
@@ -94,8 +102,7 @@ pub(crate) fn copy_at_one_moment<T>(
     let reads = files.iter().map(|(source, _)| Read::open(&source.path)).collect::<Result<Vec<_>>>()?;
     let writers: Vec<&Mutex<Connection>> = files.iter().filter_map(|(source, _)| source.writer.as_deref()).collect();
     let kept = {
-        let _shut = gate.shut();
-        let _still = hold_still(&writers);
+        let _still = hold_still(gate, &writers);
         reads.iter().try_for_each(Read::begin)?;
         at_the_moment()
     };
@@ -105,30 +112,72 @@ pub(crate) fn copy_at_one_moment<T>(
     Ok(kept)
 }
 
-/// Holds every writer, waiting for none while it holds another: a
-/// transaction that holds one writer may wait for another's, which a wait
-/// holding that one would make it wait for ever. The gate is shut, so only
-/// transactions under way take a writer meanwhile, and the loop ends once
-/// they have.
-fn hold_still<'a>(writers: &[&'a Mutex<Connection>]) -> Vec<MutexGuard<'a, Connection>> {
-    let mut waited_for: Option<usize> = None;
+/// Every writer held and the gate shut, until it is dropped: the writers
+/// let go first.
+struct Still<'a> {
+    _writers: Vec<MutexGuard<'a, Connection>>,
+    _shut: Shut<'a>,
+}
+
+/// Shuts the gate and holds every writer, waiting for none while it holds
+/// another: a transaction that holds one writer may wait for another's,
+/// which a wait holding that one would make it wait for ever.
+///
+/// With the gate shut only transactions under way take a writer, and a round
+/// ends once they have. A transaction may also wait for a commit the gate
+/// holds back, of a thread that holds no writer, as an SDK's transaction
+/// awaits a write to another file: so a writer kept past [`PATIENCE`] is
+/// waited for with the gate open, and the gate shut again once it is held.
+fn hold_still<'a>(gate: &'a Gate, writers: &[&'a Mutex<Connection>]) -> Still<'a> {
+    let mut shut = gate.shut();
+    // the writer the last round found busy, held first once it was free
+    let mut first: Option<(usize, MutexGuard<'a, Connection>)> = None;
     loop {
-        // the one the last round found busy is waited for first, holding nothing
-        let mut held: Vec<MutexGuard<'a, Connection>> = waited_for.map(|at| lock(writers[at])).into_iter().collect();
+        let skipped = first.as_ref().map(|&(at, _)| at);
+        let mut held: Vec<MutexGuard<'a, Connection>> = first.take().map(|(_, guard)| guard).into_iter().collect();
         let mut busy = None;
-        for (at, writer) in writers.iter().enumerate().filter(|&(at, _)| Some(at) != waited_for) {
-            match writer.try_lock() {
-                Ok(guard) => held.push(guard),
-                Err(TryLockError::Poisoned(poisoned)) => held.push(poisoned.into_inner()),
-                Err(TryLockError::WouldBlock) => {
-                    busy = Some(at);
-                    break;
-                }
-            }
+        for (at, writer) in writers.iter().enumerate().filter(|&(at, _)| Some(at) != skipped) {
+            let Some(guard) = free(writer) else {
+                busy = Some(at);
+                break;
+            };
+            held.push(guard);
         }
-        let Some(at) = busy else { return held };
+        let Some(at) = busy else { return Still { _writers: held, _shut: shut } };
         drop(held);
-        waited_for = Some(at);
+        let guard = match patiently(writers[at]) {
+            Some(guard) => guard,
+            None => {
+                drop(shut);
+                let guard = lock(writers[at]);
+                shut = gate.shut();
+                guard
+            }
+        };
+        first = Some((at, guard));
+    }
+}
+
+/// The writer, when no thread holds it.
+fn free<'a>(writer: &'a Mutex<Connection>) -> Option<MutexGuard<'a, Connection>> {
+    match writer.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+/// The writer, once it is free within [`PATIENCE`].
+fn patiently<'a>(writer: &'a Mutex<Connection>) -> Option<MutexGuard<'a, Connection>> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(guard) = free(writer) {
+            return Some(guard);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(RETRY);
     }
 }
 

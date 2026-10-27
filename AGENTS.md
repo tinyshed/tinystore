@@ -304,10 +304,11 @@ pause reach. A file a capture logs and a copy run their own, never these.
 
 **A backup is one moment of every file.** For an instant a commit waits at
 the store's gate before it takes its writer, a transaction under way goes on,
-and the backup holds every writer, never waiting for one while it holds
-another, since a transaction may hold one writer and wait for another's; it
-begins a read of each file, lets go, and copies each from its read
-(`moment.rs`).
+and the backup holds every writer. It never waits for one while it holds
+another, since a transaction may hold one writer and wait for another's, nor
+past a tenth of a second with the gate shut, since a transaction may wait for
+a commit the gate holds back; it begins a read of each file, lets go, and
+copies each from its read (`moment.rs`).
 
 **A cancel interrupts its own read and no other.** `sqlite3_interrupt` stops
 whatever its connection runs, so a read lends its reader to its call's tokens

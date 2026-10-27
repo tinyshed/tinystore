@@ -1,7 +1,8 @@
 //! Files copied at one moment of them all: a row of one that follows a row of
 //! another is copied with it, whichever is named first, a transaction that
-//! holds one writer and waits for another's goes on through the moment, and
-//! each copy is a file of one piece with no free page.
+//! holds one writer and waits for another's goes on through the moment, as
+//! one that waits for another thread's commit does, and each copy is a file
+//! of one piece with no free page.
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,6 +102,40 @@ fn a_transaction_that_waits_for_another_files_writer_goes_on_through_the_moment(
         // the wanted file first, so that the moment holds it while it waits
         let files =
             [(wanted.source().unwrap(), into.join("wanted.db")), (held.source().unwrap(), into.join("held.db"))];
+        copy_at_one_moment(&gate, &files, || ()).unwrap();
+        transaction.join().unwrap().unwrap();
+        assert_eq!((newest(&into.join("held.db")), newest(&into.join("wanted.db"))), (1, 1), "after the transaction");
+    });
+}
+
+#[test]
+fn a_transaction_that_waits_for_a_commit_the_gate_holds_back_goes_on_through_the_moment() {
+    within_a_minute(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(Gate::default());
+        let held = Arc::new(with_a_table(dir.path(), "held.db", &gate));
+        let wanted = Arc::new(with_a_table(dir.path(), "wanted.db", &gate));
+        let (began, beginning) = mpsc::channel();
+        let transaction = {
+            let (held, wanted, gate) = (Arc::clone(&held), Arc::clone(&wanted), Arc::clone(&gate));
+            thread::spawn(move || {
+                held.transaction(|tx| {
+                    tx.execute("insert into t (id) values (1)", []).map_err(|error| sql_error("insert", error))?;
+                    began.send(()).unwrap();
+                    while gate.shut.load(Ordering::Acquire) == 0 {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    // as an SDK's transaction awaits a write to another file, which another thread commits
+                    thread::spawn(move || insert(&wanted, 1)).join().unwrap();
+                    Ok::<_, crate::Error>(())
+                })
+            })
+        };
+        beginning.recv().unwrap();
+        let into = dir.path().join("copy");
+        fs::create_dir(&into).unwrap();
+        let files =
+            [(held.source().unwrap(), into.join("held.db")), (wanted.source().unwrap(), into.join("wanted.db"))];
         copy_at_one_moment(&gate, &files, || ()).unwrap();
         transaction.join().unwrap().unwrap();
         assert_eq!((newest(&into.join("held.db")), newest(&into.join("wanted.db"))), (1, 1), "after the transaction");

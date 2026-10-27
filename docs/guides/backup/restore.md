@@ -115,9 +115,11 @@ app.json              a file of the program's, when included
 Every SQLite file is copied at one moment of the store. For that instant the
 backup holds every file's commits back and begins a read of each, which takes
 microseconds; the commits then go on, and no commit waits for the copies, each
-made from its file's read with every row and no free page. A file blobs keeps is linked into the snapshot rather than copied,
-so a large file costs the snapshot a directory entry until the zip is
-written.
+made from its file's read with every row and no free page. A transaction under
+way finishes first, and while one runs longer than a tenth of a second the
+backup lets the other commits through as it waits. A file blobs keeps is
+linked into the snapshot rather than copied, so a large file costs the
+snapshot a directory entry until the zip is written.
 
 ## See also
 
