@@ -64,10 +64,9 @@ fn a_client_that_grants_no_credit_falls_behind_and_is_told_how_many_it_missed() 
     let mut client = Client::connect(dir.path());
     client.greet(Hello { protocol: 1, stream_credit: Some(4 << 10), ..Hello::default() }).unwrap();
     let stream = subscribed(&mut client, &[], false);
-    let text = format!("{:?}", "m".repeat(100));
     let published = 2000;
-    for _ in 0..published {
-        publish(&mut client, &[], &text).unwrap();
+    for n in 0..published {
+        publish(&mut client, &[], &format!("\"{n:05}{}\"", "m".repeat(95))).unwrap();
     }
     let first = batches(&mut client, stream);
     let within: usize = first.iter().map(|batch| batch.messages.len()).sum();
@@ -75,10 +74,20 @@ fn a_client_that_grants_no_credit_falls_behind_and_is_told_how_many_it_missed() 
     let credit = (8u32 << 20).to_le_bytes().to_vec();
     client.write(Frame::new(Kind::Credit, stream, credit));
     let rest = batches(&mut client, stream);
-    let after: usize = rest.iter().map(|batch| batch.messages.len()).sum();
-    let missed: u64 = first.iter().chain(&rest).map(|batch| batch.missed).sum();
-    assert!(rest[0].missed > 0, "the log let the oldest go, and says so before the next message");
-    assert_eq!(within + after + missed as usize, published, "every message received or counted missed");
+    // A batch says what was missed before its messages. What the log let go
+    // may be told while the credit left takes no message at all, by a batch
+    // of none, so the gap is told before the grant or after it, as the
+    // drain's turns fell: macOS's runner once told all of it before.
+    let mut next = 0;
+    for batch in first.iter().chain(&rest) {
+        next += batch.missed;
+        for message in &batch.messages {
+            assert_eq!(message.value[1..6].parse::<u64>().unwrap(), next, "a gap told before the message after it");
+            next += 1;
+        }
+    }
+    assert_eq!(next, published as u64, "every message received or counted missed");
+    assert!(first.iter().chain(&rest).any(|batch| batch.missed > 0), "the log let the oldest go");
 }
 
 #[test]
