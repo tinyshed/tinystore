@@ -4,6 +4,10 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.4.0](v0.4.0.md)** · 27 October 2026\
+  Files that commit with a database's rows, older encryption keys, a backup
+  of one moment, and a metrics.db less than half as large for per-second
+  series.
 - **[TinyStore 0.3.0](v0.3.0.md)** · 27 October 2026\
   Metrics read and aggregated in pages, a command line that writes to a
   store, a command run under a lock, an AI agent that may write.
