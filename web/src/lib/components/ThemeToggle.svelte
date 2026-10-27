@@ -208,12 +208,16 @@
 		height: 36px;
 		padding: 0;
 		background: none;
-		border: 1px solid var(--ts-border);
-		border-radius: 9px;
+		border: 1px solid transparent;
+		border-radius: 8px;
 		cursor: pointer;
 	}
 
 	@media (hover: hover) {
+		.toggle:hover {
+			border-color: var(--ts-border);
+		}
+
 		.toggle:hover,
 		.looks button:hover {
 			background: var(--ts-hover);

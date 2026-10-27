@@ -23,8 +23,17 @@ export interface Landing {
 	pitch: string
 	/** the sample: a language each, its install command beside the switch */
 	sample: string
+	/** each language's install command, which the page closes on */
+	installs: Install[]
 	engines: EngineRow[]
 	numbers: Numbers
+}
+
+export interface Install {
+	/** the language's key, as the docs' language switch names it */
+	key: string
+	label: string
+	command: string
 }
 
 export interface EngineRow {
@@ -38,6 +47,8 @@ export interface EngineRow {
 export interface Numbers {
 	title: string
 	legend: { term: string; text: string }[]
+	/** each of the five services' memory at rest, the table under the caveat */
+	shares: { name: string; value: string }[]
 	/** the paragraph under the legend, as HTML, its links resolved */
 	caveat: string
 }
@@ -50,7 +61,8 @@ export interface Numbers {
  *     SQL, key-value state, …                        the pitch
  *     ```ts install="bun add @tinyshed/tinystore"              the sample, a fence a language
  *     ## Engines                                     a row an engine: its link, in short, in a line
- *     ## Measured against what it replaces.          the numbers: the legend's rows, then the caveat
+ *     ## Measured against what it replaces.          the numbers: the legend's rows, then the caveat,
+ *                                                    then each service's memory at rest
  *
  * A part that is missing, or a link that leads nowhere, fails the build.
  */
@@ -68,15 +80,14 @@ export async function readLanding(site: Site, root = checkout()): Promise<Landin
 	const highlight = await createHighlight()
 	const links = linksOf(site, root)
 	const headline = headlineOf(intro)
+	const codes = intro.nodes.filter((node): node is Code => node.type === 'code')
 
 	return {
 		title: `TinyStore: ${lowerFirst(withoutStop(headline))}`,
 		headline,
 		pitch: await inline(paragraphOf(intro), links, highlight),
-		sample: sampleOf(
-			intro.nodes.filter((node): node is Code => node.type === 'code'),
-			highlight,
-		),
+		sample: sampleOf(codes, highlight),
+		installs: installsOf(codes),
 		engines: rowsOf(tableOf(engines)).map(cells => engineRow(cells, links)),
 		numbers: {
 			title: numbers.title,
@@ -85,6 +96,7 @@ export async function readLanding(site: Site, root = checkout()): Promise<Landin
 				text: plain(text),
 			})),
 			caveat: await inline(paragraphOf(numbers), links, highlight),
+			shares: sharesOf(numbers),
 		},
 	}
 }
@@ -135,6 +147,14 @@ function paragraphOf(section: Section): Paragraph {
 		throw new Error(`${landingFile}: ${where} has no paragraph under it`)
 	}
 	return paragraph
+}
+
+// the numbers' second table, each service's memory at rest, which no card of the README draws
+function sharesOf(section: Section): { name: string; value: string }[] {
+	const table = section.nodes.filter((node): node is Table => node.type === 'table')[1]
+	return table === undefined
+		? []
+		: rowsOf(table).map(([name, value]) => ({ name: plain(name), value: plain(value) }))
 }
 
 function tableOf(section: Section): Table {
@@ -233,6 +253,13 @@ function sampleOf(codes: Code[], highlight: Highlight): string {
 	)
 
 	return toHtml(group)
+}
+
+function installsOf(codes: Code[]): Install[] {
+	return byLanguage(codes.map(toFence)).flatMap(variant => {
+		const command = variant.fences[0]?.install
+		return command === undefined ? [] : [{ key: variant.key, label: variant.label, command }]
+	})
 }
 
 function plain(node: TableCell | Paragraph | undefined): string {

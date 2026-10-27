@@ -83,7 +83,7 @@
 		</p>
 		<div class="title">
 			<h1>{page.title}</h1>
-			<CopyPage markdown={page.markdown} />
+			<CopyPage markdown={page.markdown} origin={data.origin} />
 		</div>
 
 		{#if page.api !== undefined}
@@ -174,16 +174,17 @@
 		margin-bottom: 18px;
 	}
 
-	.title :global(button) {
-		margin-top: 16px;
+	.title :global(.page-menu) {
+		margin-top: 10px;
 	}
 
 	h1 {
 		margin: 0;
-		font-size: 60px;
+		font-size: clamp(36px, 1.6vw + 26px, 52px);
 		font-weight: 600;
 		line-height: 1.05;
-		letter-spacing: -0.045em;
+		letter-spacing: -0.04em;
+		text-wrap: balance;
 	}
 
 	.api-switch {
@@ -369,12 +370,12 @@
 			gap: 12px;
 		}
 
-		.title :global(button) {
+		.title :global(.page-menu) {
 			margin-top: 0;
 		}
 
 		h1 {
-			font-size: 44px;
+			font-size: 36px;
 		}
 	}
 </style>

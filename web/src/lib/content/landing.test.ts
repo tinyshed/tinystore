@@ -18,12 +18,20 @@ describe('the landing page', () => {
 		expect(landing.pitch).not.toBe('')
 		expect(landing.pitch).not.toContain('<p>')
 		expect(landing.sample).toContain('data-variant="go"')
+		expect(landing.installs.map(install => install.key)).toContain('go')
+		for (const install of landing.installs) {
+			expect(landing.sample).toContain(install.command)
+		}
 		expect(landing.engines.length).toBeGreaterThan(0)
 		for (const engine of landing.engines) {
 			expect(engine.href).toMatch(engine.external ? /^https:\/\// : /^\/docs/)
 		}
 		expect(landing.numbers.legend.length).toBeGreaterThan(0)
 		expect(landing.numbers.caveat).toContain('<a href="https://')
+		expect(landing.numbers.shares.map(share => share.name)).toContain('Loki')
+		for (const share of landing.numbers.shares) {
+			expect(share.value).toMatch(/^[\d.]+ MiB$/)
+		}
 		expect(landingSummary()).toStartWith(`${landing.headline.replace(/\.$/, '')}: `)
 	}, 30_000) // the first to build the whole site, every page highlighted
 

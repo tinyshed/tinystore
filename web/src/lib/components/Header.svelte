@@ -27,29 +27,32 @@
 </script>
 
 <header>
-	<a class="brand" href={href('/')} aria-label="TinyStore, home">
-		<Logo />
-		<span>TinyStore</span>
-	</a>
-
-	<nav class="tabs" aria-label="Sections">
-		{#each tabs as tab (tab.href)}
-			<a href={href(tab.href)} aria-current={tab.active ? 'page' : undefined}>{tab.title}</a>
-		{/each}
-	</nav>
-
-	<div class="tools">
-		<button type="button" class="search" onclick={onsearch}>
-			<span>Search</span>
-			<kbd>{shortcut}</kbd>
-		</button>
-		<a class="square github" href={repository} title="GitHub" aria-label="TinyStore on GitHub">
-			<Icon name="github" />
+	<div class="bar">
+		<a class="brand" href={href('/')} aria-label="TinyStore, home">
+			<Logo />
+			<span>TinyStore</span>
 		</a>
-		<span class="theme"><ThemeToggle /></span>
-		<button type="button" class="menu" onclick={onmenu} aria-label="Open the menu">
-			<Icon name="menu" size={20} />
-		</button>
+
+		<nav class="tabs" aria-label="Sections">
+			{#each tabs as tab (tab.href)}
+				<a href={href(tab.href)} aria-current={tab.active ? 'page' : undefined}>{tab.title}</a>
+			{/each}
+		</nav>
+
+		<div class="tools">
+			<button type="button" class="search" onclick={onsearch}>
+				<Icon name="search" size={15} />
+				<span>Search</span>
+				<kbd>{shortcut}</kbd>
+			</button>
+			<a class="square github" href={repository} title="GitHub" aria-label="TinyStore on GitHub">
+				<Icon name="github" />
+			</a>
+			<span class="theme"><ThemeToggle /></span>
+			<button type="button" class="menu" onclick={onmenu} aria-label="Open the menu">
+				<Icon name="menu" size={20} />
+			</button>
+		</div>
 	</div>
 </header>
 
@@ -58,17 +61,24 @@
 		position: sticky;
 		top: 0;
 		z-index: 20;
-		display: flex;
-		align-items: center;
-		gap: 28px;
-		height: var(--ts-header);
-		padding: 0 28px;
 		background: var(--ts-bg);
 		border-bottom: 1px solid var(--ts-line);
 	}
 
+	/* the bar keeps to the docs' own width, so that it lines up with the page under it */
+	.bar {
+		display: flex;
+		align-items: center;
+		gap: 32px;
+		max-width: 1440px;
+		height: var(--ts-header);
+		margin: 0 auto;
+		padding: 0 28px;
+	}
+
 	.brand {
 		display: flex;
+		flex: none;
 		align-items: center;
 		gap: 10px;
 		font-size: 18px;
@@ -76,17 +86,74 @@
 		letter-spacing: -0.02em;
 	}
 
+	/* the parts of the docs, the one read marked on the bar's own hairline */
 	.tabs {
 		display: flex;
-		gap: 4px;
+		align-self: stretch;
+		gap: 24px;
 		font-size: 14.5px;
 		font-weight: 500;
 	}
 
 	.tabs a {
-		padding: 7px 12px;
+		display: flex;
+		align-items: center;
+		margin-bottom: -1px;
 		color: var(--ts-muted);
+		border-bottom: 2px solid transparent;
+	}
+
+	.tabs a[aria-current='page'] {
+		color: var(--ts-text);
+		border-bottom-color: var(--ts-accent);
+	}
+
+	.tools {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-left: auto;
+	}
+
+	/* the search as a field to type into, the one wide control of the bar */
+	.search {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		width: 240px;
+		height: 36px;
+		margin-right: 4px;
+		padding: 0 6px 0 11px;
+		color: var(--ts-faint);
+		background: var(--ts-surface);
+		border: 1px solid var(--ts-border-2);
 		border-radius: 8px;
+		font-size: 14px;
+		cursor: pointer;
+	}
+
+	.search span {
+		flex: 1;
+		text-align: left;
+	}
+
+	.search kbd {
+		background: var(--ts-bg);
+	}
+
+	.square,
+	.menu {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 36px;
+		padding: 0;
+		color: var(--ts-text-body);
+		background: none;
+		border: 1px solid transparent;
+		border-radius: 8px;
+		cursor: pointer;
 	}
 
 	@media (hover: hover) {
@@ -95,12 +162,14 @@
 		}
 
 		.search:hover {
+			color: var(--ts-text-body);
 			border-color: var(--ts-border-strong);
 		}
 
 		.square:hover,
 		.menu:hover {
 			background: var(--ts-hover);
+			border-color: var(--ts-border);
 		}
 	}
 
@@ -110,70 +179,19 @@
 		background: var(--ts-pill);
 	}
 
-	.tabs a[aria-current='page'] {
-		color: var(--ts-text);
-		background: var(--ts-pill);
-	}
-
-	.tools {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		margin-left: auto;
-	}
-
-	.search {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		width: 176px;
-		height: 36px;
-		padding: 0 10px 0 12px;
-		color: var(--ts-faint);
-		background: none;
-		border: 1px solid var(--ts-border);
-		border-radius: 9px;
-		font-size: 14px;
-		cursor: pointer;
-	}
-
-	.search kbd {
-		color: var(--ts-faint);
-		border-color: var(--ts-border);
-		background: none;
-	}
-
-	.square {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 36px;
-		color: var(--ts-text-body);
-		border: 1px solid var(--ts-border);
-		border-radius: 9px;
-	}
-
 	.theme {
 		display: contents;
 	}
 
 	.menu {
 		display: none;
-		align-items: center;
-		justify-content: center;
 		width: 40px;
 		height: 40px;
-		padding: 0;
 		color: var(--ts-text);
-		background: none;
-		border: 0;
-		border-radius: 10px;
-		cursor: pointer;
 	}
 
 	@media (max-width: 720px) {
-		header {
+		.bar {
 			gap: 12px;
 			height: 56px;
 			padding: 0 12px 0 18px;
@@ -190,16 +208,12 @@
 			display: none;
 		}
 
-		.tools {
-			gap: 6px;
-		}
-
 		.search {
 			width: auto;
-			height: auto;
-			padding: 6px 12px;
+			height: 36px;
+			margin-right: 0;
+			padding: 0 12px;
 			color: var(--ts-muted-2);
-			border-radius: 8px;
 			font-size: 13.5px;
 		}
 

@@ -46,6 +46,25 @@
 
 	--ts-header: 60px;
 
+	/* A key, the design's button: a face on a 3px edge below it, which lifts on
+	   hover and sinks when pressed. Its colours come from the look's own, so
+	   that every look has keys; the dark theme drops the shine and the drop. */
+	--ts-key-face: var(--ts-dialog);
+	--ts-key-edge: var(--ts-border-strong);
+	--ts-key-shine: rgb(255 255 255 / 0.9);
+	--ts-key-drop: rgb(35 33 43 / 0.22);
+	--ts-key-press: rgb(35 33 43 / 0.14);
+	--ts-accent-edge: color-mix(in oklab, var(--ts-accent) 70%, black);
+
+	/* the five services the benchmark compares, each in its own brand's colour
+	   (Simple Icons'), which the page quietens before it draws them */
+	--ts-brand-loki: #f46800;
+	--ts-brand-postgresql: #4169e1;
+	--ts-brand-minio: #c72e49;
+	--ts-brand-victoriametrics: #621773;
+	--ts-brand-redis: #ff4438;
+	--ts-brand-claude: #d97757;
+
 	color-scheme: light;
 }
 
@@ -89,6 +108,12 @@
 		--ts-overlay: rgb(10 9 13 / 0.72);
 		--ts-shadow: rgb(0 0 0 / 0.7);
 
+		--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
+		--ts-key-shine: rgb(255 255 255 / 0.06);
+		--ts-key-drop: transparent;
+		--ts-key-press: rgb(0 0 0 / 0.5);
+		--ts-brand-victoriametrics: #a64fc0;
+
 		color-scheme: dark;
 	}
 }
@@ -131,7 +156,23 @@
 	--ts-overlay: rgb(10 9 13 / 0.72);
 	--ts-shadow: rgb(0 0 0 / 0.7);
 
+	--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
+	--ts-key-shine: rgb(255 255 255 / 0.06);
+	--ts-key-drop: transparent;
+	--ts-key-press: rgb(0 0 0 / 0.5);
+	--ts-brand-victoriametrics: #a64fc0;
+
 	color-scheme: dark;
+}
+
+/* a key's shadows, from whichever theme's edge and drop are on */
+:root,
+[data-look] {
+	--ts-shadow-key:
+		0 3px 0 0 var(--ts-key-edge), 0 6px 8px -4px var(--ts-key-drop),
+		inset 0 1px 0 var(--ts-key-shine);
+	--ts-shadow-key-accent: 0 3px 0 0 var(--ts-accent-edge), 0 6px 8px -4px var(--ts-key-drop);
+	--ts-shadow-key-press: inset 0 1px 2px var(--ts-key-press);
 }
 
 *,
@@ -222,6 +263,46 @@ kbd {
 	border-radius: 5px;
 	padding: 1px 6px;
 	background: var(--ts-kbd);
+}
+
+/* a key: the face lifts a pixel on hover and sinks into its edge when pressed */
+.key {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	min-height: 46px;
+	padding: 0 20px;
+	color: var(--ts-text);
+	background: var(--ts-key-face);
+	border: 1px solid var(--ts-border-3);
+	border-radius: 9px;
+	box-shadow: var(--ts-shadow-key);
+	font-size: 15px;
+	font-weight: 500;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.key:hover {
+	transform: translateY(-1px);
+}
+
+.key:active {
+	transform: translateY(3px);
+	box-shadow: var(--ts-shadow-key-press);
+}
+
+.key.primary {
+	color: var(--ts-accent-ink);
+	background: var(--ts-accent);
+	border-color: var(--ts-accent-edge);
+	box-shadow: var(--ts-shadow-key-accent);
+	font-weight: 600;
+}
+
+.key.primary:active {
+	box-shadow: var(--ts-shadow-key-press);
 }
 
 /* a change of look crossfades the page, as the theme's menu starts it */
@@ -473,6 +554,12 @@ kbd {
 	--ts-overlay: rgb(10 9 13 / 0.72);
 	--ts-shadow: rgb(0 0 0 / 0.7);
 
+	--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
+	--ts-key-shine: rgb(255 255 255 / 0.06);
+	--ts-key-drop: transparent;
+	--ts-key-press: rgb(0 0 0 / 0.5);
+	--ts-brand-victoriametrics: #a64fc0;
+
 	color-scheme: dark;
 }
 
@@ -512,6 +599,12 @@ kbd {
 	--ts-danger-soft: #3a1c19;
 	--ts-overlay: rgb(0 0 0 / 0.75);
 	--ts-shadow: rgb(0 0 0 / 0.7);
+
+	--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
+	--ts-key-shine: rgb(255 255 255 / 0.06);
+	--ts-key-drop: transparent;
+	--ts-key-press: rgb(0 0 0 / 0.5);
+	--ts-brand-victoriametrics: #a64fc0;
 
 	color-scheme: dark;
 }

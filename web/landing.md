@@ -128,3 +128,16 @@ the requests, Redis takes writes that skip the disk sync six times faster, and
 VictoriaMetrics keeps a sample in fewer bytes.
 [Every test, the wins and the losses](../docs/handbook/production/benchmarks.md) ·
 [The round's report ↗](https://github.com/tinyshed/research/blob/main/tinystore/reports/release-2026-10-23.md)
+
+### Memory, service by service
+
+Each of the five services' share of the 402 MiB at rest, from the same
+round's [summary](https://github.com/tinyshed/research/blob/main/tinystore/reports/data/release-2026-10-23/summary.md):
+
+|                 |           |
+|-----------------|-----------|
+| Loki            | 133.0 MiB |
+| PostgreSQL      | 126.0 MiB |
+| MinIO           | 108.0 MiB |
+| VictoriaMetrics | 26.4 MiB  |
+| Redis           | 8.6 MiB   |

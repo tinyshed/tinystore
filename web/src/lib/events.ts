@@ -6,6 +6,7 @@
 export const readerEvents = [
 	'copy-code',
 	'copy-page',
+	'ask-ai',
 	'search',
 	'language',
 	'theme',

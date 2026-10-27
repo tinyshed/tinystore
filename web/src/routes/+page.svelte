@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { codeBlocks } from '$lib/code-blocks'
+	import AtRest from '$lib/components/AtRest.svelte'
+	import Logo from '$lib/components/Logo.svelte'
 	import Seo from '$lib/components/Seo.svelte'
 	import { href, rebase } from '$lib/href'
 	import { repository } from '$lib/site'
@@ -7,6 +9,10 @@
 
 	// every word of this page but its buttons comes from web/landing.md
 	let { data } = $props()
+
+	// the memory at rest, service by service, under the hero; the grid keeps the other cards
+	const rest = $derived(data.cards.find(card => card.title === 'Memory at rest'))
+	const cards = $derived(data.cards.filter(card => card !== rest))
 </script>
 
 <Seo title={data.title} description={data.summary} origin={data.origin} path="/" />
@@ -16,14 +22,18 @@
 		<h1>{data.headline}</h1>
 		<p class="pitch">{@html rebase(data.pitch)}</p>
 		<div class="actions">
-			<a class="primary" href={href(data.start)}>Start here</a>
-			<a class="secondary" href={repository} onclick={() => track('outbound', 'github')}>View on GitHub</a>
+			<a class="key primary" href={href(data.start)}>Start here</a>
+			<a class="key" href={repository} onclick={() => track('outbound', 'github')}>View on GitHub</a>
 		</div>
 
 		<div class="sample" {@attach codeBlocks}>
 			{@html data.sample}
 		</div>
 	</section>
+
+	{#if rest !== undefined && data.numbers.shares.length > 0}
+		<AtRest card={rest} legend={data.numbers.legend} shares={data.numbers.shares} />
+	{/if}
 
 	<section class="engines" aria-label="Engines">
 		{#each data.engines as engine, index (engine.name)}
@@ -41,7 +51,7 @@
 		<p class="eyebrow">Numbers</p>
 		<h2>{data.numbers.title}</h2>
 		<div class="cards">
-			{#each data.cards as card (card.title)}
+			{#each cards as card (card.title)}
 				<div class="card">
 					<p class="card-title">{card.title}</p>
 					<p class="unit">{card.unit}</p>
@@ -76,11 +86,39 @@
 		<p class="caveat">{@html rebase(data.numbers.caveat)}</p>
 	</section>
 	{/if}
+
+	<!-- the close: each language's install command, a press to copy it, and the way in -->
+	<section class="install" aria-label="Install" {@attach codeBlocks}>
+		<ul class="commands">
+			{#each data.installs as install (install.key)}
+				<li>
+					<span class="language">{install.label}</span>
+					<button type="button" class="command" data-copy="" data-copy-text={install.command} title="Copy">
+						<code><span class="prompt">$</span> {install.command}</code>
+						<span class="copied">Copied</span>
+					</button>
+				</li>
+			{/each}
+		</ul>
+		<a class="key start" href={href(data.start)}>Start here</a>
+	</section>
 </main>
 
 <footer>
-	<span>TinyStore · Apache-2.0</span>
-	<span>Go · Bun · Python</span>
+	<a class="mast" href={href('/')} aria-label="TinyStore, home">
+		<Logo size={40} />
+		<span>TinyStore</span>
+	</a>
+	<nav class="links" aria-label="Documentation">
+		{#each data.books as book (book.href)}
+			<a href={href(book.href)}>{book.title}</a>
+		{/each}
+		<a href={repository} onclick={() => track('outbound', 'github')}>GitHub</a>
+	</nav>
+	<p class="colophon">
+		<span>Apache-2.0</span>
+		<span>Bun, Python, Go and Rust</span>
+	</p>
 </footer>
 
 <style>
@@ -116,28 +154,6 @@
 		display: flex;
 		gap: 12px;
 		margin-top: 36px;
-	}
-
-	.primary,
-	.secondary {
-		padding: 12px 20px;
-		border-radius: 9px;
-		font-size: 15px;
-	}
-
-	.primary {
-		color: var(--ts-accent-ink);
-		background: var(--ts-accent);
-		font-weight: 600;
-	}
-
-	.secondary {
-		border: 1px solid var(--ts-border-3);
-		font-weight: 500;
-	}
-
-	.secondary:hover {
-		background: var(--ts-hover);
 	}
 
 	.sample {
@@ -277,6 +293,11 @@
 		border-radius: 12px;
 	}
 
+	/* an odd card out closes the grid across both columns rather than half of one row */
+	.card:last-child:nth-child(odd) {
+		grid-column: 1 / -1;
+	}
+
 	.card-title {
 		margin: 0;
 		font-size: 17px;
@@ -382,14 +403,125 @@
 		color: var(--ts-accent-text);
 	}
 
-	footer {
-		display: flex;
-		justify-content: space-between;
-		margin-top: 72px;
-		padding: 28px 0 40px;
-		color: var(--ts-faint);
+	/* the close: the install commands two by two, the way in beside them */
+	.install {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: end;
+		gap: 40px;
+		margin-top: 104px;
+		padding-top: 40px;
 		border-top: 1px solid var(--ts-line);
-		font: 13px var(--ts-mono);
+	}
+
+	.commands {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 16px 20px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.commands li {
+		display: grid;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.language {
+		color: var(--ts-faint);
+		font-size: 13.5px;
+	}
+
+	.command {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		min-height: 48px;
+		padding: 0 18px;
+		color: var(--ts-text);
+		background: var(--ts-surface);
+		border: 1px solid var(--ts-border-2);
+		border-radius: 10px;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.command code {
+		overflow: hidden;
+		font-size: 14px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.prompt,
+	.copied {
+		color: var(--ts-accent-text);
+	}
+
+	.copied {
+		display: none;
+		flex: none;
+		font-size: 13.5px;
+	}
+
+	.command:global([data-copied]) .copied {
+		display: inline;
+	}
+
+	@media (hover: hover) {
+		.command:hover {
+			border-color: var(--ts-border-strong);
+		}
+	}
+
+	.command:active {
+		background: var(--ts-hover);
+	}
+
+	/* the footer: the wordmark large over the docs' parts, the licence beside them */
+	footer {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 28px 40px;
+		margin-top: 96px;
+		padding: 48px 0 40px;
+		border-top: 1px solid var(--ts-line);
+	}
+
+	.mast {
+		display: flex;
+		grid-column: 1 / -1;
+		align-items: center;
+		gap: 14px;
+		font-size: 44px;
+		font-weight: 600;
+		letter-spacing: -0.045em;
+	}
+
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 24px;
+		font-size: 15px;
+	}
+
+	.links a {
+		color: var(--ts-text-body);
+	}
+
+	.links a:hover {
+		color: var(--ts-accent-text);
+	}
+
+	.colophon {
+		display: flex;
+		gap: 24px;
+		margin: 0;
+		color: var(--ts-faint);
+		font-size: 13.5px;
 	}
 
 	@media (max-width: 720px) {
@@ -490,9 +622,33 @@
 			font-size: 12px;
 		}
 
+		.install,
+		.commands,
 		footer {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.install {
+			align-items: start;
+			margin-top: 72px;
+		}
+
+		footer {
+			margin-top: 64px;
+		}
+
+		.mast {
+			font-size: 32px;
+		}
+
+		.mast :global(svg) {
+			width: 32px;
+			height: 32px;
+		}
+
+		.colophon {
 			flex-direction: column;
-			gap: 8px;
+			gap: 4px;
 		}
 	}
 </style>

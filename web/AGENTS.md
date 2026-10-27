@@ -168,7 +168,9 @@ private child.
 - `src/lib/content/` runs at build time only and imports no `$app` module, so
   `bun test` runs it as it is.
 - The landing page's numbers are read from the SVG cards the README shows,
-  never typed again, so the two cannot disagree.
+  never typed again, so the two cannot disagree. Each service's memory at
+  rest, which no card draws, is a table in `landing.md` copied from the
+  round's summary.
 - The README's headline, pitch, sample and engines are the landing page's:
   `task readme` writes them from `web/landing.md` between `<!-- landing:… -->`
   markers, into the SDK packages' READMEs too in their own language, and the
