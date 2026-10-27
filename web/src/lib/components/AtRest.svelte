@@ -288,10 +288,22 @@
 		height: 40px;
 	}
 
-	/* a service's colour, quietened into the page, so that TinyStore's amber is the one that speaks */
+	/* A service's colour, quietened so that TinyStore's amber is the one that
+	   speaks: every brand at the theme's one lightness, its chroma cut, so that
+	   none of the five is louder than another and none sinks into a dark page.
+	   A browser without relative colours mixes it into the page instead. */
 	.block,
 	.swatch {
 		--tint: color-mix(in oklab, var(--brand) 36%, var(--ts-bg));
+	}
+
+	@supports (color: oklch(from red l c h)) {
+		.block,
+		.swatch {
+			--tint: oklch(
+				from var(--brand) var(--ts-tint-lightness) calc(c * var(--ts-tint-chroma)) h
+			);
+		}
 	}
 
 	/* a block is its MiB's share of the scale, filled by transform so that it never reflows */

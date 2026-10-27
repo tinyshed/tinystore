@@ -64,6 +64,9 @@
 	--ts-brand-victoriametrics: #621773;
 	--ts-brand-redis: #ff4438;
 	--ts-brand-claude: #d97757;
+	/* a quietened brand colour: every brand at one lightness, its chroma cut to this share */
+	--ts-tint-lightness: 0.87;
+	--ts-tint-chroma: 0.42;
 
 	color-scheme: light;
 }
@@ -71,96 +74,105 @@
 /* the reader's choice first, the system's when there is none */
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme="light"]) {
-		--ts-bg: #141318;
-		--ts-text: #eceaf3;
-		--ts-text-body: #cfccda;
-		--ts-text-lead: #a29fb0;
-		--ts-text-note: #d8d5e2;
-		--ts-muted: #9a97a8;
-		--ts-muted-2: #8f8c9e;
-		--ts-faint: #7d7a8b;
-		--ts-dim: #6f6b7d;
+		--ts-bg: oklch(17% 0.005 270);
+		--ts-text: oklch(94.5% 0.004 270);
+		--ts-text-body: oklch(84% 0.006 270);
+		--ts-text-lead: oklch(74% 0.008 270);
+		--ts-text-note: oklch(88% 0.005 270);
+		--ts-muted: oklch(70% 0.008 270);
+		--ts-muted-2: oklch(67% 0.008 270);
+		--ts-faint: oklch(63% 0.008 270);
+		--ts-dim: oklch(57% 0.008 270);
 
-		--ts-line: #26242d;
-		--ts-border: #2a2832;
-		--ts-border-2: #2d2b35;
-		--ts-border-3: #33303c;
-		--ts-border-strong: #4d4a58;
+		--ts-line: oklch(25.5% 0.006 270);
+		--ts-border: oklch(28% 0.007 270);
+		--ts-border-2: oklch(30.5% 0.007 270);
+		--ts-border-3: oklch(34% 0.008 270);
+		--ts-border-strong: oklch(48% 0.008 270);
 
-		--ts-surface: #1b1a21;
-		--ts-surface-2: #201e27;
-		--ts-hover: #1d1b23;
-		--ts-pill: #1f1d25;
-		--ts-chip: #26242d;
-		--ts-kbd: #16151b;
-		--ts-row-hover: #18171d;
-		--ts-dialog: #1b1a21;
-		--ts-dialog-foot: #17161c;
+		--ts-surface: oklch(20.5% 0.006 270);
+		--ts-surface-2: oklch(23.5% 0.007 270);
+		--ts-hover: oklch(22% 0.006 270);
+		--ts-pill: oklch(23.5% 0.007 270);
+		--ts-chip: oklch(27% 0.007 270);
+		--ts-kbd: oklch(19% 0.006 270);
+		--ts-row-hover: oklch(19.5% 0.006 270);
+		--ts-dialog: oklch(21.5% 0.006 270);
+		--ts-dialog-foot: oklch(19.5% 0.006 270);
 
-		--ts-accent-text: #e29a36;
-		--ts-accent-line: #5a4320;
-		--ts-logo-top: #e29a36;
-		--ts-danger: #f0857a;
-		--ts-ok: #6fcf97;
-		--ts-accent-soft: #3a2b14;
-		--ts-danger-soft: #3a1c19;
+		/* the amber a step softer and lighter than the light theme's, so that it does not glare */
+		--ts-accent: oklch(79% 0.125 74);
+		--ts-accent-text: oklch(83% 0.105 76);
+		--ts-accent-ink: oklch(21% 0.03 70);
+		--ts-accent-line: oklch(46% 0.075 72);
+		--ts-logo-top: oklch(79% 0.125 74);
+		--ts-danger: oklch(73% 0.13 28);
+		--ts-ok: oklch(77% 0.12 155);
+		--ts-accent-soft: oklch(29% 0.04 72);
+		--ts-danger-soft: oklch(28% 0.045 28);
 
-		--ts-overlay: rgb(10 9 13 / 0.72);
-		--ts-shadow: rgb(0 0 0 / 0.7);
+		--ts-overlay: oklch(12% 0.004 270 / 0.72);
+		--ts-shadow: oklch(4% 0 0 / 0.7);
 
 		--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
 		--ts-key-shine: rgb(255 255 255 / 0.06);
 		--ts-key-drop: transparent;
 		--ts-key-press: rgb(0 0 0 / 0.5);
 		--ts-brand-victoriametrics: #a64fc0;
+		--ts-tint-lightness: 0.58;
+		--ts-tint-chroma: 0.5;
 
 		color-scheme: dark;
 	}
 }
 
 :root[data-theme="dark"] {
-	--ts-bg: #141318;
-	--ts-text: #eceaf3;
-	--ts-text-body: #cfccda;
-	--ts-text-lead: #a29fb0;
-	--ts-text-note: #d8d5e2;
-	--ts-muted: #9a97a8;
-	--ts-muted-2: #8f8c9e;
-	--ts-faint: #7d7a8b;
-	--ts-dim: #6f6b7d;
+	--ts-bg: oklch(17% 0.005 270);
+	--ts-text: oklch(94.5% 0.004 270);
+	--ts-text-body: oklch(84% 0.006 270);
+	--ts-text-lead: oklch(74% 0.008 270);
+	--ts-text-note: oklch(88% 0.005 270);
+	--ts-muted: oklch(70% 0.008 270);
+	--ts-muted-2: oklch(67% 0.008 270);
+	--ts-faint: oklch(63% 0.008 270);
+	--ts-dim: oklch(57% 0.008 270);
 
-	--ts-line: #26242d;
-	--ts-border: #2a2832;
-	--ts-border-2: #2d2b35;
-	--ts-border-3: #33303c;
-	--ts-border-strong: #4d4a58;
+	--ts-line: oklch(25.5% 0.006 270);
+	--ts-border: oklch(28% 0.007 270);
+	--ts-border-2: oklch(30.5% 0.007 270);
+	--ts-border-3: oklch(34% 0.008 270);
+	--ts-border-strong: oklch(48% 0.008 270);
 
-	--ts-surface: #1b1a21;
-	--ts-surface-2: #201e27;
-	--ts-hover: #1d1b23;
-	--ts-pill: #1f1d25;
-	--ts-chip: #26242d;
-	--ts-kbd: #16151b;
-	--ts-row-hover: #18171d;
-	--ts-dialog: #1b1a21;
-	--ts-dialog-foot: #17161c;
+	--ts-surface: oklch(20.5% 0.006 270);
+	--ts-surface-2: oklch(23.5% 0.007 270);
+	--ts-hover: oklch(22% 0.006 270);
+	--ts-pill: oklch(23.5% 0.007 270);
+	--ts-chip: oklch(27% 0.007 270);
+	--ts-kbd: oklch(19% 0.006 270);
+	--ts-row-hover: oklch(19.5% 0.006 270);
+	--ts-dialog: oklch(21.5% 0.006 270);
+	--ts-dialog-foot: oklch(19.5% 0.006 270);
 
-	--ts-accent-text: #e29a36;
-	--ts-accent-line: #5a4320;
-	--ts-logo-top: #e29a36;
-	--ts-danger: #f0857a;
-	--ts-ok: #6fcf97;
-	--ts-accent-soft: #3a2b14;
-	--ts-danger-soft: #3a1c19;
+	--ts-accent: oklch(79% 0.125 74);
+	--ts-accent-text: oklch(83% 0.105 76);
+	--ts-accent-ink: oklch(21% 0.03 70);
+	--ts-accent-line: oklch(46% 0.075 72);
+	--ts-logo-top: oklch(79% 0.125 74);
+	--ts-danger: oklch(73% 0.13 28);
+	--ts-ok: oklch(77% 0.12 155);
+	--ts-accent-soft: oklch(29% 0.04 72);
+	--ts-danger-soft: oklch(28% 0.045 28);
 
-	--ts-overlay: rgb(10 9 13 / 0.72);
-	--ts-shadow: rgb(0 0 0 / 0.7);
+	--ts-overlay: oklch(12% 0.004 270 / 0.72);
+	--ts-shadow: oklch(4% 0 0 / 0.7);
 
 	--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
 	--ts-key-shine: rgb(255 255 255 / 0.06);
 	--ts-key-drop: transparent;
 	--ts-key-press: rgb(0 0 0 / 0.5);
 	--ts-brand-victoriametrics: #a64fc0;
+	--ts-tint-lightness: 0.58;
+	--ts-tint-chroma: 0.5;
 
 	color-scheme: dark;
 }
@@ -519,46 +531,48 @@ kbd {
 
 :root[data-look="dark"],
 [data-look="dark"] {
-	--ts-bg: #141318;
-	--ts-text: #eceaf3;
-	--ts-text-body: #cfccda;
-	--ts-text-lead: #a29fb0;
-	--ts-text-note: #d8d5e2;
-	--ts-muted: #9a97a8;
-	--ts-muted-2: #8f8c9e;
-	--ts-faint: #7d7a8b;
-	--ts-dim: #6f6b7d;
-	--ts-line: #26242d;
-	--ts-border: #2a2832;
-	--ts-border-2: #2d2b35;
-	--ts-border-3: #33303c;
-	--ts-border-strong: #4d4a58;
-	--ts-surface: #1b1a21;
-	--ts-surface-2: #201e27;
-	--ts-hover: #1d1b23;
-	--ts-pill: #1f1d25;
-	--ts-chip: #26242d;
-	--ts-kbd: #16151b;
-	--ts-row-hover: #18171d;
-	--ts-dialog: #1b1a21;
-	--ts-dialog-foot: #17161c;
-	--ts-accent: #e29a36;
-	--ts-accent-text: #e29a36;
-	--ts-accent-ink: #17130a;
-	--ts-accent-line: #5a4320;
-	--ts-logo-top: #e29a36;
-	--ts-danger: #f0857a;
-	--ts-ok: #6fcf97;
-	--ts-accent-soft: #3a2b14;
-	--ts-danger-soft: #3a1c19;
-	--ts-overlay: rgb(10 9 13 / 0.72);
-	--ts-shadow: rgb(0 0 0 / 0.7);
+	--ts-bg: oklch(17% 0.005 270);
+	--ts-text: oklch(94.5% 0.004 270);
+	--ts-text-body: oklch(84% 0.006 270);
+	--ts-text-lead: oklch(74% 0.008 270);
+	--ts-text-note: oklch(88% 0.005 270);
+	--ts-muted: oklch(70% 0.008 270);
+	--ts-muted-2: oklch(67% 0.008 270);
+	--ts-faint: oklch(63% 0.008 270);
+	--ts-dim: oklch(57% 0.008 270);
+	--ts-line: oklch(25.5% 0.006 270);
+	--ts-border: oklch(28% 0.007 270);
+	--ts-border-2: oklch(30.5% 0.007 270);
+	--ts-border-3: oklch(34% 0.008 270);
+	--ts-border-strong: oklch(48% 0.008 270);
+	--ts-surface: oklch(20.5% 0.006 270);
+	--ts-surface-2: oklch(23.5% 0.007 270);
+	--ts-hover: oklch(22% 0.006 270);
+	--ts-pill: oklch(23.5% 0.007 270);
+	--ts-chip: oklch(27% 0.007 270);
+	--ts-kbd: oklch(19% 0.006 270);
+	--ts-row-hover: oklch(19.5% 0.006 270);
+	--ts-dialog: oklch(21.5% 0.006 270);
+	--ts-dialog-foot: oklch(19.5% 0.006 270);
+	--ts-accent: oklch(79% 0.125 74);
+	--ts-accent-text: oklch(83% 0.105 76);
+	--ts-accent-ink: oklch(21% 0.03 70);
+	--ts-accent-line: oklch(46% 0.075 72);
+	--ts-logo-top: oklch(79% 0.125 74);
+	--ts-danger: oklch(73% 0.13 28);
+	--ts-ok: oklch(77% 0.12 155);
+	--ts-accent-soft: oklch(29% 0.04 72);
+	--ts-danger-soft: oklch(28% 0.045 28);
+	--ts-overlay: oklch(12% 0.004 270 / 0.72);
+	--ts-shadow: oklch(4% 0 0 / 0.7);
 
 	--ts-key-edge: color-mix(in oklab, var(--ts-bg) 55%, black);
 	--ts-key-shine: rgb(255 255 255 / 0.06);
 	--ts-key-drop: transparent;
 	--ts-key-press: rgb(0 0 0 / 0.5);
 	--ts-brand-victoriametrics: #a64fc0;
+	--ts-tint-lightness: 0.58;
+	--ts-tint-chroma: 0.5;
 
 	color-scheme: dark;
 }
@@ -566,14 +580,14 @@ kbd {
 :root[data-look="black"],
 [data-look="black"] {
 	--ts-bg: #000000;
-	--ts-text: #eceaf3;
-	--ts-text-body: #cfccda;
-	--ts-text-lead: #a29fb0;
-	--ts-text-note: #d8d5e2;
-	--ts-muted: #9a97a8;
-	--ts-muted-2: #8f8c9e;
-	--ts-faint: #7d7a8b;
-	--ts-dim: #6f6b7d;
+	--ts-text: oklch(94.5% 0.004 270);
+	--ts-text-body: oklch(84% 0.006 270);
+	--ts-text-lead: oklch(74% 0.008 270);
+	--ts-text-note: oklch(88% 0.005 270);
+	--ts-muted: oklch(70% 0.008 270);
+	--ts-muted-2: oklch(67% 0.008 270);
+	--ts-faint: oklch(63% 0.008 270);
+	--ts-dim: oklch(57% 0.008 270);
 	--ts-line: #1b1a20;
 	--ts-border: #201f26;
 	--ts-border-2: #24222a;
@@ -588,15 +602,15 @@ kbd {
 	--ts-row-hover: #0b0b0e;
 	--ts-dialog: #0e0d11;
 	--ts-dialog-foot: #0a0a0d;
-	--ts-accent: #e29a36;
-	--ts-accent-text: #e29a36;
-	--ts-accent-ink: #17130a;
-	--ts-accent-line: #5a4320;
-	--ts-logo-top: #e29a36;
-	--ts-danger: #f0857a;
-	--ts-ok: #6fcf97;
-	--ts-accent-soft: #3a2b14;
-	--ts-danger-soft: #3a1c19;
+	--ts-accent: oklch(79% 0.125 74);
+	--ts-accent-text: oklch(83% 0.105 76);
+	--ts-accent-ink: oklch(21% 0.03 70);
+	--ts-accent-line: oklch(46% 0.075 72);
+	--ts-logo-top: oklch(79% 0.125 74);
+	--ts-danger: oklch(73% 0.13 28);
+	--ts-ok: oklch(77% 0.12 155);
+	--ts-accent-soft: oklch(29% 0.04 72);
+	--ts-danger-soft: oklch(28% 0.045 28);
 	--ts-overlay: rgb(0 0 0 / 0.75);
 	--ts-shadow: rgb(0 0 0 / 0.7);
 
@@ -605,6 +619,8 @@ kbd {
 	--ts-key-drop: transparent;
 	--ts-key-press: rgb(0 0 0 / 0.5);
 	--ts-brand-victoriametrics: #a64fc0;
+	--ts-tint-lightness: 0.58;
+	--ts-tint-chroma: 0.5;
 
 	color-scheme: dark;
 }
