@@ -11017,7 +11017,8 @@ func (m SearchSet) IsZero() bool {
 
 // SearchSetMany is the schema's search.SetMany.
 //
-// Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+// Documents set in one commit, all of them or none: 1,000 at most, and no more
+// than one request body holds, 2 MiB from every SDK.
 type SearchSetMany struct {
 	Handle    uint64           `wire:"1,handle"`
 	Documents []SearchDocument `wire:"2,documents"`

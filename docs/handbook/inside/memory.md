@@ -72,7 +72,9 @@ bound was:
 | `store memory, now`      | the call did not fit beside what others hold or wait for now | try again, or do less at once    |
 
 The last one is the only one that a retry can fix. The first two say the
-call is too big, and will be too big every time.
+call is too big, and will be too big every time. Every other bound a call
+meets is listed by its name in
+[Limits and defaults](../production/limits.md#bounds-by-name).
 
 ## Why this design?
 

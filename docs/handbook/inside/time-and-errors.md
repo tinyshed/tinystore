@@ -74,6 +74,14 @@ SQLite error reaches you with the bucket, the key and SQLite's own words.
 A name that does not exist is told the nearest one that does, when one is an
 edit or two away: a config key, a filter's field, a command of the CLI.
 
+A `limit` error also says which bound the call met, so a program can react
+without reading the message. It has three facts: `limit`, the bound's name;
+`wanted`, what the call would have taken of it; and `bound`, the most it
+takes. A `setMany` of 1,001 documents fails with `set_many documents`, 1001
+and 1000. They are fields of `LimitError` in Bun and Python and of `Error` in
+Go, and `error.fact("limit")` in Rust. Every name and its bound is listed in
+[Limits and defaults](../production/limits.md#bounds-by-name).
+
 ## Why this design?
 
 **Why one set of kinds.** Each engine could have its own errors, as separate

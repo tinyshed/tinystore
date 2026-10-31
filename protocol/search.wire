@@ -41,7 +41,8 @@ message search.Set {
   5 noVector: bool          # the document has no vector, on an index with vectors
 }
 
-# Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+# Documents set in one commit, all of them or none: 1,000 at most, and no more
+# than one request body holds, 2 MiB from every SDK.
 message search.SetMany {
   1 handle: uint
   2 documents: [search.Document]

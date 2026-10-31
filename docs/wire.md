@@ -97,6 +97,9 @@ A `HELLO` from Bun:
 A body must fit the credit it is sent under, so the max body both sides agree
 is the smallest of the server's, the client's and the client's stream
 credit: a client granting 64 KiB a stream takes bodies of 64 KiB at most.
+Every SDK grants 2 MiB, so a request is 2 MiB at most, and a client refuses
+a larger one before it sends it: a `limit` that names the method and
+`request bytes`, the size wanted and the body agreed.
 
 `WELCOME`:
 

@@ -9708,7 +9708,8 @@ impl Message for SearchSet {
     }
 }
 
-/// Documents set in one commit, all of them or none: 1,000 and 16 MiB at most.
+/// Documents set in one commit, all of them or none: 1,000 at most, and no more
+/// than one request body holds, 2 MiB from every SDK.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchSetMany {
