@@ -17,6 +17,7 @@ use super::directory::MOST_BODY;
 use crate::compress::checksum::Crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count, put_int};
+use crate::limits::Limit;
 use crate::{Error, Result};
 
 /// The samples a head holds at most: a backlog of one ingest fits, and
@@ -25,6 +26,9 @@ pub(super) const MOST_SAMPLES: usize = 16_384;
 /// What a head's row holds at most.
 pub(super) const MOST_BYTES: usize = 1 << 20;
 pub(super) const VERSION: u8 = 1;
+/// A head's samples and its bytes as bounds a write names.
+const HEAD_SAMPLES: Limit = Limit { name: "head samples", bound: MOST_SAMPLES as u64 };
+const HEAD_BYTES: Limit = Limit { name: "head bytes", bound: MOST_BYTES as u64 };
 
 /// How many samples a head holds and its first and last times, which the
 /// series' state row keeps, so that a read finds the heads its range touches
@@ -158,9 +162,9 @@ pub(super) fn encode(zstd: &mut Zstd, series: i64, kept: &[Chunk<'_>], points: &
         return Ok(Vec::new());
     }
     if count > MOST_SAMPLES {
-        return Err(Error::limit(format!(
-            "{count} samples not packed yet, where a series holds {MOST_SAMPLES}: packing has not caught up"
-        )));
+        let refused =
+            format!("{count} samples not packed yet, where a series holds {MOST_SAMPLES}: packing has not caught up");
+        return Err(HEAD_SAMPLES.refuse(count as u64, refused));
     }
     let mut out = vec![VERSION];
     put_count(&mut out, count as u64);
@@ -174,7 +178,8 @@ pub(super) fn encode(zstd: &mut Zstd, series: i64, kept: &[Chunk<'_>], points: &
         put_count(&mut out, body.len() as u64);
         out.extend_from_slice(&body);
         if out.len() + 4 > MOST_BYTES {
-            return Err(Error::limit(format!("a head past {MOST_BYTES} bytes: packing has not caught up")));
+            let refused = format!("a head past {MOST_BYTES} bytes: packing has not caught up");
+            return Err(HEAD_BYTES.refuse((out.len() + 4) as u64, refused));
         }
     }
     let sum = Crc32::new().update(&series.to_le_bytes()).update(&out).finish();

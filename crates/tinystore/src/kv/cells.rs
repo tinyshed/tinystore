@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::value::Raw;
 use crate::Result;
+use crate::limits::VALUE_BYTES;
 use crate::sqlite::sql_error;
 
 /// A value over this many bytes lives in a row of its own, so that a page of
@@ -13,7 +14,7 @@ use crate::sqlite::sql_error;
 pub(crate) const SPILL: usize = 512;
 
 /// The largest value a key holds.
-pub(crate) const MAX_VALUE: usize = 1 << 20;
+pub(crate) const MAX_VALUE: usize = VALUE_BYTES.bound as usize;
 
 /// Whether a cell is hidden by a clear marked on a branch above it, by the
 /// branch's prefix followed by an owner's or a key's mark.

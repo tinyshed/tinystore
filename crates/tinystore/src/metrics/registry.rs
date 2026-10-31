@@ -18,6 +18,7 @@ use super::engine::{execute, query_one};
 use super::ingest::Batch;
 use super::labels::encode_ids;
 use super::series::Kind;
+use crate::limits::Limit;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
@@ -114,10 +115,9 @@ impl Registering {
             return Ok(());
         }
         let max_series = self.max_series;
-        Err(Error::limit(format!("a series past the {max_series} a store holds, its max_series"))
-            .naming("limit", "series in a store")
-            .naming("wanted", (count + 1).to_string())
-            .naming("bound", max_series.to_string()))
+        let refused = format!("a series past the {max_series} a store holds, its max_series");
+        let held = Limit { name: "series in a store", bound: max_series as u64 };
+        Err(held.refuse((count + 1) as u64, refused))
     }
 
     /// The dictionary ids of `pairs`, those of the series registered last

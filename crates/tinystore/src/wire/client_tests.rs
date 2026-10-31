@@ -163,3 +163,22 @@ fn a_text_past_one_message_goes_up_in_pieces_and_is_written_whole() {
     let refused = client.ingest_prometheus(broken.as_bytes(), &labels, SystemTime::now(), None).unwrap_err();
     assert!(refused.to_string().contains("line 30001"), "{refused}");
 }
+
+// contract: ERR-05
+#[test]
+fn a_request_past_the_body_agreed_names_its_call_its_bytes_and_the_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), Options::default()).unwrap();
+    let (mut client, _) = welcomed(&store);
+    let wide = "w".repeat(4000);
+    let at = SystemTime::now();
+    let series: Vec<Series> =
+        (0..600).map(|n| Series::gauge("wide").label("n", format!("{n}{wide}")).sample(at, 1.0)).collect();
+    let refused = client.ingest(&series).unwrap_err();
+    let wanted: u64 = refused.fact("wanted").unwrap().parse().unwrap();
+    assert!(wanted > 2 << 20, "{refused}");
+    let said = format!("metrics.ingest: a request of {wanted} bytes, past the 2097152 a body holds: limit");
+    assert_eq!((refused.kind(), refused.to_string()), (ErrorKind::Limit, said));
+    assert_eq!((refused.fact("limit"), refused.fact("bound")), (Some("request bytes"), Some("2097152")));
+    assert_eq!(samples_of(&store, "wide"), 0, "nothing was sent");
+}

@@ -23,6 +23,7 @@ use super::event::Event;
 use super::events::AllEvents;
 use super::read::List;
 use crate::calendar::{Calendar, Zoned};
+use crate::limits::{AGGREGATE_ROWS, COUNT_BYTES, Limit};
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -30,11 +31,11 @@ use crate::{Error, Result, unix_nanos};
 const TOP: usize = 10;
 const MOST_TOP: usize = 1000;
 /// The rows `aggregate` gives at most.
-const MOST_ROWS: usize = 10_000;
+const MOST_ROWS: usize = AGGREGATE_ROWS.bound as usize;
 /// What the different values a count holds may weigh at most: of the key
 /// `top` counts, or of every field `distinct` names in every row, each its
 /// JSON and what its map spends on it.
-const MOST_HELD: usize = 64 << 20;
+const MOST_HELD: usize = COUNT_BYTES.bound as usize;
 const HELD_EACH: usize = 64;
 
 /// A value of a key and how many events hold it.
@@ -334,7 +335,8 @@ impl Held {
     fn add(&mut self, json: &str, new: bool) -> Result<()> {
         self.bytes += if new { json.len() + HELD_EACH } else { 0 };
         if self.bytes > self.most {
-            return Err(Error::limit(format!("past the {} bytes of different values one count holds", self.most)));
+            let refused = format!("past the {} bytes of different values one count holds", self.most);
+            return Err(Limit { bound: self.most as u64, ..COUNT_BYTES }.refuse(self.bytes as u64, refused));
         }
         Ok(())
     }
@@ -395,9 +397,8 @@ impl Rows<'_> {
         let by: Vec<Value> = self.asked.by.iter().map(|key| value_of(event, key).unwrap_or(Value::Null)).collect();
         let key = (at, Value::Array(by.clone()).to_string());
         if !self.rows.contains_key(&key) && self.rows.len() == MOST_ROWS {
-            return Err(Error::limit(format!(
-                "past the {MOST_ROWS} rows an aggregate gives: ask a shorter range or a wider every"
-            )));
+            let refused = format!("past the {MOST_ROWS} rows an aggregate gives: ask a shorter range or a wider every");
+            return Err(AGGREGATE_ROWS.refuse(MOST_ROWS as u64 + 1, refused));
         }
         let asked = self.asked;
         let row = self.rows.entry(key).or_insert_with(|| Filling {
@@ -456,7 +457,9 @@ impl Summing {
         match number {
             Number::Integer(integer) => {
                 let sum = self.integers.checked_add(integer);
-                self.integers = sum.ok_or_else(|| Error::limit("a sum of integers past what 128 bits hold"))?;
+                // named alone: its bound, 2¹²⁷, is no number a fact of a bound holds
+                let past = || Error::limit("a sum of integers past what 128 bits hold").naming("limit", "sum range");
+                self.integers = sum.ok_or_else(past)?;
             }
             Number::Float(float) => (self.floats, self.float) = (self.floats + float, true),
         }

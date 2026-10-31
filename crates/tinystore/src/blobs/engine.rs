@@ -22,6 +22,7 @@ use super::disk::{Disk, OBJECTS, UPLOADS};
 use super::ids::Ids;
 use super::scrub::Scrubbing;
 use crate::engine::{Claim, Copied, Copying, Engine, Host, Then, to_copy};
+use crate::limits::Limit;
 use crate::sqlite::{Config, File, Migration, Tx, own_work, sql_error};
 use crate::sync::lock;
 use crate::{Clock, Durability, Error, Memory, Result, Store, unix_millis};
@@ -365,11 +366,13 @@ impl Blobs {
         if free >= self.keep_free.saturating_add(coming) {
             return Ok(());
         }
-        Err(Error::limit(format!(
+        let refused = format!(
             "{coming} bytes more would leave the disk {} bytes free, under the {} the store keeps",
             free.saturating_sub(coming),
             self.keep_free
-        )))
+        );
+        let space = Limit { name: "disk space", bound: free.saturating_sub(self.keep_free) };
+        Err(space.refuse(coming, refused))
     }
 
     /// Takes up the file's marks and removes what a process that died left:

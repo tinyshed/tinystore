@@ -512,7 +512,7 @@ fn a_text_past_its_bound_its_size_or_its_lines_is_refused_whole_and_writes_nothi
     assert_eq!(refused.code, "limit", "{}", refused.message);
     let what = refused.what.unwrap_or_default();
     let facts = [&what["limit"], &what["wanted"], &what["bound"]];
-    assert_eq!(facts, ["one text's bytes", "33554433", "33554432"]);
+    assert_eq!(facts, ["text bytes", "33554433", "33554432"]);
 
     let text = wide_text(100, 10);
     let at_most = |size: usize| MetricsUpload { size: size as u64, ..MetricsUpload::default() };

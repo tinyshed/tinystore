@@ -3,25 +3,21 @@
 //! buckets it answers. Past one is a `limit` that names it, never a smaller
 //! answer; `explain` says what a call would spend of each before it runs.
 
-use crate::{Error, Result};
+use crate::Result;
+use crate::limits::{Limit, QUERY_ANSWER, QUERY_BYTES, QUERY_SAMPLES, QUERY_SERIES};
 
-/// A bound of a query, by the name every SDK reads in a `limit`.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct Bound {
-    pub(super) name: &'static str,
-    pub(super) most: usize,
+const SERIES: Limit = QUERY_SERIES;
+/// The bytes a query copies out of the file: labels, directories, clocks,
+/// payloads and heads.
+const BYTES: Limit = QUERY_BYTES;
+/// A block answered from its summary decodes none.
+const DECODED: Limit = QUERY_SAMPLES;
+const ANSWER: Limit = QUERY_ANSWER;
+
+/// A bound's most, counted in memory.
+const fn most(bound: &Limit) -> usize {
+    bound.bound as usize
 }
-
-/// The series a query finds at most.
-const SERIES: Bound = Bound { name: "series", most: 1000 };
-/// The bytes a query copies out of the file at most: labels, directories,
-/// clocks, payloads and heads.
-const BYTES: Bound = Bound { name: "bytes read", most: 16 << 20 };
-/// The samples a query decodes at most; a block answered from its summary
-/// decodes none.
-const DECODED: Bound = Bound { name: "samples decoded", most: 1 << 20 };
-/// The samples or buckets an answer holds at most.
-const ANSWER: Bound = Bound { name: "answer", most: 100_000 };
 
 /// What a query has spent so far.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -36,7 +32,7 @@ pub(super) struct Budget {
     /// its own work.
     planning: bool,
     /// The first bound a plan found passed, and what was wanted of it there.
-    passed: Option<(&'static Bound, usize)>,
+    passed: Option<(&'static Limit, usize)>,
 }
 
 impl Budget {
@@ -59,11 +55,11 @@ impl Budget {
             ANSWER => self.answer,
             _ => wanted,
         };
-        Some((bound.name, wanted, bound.most))
+        Some((bound.name, wanted, most(bound)))
     }
 
     pub(super) fn series_limit(&self) -> usize {
-        SERIES.most
+        most(&SERIES)
     }
 
     pub(super) fn take_series(&mut self) -> Result<()> {
@@ -79,12 +75,12 @@ impl Budget {
     /// The bytes a query may still copy, which a statement asks a row's
     /// bytes be within before it copies them.
     pub(super) fn bytes_left(&self) -> usize {
-        BYTES.most - self.bytes
+        most(&BYTES) - self.bytes
     }
 
     /// The samples a query may still decode.
     pub(super) fn decoded_left(&self) -> usize {
-        DECODED.most.saturating_sub(self.decoded)
+        most(&DECODED).saturating_sub(self.decoded)
     }
 
     /// Spends nothing more: what a page took of a group it then leaves out
@@ -97,7 +93,7 @@ impl Budget {
     /// their bounds: a page asks before it takes a part, and stops rather
     /// than fail.
     pub(super) fn fits(&self, bytes: usize, samples: usize) -> bool {
-        self.bytes.saturating_add(bytes) <= BYTES.most && self.decoded.saturating_add(samples) <= DECODED.most
+        self.bytes.saturating_add(bytes) <= most(&BYTES) && self.decoded.saturating_add(samples) <= most(&DECODED)
     }
 
     pub(super) fn take_decoded(&mut self, samples: usize) -> Result<()> {
@@ -112,9 +108,9 @@ impl Budget {
 
     /// `spent + more`, or a `limit` naming the bound, what the call wanted
     /// and the bound, by the names every SDK reads.
-    fn take(&mut self, spent: usize, more: usize, bound: &'static Bound) -> Result<usize> {
+    fn take(&mut self, spent: usize, more: usize, bound: &'static Limit) -> Result<usize> {
         let wanted = spent.saturating_add(more);
-        if wanted <= bound.most {
+        if wanted <= most(bound) {
             return Ok(wanted);
         }
         if self.planning {
@@ -123,15 +119,12 @@ impl Budget {
                 return Ok(wanted);
             }
         }
-        let most = bound.most;
-        Err(Error::limit(format!(
-            "a query past {most} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page \
-             at a time with `limit`",
-            bound.name
-        ))
-        .naming("limit", bound.name)
-        .naming("wanted", wanted.to_string())
-        .naming("bound", most.to_string()))
+        let refused = format!(
+            "a query past {} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page at a \
+             time with `limit`",
+            bound.bound, bound.name
+        );
+        Err(bound.refuse(wanted as u64, refused))
     }
 }
 
@@ -142,24 +135,24 @@ mod tests {
     // contract: ERR-05, MET-07
     #[test]
     fn a_limit_names_its_bound_what_was_wanted_and_the_bound() {
-        let mut budget = Budget { decoded: DECODED.most - 10, ..Budget::default() };
+        let mut budget = Budget { decoded: most(&DECODED) - 10, ..Budget::default() };
         budget.take_decoded(10).unwrap();
         let error = budget.take_decoded(240).unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::Limit);
         let facts = (error.fact("limit"), error.fact("wanted"), error.fact("bound"));
         assert_eq!(facts, (Some("samples decoded"), Some("1048816"), Some("1048576")));
-        assert_eq!(budget.decoded, DECODED.most, "a refused take spends nothing");
+        assert_eq!(budget.decoded, most(&DECODED), "a refused take spends nothing");
     }
 
     // contract: MET-07
     #[test]
     fn a_plan_counts_on_past_the_samples_a_call_decodes_and_stops_at_the_bytes_it_reads() {
         let mut plan = Budget::planning();
-        plan.take_decoded(DECODED.most).unwrap();
+        plan.take_decoded(most(&DECODED)).unwrap();
         plan.take_decoded(240).unwrap();
         plan.take_decoded(240).unwrap();
-        assert_eq!(plan.passed(), Some(("samples decoded", DECODED.most + 480, DECODED.most)));
-        let error = plan.take_bytes(BYTES.most + 1).unwrap_err();
+        assert_eq!(plan.passed(), Some(("samples decoded", most(&DECODED) + 480, most(&DECODED))));
+        let error = plan.take_bytes(most(&BYTES) + 1).unwrap_err();
         assert_eq!(error.fact("limit"), Some("bytes read"));
         assert_eq!(plan.passed().map(|passed| passed.0), Some("samples decoded"), "the first bound passed stays");
         assert_eq!(Budget::default().passed(), None);

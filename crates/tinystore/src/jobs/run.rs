@@ -13,10 +13,11 @@ use super::engine::Jobs;
 use super::state::QueueState;
 use super::steps;
 use crate::clock::{from_unix_millis, millis};
+use crate::limits::PROGRESS_BYTES;
 use crate::{Error, Result, unix_millis};
 
 /// A run's progress, as JSON, is at most this long: it lives in memory.
-const MAX_PROGRESS: usize = 4 << 10;
+const MAX_PROGRESS: usize = PROGRESS_BYTES.bound as usize;
 
 /// This call on a job: when it was due, which attempt it is, whether it was
 /// told to stop, and the answers a handler returns to say what happens next.
@@ -68,9 +69,9 @@ impl Run {
             .map_err(|error| Error::invalid("a progress JSON cannot write").with_source(error))?;
         let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
         if size > MAX_PROGRESS {
-            return Err(
-                Error::limit(format!("a progress of {size} bytes, past {MAX_PROGRESS}")).within(self.describe())
-            );
+            let refused =
+                PROGRESS_BYTES.refuse(size as u64, format!("a progress of {size} bytes, past {MAX_PROGRESS}"));
+            return Err(refused.within(self.describe()));
         }
         self.lease.set_progress(value);
         self.queue.watchers.changed();

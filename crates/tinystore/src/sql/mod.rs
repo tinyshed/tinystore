@@ -51,7 +51,7 @@ pub use tx::Tx;
 pub(crate) use {
     columns::{Column, Columns},
     rows::{Answer, Held, Keep, Kept},
-    tx::BOUND as TX_BOUND,
+    tx::{BOUND as TX_BOUND, HELD as TX_HELD},
     values::Value,
 };
 

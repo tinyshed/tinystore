@@ -22,26 +22,27 @@ use super::vectors::Question;
 use super::write::{Incoming, Prepared};
 #[cfg(feature = "sql")]
 use crate::Transaction;
+use crate::limits::{DOCUMENT_BYTES, SEARCH_HITS, SEARCH_TEXT, SET_MANY_BYTES, SET_MANY_DOCUMENTS};
 use crate::{Error, Key, Result, Store};
 
 /// The largest document, as its JSON.
-const MOST_DOCUMENT: usize = 1 << 20;
+const MOST_DOCUMENT: usize = DOCUMENT_BYTES.bound as usize;
 /// The longest id, as kv keeps a key.
 const MOST_ID: usize = 1 << 10;
 /// The longest text a search reads, and the words of it it reads.
-const MOST_TEXT: usize = 1 << 10;
+const MOST_TEXT: usize = SEARCH_TEXT.bound as usize;
 const MOST_WORDS: usize = 32;
 /// The letters a word needs before a `prefix` search reads it as the start
 /// of others: one letter would read every word that starts with it.
 const LEAST_PREFIX: usize = 2;
 /// The hits a search reaches at most, `offset` and `limit` together.
-const MOST_HITS: usize = 1000;
+const MOST_HITS: usize = SEARCH_HITS.bound as usize;
 /// The hits a search answers unless it says.
 const LIMIT: usize = 10;
 /// The documents a `set_many` takes at most, and their bytes as JSON, so
 /// that no import makes one commit and a write-ahead log of its size.
-pub(super) const MOST_MANY: usize = 1000;
-const MOST_MANY_BYTES: usize = 16 << 20;
+pub(super) const MOST_MANY: usize = SET_MANY_DOCUMENTS.bound as usize;
+const MOST_MANY_BYTES: usize = SET_MANY_BYTES.bound as usize;
 
 /// What [`Store::index`] opens: an index's settings, given where it opens.
 #[must_use = "an index opens at `open`"]
@@ -316,7 +317,8 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     /// and in a list where some have none `(id, &value, Some(&vector[..]))`
     /// and `(id, &value, None)`. A refused one names its place in the list
     /// and its id. A call holds 1,000 documents and 16 MiB of them as JSON
-    /// at most; a larger import goes in calls of that size.
+    /// at most, [`SET_MANY_DOCUMENTS`] and [`SET_MANY_BYTES`]; a larger
+    /// import goes in calls of that size.
     pub fn set_many<'v>(&self, documents: impl IntoIterator<Item = impl Document<'v, T>>) -> Result<()>
     where
         T: 'v,
@@ -329,8 +331,7 @@ impl<T: Serialize + DeserializeOwned> Index<T> {
     pub(super) fn set_all(&self, documents: Vec<Given<'_, T>>) -> Result<()> {
         let within = |error: Error| error.within(format!("index {}", self.open.name));
         if documents.len() > MOST_MANY {
-            let said = format!("a set_many of {} documents, past {MOST_MANY}", documents.len());
-            return Err(within(Error::limit(said)));
+            return Err(within(too_many(documents.len())));
         }
         #[cfg(feature = "replication")]
         if self.search.file.is_copy() {
@@ -599,15 +600,16 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
 
     fn query(&self) -> Result<Query> {
         if self.text.len() > MOST_TEXT {
-            return Err(Error::limit(format!("a search's text of {} bytes, past {MOST_TEXT}", self.text.len())));
+            let refused = format!("a search's text of {} bytes, past {MOST_TEXT}", self.text.len());
+            return Err(SEARCH_TEXT.refuse(self.text.len() as u64, refused));
         }
         if self.limit == 0 {
             return Err(Error::invalid("a search asks for at least one hit"));
         }
-        if self.offset.saturating_add(self.limit) > MOST_HITS {
-            return Err(Error::limit(format!(
-                "a search reaches its {MOST_HITS}th hit at most, offset and limit together"
-            )));
+        let reached = self.offset.saturating_add(self.limit);
+        if reached > MOST_HITS {
+            let refused = format!("a search reaches its {MOST_HITS}th hit at most, offset and limit together");
+            return Err(SEARCH_HITS.refuse(reached as u64, refused));
         }
         let normal = analyzer::normalize(&self.text);
         let mut words = analyzer::words_of(&normal);
@@ -683,7 +685,8 @@ pub(super) fn prepared_many(documents: impl IntoIterator<Item = impl ToSet>, dat
         let document = document.prepared(data).map_err(place)?;
         bytes += document.value.len();
         if bytes > MOST_MANY_BYTES {
-            return Err(Error::limit(format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20)));
+            let refused = format!("a set_many past {} MiB as JSON", MOST_MANY_BYTES >> 20);
+            return Err(SET_MANY_BYTES.refuse(bytes as u64, refused));
         }
         prepared_all.push(document);
     }
@@ -695,9 +698,16 @@ pub(super) fn json<T: Serialize>(value: &T) -> Result<(Value, Vec<u8>)> {
     let tree = serde_json::to_value(value).map_err(|error| Error::invalid(format!("a document: {error}")))?;
     let bytes = serde_json::to_vec(&tree).map_err(|error| Error::invalid(format!("a document: {error}")))?;
     if bytes.len() > MOST_DOCUMENT {
-        return Err(Error::limit(format!("a document of {} bytes as JSON, past 1 MiB", bytes.len())));
+        let refused = format!("a document of {} bytes as JSON, past 1 MiB", bytes.len());
+        return Err(DOCUMENT_BYTES.refuse(bytes.len() as u64, refused));
     }
     Ok((tree, bytes))
+}
+
+/// The refusal of a set_many of `documents`, past the documents one takes.
+pub(super) fn too_many(documents: usize) -> Error {
+    let refused = format!("a set_many of {documents} documents, past {MOST_MANY}");
+    SET_MANY_DOCUMENTS.refuse(documents as u64, refused)
 }
 
 fn decode<T: DeserializeOwned>(value: &[u8]) -> Result<T> {

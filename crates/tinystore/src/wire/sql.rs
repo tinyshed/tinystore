@@ -17,8 +17,9 @@ use super::protocol::{
 };
 use super::{Route, codec, msgpack};
 use crate::engine::SharedFile;
+use crate::limits::{ANSWER_BYTES, Limit};
 use crate::sql::{
-    Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, Tx, Value, Wanted, Write,
+    Answer, Column, Columns, Database, Done, Held, Keep, Kept, Migrations, Rows, Sql, TX_HELD, Tx, Value, Wanted, Write,
 };
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Store, Transaction};
@@ -375,9 +376,8 @@ fn row_parts(rows: Rows, bound: usize) -> Result<VecDeque<Vec<u8>>, Failure> {
 }
 
 fn past_a_message(weight: usize, bound: usize) -> Failure {
-    Failure::from(Error::limit(format!(
-        "a row of {weight} bytes, past the {bound} one message of this connection carries"
-    )))
+    let refused = format!("a row of {weight} bytes, past the {bound} one message of this connection carries");
+    Failure::from(Limit { name: "row bytes", bound: bound as u64 }.refuse(weight as u64, refused))
 }
 
 /// What a row of a packed column takes of a message: its eight bytes, and
@@ -681,7 +681,8 @@ impl Txing {
 }
 
 fn past_bound() -> Error {
-    Error::limit(format!("a transaction held the writer past its {TX_BOUND:?}, and rolled back"))
+    let held = Limit { bound: TX_BOUND.as_millis() as u64, ..TX_HELD };
+    held.run_out(format!("a transaction held the writer past its {TX_BOUND:?}, and rolled back"))
 }
 
 fn left_its_transaction() -> Error {
@@ -712,9 +713,9 @@ fn answer(tx: &Tx<'_>, call: SqlTxCall, max_body: usize, nested: Nested<'_>) -> 
         let rows = tx.rows_of(&statement, wanted)?;
         let mut parts = row_parts(rows, max_body / 2)?;
         if parts.len() > 1 {
-            return Err(Failure::from(Error::limit(
-                "rows past what one answer carries: read them outside the transaction, or fewer at a time",
-            )));
+            let wanted = parts.iter().map(Vec::len).sum::<usize>() as u64;
+            let refused = "rows past what one answer carries: read them outside the transaction, or fewer at a time";
+            return Err(Failure::from(Limit { bound: max_body as u64 / 2, ..ANSWER_BYTES }.refuse(wanted, refused)));
         }
         let rows = SqlRows::decode(&parts.pop_front().unwrap_or_default())?;
         Ok(SqlTxAnswer { rows: Some(rows), ..SqlTxAnswer::default() })

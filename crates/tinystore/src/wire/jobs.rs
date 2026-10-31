@@ -28,6 +28,7 @@ use crate::jobs::{
     Answers, Change, Concurrency, Ended, Filter, Hand, Hears, How, Job, JobCall, Lease, Queue, QueueBuilder, Remote,
     RemoteWork, Report, Seen, State, Subscription, keep_encoded, kept, read_value, start_remote,
 };
+use crate::limits::{ANSWER_BYTES, Limit, PROGRESS_BYTES};
 use crate::{Error, ErrorKind, Store, Transaction, unix_millis};
 
 /// A job's value as the wire carries it.
@@ -52,7 +53,7 @@ type Watches = Mutex<HashMap<u32, Arc<Watching>>>;
 
 /// A progress, as JSON, is at most this long: memory keeps it while its job
 /// runs.
-const MAX_PROGRESS: usize = 4 << 10;
+const MAX_PROGRESS: usize = PROGRESS_BYTES.bound as usize;
 /// The handlers a client's worker runs at once at most.
 const MAX_HANDLERS: u64 = 1024;
 
@@ -788,7 +789,7 @@ impl Stream {
         let report = report.ok_or_else(|| Failure::invalid("a progress without its report"))?;
         if report.len() > MAX_PROGRESS {
             let refused = format!("a progress of {} bytes, past {MAX_PROGRESS}", report.len());
-            return Err(Failure::from(Error::limit(refused)));
+            return Err(Failure::from(PROGRESS_BYTES.refuse(report.len() as u64, refused)));
         }
         let report = serde_json::from_str(&report)
             .map_err(|error| Failure::invalid(format!("a progress that is not JSON: {error}")))?;
@@ -1098,7 +1099,8 @@ impl Watching {
 fn within(encoded: Vec<u8>, max_body: usize) -> Answered {
     if encoded.len() > max_body {
         let refused = format!("an answer of {} bytes, past the {max_body} this connection agreed", encoded.len());
-        return Err(Failure::from(Error::limit(refused)));
+        let agreed = Limit { bound: max_body as u64, ..ANSWER_BYTES };
+        return Err(Failure::from(agreed.refuse(encoded.len() as u64, refused)));
     }
     Ok(encoded)
 }

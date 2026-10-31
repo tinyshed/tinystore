@@ -32,26 +32,28 @@ use super::retention::expires;
 use super::series::{Kind, Labels, Series};
 use super::timestamp::rfc3339;
 use crate::compress::frame::Zstd;
+use crate::limits::{INGEST_BYTES, INGEST_SAMPLES, Limit, TEXT_BYTES, TEXT_SAMPLES};
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Reservation, Result, unix_millis};
 
 /// What one write of samples carries at most: more is sent in several.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bound {
-    /// What a limit error names it.
-    limit: &'static str,
-    pub(super) samples: usize,
-    bytes: usize,
+    samples: Limit,
+    bytes: Limit,
 }
 
 /// One `ingest`'s series.
-pub(super) const ONE_INGEST: Bound = Bound { limit: "one ingest", samples: 10_000, bytes: 4 << 20 };
+pub(super) const ONE_INGEST: Bound = Bound { samples: INGEST_SAMPLES, bytes: INGEST_BYTES };
 /// One exposition's text, which a scrape gives whole and which is written
 /// whole: a large exporter's text, kube-state-metrics' or cadvisor's, goes in
 /// one write rather than in parts a failure could leave half written.
-pub(super) const ONE_TEXT: Bound = Bound { limit: "one text", samples: 100_000, bytes: 32 << 20 };
+pub(super) const ONE_TEXT: Bound = Bound { samples: TEXT_SAMPLES, bytes: TEXT_BYTES };
 /// What a sample weighs against the call's bytes, a time and a value.
 pub(super) const SAMPLE_BYTES: usize = 16;
+/// A series' version, which every write moves: past it the series takes no
+/// write more.
+pub(super) const VERSIONS: Limit = Limit { name: "series versions", bound: i64::MAX as u64 };
 use crate::memory::PATIENCE;
 
 /// What a series of a call holds of the heap beside its labels and its
@@ -257,12 +259,15 @@ impl Engine {
 /// Refuses `what` past the samples or the bytes `bound` carries, a sample
 /// weighing its labels, its name among them, and `SAMPLE_BYTES`.
 pub(super) fn within(bound: Bound, what: &str, samples: usize, bytes: usize) -> Result<()> {
-    if samples <= bound.samples && bytes <= bound.bytes {
-        return Ok(());
+    let (most, mib) = (bound.samples.bound, bound.bytes.bound >> 20);
+    let refused = || format!("{what} past {most} samples or {mib} MiB: send it in parts");
+    if samples as u64 > bound.samples.bound {
+        return Err(bound.samples.refuse(samples as u64, refused()));
     }
-    let (most, mib) = (bound.samples, bound.bytes >> 20);
-    let error = Error::limit(format!("{what} past {most} samples or {mib} MiB: send it in parts"));
-    Err(error.naming("limit", bound.limit).naming("wanted", samples.to_string()).naming("bound", most.to_string()))
+    if bytes as u64 > bound.bytes.bound {
+        return Err(bound.bytes.refuse(bytes as u64, refused()));
+    }
+    Ok(())
 }
 
 /// A series' labels, a histogram's bound among them written as JavaScript
@@ -437,7 +442,7 @@ impl State {
             return Err(Error::new(ErrorKind::TooOld, format!("sample at {at}, behind what its series has packed")));
         }
         if self.version == i64::MAX {
-            return Err(Error::limit("its version cannot move once more"));
+            return Err(VERSIONS.run_out("its version cannot move once more"));
         }
         Ok(())
     }

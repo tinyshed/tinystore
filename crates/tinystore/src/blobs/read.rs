@@ -10,6 +10,7 @@ use super::change::hidden;
 use super::disk::{being_removed, read_at};
 use super::files::Files;
 use super::info::{FileInfo, FileRow, file_columns};
+use crate::limits::Limit;
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -190,7 +191,8 @@ impl StoredFile {
     /// memory, so a large file is read as a stream.
     pub fn read_all(&mut self) -> Result<Vec<u8>> {
         let size = usize::try_from(self.info.size).map_err(|_| {
-            Error::new(crate::ErrorKind::Limit, "a file past this machine's memory").within(&self.label)
+            let memory = Limit { name: "file bytes", bound: usize::MAX as u64 };
+            memory.refuse(self.info.size, "a file past this machine's memory").within(&self.label)
         })?;
         let mut bytes = vec![0; size];
         self.read_whole(&mut bytes)?;

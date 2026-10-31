@@ -23,6 +23,7 @@ use crate::kv::{
 };
 #[cfg(feature = "sql")]
 use crate::kv::{call_on_branch, call_on_key, clear_work};
+use crate::limits::{ANSWER_BYTES, Limit};
 use crate::{Error, Store, unix_millis};
 
 /// What a connection opened, by handle.
@@ -392,7 +393,9 @@ fn page(rows: Vec<(String, Cell)>, list: &KvList, limit: usize, max_body: usize)
         let bytes = entry.encode().len() + 1;
         if bytes > room {
             if page.entries.is_empty() {
-                return Err(Failure::from(Error::limit("an entry past the largest body this connection agreed")));
+                let agreed = Limit { bound: max_body as u64, ..ANSWER_BYTES };
+                let refused = "an entry past the largest body this connection agreed";
+                return Err(Failure::from(agreed.refuse(bytes as u64, refused)));
             }
             page.next = page.entries.last().and_then(|entry| entry.key.clone());
             return Ok(page.encode());

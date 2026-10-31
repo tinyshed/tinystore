@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use super::deliver::Deliverer;
 use super::log::{Log, Released, Wake};
 use crate::engine::{Engine, Host};
+use crate::limits::SUBSCRIPTIONS;
 use crate::memory::Reservation;
 use crate::{Error, Memory, Result, Store};
 
@@ -23,7 +24,7 @@ use crate::{Error, Memory, Result, Store};
 const MOST_HELD: u64 = 64 << 20;
 
 /// The subscriptions a store holds at once.
-pub(super) const MOST_SUBSCRIPTIONS: usize = 10_000;
+pub(super) const MOST_SUBSCRIPTIONS: usize = SUBSCRIPTIONS.bound as usize;
 
 /// A log by what it takes: a channel's branch, and whether the branches below
 /// it too.
@@ -134,7 +135,8 @@ impl Hub {
             return Err(Error::closed(format!("channel {}", key.channel)));
         }
         if logs.readers >= MOST_SUBSCRIPTIONS {
-            return Err(Error::limit(format!("{MOST_SUBSCRIPTIONS} subscriptions of the store's channels")));
+            let refused = format!("{MOST_SUBSCRIPTIONS} subscriptions of the store's channels");
+            return Err(SUBSCRIPTIONS.refuse((logs.readers + 1) as u64, refused));
         }
         let made = || Arc::new(Log::new().measured(Arc::clone(&self.probe), Arc::clone(&key.channel)));
         let log = Arc::clone(logs.by_key.entry(key.clone()).or_insert_with(made));

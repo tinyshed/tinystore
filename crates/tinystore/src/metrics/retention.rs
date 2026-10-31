@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::clock;
 use super::engine::{Engine, execute, query_one};
 use super::head::{self, Extent};
-use super::ingest::ready;
+use super::ingest::{VERSIONS, ready};
 use super::labels::decode_ids;
 use super::names::{KEEP, millis};
 use super::publish::{self, earlier, group_row, read_group};
@@ -135,7 +135,7 @@ fn expire_isolated(tx: &Tx<'_>, zstd: &mut Zstd, series: &Due) -> Result<Option<
 pub(super) fn expire_series(tx: &Tx<'_>, zstd: &mut Zstd, due: &Due) -> Result<Expired> {
     let Some((version, max_seen, extent, bytes)) = read_head(tx, due.id)? else { return Ok(Expired::default()) };
     if version == i64::MAX {
-        return Err(Error::limit("its version cannot move once more"));
+        return Err(VERSIONS.run_out("its version cannot move once more"));
     }
     let mut points = Vec::new();
     if let Some(bytes) = &bytes {

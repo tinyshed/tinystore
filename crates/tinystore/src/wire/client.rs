@@ -20,6 +20,8 @@ use super::codec::Message;
 use super::frame::{self, Frame, Kind};
 use super::message::kind_of;
 use super::protocol::{self as wire, Empty, Failure, GoAway, Hello, method};
+use super::session::method_name;
+use crate::limits::{Limit, REQUEST_BYTES};
 use crate::{Error, ErrorKind, Result};
 
 /// The protocol this client speaks.
@@ -391,11 +393,14 @@ impl<S: Read + Write> Client<S> {
     fn request(&mut self, called: u16, request: &impl Message, ends: bool) -> Result<u32> {
         let body = request.encode();
         if body.len() > self.max_body {
-            return Err(Error::limit(format!(
-                "a request of {} bytes, past the {} the server takes",
+            let refused = format!(
+                "{}: a request of {} bytes, past the {} a body holds",
+                method_name(called),
                 body.len(),
                 self.max_body
-            )));
+            );
+            let agreed = Limit { bound: self.max_body as u64, ..REQUEST_BYTES };
+            return Err(agreed.refuse(body.len() as u64, refused));
         }
         let length = body.len() as u64;
         while self.credit < length {

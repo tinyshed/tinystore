@@ -134,7 +134,7 @@ fn a_text_past_one_ingest_is_written_whole_and_one_past_one_text_is_a_limit() {
     let error = parse(lines(100_001).as_bytes(), &Labels::new(), 0).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Limit, "{error}");
     assert!(error.to_string().starts_with("metrics: line 100001, "), "{error}");
-    assert_eq!((error.fact("limit"), error.fact("bound")), (Some("one text"), Some("100000")));
+    assert_eq!((error.fact("limit"), error.fact("bound")), (Some("text samples"), Some("100000")));
 }
 
 // contract: MET-15, MET-03

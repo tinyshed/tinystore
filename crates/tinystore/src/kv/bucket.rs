@@ -20,6 +20,7 @@ use crate::clock::{from_unix_millis, millis};
 use crate::engine::Home;
 #[cfg(any(feature = "sql", feature = "wire"))]
 use crate::engine::SharedFile;
+use crate::limits::VALUE_BYTES;
 use crate::sqlite::Tx;
 use crate::{Error, ErrorKind, Result, Store, unix_millis};
 
@@ -610,7 +611,8 @@ impl<V> Bucket<V> {
         seal: bool,
     ) -> Result<(usize, impl Work<Stamp> + use<V>)> {
         if raw.len() > MAX_VALUE {
-            let too_large = Error::limit(format!("a value of {} bytes, over {MAX_VALUE}", raw.len()));
+            let too_large =
+                VALUE_BYTES.refuse(raw.len() as u64, format!("a value of {} bytes, over {MAX_VALUE}", raw.len()));
             return Err(too_large.within(self.scope.shown_key(key)));
         }
         let now = self.scope.now();

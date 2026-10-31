@@ -70,6 +70,11 @@ impl<'a> Reader<'a> {
         Reader { bytes, at: 0, room: bytes.len().saturating_mul(ROOM_PER_BYTE).max(LEAST_ROOM) }
     }
 
+    /// What the body's lists may still take in memory.
+    pub(crate) fn room(&self) -> usize {
+        self.room
+    }
+
     /// Takes `bytes` of the room the body's lists have in memory; says
     /// whether it had them, so that a list is refused before it is made.
     pub(crate) fn take_room(&mut self, bytes: usize) -> bool {

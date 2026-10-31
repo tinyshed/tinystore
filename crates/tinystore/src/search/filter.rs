@@ -39,6 +39,7 @@ use super::pack::{Stored, read_list};
 use super::postings::{unpack, unpack_inline};
 use super::score::Part;
 use super::settings::Settings;
+use crate::limits::{FILTER_CONDITIONS, FILTER_TEXT, FILTER_VALUES};
 use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
@@ -47,12 +48,12 @@ const READ_PAYLOADS: &str = "select payload from _tinystore_search_blocks where 
 const READ_HEAD: &str = "select doc from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 
 /// The longest text a filter keeps as a value.
-pub(crate) const MOST_VALUE: usize = 256;
+pub(crate) const MOST_VALUE: usize = FILTER_TEXT.bound as usize;
 /// The conditions a search holds at most, `or` and `and` counting those
 /// inside them.
-pub(crate) const MOST_CONDITIONS: usize = 8;
+pub(crate) const MOST_CONDITIONS: usize = FILTER_CONDITIONS.bound as usize;
 /// The values the lists of a search's conditions hold at most.
-pub(crate) const MOST_VALUES: usize = 100;
+pub(crate) const MOST_VALUES: usize = FILTER_VALUES.bound as usize;
 /// The term of no value.
 const NONE: &str = "n:";
 /// A number's precisions, each 8 bits coarser than the one before.
@@ -206,11 +207,17 @@ struct Counted {
 pub(crate) fn asked(conditions: &[Condition]) -> Result<Asked> {
     let mut counted = Counted::default();
     let asked = conditions.iter().map(|condition| condition.asked(&mut counted)).collect::<Result<Vec<_>>>()?;
-    if counted.conditions > MOST_CONDITIONS || counted.values > MOST_VALUES {
-        return Err(Error::limit(format!(
+    let refused = || {
+        format!(
             "a filter of {} conditions and {} values, past {MOST_CONDITIONS} and {MOST_VALUES}",
             counted.conditions, counted.values
-        )));
+        )
+    };
+    if counted.conditions > MOST_CONDITIONS {
+        return Err(FILTER_CONDITIONS.refuse(counted.conditions as u64, refused()));
+    }
+    if counted.values > MOST_VALUES {
+        return Err(FILTER_VALUES.refuse(counted.values as u64, refused()));
     }
     Ok(Asked::And(asked))
 }
@@ -281,7 +288,8 @@ fn term(value: &Value, path: &str) -> Result<String> {
             "filter {path}: a value of None or null; missing({path:?}) asks for a document with none"
         ))),
         Value::String(text) if text.len() > MOST_VALUE => {
-            Err(Error::limit(format!("filter {path} holds {} bytes of text, past {MOST_VALUE}", text.len())))
+            let refused = format!("filter {path} holds {} bytes of text, past {MOST_VALUE}", text.len());
+            Err(FILTER_TEXT.refuse(text.len() as u64, refused))
         }
         Value::String(text) => Ok(format!("t:{text}")),
         Value::Bool(on) => Ok(format!("b:{on}")),

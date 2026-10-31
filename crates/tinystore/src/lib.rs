@@ -35,6 +35,7 @@ pub mod jobs;
 mod key;
 #[cfg(feature = "kv")]
 pub mod kv;
+pub mod limits;
 #[cfg(all(feature = "records", feature = "config"))]
 mod log_config;
 #[cfg(feature = "config")]

@@ -16,13 +16,14 @@ use super::event::Kept;
 use super::event::{Level, MAX_EVENT, MAX_ID, MAX_KEYS, NewEvent, SpanId, TraceId};
 use super::head::{self, Codec, Row};
 use super::read::List;
+use crate::limits::{APPEND_BYTES, EVENT_BYTES};
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Result, Store, unix_nanos};
 #[cfg(feature = "async")]
 use crate::{Reservation, polled::Lead};
 
 /// What one append carries at most: more is sent in pieces.
-const MAX_APPEND: usize = 4 << 20;
+const MAX_APPEND: usize = APPEND_BYTES.bound as usize;
 /// What an awaited append compresses in its poll at most: a head row's
 /// worth. A heavier one, up to the 4 MiB an append carries, is compressed on
 /// the store's pool, so that a poll costs the executor one row at most.
@@ -383,7 +384,8 @@ impl Records {
         checked.retain(|event| event.id.as_ref().is_none_or(|id| ids.insert(id.clone())));
         let weight = weight_of(&checked);
         if weight > MAX_APPEND as u64 {
-            return Err(Error::limit(format!("an append of {weight} bytes, past the {MAX_APPEND} one carries")));
+            let refused = format!("an append of {weight} bytes, past the {MAX_APPEND} one carries");
+            return Err(APPEND_BYTES.refuse(weight, refused));
         }
         Ok((checked, now))
     }
@@ -639,7 +641,8 @@ fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept
     let at = event.at.map_or(now, unix_nanos);
     let event = event.kept(at);
     if event.weight() > MAX_EVENT {
-        return Err(Error::limit(format!("{} bytes, past the {MAX_EVENT} an event weighs", event.weight())));
+        let refused = format!("{} bytes, past the {MAX_EVENT} an event weighs", event.weight());
+        return Err(EVENT_BYTES.refuse(event.weight() as u64, refused));
     }
     if at < oldest {
         return Err(Error::new(ErrorKind::TooOld, "older than its stream keeps"));

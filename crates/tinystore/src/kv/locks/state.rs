@@ -12,10 +12,11 @@ use std::time::Duration;
 
 use super::lease::{Answer, Ask, Ending, Fence, Granted, LeaseId, Place, Reply, RequestId, Watch};
 use crate::encryption::random;
+use crate::limits::LOCK_WAITERS;
 use crate::{Error, Result};
 
 /// Waiters a key's line takes; the next is refused `limit`.
-pub(super) const MOST_WAITERS: usize = 10_000;
+pub(super) const MOST_WAITERS: usize = LOCK_WAITERS.bound as usize;
 
 /// What gives leases: the store's epoch, written each time its locks open,
 /// and the count of leases since.
@@ -249,7 +250,8 @@ impl State {
         let place = ask.place.clone();
         let line = self.lines.entry(place.clone()).or_default();
         if line.waiters.len() >= MOST_WAITERS {
-            let refused = Error::limit(format!("{MOST_WAITERS} wait for it already")).within(&place);
+            let waiting = (line.waiters.len() + 1) as u64;
+            let refused = LOCK_WAITERS.refuse(waiting, format!("{MOST_WAITERS} wait for it already")).within(&place);
             effects.answer(reply, Err(refused));
             return None;
         }

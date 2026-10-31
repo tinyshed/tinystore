@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use super::msgpack::{self, Reader, Refused, Token};
 use super::protocol::Failure;
+use crate::limits::Limit;
 
 /// A message of the schema: read whole or refused, and written with every
 /// field at its zero value left out.
@@ -276,11 +277,12 @@ pub(crate) fn cell(r: &mut Reader<'_>, name: &str) -> Result<Cell, Failure> {
 /// items would otherwise grow a hundredfold as it is read.
 fn room(r: &mut Reader<'_>, name: &str, count: usize, each: usize) -> Result<(), Failure> {
     let needed = count.saturating_mul(each);
+    let room = Limit { name: "body memory", bound: r.room() as u64 };
     if r.take_room(needed) {
         return Ok(());
     }
     let refused = format!("{name}: {count} items, {needed} bytes in memory, past what a body of its size may take");
-    Err(Failure::from(crate::Error::limit(refused)))
+    Err(Failure::from(room.refuse(needed as u64, refused)))
 }
 
 pub(crate) fn list<T>(

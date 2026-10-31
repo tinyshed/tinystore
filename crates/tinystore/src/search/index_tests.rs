@@ -133,6 +133,29 @@ fn a_set_many_past_its_bound_is_a_limit_and_sets_nothing() {
     assert_eq!(notes.get("n-0").unwrap(), None);
 }
 
+// contract: ERR-05
+#[test]
+fn a_call_past_a_bound_names_it_what_it_wanted_and_the_bound() {
+    let fixture = fixture();
+    let notes = fixture.store.index::<String>("notes").open().unwrap();
+    let facts = |error: Error| {
+        let facts = [error.fact("limit"), error.fact("wanted"), error.fact("bound")];
+        (error.kind(), facts.map(|fact| fact.unwrap_or_default().to_owned()))
+    };
+    let short = "word".to_owned();
+    let many: Vec<(String, &String)> = (0..1001).map(|n| (format!("n-{n}"), &short)).collect();
+    let refused = notes.set_many(many).unwrap_err();
+    assert_eq!(refused.to_string(), "index notes: a set_many of 1001 documents, past 1000: limit");
+    assert_eq!(facts(refused), (ErrorKind::Limit, ["set_many documents".into(), "1001".into(), "1000".into()]));
+    let large = "x".repeat(1_000_000);
+    let heavy: Vec<(String, &String)> = (0..17).map(|n| (format!("n-{n}"), &large)).collect();
+    let (kind, [limit, wanted, bound]) = facts(notes.set_many(heavy).unwrap_err());
+    assert_eq!((kind, limit.as_str(), bound.as_str()), (ErrorKind::Limit, "set_many bytes", "16777216"));
+    assert!(wanted.parse::<u64>().unwrap() > 16 << 20, "{wanted}");
+    let hits = facts(notes.search("word").offset(1990).limit(10).run().unwrap_err());
+    assert_eq!(hits, (ErrorKind::Limit, ["search hits".into(), "2000".into(), "1000".into()]));
+}
+
 #[test]
 fn pages_of_a_search_join_into_its_whole_ranking() {
     let fixture = fixture();

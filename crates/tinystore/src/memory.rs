@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::cancel::{self, Given};
+use crate::limits::Limit;
 #[cfg(feature = "async")]
 use crate::timer::{self, Rang, Timer};
 use crate::{Error, Result};
@@ -369,9 +370,8 @@ impl Memory {
         if bytes <= self.limit {
             return Ok(());
         }
-        let error =
-            Error::limit(format!("{what}: {bytes} bytes is more than the store's memory, {} bytes", self.limit));
-        Err(self.named(error, STORE_MEMORY, bytes))
+        let refused = format!("{what}: {bytes} bytes is more than the store's memory, {} bytes", self.limit);
+        Err(self.budget(STORE_MEMORY).refuse(bytes, refused))
     }
 
     /// A call that does not fit beside what is held and what the waiters
@@ -382,16 +382,16 @@ impl Memory {
             0 => String::new(),
             ahead => format!(", and {ahead} bytes waited for by work that came before it"),
         };
-        let error = Error::limit(format!(
+        let refused = format!(
             "{what}: {bytes} bytes do not fit in the store's memory, {used} of {} bytes in use{waited}",
             self.limit
-        ));
-        self.named(error, STORE_MEMORY_NOW, used.saturating_add(ahead).saturating_add(bytes))
+        );
+        self.budget(STORE_MEMORY_NOW).refuse(used.saturating_add(ahead).saturating_add(bytes), refused)
     }
 
-    /// A limit of the store's memory with its facts, which every SDK reads.
-    fn named(&self, error: Error, limit: &str, wanted: u64) -> Error {
-        error.naming("limit", limit).naming("wanted", wanted.to_string()).naming("bound", self.limit.to_string())
+    /// The store's memory as a bound, by `name`.
+    fn budget(&self, name: &'static str) -> Limit {
+        Limit { name, bound: self.limit }
     }
 
     fn reservation(self: &Arc<Self>, bytes: u64) -> Reservation {

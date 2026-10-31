@@ -21,7 +21,7 @@ use serde_json::Value;
 use super::engine::elsewhere;
 #[cfg(feature = "replication")]
 use super::forward::{self, Passed};
-use super::index::{Found, Index, MOST_MANY, ToSet, checked, json, prepared_many};
+use super::index::{Found, Index, MOST_MANY, ToSet, checked, json, prepared_many, too_many};
 #[cfg(feature = "replication")]
 use super::index::{Given, pass_on_documents};
 use super::open::Data;
@@ -90,7 +90,7 @@ impl<T> Index<T> {
         let named = format!("index {}", self.open.name);
         let done = move |set: Result<()>| done(set.map_err(|error| error.within(named)));
         if documents.len() > MOST_MANY {
-            return done(Err(Error::limit(format!("a set_many of {} documents, past {MOST_MANY}", documents.len()))));
+            return done(Err(too_many(documents.len())));
         }
         #[cfg(feature = "replication")]
         if self.search.file.is_copy() {

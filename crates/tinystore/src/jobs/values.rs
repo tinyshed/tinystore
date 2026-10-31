@@ -4,10 +4,11 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::limits::JOB_BYTES;
 use crate::{Error, Result};
 
 /// The most a value may be; a larger one is refused `limit`.
-pub(crate) const MAX_VALUE: usize = 1 << 20;
+pub(crate) const MAX_VALUE: usize = JOB_BYTES.bound as usize;
 
 /// A value past this lives in a row of its own, where a claim of the jobs
 /// around it need not read it.
@@ -58,7 +59,7 @@ pub(crate) fn decode<V: DeserializeOwned>(encoded: &[u8]) -> Result<V> {
 
 pub(crate) fn check_size(bytes: usize, what: &str) -> Result<()> {
     if bytes > MAX_VALUE {
-        return Err(Error::limit(format!("{what} of {bytes} bytes, past {MAX_VALUE}")));
+        return Err(JOB_BYTES.refuse(bytes as u64, format!("{what} of {bytes} bytes, past {MAX_VALUE}")));
     }
     Ok(())
 }

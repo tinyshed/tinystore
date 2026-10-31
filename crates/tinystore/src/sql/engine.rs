@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use super::tx::BOUND;
+use super::tx::{BOUND, HELD};
 use crate::engine::{Claim, Engine, Host, SharedFile};
 use crate::sqlite::{Config, File, Migration};
 use crate::sync::lock;
@@ -156,10 +156,9 @@ impl Base {
         if held <= BOUND {
             return Ok(());
         }
-        Err(Error::limit(format!(
-            "{}: a transaction held the writer {held:?}, past its {BOUND:?}, and rolls back",
-            self.describe()
-        )))
+        let refused =
+            format!("{}: a transaction held the writer {held:?}, past its {BOUND:?}, and rolls back", self.describe());
+        Err(HELD.refuse(held.as_millis() as u64, refused))
     }
 
     pub(crate) fn writes(&self, text: &str) -> bool {

@@ -14,14 +14,12 @@ use serde::de::{self, DeserializeOwned, DeserializeSeed, IntoDeserializer, Visit
 
 use super::included::literal_rows;
 use super::values::Value;
+use crate::limits::{Limit, ROWS_BYTES};
 use crate::{Error, Memory, Reservation, Result};
 
 /// Values a call reads at most, in bytes, before it is `limit`: past them a
 /// program reads in pages, or a row at a time.
-pub(crate) const MOST_READ: usize = 64 << 20;
-
-/// What a `limit` of a call's rows names in its `limit` fact.
-const ROW_BYTES: &str = "bytes of a call's rows";
+pub(crate) const MOST_READ: usize = ROWS_BYTES.bound as usize;
 
 /// The store's memory a call reserves first for its rows, and at least each
 /// time it grows.
@@ -336,10 +334,8 @@ impl Rows {
 
 /// The `limit` of a call's rows past their bound, with its facts.
 fn past_bound(size: usize, bytes: usize) -> Error {
-    Error::limit(format!("its rows pass {} MiB: read them a page at a time, or one at a time", bytes >> 20))
-        .naming("limit", ROW_BYTES)
-        .naming("wanted", size.to_string())
-        .naming("bound", bytes.to_string())
+    let refused = format!("its rows pass {} MiB: read them a page at a time, or one at a time", bytes >> 20);
+    Limit { bound: bytes as u64, ..ROWS_BYTES }.refuse(size as u64, refused)
 }
 
 /// A statement's failure as the error a caller acts on: a unique or primary

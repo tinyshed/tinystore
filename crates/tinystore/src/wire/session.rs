@@ -37,6 +37,7 @@ use crate::Transaction;
 use crate::clock::from_unix_millis;
 use crate::engine::SharedFile;
 use crate::kv::Handed;
+use crate::limits::{ANSWER_BYTES, Limit};
 use crate::pipe::{Capability, Connect};
 use crate::pool::Pool;
 use crate::sync::lock;
@@ -1571,11 +1572,10 @@ impl Shared {
     fn within_agreed(&self, answered: std::result::Result<Vec<u8>, Failure>) -> std::result::Result<Vec<u8>, Failure> {
         let agreed = self.agreed.load(Ordering::Acquire);
         match answered {
-            Ok(body) if body.len() > agreed => Err(Failure {
-                code: "limit".to_owned(),
-                message: format!("an answer of {} bytes, past the {agreed} a body holds", body.len()),
-                what: None,
-            }),
+            Ok(body) if body.len() > agreed => {
+                let refused = format!("an answer of {} bytes, past the {agreed} a body holds", body.len());
+                Err(Failure::from(Limit { bound: agreed as u64, ..ANSWER_BYTES }.refuse(body.len() as u64, refused)))
+            }
             answered => answered,
         }
     }
@@ -1782,6 +1782,6 @@ impl Drop for Shared {
 }
 
 /// A method's name as the protocol spells it, `kv.get`.
-fn method_name(method: u16) -> &'static str {
+pub(super) fn method_name(method: u16) -> &'static str {
     super::protocol::METHODS.iter().find(|(_, id, _)| *id == method).map_or("unknown", |(name, ..)| name)
 }

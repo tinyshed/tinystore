@@ -18,7 +18,7 @@ use super::change::{Condition, Content, Place};
 use super::engine::Blobs;
 use super::files::{FileCall, Files, Options};
 use super::info::FileInfo;
-use super::upload::INLINE;
+use super::upload::{INLINE, past_its_bound};
 use crate::transaction::sealed::Sealed;
 use crate::{Error, Result, Transaction, TxHandle};
 
@@ -123,7 +123,7 @@ pub(super) fn write_in(
 /// the call declared.
 fn check_size(files: &Files, options: &Options, size: u64) -> Result<()> {
     if let Some(most) = files.max_file_size.filter(|most| size > *most) {
-        return Err(Error::limit(format!("a file of {size} bytes, past the {most} the files take at most")));
+        return Err(past_its_bound(size, most));
     }
     match options.size {
         Some(declared) if declared != size => {

@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::analyzer;
 use super::vectors::MOST_DIMENSIONS;
+use crate::limits::VECTOR_DIMENSIONS;
 use crate::{Error, Result};
 
 /// A field: where its text lies in a document, what a word found there
@@ -226,7 +227,8 @@ impl Wanted {
         match self.dimensions {
             Some(0) => return Err(Error::invalid("vectors of 0 dimensions")),
             Some(dimensions) if dimensions > MOST_DIMENSIONS => {
-                return Err(Error::limit(format!("vectors of {dimensions} dimensions, past {MOST_DIMENSIONS}")));
+                let refused = format!("vectors of {dimensions} dimensions, past {MOST_DIMENSIONS}");
+                return Err(VECTOR_DIMENSIONS.refuse(dimensions as u64, refused));
             }
             None if self.vector_weight.is_some() || self.rerank || self.recall.is_some() => {
                 return Err(Error::invalid("a vector weight, a rerank or a recall for an index without vectors"));

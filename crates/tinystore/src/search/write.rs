@@ -24,6 +24,7 @@ use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
 use super::settings::Settings;
 use super::vectors::{self, Vector};
+use crate::limits::Limit;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
@@ -49,6 +50,7 @@ const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2 + 1
 
 /// The last number an index gives: past it, [`END`](super::execute::END).
 const LAST_DOC: i64 = u32::MAX as i64 - 1;
+const DOCUMENT_NUMBERS: Limit = Limit { name: "document numbers", bound: LAST_DOC as u64 };
 
 /// A document ready to set: its id, its value as JSON, its words and its
 /// vector, if it has one.
@@ -109,7 +111,9 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
         .and_then(|mut select| select.query_row([index], |row| row.get(0)))
         .map_err(|error| sql_error("number a document", error))?;
     if doc > LAST_DOC {
-        return Err(Error::limit(format!("the index gave its {LAST_DOC} numbers: a set takes a number each")));
+        return Err(
+            DOCUMENT_NUMBERS.run_out(format!("the index gave its {LAST_DOC} numbers: a set takes a number each"))
+        );
     }
     let mut keys = Vec::with_capacity(document.analyzed.terms.len());
     let mut new_words = false;

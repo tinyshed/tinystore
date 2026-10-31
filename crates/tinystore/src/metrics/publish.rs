@@ -25,13 +25,16 @@ use super::codec::Point;
 use super::directory::{Group, MOST_ENTRIES, Row};
 use super::engine::{Engine, execute, query_one};
 use super::head::{self, Extent};
-use super::ingest::ready;
+use super::ingest::{VERSIONS, ready};
 use super::pack::{Candidate, Packed, Staged, mask};
 use super::retention::{Due, expire_series, expires};
 use crate::compress::frame::Zstd;
+use crate::limits::Limit;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, ErrorKind, Result};
 
+/// The ids of the payloads every series' blocks share.
+const PAYLOAD_IDS: Limit = Limit { name: "payload ids", bound: i64::MAX as u64 };
 const SAVEPOINT: &str = "savepoint metrics_series";
 const RELEASE: &str = "release metrics_series";
 const ROLLBACK_TO: &str = "rollback to metrics_series";
@@ -138,7 +141,7 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> 
         return Err(Error::new(ErrorKind::Conflict, "a series written to since packing read it"));
     }
     if version == i64::MAX {
-        return Err(Error::limit("its version cannot move once more"));
+        return Err(VERSIONS.run_out("its version cannot move once more"));
     }
     let expired = expire_behind(tx, zstd, candidate)?;
     let (mut group, merged) = merge_before(tx, zstd, series.group.clone())?;
@@ -243,7 +246,7 @@ fn give_payloads(tx: &Tx<'_>, group: &mut Group) -> Result<()> {
     }
     let next: i64 = query_one(tx, NEXT_PAYLOAD, params![], "read the next payload's id")?;
     if next > i64::MAX - wanted {
-        return Err(Error::limit("payload ids run out"));
+        return Err(PAYLOAD_IDS.run_out("payload ids run out"));
     }
     execute(tx, TAKE_PAYLOADS, params![next + wanted], "take payload ids")?;
     let fresh = group.blocks.iter_mut().filter(|block| block.external() && block.payload == 0);

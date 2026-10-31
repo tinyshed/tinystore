@@ -7,12 +7,13 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::console::object_pairs;
+use crate::limits::EVENT_BYTES;
 use crate::{Error, Result};
 
 /// The keys an event's fields hold at most, and its context's.
 pub(super) const MAX_KEYS: usize = 128;
 /// The bytes one event weighs at most.
-pub(super) const MAX_EVENT: usize = 256 << 10;
+pub(super) const MAX_EVENT: usize = EVENT_BYTES.bound as usize;
 /// The bytes of an event's id at most: its key in `event_ids` stays on its
 /// page of records.db, whose pages are 1 KiB.
 pub(super) const MAX_ID: usize = 128;

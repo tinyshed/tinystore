@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::declaration::Declaration;
 use crate::kv::engine::{Kv, next_version};
+use crate::limits::CONFIG_BYTES;
 #[cfg(feature = "async")]
 use crate::polled::Lead;
 use crate::sqlite::{Tx, sql_error};
@@ -37,7 +38,7 @@ const KEPT_BYTES: &str = "select coalesce(sum(length(cast(path as blob)) + lengt
     from _tinystore_kv_config_changes where name = ?1";
 
 /// What a config keeps of its changes, all of them together.
-const MOST_KEPT: i64 = 256 << 10;
+const MOST_KEPT: i64 = CONFIG_BYTES.bound as i64;
 
 /// The changes a config keeps, by the setting's path, and the version that
 /// last moved them.
@@ -431,7 +432,8 @@ fn refuse_past_bound(connection: &Connection, name: &str) -> Result<()> {
         .and_then(|mut select| select.query_row([name], |row| row.get(0)))
         .map_err(|error| sql_error("its changes' size", error))?;
     if bytes > MOST_KEPT {
-        return Err(Error::limit(format!("its changes would hold {bytes} bytes, past the {MOST_KEPT} a config keeps")));
+        let refused = format!("its changes would hold {bytes} bytes, past the {MOST_KEPT} a config keeps");
+        return Err(CONFIG_BYTES.refuse(bytes as u64, refused));
     }
     Ok(())
 }

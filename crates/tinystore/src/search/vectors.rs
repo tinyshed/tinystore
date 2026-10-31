@@ -22,6 +22,7 @@ use std::collections::{BinaryHeap, HashMap};
 use rusqlite::{Connection, OptionalExtension, Row};
 
 use super::write::execute;
+use crate::limits::VECTOR_DIMENSIONS;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
 
@@ -36,7 +37,7 @@ const ADD_HEAD: &str = "insert into _tinystore_search_members (index_id, cluster
 const DROP_MEMBER: &str = "delete from _tinystore_search_members where index_id = ?1 and doc = ?2";
 
 /// The most dimensions a vector has.
-pub(crate) const MOST_DIMENSIONS: usize = 4096;
+pub(crate) const MOST_DIMENSIONS: usize = VECTOR_DIMENSIONS.bound as usize;
 /// A code's scale and error, before its levels.
 const HEADER: usize = 8;
 /// A question's levels reach ±4,095, so that a dot product of 4,096 of them
@@ -88,7 +89,8 @@ pub(crate) struct Question {
 impl Question {
     pub(crate) fn new(values: &[f32]) -> Result<Question> {
         if values.len() > MOST_DIMENSIONS {
-            return Err(Error::limit(format!("a vector of {} dimensions, past {MOST_DIMENSIONS}", values.len())));
+            let refused = format!("a vector of {} dimensions, past {MOST_DIMENSIONS}", values.len());
+            return Err(VECTOR_DIMENSIONS.refuse(values.len() as u64, refused));
         }
         let length = checked(values, values.len())?;
         let direction: Vec<f64> = values.iter().map(|value| f64::from(*value) / length).collect();

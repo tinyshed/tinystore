@@ -27,13 +27,14 @@ use super::rules::{self, described};
 use crate::clock::from_unix_millis;
 use crate::kv::engine::Kv;
 use crate::kv::scope::check_name;
+use crate::limits::SETTING_BYTES;
 use crate::sync::lock;
 use crate::{Error, ErrorKind, Result, Store};
 
 /// The tries a change makes while others race it before it gives up.
 const ATTEMPTS: usize = 8;
 /// The longest JSON one setting's change holds.
-const MOST_VALUE: usize = 16 << 10;
+const MOST_VALUE: usize = SETTING_BYTES.bound as usize;
 
 /// A program's settings as one typed value, read from memory, with the
 /// changes made while the program runs to the settings marked `Live`.
@@ -505,7 +506,8 @@ where
         }
         let size = value.to_string().len();
         if size > MOST_VALUE {
-            return Err(Error::limit(format!("{path}: {size} bytes, past the {MOST_VALUE} a change holds")));
+            let refused = format!("{path}: {size} bytes, past the {MOST_VALUE} a change holds");
+            return Err(SETTING_BYTES.refuse(size as u64, refused));
         }
         let value = rules::check(setting, value).map_err(|why| Error::invalid(format!("{path}: {why}")))?;
         for follower in self.hub.followers() {

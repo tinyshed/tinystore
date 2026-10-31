@@ -170,7 +170,8 @@ fn an_ingest_past_its_bound_is_a_limit() {
     let f = fixture();
     let many = f.gauge("many", 10_001, Duration::from_millis(10), |index| index as f64);
     let error = f.metrics().ingest(&[many]).unwrap_err();
-    assert_eq!((error.kind(), error.fact("limit")), (ErrorKind::Limit, Some("one ingest")));
+    let facts = (error.fact("limit"), error.fact("wanted"), error.fact("bound"));
+    assert_eq!((error.kind(), facts), (ErrorKind::Limit, (Some("ingest samples"), Some("10001"), Some("10000"))));
     let fits = f.gauge("many", 10_000, Duration::from_millis(10), |index| index as f64);
     f.metrics().ingest(&[fits]).unwrap();
 }

@@ -27,13 +27,14 @@ use super::protocol::{
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
+use crate::limits::TEXT_BYTES;
 use crate::memory::PATIENCE;
 use crate::metrics::{
     Ack, AggregatePage, Batch, Buckets, Change, Condition, Declared, Description, Latest, List, Metrics, Op,
     Prometheus, Query, Remote, Series, SeriesPage, Set, Value,
 };
 use crate::sync::lock;
-use crate::{Calendar, Error, Memory, Reservation, Store, unix_millis};
+use crate::{Calendar, Memory, Reservation, Store, unix_millis};
 
 use super::Answered;
 
@@ -50,7 +51,7 @@ const BUCKET: usize = 64;
 /// The longest text an upload gathers: one text's 32 MiB, as the engine
 /// bounds what its series weigh. It bounds what the session holds for a
 /// client, so it is refused before a byte of the text comes.
-const TEXT_MOST: usize = 32 << 20;
+const TEXT_MOST: usize = TEXT_BYTES.bound as usize;
 /// What an uploaded text's memory is reserved as, and its refusals name.
 const UPLOADED: &str = "metrics: an uploaded text";
 
@@ -792,9 +793,7 @@ pub(crate) fn gather(
 /// A text of `size` bytes, past what an upload gathers, with the facts a
 /// limit names.
 fn past(size: u64) -> Failure {
-    let error = Error::limit(format!("{UPLOADED} of {size} bytes, past one text's {} MiB", TEXT_MOST >> 20));
-    let named = error.naming("limit", "one text's bytes").naming("wanted", size.to_string());
-    named.naming("bound", TEXT_MOST.to_string()).into()
+    TEXT_BYTES.refuse(size, format!("{UPLOADED} of {size} bytes, past one text's {} MiB", TEXT_MOST >> 20)).into()
 }
 
 /// A text that comes as the client's pieces, gathered in the store's memory

@@ -12,7 +12,11 @@ use super::change::{Condition, Content, Place, WhenThere};
 use super::files::Done;
 use super::files::{Files, Options};
 use super::info::FileInfo;
+use crate::limits::Limit;
 use crate::{Error, ErrorKind, Reservation, Result};
+
+/// What a refusal of a file's size names it.
+const FILE_BYTES: &str = "file bytes";
 
 /// A content up to it is a row of `bodies`: inline wrote and read faster than
 /// a file on Linux and on Windows up to it, and at 64 KiB a file read faster
@@ -280,7 +284,9 @@ impl Upload {
 
     /// The SHA-256 of the bytes taken, and how many they are.
     fn checksum(&self) -> Result<(Vec<u8>, i64)> {
-        let size = i64::try_from(self.written).map_err(|_| Error::limit("a file past 2⁶³ bytes"))?;
+        let size = i64::try_from(self.written).map_err(|_| {
+            Limit { name: FILE_BYTES, bound: i64::MAX as u64 }.refuse(self.written, "a file past 2⁶³ bytes")
+        })?;
         Ok((self.hash.clone().finalize().to_vec(), size))
     }
 
@@ -288,10 +294,12 @@ impl Upload {
     #[cfg(feature = "replication")]
     fn gather(&mut self, bytes: &[u8]) -> Result<()> {
         if self.written > super::forward::GATHERED {
-            return Err(Error::limit(format!(
+            let refused = format!(
                 "a file past {} MiB written on a copy, whose home takes it whole: write it at the home",
                 super::forward::GATHERED >> 20
-            )));
+            );
+            let gathered = Limit { name: "file bytes on a copy", bound: super::forward::GATHERED };
+            return Err(gathered.refuse(self.written, refused));
         }
         self.buffer.extend_from_slice(bytes);
         Ok(())
@@ -428,8 +436,10 @@ impl Drop for Upload {
     }
 }
 
-fn past_its_bound(bytes: u64, most: u64) -> Error {
-    Error::limit(format!("a file of {bytes} bytes, past the files' bound of {most}"))
+/// A file of `bytes`, past the `most` its files take, `max_file_size`.
+pub(super) fn past_its_bound(bytes: u64, most: u64) -> Error {
+    let refused = format!("a file of {bytes} bytes, past the files' bound of {most}");
+    Limit { name: FILE_BYTES, bound: most }.refuse(bytes, refused)
 }
 
 #[cfg(test)]

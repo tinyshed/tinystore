@@ -15,6 +15,7 @@ use super::scope::{Kind, Scope};
 use super::value::Raw;
 use crate::clock::millis;
 use crate::engine::Home;
+use crate::limits::Limit;
 use crate::sqlite::Tx;
 use crate::{Error, Result, Store};
 
@@ -364,7 +365,8 @@ pub(crate) fn live(connection: &Connection, id: i64, path: &[u8], now: i64) -> R
 }
 
 fn overflow(n: i64) -> Error {
-    Error::limit(format!("adding {n} passes the range of an i64"))
+    let range = Limit { name: "counter range", bound: i64::MAX as u64 };
+    range.run_out(format!("adding {n} passes the range of an i64"))
 }
 
 #[cfg(test)]

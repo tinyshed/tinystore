@@ -22,6 +22,7 @@ use super::summary::{Summary, Sums};
 use crate::compress::checksum::Crc32;
 use crate::compress::frame::Zstd;
 use crate::compress::varint::{Reader, put_count};
+use crate::limits::Limit;
 use crate::{Error, Result};
 
 /// The directory's format: 1 until v0.1.0, since nothing before it is kept.
@@ -31,6 +32,7 @@ const HEADER: usize = 10;
 pub(super) const INLINE: usize = 16;
 /// What a directory row holds at most.
 pub(super) const MOST_BYTES: usize = 8192;
+const DIRECTORY_BYTES: Limit = Limit { name: "directory bytes", bound: MOST_BYTES as u64 };
 /// What a directory's entries take at most before zstd as packing fills
 /// them, which leaves room for its header and its checksum whatever zstd
 /// makes of them.
@@ -102,7 +104,7 @@ impl Group {
     pub(super) fn encode(&self, zstd: &mut Zstd) -> Result<Vec<u8>> {
         let raw = self.entries();
         if raw.len() > MOST_BYTES {
-            return Err(Error::limit("a group's directory past its bound"));
+            return Err(DIRECTORY_BYTES.refuse(raw.len() as u64, "a group's directory past its bound"));
         }
         let mut out = vec![VERSION, self.blocks.len() as u8];
         out.extend_from_slice(&self.live.to_le_bytes());
@@ -116,7 +118,7 @@ impl Group {
             out.extend_from_slice(&raw);
         }
         if out.len() + 4 > MOST_BYTES {
-            return Err(Error::limit("a group's directory past its bound"));
+            return Err(DIRECTORY_BYTES.refuse((out.len() + 4) as u64, "a group's directory past its bound"));
         }
         let sum = self.checksum(&out);
         out.extend_from_slice(&sum.to_le_bytes());

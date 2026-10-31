@@ -5,8 +5,9 @@
 use rusqlite::{Connection, OptionalExtension, Params, params};
 
 use super::values::Kept;
+use crate::Result;
+use crate::limits::Limit;
 use crate::sqlite::sql_error;
-use crate::{Error, Result};
 
 /// A due job whose group has no room is parked: its next moves `PARKED_BY`
 /// later, past every time a job may have, so that the next claim does not meet
@@ -224,8 +225,10 @@ pub(crate) fn check_room(c: &Connection, queue: i64, max_waiting: u64) -> Result
         .prepare_cached(COUNT_WAITING)
         .and_then(|mut select| select.query_row([queue], |row| row.get(0)))
         .map_err(|error| sql_error("the jobs a queue holds", error))?;
-    if u64::try_from(waiting).unwrap_or(0) >= max_waiting {
-        return Err(Error::limit(format!("the queue holds {waiting} jobs, its max_waiting")));
+    let waiting = u64::try_from(waiting).unwrap_or(0);
+    if waiting >= max_waiting {
+        let held = Limit { name: "waiting jobs", bound: max_waiting };
+        return Err(held.refuse(waiting + 1, format!("the queue holds {waiting} jobs, its max_waiting")));
     }
     Ok(())
 }

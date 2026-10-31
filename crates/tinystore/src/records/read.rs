@@ -35,6 +35,7 @@ use super::pack::{CONTEXT_KEY, FIELD_KEY, NAME_KEY};
 use super::repair::Part;
 use super::segment::Schema;
 use super::tail::Tail;
+use crate::limits::Limit;
 use crate::sqlite::sql_error;
 use crate::{Error, Result, unix_nanos};
 
@@ -880,7 +881,10 @@ fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Pag
         }
         if whole == 0 {
             let limit = asked.limit;
-            return Err(Error::limit(format!("more events at one time than a page of {limit} holds")));
+            let at_once = found.iter().take_while(|event| event.at == found[0].at).count();
+            let page = Limit { name: "page events", bound: limit as u64 };
+            let refused = format!("more events at one time than a page of {limit} holds");
+            return Err(page.refuse(at_once as u64, refused));
         }
         let edge = found[whole - 1].at;
         next = Some(if asked.newest { (asked.first, edge - 1) } else { (edge + 1, asked.last) });

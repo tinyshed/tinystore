@@ -7,10 +7,13 @@ use super::engine::Base;
 use super::rows::{Held, Rows};
 use super::run::{self, Wanted};
 use super::statement::Sql;
+use crate::limits::Limit;
 use crate::{Result, Transaction, TxHandle};
 
 /// How long a transaction holds the writer at most: past it, it rolls back.
 pub(crate) const BOUND: Duration = Duration::from_secs(5);
+/// [`BOUND`] as a refusal names it, in milliseconds.
+pub(crate) const HELD: Limit = Limit { name: "transaction millis", bound: BOUND.as_millis() as u64 };
 
 /// A database's transaction, from [`Database::tx`](super::Database::tx): its
 /// reads see its writes, and a call that fails leaves it as it was before the

@@ -26,6 +26,7 @@ use super::open::Current;
 use super::rebuild::read_current;
 use super::settings::{Settings, Table};
 use super::write::{self, Incoming, Prepared, execute};
+use crate::limits::DOCUMENT_BYTES;
 use crate::sqlite::{Left, Settle, Tx, given_sql_error, sql_error};
 use crate::{Error, ErrorKind, Result};
 
@@ -53,7 +54,7 @@ const STEP: usize = 256;
 /// The bytes of a row's digest that a document keeps before its key.
 const DIGEST: usize = 16;
 /// The largest a row is as the index reads it, as a document's JSON.
-const MOST_ROW: usize = 1 << 20;
+const MOST_ROW: usize = DOCUMENT_BYTES.bound as usize;
 
 /// What the triggers a table's index puts on its table are named, each
 /// beside the statement that makes it as SQLite keeps it: `CREATE TRIGGER`
@@ -503,7 +504,8 @@ fn row_of(columns: &[&str], values: Vec<SqlValue>, table: &Table) -> Result<Row>
     let tree = Value::Object(tree);
     let bytes = serde_json::to_vec(&tree).map_err(|error| Error::invalid(format!("a row: {error}")))?;
     if bytes.len() > MOST_ROW {
-        return Err(Error::limit(format!("a row of {} bytes as the index reads it, past 1 MiB", bytes.len())));
+        let refused = format!("a row of {} bytes as the index reads it, past 1 MiB", bytes.len());
+        return Err(DOCUMENT_BYTES.refuse(bytes.len() as u64, refused));
     }
     let mut digest = Sha256::new();
     digest.update(&bytes);
