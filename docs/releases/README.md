@@ -4,6 +4,9 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.4.1](v0.4.1.md)** · 31 October 2026\
+  Search as you type with `prefix`, and one value for a key that a nested
+  `with` gives again.
 - **[TinyStore 0.4.0](v0.4.0.md)** · 27 October 2026\
   Files that commit with a database's rows, older encryption keys, a backup
   of one moment, and a metrics.db less than half as large for per-second
