@@ -1,4 +1,5 @@
 use std::pin::pin;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::task::Waker;
 
 use futures_core::Stream;
@@ -384,5 +385,60 @@ async fn an_awaited_reseal_answers_how_many_values_it_sealed_again() {
     assert_eq!(passwords.reseal().await.unwrap(), 0, "the sealing key sealed it");
     let plain = store.bucket::<String>("notes").open().unwrap();
     assert_eq!(said(plain.reseal().await).0, ErrorKind::Invalid);
+    f.store.close().unwrap();
+}
+
+/// A change that adds `course` to the courses pinned, or writes nothing when
+/// it is there already.
+fn pin_course(course: i64) -> impl FnMut(Option<Vec<i64>>) -> Option<Vec<i64>> + Send + 'static {
+    move |courses| {
+        let mut courses = courses.unwrap_or_default();
+        if courses.contains(&course) {
+            return None;
+        }
+        courses.push(course);
+        Some(courses)
+    }
+}
+
+// contract: KV-14
+#[tokio::test]
+async fn awaited_updates_racing_on_a_key_keep_both_changes() {
+    let f = fixture();
+    let store = awaited(&f);
+    let pinned = store.bucket::<Vec<i64>>("pinned").open().unwrap();
+    let (phone, laptop) =
+        tokio::join!(pinned.update("97516", pin_course(2518)), pinned.update("97516", pin_course(3307)));
+    let (phone, laptop) = (phone.unwrap().unwrap(), laptop.unwrap().unwrap());
+    let mut kept = pinned.get("97516").await.unwrap().unwrap();
+    assert!(kept == phone || kept == laptop, "the second written answers both: {phone:?}, {laptop:?}");
+    kept.sort_unstable();
+    assert_eq!(kept, [2518, 3307]);
+
+    let before = pinned.entry("97516").await.unwrap().unwrap();
+    assert_eq!(pinned.update("97516", pin_course(2518)).await.unwrap(), Some(before.value.clone()), "the value there");
+    assert_eq!(pinned.entry("97516").await.unwrap(), Some(before), "nothing written");
+    assert_eq!(pinned.update("80211", |_| None).await.unwrap(), None);
+    assert!(!pinned.has("80211").await.unwrap());
+    f.store.close().unwrap();
+}
+
+// contract: KV-14
+#[tokio::test]
+async fn an_awaited_update_raced_each_try_gives_up_as_its_blocking_twin_does() {
+    let f = fixture();
+    let store = awaited(&f);
+    let visits = store.bucket::<i64>("visits").open().unwrap();
+    let (other, runs) = (visits.blocking().clone(), Arc::new(AtomicI64::new(0)));
+    let counted = Arc::clone(&runs);
+    let raced = visits.update("ann", move |count| {
+        let run = counted.fetch_add(1, Ordering::Relaxed) + 1;
+        other.set("ann", &-run).unwrap();
+        Some(count.unwrap_or(0) + 1)
+    });
+    let gave_up = r#"kv bucket visits: key "ann": other writes came first each time it was tried: conflict"#;
+    assert_eq!(said(raced.await), (ErrorKind::Conflict, gave_up.to_owned()));
+    assert_eq!(runs.load(Ordering::Relaxed), UPDATE_ATTEMPTS as i64);
+    assert_eq!(visits.update("bob", |count| Some(count.unwrap_or(0) + 1)).await.unwrap(), Some(1), "created");
     f.store.close().unwrap();
 }

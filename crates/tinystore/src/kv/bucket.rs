@@ -35,6 +35,10 @@ pub const PAGE_KEYS: usize = 1000;
 const REFRESHES: i64 = 30;
 const RENEW_AT_ONCE: i64 = 60_000;
 
+/// The tries an update makes while other writes race it before it gives up,
+/// as many as a config's change makes.
+pub(crate) const UPDATE_ATTEMPTS: usize = 8;
+
 /// A bucket being opened: its name, its type, how its keys expire, whether
 /// its values are encrypted.
 #[must_use = "a bucket opens with open()"]
@@ -236,6 +240,24 @@ pub(crate) struct Stamp {
     pub(crate) expires: Option<i64>,
 }
 
+/// What one try of an update makes of the key it read.
+pub(crate) enum Proposed<V> {
+    /// `change` wrote nothing: the value there, which the update answers.
+    Unchanged(Option<V>),
+    /// The value `change` made, and the write that keeps it.
+    Write(V, (Raw, WriteOptions, Put)),
+}
+
+/// Whether an update's write was kept: false when another write came first,
+/// so that the key is no longer at the version read, or a create found it.
+pub(crate) fn kept(written: Result<Stamp>) -> Result<bool> {
+    match written {
+        Ok(stamp) => Ok(stamp.written),
+        Err(error) if error.kind() == ErrorKind::Conflict => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// A write as a closure the group commit or a transaction runs.
 pub(crate) trait Work<T>: FnOnce(&Tx<'_>, &Revision) -> Result<T> + Send + 'static {}
 
@@ -252,6 +274,74 @@ impl<V: Value> Bucket<V> {
     /// expired key is not there. A key that is there is `false`, never an error.
     pub fn create(&self, key: impl Key, value: &V) -> Result<bool> {
         self.put(&key.text(), value, WriteOptions::default(), Put::OnlyNew)
+    }
+
+    /// Writes what `change` makes of the value under `key` without losing a
+    /// write made meanwhile: it reads the key, calls `change` with its value,
+    /// or `None` where there is none, and writes what `change` returns at the
+    /// version it read, or creates the key. When another write came first it
+    /// reads again and calls `change` again, eight tries at most, then fails
+    /// `Conflict`; so `change` may run more than once, and must change
+    /// nothing else. A `change` that returns `None` writes nothing. It answers
+    /// the value written, or the one there when nothing was.
+    ///
+    /// A key that is there keeps its expiry, and one it creates takes the
+    /// bucket's, as `set` and `create` do.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let pinned = store.bucket::<Vec<i64>>("pinned-courses").open()?;
+    /// // a phone and a laptop pinning at once both keep their course
+    /// pinned.update("97516", |courses| {
+    ///     let mut courses = courses.unwrap_or_default();
+    ///     courses.push(2518);
+    ///     Some(courses)
+    /// })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn update(&self, key: impl Key, mut change: impl FnMut(Option<V>) -> Option<V>) -> Result<Option<V>> {
+        let key = key.text();
+        for _ in 0..UPDATE_ATTEMPTS {
+            let found = self.read_cell(&key)?;
+            let (value, (raw, options, put)) = match self.proposed(&key, found, &mut change)? {
+                Proposed::Unchanged(current) => return Ok(current),
+                Proposed::Write(value, write) => (value, write),
+            };
+            if kept(self.put_raw(&key, raw, options, put))? {
+                return Ok(Some(value));
+            }
+        }
+        Err(self.raced(&key))
+    }
+
+    /// One try of an update, on what it read of `key`: the value there when
+    /// `change` makes none, else the value it makes and the write that keeps
+    /// it at the version read, or creates the key.
+    pub(crate) fn proposed(
+        &self,
+        key: &str,
+        found: Option<Cell>,
+        change: impl FnOnce(Option<V>) -> Option<V>,
+    ) -> Result<Proposed<V>> {
+        let decoded = |cell: &Cell| decode::<V>(&cell.raw).map_err(|error| error.within(self.scope.shown_key(key)));
+        let Some(next) = change(found.as_ref().map(decoded).transpose()?) else {
+            // `change` took the value it was given, so the one answered is decoded again
+            return Ok(Proposed::Unchanged(found.as_ref().map(decoded).transpose()?));
+        };
+        let raw = self.encode(key, &next)?;
+        let write = match found {
+            Some(cell) => (raw, WriteOptions::default().if_version(Version(cell.version)), Put::Always),
+            None => (raw, WriteOptions::default(), Put::OnlyNew),
+        };
+        Ok(Proposed::Write(next, write))
+    }
+
+    /// What an update answers once other writes came first each of its tries.
+    pub(crate) fn raced(&self, key: &str) -> Error {
+        let raced = Error::new(ErrorKind::Conflict, "other writes came first each time it was tried");
+        raced.within(self.scope.shown_key(key))
     }
 
     /// A call on `key` with what it asks beside its value, a new expiry or a
@@ -308,13 +398,7 @@ impl<V: Value> Bucket<V> {
     }
 
     fn put(&self, key: &str, value: &V, options: WriteOptions, put: Put) -> Result<bool> {
-        #[cfg(feature = "replication")]
-        if self.is_copy() {
-            let call = forward::Call::Put { raw: self.encode(key, value)?, put, options };
-            return Ok(forward::stamp(&self.pass_on(key, call)?)?.written);
-        }
-        let (bytes, work) = self.put_work(key, self.encode(key, value)?, options, put)?;
-        Ok(self.scope.write(key, bytes, work)?.written)
+        Ok(self.put_raw(key, self.encode(key, value)?, options, put)?.written)
     }
 
     pub(crate) fn encode(&self, key: &str, value: &V) -> Result<Raw> {
@@ -475,7 +559,6 @@ impl<V> Bucket<V> {
     }
 
     /// Writes a row's value under `key`, as `put` says, and stamps it.
-    #[cfg(any(feature = "wire", feature = "replication"))]
     pub(crate) fn put_raw(&self, key: &str, raw: Raw, options: WriteOptions, put: Put) -> Result<Stamp> {
         #[cfg(feature = "replication")]
         if self.is_copy() {

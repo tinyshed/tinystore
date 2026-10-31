@@ -11,6 +11,7 @@ opens with its first call on a connection::
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, Unpack
@@ -32,10 +33,10 @@ from ._wire.protocol import (
     KvWritten,
     methods,
 )
-from .errors import InvalidError
+from .errors import ConflictError, InvalidError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from ._connection import Idempotence, Link
     from ._values import Values
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
 
 Version = bytes
 """What a key was when it was read: compared only for equality, given back to ``if_version``."""
+
+_UPDATE_ATTEMPTS = 8
+"""The tries an update makes while other writes come first, as many as a config's change makes."""
 
 
 class IfVersion(TypedDict):
@@ -194,6 +198,31 @@ class Bucket[T]:
         fields = {"key": key, "value": self._values.encode(value), **write_fields(ttl, expires_at)}
         return KvWritten.decode(await self._call("kv.create", fields, "write")).get("written", False)
 
+    async def update(self, key: Key, change: Callable[[T | None], T | None]) -> T | None:
+        """Writes what change makes of the key's value without losing a write made meanwhile.
+
+        It reads the key, calls change with its value, or None where it holds
+        none, and writes what change returns at the version it read, or
+        creates the key. When another write came first it reads again and
+        calls change again, eight times at most, then raises ConflictError:
+        change may run more than once, so it must do nothing else. A change
+        that returns None, or the very value it was given, writes nothing. It
+        returns the value written, or the one there when nothing was. A key
+        that is there keeps its expiry, and one it creates takes the bucket's,
+        as set and create do::
+
+            await pinned.update(student_id, lambda courses: [*(courses or []), 2518])
+        """
+        for _ in range(_UPDATE_ATTEMPTS):
+            entry = await self.entry(key)
+            current = None if entry is None else entry.value
+            changed = change(current)
+            if changed is None or (entry is not None and changed is current):
+                return current
+            if await self._written(key, changed, None if entry is None else entry.version):
+                return changed
+        raise ConflictError(f"{self._shown(key)}: other writes came first each time it was tried")
+
     async def add(self, key: Key, *, ttl: Duration | None = None, expires_at: datetime | None = None) -> bool:
         """Puts the key in a bucket used as a set; False when it was there."""
         fields = {"key": key, **write_fields(ttl, expires_at)}
@@ -273,6 +302,22 @@ class Bucket[T]:
             if page.next is None:
                 return
             after = page.next
+
+    async def _written(self, key: Key, value: T, version: Version | None) -> bool:
+        """One try of an update: False when another write came first, at the key or creating it."""
+        try:
+            if version is None:
+                return await self.create(key, value)
+            await self.set(key, value, if_version=version)
+            return True
+        except ConflictError:
+            return False
+
+    def _shown(self, key: Key) -> str:
+        """The bucket and the key as the core's errors show them, the key after its branch's owners."""
+        path = "/".join((*self._parts.under, key_text(key)))
+        shown = f"kv bucket {self.name}: key {json.dumps(path, ensure_ascii=False)}"
+        return shown if self._parts.home is None else f"{self._parts.home.describe}: {shown}"
 
     async def _call(self, method: str, fields: dict[str, Any], idempotence: Idempotence) -> bytes:
         under = under_field(self._parts.under)

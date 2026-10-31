@@ -19,6 +19,8 @@ import tinystore
 from ways import removed
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ways import Way
 
 
@@ -56,6 +58,78 @@ async def test_a_stale_version_is_a_conflict_naming_its_bucket_and_key(store: ti
     found = await sessions.get("k")
     assert found is not None
     assert found.device == "b"
+
+
+@dataclass
+class State:
+    pinned: list[int]
+    read: list[int]
+
+
+# contract: KV-14
+async def test_updates_racing_on_a_key_both_keep_their_change_the_key_there_or_created(store: tinystore.Store) -> None:
+    states = store.bucket("user-state", State)
+    runs = 0
+
+    def pin(state: State | None) -> State:
+        nonlocal runs
+        runs += 1
+        return State([*(state.pinned if state else []), 2518], state.read if state else [])
+
+    def mark_read(state: State | None) -> State:
+        nonlocal runs
+        runs += 1
+        return State(state.pinned if state else [], [*(state.read if state else []), 105564])
+
+    await states.set("97516", State([], []))
+    await asyncio.gather(states.update("97516", pin), states.update("97516", mark_read))
+    assert await states.get("97516") == State([2518], [105564])
+    assert runs == 3  # both read one version, and the one written second ran again
+
+    await asyncio.gather(states.update("41207", pin), states.update("41207", mark_read))
+    assert await states.get("41207") == State([2518], [105564])
+    assert runs == 6  # of two creates, the one refused ran again
+
+
+# contract: KV-14
+async def test_an_update_whose_change_gives_back_what_it_got_or_none_writes_nothing(store: tinystore.Store) -> None:
+    pinned = store.bucket("pinned", list[int])
+
+    def pin(course: int) -> Callable[[list[int] | None], list[int]]:
+        return lambda courses: courses if courses and course in courses else [*(courses or []), course]
+
+    await pinned.set("97516", [2518])
+    before = await pinned.entry("97516")
+    assert await pinned.update("97516", pin(2518)) == [2518]
+    after = await pinned.entry("97516")
+    assert before is not None and after is not None and after.version == before.version
+    assert await pinned.update("80211", lambda _: None) is None
+    assert not await pinned.has("80211")
+    assert await pinned.update("80211", pin(3307)) == [3307]
+    assert await pinned.update("97516", pin(3307)) == [2518, 3307]
+
+
+# contract: KV-14
+async def test_an_update_another_write_comes_before_each_try_gives_up_with_a_conflict_error(
+    store: tinystore.Store,
+) -> None:
+    visits = store.bucket("visits", int)
+    read = visits.entry
+    runs = 0
+
+    async def read_then_another_write(key: str) -> tinystore.Entry[int] | None:
+        nonlocal runs
+        found = await read(key)
+        runs += 1
+        await visits.set(key, -runs)
+        return found
+
+    visits.entry = read_then_another_write  # type: ignore[method-assign]
+    gave_up = r'^kv bucket visits: key "ann": other writes came first each time it was tried$'
+    with pytest.raises(tinystore.ConflictError, match=gave_up):
+        await visits.update("ann", lambda count: (count or 0) + 1)
+    assert runs == 8
+    assert await visits.get("ann") == -8
 
 
 async def test_a_version_of_none_is_refused_so_a_write_is_never_unchecked_by_accident(

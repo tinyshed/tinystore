@@ -90,6 +90,64 @@ for (const way of ways) {
 				expect(await drafts.expire('never-set', '1h')).toBe(false)
 			})
 
+			// contract: KV-14
+			test('updates racing on a key both keep their change, the key there or created', async () => {
+				type State = { pinned: number[]; read: number[] }
+				const states = store.bucket<State>('user-state')
+				let runs = 0
+				const pin = (state: State | undefined): State => {
+					runs++
+					return { pinned: [...(state?.pinned ?? []), 2518], read: state?.read ?? [] }
+				}
+				const markRead = (state: State | undefined): State => {
+					runs++
+					return { pinned: state?.pinned ?? [], read: [...(state?.read ?? []), 105564] }
+				}
+				await states.set('97516', { pinned: [], read: [] })
+				await Promise.all([states.update('97516', pin), states.update('97516', markRead)])
+				expect(await states.get('97516')).toEqual({ pinned: [2518], read: [105564] })
+				expect(runs).toBe(3) // both read one version, and the one written second ran again
+
+				await Promise.all([states.update('41207', pin), states.update('41207', markRead)])
+				expect(await states.get('41207')).toEqual({ pinned: [2518], read: [105564] })
+				expect(runs).toBe(6) // of two creates, the one refused ran again
+			})
+
+			// contract: KV-14
+			test('an update whose change gives back what it got, or undefined, writes nothing', async () => {
+				const pinned = store.bucket<number[]>('pinned')
+				const pin = (course: number) => (courses: number[] | undefined) =>
+					courses?.includes(course) === true ? courses : [...(courses ?? []), course]
+				await pinned.set('97516', [2518])
+				const before = await pinned.entry('97516')
+				expect(await pinned.update('97516', pin(2518))).toEqual([2518])
+				expect((await pinned.entry('97516'))?.version).toBe(before?.version)
+				expect(await pinned.update('80211', () => undefined)).toBeUndefined()
+				expect(await pinned.has('80211')).toBe(false)
+				expect(await pinned.update('80211', pin(3307))).toEqual([3307])
+				expect(await pinned.update('97516', pin(3307))).toEqual([2518, 3307])
+			})
+
+			// contract: KV-14
+			test('an update another write comes before each try gives up with a ConflictError', async () => {
+				const visits = store.bucket<number>('visits', { type: 'int' })
+				const read = visits.entry.bind(visits)
+				let runs = 0
+				// each read the update makes is followed by another write, before its own
+				visits.entry = async key => {
+					const found = await read(key)
+					await visits.set(key, -++runs)
+					return found
+				}
+				const err = await caught(visits.update('ann', count => (count ?? 0) + 1))
+				expect(err).toBeInstanceOf(ConflictError)
+				expect((err as Error).message).toBe(
+					'kv bucket visits: key "ann": other writes came first each time it was tried',
+				)
+				expect(runs).toBe(8)
+				expect(await visits.get('ann')).toBe(-8)
+			})
+
 			test('create and add write a key only where none is, and say so', async () => {
 				const seen = store.bucket('stripe-events', { ttl: '7d' })
 				expect(await seen.add('evt_1')).toBe(true)

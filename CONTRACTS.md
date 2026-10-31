@@ -72,6 +72,7 @@ These contracts are what does not.
 - **KV-11** `once` MUST run a key's function once and keep its answer; other callers MUST wait for it and get its answer, one too large to keep included, and a run that failed or was abandoned MUST let the next caller run.
 - **KV-12** Of two transactions taking the last item, one MUST get it.
 - **KV-13** A page MUST NOT hold a snapshot between pages, and MUST end before the value that passes its bytes.
+- **KV-14** An update MUST write its change at the version it read, or create a key that was not there, so that updates racing on a key all keep their changes; one that another write came before eight times running MUST fail `conflict`, and a change that returns nothing MUST write nothing.
 
 ### Config
 

@@ -4,7 +4,7 @@
 // its first call on a connection.
 
 import type { Connection, Idempotence, Link } from './connection.ts'
-import { CorruptError, InvalidError } from './errors.ts'
+import { ConflictError, CorruptError, InvalidError } from './errors.ts'
 import {
 	checkName,
 	type Home,
@@ -45,6 +45,9 @@ import {
  *     'bool'     1 or 0
  */
 export type ValueType = 'string' | 'bytes' | 'int' | 'bigint' | 'float' | 'bool'
+
+/** The tries an update makes while other writes come first, as many as a config's change makes. */
+const updateAttempts = 8
 
 export interface BucketOptions {
 	/** a key expires this long after it was written, unless its write gives its own */
@@ -196,6 +199,40 @@ export class Bucket<T> {
 		return this.#ask('kv.create', { key, value: raw, ...writeFields(options) }, 'write', written)
 	}
 
+	/**
+	 * Writes what `change` makes of the key's value without losing a write
+	 * made meanwhile: it reads the key, calls `change` with its value, or
+	 * undefined where it holds none, and writes what `change` returns at the
+	 * version it read, or creates the key. When another write came first it
+	 * reads again and calls `change` again, eight times at most, then throws
+	 * ConflictError: `change` may run more than once, so it must do nothing
+	 * else. A change that returns undefined, or the very value it was given,
+	 * writes nothing. It returns the value written, or the one there when
+	 * nothing was. A key that is there keeps its expiry, and one it creates
+	 * takes the bucket's, as set and create do.
+	 *
+	 *     await pinned.update(studentId, courses => [...(courses ?? []), 2518])
+	 */
+	async update(
+		key: Key,
+		change: (current: T | undefined) => T | undefined,
+	): Promise<T | undefined> {
+		for (let attempt = 0; attempt < updateAttempts; attempt++) {
+			const entry = await this.entry(key)
+			const next = change(entry?.value)
+			if (next === undefined || (entry !== undefined && next === entry.value)) {
+				return entry?.value
+			}
+			if (await this.#written(key, next, entry?.version)) {
+				return next
+			}
+		}
+		const shown = [this.#home?.describe, `kv bucket ${this.name}`, this.#shownKey(key)]
+		throw new ConflictError(
+			`${shown.filter(part => part !== undefined).join(': ')}: other writes came first each time it was tried`,
+		)
+	}
+
 	/** Puts the key in a bucket used as a set; false when it was there. */
 	async add(key: Key, options?: Omit<WriteOptions, 'ifVersion'>): Promise<boolean> {
 		return this.#ask('kv.create', { key, ...writeFields(options) }, 'write', written)
@@ -290,6 +327,27 @@ export class Bucket<T> {
 			}
 			after = page.next
 		}
+	}
+
+	// one try of an update: false when another write came first, at the key or creating it
+	async #written(key: Key, next: T, version: string | undefined): Promise<boolean> {
+		try {
+			if (version === undefined) {
+				return await this.create(key, next)
+			}
+			await this.set(key, next, { ifVersion: version })
+			return true
+		} catch (err) {
+			if (err instanceof ConflictError) {
+				return false
+			}
+			throw err
+		}
+	}
+
+	// the key as the core's errors show it, after its branch's owners
+	#shownKey(key: Key): string {
+		return `key ${JSON.stringify([...this.#under, keyText(key)].join('/'))}`
 	}
 
 	// a call on one key: its fields written where they leave from, its answer read where it arrived

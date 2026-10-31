@@ -10,7 +10,9 @@ package kv
 
 import (
 	"context"
+	"fmt"
 	"iter"
+	"strings"
 	"time"
 
 	"tinyshed.org/tinystore"
@@ -270,6 +272,79 @@ func (b *Bucket[T]) Create(ctx context.Context, key string, value T, opts ...Cre
 		return false, err
 	}
 	return b.create(ctx, key, rawOf(raw), opts)
+}
+
+// Update writes what change makes of the key's value without losing a write
+// made meanwhile: it reads the key, calls change with its value and whether it
+// holds one, and writes what change returns at the version it read, or creates
+// the key. When another write came first it reads again and calls change
+// again, eight times at most, then fails with a Conflict: change may run more
+// than once, so it must do nothing else. A change that returns false writes
+// nothing. Update returns the value written, or the one there when nothing
+// was, and whether there is one. A key that is there keeps its expiry, and
+// one it creates takes the bucket's, as Set and Create do.
+//
+//	pinned, _, err := courses.Update(ctx, studentID, func(pinned []int, found bool) ([]int, bool) {
+//		return append(pinned, 2518), true
+//	})
+//
+// A store's transaction refuses it, since the transaction runs its function
+// again when a key it read changed: read with Get and write with Set there.
+func (b *Bucket[T]) Update(ctx context.Context, key string, change func(current T, found bool) (T, bool)) (T, bool, error) {
+	var zero T
+	if b.err != nil {
+		return zero, false, b.err
+	}
+	if b.tx != nil {
+		return zero, false, core.Errorf(core.Invalid, "%s: an update inside a transaction of the store, "+
+			"which runs again when a key it read changed: read with Get and write with Set", b.shown(key))
+	}
+	for range updateAttempts {
+		entry, found, err := b.Entry(ctx, key)
+		if err != nil {
+			return zero, false, err
+		}
+		next, write := change(entry.Value, found)
+		if !write {
+			return entry.Value, found, nil
+		}
+		kept, err := b.written(ctx, key, next, entry.Version, found)
+		if err != nil {
+			return zero, false, err
+		}
+		if kept {
+			return next, true, nil
+		}
+	}
+	return zero, false, core.Errorf(core.Conflict, "%s: other writes came first each time it was tried", b.shown(key))
+}
+
+// updateAttempts is how many times Update tries while other writes come
+// first, as many as a config's change makes.
+const updateAttempts = 8
+
+// written is one try of an update: false when another write came first, at
+// the key or creating it.
+func (b *Bucket[T]) written(ctx context.Context, key string, value T, version Version, found bool) (bool, error) {
+	if !found {
+		return b.Create(ctx, key, value)
+	}
+	err := b.Set(ctx, key, value, IfVersion(version))
+	if core.KindOf(err) == core.Conflict {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// shown is the bucket and the key as the core's errors show them, the key
+// after its branch's owners.
+func (b *Bucket[T]) shown(key string) string {
+	path := strings.Join(append(append([]string{}, b.under...), key), "/")
+	shown := fmt.Sprintf("kv bucket %s: key %q", b.name, path)
+	if b.home != nil {
+		return b.home.Describe() + ": " + shown
+	}
+	return shown
 }
 
 // Add puts the key in a bucket used as a set, a bucket of struct{}; false

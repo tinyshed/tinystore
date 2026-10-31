@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -143,6 +144,119 @@ fn a_commit_of_many_sets_keeps_the_highest_version_they_took() {
     let settings = f.store.bucket::<i64>("settings").open().unwrap();
     settings.set("15-19", &0).unwrap();
     assert!(settings.entry("15-19").unwrap().unwrap().version.0 > highest, "a reopened file goes on past it");
+}
+
+/// What a student keeps across devices, as issue 41 reported it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Shared {
+    pinned: Vec<i64>,
+    read: Vec<i64>,
+}
+
+/// A phone pinning a course while a laptop marks a page read, both updates
+/// of `key` at once: each change waits at its first run for the other's, so
+/// that both read the same version. Says how many times the changes ran.
+fn raced_updates(states: &Bucket<Shared>, key: &str) -> usize {
+    let (both_read, runs) = (Arc::new(Barrier::new(2)), Arc::new(AtomicUsize::new(0)));
+    let device = |change: fn(&mut Shared)| {
+        let (states, key) = (states.clone(), key.to_owned());
+        let (both_read, runs) = (Arc::clone(&both_read), Arc::clone(&runs));
+        thread::spawn(move || {
+            let mut first = true;
+            let changed = states.update(key.as_str(), |state| {
+                runs.fetch_add(1, Ordering::Relaxed);
+                if std::mem::take(&mut first) {
+                    both_read.wait();
+                }
+                let mut state = state.unwrap_or_default();
+                change(&mut state);
+                Some(state)
+            });
+            changed.unwrap()
+        })
+    };
+    let phone = device(|state| state.pinned.push(2518));
+    let laptop = device(|state| state.read.push(105_564));
+    phone.join().unwrap();
+    laptop.join().unwrap();
+    runs.load(Ordering::Relaxed)
+}
+
+// contract: KV-14
+#[test]
+fn updates_racing_on_a_key_keep_both_changes() {
+    let f = fixture();
+    let states = f.store.bucket::<Shared>("user-state").open().unwrap();
+    let both = Shared { pinned: vec![2518], read: vec![105_564] };
+
+    states.set("97516", &Shared::default()).unwrap();
+    assert_eq!(raced_updates(&states, "97516"), 3, "the change written second ran again");
+    assert_eq!(states.get("97516").unwrap(), Some(both.clone()));
+
+    assert_eq!(raced_updates(&states, "41207"), 3, "of two creates, the one refused ran again");
+    assert_eq!(states.get("41207").unwrap(), Some(both));
+}
+
+// contract: KV-14
+#[test]
+fn an_update_whose_change_returns_none_writes_nothing() {
+    let f = fixture();
+    let pinned = f.store.bucket::<Vec<i64>>("pinned").open().unwrap();
+    pinned.set("97516", &vec![2518]).unwrap();
+    let pin = |course: i64| {
+        move |courses: Option<Vec<i64>>| {
+            let mut courses = courses.unwrap_or_default();
+            if courses.contains(&course) {
+                return None;
+            }
+            courses.push(course);
+            Some(courses)
+        }
+    };
+    let before = (pinned.entry("97516").unwrap().unwrap().version, f.commits());
+    assert_eq!(pinned.update("97516", pin(2518)).unwrap(), Some(vec![2518]), "the value there");
+    assert_eq!((pinned.entry("97516").unwrap().unwrap().version, f.commits()), before, "nothing written");
+
+    assert_eq!(pinned.update("80211", |_| None).unwrap(), None);
+    assert!(!pinned.has("80211").unwrap(), "a key the change left out is not made");
+    assert_eq!(pinned.update("97516", pin(3307)).unwrap(), Some(vec![2518, 3307]));
+}
+
+// contract: KV-14
+#[test]
+fn an_update_creates_a_key_not_there_and_keeps_the_expiry_of_one_there() {
+    let f = fixture();
+    let visits = f.store.bucket::<i64>("visits").ttl(MINUTE).open().unwrap();
+    let counted = |visits: Option<i64>| Some(visits.unwrap_or(0) + 1);
+    visits.key("ann").ttl(30 * MINUTE).set(&1).unwrap();
+    assert_eq!(visits.update("ann", counted).unwrap(), Some(2));
+    assert_eq!(visits.entry("ann").unwrap().unwrap().expires_at, Some(f.store.now() + 30 * MINUTE));
+
+    assert_eq!(visits.update("bob", counted).unwrap(), Some(1), "created");
+    assert_eq!(visits.entry("bob").unwrap().unwrap().expires_at, Some(f.store.now() + MINUTE), "the bucket's");
+
+    assert_eq!(visits.under(42).update("ann", counted).unwrap(), Some(1), "a branch's own key");
+    assert_eq!(visits.get("ann").unwrap(), Some(2));
+}
+
+// contract: KV-14
+#[test]
+fn an_update_another_write_comes_before_each_try_gives_up_as_a_conflict() {
+    let f = fixture();
+    let visits = f.store.bucket::<i64>("visits").open().unwrap();
+    let (other, mut runs) = (visits.clone(), 0);
+    let error = visits
+        .update("ann", |count| {
+            runs += 1;
+            other.set("ann", &-runs).unwrap();
+            Some(count.unwrap_or(0) + 1)
+        })
+        .unwrap_err();
+    assert_eq!(runs, UPDATE_ATTEMPTS as i64);
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    let said = r#"kv bucket visits: key "ann": other writes came first each time it was tried: conflict"#;
+    assert_eq!(error.to_string(), said);
+    assert_eq!(visits.get("ann").unwrap(), Some(-8), "the other writes stay");
 }
 
 /// The stamp a set leaves, what the wire answers a set with.

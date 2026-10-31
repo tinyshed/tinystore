@@ -75,6 +75,27 @@ fn a_bucket_and_a_queue_opened_from_a_database_live_in_its_file() {
     );
 }
 
+// contract: KV-14
+#[test]
+fn an_update_of_a_bucket_kept_in_a_database_reads_again_after_another_write() {
+    let f = fixture();
+    let db = f.app();
+    let carts = db.bucket::<Vec<String>>("carts").open().unwrap();
+    let (other, mut runs) = (carts.clone(), 0);
+    let changed = carts.update("ann", |cart| {
+        runs += 1;
+        if runs == 1 {
+            other.set("ann", &vec!["tea".to_owned()]).unwrap();
+        }
+        let mut cart = cart.unwrap_or_default();
+        cart.push("milk".to_owned());
+        Some(cart)
+    });
+    assert_eq!(changed.unwrap(), Some(vec!["tea".to_owned(), "milk".to_owned()]));
+    assert_eq!(runs, 2, "the other write came before the create, so the change ran again on it");
+    assert!(!f.dir.path().join("kv.db").exists(), "kept in the database's file");
+}
+
 // contract: DUR-06
 #[test]
 fn rows_keys_and_jobs_commit_together_or_not_at_all() {

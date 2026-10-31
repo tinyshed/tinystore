@@ -61,6 +61,9 @@ let used = messages.allow(user_id)?;
   job (contract KV-03).
 - A version changes on every write and a write with `ifVersion` fails
   `conflict` if the key changed since it was read.
+- `update` changes a key from the value it reads and keeps every change made
+  at the same time: when another write came first, it reads the key again
+  and runs your function again (contract KV-14).
 - `take`, `create` and `add` decide in one write: of two callers, one wins.
 - `once` runs a key's function once while its answer is kept, and callers in
   any process wait for it (contract KV-11).
@@ -95,6 +98,7 @@ reads, writes or waits is the blocking call with `.await`:
 | `sessions.set(&key, &session)?`        | `sessions.set(&key, &session).await?`        |
 | `sessions.get(&key)?`                  | `sessions.get(&key).await?`                  |
 | `codes.take(&code)?`                   | `codes.take(&code).await?`                   |
+| `states.update(&key, change)?`         | `states.update(&key, change).await?`         |
 | `sessions.key(&key).ttl(day).set(&s)?` | `sessions.key(&key).ttl(day).set(&s).await?` |
 | `targets.list(100, None)?`             | `targets.list(100, None).await?`             |
 | `for entry in sessions.all()`          | `while let Some(entry) = all.next().await`   |
@@ -118,6 +122,7 @@ future (contract STORE-10):
 | a step in memory: a rate limit's `allow`, an `add` with `flush_every` | in the first poll, else on the store's threads                       | it applies all the same                                 |
 | a page: `list`, each page of `all`                                    | on the store's threads                                               | it stops and gives its reader back                      |
 | a `once` run that waits for the run under way                         | a waiter in the engine, on no thread                                 | it stops waiting, and nothing else changes              |
+| an `update`                                                           | each read and write as above, your function in the poll              | a write already queued commits, and no new try starts   |
 
 A write that you never poll writes nothing. Writes that you join in one task,
 for example with `tokio::try_join!`, are queued together and can share one
@@ -140,7 +145,7 @@ store's side.
 | Page                              | Covers                                                   |
 |-----------------------------------|----------------------------------------------------------|
 | [Expiry](expiry.md)               | `ttl`, `idle`, `expiresAt`, `expire`                     |
-| [Versions](versions.md)           | `entry`, `ifVersion`, safe read-modify-write             |
+| [Versions](versions.md)           | `entry`, `ifVersion`, and `update`, which loses no write |
 | [Branches](branches.md)           | `list`, `all` and `under`: keys listed, a page's entries |
 | [Encrypted buckets](encrypted.md) | values sealed with the store's key                       |
 | [Counters](counters.md)           | totals by key, in memory or written every add            |

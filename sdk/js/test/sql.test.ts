@@ -687,6 +687,18 @@ for (const way of ways) {
 			expect(await store.bucket('sessions').has('t-1')).toBe(false)
 		})
 
+		// contract: KV-14
+		test('an update of a bucket the database keeps keeps both changes, and runs inside its transaction', async () => {
+			const carts = app.bucket<string[]>('carts')
+			const add = (item: string) => (cart: string[] | undefined) => [...(cart ?? []), item]
+			await Promise.all([carts.update('ann', add('tea')), carts.update('ann', add('milk'))])
+			expect((await carts.get('ann'))?.sort()).toEqual(['milk', 'tea'])
+			await app.tx(async tx => {
+				expect(await tx.with(carts).update('ann', add('bread'))).toHaveLength(3)
+			})
+			expect(await carts.get('ann')).toHaveLength(3)
+		})
+
 		test('files opened from the database commit with its rows, or roll back with them', async () => {
 			const packages = app.files('packages')
 			const pkg = new Uint8Array(40 << 10).fill(7)

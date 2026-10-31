@@ -78,6 +78,115 @@ func TestAStaleVersionIsAConflictNamingItsBucketAndKey(t *testing.T) {
 	})
 }
 
+// State is what a student keeps across devices, as issue 41 reported it.
+type State struct {
+	Pinned []int `json:"pinned"`
+	Read   []int `json:"read"`
+}
+
+// contract: KV-14
+func TestUpdatesRacingOnAKeyBothKeepTheirChangeTheKeyThereOrCreated(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		states := ways.Must(kv.OpenBucket[State](store, "user-state"))
+		// a phone pins a course while a laptop marks a page read: each change
+		// waits at its first run for the other's, so that both read one version
+		raced := func(key string) int64 {
+			var runs atomic.Int64
+			var bothRead, done sync.WaitGroup
+			bothRead.Add(2)
+			device := func(change func(*State)) {
+				defer done.Done()
+				first := true
+				_, _, err := states.Update(ctx, key, func(state State, _ bool) (State, bool) {
+					runs.Add(1)
+					if first {
+						first = false
+						bothRead.Done()
+						bothRead.Wait()
+					}
+					change(&state)
+					return state, true
+				})
+				if err != nil {
+					t.Error(err)
+				}
+			}
+			done.Add(2)
+			go device(func(s *State) { s.Pinned = append(s.Pinned, 2518) })
+			go device(func(s *State) { s.Read = append(s.Read, 105564) })
+			done.Wait()
+			return runs.Load()
+		}
+		check(t, states.Set(ctx, "97516", State{Pinned: []int{}, Read: []int{}}))
+		if runs := raced("97516"); runs != 3 {
+			t.Fatalf("the change written second ran again: %d runs", runs)
+		}
+		if raced("41207") != 3 {
+			t.Fatal("of two creates, the one refused ran again")
+		}
+		for _, key := range []string{"97516", "41207"} {
+			got, _ := ways.Must2(states.Get(ctx, key))
+			if len(got.Pinned) != 1 || got.Pinned[0] != 2518 || len(got.Read) != 1 || got.Read[0] != 105564 {
+				t.Fatalf("%s: %+v", key, got)
+			}
+		}
+	})
+}
+
+// contract: KV-14
+func TestAnUpdateWhoseChangeReturnsFalseWritesNothing(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		visits := ways.Must(kv.OpenBucket[int64](store, "visits"))
+		check(t, visits.Set(ctx, "ann", 7))
+		before, _ := ways.Must2(visits.Entry(ctx, "ann"))
+		unchanged := func(count int64, found bool) (int64, bool) { return count, false }
+		if count, found, err := visits.Update(ctx, "ann", unchanged); err != nil || !found || count != 7 {
+			t.Fatalf("got %d %v %v", count, found, err)
+		}
+		if after, _ := ways.Must2(visits.Entry(ctx, "ann")); string(after.Version) != string(before.Version) {
+			t.Fatal("a change that returns false wrote")
+		}
+		if _, found, err := visits.Update(ctx, "bob", unchanged); err != nil || found {
+			t.Fatalf("got %v %v", found, err)
+		}
+		counted := func(count int64, _ bool) (int64, bool) { return count + 1, true }
+		if count, found, err := visits.Update(ctx, "bob", counted); err != nil || !found || count != 1 {
+			t.Fatalf("a key not there is created: %d %v %v", count, found, err)
+		}
+		if count, _, err := visits.Under(42).Update(ctx, "ann", counted); err != nil || count != 1 {
+			t.Fatalf("a branch's own key: %d %v", count, err)
+		}
+	})
+}
+
+// contract: KV-14
+func TestAnUpdateAnotherWriteComesBeforeEachTryGivesUpWithAConflict(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		visits := ways.Must(kv.OpenBucket[int64](store, "visits"))
+		runs := int64(0)
+		_, _, err := visits.Update(ctx, "ann", func(count int64, _ bool) (int64, bool) {
+			runs++
+			check(t, visits.Set(ctx, "ann", -runs))
+			return count + 1, true
+		})
+		is(t, err, tinystore.ErrConflict)
+		if want := `kv bucket visits: key "ann": other writes came first each time it was tried`; err.Error() != want {
+			t.Fatalf("got %q", err)
+		}
+		if got, _ := ways.Must2(visits.Get(ctx, "ann")); runs != 8 || got != -8 {
+			t.Fatalf("%d runs, the other writes left %d", runs, got)
+		}
+		refused := store.Tx(ctx, func(tx *tinystore.Tx) error {
+			_, _, err := visits.In(tx).Update(ctx, "ann", func(count int64, _ bool) (int64, bool) { return count + 1, true })
+			return err
+		})
+		is(t, refused, tinystore.ErrInvalid)
+	})
+}
+
 func TestAnExpiryHoldsTheKeyUntilItsTimeAndExpireMovesItEitherWay(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

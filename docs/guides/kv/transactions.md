@@ -145,7 +145,7 @@ transaction holds.
 ## See also
 
 - [KV](README.md): the engine's overview.
-- [Versions](versions.md): one key's read-modify-write without a
-  transaction.
+- [Versions](versions.md): one key's read-modify-write with `update`,
+  without a transaction.
 - [Two engines in one file](../../handbook/start/directory.md#two-engines-in-one-file):
   keys and jobs that commit with rows.

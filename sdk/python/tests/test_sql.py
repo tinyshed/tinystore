@@ -475,6 +475,25 @@ async def test_a_bucket_and_a_queue_opened_from_the_database_commit_with_its_row
     assert not await store.bucket("sessions").has("t-1")
 
 
+# contract: KV-14
+async def test_an_update_of_a_bucket_the_database_keeps_keeps_both_changes_and_runs_inside_its_transaction(
+    app: tinystore.Database,
+) -> None:
+    carts = app.bucket("carts", list[str])
+
+    def add(item: str) -> Callable[[list[str] | None], list[str]]:
+        return lambda cart: [*(cart or []), item]
+
+    await asyncio.gather(carts.update("ann", add("tea")), carts.update("ann", add("milk")))
+    assert sorted(await carts.get("ann") or []) == ["milk", "tea"]
+
+    async def bread(tx: tinystore.SqlTx) -> None:
+        assert len(await tx.with_(carts).update("ann", add("bread")) or []) == 3
+
+    await app.tx(bread)
+    assert len(await carts.get("ann") or []) == 3
+
+
 # contract: DUR-06
 async def test_files_opened_from_the_database_commit_with_its_rows(app: tinystore.Database) -> None:
     packages = app.files("packages")

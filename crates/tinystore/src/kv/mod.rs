@@ -61,6 +61,9 @@ pub(crate) use {
     once::{Hand, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
 };
+// The tries of an update, which the async API awaits.
+#[cfg(feature = "async")]
+pub(crate) use bucket::{Proposed, UPDATE_ATTEMPTS, kept};
 // A row's value, which the async API keeps at a copy's home for once.
 #[cfg(any(feature = "wire", all(feature = "async", feature = "replication")))]
 pub(crate) use value::Raw;

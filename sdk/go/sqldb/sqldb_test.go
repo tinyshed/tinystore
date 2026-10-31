@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -466,6 +468,37 @@ func TestAJoinASubqueryAndAnIncludedQueryGiveEachRowItsRows(t *testing.T) {
 		}
 		_, err := sqldb.OpenTable[Author](db, "authors as a").Include("posts", sqldb.OpenTable[Post](db, "posts as p").Limit(1)).All(ctx)
 		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
+// contract: KV-14
+func TestAnUpdateOfABucketTheDatabaseKeepsKeepsBothChangesAndRunsInsideItsTransaction(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		carts := ways.Must(kv.OpenBucket[[]string](db, "carts"))
+		add := func(item string) func([]string, bool) ([]string, bool) {
+			return func(cart []string, _ bool) ([]string, bool) { return append(cart, item), true }
+		}
+		var both sync.WaitGroup
+		for _, item := range []string{"tea", "milk"} {
+			both.Go(func() {
+				if _, _, err := carts.Update(ctx, "ann", add(item)); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		both.Wait()
+		ways.Must(0, db.Tx(ctx, func(tx *sqldb.Tx) error {
+			cart, _, err := carts.In(tx).Update(ctx, "ann", add("bread"))
+			if err == nil && len(cart) != 3 {
+				err = fmt.Errorf("cart %v", cart)
+			}
+			return err
+		}))
+		if cart, _ := ways.Must2(carts.Get(ctx, "ann")); len(cart) != 3 || !slices.Contains(cart, "tea") || !slices.Contains(cart, "milk") {
+			t.Fatalf("cart %v", cart)
+		}
 	})
 }
 

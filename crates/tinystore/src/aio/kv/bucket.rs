@@ -6,9 +6,12 @@ use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
 use super::named;
+use crate::aio::oneshot::Answer;
 use crate::aio::{Store, run};
 use crate::cancel::{self, Captured};
-use crate::kv::{Entry, Key, PAGE_KEYS, Page, Put, Stamp, TxBucket, Value, Version, WriteOptions};
+use crate::kv::{
+    Entry, Key, PAGE_KEYS, Page, Proposed, Put, Stamp, TxBucket, UPDATE_ATTEMPTS, Value, Version, WriteOptions, kept,
+};
 use crate::pool::Pool;
 use crate::transaction::sealed::Sealed;
 use crate::{Result, Transaction, TxHandle};
@@ -77,6 +80,25 @@ impl<V: Value> Bucket<V> {
     pub fn create(&self, key: impl Key, value: &V) -> impl Future<Output = Result<bool>> + Send + 'static {
         let written = self.put(key.text().into_owned(), value, Put::OnlyNew);
         async move { written.await.map(|stamp| stamp.written) }
+    }
+
+    /// Writes what `change` makes of the value under `key` without losing a
+    /// write made meanwhile, as [`crate::kv::Bucket::update`] does: another
+    /// write that came first has it read again and call `change` again, eight
+    /// tries at most, so `change` must change nothing else. It answers the
+    /// value written, or the one there when `change` returns `None`.
+    ///
+    /// Each read runs as `get`'s, `change` in the poll on the thread that
+    /// polls the future, and each write is queued as `set`'s. Once polled,
+    /// the try submitted commits whether or not the future is still awaited;
+    /// a try after a conflict is made only while it is polled.
+    pub fn update(
+        &self,
+        key: impl Key,
+        change: impl FnMut(Option<V>) -> Option<V> + Send + 'static,
+    ) -> impl Future<Output = Result<Option<V>>> + Send + 'static {
+        let (bucket, pool, key) = (self.bucket.clone(), Arc::clone(&self.pool), key.text().into_owned());
+        updated(bucket, pool, cancel::captured(), key, change)
     }
 
     /// A call on `key` with what it asks beside its value, run by its last
@@ -318,6 +340,36 @@ fn write<V: Value>(
         })
     });
     async move { written?.await }
+}
+
+/// Tries an update until its write is kept or `change` writes nothing: each
+/// read as a get's under the tokens of the call that made it, `change` where
+/// the future is polled, and each write queued as a set's.
+async fn updated<V: Value>(
+    bucket: crate::kv::Bucket<V>,
+    pool: Arc<Pool>,
+    tokens: Captured,
+    key: String,
+    mut change: impl FnMut(Option<V>) -> Option<V> + Send,
+) -> Result<Option<V>> {
+    let what = named(bucket.scope.shown_key(&key), "an update");
+    for _ in 0..UPDATE_ATTEMPTS {
+        let (reading, read_key) = (bucket.clone(), key.clone());
+        let read = || run::point(&pool, what.clone(), move || reading.read_cell(&read_key));
+        let found = tokens.run(None, read).await?;
+        let (value, write) = match bucket.proposed(&key, found, &mut change)? {
+            Proposed::Unchanged(current) => return Ok(current),
+            Proposed::Write(value, write) => (value, write),
+        };
+        let (writing, write_key) = (bucket.clone(), key.clone());
+        let submit = move |answer: Answer<Stamp>| {
+            writing.put_raw_then(&write_key, write, move |stamp| answer.send(stamp));
+        };
+        if kept(run::write(&pool, what.clone(), submit).await)? {
+            return Ok(Some(value));
+        }
+    }
+    Err(bucket.raced(&key))
 }
 
 /// A take of `key` with `options`, typed: the value decoded inside its write.
