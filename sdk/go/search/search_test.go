@@ -73,6 +73,38 @@ func TestDocumentsSetByIDAreFoundByAnyOfTheirWordsTheBestFirst(t *testing.T) {
 	})
 }
 
+type course struct {
+	Name string `json:"name"`
+}
+
+// contract: SRCH-11
+func TestAWordTypedHalfwayFindsTheWordsItBeginsWithPrefixAndNothingWithout(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		courses := ways.Must(search.OpenIndex[course](store, "courses", search.Fields{"name": 1}))
+		ways.Must(0, courses.SetMany(ctx, []search.Doc[course]{
+			{ID: "1", Value: course{"Cryptographic methods of information security"}},
+			{ID: "2", Value: course{"Cryptanalysis"}},
+			{ID: "3", Value: course{"Cryptography"}},
+			{ID: "4", Value: course{"Foundations of cryptography"}},
+		}))
+		for _, asked := range []struct {
+			text string
+			opts []search.QueryOption
+			want []string
+		}{
+			{"crypt", nil, []string{}},
+			{"crypt", []search.QueryOption{search.Prefix()}, []string{"2", "3", "4", "1"}},
+			{"cryptograph", []search.QueryOption{search.Prefix()}, []string{"3", "4", "1"}},
+			{"crypt ", []search.QueryOption{search.Prefix()}, []string{}},
+		} {
+			if got := ids(ways.Must(courses.Search(ctx, asked.text, asked.opts...))); !reflect.DeepEqual(got, asked.want) {
+				t.Fatalf("%q %d options: %v, want %v", asked.text, len(asked.opts), got, asked.want)
+			}
+		}
+	})
+}
+
 func TestAVectorFindsTheNearestByItsCosineAndWithWordsBothAreSummedOrReranked(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

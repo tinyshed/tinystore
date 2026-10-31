@@ -9977,6 +9977,8 @@ pub(crate) struct SearchQuery {
     pub(crate) offset: u64,
     /// 10 when absent; offset and limit together 1000 at most.
     pub(crate) limit: Option<u64>,
+    /// The last word read as the start of a word too, as a search box types.
+    pub(crate) prefix: bool,
 }
 
 #[cfg(feature = "search")]
@@ -9996,6 +9998,7 @@ impl Message for SearchQuery {
                 6 => message.r#where = Some(codec::str(r, "where")?),
                 7 => message.offset = codec::uint(r, "offset")?,
                 8 => message.limit = Some(codec::uint(r, "limit")?),
+                9 => message.prefix = codec::bool(r, "prefix")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10036,6 +10039,10 @@ impl Message for SearchQuery {
             map.field(out, 8);
             codec::write_uint(out, limit);
         }
+        if self.prefix {
+            map.field(out, 9);
+            codec::write_bool(out, &self.prefix);
+        }
         map.close(out);
     }
 
@@ -10049,6 +10056,7 @@ impl Message for SearchQuery {
             + self.r#where.as_ref().map_or(0, |r#where| 1 + 5 + r#where.len())
             + 10
             + self.limit.map_or(0, |_| 10)
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -10060,6 +10068,7 @@ impl Message for SearchQuery {
             && self.r#where.is_none()
             && self.offset == 0
             && self.limit.is_none()
+            && !self.prefix
     }
 }
 

@@ -204,6 +204,7 @@ These contracts are what does not.
 - **SRCH-08** A write from beside the store MUST reach a table's index at the store's next write to the file, or within a second.
 - **SRCH-09** A misspelt word MUST be read as its nearest and `corrected` MUST say so; a word that matches MUST never be changed.
 - **SRCH-10** An index MUST answer after a restart as before.
+- **SRCH-11** A search with `prefix` MUST find every document holding a word its last word begins, of the 64 most held it begins in a field, unless a space follows that word or it is a single letter, and MUST answer what scoring every document answers.
 
 ## 5. Replication
 

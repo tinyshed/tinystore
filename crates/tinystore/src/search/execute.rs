@@ -23,7 +23,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::Range;
 
-use super::postings::Posting;
+use super::postings::{BLOCK, Posting};
 use super::score::{Part, points};
 use crate::Result;
 
@@ -32,6 +32,9 @@ use crate::Result;
 const WINDOW: u32 = if cfg!(test) { 512 } else { 4096 };
 /// Past every document.
 pub(crate) const END: u32 = u32::MAX;
+/// No key's id, since keys are numbered from 1: a list of postings in hand,
+/// which never fetches a block by it.
+const NO_KEY: i64 = 0;
 
 /// A block of a list: its documents' range, the most its key adds to any of
 /// them, and its postings when they are in hand already, a key's own row or
@@ -69,6 +72,30 @@ impl List {
     /// A list of `blocks` in their documents' order, none empty.
     pub(crate) fn new(key: i64, part: Part, scale: f64, average: f64, blocks: Vec<Block>) -> List {
         List { key, part, scale, average, blocks, block: 0, decoded: usize::MAX, postings: Vec::new(), at: 0 }
+    }
+
+    /// A list of postings in hand, in their documents' order, that names no
+    /// key: the words a prefix begins, joined. Its blocks hold as many as a
+    /// stored block does, so that their bounds skip as theirs do.
+    pub(crate) fn joined(part: Part, scale: f64, average: f64, postings: Vec<Posting>) -> List {
+        let mut list = List::new(NO_KEY, part, scale, average, Vec::new());
+        for postings in postings.chunks(BLOCK) {
+            let block = list.in_hand(postings.to_vec());
+            list.push(block);
+        }
+        list
+    }
+
+    /// Every posting the list holds, its stored blocks fetched, in its
+    /// documents' order.
+    pub(crate) fn into_postings(mut self, source: &mut dyn Fetch) -> Result<Vec<Posting>> {
+        let mut postings = Vec::new();
+        for block in 0..self.blocks.len() {
+            self.block = block;
+            self.open(source)?;
+            postings.append(&mut self.postings);
+        }
+        Ok(postings)
     }
 
     /// A block of postings in hand, bounded by its own.

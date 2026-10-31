@@ -10239,6 +10239,8 @@ export const SearchQuery = message(
 		offset: [7, uint],
 		/** 10 when absent; offset and limit together 1000 at most */
 		limit: [8, uint],
+		/** the last word read as the start of a word too, as a search box types */
+		prefix: [9, bool],
 	},
 	{
 		write(w, v) {
@@ -10284,6 +10286,11 @@ export const SearchQuery = message(
 				w.uint(v.limit)
 				n++
 			}
+			if (v.prefix !== undefined) {
+				w.field(9)
+				w.bool(v.prefix)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10295,6 +10302,7 @@ export const SearchQuery = message(
 			let $where: string | undefined
 			let $offset: number | undefined
 			let $limit: number | undefined
+			let $prefix: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10321,6 +10329,9 @@ export const SearchQuery = message(
 					case 8:
 						$limit = r.uint()
 						break
+					case 9:
+						$prefix = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -10335,6 +10346,7 @@ export const SearchQuery = message(
 				where: $where,
 				offset: $offset,
 				limit: $limit,
+				prefix: $prefix,
 			}
 		},
 	},

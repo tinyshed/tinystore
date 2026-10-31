@@ -16,6 +16,10 @@ const B: f64 = 0.75;
 const POINT: f64 = 4_294_967_296.0;
 /// What a stem found weighs beside the word as written in the same field.
 const STEMS: f64 = 0.75;
+/// What the words a prefix begins weigh beside the word as written in the
+/// same field: less than a stem, since a word its reader typed whole is
+/// likelier the one meant than any it begins.
+pub(crate) const PREFIXED: f64 = 0.5;
 
 /// A field's words as written, or their stems: each its own lengths, keys
 /// and weight. A field's number `n` is parts `2n` and `2n + 1`; a filter's

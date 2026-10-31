@@ -55,6 +55,23 @@ for (const way of ways) {
 			expect(await articles.delete('c')).toBe(false)
 		})
 
+		// contract: SRCH-11
+		test('a word typed halfway finds the words it begins with prefix, and nothing without', async () => {
+			const courses = store.index<{ name: string }>('courses', { fields: { name: 1 } })
+			await courses.setMany([
+				{ id: 1, value: { name: 'Cryptographic methods of information security' } },
+				{ id: 2, value: { name: 'Cryptanalysis' } },
+				{ id: 3, value: { name: 'Cryptography' } },
+				{ id: 4, value: { name: 'Foundations of cryptography' } },
+			])
+			const found = async (text: string, prefix?: boolean) =>
+				ids(await courses.search({ text, prefix }))
+			expect(await found('crypt')).toEqual([])
+			expect(await found('crypt', true)).toEqual(['2', '3', '4', '1'])
+			expect(await found('cryptograph', true)).toEqual(['3', '4', '1'])
+			expect(await found('crypt ', true)).toEqual([])
+		})
+
 		test('a vector finds the nearest by its cosine, and with words both are summed or reranked', async () => {
 			const shoes = store.index<Product>('shoes', {
 				fields: ['title'],

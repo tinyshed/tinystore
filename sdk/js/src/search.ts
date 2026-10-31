@@ -85,6 +85,12 @@ export interface Query {
 	where?: Where | undefined
 	/** this search's way of combining its words and its vector, in place of the index's */
 	hybrid?: { vectorWeight?: number | undefined; rerank?: boolean | undefined } | undefined
+	/**
+	 * the last word read as the start of a word too, as a search box types:
+	 * `crypt` finds `cryptography` as well, at half its field's weight; a
+	 * word a space follows is whole, and so is one of a single letter
+	 */
+	prefix?: boolean | undefined
 	/** 10 unless said; offset and limit together 1000 at most */
 	limit?: number | undefined
 	offset?: number | undefined
@@ -187,6 +193,7 @@ abstract class Searchable<T> {
 				vector,
 				vectorWeight: asked.hybrid?.vectorWeight,
 				rerank: asked.hybrid?.rerank,
+				prefix: asked.prefix,
 				where,
 				offset: asked.offset,
 				limit: asked.limit,

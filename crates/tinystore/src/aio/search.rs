@@ -373,6 +373,11 @@ impl<'i, T: DeserializeOwned + Send + 'static> SearchCall<'i, T> {
         self.changed(crate::search::SearchCall::rerank)
     }
 
+    /// As [`crate::search::SearchCall::prefix`].
+    pub fn prefix(self) -> Self {
+        self.changed(crate::search::SearchCall::prefix)
+    }
+
     /// As [`crate::search::SearchCall::filter`].
     pub fn filter(self, condition: Condition) -> Self {
         self.changed(|call| call.filter(condition))

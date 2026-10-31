@@ -251,6 +251,9 @@ fn query<'i>(
     if asked.rerank {
         call = call.rerank();
     }
+    if asked.prefix {
+        call = call.prefix();
+    }
     if let Some(conditions) = &asked.r#where {
         for condition in search::conditions(conditions)? {
             call = call.filter(condition);

@@ -72,6 +72,12 @@ interface Query {
         vectorWeight?: number | undefined
         rerank?: boolean | undefined
     } | undefined
+    /**
+     * the last word read as the start of a word too, as a search box types:
+     * `crypt` finds `cryptography` as well, at half its field's weight; a
+     * word a space follows is whole, and so is one of a single letter
+     */
+    prefix?: boolean | undefined
     /** 10 unless said; offset and limit together 1000 at most */
     limit?: number | undefined
     offset?: number | undefined

@@ -31,6 +31,9 @@ const MOST_ID: usize = 1 << 10;
 /// The longest text a search reads, and the words of it it reads.
 const MOST_TEXT: usize = 1 << 10;
 const MOST_WORDS: usize = 32;
+/// The letters a word needs before a `prefix` search reads it as the start
+/// of others: one letter would read every word that starts with it.
+const LEAST_PREFIX: usize = 2;
 /// The hits a search reaches at most, `offset` and `limit` together.
 const MOST_HITS: usize = 1000;
 /// The hits a search answers unless it says.
@@ -259,6 +262,7 @@ impl<T: DeserializeOwned> Index<T> {
             vector: None,
             vector_weight: None,
             rerank: false,
+            prefix: false,
             filter: Vec::new(),
             offset: 0,
             limit: LIMIT,
@@ -476,6 +480,7 @@ pub struct SearchCall<'i, T> {
     vector: Option<&'i [f32]>,
     vector_weight: Option<f64>,
     rerank: bool,
+    prefix: bool,
     filter: Vec<Condition>,
     offset: usize,
     limit: usize,
@@ -530,6 +535,15 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// without a vector comes after those with one, scored −1.
     pub fn rerank(mut self) -> Self {
         self.rerank = true;
+        self
+    }
+
+    /// Reads the text's last word as the start of a word too, as a search
+    /// box does while its reader types: `crypt` finds `cryptography` as
+    /// well, at half its field's weight. A word followed by a space or a
+    /// mark is whole, and so is one of a single letter.
+    pub fn prefix(mut self) -> Self {
+        self.prefix = true;
         self
     }
 
@@ -598,12 +612,17 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         let normal = analyzer::normalize(&self.text);
         let mut words = analyzer::words_of(&normal);
         words.truncate(MOST_WORDS);
+        let prefix = self.prefix
+            && words
+                .last()
+                .is_some_and(|last| last.at.end == normal.len() && last.text.chars().count() >= LEAST_PREFIX);
         Ok(Query {
             normal,
             words,
             vector: self.question()?,
             vector_weight: self.vector_weight,
             rerank: self.rerank,
+            prefix,
             filter: if self.filter.is_empty() { None } else { Some(filter::asked(&self.filter)?) },
             offset: self.offset,
             limit: self.limit,

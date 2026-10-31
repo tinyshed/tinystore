@@ -205,6 +205,124 @@ fn a_word_that_matches_is_never_changed() {
     assert_eq!((ids(&found), found.corrected.as_deref()), (vec!["a"], None));
 }
 
+// contract: SRCH-11
+#[test]
+fn a_word_typed_halfway_finds_the_words_it_begins_below_one_typed_whole() {
+    // the catalogue issue 39 searched, since only a Cyrillic word has a stem to meet a prefix
+    let fixture = fixture();
+    let courses = fixture.store.index::<String>("courses").open().unwrap();
+    let names = [
+        "Криптографические методы защиты информации",
+        "Криптоанализ",
+        "Криптография",
+        "Основы криптографии",
+        "Крипто и блокчейн",
+        "Криптон",
+    ];
+    for (id, name) in (1..).zip(names) {
+        courses.set(id, &name.to_owned()).unwrap();
+    }
+    let found = |text: &str| {
+        let found = checked(|| courses.search(text).prefix().run()).unwrap();
+        let ids: Vec<String> = found.hits.iter().map(|hit| hit.id.clone()).collect();
+        (ids, found.corrected)
+    };
+    let typed = |text: &str| found(text).0;
+    // the course named by the word itself first, then the shortest names by BM25, ties in the order set
+    assert_eq!(typed("крипто"), ["5", "2", "3", "6", "4", "1"]);
+    assert_eq!(ids(&checked(|| courses.search("крипто").run()).unwrap()), ["5"], "a whole word without prefix");
+    assert_eq!(typed("крипто "), ["5"], "a word a space follows is whole");
+    // `методы` is whole, so 1 is found by it and by the prefix, below 5's shorter name
+    assert_eq!(typed("методы крипто"), ["5", "1", "2", "3", "6", "4"], "the last word alone is a prefix");
+    // `информ` begins `информации` and is neither its word nor its stem
+    assert_eq!(typed("информ крипто"), ["5", "2", "3", "6", "4", "1"], "a word before the last is never a prefix");
+    // their stem finds 3 and 4, the prefix 1 too
+    assert_eq!(typed("криптограф"), ["3", "4", "1"]);
+    assert!(typed("к").is_empty(), "one letter is a whole word");
+    // one edit from `криптон`, yet the start of three words: no typo
+    assert_eq!(found("криптог"), (vec!["3".to_owned(), "4".to_owned(), "1".to_owned()], None));
+    // a prefix that begins no word is corrected as a word is
+    let (hits, corrected) = found("крипотграфия");
+    assert_eq!((hits.first().map(String::as_str), corrected.as_deref()), (Some("3"), Some("криптография")));
+}
+
+// contract: SRCH-11
+#[test]
+fn a_prefix_reads_as_the_guide_shows_it() {
+    let fixture = fixture();
+    let courses = fixture.store.index::<String>("courses").open().unwrap();
+    let names = [
+        "Cryptographic methods of information security",
+        "Cryptanalysis",
+        "Cryptography",
+        "Foundations of cryptography",
+        "Cards",
+        "Cardigan knitting",
+    ];
+    for (id, name) in (1..).zip(names) {
+        courses.set(id, &name.to_owned()).unwrap();
+    }
+    let found = |text: &str, prefix: bool| {
+        let call = courses.search(text);
+        let found = checked(|| if prefix { call.prefix() } else { call }.run()).unwrap();
+        let ids: Vec<String> = found.hits.iter().map(|hit| hit.id.clone()).collect();
+        (ids, found.corrected)
+    };
+    let typed = |text: &str| found(text, true).0;
+    assert_eq!(typed("crypt"), ["2", "3", "4", "1"]);
+    assert!(found("crypt", false).0.is_empty());
+    assert_eq!(typed("cryptograph"), ["3", "4", "1"]);
+    for whole in ["crypt ", "crypt,", "c"] {
+        assert!(typed(whole).is_empty(), "{whole:?} is a whole word");
+    }
+    assert_eq!(found("cardi", true), (vec!["6".to_owned()], None));
+    assert_eq!(found("cardi", false), (vec!["5".to_owned()], Some("cards".to_owned())));
+    let (hits, corrected) = found("cryptograhpy", true);
+    assert_eq!((hits.first().map(String::as_str), corrected.as_deref()), (Some("3"), Some("cryptography")));
+}
+
+// contract: SRCH-11
+#[test]
+fn a_prefix_finds_every_document_holding_a_word_it_begins_waiting_and_packed() {
+    let fixture = fixture();
+    let index: Index<Article> =
+        fixture.store.index("mix").field("title", 2.0).field("body", 1.0).typo_tolerance(false).open().unwrap();
+    let mut random = Random::new(11);
+    let mut docs: BTreeMap<String, Article> = BTreeMap::new();
+    let begun = |docs: &BTreeMap<String, Article>, prefix: &str| -> BTreeSet<String> {
+        let begins = |text: &String| {
+            analyzer::words_of(&analyzer::normalize(text)).iter().any(|word| word.text.starts_with(prefix))
+        };
+        docs.iter().filter(|(_, value)| begins(&value.title) || begins(&value.body)).map(|(id, _)| id.clone()).collect()
+    };
+    let found = |prefix: &str| -> BTreeSet<String> {
+        let found = checked(|| index.search(prefix).prefix().limit(1000).run()).unwrap();
+        found.hits.into_iter().map(|hit| hit.id).collect()
+    };
+    for round in 0..3 {
+        for _ in 0..400 {
+            let id = format!("d{}", random.below(300));
+            if random.below(5) == 0 {
+                index.delete(&id).unwrap();
+                docs.remove(&id);
+            } else {
+                let value = random_article(&mut random);
+                index.set(&id, &value).unwrap();
+                docs.insert(id, value);
+            }
+        }
+        for prefix in ["rare39", "rare7", "кош", "соба", "те", "ba"] {
+            let expected = begun(&docs, prefix);
+            assert!(!expected.is_empty(), "round {round}: {prefix} begins a word");
+            assert_eq!(found(prefix), expected, "round {round}: {prefix}");
+        }
+        maintain(&fixture.store).unwrap();
+        for prefix in ["rare39", "кош", "ba"] {
+            assert_eq!(found(prefix), begun(&docs, prefix), "round {round}, packed: {prefix}");
+        }
+    }
+}
+
 #[test]
 fn a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_again() {
     let fixture = fixture();

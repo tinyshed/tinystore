@@ -25,7 +25,7 @@ use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
-use super::score::{Part, average, idf, score};
+use super::score::{PREFIXED, Part, average, idf, score};
 use super::settings::Settings;
 use super::vectors::{self, Among, Question, Scan};
 use crate::sqlite::sql_error;
@@ -37,6 +37,15 @@ const READ_INDEX: &str =
 const READ_PARTS: &str = "select part, tokens from _tinystore_search_parts where index_id = ?1";
 const FIND_KEY: &str =
     "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
+/// The words of a part that start with a prefix and are longer, between
+/// `?3` and `?4`, the most held first: a range of the keys' index by term,
+/// read to its end, since how many documents hold a word is no order that
+/// index keeps.
+const FIND_PREFIXED: &str = "select id, documents from _tinystore_search_keys
+    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0
+    order by documents desc, term limit cast(?5 as integer)";
+const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys
+    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0)";
 const READ_HEAD: &str = "select doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 pub(super) const READ_BLOCK: &str = "select payload from _tinystore_search_blocks where key = ?1 and first = ?2";
 const READ_BLOCKS: &str =
@@ -45,6 +54,9 @@ const READ_HIT: &str = "select id, value from _tinystore_search_docs where index
 
 /// Blocks a statement reads at once while a list is read in order.
 const AHEAD: usize = 8;
+/// The words a prefix is read as in a field at most, those most documents
+/// hold: each one's postings are read whole before the search scores.
+const MOST_PREFIXED: usize = 64;
 /// A filter that passes no more than one document in this many of an
 /// index's has them scored alone, rather than crossed out of a search of
 /// every one; a search by a vector reads their codes by their numbers
@@ -63,6 +75,9 @@ pub(crate) struct Query {
     pub(crate) vector: Option<Question>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
+    /// The last word is read as the start of a word too: the search asked
+    /// so, nothing follows the word in its text, and it is long enough.
+    pub(crate) prefix: bool,
     pub(crate) filter: Option<filter::Asked>,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
@@ -206,7 +221,7 @@ fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize
     let stats =
         Stats { documents, tokens: tokens(connection, asked.index)?, gone: asked.kept.gone(connection, moment)? };
     let mut source = Source::new(connection, asked, moment, &stats);
-    let mut lists = lists(connection, asked, &stats)?;
+    let mut lists = lists(connection, asked, &stats, &mut source)?;
     let found = match passing {
         Some(docs) if narrow(docs.len(), documents, NARROW_WORDS) => best_of(&mut lists, &mut source, docs, k)?,
         passing => best(&mut lists, &mut source, k, passing)?,
@@ -287,15 +302,29 @@ struct Stats {
     gone: Arc<Gone>,
 }
 
-/// The lists of a search's keys.
-fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats) -> Result<Vec<List>> {
+/// The lists of a search's keys, and in each field the list of the words
+/// its last word begins, when it reads that word as a prefix.
+fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut Source<'_>) -> Result<Vec<List>> {
     let mut lists = Vec::new();
     for form in forms(&asked.query.words, asked.settings) {
         if let Some(list) = list(connection, asked, stats, &form)? {
             lists.push(list);
         }
     }
+    if let Some(word) = prefix_of(&asked.query) {
+        for field in &asked.settings.fields {
+            let part = Part::written(field.number);
+            if let Some(list) = prefixed(connection, asked, (stats, &mut *source), (part, &word.text))? {
+                lists.push(list);
+            }
+        }
+    }
     Ok(lists)
+}
+
+/// The word a search reads as the start of others: its last, when it does.
+fn prefix_of(query: &Query) -> Option<&Word> {
+    query.words.last().filter(|_| query.prefix)
 }
 
 #[cfg(test)]
@@ -324,7 +353,8 @@ fn check(
         return Ok(());
     }
     let mut source = Source::new(connection, asked, held.moment, stats);
-    let every = super::execute::every(&mut lists(connection, asked, stats)?, &mut source, k, held.passing)?;
+    let mut lists = lists(connection, asked, stats, &mut source)?;
+    let every = super::execute::every(&mut lists, &mut source, k, held.passing)?;
     if every != found {
         return Err(Error::internal(format!("found {found:?} where every posting gives {every:?}")));
     }
@@ -384,9 +414,14 @@ fn correct(connection: &Connection, asked: &mut Asked<'_>, version: i64, behind:
         return Ok(None);
     }
     let mut replaced = Vec::new();
+    let last = asked.query.words.len().saturating_sub(1);
     for at in 0..asked.query.words.len() {
         let word = &asked.query.words[at];
         if word.text.chars().count() < 5 || held(connection, asked, word)? > 0 {
+            continue;
+        }
+        // a word typed halfway is no typo while it begins one the index holds
+        if asked.query.prefix && at == last && begins_a_word(connection, asked, &word.text)? {
             continue;
         }
         let corrector = corrector(connection, asked, version, behind)?;
@@ -440,16 +475,26 @@ fn corrector(connection: &Connection, asked: &Asked<'_>, version: i64, behind: &
     Ok(built)
 }
 
-/// A key's list: its blocks by its directory, or its postings in its own
-/// row, then its head; nothing when no document holds it.
+/// A word's list in a part; nothing when no document holds it.
 fn list(
     connection: &Connection,
     asked: &Asked<'_>,
     stats: &Stats,
     (part, term): &(Part, String),
 ) -> Result<Option<List>> {
-    let part = *part;
-    let Some((key, holding)) = find(connection, asked.index, part, term)? else { return Ok(None) };
+    let Some(found) = find(connection, asked.index, *part, term)? else { return Ok(None) };
+    keyed(connection, asked, stats, (*part, found))
+}
+
+/// A key's list, `holding` documents holding it: its blocks by its
+/// directory, or its postings in its own row, then its head; nothing when
+/// no document holds it.
+fn keyed(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    stats: &Stats,
+    (part, (key, holding)): (Part, (i64, u64)),
+) -> Result<Option<List>> {
     let Some(weight) = asked.settings.weight(part.field()) else { return Ok(None) };
     if holding == 0 {
         return Ok(None);
@@ -470,6 +515,102 @@ fn list(
     }
     push_held(&mut list, head(connection, asked.index, key)?, gone);
     Ok((!list.is_empty()).then_some(list))
+}
+
+/// The words of `part` that start with `prefix` and are longer, read as one
+/// word: the most held of them, their postings joined, a document's
+/// frequency the sum of theirs, scored as [`PREFIXED`] of the field's
+/// weight by how many documents hold any of them. Their postings are read
+/// whole here, so a search skips none of their blocks.
+///
+/// ```text
+/// crypt  →  cryptography 2, cryptanalysis 1, cryptographic 1   one list of the documents holding any
+/// ```
+fn prefixed(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    (stats, source): (&Stats, &mut Source<'_>),
+    (part, prefix): (Part, &str),
+) -> Result<Option<List>> {
+    let Some(weight) = asked.settings.weight(part.field()) else { return Ok(None) };
+    let Some(past) = past(prefix) else { return Ok(None) };
+    let mut postings = Vec::new();
+    for found in words_starting(connection, asked.index, part, (prefix, &past))? {
+        if let Some(list) = keyed(connection, asked, stats, (part, found))? {
+            postings.extend(list.into_postings(source)?);
+        }
+    }
+    let joined = joined(postings);
+    if joined.is_empty() {
+        return Ok(None);
+    }
+    let tokens = stats.tokens.get(&part).copied().unwrap_or(0);
+    let scale = weight * PREFIXED * idf(stats.documents, joined.len() as u64);
+    Ok(Some(List::joined(part, scale, average(tokens, stats.documents), joined)))
+}
+
+/// Postings of one part's words, a document once, its frequency the sum of
+/// theirs; its length is the part's, the same in each.
+fn joined(mut postings: Vec<Posting>) -> Vec<Posting> {
+    postings.sort_unstable_by_key(|posting| posting.doc);
+    let mut joined: Vec<Posting> = Vec::with_capacity(postings.len());
+    for posting in postings {
+        match joined.last_mut() {
+            Some(last) if last.doc == posting.doc => last.tf = last.tf.saturating_add(posting.tf),
+            _ => joined.push(posting),
+        }
+    }
+    joined
+}
+
+/// The keys of the words of `part` that start with `prefix` and are longer,
+/// those before `past`, with how many documents hold each.
+fn words_starting(
+    connection: &Connection,
+    index: i64,
+    part: Part,
+    (prefix, past): (&str, &str),
+) -> Result<Vec<(i64, u64)>> {
+    let failed = |error| sql_error("find the words a prefix begins", error);
+    let mut select = connection.prepare_cached(FIND_PREFIXED).map_err(failed)?;
+    let most = MOST_PREFIXED as i64;
+    let rows = select
+        .query_map((index, part.0, prefix, past, most), |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.max(0) as u64)));
+    rows.and_then(Iterator::collect).map_err(failed)
+}
+
+/// Whether a field holds a word that starts with `prefix` and is longer.
+fn begins_a_word(connection: &Connection, asked: &Asked<'_>, prefix: &str) -> Result<bool> {
+    let Some(past) = past(prefix) else { return Ok(false) };
+    let failed = |error| sql_error("find a word a prefix begins", error);
+    let mut select = connection.prepare_cached(BEGINS_A_WORD).map_err(failed)?;
+    for field in &asked.settings.fields {
+        let part = Part::written(field.number);
+        if select.query_row((asked.index, part.0, prefix, &past), |row| row.get(0)).map_err(failed)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The least text past every one that starts with `prefix`: its last letter
+/// that has a next, as that next, and nothing after it. UTF-8 orders as
+/// code points do, and SQLite compares text by its bytes, so the range from
+/// `prefix` to this is every word that starts with it. None when every
+/// letter is the last there is, which no word holds.
+///
+/// ```text
+/// crypt → crypu     a + U+10FFFF → b
+/// ```
+fn past(prefix: &str) -> Option<String> {
+    let mut letters: Vec<char> = prefix.chars().collect();
+    while let Some(last) = letters.pop() {
+        if let Some(next) = (u32::from(last) + 1..=u32::from(char::MAX)).find_map(char::from_u32) {
+            letters.push(next);
+            return Some(letters.into_iter().collect());
+        }
+    }
+    None
 }
 
 /// Postings in hand as a list's next block, those of documents gone left out.
@@ -582,5 +723,22 @@ impl<'a> Source<'a> {
         let read = self.asked.kept.chunk(self.connection, self.asked.memory, self.moment, (part, chunk))?;
         self.chunks.insert((part, chunk), Arc::clone(&read));
         Ok(read)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::past;
+
+    #[test]
+    fn past_a_prefix_is_the_least_text_no_word_it_begins_reaches() {
+        assert_eq!(past("crypt").as_deref(), Some("crypu"));
+        assert_eq!(past("крипто").as_deref(), Some("криптп"));
+        // a surrogate is no letter, and the last letter there is has no next
+        assert_eq!(past("\u{d7ff}").as_deref(), Some("\u{e000}"));
+        assert_eq!(past("a\u{10ffff}").as_deref(), Some("b"));
+        assert_eq!(past("\u{10ffff}"), None);
+        let begun = ["crypt", "cryptography", "crypt\u{10ffff}"];
+        assert!(begun.iter().all(|word| *word < past("crypt").unwrap().as_str()));
     }
 }

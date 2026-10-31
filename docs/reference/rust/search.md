@@ -492,6 +492,17 @@ Orders the hundred best of the search's words by their vectors'
 cosines with its vector, finding nothing the words do not; a hit
 without a vector comes after those with one, scored −1.
 
+### SearchCall.prefix
+
+```rust
+pub fn prefix(self) -> Self
+```
+
+Reads the text's last word as the start of a word too, as a search
+box does while its reader types: `crypt` finds `cryptography` as
+well, at half its field's weight. A word followed by a space or a
+mark is whole, and so is one of a single letter.
+
 ### SearchCall.filter
 
 ```rust
@@ -1059,6 +1070,14 @@ pub fn rerank(self) -> Self
 ```
 
 As `crate::search::SearchCall::rerank`.
+
+### aio::search::SearchCall.prefix
+
+```rust
+pub fn prefix(self) -> Self
+```
+
+As `crate::search::SearchCall::prefix`.
 
 ### aio::search::SearchCall.filter
 

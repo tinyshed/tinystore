@@ -201,7 +201,7 @@ type vectorSaid struct {
 	err      error
 }
 
-// QueryOption is how a search reads: Vector, Where, Or, Limit, Offset, Hybrid.
+// QueryOption is how a search reads: Vector, Where, Or, Prefix, Limit, Offset, Hybrid.
 type QueryOption interface{ search(*wire.SearchQuery) }
 
 type vector []float32
@@ -341,6 +341,15 @@ type Result[T any] struct {
 	Hits      []Hit[T]
 	Corrected string
 }
+
+type prefix struct{}
+
+// Prefix reads the last word as the start of a word too, as a search box
+// types: "crypt" finds "cryptography" as well, at half its field's weight.
+// A word a space follows is whole, and so is one of a single letter.
+func Prefix() QueryOption { return prefix{} }
+
+func (prefix) search(q *wire.SearchQuery) { q.Prefix = true }
 
 type limit int
 

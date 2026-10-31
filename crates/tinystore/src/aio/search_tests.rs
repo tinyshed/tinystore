@@ -131,6 +131,9 @@ async fn an_awaited_index_answers_as_the_blocking_one_on_the_same_store() {
     let misspelt = articles.search("replicaiton").run().await.unwrap();
     assert_eq!(misspelt.corrected.as_deref(), Some("replication"));
     assert_eq!(misspelt, blocking.search("replicaiton").run().unwrap());
+    let typed = articles.search("sourd").prefix().run().await.unwrap();
+    assert_eq!(typed.hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["a-17"]);
+    assert_eq!(typed, blocking.search("sourd").prefix().run().unwrap());
     assert_eq!(articles.status().await.unwrap(), blocking.status().unwrap());
 
     assert!(articles.delete("a-17").await.unwrap());

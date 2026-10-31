@@ -40,7 +40,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 | kv             | buckets, branches, expiry, versions, encrypted values, counters, rate limits, quotas, `once`       | [kv](docs/guides/kv/README.md)                       |
 | jobs           | queues, ids, repeats and cron, schedules, concurrency, rate, retries, steps, workers               | [jobs](docs/guides/jobs/README.md)                   |
 | blobs          | files by path, uploads, conditions, copies, expiry, checked reads, the scrub                       | [blobs](docs/guides/blobs/README.md)                 |
-| search         | indexes by words, by vectors and by both, filters, typos, rebuilds, a table's own index            | [search](docs/guides/search/README.md)               |
+| search         | indexes by words, by vectors and by both, filters, typos, prefixes, rebuilds, a table's own index  | [search](docs/guides/search/README.md)               |
 | channels       | messages to whoever listens now, a transaction's at its commit                                     | [channels](docs/guides/channels/README.md)           |
 | locks          | locks and semaphores with fences, leases over the wire                                             | [locks](docs/guides/locks/README.md)                 |
 | config         | typed settings in layers, secrets, live settings kept in kv.db                                     | [config](docs/guides/config/README.md)               |

@@ -8451,6 +8451,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(8)
         w.uint(x)
         n += 1
+    if (x := v.get("prefix")) is not None:
+        w.uint(9)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8475,6 +8479,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 read["offset"] = r.uint()
             case 8:
                 read["limit"] = r.uint()
+            case 9:
+                read["prefix"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -8496,6 +8502,8 @@ SearchQuery = Message(
         "offset": (7, uint),
         # 10 when absent; offset and limit together 1000 at most
         "limit": (8, uint),
+        # the last word read as the start of a word too, as a search box types
+        "prefix": (9, bool_),
     },
     _write_search_query,
     _read_search_query,

@@ -174,6 +174,7 @@ class _Searchable[T]:
         vector: Vector | None = None,
         where: Where | None = None,
         hybrid: Hybrid | None = None,
+        prefix: bool = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Result[T]:
@@ -181,6 +182,10 @@ class _Searchable[T]:
 
         Both at once scale each half's best hundred and sum them at the
         index's vector weight. Of equal scores the one set first comes first.
+        With prefix, the last word is read as the start of a word too, as a
+        search box types: "crypt" finds "cryptography" as well, at half its
+        field's weight; a word a space follows is whole, and so is one of a
+        single letter.
         """
         vector_bytes = None if vector is None else _vector_bytes(vector)
         asked = None if where is None else where_json(where)
@@ -192,6 +197,7 @@ class _Searchable[T]:
                 vector=vector_bytes,
                 vector_weight=None if hybrid is None else hybrid.vector_weight,
                 rerank=None if hybrid is None else hybrid.rerank,
+                prefix=prefix,
                 where=asked,
                 offset=offset,
                 limit=limit,

@@ -78,6 +78,7 @@ message search.Query {
   6 where: json?            # the conditions, as docs/wire.md's "search's where" writes them
   7 offset: uint
   8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
+  9 prefix: bool            # the last word read as the start of a word too, as a search box types
 }
 
 # A hit: a document and its value, or a table's row, a value a column of

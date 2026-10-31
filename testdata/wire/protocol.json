@@ -5283,6 +5283,9 @@
         "offset": {
           "uint": "707"
         },
+        "prefix": {
+          "bool": true
+        },
         "rerank": {
           "bool": true
         },
@@ -5299,7 +5302,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "88016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd0327",
+      "hex": "89016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c3",
       "message": "search.Query",
       "name": "search.Query with every field"
     },

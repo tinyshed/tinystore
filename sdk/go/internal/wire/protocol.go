@@ -11273,6 +11273,8 @@ type SearchQuery struct {
 	Offset uint64  `wire:"7,offset"`
 	// 10 when absent; offset and limit together 1000 at most
 	Limit *uint64 `wire:"8,limit"`
+	// the last word read as the start of a word too, as a search box types
+	Prefix bool `wire:"9,prefix"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -11318,6 +11320,11 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Uint(*m.Limit)
 		n++
 	}
+	if m.Prefix {
+		w.Uint(9)
+		w.Bool(m.Prefix)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11346,6 +11353,8 @@ func (m *SearchQuery) Read(r *Reader) {
 		case 8:
 			v := r.Uint()
 			m.Limit = &v
+		case 9:
+			m.Prefix = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -11362,7 +11371,8 @@ func (m SearchQuery) IsZero() bool {
 		!m.Rerank &&
 		m.Where == nil &&
 		m.Offset == 0 &&
-		m.Limit == nil
+		m.Limit == nil &&
+		!m.Prefix
 }
 
 // SearchHit is the schema's search.Hit.

@@ -185,6 +185,7 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 |-----------------------------------------|-----------------------------------------------------|
 | [Fields and weights](fields.md)         | which text is read, and how much each field counts  |
 | [Typos](typos.md)                       | the nearest word, `corrected`, `typoTolerance`      |
+| [As you type](prefix.md)                | `prefix`: the last word as the start of others      |
 | [Filters](filters.md)                   | `where`, lists, ranges, `search.or`                 |
 | [Vectors](vectors.md)                   | dimensions, exact search, `recall` and clusters     |
 | [Words and vectors together](hybrid.md) | `vectorWeight`, `rerank`                            |

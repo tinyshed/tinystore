@@ -274,7 +274,7 @@ type QueryOption interface {
 }
 ```
 
-QueryOption is how a search reads: Vector, Where, Or, Limit, Offset, Hybrid.
+QueryOption is how a search reads: Vector, Where, Or, Prefix, Limit, Offset, Hybrid.
 
 ### Limit
 
@@ -291,6 +291,14 @@ func Offset(n int) QueryOption
 ```
 
 Offset skips the best hits a page before gave.
+
+### Prefix
+
+```go
+func Prefix() QueryOption
+```
+
+Prefix reads the last word as the start of a word too, as a search box types: "crypt" finds "cryptography" as well, at half its field's weight. A word a space follows is whole, and so is one of a single letter.
 
 ## Range
 

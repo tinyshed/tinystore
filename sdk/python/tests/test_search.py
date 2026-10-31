@@ -51,6 +51,29 @@ async def test_documents_set_by_id_are_found_by_any_of_their_words_the_best_firs
     assert not await articles.delete("c")
 
 
+@dataclass
+class Course:
+    name: str
+
+
+# contract: SRCH-11
+async def test_a_word_typed_halfway_finds_the_words_it_begins_with_prefix_and_nothing_without(
+    store: tinystore.Store,
+) -> None:
+    courses = store.index("courses", Course, fields={"name": 1})
+    names = [
+        "Cryptographic methods of information security",
+        "Cryptanalysis",
+        "Cryptography",
+        "Foundations of cryptography",
+    ]
+    await courses.set_many([(str(n), Course(name)) for n, name in enumerate(names, start=1)])
+    assert ids(await courses.search("crypt")) == []
+    assert ids(await courses.search("crypt", prefix=True)) == ["2", "3", "4", "1"]
+    assert ids(await courses.search("cryptograph", prefix=True)) == ["3", "4", "1"]
+    assert ids(await courses.search("crypt ", prefix=True)) == []
+
+
 async def test_a_vector_finds_the_nearest_by_its_cosine_and_with_words_both_are_summed_or_reranked(
     store: tinystore.Store,
 ) -> None:
