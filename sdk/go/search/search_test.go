@@ -163,6 +163,68 @@ func TestPrefixEveryReadsEachWordAsAStartADocumentHoldingOneForEachFirst(t *test
 	})
 }
 
+type listed struct {
+	Name  string   `json:"name"`
+	Short string   `json:"short"`
+	Tags  []string `json:"tags,omitempty"`
+}
+
+// contract: SRCH-14
+func TestAHitSaysWhereItMatchedInBytesThatSliceItsOwnStrings(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		catalog := ways.Must(search.OpenIndex[listed](store, "catalog", search.Fields{"name": 2, "short": 1, "tags": 1}))
+		ways.Must(0, catalog.SetMany(ctx, []search.Doc[listed]{
+			{ID: "1", Value: listed{Name: "Линейная алгебра и аналитическая геометрия", Short: "ЛААГ"}},
+			{ID: "2", Value: listed{Name: "Криптографические методы защиты информации", Short: "КМЗИ"}},
+			{ID: "3", Value: listed{Name: "🦀 Ёлка", Tags: []string{"ёлки", "пальмы"}}},
+		}))
+		sliced := func(value listed, m search.Match) string {
+			text := map[string]string{"name": value.Name, "short": value.Short}[m.Field]
+			if m.Field == "tags" {
+				text = value.Tags[m.Item]
+			}
+			return text[m.Start:m.End]
+		}
+		shown := func(text string) [][4]string {
+			out := [][4]string{}
+			for _, hit := range ways.Must(catalog.Search(ctx, text, search.Prefix(), search.Matches())).Hits {
+				for _, m := range hit.Matches {
+					out = append(out, [4]string{hit.ID, m.Field, sliced(hit.Value, m), m.Word})
+				}
+			}
+			return out
+		}
+		for _, asked := range []struct {
+			text string
+			want [][4]string
+		}{
+			{"алгебре", [][4]string{{"1", "name", "алгебра", "алгебре"}}},
+			{"крипто", [][4]string{{"2", "name", "Крипто", "крипто"}}},
+			{"криптографичесике методы", [][4]string{
+				{"2", "name", "Криптографические", "криптографичесике"},
+				{"2", "name", "методы", "методы"},
+			}},
+		} {
+			if got := shown(asked.text); !reflect.DeepEqual(got, asked.want) {
+				t.Fatalf("%q: %v, want %v", asked.text, got, asked.want)
+			}
+		}
+		// the crab before Ёлка is four bytes
+		tree := ways.Must(catalog.Search(ctx, "елка", search.Matches())).Hits[0]
+		want := []search.Match{
+			{Field: "name", Start: 5, End: 13, Word: "елка"},
+			{Field: "tags", Item: 0, Start: 0, End: 8, Word: "елка"},
+		}
+		if !reflect.DeepEqual(tree.Matches, want) {
+			t.Fatalf("matches %v, want %v", tree.Matches, want)
+		}
+		if plain := ways.Must(catalog.Search(ctx, "елка")).Hits[0]; plain.Matches != nil {
+			t.Fatalf("matches %v unasked", plain.Matches)
+		}
+	})
+}
+
 func TestAVectorFindsTheNearestByItsCosineAndWithWordsBothAreSummedOrReranked(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

@@ -82,15 +82,31 @@ message search.Query {
   8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
   9 prefix: bool            # the last word read as the start of a word too, as a search box types
   10 prefixEvery: bool      # every word read so, a document holding a word for each first; in place of prefix
+  11 matches: str?          # utf8, utf16 or chars: each hit says where it matched, counted in that unit
 }
 
 # A hit: a document and its value, or a table's row, a value a column of
-# the answer's columns, as sql.Rows holds one.
+# the answer's columns, as sql.Rows holds one, and where the search's words
+# matched it when the query asked.
 message search.Hit {
   1 id: str
   2 value: json             # null for a table's row
   3 score: float
   4 row: [cell]?
+  5 matches: [search.Match]?
+}
+
+# Where a search's word matched a hit: a range of a field's text, or of a
+# string of a field that holds a list, counted in the unit the query asked:
+# bytes of UTF-8, units of UTF-16 or code points. The whole word for a word
+# found as written, by its stem or once corrected; the letters typed for a
+# word a prefix began.
+message search.Match {
+  1 field: str              # the field's path or the table's column; empty for a document that is its own text
+  2 item: uint?             # the string's place in a field that holds a list
+  3 start: uint
+  4 end: uint
+  5 word: str               # the query's word, as its text wrote it
 }
 
 message search.Found {

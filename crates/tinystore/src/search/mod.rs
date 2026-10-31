@@ -50,6 +50,7 @@ mod hybrid;
 mod index;
 mod kept;
 mod layouts;
+mod matches;
 mod open;
 mod pack;
 mod postings;
@@ -73,6 +74,9 @@ pub use filter::{Condition, and, eq, is_in, missing, or, range};
 #[cfg(feature = "client")]
 pub(crate) use held::held;
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};
+pub use matches::Match;
+#[cfg(feature = "wire")]
+pub(crate) use matches::Unit;
 pub use open::Status;
 pub use rebuild::Listed;
 #[cfg(feature = "sql")]

@@ -9991,6 +9991,8 @@ pub(crate) struct SearchQuery {
     pub(crate) prefix: bool,
     /// Every word read so, a document holding a word for each first; in place of prefix.
     pub(crate) prefix_every: bool,
+    /// Utf8, utf16 or chars: each hit says where it matched, counted in that unit.
+    pub(crate) matches: Option<String>,
 }
 
 #[cfg(feature = "search")]
@@ -10012,6 +10014,7 @@ impl Message for SearchQuery {
                 8 => message.limit = Some(codec::uint(r, "limit")?),
                 9 => message.prefix = codec::bool(r, "prefix")?,
                 10 => message.prefix_every = codec::bool(r, "prefixEvery")?,
+                11 => message.matches = Some(codec::str(r, "matches")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10060,6 +10063,10 @@ impl Message for SearchQuery {
             map.field(out, 10);
             codec::write_bool(out, &self.prefix_every);
         }
+        if let Some(matches) = &self.matches {
+            map.field(out, 11);
+            codec::write_str(out, matches);
+        }
         map.close(out);
     }
 
@@ -10075,6 +10082,7 @@ impl Message for SearchQuery {
             + self.limit.map_or(0, |_| 10)
             + 2
             + 2
+            + self.matches.as_ref().map_or(0, |matches| 1 + 5 + matches.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -10088,11 +10096,13 @@ impl Message for SearchQuery {
             && self.limit.is_none()
             && !self.prefix
             && !self.prefix_every
+            && self.matches.is_none()
     }
 }
 
 /// A hit: a document and its value, or a table's row, a value a column of
-/// the answer's columns, as sql.Rows holds one.
+/// the answer's columns, as sql.Rows holds one, and where the search's words
+/// matched it when the query asked.
 #[cfg(feature = "search")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SearchHit {
@@ -10101,6 +10111,7 @@ pub(crate) struct SearchHit {
     pub(crate) value: String,
     pub(crate) score: f64,
     pub(crate) row: Option<Vec<Cell>>,
+    pub(crate) matches: Option<Vec<SearchMatch>>,
 }
 
 #[cfg(feature = "search")]
@@ -10116,6 +10127,7 @@ impl Message for SearchHit {
                 2 => message.value = codec::str(r, "value")?,
                 3 => message.score = codec::float(r, "score")?,
                 4 => message.row = Some(codec::list(r, "row", codec::cell)?),
+                5 => message.matches = Some(codec::list(r, "matches", codec::message::<SearchMatch>)?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10140,6 +10152,10 @@ impl Message for SearchHit {
             map.field(out, 4);
             codec::write_list(out, row, codec::write_cell);
         }
+        if let Some(matches) = &self.matches {
+            map.field(out, 5);
+            codec::write_list(out, matches, codec::write_message);
+        }
         map.close(out);
     }
 
@@ -10149,6 +10165,7 @@ impl Message for SearchHit {
             + 1 + 5 + self.value.len()
             + 10
             + self.row.as_ref().map_or(0, |row| 1 + codec::list_size(row, codec::cell_size))
+            + self.matches.as_ref().map_or(0, |matches| 1 + codec::list_size(matches, codec::message_size))
     }
 
     fn is_zero(&self) -> bool {
@@ -10156,6 +10173,88 @@ impl Message for SearchHit {
             && self.value.is_empty()
             && self.score.to_bits() == 0
             && self.row.is_none()
+            && self.matches.is_none()
+    }
+}
+
+/// Where a search's word matched a hit: a range of a field's text, or of a
+/// string of a field that holds a list, counted in the unit the query asked:
+/// bytes of UTF-8, units of UTF-16 or code points. The whole word for a word
+/// found as written, by its stem or once corrected; the letters typed for a
+/// word a prefix began.
+#[cfg(feature = "search")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SearchMatch {
+    /// The field's path or the table's column; empty for a document that is its own text.
+    pub(crate) field: String,
+    /// The string's place in a field that holds a list.
+    pub(crate) item: Option<u64>,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+    /// The query's word, as its text wrote it.
+    pub(crate) word: String,
+}
+
+#[cfg(feature = "search")]
+impl Message for SearchMatch {
+    const NAME: &'static str = "search.Match";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.field = codec::str(r, "field")?,
+                2 => message.item = Some(codec::uint(r, "item")?),
+                3 => message.start = codec::uint(r, "start")?,
+                4 => message.end = codec::uint(r, "end")?,
+                5 => message.word = codec::str(r, "word")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.field.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.field);
+        }
+        if let Some(item) = &self.item {
+            map.field(out, 2);
+            codec::write_uint(out, item);
+        }
+        if self.start != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.start);
+        }
+        if self.end != 0 {
+            map.field(out, 4);
+            codec::write_uint(out, &self.end);
+        }
+        if !self.word.is_empty() {
+            map.field(out, 5);
+            codec::write_str(out, &self.word);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.field.len()
+            + self.item.map_or(0, |_| 10)
+            + 10
+            + 10
+            + 1 + 5 + self.word.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.field.is_empty()
+            && self.item.is_none()
+            && self.start == 0
+            && self.end == 0
+            && self.word.is_empty()
     }
 }
 
@@ -12397,6 +12496,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "search.Query" => SearchQuery::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Hit" => SearchHit::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "search")]
+        "search.Match" => SearchMatch::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]
         "search.Found" => SearchFound::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "search")]

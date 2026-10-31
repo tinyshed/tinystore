@@ -209,7 +209,7 @@ type vectorSaid struct {
 	err      error
 }
 
-// QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Limit, Offset, Hybrid.
+// QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Limit, Offset, Hybrid.
 type QueryOption interface{ search(*wire.SearchQuery) }
 
 type vector []float32
@@ -339,11 +339,27 @@ func (x *Index[T]) Get(ctx context.Context, id any) (T, bool, error) {
 	return out, true, nil
 }
 
-// Hit is a document a search found, and the score that ordered it among this search's hits.
+// Hit is a document a search found, and the score that ordered it among
+// this search's hits; Matches says where the search's words matched it,
+// when the search asked with Matches.
 type Hit[T any] struct {
-	ID    string
-	Value T
-	Score float64
+	ID      string
+	Value   T
+	Score   float64
+	Matches []Match
+}
+
+// Match is where a search's word matched a hit: bytes Start to End of a
+// field's text, so that text[m.Start:m.End] is what matched. Field is its
+// path, or a table's column, and "" for a document that is its own text;
+// Item is the string's place in a field that holds a list, 0 in one that
+// holds a string; Word is the query's word, as its text wrote it.
+type Match struct {
+	Field string
+	Item  int
+	Start int
+	End   int
+	Word  string
 }
 
 // Result is what a search found, the best first, and the text it read in
@@ -372,6 +388,17 @@ type prefixEvery struct{}
 func PrefixEvery() QueryOption { return prefixEvery{} }
 
 func (prefixEvery) search(q *wire.SearchQuery) { q.PrefixEvery = true }
+
+type matches struct{}
+
+// Matches has each hit say where the search's words matched it, in
+// Hit.Matches, as a search box shows them in bold: a word found as written,
+// by its stem or once corrected whole, and a word a prefix began by the
+// letters typed.
+func Matches() QueryOption { return matches{} }
+
+// Go slices a string by its bytes.
+func (matches) search(q *wire.SearchQuery) { unit := "utf8"; q.Matches = &unit }
 
 type limit int
 
@@ -428,7 +455,7 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 		columns = *found.Columns
 	}
 	for i, hit := range found.Hits {
-		out.Hits[i] = Hit[T]{ID: hit.Id, Score: hit.Score}
+		out.Hits[i] = Hit[T]{ID: hit.Id, Score: hit.Score, Matches: matchesOf(hit.Matches)}
 		var err error
 		switch {
 		case hit.Row != nil:
@@ -441,6 +468,22 @@ func (x *Index[T]) result(found wire.SearchFound) (Result[T], error) {
 		}
 	}
 	return out, nil
+}
+
+// matchesOf is where a hit matched, an empty list when the search asked and
+// none, and nil when it did not ask.
+func matchesOf(found *[]wire.SearchMatch) []Match {
+	if found == nil {
+		return nil
+	}
+	out := make([]Match, len(*found))
+	for i, m := range *found {
+		out[i] = Match{Field: m.Field, Start: int(m.Start), End: int(m.End), Word: m.Word}
+		if m.Item != nil {
+			out[i].Item = int(*m.Item)
+		}
+	}
+	return out
 }
 
 // State is where an index stands.

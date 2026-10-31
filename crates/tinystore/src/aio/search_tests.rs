@@ -141,6 +141,10 @@ async fn an_awaited_index_answers_as_the_blocking_one_on_the_same_store() {
     let swapped = articles.search("ызуде").run().await.unwrap();
     assert_eq!(swapped.corrected.as_deref(), Some("spelt"), "typed with the other layout on");
     assert_eq!(swapped, blocking.search("ызуде").run().unwrap());
+    let matched = articles.search("bread sourd").prefix().matches().run().await.unwrap();
+    let words: Vec<&str> = matched.hits[0].matches.iter().map(|found| &bread.title[found.at.clone()]).collect();
+    assert_eq!(words, ["Sourd", "bread"]);
+    assert_eq!(matched, blocking.search("bread sourd").prefix().matches().run().unwrap());
     assert_eq!(articles.status().await.unwrap(), blocking.status().unwrap());
 
     assert!(articles.delete("a-17").await.unwrap());

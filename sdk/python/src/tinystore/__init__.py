@@ -88,7 +88,7 @@ from .records import (
     TailBatch,
     Top,
 )
-from .search import Hit, Hybrid, IndexInfo, IndexStatus, Result, SearchIndex, TableIndex, Vectors
+from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Vectors
 from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
 from .store import SelfMetrics, Status, Store, connect, open
 from .trace import trace
@@ -150,6 +150,7 @@ __all__ = [
     "Lock",
     "Logger",
     "LostError",
+    "Match",
     "Message",
     "Metrics",
     "MetricsDamage",

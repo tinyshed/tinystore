@@ -68,7 +68,9 @@ use crate::{Key, Result};
 
 #[cfg(feature = "sql")]
 pub use crate::search::TxTableIndex;
-pub use crate::search::{Condition, Document, Found, Hit, Listed, Rebuild, Status, and, eq, is_in, missing, or, range};
+pub use crate::search::{
+    Condition, Document, Found, Hit, Listed, Match, Rebuild, Status, and, eq, is_in, missing, or, range,
+};
 
 impl Store {
     /// The index `name`, made the first time it opens, as
@@ -386,6 +388,11 @@ impl<'i, T: DeserializeOwned + Send + 'static> SearchCall<'i, T> {
     /// As [`crate::search::SearchCall::prefix_every`].
     pub fn prefix_every(self) -> Self {
         self.changed(crate::search::SearchCall::prefix_every)
+    }
+
+    /// As [`crate::search::SearchCall::matches`].
+    pub fn matches(self) -> Self {
+        self.changed(crate::search::SearchCall::matches)
     }
 
     /// As [`crate::search::SearchCall::filter`].

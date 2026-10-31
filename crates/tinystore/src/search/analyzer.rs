@@ -67,13 +67,18 @@ pub(crate) fn words(text: &str) -> Vec<Word> {
 
 /// The words of text [`normalize`] gave, each at its place in it.
 pub(crate) fn words_of(normal: &str) -> Vec<Word> {
-    let letters = |c: &char| c.is_alphanumeric() || is_combining_mark(*c);
     let mut words = Vec::new();
     for at in cut(normal) {
-        let text: String = normal[at.clone()].chars().filter(letters).collect();
+        let text: String = normal[at.clone()].chars().filter(|c| is_letter(*c)).collect();
         words.push(Word { stem: stem(&text), text, at });
     }
     words
+}
+
+/// Whether a word keeps `c` of its place in the text: a letter, a digit or
+/// a mark, and not the `'` of `can't`.
+pub(crate) fn is_letter(c: char) -> bool {
+    c.is_alphanumeric() || is_combining_mark(c)
 }
 
 /// The stem of a word, where Snowball helps its script and the stem differs.
@@ -91,26 +96,89 @@ pub(crate) fn stem(word: &str) -> Option<String> {
 /// accents folded.
 pub(crate) fn normalize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut base = Script::Other;
-    let mut greek = false;
-    for c in text.nfkc().flat_map(char::to_lowercase) {
-        if is_combining_mark(c) {
-            if !(matches!(base, Script::Latin | Script::Cyrillic) || greek) {
-                out.push(c);
+    Folding::new().fold(text, &mut out);
+    out
+}
+
+/// Where [`normalize`] stands between two pieces of one text: the script of
+/// the last letter it folded, which says whether a mark after it goes.
+struct Folding {
+    base: Script,
+    greek: bool,
+}
+
+impl Folding {
+    fn new() -> Folding {
+        Folding { base: Script::Other, greek: false }
+    }
+
+    /// Appends `text` to `out` as [`normalize`] reads it, a mark at its start
+    /// taken off or kept by the letter that ended the piece folded before.
+    fn fold(&mut self, text: &str, out: &mut String) {
+        for c in text.nfkc().flat_map(char::to_lowercase) {
+            if is_combining_mark(c) {
+                if !(matches!(self.base, Script::Latin | Script::Cyrillic) || self.greek) {
+                    out.push(c);
+                }
+                continue;
             }
-            continue;
-        }
-        base = script(c);
-        greek = (0x0370..=0x03FF).contains(&(c as u32));
-        match c {
-            'ё' => out.push('е'),
-            c if base == Script::Latin && !c.is_ascii() => {
-                out.extend(std::iter::once(c).nfd().filter(|c| !is_combining_mark(*c)));
+            self.base = script(c);
+            self.greek = (0x0370..=0x03FF).contains(&(c as u32));
+            match c {
+                'ё' => out.push('е'),
+                c if self.base == Script::Latin && !c.is_ascii() => {
+                    out.extend(std::iter::once(c).nfd().filter(|c| !is_combining_mark(*c)));
+                }
+                c => out.push(c),
             }
-            c => out.push(c),
         }
     }
-    out
+}
+
+/// Text [`normalize`] gave, and where each grapheme of the text it was given
+/// went in it, so that a place in the one reads back as a place in the
+/// other: normalizing changes lengths, `ﬁ` → `fi`, `Ａ` → `a`, `é` → `e`,
+/// `İ` → `i̇`, and only `ё` → `е` keeps its bytes.
+///
+/// ```text
+/// given   ﬁ    n  é      "ine", 1..4 of normal, lies in ﬁ, n and é,
+/// normal  f i  n  e      so it reads back as "ﬁné", 0..6 of the text given
+/// ```
+pub(crate) struct Mapped {
+    pub(crate) normal: String,
+    /// Where each grapheme starts in the text given and in `normal`, and
+    /// both their ends last.
+    starts: Vec<(usize, usize)>,
+}
+
+/// The text `text` normalizes to, folded a grapheme at a time, with where
+/// each grapheme went; none where that reads otherwise than [`normalize`]
+/// reading it whole, since a place it gave would then be wrong. NFKC
+/// composes and reorders letters only within a grapheme, so no text known
+/// reads otherwise, and a test holds random text to it.
+pub(crate) fn mapped(text: &str) -> Option<Mapped> {
+    let mut folding = Folding::new();
+    let mut normal = String::with_capacity(text.len());
+    let mut starts = Vec::new();
+    for (at, grapheme) in text.grapheme_indices(true) {
+        starts.push((at, normal.len()));
+        folding.fold(grapheme, &mut normal);
+    }
+    starts.push((text.len(), normal.len()));
+    (normal == normalize(text)).then_some(Mapped { normal, starts })
+}
+
+impl Mapped {
+    /// The bytes of the text given that `normal`, a range of the normalized
+    /// text, came from: every grapheme it lies in, whole.
+    pub(crate) fn original(&self, normal: Range<usize>) -> Range<usize> {
+        // The last grapheme that starts at or before a byte holds it; one that
+        // gave nothing starts where the next does, and is passed over.
+        let holding = |at: usize| self.starts.partition_point(|(_, start)| *start <= at).saturating_sub(1);
+        let first = holding(normal.start);
+        let last = holding(normal.end.saturating_sub(1).max(normal.start));
+        self.starts[first].0..self.starts[last + 1].0
+    }
 }
 
 /// Where each word lies: words of letters, marks and digits by Unicode's
@@ -203,5 +271,51 @@ mod tests {
         let normal = normalize("Helo, Wörld 世界");
         let places: Vec<&str> = words_of(&normal).iter().map(|word| &normal[word.at.clone()]).collect();
         assert_eq!(places, ["helo", "world", "世界"]);
+    }
+
+    /// Each word of `text` as the text given wrote it.
+    fn written(text: &str) -> Vec<&str> {
+        let mapped = mapped(text).unwrap();
+        words_of(&mapped.normal).into_iter().map(|word| &text[mapped.original(word.at)]).collect()
+    }
+
+    #[test]
+    fn a_word_reads_back_as_the_text_given_wrote_it_where_normalizing_changed_its_length() {
+        let mapped = mapped("ﬁné").unwrap();
+        assert_eq!((mapped.normal.as_str(), mapped.original(1..4)), ("fine", 0..6), "the doc comment's example");
+        // the stress mark goes, İ lowers to i and a dot that goes, Ё keeps its bytes as Е
+        assert_eq!(written("Кари́бский İstanbul ЁЖ"), ["Кари́бский", "İstanbul", "ЁЖ"]);
+        // a decomposed é composes, then folds; full width narrows; ﬃ and ½ widen
+        assert_eq!(written("cafe\u{301}, ＴＯＫＹＯ ﬃx"), ["cafe\u{301}", "ＴＯＫＹＯ", "ﬃx"]);
+        // и with a breve apart composes into й, which stays
+        assert_eq!(written("и\u{306}од"), ["и\u{306}од"]);
+        assert_eq!(written("can't 世界和平"), ["can't", "世界", "界和", "和平"]);
+    }
+
+    /// Letters whose normalizing changes their length or composes them with
+    /// the next, marks, unspaced scripts, emoji and what ends a word.
+    const TRICKY: &[&str] = &[
+        "a", "Z", "e", "и", "к", "ω", " ", ",", "'", "-", "\n", "\r", "4", "\u{301}", "\u{306}", "\u{307}", "\u{308}",
+        "\u{200d}", "ﬁ", "ﬃ", "ﬆ", "İ", "ё", "Ё", "Ａ", "ｂ", "é", "Å", "\u{212b}", "ǅ", "ẞ", "ß", "ά", "\u{2126}",
+        "ŉ", "ǰ", "½", "㎏", "Ⅻ", "\u{1100}", "\u{1161}", "\u{11a8}", "가", "世", "界", "タ", "ส", "\u{e31}", "क",
+        "\u{94d}", "ष", "\u{b47}", "\u{b3e}", "👍", "🏽", "🇷", "🇺",
+    ];
+
+    #[test]
+    fn random_text_folds_a_grapheme_at_a_time_as_it_folds_whole_and_each_word_reads_back() {
+        let mut random = crate::search::fixture::Random::new(45);
+        for round in 0..20_000 {
+            let length = random.below(16);
+            let text: String = (0..length).map(|_| TRICKY[random.below(TRICKY.len() as u64) as usize]).collect();
+            let mapped = mapped(&text).unwrap_or_else(|| panic!("round {round}: {text:?} folds otherwise apart"));
+            let mut start = 0;
+            for word in words_of(&mapped.normal) {
+                let given = mapped.original(word.at.clone());
+                assert!(given.start >= start, "round {round}: {text:?}: a word starts before the one before it");
+                let read = &text[given.clone()];
+                assert!(normalize(read).contains(&mapped.normal[word.at.clone()]), "round {round}: {text:?} {read:?}");
+                start = given.start;
+            }
+        }
     }
 }

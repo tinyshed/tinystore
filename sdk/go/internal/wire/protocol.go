@@ -573,6 +573,8 @@ func NewMessage(name string) Message {
 		return &SearchQuery{}
 	case "search.Hit":
 		return &SearchHit{}
+	case "search.Match":
+		return &SearchMatch{}
 	case "search.Found":
 		return &SearchFound{}
 	case "search.Status":
@@ -11297,6 +11299,8 @@ type SearchQuery struct {
 	Prefix bool `wire:"9,prefix"`
 	// every word read so, a document holding a word for each first; in place of prefix
 	PrefixEvery bool `wire:"10,prefixEvery"`
+	// utf8, utf16 or chars: each hit says where it matched, counted in that unit
+	Matches *string `wire:"11,matches"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -11352,6 +11356,11 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Bool(m.PrefixEvery)
 		n++
 	}
+	if m.Matches != nil {
+		w.Uint(11)
+		w.Str(*m.Matches)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11384,6 +11393,9 @@ func (m *SearchQuery) Read(r *Reader) {
 			m.Prefix = r.Bool()
 		case 10:
 			m.PrefixEvery = r.Bool()
+		case 11:
+			v := r.Str()
+			m.Matches = &v
 		default:
 			r.Skip()
 		}
@@ -11402,19 +11414,22 @@ func (m SearchQuery) IsZero() bool {
 		m.Offset == 0 &&
 		m.Limit == nil &&
 		!m.Prefix &&
-		!m.PrefixEvery
+		!m.PrefixEvery &&
+		m.Matches == nil
 }
 
 // SearchHit is the schema's search.Hit.
 //
 // A hit: a document and its value, or a table's row, a value a column of
-// the answer's columns, as sql.Rows holds one.
+// the answer's columns, as sql.Rows holds one, and where the search's words
+// matched it when the query asked.
 type SearchHit struct {
 	Id string `wire:"1,id"`
 	// null for a table's row
-	Value string  `wire:"2,value"`
-	Score float64 `wire:"3,score"`
-	Row   *[]Cell `wire:"4,row"`
+	Value   string         `wire:"2,value"`
+	Score   float64        `wire:"3,score"`
+	Row     *[]Cell        `wire:"4,row"`
+	Matches *[]SearchMatch `wire:"5,matches"`
 }
 
 func (m SearchHit) Write(w *Writer) {
@@ -11443,6 +11458,14 @@ func (m SearchHit) Write(w *Writer) {
 		}
 		n++
 	}
+	if m.Matches != nil {
+		w.Uint(5)
+		w.Array(len(*m.Matches))
+		for _, item0 := range *m.Matches {
+			item0.Write(w)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11465,6 +11488,15 @@ func (m *SearchHit) Read(r *Reader) {
 			}
 			r.Leave()
 			m.Row = &v
+		case 5:
+			v := []SearchMatch{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 SearchMatch
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Matches = &v
 		default:
 			r.Skip()
 		}
@@ -11477,7 +11509,89 @@ func (m SearchHit) IsZero() bool {
 	return m.Id == "" &&
 		m.Value == "" &&
 		math.Float64bits(m.Score) == 0 &&
-		m.Row == nil
+		m.Row == nil &&
+		m.Matches == nil
+}
+
+// SearchMatch is the schema's search.Match.
+//
+// Where a search's word matched a hit: a range of a field's text, or of a
+// string of a field that holds a list, counted in the unit the query asked:
+// bytes of UTF-8, units of UTF-16 or code points. The whole word for a word
+// found as written, by its stem or once corrected; the letters typed for a
+// word a prefix began.
+type SearchMatch struct {
+	// the field's path or the table's column; empty for a document that is its own text
+	Field string `wire:"1,field"`
+	// the string's place in a field that holds a list
+	Item  *uint64 `wire:"2,item"`
+	Start uint64  `wire:"3,start"`
+	End   uint64  `wire:"4,end"`
+	// the query's word, as its text wrote it
+	Word string `wire:"5,word"`
+}
+
+func (m SearchMatch) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Field != "" {
+		w.Uint(1)
+		w.Str(m.Field)
+		n++
+	}
+	if m.Item != nil {
+		w.Uint(2)
+		w.Uint(*m.Item)
+		n++
+	}
+	if m.Start != 0 {
+		w.Uint(3)
+		w.Uint(m.Start)
+		n++
+	}
+	if m.End != 0 {
+		w.Uint(4)
+		w.Uint(m.End)
+		n++
+	}
+	if m.Word != "" {
+		w.Uint(5)
+		w.Str(m.Word)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *SearchMatch) Read(r *Reader) {
+	*m = SearchMatch{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Field = r.Str()
+		case 2:
+			v := r.Uint()
+			m.Item = &v
+		case 3:
+			m.Start = r.Uint()
+		case 4:
+			m.End = r.Uint()
+		case 5:
+			m.Word = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether SearchMatch writes as no field at all.
+func (m SearchMatch) IsZero() bool {
+	return m.Field == "" &&
+		m.Item == nil &&
+		m.Start == 0 &&
+		m.End == 0 &&
+		m.Word == ""
 }
 
 // SearchFound is the schema's search.Found.

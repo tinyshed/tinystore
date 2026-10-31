@@ -112,6 +112,49 @@ async def test_prefix_every_reads_each_word_as_a_start_a_document_holding_one_fo
     assert ids(await courses.search("лин алг", prefix=True)) == ["3", "1", "2"]
 
 
+@dataclass
+class Listed:
+    name: str
+    short: str
+    tags: list[str] = field(default_factory=list[str])
+
+
+# contract: SRCH-14
+async def test_a_hit_says_where_it_matched_in_code_points_that_slice_its_own_strings(
+    store: tinystore.Store,
+) -> None:
+    catalog = store.index("catalog", Listed, fields={"name": 2, "short": 1, "tags": 1})
+    await catalog.set_many(
+        [
+            ("1", Listed("Линейная алгебра и аналитическая геометрия", "ЛААГ")),
+            ("2", Listed("Криптографические методы защиты информации", "КМЗИ")),
+            ("3", Listed("🦀 Ёлка", "", ["ёлки", "пальмы"])),
+        ]
+    )
+
+    def sliced(value: Listed, match: tinystore.Match) -> str:
+        text = value.tags[match.item or 0] if match.field == "tags" else getattr(value, match.field)
+        return text[match.start : match.end]
+
+    async def shown(text: str) -> list[tuple[str, str, str, str]]:
+        result = await catalog.search(text, prefix=True, matches=True)
+        return [(hit.id, m.field, sliced(hit.value, m), m.word) for hit in result.hits for m in hit.matches or []]
+
+    assert await shown("алгебре") == [("1", "name", "алгебра", "алгебре")]
+    assert await shown("крипто") == [("2", "name", "Крипто", "крипто")]
+    assert await shown("криптографичесике методы") == [
+        ("2", "name", "Криптографические", "криптографичесике"),
+        ("2", "name", "методы", "методы"),
+    ]
+    # the crab before Ёлка is one code point, where UTF-16 counts two
+    tree = (await catalog.search("елка", matches=True)).hits[0]
+    assert tree.matches == [
+        tinystore.Match("name", 2, 6, "елка"),
+        tinystore.Match("tags", 0, 4, "елка", item=0),
+    ]
+    assert (await catalog.search("елка")).hits[0].matches is None
+
+
 async def test_a_vector_finds_the_nearest_by_its_cosine_and_with_words_both_are_summed_or_reranked(
     store: tinystore.Store,
 ) -> None:

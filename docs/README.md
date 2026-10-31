@@ -137,6 +137,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Typos](guides/search/typos.md)
 - [As you type](guides/search/prefix.md)
 - [Keyboard layouts](guides/search/layouts.md)
+- [Show what matched](guides/search/matches.md)
 - [Filters](guides/search/filters.md)
 - [Vectors](guides/search/vectors.md)
 - [Words and vectors together](guides/search/hybrid.md)

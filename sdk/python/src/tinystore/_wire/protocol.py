@@ -8459,6 +8459,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(10)
         w.bool(x)
         n += 1
+    if (x := v.get("matches")) is not None:
+        w.uint(11)
+        w.str(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8487,6 +8491,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 read["prefix"] = r.bool()
             case 10:
                 read["prefix_every"] = r.bool()
+            case 11:
+                read["matches"] = r.str()
             case _:
                 r.skip()
     r.leave()
@@ -8512,127 +8518,80 @@ SearchQuery = Message(
         "prefix": (9, bool_),
         # every word read so, a document holding a word for each first; in place of prefix
         "prefix_every": (10, bool_),
+        # utf8, utf16 or chars: each hit says where it matched, counted in that unit
+        "matches": (11, str_),
     },
     _write_search_query,
     _read_search_query,
 )
 
 
-def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
+def _write_search_match(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
-    if (x := v.get("id")) is not None:
+    if (x := v.get("field")) is not None:
         w.uint(1)
         w.str(x)
         n += 1
-    if (x := v.get("value")) is not None:
+    if (x := v.get("item")) is not None:
         w.uint(2)
-        w.str(x)
+        w.uint(x)
         n += 1
-    if (x := v.get("score")) is not None:
+    if (x := v.get("start")) is not None:
         w.uint(3)
-        w.float(x)
+        w.uint(x)
         n += 1
-    if (x := v.get("row")) is not None:
+    if (x := v.get("end")) is not None:
         w.uint(4)
-        w.array(len(x))
-        for item0 in x:
-            sql_value.write(w, item0)
+        w.uint(x)
         n += 1
-    w.close_map(head, n)
-
-
-def _read_search_hit(r: Reader) -> dict[str, Any]:
-    read: dict[str, Any] = {}
-    seen: set[int] = set()
-    for _ in range(r.map()):
-        match r.field(seen):
-            case 1:
-                read["id"] = r.str()
-            case 2:
-                read["value"] = r.str()
-            case 3:
-                read["score"] = r.float()
-            case 4:
-                items0 = [sql_value.read(r) for _ in range(r.array())]
-                r.leave()
-                read["row"] = items0
-            case _:
-                r.skip()
-    r.leave()
-    return read
-
-
-# A hit: a document and its value, or a table's row, a value a column of
-# the answer's columns, as sql.Rows holds one.
-SearchHit = Message(
-    "search.Hit",
-    {
-        "id": (1, str_),
-        # null for a table's row
-        "value": (2, str_),
-        "score": (3, float_),
-        "row": (4, list_(sql_value)),
-    },
-    _write_search_hit,
-    _read_search_hit,
-)
-
-
-def _write_search_found(w: Writer, v: Mapping[str, Any]) -> None:
-    head = w.open_map()
-    n = 0
-    if (x := v.get("hits")) is not None:
-        w.uint(1)
-        w.array(len(x))
-        for item0 in x:
-            SearchHit.write(w, item0)
-        n += 1
-    if (x := v.get("corrected")) is not None:
-        w.uint(2)
+    if (x := v.get("word")) is not None:
+        w.uint(5)
         w.str(x)
         n += 1
-    if (x := v.get("columns")) is not None:
-        w.uint(3)
-        w.array(len(x))
-        for item0 in x:
-            w.str(item0)
-        n += 1
     w.close_map(head, n)
 
 
-def _read_search_found(r: Reader) -> dict[str, Any]:
+def _read_search_match(r: Reader) -> dict[str, Any]:
     read: dict[str, Any] = {}
     seen: set[int] = set()
     for _ in range(r.map()):
         match r.field(seen):
             case 1:
-                items0 = [SearchHit.read(r) for _ in range(r.array())]
-                r.leave()
-                read["hits"] = items0
+                read["field"] = r.str()
             case 2:
-                read["corrected"] = r.str()
+                read["item"] = r.uint()
             case 3:
-                items0 = [r.str() for _ in range(r.array())]
-                r.leave()
-                read["columns"] = items0
+                read["start"] = r.uint()
+            case 4:
+                read["end"] = r.uint()
+            case 5:
+                read["word"] = r.str()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-SearchFound = Message(
-    "search.Found",
+# Where a search's word matched a hit: a range of a field's text, or of a
+# string of a field that holds a list, counted in the unit the query asked:
+# bytes of UTF-8, units of UTF-16 or code points. The whole word for a word
+# found as written, by its stem or once corrected; the letters typed for a
+# word a prefix began.
+SearchMatch = Message(
+    "search.Match",
     {
-        "hits": (1, list_(SearchHit)),
-        # the text the search read in fact, when a word was read as another
-        "corrected": (2, str_),
-        # the columns of a table's index's rows
-        "columns": (3, list_(str_)),
+        # the field's path or the table's column; empty for a document that is its own text
+        "field": (1, str_),
+        # the string's place in a field that holds a list
+        "item": (2, uint),
+        "start": (3, uint),
+        "end": (4, uint),
+        # the query's word, as its text wrote it
+        "word": (5, str_),
     },
-    _write_search_found,
-    _read_search_found,
+    _write_search_match,
+    _read_search_match,
 )
 
 
@@ -10024,6 +9983,136 @@ SearchSetMany = Message(
 )
 
 
+def _write_search_hit(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("id")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("value")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("score")) is not None:
+        w.uint(3)
+        w.float(x)
+        n += 1
+    if (x := v.get("row")) is not None:
+        w.uint(4)
+        w.array(len(x))
+        for item0 in x:
+            sql_value.write(w, item0)
+        n += 1
+    if (x := v.get("matches")) is not None:
+        w.uint(5)
+        w.array(len(x))
+        for item0 in x:
+            SearchMatch.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_hit(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["id"] = r.str()
+            case 2:
+                read["value"] = r.str()
+            case 3:
+                read["score"] = r.float()
+            case 4:
+                items0 = [sql_value.read(r) for _ in range(r.array())]
+                r.leave()
+                read["row"] = items0
+            case 5:
+                items0 = [SearchMatch.read(r) for _ in range(r.array())]
+                r.leave()
+                read["matches"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A hit: a document and its value, or a table's row, a value a column of
+# the answer's columns, as sql.Rows holds one, and where the search's words
+# matched it when the query asked.
+SearchHit = Message(
+    "search.Hit",
+    {
+        "id": (1, str_),
+        # null for a table's row
+        "value": (2, str_),
+        "score": (3, float_),
+        "row": (4, list_(sql_value)),
+        "matches": (5, list_(SearchMatch)),
+    },
+    _write_search_hit,
+    _read_search_hit,
+)
+
+
+def _write_search_found(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("hits")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            SearchHit.write(w, item0)
+        n += 1
+    if (x := v.get("corrected")) is not None:
+        w.uint(2)
+        w.str(x)
+        n += 1
+    if (x := v.get("columns")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_search_found(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [SearchHit.read(r) for _ in range(r.array())]
+                r.leave()
+                read["hits"] = items0
+            case 2:
+                read["corrected"] = r.str()
+            case 3:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["columns"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+SearchFound = Message(
+    "search.Found",
+    {
+        "hits": (1, list_(SearchHit)),
+        # the text the search read in fact, when a word was read as another
+        "corrected": (2, str_),
+        # the columns of a table's index's rows
+        "columns": (3, list_(str_)),
+    },
+    _write_search_found,
+    _read_search_found,
+)
+
+
 def _write_config_line(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -10317,8 +10406,7 @@ messages: dict[str, Message] = {
     "search.Deleted": SearchDeleted,
     "search.Got": SearchGot,
     "search.Query": SearchQuery,
-    "search.Hit": SearchHit,
-    "search.Found": SearchFound,
+    "search.Match": SearchMatch,
     "search.Status": SearchStatus,
     "search.Name": SearchName,
     "search.Dropped": SearchDropped,
@@ -10344,6 +10432,8 @@ messages: dict[str, Message] = {
     "metrics.Plan": MetricsPlan,
     "search.Open": SearchOpen,
     "search.SetMany": SearchSetMany,
+    "search.Hit": SearchHit,
+    "search.Found": SearchFound,
     "config.Line": ConfigLine,
     "config.Value": ConfigValue,
 }

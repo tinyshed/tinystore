@@ -5287,6 +5287,9 @@
         "limit": {
           "uint": "807"
         },
+        "matches": {
+          "str": "matches"
+        },
         "offset": {
           "uint": "707"
         },
@@ -5312,7 +5315,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8a016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac3",
+      "hex": "8b016b02a47465787403c40201ff04cb3ff800000000000005c306a77b2261223a317d07cd02c308cd032709c30ac30ba76d617463686573",
       "message": "search.Query",
       "name": "search.Query with every field"
     },
@@ -5326,6 +5329,29 @@
       "fields": {
         "id": {
           "str": "id"
+        },
+        "matches": {
+          "list": [
+            {
+              "fields": {
+                "end": {
+                  "uint": "407"
+                },
+                "field": {
+                  "str": "field"
+                },
+                "item": {
+                  "uint": "207"
+                },
+                "start": {
+                  "uint": "307"
+                },
+                "word": {
+                  "str": "word"
+                }
+              }
+            }
+          ]
         },
         "row": {
           "list": [
@@ -5341,7 +5367,7 @@
           "str": "{\"a\":1}"
         }
       },
-      "hex": "8401a2696402a77b2261223a317d03cb3ff80000000000000491a3726f77",
+      "hex": "8501a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f7264",
       "message": "search.Hit",
       "name": "search.Hit with every field"
     },
@@ -5350,6 +5376,34 @@
       "hex": "80",
       "message": "search.Hit",
       "name": "search.Hit with no field"
+    },
+    {
+      "fields": {
+        "end": {
+          "uint": "407"
+        },
+        "field": {
+          "str": "field"
+        },
+        "item": {
+          "uint": "207"
+        },
+        "start": {
+          "uint": "307"
+        },
+        "word": {
+          "str": "word"
+        }
+      },
+      "hex": "8501a56669656c6402cccf03cd013304cd019705a4776f7264",
+      "message": "search.Match",
+      "name": "search.Match with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "search.Match",
+      "name": "search.Match with no field"
     },
     {
       "fields": {
@@ -5370,6 +5424,29 @@
                 "id": {
                   "str": "id"
                 },
+                "matches": {
+                  "list": [
+                    {
+                      "fields": {
+                        "end": {
+                          "uint": "407"
+                        },
+                        "field": {
+                          "str": "field"
+                        },
+                        "item": {
+                          "uint": "207"
+                        },
+                        "start": {
+                          "uint": "307"
+                        },
+                        "word": {
+                          "str": "word"
+                        }
+                      }
+                    }
+                  ]
+                },
                 "row": {
                   "list": [
                     {
@@ -5388,7 +5465,7 @@
           ]
         }
       },
-      "hex": "8301918401a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7702a9636f727265637465640391a7636f6c756d6e73",
+      "hex": "8301918501a2696402a77b2261223a317d03cb3ff80000000000000491a3726f7705918501a56669656c6402cccf03cd013304cd019705a4776f726402a9636f727265637465640391a7636f6c756d6e73",
       "message": "search.Found",
       "name": "search.Found with every field"
     },

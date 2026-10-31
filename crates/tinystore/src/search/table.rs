@@ -422,6 +422,18 @@ pub(crate) fn hit_select(table: &Table) -> String {
     format!("select * from {} where {} = ?", quoted(&table.name), quoted(&table.key))
 }
 
+/// The columns of the row keyed `key` the index reads, as its document holds
+/// them, for a hit's matches; none where the table holds no such row, or
+/// one the index could not read, which it holds no words of.
+#[cfg(feature = "sql")]
+pub(crate) fn columns_read(connection: &Connection, settings: &Settings, key: &SqlValue) -> Result<Option<Value>> {
+    match read(connection, settings, key) {
+        Ok(row) => Ok(row.map(|row| row.tree)),
+        Err(error) if matches!(error.kind(), ErrorKind::Invalid | ErrorKind::Limit) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// The key of the row a hit stands for, from the value its document keeps.
 #[cfg(any(feature = "sql", test))]
 pub(crate) fn hit_key(value: &[u8]) -> Result<SqlValue> {

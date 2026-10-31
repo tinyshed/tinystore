@@ -83,6 +83,33 @@ fn an_index_sets_reads_searches_and_deletes_documents_over_the_wire() {
     assert_eq!(status.state, "ready");
 }
 
+// contract: SRCH-14
+#[test]
+fn a_hit_s_matches_count_in_the_unit_its_client_slices_strings_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let handle = open(&mut client, "notes");
+    // an emoji outside the BMP before the match: 4 bytes, 2 units of UTF-16, 1 code point
+    set(&mut client, handle, ("a", r#"{"title":"🦀 Ёлка"}"#), &[1.0, 0.0, 0.0]);
+    let mut matched = |unit: &str| {
+        let asked = SearchQuery { matches: Some(unit.to_owned()), ..query(handle, "елка") };
+        let found: SearchFound = client.call(method::SEARCH_SEARCH, &asked).unwrap();
+        let only = found.hits[0].matches.clone().unwrap();
+        assert_eq!(
+            (only.len(), only[0].field.as_str(), only[0].item, only[0].word.as_str()),
+            (1, "title", None, "елка")
+        );
+        (only[0].start, only[0].end)
+    };
+    assert_eq!([matched("utf8"), matched("utf16"), matched("chars")], [(5, 13), (3, 7), (2, 6)]);
+    let plain: SearchFound = client.call(method::SEARCH_SEARCH, &query(handle, "елка")).unwrap();
+    assert_eq!(plain.hits[0].matches, None, "none unless the query asks");
+    let furlongs = SearchQuery { matches: Some("bytes".to_owned()), ..query(handle, "елка") };
+    let refused = client.call::<SearchFound>(method::SEARCH_SEARCH, &furlongs).unwrap_err();
+    assert_eq!(refused.code, "invalid");
+    assert!(refused.message.contains("utf8, utf16 or chars"), "{}", refused.message);
+}
+
 #[test]
 fn an_index_opened_with_layouts_reads_a_word_typed_with_the_other_on_over_the_wire() {
     let dir = tempfile::tempdir().unwrap();
@@ -182,6 +209,10 @@ fn a_table_s_index_opens_in_its_database_and_its_hits_carry_their_rows() {
     assert_eq!(found.columns.as_deref(), Some(&["id".to_owned(), "title".to_owned(), "done".to_owned()][..]));
     let row = [Cell::Int(7), Cell::Str("rye bread".to_owned()), Cell::Int(1)];
     assert_eq!(found.hits[0].row.as_deref(), Some(&row[..]));
+    let matched: SearchFound =
+        client.call(method::SEARCH_SEARCH, &SearchQuery { matches: Some("chars".to_owned()), ..filtered }).unwrap();
+    let only = &matched.hits[0].matches.as_ref().unwrap()[0];
+    assert_eq!((only.field.as_str(), only.start, only.end), ("title", 4, 9), "a column of the row");
     let set = SearchSet { handle, id: "8".to_owned(), value: "{}".to_owned(), vector: None, no_vector: true };
     let refused = client.call::<Empty>(method::SEARCH_SET, &set).unwrap_err();
     assert!(refused.message.contains("written to the table"), "{}", refused.message);

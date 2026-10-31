@@ -10243,6 +10243,8 @@ export const SearchQuery = message(
 		prefix: [9, bool],
 		/** every word read so, a document holding a word for each first; in place of prefix */
 		prefixEvery: [10, bool],
+		/** utf8, utf16 or chars: each hit says where it matched, counted in that unit */
+		matches: [11, str],
 	},
 	{
 		write(w, v) {
@@ -10298,6 +10300,11 @@ export const SearchQuery = message(
 				w.bool(v.prefixEvery)
 				n++
 			}
+			if (v.matches !== undefined) {
+				w.field(11)
+				w.str(v.matches)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10311,6 +10318,7 @@ export const SearchQuery = message(
 			let $limit: number | undefined
 			let $prefix: boolean | undefined
 			let $prefixEvery: boolean | undefined
+			let $matches: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10343,6 +10351,9 @@ export const SearchQuery = message(
 					case 10:
 						$prefixEvery = r.bool()
 						break
+					case 11:
+						$matches = r.str()
+						break
 					default:
 						r.skip()
 				}
@@ -10359,157 +10370,91 @@ export const SearchQuery = message(
 				limit: $limit,
 				prefix: $prefix,
 				prefixEvery: $prefixEvery,
+				matches: $matches,
 			}
 		},
 	},
 )
 
 /**
- * A hit: a document and its value, or a table's row, a value a column of
- * the answer's columns, as sql.Rows holds one.
+ * Where a search's word matched a hit: a range of a field's text, or of a
+ * string of a field that holds a list, counted in the unit the query asked:
+ * bytes of UTF-8, units of UTF-16 or code points. The whole word for a word
+ * found as written, by its stem or once corrected; the letters typed for a
+ * word a prefix began.
  */
-export const SearchHit = message(
-	'search.Hit',
+export const SearchMatch = message(
+	'search.Match',
 	{
-		id: [1, str],
-		/** null for a table's row */
-		value: [2, str],
-		score: [3, float],
-		row: [4, list(sqlValue)],
+		/** the field's path or the table's column; empty for a document that is its own text */
+		field: [1, str],
+		/** the string's place in a field that holds a list */
+		item: [2, uint],
+		start: [3, uint],
+		end: [4, uint],
+		/** the query's word, as its text wrote it */
+		word: [5, str],
 	},
 	{
 		write(w, v) {
 			const head = w.openMap()
 			let n = 0
-			if (v.id !== undefined) {
+			if (v.field !== undefined) {
 				w.field(1)
-				w.str(v.id)
+				w.str(v.field)
 				n++
 			}
-			if (v.value !== undefined) {
+			if (v.item !== undefined) {
 				w.field(2)
-				w.str(v.value)
+				w.uint(v.item)
 				n++
 			}
-			if (v.score !== undefined) {
+			if (v.start !== undefined) {
 				w.field(3)
-				w.float(v.score)
+				w.uint(v.start)
 				n++
 			}
-			if (v.row !== undefined) {
+			if (v.end !== undefined) {
 				w.field(4)
-				w.array(v.row.length)
-				for (const item0 of v.row) {
-					sqlValue.write(w, item0)
-				}
+				w.uint(v.end)
+				n++
+			}
+			if (v.word !== undefined) {
+				w.field(5)
+				w.str(v.word)
 				n++
 			}
 			w.closeMap(head, n)
 		},
 		read(r) {
-			let $id: string | undefined
-			let $value: string | undefined
-			let $score: number | undefined
-			let $row: (SqlValue | boolean)[] | undefined
+			let $field: string | undefined
+			let $item: number | undefined
+			let $start: number | undefined
+			let $end: number | undefined
+			let $word: string | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
-						$id = r.str()
+						$field = r.str()
 						break
 					case 2:
-						$value = r.str()
+						$item = r.uint()
 						break
 					case 3:
-						$score = r.float()
+						$start = r.uint()
 						break
-					case 4: {
-						const items0: (SqlValue | boolean)[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(sqlValue.read(r))
-						}
-						r.leave()
-						$row = items0
+					case 4:
+						$end = r.uint()
 						break
-					}
+					case 5:
+						$word = r.str()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { id: $id, value: $value, score: $score, row: $row }
-		},
-	},
-)
-
-export const SearchFound = message(
-	'search.Found',
-	{
-		hits: [1, list(SearchHit)],
-		/** the text the search read in fact, when a word was read as another */
-		corrected: [2, str],
-		/** the columns of a table's index's rows */
-		columns: [3, list(str)],
-	},
-	{
-		write(w, v) {
-			const head = w.openMap()
-			let n = 0
-			if (v.hits !== undefined) {
-				w.field(1)
-				w.array(v.hits.length)
-				for (const item0 of v.hits) {
-					SearchHit.write(w, item0)
-				}
-				n++
-			}
-			if (v.corrected !== undefined) {
-				w.field(2)
-				w.str(v.corrected)
-				n++
-			}
-			if (v.columns !== undefined) {
-				w.field(3)
-				w.array(v.columns.length)
-				for (const item0 of v.columns) {
-					w.str(item0)
-				}
-				n++
-			}
-			w.closeMap(head, n)
-		},
-		read(r) {
-			let $hits: Read<typeof SearchHit.fields>[] | undefined
-			let $corrected: string | undefined
-			let $columns: string[] | undefined
-			for (let n = r.message(); n > 0; n--) {
-				switch (r.field()) {
-					case 1: {
-						const items0: Read<typeof SearchHit.fields>[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(SearchHit.read(r))
-						}
-						r.leave()
-						$hits = items0
-						break
-					}
-					case 2:
-						$corrected = r.str()
-						break
-					case 3: {
-						const items0: string[] = []
-						for (let i0 = r.array(); i0 > 0; i0--) {
-							items0.push(r.str())
-						}
-						r.leave()
-						$columns = items0
-						break
-					}
-					default:
-						r.skip()
-				}
-			}
-			r.leave()
-			return { hits: $hits, corrected: $corrected, columns: $columns }
+			return { field: $field, item: $item, start: $start, end: $end, word: $word }
 		},
 	},
 )
@@ -12234,6 +12179,176 @@ export const SearchSetMany = message(
 			}
 			r.leave()
 			return { handle: $handle, documents: $documents }
+		},
+	},
+)
+
+/**
+ * A hit: a document and its value, or a table's row, a value a column of
+ * the answer's columns, as sql.Rows holds one, and where the search's words
+ * matched it when the query asked.
+ */
+export const SearchHit = message(
+	'search.Hit',
+	{
+		id: [1, str],
+		/** null for a table's row */
+		value: [2, str],
+		score: [3, float],
+		row: [4, list(sqlValue)],
+		matches: [5, list(SearchMatch)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.id !== undefined) {
+				w.field(1)
+				w.str(v.id)
+				n++
+			}
+			if (v.value !== undefined) {
+				w.field(2)
+				w.str(v.value)
+				n++
+			}
+			if (v.score !== undefined) {
+				w.field(3)
+				w.float(v.score)
+				n++
+			}
+			if (v.row !== undefined) {
+				w.field(4)
+				w.array(v.row.length)
+				for (const item0 of v.row) {
+					sqlValue.write(w, item0)
+				}
+				n++
+			}
+			if (v.matches !== undefined) {
+				w.field(5)
+				w.array(v.matches.length)
+				for (const item0 of v.matches) {
+					SearchMatch.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $id: string | undefined
+			let $value: string | undefined
+			let $score: number | undefined
+			let $row: (SqlValue | boolean)[] | undefined
+			let $matches: Read<typeof SearchMatch.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$id = r.str()
+						break
+					case 2:
+						$value = r.str()
+						break
+					case 3:
+						$score = r.float()
+						break
+					case 4: {
+						const items0: (SqlValue | boolean)[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(sqlValue.read(r))
+						}
+						r.leave()
+						$row = items0
+						break
+					}
+					case 5: {
+						const items0: Read<typeof SearchMatch.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchMatch.read(r))
+						}
+						r.leave()
+						$matches = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { id: $id, value: $value, score: $score, row: $row, matches: $matches }
+		},
+	},
+)
+
+export const SearchFound = message(
+	'search.Found',
+	{
+		hits: [1, list(SearchHit)],
+		/** the text the search read in fact, when a word was read as another */
+		corrected: [2, str],
+		/** the columns of a table's index's rows */
+		columns: [3, list(str)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.hits !== undefined) {
+				w.field(1)
+				w.array(v.hits.length)
+				for (const item0 of v.hits) {
+					SearchHit.write(w, item0)
+				}
+				n++
+			}
+			if (v.corrected !== undefined) {
+				w.field(2)
+				w.str(v.corrected)
+				n++
+			}
+			if (v.columns !== undefined) {
+				w.field(3)
+				w.array(v.columns.length)
+				for (const item0 of v.columns) {
+					w.str(item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $hits: Read<typeof SearchHit.fields>[] | undefined
+			let $corrected: string | undefined
+			let $columns: string[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof SearchHit.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(SearchHit.read(r))
+						}
+						r.leave()
+						$hits = items0
+						break
+					}
+					case 2:
+						$corrected = r.str()
+						break
+					case 3: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$columns = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { hits: $hits, corrected: $corrected, columns: $columns }
 		},
 	},
 )

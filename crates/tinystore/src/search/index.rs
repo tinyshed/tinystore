@@ -13,8 +13,9 @@ use super::engine::Search;
 use super::filter::{self, Condition};
 #[cfg(feature = "replication")]
 use super::forward::Passed;
+use super::matches::{Ask, Match, Unit};
 use super::open::{Data, OpenIndex, Status};
-use super::read::{Prefix, Query};
+use super::read::{Answer, Prefix, Query};
 use super::settings::{Settings, Wanted, check_hybrid};
 #[cfg(feature = "sql")]
 use super::table_index::ReadRows;
@@ -271,6 +272,7 @@ impl<T: DeserializeOwned> Index<T> {
             vector_weight: None,
             rerank: false,
             prefix: Prefix::Whole,
+            matches: None,
             filter: Vec::new(),
             offset: 0,
             limit: LIMIT,
@@ -284,14 +286,16 @@ impl<T: DeserializeOwned> Index<T> {
         self.search("").vector(vector)
     }
 
-    /// The hits of `query`, each with its document as its value.
+    /// The hits of `query`, each with its document as its value, and where
+    /// it matched when the search asked, read from it after the search.
     pub(super) fn found(&self, query: Query) -> Result<Found<T>> {
-        let answer = self.search.search(&self.open, query)?;
-        let hits = answer.hits.into_iter().map(|(id, value, score)| {
+        let Answer { hits, corrected, sought, .. } = self.search.search(&self.open, query)?;
+        let hits = hits.into_iter().map(|(id, value, score)| {
+            let matches = sought.as_ref().map(|sought| sought.matches_in(&value)).unwrap_or_default();
             let value = decode(&value).map_err(|error| error.within(format!("id {id:?}")))?;
-            Ok(Hit { id, value, score })
+            Ok(Hit { id, value, score, matches })
         });
-        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected: answer.corrected })
+        Ok(Found { hits: hits.collect::<Result<_>>()?, corrected })
     }
 }
 
@@ -489,6 +493,8 @@ pub struct SearchCall<'i, T> {
     vector_weight: Option<f64>,
     rerank: bool,
     prefix: Prefix,
+    /// What a hit's matches count, when the search asks where it matched.
+    matches: Option<Unit>,
     filter: Vec<Condition>,
     offset: usize,
     limit: usize,
@@ -511,10 +517,14 @@ pub struct Found<T> {
 /// A document a search found, and the score that ordered it: a score orders
 /// one search's hits and means nothing beside another's.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Hit<T> {
     pub id: String,
     pub value: T,
     pub score: f64,
+    /// Where the search's words matched it, when the search asked with
+    /// [`matches`](SearchCall::matches); empty otherwise.
+    pub matches: Vec<Match>,
 }
 
 impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
@@ -564,6 +574,25 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// down the page. In place of [`prefix`](Self::prefix).
     pub fn prefix_every(mut self) -> Self {
         self.prefix = Prefix::Every;
+        self
+    }
+
+    /// Says in each hit's [`matches`](Hit::matches) where the search's words
+    /// matched it, as a search box shows them in bold: in each field, the
+    /// bytes of its text that a word matched as written, by its stem or once
+    /// corrected, and the letters typed of a word a prefix began, each with
+    /// the query's word that found it. `алгебре` matches `алгебра` of
+    /// `Линейная алгебра`, bytes 17..31.
+    pub fn matches(mut self) -> Self {
+        self.matches = Some(Unit::Bytes);
+        self
+    }
+
+    /// Says where each hit matched as [`matches`](Self::matches) does, its
+    /// ranges counted in `unit`, as a client of the wire slices its strings.
+    #[cfg(feature = "wire")]
+    pub(crate) fn matches_in(mut self, unit: Unit) -> Self {
+        self.matches = Some(unit);
         self
     }
 
@@ -631,8 +660,10 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             return Err(SEARCH_HITS.refuse(reached as u64, refused));
         }
         let normal = analyzer::normalize(&self.text);
+        let words = words_read(&normal);
         Ok(Query {
-            words: words_read(&normal),
+            matches: self.matches.map(|unit| Ask::new(&self.text, &words, unit)),
+            words,
             normal,
             vector: self.question()?,
             vector_weight: self.vector_weight,

@@ -187,6 +187,7 @@ search, `status` and `ready`: see [A table's index](table-index.md#async-rust).
 | [Typos](typos.md)                       | the nearest word, `corrected`, `typoTolerance`      |
 | [As you type](prefix.md)                | `prefix`: the last word, or each, as a start        |
 | [Keyboard layouts](layouts.md)          | `layouts`: a word typed with the other layout on    |
+| [Show what matched](matches.md)         | `matches`: where each hit matched, to bold it       |
 | [Filters](filters.md)                   | `where`, lists, ranges, `search.or`                 |
 | [Vectors](vectors.md)                   | dimensions, exact search, `recall` and clusters     |
 | [Words and vectors together](hybrid.md) | `vectorWeight`, `rerank`                            |

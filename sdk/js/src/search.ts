@@ -104,9 +104,30 @@ export interface Query {
 	 * text comes first, its score raised above the rest
 	 */
 	prefix?: boolean | 'every' | undefined
+	/**
+	 * each hit says where the search's words matched it, in `matches`, as a
+	 * search box shows them in bold: a word found as written, by its stem or
+	 * once corrected whole, and a word a prefix began by the letters typed
+	 */
+	matches?: boolean | undefined
 	/** 10 unless said; offset and limit together 1000 at most */
 	limit?: number | undefined
 	offset?: number | undefined
+}
+
+/**
+ * Where a search's word matched a hit: `start` to `end` of a field's text in
+ * UTF-16 units, so that `text.slice(start, end)` is what matched.
+ */
+export interface Match {
+	/** the field's path, or a table's column; `''` for a document that is its own text */
+	field: string
+	/** the string's place in a field that holds a list */
+	item?: number
+	start: number
+	end: number
+	/** the query's word, as its text wrote it */
+	word: string
 }
 
 /** A document a search found, and the score that ordered it among this search's hits. */
@@ -114,6 +135,8 @@ export interface Hit<T> {
 	id: string
 	value: T
 	score: number
+	/** where the search's words matched it, when the search asked with `matches` */
+	matches?: Match[]
 }
 
 /** What a search found, the best first, and the text it read in fact when a word was misspelt. */
@@ -210,19 +233,26 @@ abstract class Searchable<T> {
 				prefix: asked.prefix === true || undefined,
 				// none unless asked, so that a server before it reads the search
 				prefixEvery: asked.prefix === 'every' || undefined,
+				// JavaScript slices a string by its UTF-16 units
+				matches: asked.matches === true ? 'utf16' : undefined,
 				where,
 				offset: asked.offset,
 				limit: asked.limit,
 			})
 		const found = SearchFound.decode(await this.call('search.search', body, 'read'))
 		const columns = found.columns
-		const hits = (found.hits ?? []).map(hit => ({
-			id: hit.id ?? '',
-			value: (columns === undefined
-				? parseJson(hit.value ?? 'null')
-				: rowsOf<T>(columns, [(hit.row ?? []) as SqlValue[]])[0]) as T,
-			score: hit.score ?? 0,
-		}))
+		const hits = (found.hits ?? []).map(hit => {
+			const value = (
+				columns === undefined
+					? parseJson(hit.value ?? 'null')
+					: rowsOf<T>(columns, [(hit.row ?? []) as SqlValue[]])[0]
+			) as T
+			const read: Hit<T> = { id: hit.id ?? '', value, score: hit.score ?? 0 }
+			if (hit.matches !== undefined) {
+				read.matches = hit.matches.map(matchOf)
+			}
+			return read
+		})
 		return found.corrected === undefined ? { hits } : { hits, corrected: found.corrected }
 	}
 
@@ -423,6 +453,25 @@ function statusOf(status: {
 		default:
 			return { state: 'ready' }
 	}
+}
+
+function matchOf(found: {
+	field?: string | undefined
+	item?: number | undefined
+	start?: number | undefined
+	end?: number | undefined
+	word?: string | undefined
+}): Match {
+	const match: Match = {
+		field: found.field ?? '',
+		start: found.start ?? 0,
+		end: found.end ?? 0,
+		word: found.word ?? '',
+	}
+	if (found.item !== undefined) {
+		match.item = found.item
+	}
+	return match
 }
 
 function documentJson(name: string, value: unknown): string {

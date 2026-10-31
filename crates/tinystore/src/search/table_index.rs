@@ -353,29 +353,44 @@ pub(crate) type RowsReader<'r, R> =
 /// The hits of `query` in a table's index, each with its row as its value,
 /// read in the snapshot the search read, or in the transaction `tx` of the
 /// table's database, seeing what it wrote. A row a process beside the store
-/// deleted that its index has not settled yet is left out.
+/// deleted that its index has not settled yet is left out. Where a hit
+/// matched is read after, from the columns the index reads of its row, read
+/// with the row.
 pub(crate) fn found<T, R>(
     index: &Index<T>,
     read_rows: RowsReader<'_, R>,
     query: Query,
     tx: Option<&Transaction<'_>>,
 ) -> Result<Found<R>> {
-    let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<Vec<Option<R>>> {
+    let read = |connection: &Connection, settings: &Settings, answer: &Answer| -> Result<(Vec<Option<R>>, Columns)> {
         let select = table::hit_select(&table_of(settings)?);
         let keys = answer.hits.iter().map(|(_, value, _)| table::hit_key(value)).collect::<Result<Vec<_>>>()?;
-        read_rows(connection, &index.search.memory, (&select, &keys))
+        let rows = read_rows(connection, &index.search.memory, (&select, &keys))?;
+        let columns = match answer.sought {
+            Some(_) => keys.iter().map(|key| table::columns_read(connection, settings, key)).collect::<Result<_>>()?,
+            None => Vec::new(),
+        };
+        Ok((rows, columns))
     };
-    let (answer, rows) = match tx {
+    let (answer, (rows, mut columns)) = match tx {
         None => index.search.search_then(&index.open, query, read)?,
         Some(tx) => {
             tx.takes(&index.search.file, index.search.place())?;
             tx.call(|writer| index.search.search_in(writer, &index.open, query, read))?
         }
     };
-    let hits = answer.hits.into_iter().zip(rows);
-    let hits = hits.filter_map(|((id, _, score), row)| row.map(|value| Hit { id, value, score }));
-    Ok(Found { hits: hits.collect(), corrected: answer.corrected })
+    columns.resize(rows.len(), None);
+    let Answer { hits, corrected, sought, .. } = answer;
+    let hits = hits.into_iter().zip(rows).zip(columns).filter_map(|(((id, _, score), row), columns)| {
+        let matches = sought.as_ref().zip(columns).map(|(sought, columns)| sought.matches(&columns));
+        row.map(|value| Hit { id, value, score, matches: matches.unwrap_or_default() })
+    });
+    Ok(Found { hits: hits.collect(), corrected })
 }
+
+/// The columns the index reads of each hit's row, for where it matched;
+/// none for a search that does not ask.
+type Columns = Vec<Option<serde_json::Value>>;
 
 /// Drops the table's index `name` kept in a database's file.
 pub(crate) fn drop_in_file(shared: &SharedFile, name: &str) -> Result<bool> {

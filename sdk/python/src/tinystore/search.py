@@ -90,12 +90,28 @@ class Hybrid:
 
 
 @dataclass(frozen=True, slots=True)
+class Match:
+    """Where a search's word matched a hit: ``text[start:end]`` of a field's text, in code points."""
+
+    field: str
+    """the field's path, or a table's column; "" for a document that is its own text"""
+    start: int
+    end: int
+    word: str
+    """the query's word, as its text wrote it"""
+    item: int | None = None
+    """the string's place in a field that holds a list"""
+
+
+@dataclass(frozen=True, slots=True)
 class Hit[T]:
     """A document a search found, and the score that ordered it among this search's hits."""
 
     id: str
     value: T
     score: float
+    matches: list[Match] | None = None
+    """where the search's words matched it, when the search asked with matches"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +194,7 @@ class _Searchable[T]:
         where: Where | None = None,
         hybrid: Hybrid | None = None,
         prefix: bool | Literal["every"] = False,
+        matches: bool = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Result[T]:
@@ -192,6 +209,10 @@ class _Searchable[T]:
         is read so, the first eight, as people shorten each word of a name:
         "лин алг" finds "Линейная алгебра"; a document that holds a word for
         each word of the text comes first, its score raised above the rest.
+        With matches, each hit says where the search's words matched it, as a
+        search box shows them in bold: ranges of code points of each field's
+        text, a word found as written, by its stem or once corrected whole,
+        and a word a prefix began by the letters typed.
         """
         if prefix not in (True, False, "every"):
             raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
@@ -208,6 +229,8 @@ class _Searchable[T]:
                 prefix=prefix is True,
                 # none unless asked, so that a server before it reads the search
                 prefix_every=True if prefix == "every" else None,
+                # Python slices a str by its code points
+                matches="chars" if matches else None,
                 where=asked,
                 offset=offset,
                 limit=limit,
@@ -216,7 +239,12 @@ class _Searchable[T]:
         found = SearchFound.decode(await self._call("search.search", body, "read"))
         return Result(
             [
-                Hit(hit.get("id", ""), self._read({**hit, "columns": found.get("columns")}), hit.get("score", 0.0))
+                Hit(
+                    hit.get("id", ""),
+                    self._read({**hit, "columns": found.get("columns")}),
+                    hit.get("score", 0.0),
+                    _matches_of(hit.get("matches")),
+                )
                 for hit in found.get("hits", [])
             ],
             found.get("corrected"),
@@ -397,6 +425,15 @@ def _status_of(status: dict[str, Any]) -> IndexStatus:
     if state == "failed":
         return IndexStatus("failed", error=status.get("error", ""))
     return IndexStatus("ready")
+
+
+def _matches_of(found: list[dict[str, Any]] | None) -> list[Match] | None:
+    if found is None:
+        return None
+    return [
+        Match(each.get("field", ""), each.get("start", 0), each.get("end", 0), each.get("word", ""), each.get("item"))
+        for each in found
+    ]
 
 
 def _document_json(name: str, value: Any) -> str:

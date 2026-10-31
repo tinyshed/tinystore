@@ -24,6 +24,7 @@ use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
 use super::layouts;
+use super::matches::{Ask, Sought};
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
 use super::score::{PREFIXED, Part, average, idf, score};
@@ -42,7 +43,7 @@ const FIND_KEY: &str =
 /// `?3` and `?4`, the most held first: a range of the keys' index by term,
 /// read to its end, since how many documents hold a word is no order that
 /// index keeps.
-const FIND_PREFIXED: &str = "select id, documents from _tinystore_search_keys
+const FIND_PREFIXED: &str = "select id, documents, term from _tinystore_search_keys
     where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0
     order by documents desc, term limit cast(?5 as integer)";
 const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys
@@ -85,6 +86,9 @@ pub(crate) struct Query {
     /// Which words the search asks read as the start of others too, as
     /// [`prefixes`] reads them.
     pub(crate) prefix: Prefix,
+    /// What the search asks of its hits' matches, when it asks where they
+    /// matched.
+    pub(crate) matches: Option<Ask>,
     pub(crate) filter: Option<filter::Asked>,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
@@ -122,6 +126,9 @@ pub(crate) struct Answer {
     pub(crate) corrected: Option<String>,
     /// The index's words changed since its dictionary was built.
     pub(crate) behind: bool,
+    /// What the hits' matches are read against after the read, when the
+    /// search asks where they matched and found them by its words.
+    pub(crate) sought: Option<Sought>,
 }
 
 /// How a search makes its hits of its words and its vector.
@@ -160,7 +167,35 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     };
     let page = ranked.into_iter().skip(asked.query.offset).take(asked.query.limit);
     let hits = page.map(|(score, doc)| hit(connection, asked.index, doc, score)).collect::<Result<_>>()?;
-    Ok(Answer { hits, corrected, behind })
+    let sought = match &asked.query.matches {
+        Some(ask) if !matches!(mode, Mode::Vector) => Some(sought(connection, &asked, ask)?),
+        _ => None,
+    };
+    Ok(Answer { hits, corrected, behind, sought })
+}
+
+/// The keys the search's words found documents by, each with the place of
+/// its query word: every form of each word as [`lists`] reads it, and in
+/// each field the words each prefix chose, as [`prefixed`] chooses them.
+fn sought(connection: &Connection, asked: &Asked<'_>, ask: &Ask) -> Result<Sought> {
+    let mut sought = Sought::new(ask.clone(), &asked.settings.fields);
+    for (at, word) in asked.query.words.iter().enumerate() {
+        for form in forms(std::slice::from_ref(word), asked.settings) {
+            sought.key(form, at);
+        }
+    }
+    for at in prefixes(&asked.query) {
+        let word = &asked.query.words[at];
+        let Some(past) = past(&word.text) else { continue };
+        let typed = (at, word.text.chars().count());
+        for field in &asked.settings.fields {
+            let part = Part::written(field.number);
+            for term in terms_starting(connection, asked.index, part, (&word.text, &past))? {
+                sought.begun((part, term), typed);
+            }
+        }
+    }
+    Ok(sought)
 }
 
 /// How the search makes its hits, from what it gives and what its index
@@ -732,6 +767,20 @@ fn words_starting(
     let most = MOST_PREFIXED as i64;
     let rows = select
         .query_map((index, part.0, prefix, past, most), |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.max(0) as u64)));
+    rows.and_then(Iterator::collect).map_err(failed)
+}
+
+/// The words [`words_starting`] chooses, by their text.
+fn terms_starting(
+    connection: &Connection,
+    index: i64,
+    part: Part,
+    (prefix, past): (&str, &str),
+) -> Result<Vec<String>> {
+    let failed = |error| sql_error("find the words a prefix begins", error);
+    let mut select = connection.prepare_cached(FIND_PREFIXED).map_err(failed)?;
+    let most = MOST_PREFIXED as i64;
+    let rows = select.query_map((index, part.0, prefix, past, most), |row| row.get(2));
     rows.and_then(Iterator::collect).map_err(failed)
 }
 

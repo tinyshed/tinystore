@@ -37,7 +37,7 @@ pub(crate) fn analyze(document: &Value, fields: &[Field], filters: &[Filter]) ->
     let mut lengths: BTreeMap<Part, u32> = BTreeMap::new();
     for field in fields {
         let (written, stems) = (Part::written(field.number), Part::stems(field.number));
-        for text in texts(document, &field.path)? {
+        for (_, text) in texts(document, &field.path)? {
             for word in analyzer::words(text) {
                 *lengths.entry(written).or_default() += 1;
                 if let Some(stem) = word.stem {
@@ -59,9 +59,10 @@ pub(crate) fn analyze(document: &Value, fields: &[Field], filters: &[Filter]) ->
     })
 }
 
-/// The text at `path`: a string, or the strings of a list; nothing where
-/// the document has no such field or holds null there.
-fn texts<'v>(document: &'v Value, path: &str) -> Result<Vec<&'v str>> {
+/// The text at `path`: a string, or the strings of a list, each with its
+/// place in the list; nothing where the document has no such field or holds
+/// null there.
+pub(crate) fn texts<'v>(document: &'v Value, path: &str) -> Result<Vec<(Option<usize>, &'v str)>> {
     let mut at = document;
     for name in path.split('.').filter(|name| !name.is_empty()) {
         match at.get(name) {
@@ -72,11 +73,14 @@ fn texts<'v>(document: &'v Value, path: &str) -> Result<Vec<&'v str>> {
     let not_text = |what: &str| Error::invalid(format!("field {} holds {what}, not text", shown(path)));
     match at {
         Value::Null => Ok(Vec::new()),
-        Value::String(text) => Ok(vec![text]),
-        Value::Array(items) => items
-            .iter()
-            .filter(|item| !item.is_null())
-            .map(|item| item.as_str().ok_or_else(|| not_text("a list holding more than strings")))
+        Value::String(text) => Ok(vec![(None, text)]),
+        Value::Array(items) => (0..)
+            .zip(items)
+            .filter(|(_, item)| !item.is_null())
+            .map(|(place, item)| {
+                let text = item.as_str().ok_or_else(|| not_text("a list holding more than strings"))?;
+                Ok((Some(place), text))
+            })
             .collect(),
         Value::Bool(_) => Err(not_text("a boolean")),
         Value::Number(_) => Err(not_text("a number")),

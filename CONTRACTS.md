@@ -208,6 +208,7 @@ These contracts are what does not.
 - **SRCH-11** A search with `prefix` MUST find every document holding a word its last word begins, of the 64 most held it begins in a field, unless a space follows that word or it is a single letter, and MUST answer what scoring every document answers.
 - **SRCH-12** An index with `layouts` MUST read a piece of a search's text whose words find nothing as typed as the same keys type in its other layout when every word that reading gives finds something, and `corrected` MUST say so; a word that finds something as typed MUST never be read so.
 - **SRCH-13** A search with `prefix_every` MUST read each of its first eight words of two letters or more as the start of others too, whatever follows it, and MUST answer first the documents that hold a word for every word of its text, then the rest, each part as scoring every document answers and its scores never rising down the page.
+- **SRCH-14** A search with `matches` MUST say in each hit where each of its words matched, by the keys it found documents by: ranges, in the unit its client slices strings in, that slice the text the document or the row holds to a word found as written, by its stem or once corrected, whole, and to the letters typed of a word its prefix began, the query's word as its text wrote it beside each, overlapping ranges joined; a text whose letters cannot be placed MUST answer no range rather than a wrong one.
 
 ## 5. Replication
 

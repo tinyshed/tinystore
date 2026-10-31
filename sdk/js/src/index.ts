@@ -180,6 +180,7 @@ export {
 	type IndexOptions,
 	type IndexStatus,
 	type KeyboardLayout,
+	type Match as SearchMatch,
 	type Query as SearchQuery,
 	SearchIndex,
 	search,

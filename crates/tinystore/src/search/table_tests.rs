@@ -145,6 +145,27 @@ fn a_search_in_the_transaction_that_wrote_sees_its_writes() {
     assert_eq!(around.kind(), ErrorKind::Invalid, "a search beside the transaction would not see its writes");
 }
 
+// contract: SRCH-14
+#[test]
+fn a_hit_says_where_its_columns_matched_as_its_row_holds_them_inside_a_transaction_too() {
+    let f = fixture();
+    let articles = f.articles();
+    f.insert(1, "Ёлки и ЁЛКА", "a forest of firs");
+    let shown = |found: search::Found<Article>| -> Vec<(String, String)> {
+        let hit = &found.hits[0];
+        let text = |column: &str| if column == "title" { &hit.value.title } else { &hit.value.body };
+        hit.matches.iter().map(|found| (found.field.clone(), text(&found.field)[found.at.clone()].to_owned())).collect()
+    };
+    let pair = |column: &str, text: &str| (column.to_owned(), text.to_owned());
+    let found = articles.search("елка forest").matches().run().unwrap();
+    assert_eq!(shown(found), [pair("title", "Ёлки"), pair("title", "ЁЛКА"), pair("body", "forest")]);
+    let inside = f.db.tx(|tx| {
+        tx.exec(sql!("update articles set title = 'Ёлочка и ёлка' where id = 1"))?;
+        tx.with(&articles).search("елка").matches().run()
+    });
+    assert_eq!(shown(inside.unwrap()), [pair("title", "ёлка")], "the row as the transaction wrote it");
+}
+
 // contract: SRCH-07
 #[test]
 fn a_search_in_a_transaction_goes_on_while_a_switch_of_its_index_waits_for_that_transaction() {

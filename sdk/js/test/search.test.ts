@@ -7,7 +7,13 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { InvalidError, type SearchFound, type Store, search } from '../src/index.ts'
+import {
+	InvalidError,
+	type SearchFound,
+	type SearchMatch,
+	type Store,
+	search,
+} from '../src/index.ts'
 import { caught, removed, ways } from './ways.ts'
 
 interface Product {
@@ -110,6 +116,46 @@ for (const way of ways) {
 			expect(await found('лин алгебра', 'every')).toEqual(['1', '3'])
 			expect(await found('линейная алг', 'every')).toEqual(['1', '2'])
 			expect(await found('лин алг', true)).toEqual(['3', '1', '2'])
+		})
+
+		// contract: SRCH-14
+		test('a hit says where it matched, in UTF-16 units that slice its own strings', async () => {
+			type Course = { name: string; short: string; tags?: string[] }
+			const catalog = store.index<Course>('catalog', { fields: { name: 2, short: 1, tags: 1 } })
+			await catalog.setMany([
+				{ id: 1, value: { name: 'Линейная алгебра и аналитическая геометрия', short: 'ЛААГ' } },
+				{ id: 2, value: { name: 'Криптографические методы защиты информации', short: 'КМЗИ' } },
+				{ id: 3, value: { name: '🦀 Ёлка', short: '', tags: ['ёлки', 'пальмы'] } },
+			])
+			const sliced = (value: Course, match: SearchMatch) => {
+				const field = value[match.field as keyof Course]
+				const text = Array.isArray(field) ? field[match.item ?? 0] : field
+				return text?.slice(match.start, match.end)
+			}
+			const shown = async (text: string) => {
+				const found = await catalog.search({ text, prefix: true, matches: true })
+				return found.hits.flatMap(hit =>
+					(hit.matches ?? []).map(match => [
+						hit.id,
+						match.field,
+						sliced(hit.value, match),
+						match.word,
+					]),
+				)
+			}
+			expect(await shown('алгебре')).toEqual([['1', 'name', 'алгебра', 'алгебре']])
+			expect(await shown('крипто')).toEqual([['2', 'name', 'Крипто', 'крипто']])
+			expect(await shown('криптографичесике методы')).toEqual([
+				['2', 'name', 'Криптографические', 'криптографичесике'],
+				['2', 'name', 'методы', 'методы'],
+			])
+			// the crab before Ёлка is two units of UTF-16, one code point
+			const [tree] = (await catalog.search({ text: 'елка', matches: true })).hits
+			expect(tree?.matches).toEqual([
+				{ field: 'name', start: 3, end: 7, word: 'елка' },
+				{ field: 'tags', item: 0, start: 0, end: 4, word: 'елка' },
+			])
+			expect((await catalog.search('елка')).hits[0]?.matches).toBeUndefined()
 		})
 
 		test('a vector finds the nearest by its cosine, and with words both are summed or reranked', async () => {

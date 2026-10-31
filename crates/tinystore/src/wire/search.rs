@@ -13,11 +13,11 @@ use super::Lent;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, SearchDeleted, SearchDocument, SearchDropped, SearchFound, SearchGot, SearchHit,
-    SearchIndex, SearchKey, SearchListed, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany, SearchStatus,
-    method,
+    SearchIndex, SearchKey, SearchListed, SearchMatch, SearchName, SearchOpen, SearchQuery, SearchSet, SearchSetMany,
+    SearchStatus, method,
 };
 use crate::engine::SharedFile;
-use crate::search::{self, Document, Index, Rebuild, SearchCall, Status};
+use crate::search::{self, Document, Index, Match, Rebuild, SearchCall, Status, Unit};
 use crate::{Store, unix_millis};
 
 use super::Answered;
@@ -220,8 +220,9 @@ fn searched(handles: &Handles, asked: SearchQuery) -> Answered {
     let index = handles.index(asked.handle)?;
     let vector = floats(asked.vector.as_deref())?;
     let call = query(&index, &asked, vector.as_deref())?;
+    let asked_matches = asked.matches.is_some();
     if index.follows_table() {
-        return rows_found(call);
+        return rows_found(call, asked_matches);
     }
     let found = call.run()?;
     let hits = found.hits.into_iter().map(|hit| SearchHit {
@@ -229,8 +230,31 @@ fn searched(handles: &Handles, asked: SearchQuery) -> Answered {
         value: hit.value.to_string(),
         score: hit.score,
         row: None,
+        matches: asked_matches.then(|| matches(hit.matches)),
     });
     Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: None }.encode())
+}
+
+/// The unit a query counts its hits' matches in, as the wire names it.
+fn unit(named: &str) -> Result<Unit, Failure> {
+    match named {
+        "utf8" => Ok(Unit::Bytes),
+        "utf16" => Ok(Unit::Utf16),
+        "chars" => Ok(Unit::Chars),
+        other => Err(Failure::invalid(format!("matches counted in {other:?}: utf8, utf16 or chars"))),
+    }
+}
+
+fn matches(found: Vec<Match>) -> Vec<SearchMatch> {
+    let wide = |at: usize| u64::try_from(at).unwrap_or(u64::MAX);
+    let each = |found: Match| SearchMatch {
+        field: found.field,
+        item: found.item.map(wide),
+        start: wide(found.at.start),
+        end: wide(found.at.end),
+        word: found.word,
+    };
+    found.into_iter().map(each).collect()
 }
 
 /// The search a query asks of `index`.
@@ -257,6 +281,9 @@ fn query<'i>(
     } else if asked.prefix {
         call = call.prefix();
     }
+    if let Some(named) = &asked.matches {
+        call = call.matches_in(unit(named)?);
+    }
     if let Some(conditions) = &asked.r#where {
         for condition in search::conditions(conditions)? {
             call = call.filter(condition);
@@ -268,7 +295,7 @@ fn query<'i>(
 /// A table's index's hits, each with its row's cells, and the rows' columns
 /// once: every row is read whole, so all have the same.
 #[cfg(feature = "sql")]
-fn rows_found(call: SearchCall<'_, Value>) -> Answered {
+fn rows_found(call: SearchCall<'_, Value>, asked_matches: bool) -> Answered {
     let found = search::found_by(call, &crate::sql::cells_on)?;
     let columns = found.hits.first().map(|hit| hit.value.0.clone()).unwrap_or_default();
     let hits = found.hits.into_iter().map(|hit| SearchHit {
@@ -276,12 +303,13 @@ fn rows_found(call: SearchCall<'_, Value>) -> Answered {
         value: "null".to_owned(),
         score: hit.score,
         row: Some(hit.value.1.into_iter().map(super::sql::cell_of).collect()),
+        matches: asked_matches.then(|| matches(hit.matches)),
     });
     Ok(SearchFound { hits: hits.collect(), corrected: found.corrected, columns: Some(columns) }.encode())
 }
 
 #[cfg(not(feature = "sql"))]
-fn rows_found(_: SearchCall<'_, Value>) -> Answered {
+fn rows_found(_: SearchCall<'_, Value>, _: bool) -> Answered {
     Err(Failure::internal("a table's index on a server that keeps no databases"))
 }
 
