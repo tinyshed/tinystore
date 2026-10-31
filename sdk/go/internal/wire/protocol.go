@@ -11295,6 +11295,8 @@ type SearchQuery struct {
 	Limit *uint64 `wire:"8,limit"`
 	// the last word read as the start of a word too, as a search box types
 	Prefix bool `wire:"9,prefix"`
+	// every word read so, a document holding a word for each first; in place of prefix
+	PrefixEvery bool `wire:"10,prefixEvery"`
 }
 
 func (m SearchQuery) Write(w *Writer) {
@@ -11345,6 +11347,11 @@ func (m SearchQuery) Write(w *Writer) {
 		w.Bool(m.Prefix)
 		n++
 	}
+	if m.PrefixEvery {
+		w.Uint(10)
+		w.Bool(m.PrefixEvery)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -11375,6 +11382,8 @@ func (m *SearchQuery) Read(r *Reader) {
 			m.Limit = &v
 		case 9:
 			m.Prefix = r.Bool()
+		case 10:
+			m.PrefixEvery = r.Bool()
 		default:
 			r.Skip()
 		}
@@ -11392,7 +11401,8 @@ func (m SearchQuery) IsZero() bool {
 		m.Where == nil &&
 		m.Offset == 0 &&
 		m.Limit == nil &&
-		!m.Prefix
+		!m.Prefix &&
+		!m.PrefixEvery
 }
 
 // SearchHit is the schema's search.Hit.

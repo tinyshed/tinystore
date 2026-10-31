@@ -252,7 +252,9 @@ fn query<'i>(
     if asked.rerank {
         call = call.rerank();
     }
-    if asked.prefix {
+    if asked.prefix_every {
+        call = call.prefix_every();
+    } else if asked.prefix {
         call = call.prefix();
     }
     if let Some(conditions) = &asked.r#where {

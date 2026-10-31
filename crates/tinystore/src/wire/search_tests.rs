@@ -70,6 +70,11 @@ fn an_index_sets_reads_searches_and_deletes_documents_over_the_wire() {
     assert!(ids(&client.call(method::SEARCH_SEARCH, &halfway).unwrap()).is_empty());
     let typed = SearchQuery { prefix: true, ..halfway };
     assert_eq!(ids(&client.call(method::SEARCH_SEARCH, &typed).unwrap()), ["a", "b"]);
+    // `re` begins `red`, and only a holds a word each begins
+    let both = SearchQuery { prefix_every: true, ..query(handle, "sho re") };
+    assert_eq!(ids(&client.call(method::SEARCH_SEARCH, &both).unwrap()), ["a", "b", "c"]);
+    let last = SearchQuery { prefix: true, ..query(handle, "re sho") };
+    assert_eq!(ids(&client.call(method::SEARCH_SEARCH, &last).unwrap()), ["a", "b"]);
     let got: SearchGot = client.call(method::SEARCH_GET, &SearchKey { handle, id: "c".to_owned() }).unwrap();
     assert!(got.found && got.value.as_deref() == Some(r#"{"title":"red hat"}"#));
     let deleted: SearchDeleted = client.call(method::SEARCH_DELETE, &SearchKey { handle, id: "c".to_owned() }).unwrap();

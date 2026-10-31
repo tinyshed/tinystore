@@ -209,7 +209,7 @@ type vectorSaid struct {
 	err      error
 }
 
-// QueryOption is how a search reads: Vector, Where, Or, Prefix, Limit, Offset, Hybrid.
+// QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Limit, Offset, Hybrid.
 type QueryOption interface{ search(*wire.SearchQuery) }
 
 type vector []float32
@@ -361,6 +361,17 @@ type prefix struct{}
 func Prefix() QueryOption { return prefix{} }
 
 func (prefix) search(q *wire.SearchQuery) { q.Prefix = true }
+
+type prefixEvery struct{}
+
+// PrefixEvery reads every word as the start of a word too, as people
+// shorten each word of a name: "лин алг" finds "Линейная алгебра". Each
+// word of two letters or more is read so, the first eight, whatever follows
+// it; a document that holds a word for each word of the text comes first,
+// its score raised above the rest. In place of Prefix.
+func PrefixEvery() QueryOption { return prefixEvery{} }
+
+func (prefixEvery) search(q *wire.SearchQuery) { q.PrefixEvery = true }
 
 type limit int
 

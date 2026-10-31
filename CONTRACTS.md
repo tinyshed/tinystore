@@ -207,6 +207,7 @@ These contracts are what does not.
 - **SRCH-10** An index MUST answer after a restart as before.
 - **SRCH-11** A search with `prefix` MUST find every document holding a word its last word begins, of the 64 most held it begins in a field, unless a space follows that word or it is a single letter, and MUST answer what scoring every document answers.
 - **SRCH-12** An index with `layouts` MUST read a piece of a search's text whose words find nothing as typed as the same keys type in its other layout when every word that reading gives finds something, and `corrected` MUST say so; a word that finds something as typed MUST never be read so.
+- **SRCH-13** A search with `prefix_every` MUST read each of its first eight words of two letters or more as the start of others too, whatever follows it, and MUST answer first the documents that hold a word for every word of its text, then the rest, each part as scoring every document answers and its scores never rising down the page.
 
 ## 5. Replication
 

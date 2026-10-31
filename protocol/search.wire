@@ -81,6 +81,7 @@ message search.Query {
   7 offset: uint
   8 limit: uint?            # 10 when absent; offset and limit together 1000 at most
   9 prefix: bool            # the last word read as the start of a word too, as a search box types
+  10 prefixEvery: bool      # every word read so, a document holding a word for each first; in place of prefix
 }
 
 # A hit: a document and its value, or a table's row, a value a column of

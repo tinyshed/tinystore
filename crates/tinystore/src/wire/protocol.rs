@@ -9989,6 +9989,8 @@ pub(crate) struct SearchQuery {
     pub(crate) limit: Option<u64>,
     /// The last word read as the start of a word too, as a search box types.
     pub(crate) prefix: bool,
+    /// Every word read so, a document holding a word for each first; in place of prefix.
+    pub(crate) prefix_every: bool,
 }
 
 #[cfg(feature = "search")]
@@ -10009,6 +10011,7 @@ impl Message for SearchQuery {
                 7 => message.offset = codec::uint(r, "offset")?,
                 8 => message.limit = Some(codec::uint(r, "limit")?),
                 9 => message.prefix = codec::bool(r, "prefix")?,
+                10 => message.prefix_every = codec::bool(r, "prefixEvery")?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -10053,6 +10056,10 @@ impl Message for SearchQuery {
             map.field(out, 9);
             codec::write_bool(out, &self.prefix);
         }
+        if self.prefix_every {
+            map.field(out, 10);
+            codec::write_bool(out, &self.prefix_every);
+        }
         map.close(out);
     }
 
@@ -10067,6 +10074,7 @@ impl Message for SearchQuery {
             + 10
             + self.limit.map_or(0, |_| 10)
             + 2
+            + 2
     }
 
     fn is_zero(&self) -> bool {
@@ -10079,6 +10087,7 @@ impl Message for SearchQuery {
             && self.offset == 0
             && self.limit.is_none()
             && !self.prefix
+            && !self.prefix_every
     }
 }
 

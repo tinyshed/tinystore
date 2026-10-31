@@ -98,6 +98,20 @@ async def test_a_word_typed_with_the_other_layout_on_is_read_as_its_keys_type_th
     assert await found("python") == (["3"], None)
 
 
+# contract: SRCH-13
+async def test_prefix_every_reads_each_word_as_a_start_a_document_holding_one_for_each_first(
+    store: tinystore.Store,
+) -> None:
+    courses = store.index("shortened", Course, fields={"name": 1})
+    names = ["Линейная алгебра", "Алгоритмизация и программирование", "Проектирование технологических линий"]
+    await courses.set_many([(str(n), Course(name)) for n, name in enumerate(names, start=1)])
+    assert ids(await courses.search("лин алг", prefix="every")) == ["1", "3", "2"]
+    assert ids(await courses.search("алг лин", prefix="every")) == ["1", "3", "2"]
+    assert ids(await courses.search("лин алгебра", prefix="every")) == ["1", "3"]
+    assert ids(await courses.search("линейная алг", prefix="every")) == ["1", "2"]
+    assert ids(await courses.search("лин алг", prefix=True)) == ["3", "1", "2"]
+
+
 async def test_a_vector_finds_the_nearest_by_its_cosine_and_with_words_both_are_summed_or_reranked(
     store: tinystore.Store,
 ) -> None:

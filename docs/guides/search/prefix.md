@@ -38,7 +38,8 @@ Without `prefix`, `crypt` is a word of its own: it finds a course named
 
 ## Which word is a prefix
 
-Only the last word, and only while the reader may still be typing it:
+With `prefix: true`, only the last word is a prefix, and only while the reader
+may still be typing it:
 
 | Text               | Read as                                                    |
 |--------------------|------------------------------------------------------------|
@@ -50,6 +51,64 @@ Only the last word, and only while the reader may still be typing it:
 
 A word is read as Search reads every word: in lower case, accents off, `ё` as
 `е`. `Crypt` and `crypt` are the same prefix, in any script.
+
+## Every word
+
+People shorten every word of a name, not only the last: `лин алг` for
+`Линейная алгебра`, or `теор вер` for `Теория вероятностей`. With
+`prefix: 'every'`, Search reads each word of the text as the start of a word
+too, and puts first the documents that hold a word for each word of the text.
+
+```ts
+await courses.setMany([
+	{ id: 5, value: { name: 'Линейная алгебра' } },
+	{ id: 6, value: { name: 'Алгоритмизация и программирование' } },
+	{ id: 7, value: { name: 'Проектирование технологических линий' } },
+])
+const { hits } = await courses.search({ text: 'лин алг', prefix: 'every' })
+hits.map(hit => hit.id) // ['5', '7', '6']
+```
+
+```python
+await courses.set_many([
+    ("5", Course("Линейная алгебра")),
+    ("6", Course("Алгоритмизация и программирование")),
+    ("7", Course("Проектирование технологических линий")),
+])
+result = await courses.search("лин алг", prefix="every")
+```
+
+```go
+err = courses.SetMany(ctx, []search.Doc[Course]{
+	{ID: "5", Value: Course{"Линейная алгебра"}},
+	{ID: "6", Value: Course{"Алгоритмизация и программирование"}},
+	{ID: "7", Value: Course{"Проектирование технологических линий"}},
+})
+result, err := courses.Search(ctx, "лин алг", search.PrefixEvery())
+```
+
+```rust
+let found = courses.search("лин алг").prefix_every().run()?;
+```
+
+`prefix: 'every' / prefix="every" / PrefixEvery / prefix_every` turns it on
+for one search, in place of the last word alone. `Линейная алгебра` comes
+first because it holds a word that starts with `лин` and one that starts with
+`алг`. The other two courses each hold only one of them. With
+`prefix: true`, `лин` is a whole word, so it finds only `линий` by its stem,
+and `Проектирование технологических линий` comes first.
+
+- Each word of two letters or more is read as the start of a word, whatever
+  follows it. A space does not make it whole.
+- Only the first eight such words are read this way. The words after them are
+  read whole.
+- A document holds a word of the text when it holds that word, its stem, or a
+  longer word that starts with it.
+- The documents that hold a word for each word of the text come first, and
+  the rest come after them. BM25 orders the documents within each group.
+- Scores still go down the page. Search adds to the score of each document in
+  the first group the most that any document could score. As always, a score
+  orders the hits of one search and means nothing beside another's.
 
 ## How a prefix ranks
 
@@ -77,13 +136,14 @@ typos](typos.md#the-rules), and its prefix is then that word.
 
 ## Limits and defaults
 
-| What                         | Value                          |
-|------------------------------|--------------------------------|
-| `prefix`                     | off unless the search says     |
-| the shortest prefix          | two letters                    |
-| words a prefix is read as    | the 64 most held in each field |
-| what a word it begins weighs | half its field's weight        |
-| words before the last        | whole, always                  |
+| What                         | Value                                    |
+|------------------------------|------------------------------------------|
+| `prefix`                     | off unless the search says               |
+| the shortest prefix          | two letters                              |
+| words a prefix is read as    | the 64 most held in each field           |
+| what a word it begins weighs | half its field's weight                  |
+| words before the last        | whole, unless `prefix` is `'every'`      |
+| prefixes with `'every'`      | the first 8 words of two letters or more |
 
 A prefix reads the postings of every word it begins before the search scores,
 so a short prefix on an index of many documents reads more than a whole word

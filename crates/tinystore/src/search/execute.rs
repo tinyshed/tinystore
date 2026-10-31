@@ -39,7 +39,7 @@ const NO_KEY: i64 = 0;
 /// A block of a list: its documents' range, the most its key adds to any of
 /// them, and its postings when they are in hand already, a key's own row or
 /// its head, rather than in a row of `blocks`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Block {
     pub(crate) first: u32,
     pub(crate) last: u32,
@@ -47,8 +47,9 @@ pub(crate) struct Block {
     pub(crate) held: Option<Vec<Posting>>,
 }
 
-/// A key's postings in a search, and a cursor over them.
-#[derive(Debug)]
+/// A key's postings in a search, and a cursor over them. A clone reads from
+/// where the list stands, apart from it.
+#[derive(Clone, Debug)]
 pub(crate) struct List {
     pub(crate) key: i64,
     pub(crate) part: Part,
@@ -117,6 +118,11 @@ impl List {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.blocks.is_empty()
+    }
+
+    /// The most the key adds to any document.
+    pub(crate) fn most(&self) -> u64 {
+        self.blocks.iter().map(|block| block.bound).max().unwrap_or(0)
     }
 
     /// The cursor's document, the next block opened when this one is done.
@@ -317,6 +323,53 @@ pub(crate) fn best_of(lists: &mut [List], source: &mut dyn Fetch, docs: &[u32], 
         }
     }
     Ok(best.sorted())
+}
+
+/// The documents that hold a word for each of `words`, each the places in
+/// `lists` of the lists that find one word, of those `passing` holds when a
+/// filter gives them, in their order: the documents of the word whose lists
+/// hold the fewest blocks, each sought in the lists of every other word. A
+/// word no list finds leaves none.
+pub(crate) fn held_by_all(
+    lists: &[List],
+    words: &[Vec<usize>],
+    source: &mut dyn Fetch,
+    passing: Option<&[u32]>,
+) -> Result<Vec<u32>> {
+    let blocks = |word: &&Vec<usize>| word.iter().map(|at| lists[*at].blocks.len()).sum::<usize>();
+    let Some(fewest) = words.iter().min_by_key(blocks) else { return Ok(Vec::new()) };
+    let mut held = Vec::new();
+    for &at in fewest {
+        let mut list = lists[at].clone();
+        while list.doc(source)? != END {
+            held.push(list.postings[list.at].doc);
+            list.next();
+        }
+    }
+    held.sort_unstable();
+    held.dedup();
+    held.retain(|doc| passing.is_none_or(|docs| docs.binary_search(doc).is_ok()));
+    for word in words.iter().filter(|word| !std::ptr::eq(*word, fewest)) {
+        let mut finding: Vec<List> = word.iter().map(|at| lists[*at].clone()).collect();
+        let mut kept = Vec::with_capacity(held.len());
+        for doc in held {
+            if any_holds(&mut finding, doc, source)? {
+                kept.push(doc);
+            }
+        }
+        held = kept;
+    }
+    Ok(held)
+}
+
+/// Whether any of `lists` holds `doc`, each moved to it or past it.
+fn any_holds(lists: &mut [List], doc: u32, source: &mut dyn Fetch) -> Result<bool> {
+    for list in lists {
+        if list.seek(doc, source)? == doc {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The documents a filter passes, met in their order.

@@ -346,6 +346,199 @@ fn a_prefix_finds_every_document_holding_a_word_it_begins_waiting_and_packed() {
     }
 }
 
+/// The ids of a search's hits and what it read, its scores checked to descend.
+fn descending<T>(found: Found<T>) -> (Vec<String>, Option<String>) {
+    let scores: Vec<f64> = found.hits.iter().map(|hit| hit.score).collect();
+    assert!(scores.windows(2).all(|pair| pair[0] >= pair[1]), "scores rise down the page: {scores:?}");
+    (found.hits.into_iter().map(|hit| hit.id).collect(), found.corrected)
+}
+
+// contract: SRCH-13
+#[test]
+fn every_word_begun_puts_first_the_documents_holding_a_word_for_each() {
+    // issue 40's three courses: `лин` reaches `линий` by its stem as well
+    let fixture = fixture();
+    let courses = fixture.store.index::<String>("courses").open().unwrap();
+    let names = ["Линейная алгебра", "Алгоритмизация и программирование", "Проектирование технологических линий"];
+    for (id, name) in (1..).zip(names) {
+        courses.set(id, &name.to_owned()).unwrap();
+    }
+    let every = |text: &str| descending(checked(|| courses.search(text).prefix_every().run()).unwrap()).0;
+    assert_eq!(every("лин алг"), ["1", "3", "2"], "1 holds a word each began, then BM25");
+    assert_eq!(every("алг лин"), ["1", "3", "2"], "`алг` begins `алгоритмизация` too");
+    assert_eq!(every("лин алгебра"), ["1", "3"]);
+    assert_eq!(every("линейная алг"), ["1", "2"]);
+    assert_eq!(every("лин"), ["3", "1"], "one word: BM25 alone");
+    let last = |text: &str| ids(&checked(|| courses.search(text).prefix().run()).unwrap()).join(" ");
+    assert_eq!(last("лин алг"), "3 1 2", "the last word alone, as 0.4.1 read it");
+    assert_eq!(last("алг лин"), "3 1");
+    let (hits, corrected) = descending(checked(|| courses.search("линеная алг").prefix_every().run()).unwrap());
+    assert_eq!((hits[0].as_str(), corrected.as_deref()), ("1", Some("линейная алг")), "a word that begins none");
+}
+
+// contract: SRCH-13
+#[test]
+fn every_word_begun_reads_as_the_guide_shows_it() {
+    let fixture = fixture();
+    let courses = fixture.store.index::<String>("courses").open().unwrap();
+    let names = [
+        "Cryptographic methods of information security",
+        "Cryptanalysis",
+        "Cryptography",
+        "Foundations of cryptography",
+        "Линейная алгебра",
+        "Алгоритмизация и программирование",
+        "Проектирование технологических линий",
+    ];
+    for (id, name) in (1..).zip(names) {
+        courses.set(id, &name.to_owned()).unwrap();
+    }
+    assert_eq!(descending(checked(|| courses.search("лин алг").prefix_every().run()).unwrap()).0, ["5", "7", "6"]);
+    assert_eq!(ids(&checked(|| courses.search("лин алг").prefix().run()).unwrap()), ["7", "5", "6"]);
+}
+
+// contract: SRCH-13
+#[test]
+fn every_word_begun_finds_the_course_its_reader_shortened_first() {
+    let fixture = fixture();
+    let courses = fixture.store.index::<String>("catalogue").open().unwrap();
+    let names = [
+        "Линейная алгебра",
+        "Алгоритмизация и модульное программирование",
+        "Инженерная графика",
+        "Проектная графика и типографика",
+        "Инженерное творчество",
+        "Теория вероятностей",
+        "Теория организации",
+        "Начертательная геометрия",
+        "Аналитическая геометрия",
+        "Проектирование технологических линий",
+    ];
+    for (id, name) in (1..).zip(names) {
+        courses.set(id, &name.to_owned()).unwrap();
+    }
+    let first = |text: &str| {
+        let found = descending(checked(|| courses.search(text).prefix_every().run()).unwrap()).0;
+        found.first().map(|id| names[id.parse::<usize>().unwrap() - 1]).unwrap_or_default()
+    };
+    // with the last word alone, issue 40's catalogue put the second of each first
+    for (text, meant) in [
+        ("лин алг", "Линейная алгебра"),
+        ("инж граф", "Инженерная графика"),
+        ("теор вер", "Теория вероятностей"),
+        ("нач геом", "Начертательная геометрия"),
+    ] {
+        assert_eq!(first(text), meant, "{text}");
+    }
+}
+
+// contract: SRCH-13
+#[test]
+fn every_word_begun_answers_the_documents_holding_one_for_each_first_waiting_and_packed() {
+    let fixture = fixture();
+    let builder = fixture.store.index("mix").field("title", 2.0).field("body", 1.0).filters(["category"]);
+    let index: Index<Article> = builder.typo_tolerance(false).open().unwrap();
+    let mut random = Random::new(40);
+    let mut docs: BTreeMap<String, Article> = BTreeMap::new();
+    // the documents holding a word each prefix begins, and those holding one for every prefix
+    let begun = |docs: &BTreeMap<String, Article>, text: &str| -> (BTreeSet<String>, BTreeSet<String>) {
+        let (mut any, mut every) = (BTreeSet::new(), BTreeSet::new());
+        for (id, value) in docs {
+            let words = analyzer::words(&format!("{} {}", value.title, value.body));
+            let holds = |prefix: &str| words.iter().any(|word| word.text.starts_with(prefix));
+            if text.split(' ').any(holds) {
+                any.insert(id.clone());
+            }
+            if text.split(' ').all(holds) {
+                every.insert(id.clone());
+            }
+        }
+        (any, every)
+    };
+    let found = |text: &str, category: Option<&str>| {
+        let call = index.search(text).prefix_every().limit(1000);
+        let call = match category {
+            Some(category) => call.filter(crate::search::eq("category", category)),
+            None => call,
+        };
+        descending(checked(|| call.run()).unwrap()).0
+    };
+    for round in 0..3 {
+        for _ in 0..400 {
+            let id = format!("d{}", random.below(300));
+            if random.below(5) == 0 {
+                index.delete(&id).unwrap();
+                docs.remove(&id);
+            } else {
+                let category = if random.below(3) == 0 { "shoes" } else { "boots" };
+                let value = Article { category: Some(category.to_owned()), ..random_article(&mut random) };
+                index.set(&id, &value).unwrap();
+                docs.insert(id, value);
+            }
+        }
+        for packed in [false, true] {
+            if packed {
+                maintain(&fixture.store).unwrap();
+            }
+            for text in ["rare39 ba", "кош соба", "те rare7 ba", "st ye", "cr сол"] {
+                let (any, every) = begun(&docs, text);
+                assert!(!every.is_empty(), "round {round}: {text} has documents holding a word for each");
+                for category in [None, Some("shoes")] {
+                    let kept = |ids: &BTreeSet<String>| -> BTreeSet<String> {
+                        let passes = |id: &&String| category.is_none_or(|c| docs[*id].category.as_deref() == Some(c));
+                        ids.iter().filter(passes).cloned().collect()
+                    };
+                    let (any, every) = (kept(&any), kept(&every));
+                    let said = format!("round {round}, packed {packed}, {category:?}: {text}");
+                    let hits = found(text, category);
+                    assert_eq!(hits.iter().cloned().collect::<BTreeSet<_>>(), any, "{said}");
+                    let first: BTreeSet<String> = hits[..every.len()].iter().cloned().collect();
+                    assert_eq!(first, every, "{said}: those holding a word for each first");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "a timing, run by hand"]
+fn a_search_reading_every_word_as_a_prefix_takes() {
+    let fixture = fixture();
+    let index: Index<Article> = fixture.store.index("timed").field("title", 2.0).field("body", 1.0).open().unwrap();
+    let mut random = Random::new(7);
+    let documents = 5_000;
+    for start in (0..documents).step_by(1000) {
+        let articles: Vec<(String, Article)> =
+            (start..start + 1000).map(|n| (format!("d{n}"), random_article(&mut random))).collect();
+        index.set_many(articles.iter().map(|(id, value)| (id.as_str(), value))).unwrap();
+    }
+    maintain(&fixture.store).unwrap();
+    let texts = ["bread rare3", "sour wat", "кош соба", "st ye ba", "хлеб мук"];
+    let timed = |search: &dyn Fn(&str) -> Found<Article>| {
+        let mut passes: Vec<std::time::Duration> = (0..7)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                for _ in 0..20 {
+                    for text in texts {
+                        std::hint::black_box(search(text));
+                    }
+                }
+                started.elapsed() / (20 * texts.len() as u32)
+            })
+            .collect();
+        passes.sort();
+        passes[passes.len() / 2]
+    };
+    for turn in 0..2 {
+        let plain = timed(&|text| index.search(text).run().unwrap());
+        let last = timed(&|text| index.search(text).prefix().run().unwrap());
+        let every = timed(&|text| index.search(text).prefix_every().run().unwrap());
+        println!(
+            "turn {turn}, {documents} documents, median a search: plain {plain:?}, prefix {last:?}, every {every:?}"
+        );
+    }
+}
+
 #[test]
 fn a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_again() {
     let fixture = fixture();

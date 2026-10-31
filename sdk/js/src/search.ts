@@ -97,9 +97,13 @@ export interface Query {
 	/**
 	 * the last word read as the start of a word too, as a search box types:
 	 * `crypt` finds `cryptography` as well, at half its field's weight; a
-	 * word a space follows is whole, and so is one of a single letter
+	 * word a space follows is whole, and so is one of a single letter. With
+	 * `'every'`, every word of two letters or more is read so, the first
+	 * eight, as people shorten each word of a name: `лин алг` finds
+	 * `Линейная алгебра`; a document that holds a word for each word of the
+	 * text comes first, its score raised above the rest
 	 */
-	prefix?: boolean | undefined
+	prefix?: boolean | 'every' | undefined
 	/** 10 unless said; offset and limit together 1000 at most */
 	limit?: number | undefined
 	offset?: number | undefined
@@ -203,7 +207,9 @@ abstract class Searchable<T> {
 				vector,
 				vectorWeight: asked.hybrid?.vectorWeight,
 				rerank: asked.hybrid?.rerank,
-				prefix: asked.prefix,
+				prefix: asked.prefix === true || undefined,
+				// none unless asked, so that a server before it reads the search
+				prefixEvery: asked.prefix === 'every' || undefined,
 				where,
 				offset: asked.offset,
 				limit: asked.limit,

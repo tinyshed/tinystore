@@ -14,7 +14,7 @@ use super::filter::{self, Condition};
 #[cfg(feature = "replication")]
 use super::forward::Passed;
 use super::open::{Data, OpenIndex, Status};
-use super::read::Query;
+use super::read::{Prefix, Query};
 use super::settings::{Settings, Wanted, check_hybrid};
 #[cfg(feature = "sql")]
 use super::table_index::ReadRows;
@@ -270,7 +270,7 @@ impl<T: DeserializeOwned> Index<T> {
             vector: None,
             vector_weight: None,
             rerank: false,
-            prefix: false,
+            prefix: Prefix::Whole,
             filter: Vec::new(),
             offset: 0,
             limit: LIMIT,
@@ -488,7 +488,7 @@ pub struct SearchCall<'i, T> {
     vector: Option<&'i [f32]>,
     vector_weight: Option<f64>,
     rerank: bool,
-    prefix: bool,
+    prefix: Prefix,
     filter: Vec<Condition>,
     offset: usize,
     limit: usize,
@@ -551,7 +551,19 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
     /// well, at half its field's weight. A word followed by a space or a
     /// mark is whole, and so is one of a single letter.
     pub fn prefix(mut self) -> Self {
-        self.prefix = true;
+        self.prefix = Prefix::Last;
+        self
+    }
+
+    /// Reads every word of the text as the start of a word too, as people
+    /// shorten each word of a name: `лин алг` finds `Линейная алгебра`, at
+    /// half its field's weight. Each word of two letters or more is read so,
+    /// the first eight, whatever follows it. A document that holds a word
+    /// for each word of the text comes before any that does not, its score
+    /// raised by the most any other could score, so that scores descend
+    /// down the page. In place of [`prefix`](Self::prefix).
+    pub fn prefix_every(mut self) -> Self {
+        self.prefix = Prefix::Every;
         self
     }
 

@@ -74,7 +74,8 @@ Search splits the text at spaces and looks at each piece on its own:
 Search checks each piece on its own. With `prefix`, only the last word is
 read as the start of a word, so `kby fku`, the QWERTY keys of `лин алг`, reads
 as `kby алг`. The index holds no word `лин`, so `kby` stays as typed, and
-`алг` begins `алгебра`.
+`алг` begins `алгебра`. With [`prefix: 'every'`](prefix.md#every-word), every
+word is read as the start of a word, so `kby fku` reads as `лин алг`.
 
 ```ts
 const found = await courses.search({ text: 'kby fku', prefix: true })

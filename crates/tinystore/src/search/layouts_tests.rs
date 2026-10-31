@@ -91,6 +91,9 @@ fn a_word_typed_with_the_other_layout_on_is_read_as_its_keys_type_there_and_corr
     assert_eq!(typed("знерщт"), hits(&["3"], Some("python")));
     // `лин` and `инж` are no word of the index, and only the last word is read as a prefix
     assert_eq!(typed("kby fku"), hits(&["2"], Some("kby алг")));
+    let every = |text: &str| read(checked(|| index.search(text).prefix_every().run()).unwrap());
+    assert_eq!(every("kby fku"), hits(&["2"], Some("лин алг")), "every word read as a prefix");
+    assert_eq!(every("by; uhfa"), hits(&["4"], Some("инж граф")));
     assert_eq!(typed("by; uhfa"), hits(&["4"], Some("by; граф")));
     // the course names mix both, and so does a search box
     assert_eq!(typed("Python lkz"), hits(&["3"], Some("python для")));

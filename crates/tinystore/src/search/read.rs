@@ -19,7 +19,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::analyzer::{self, Word};
 use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
-use super::execute::{Fetch, List, best, best_of};
+use super::execute::{Fetch, List, best, best_of, held_by_all};
 use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
@@ -61,6 +61,9 @@ const MOST_PREFIXED: usize = 64;
 /// The letters a word needs before a `prefix` search reads it as the start
 /// of others: one letter would read every word that starts with it.
 const LEAST_PREFIX: usize = 2;
+/// The words a search that reads every word as a prefix reads so at most:
+/// each one reads the postings of up to 64 words in each field.
+const MOST_PREFIXES: usize = 8;
 /// A filter that passes no more than one document in this many of an
 /// index's has them scored alone, rather than crossed out of a search of
 /// every one; a search by a vector reads their codes by their numbers
@@ -79,12 +82,26 @@ pub(crate) struct Query {
     pub(crate) vector: Option<Question>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
-    /// The search asks its last word read as the start of a word too, which
-    /// [`prefix_of`] reads it as while it may still be being typed.
-    pub(crate) prefix: bool,
+    /// Which words the search asks read as the start of others too, as
+    /// [`prefixes`] reads them.
+    pub(crate) prefix: Prefix,
     pub(crate) filter: Option<filter::Asked>,
     pub(crate) offset: usize,
     pub(crate) limit: usize,
+}
+
+/// Which of a search's words it reads as the start of others too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Prefix {
+    /// None: each word is whole.
+    #[default]
+    Whole,
+    /// The last, while it may still be being typed.
+    Last,
+    /// Every word of two letters or more, the first eight, whatever follows
+    /// it, as a reader who begins each word types: `лин алг`. A document
+    /// that holds a word for each comes before one that does not.
+    Every,
 }
 
 /// A query of an index, and what the index keeps for it.
@@ -222,18 +239,62 @@ thread_local! {
 
 /// The best `k` by the search's words, with their scores.
 fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
-    let Held { moment, documents, passing } = held;
+    let Held { moment, documents, .. } = held;
     let stats =
         Stats { documents, tokens: tokens(connection, asked.index)?, gone: asked.kept.gone(connection, moment)? };
     let mut source = Source::new(connection, asked, moment, &stats);
-    let mut lists = lists(connection, asked, &stats, &mut source)?;
-    let found = match passing {
-        Some(docs) if narrow(docs.len(), documents, NARROW_WORDS) => best_of(&mut lists, &mut source, docs, k)?,
-        passing => best(&mut lists, &mut source, k, passing)?,
+    let Lists { mut lists, words } = lists(connection, asked, &stats, &mut source)?;
+    let found = match asked.query.prefix {
+        Prefix::Every => holding_every_word_first((&mut lists, &words), &mut source, held, k)?,
+        Prefix::Whole | Prefix::Last => ranked(&mut lists, &mut source, held, k)?,
     };
     #[cfg(test)]
     check(connection, asked, (&stats, held), (&found, k))?;
     Ok(found.into_iter().map(|(points, doc)| (score(points), doc)).collect())
+}
+
+/// The best `k` by the lists' points, of the documents a filter passes
+/// scored alone when it passes few.
+fn ranked(lists: &mut [List], source: &mut Source<'_>, held: Held<'_>, k: usize) -> Result<Vec<(u64, u32)>> {
+    match held.passing {
+        Some(docs) if narrow(docs.len(), held.documents, NARROW_WORDS) => best_of(lists, source, docs, k),
+        passing => best(lists, source, k, passing),
+    }
+}
+
+/// The best `k` of the documents that hold a word for each of the search's
+/// words, then the best of the rest: the first with what every list adds at
+/// most added to their points, which no document of the rest reaches, so
+/// that the points still descend. A search of one word holds it in every
+/// hit, and finds none of the rest.
+///
+/// ```text
+/// лин алг  →  Линейная алгебра                       лин…, алг…   its points + above
+///             Проектирование технологических линий   лин…         its points
+///             Алгоритмизация и программирование      алг…         its points
+/// ```
+///
+/// The best `k − m` of the rest, where `m < k` hold every word, are among
+/// the best `k` of all, since at most `m` of the first come before them.
+fn holding_every_word_first(
+    (lists, words): (&mut [List], &[Vec<usize>]),
+    source: &mut Source<'_>,
+    held: Held<'_>,
+    k: usize,
+) -> Result<Vec<(u64, u32)>> {
+    let above = lists.iter().fold(0_u64, |sum, list| sum.saturating_add(list.most()));
+    let raised = |found: Vec<(u64, u32)>| found.into_iter().map(|(points, doc)| (points.saturating_add(above), doc));
+    if words.len() < 2 {
+        return Ok(raised(ranked(lists, source, held, k)?).collect());
+    }
+    let every = held_by_all(lists, words, source, held.passing)?;
+    let holding = Held { passing: Some(&every), ..held };
+    let mut first: Vec<(u64, u32)> = raised(ranked(&mut lists.to_vec(), source, holding, k)?).collect();
+    if first.len() < k {
+        let rest = ranked(lists, source, held, k)?.into_iter().filter(|(_, doc)| every.binary_search(doc).is_err());
+        first.extend(rest.take(k - every.len()));
+    }
+    Ok(first)
 }
 
 /// The best `k` from the index's clusters, when it has a `recall` and its
@@ -307,36 +368,76 @@ struct Stats {
     gone: Arc<Gone>,
 }
 
+/// A search's lists, and for each of its words the places among them of
+/// the lists that find it.
+struct Lists {
+    lists: Vec<List>,
+    words: Vec<Vec<usize>>,
+}
+
 /// The lists of a search's keys, and in each field the list of the words
-/// its last word begins, when it reads that word as a prefix.
-fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut Source<'_>) -> Result<Vec<List>> {
+/// each word it reads as a prefix begins.
+fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut Source<'_>) -> Result<Lists> {
+    let mut found = keyed_lists(connection, asked, stats)?;
+    let mut begun: HashMap<&str, Vec<usize>> = HashMap::new();
+    for at in prefixes(&asked.query) {
+        let text = asked.query.words[at].text.as_str();
+        if !begun.contains_key(text) {
+            let mut places = Vec::new();
+            for field in &asked.settings.fields {
+                let part = Part::written(field.number);
+                if let Some(list) = prefixed(connection, asked, (stats, &mut *source), (part, text))? {
+                    places.push(found.lists.len());
+                    found.lists.push(list);
+                }
+            }
+            begun.insert(text, places);
+        }
+        found.words[at].extend(&begun[text]);
+    }
+    Ok(found)
+}
+
+/// The lists of the keys a search's words are found by, each once, and
+/// which find each word.
+fn keyed_lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats) -> Result<Lists> {
     let mut lists = Vec::new();
+    let mut placed: HashMap<(Part, String), usize> = HashMap::new();
     for form in forms(&asked.query.words, asked.settings) {
         if let Some(list) = list(connection, asked, stats, &form)? {
+            placed.insert(form, lists.len());
             lists.push(list);
         }
     }
-    if let Some(word) = prefix_of(&asked.query) {
-        for field in &asked.settings.fields {
-            let part = Part::written(field.number);
-            if let Some(list) = prefixed(connection, asked, (stats, &mut *source), (part, &word.text))? {
-                lists.push(list);
-            }
-        }
-    }
-    Ok(lists)
+    let finding = |word: &Word| {
+        forms(std::slice::from_ref(word), asked.settings).iter().filter_map(|form| placed.get(form).copied()).collect()
+    };
+    Ok(Lists { lists, words: asked.query.words.iter().map(finding).collect() })
 }
 
-/// The word a search reads as the start of others: its last, when it asks
-/// so and the word may still be being typed.
-pub(super) fn prefix_of(query: &Query) -> Option<&Word> {
-    query.words.last().filter(|last| query.prefix && halfway(last, &query.normal))
+/// The words a search reads as the start of others too, by their places
+/// among its words: its last while it may still be being typed, or every
+/// one long enough, the first eight.
+pub(super) fn prefixes(query: &Query) -> Vec<usize> {
+    let words = &query.words;
+    match query.prefix {
+        Prefix::Whole => Vec::new(),
+        Prefix::Last => {
+            words.len().checked_sub(1).filter(|last| halfway(&words[*last], &query.normal)).into_iter().collect()
+        }
+        Prefix::Every => (0..words.len()).filter(|at| long_enough(&words[*at])).take(MOST_PREFIXES).collect(),
+    }
 }
 
 /// Whether a word of `normal` may be typed halfway: nothing follows it, not
 /// a space nor a mark, and it is long enough to begin few words.
 pub(super) fn halfway(word: &Word, normal: &str) -> bool {
-    word.at.end == normal.len() && word.text.chars().count() >= LEAST_PREFIX
+    word.at.end == normal.len() && long_enough(word)
+}
+
+/// Whether a word is long enough to be read as the start of others.
+pub(super) fn long_enough(word: &Word) -> bool {
+    word.text.chars().count() >= LEAST_PREFIX
 }
 
 #[cfg(test)]
@@ -365,12 +466,49 @@ fn check(
         return Ok(());
     }
     let mut source = Source::new(connection, asked, held.moment, stats);
-    let mut lists = lists(connection, asked, stats, &mut source)?;
-    let every = super::execute::every(&mut lists, &mut source, k, held.passing)?;
+    let Lists { mut lists, words } = lists(connection, asked, stats, &mut source)?;
+    let every = match asked.query.prefix {
+        Prefix::Every => every_by_words(&mut lists, &words, &mut source, (held.passing, k))?,
+        Prefix::Whole | Prefix::Last => super::execute::every(&mut lists, &mut source, k, held.passing)?,
+    };
     if every != found {
         return Err(Error::internal(format!("found {found:?} where every posting gives {every:?}")));
     }
     Ok(())
+}
+
+/// What [`holding_every_word_first`] must answer, scoring every posting: a
+/// document that holds a word for each of the search's words has the most
+/// every list adds added to its points.
+#[cfg(test)]
+fn every_by_words(
+    lists: &mut [List],
+    words: &[Vec<usize>],
+    source: &mut Source<'_>,
+    (passing, k): (Option<&[u32]>, usize),
+) -> Result<Vec<(u64, u32)>> {
+    let above = lists.iter().fold(0_u64, |sum, list| sum.saturating_add(list.most()));
+    let mut holding: Option<HashSet<u32>> = None;
+    for word in words {
+        let mut docs = HashSet::new();
+        for &at in word {
+            docs.extend(lists[at].clone().into_postings(source)?.into_iter().map(|posting| posting.doc));
+        }
+        holding = Some(match holding {
+            Some(held) => held.intersection(&docs).copied().collect(),
+            None => docs,
+        });
+    }
+    let holding = holding.unwrap_or_default();
+    let mut every = super::execute::every(lists, source, usize::MAX, passing)?;
+    for (points, doc) in &mut every {
+        if holding.contains(doc) {
+            *points = points.saturating_add(above);
+        }
+    }
+    every.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    every.truncate(k);
+    Ok(every)
 }
 
 /// How many words each part has in every document.
@@ -432,14 +570,14 @@ fn correct(
         return Ok(swapped.then(|| asked.query.normal.clone()));
     }
     let mut replaced = Vec::new();
-    let prefix = prefix_of(&asked.query).map(|word| word.at.clone());
+    let prefixes = prefixes(&asked.query);
     for at in 0..asked.query.words.len() {
         let word = &asked.query.words[at];
         if word.text.chars().count() < 5 || held(connection, asked, word)? > 0 {
             continue;
         }
         // a word typed halfway is no typo while it begins one the index holds
-        if prefix.as_ref() == Some(&word.at) && begins_a_word(connection, asked, &word.text)? {
+        if prefixes.contains(&at) && begins_a_word(connection, asked, &word.text)? {
             continue;
         }
         let corrector = corrector(connection, asked, version, behind)?;

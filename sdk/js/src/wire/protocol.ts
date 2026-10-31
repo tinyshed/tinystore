@@ -10241,6 +10241,8 @@ export const SearchQuery = message(
 		limit: [8, uint],
 		/** the last word read as the start of a word too, as a search box types */
 		prefix: [9, bool],
+		/** every word read so, a document holding a word for each first; in place of prefix */
+		prefixEvery: [10, bool],
 	},
 	{
 		write(w, v) {
@@ -10291,6 +10293,11 @@ export const SearchQuery = message(
 				w.bool(v.prefix)
 				n++
 			}
+			if (v.prefixEvery !== undefined) {
+				w.field(10)
+				w.bool(v.prefixEvery)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -10303,6 +10310,7 @@ export const SearchQuery = message(
 			let $offset: number | undefined
 			let $limit: number | undefined
 			let $prefix: boolean | undefined
+			let $prefixEvery: boolean | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -10332,6 +10340,9 @@ export const SearchQuery = message(
 					case 9:
 						$prefix = r.bool()
 						break
+					case 10:
+						$prefixEvery = r.bool()
+						break
 					default:
 						r.skip()
 				}
@@ -10347,6 +10358,7 @@ export const SearchQuery = message(
 				offset: $offset,
 				limit: $limit,
 				prefix: $prefix,
+				prefixEvery: $prefixEvery,
 			}
 		},
 	},

@@ -177,7 +177,7 @@ class _Searchable[T]:
         vector: Vector | None = None,
         where: Where | None = None,
         hybrid: Hybrid | None = None,
-        prefix: bool = False,
+        prefix: bool | Literal["every"] = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> Result[T]:
@@ -188,8 +188,13 @@ class _Searchable[T]:
         With prefix, the last word is read as the start of a word too, as a
         search box types: "crypt" finds "cryptography" as well, at half its
         field's weight; a word a space follows is whole, and so is one of a
-        single letter.
+        single letter. With prefix="every", every word of two letters or more
+        is read so, the first eight, as people shorten each word of a name:
+        "лин алг" finds "Линейная алгебра"; a document that holds a word for
+        each word of the text comes first, its score raised above the rest.
         """
+        if prefix not in (True, False, "every"):
+            raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
         vector_bytes = None if vector is None else _vector_bytes(vector)
         asked = None if where is None else where_json(where)
 
@@ -200,7 +205,9 @@ class _Searchable[T]:
                 vector=vector_bytes,
                 vector_weight=None if hybrid is None else hybrid.vector_weight,
                 rerank=None if hybrid is None else hybrid.rerank,
-                prefix=prefix,
+                prefix=prefix is True,
+                # none unless asked, so that a server before it reads the search
+                prefix_every=True if prefix == "every" else None,
                 where=asked,
                 offset=offset,
                 limit=limit,

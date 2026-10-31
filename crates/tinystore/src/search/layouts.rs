@@ -16,8 +16,8 @@ use std::ops::Range;
 
 use rusqlite::Connection;
 
-use super::analyzer::{self, Word};
-use super::read::{Asked, begins_a_word, halfway, held, prefix_of};
+use super::analyzer;
+use super::read::{Asked, Prefix, begins_a_word, halfway, held, long_enough, prefixes};
 use crate::{Error, Result};
 
 /// A layout an index may name.
@@ -137,8 +137,8 @@ pub(super) fn swap(connection: &Connection, asked: &mut Asked<'_>) -> Result<boo
     let query = &asked.query;
     let mut swaps: Vec<(Range<usize>, String)> = Vec::new();
     for piece in pieces(&query.normal) {
-        let inside = |word: &&Word| piece.start <= word.at.start && word.at.end <= piece.end;
-        let typed: Vec<&Word> = query.words.iter().filter(inside).collect();
+        let inside = |at: &usize| piece.start <= query.words[*at].at.start && query.words[*at].at.end <= piece.end;
+        let typed: Vec<usize> = (0..query.words.len()).filter(inside).collect();
         if typed.is_empty() || finds_typed(connection, asked, &typed)? {
             continue;
         }
@@ -160,22 +160,25 @@ pub(super) fn swap(connection: &Connection, asked: &mut Asked<'_>) -> Result<boo
     Ok(true)
 }
 
-/// Whether any of a piece's words finds something as typed.
-fn finds_typed(connection: &Connection, asked: &Asked<'_>, typed: &[&Word]) -> Result<bool> {
-    let prefix = prefix_of(&asked.query).map(|word| word.at.clone());
-    for word in typed {
+/// Whether any of a piece's words, by their places among the search's,
+/// finds something as typed.
+fn finds_typed(connection: &Connection, asked: &Asked<'_>, typed: &[usize]) -> Result<bool> {
+    let prefixes = prefixes(&asked.query);
+    for &at in typed {
+        let word = &asked.query.words[at];
         if held(connection, asked, word)? > 0 {
             return Ok(true);
         }
-        if prefix.as_ref() == Some(&word.at) && begins_a_word(connection, asked, &word.text)? {
+        if prefixes.contains(&at) && begins_a_word(connection, asked, &word.text)? {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-/// Whether every word of a piece's reading finds something, its last read
-/// as a prefix where it ends the search's text, `last`, as typed text does.
+/// Whether every word of a piece's reading finds something, a word read as
+/// a prefix as the search reads typed words: each of them, or its last
+/// where it ends the search's text, `last`.
 fn finds_read(connection: &Connection, asked: &Asked<'_>, reading: &str, last: bool) -> Result<bool> {
     let words = analyzer::words_of(reading);
     if words.is_empty() {
@@ -185,7 +188,11 @@ fn finds_read(connection: &Connection, asked: &Asked<'_>, reading: &str, last: b
         if held(connection, asked, word)? > 0 {
             continue;
         }
-        let prefix = asked.query.prefix && last && at == words.len() - 1 && halfway(word, reading);
+        let prefix = match asked.query.prefix {
+            Prefix::Whole => false,
+            Prefix::Last => last && at == words.len() - 1 && halfway(word, reading),
+            Prefix::Every => long_enough(word),
+        };
         if !(prefix && begins_a_word(connection, asked, &word.text)?) {
             return Ok(false);
         }

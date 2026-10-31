@@ -135,6 +135,9 @@ async fn an_awaited_index_answers_as_the_blocking_one_on_the_same_store() {
     let typed = articles.search("sourd").prefix().run().await.unwrap();
     assert_eq!(typed.hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["a-17"]);
     assert_eq!(typed, blocking.search("sourd").prefix().run().unwrap());
+    let begun = articles.search("sou fl").prefix_every().run().await.unwrap();
+    assert_eq!(begun.hits.first().map(|hit| hit.id.as_str()), Some("a-17"), "it begins a word of each");
+    assert_eq!(begun, blocking.search("sou fl").prefix_every().run().unwrap());
     let swapped = articles.search("ызуде").run().await.unwrap();
     assert_eq!(swapped.corrected.as_deref(), Some("spelt"), "typed with the other layout on");
     assert_eq!(swapped, blocking.search("ызуде").run().unwrap());

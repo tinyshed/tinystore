@@ -8455,6 +8455,10 @@ def _write_search_query(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(9)
         w.bool(x)
         n += 1
+    if (x := v.get("prefix_every")) is not None:
+        w.uint(10)
+        w.bool(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -8481,6 +8485,8 @@ def _read_search_query(r: Reader) -> dict[str, Any]:
                 read["limit"] = r.uint()
             case 9:
                 read["prefix"] = r.bool()
+            case 10:
+                read["prefix_every"] = r.bool()
             case _:
                 r.skip()
     r.leave()
@@ -8504,6 +8510,8 @@ SearchQuery = Message(
         "limit": (8, uint),
         # the last word read as the start of a word too, as a search box types
         "prefix": (9, bool_),
+        # every word read so, a document holding a word for each first; in place of prefix
+        "prefix_every": (10, bool_),
     },
     _write_search_query,
     _read_search_query,

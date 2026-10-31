@@ -95,6 +95,23 @@ for (const way of ways) {
 			expect(await found('python')).toEqual([['3'], undefined])
 		})
 
+		// contract: SRCH-13
+		test("prefix 'every' reads each word as a start, a document holding one for each first", async () => {
+			const courses = store.index<{ name: string }>('shortened', { fields: { name: 1 } })
+			await courses.setMany([
+				{ id: 1, value: { name: 'Линейная алгебра' } },
+				{ id: 2, value: { name: 'Алгоритмизация и программирование' } },
+				{ id: 3, value: { name: 'Проектирование технологических линий' } },
+			])
+			const found = async (text: string, prefix: boolean | 'every') =>
+				ids(await courses.search({ text, prefix }))
+			expect(await found('лин алг', 'every')).toEqual(['1', '3', '2'])
+			expect(await found('алг лин', 'every')).toEqual(['1', '3', '2'])
+			expect(await found('лин алгебра', 'every')).toEqual(['1', '3'])
+			expect(await found('линейная алг', 'every')).toEqual(['1', '2'])
+			expect(await found('лин алг', true)).toEqual(['3', '1', '2'])
+		})
+
 		test('a vector finds the nearest by its cosine, and with words both are summed or reranked', async () => {
 			const shoes = store.index<Product>('shoes', {
 				fields: ['title'],

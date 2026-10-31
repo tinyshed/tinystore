@@ -134,6 +134,35 @@ func TestAWordTypedWithTheOtherLayoutOnIsReadAsItsKeysTypeThereAndCorrectedSaysS
 	})
 }
 
+// contract: SRCH-13
+func TestPrefixEveryReadsEachWordAsAStartADocumentHoldingOneForEachFirst(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		courses := ways.Must(search.OpenIndex[course](store, "shortened", search.Fields{"name": 1}))
+		ways.Must(0, courses.SetMany(ctx, []search.Doc[course]{
+			{ID: "1", Value: course{"Линейная алгебра"}},
+			{ID: "2", Value: course{"Алгоритмизация и программирование"}},
+			{ID: "3", Value: course{"Проектирование технологических линий"}},
+		}))
+		every, last := []search.QueryOption{search.PrefixEvery()}, []search.QueryOption{search.Prefix()}
+		for _, asked := range []struct {
+			text string
+			opts []search.QueryOption
+			want []string
+		}{
+			{"лин алг", every, []string{"1", "3", "2"}},
+			{"алг лин", every, []string{"1", "3", "2"}},
+			{"лин алгебра", every, []string{"1", "3"}},
+			{"линейная алг", every, []string{"1", "2"}},
+			{"лин алг", last, []string{"3", "1", "2"}},
+		} {
+			if got := ids(ways.Must(courses.Search(ctx, asked.text, asked.opts...))); !reflect.DeepEqual(got, asked.want) {
+				t.Fatalf("%q: %v, want %v", asked.text, got, asked.want)
+			}
+		}
+	})
+}
+
 func TestAVectorFindsTheNearestByItsCosineAndWithWordsBothAreSummedOrReranked(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()
