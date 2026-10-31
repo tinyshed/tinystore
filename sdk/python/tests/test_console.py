@@ -89,6 +89,22 @@ def test_the_console_alone_prints_each_line_and_keeps_none(monkeypatch: pytest.M
     assert "Traceback" in lines[1]["error"] and "card declined" in lines[1]["error"]
 
 
+# contract: LOG-10
+def test_a_key_a_nested_bind_gives_again_takes_the_new_value_where_the_outer_one_stood(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("LOG_LEVEL", "LOG_FORMAT", "LOG_TIME", "FORCE_COLOR"):
+        monkeypatch.delenv(name, raising=False)
+    out = io.StringIO()
+    http = tinystore.logger("api", console="pretty", time="off", to=out).bind(component="http", user=7)
+    http.bind(component="access").info("request completed", status=200)
+    http.info("served")
+    assert out.getvalue().splitlines() == [
+        "INFO  api  request completed  component=access user=7 status=200",
+        "INFO  api  served  component=http user=7",
+    ]
+
+
 def test_the_environment_wins_over_the_code_and_never_turns_a_console_on(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_LOG_LEVEL", "warning")
     monkeypatch.setenv("APP_LOG_FORMAT", "pretty")

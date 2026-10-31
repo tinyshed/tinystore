@@ -100,9 +100,10 @@ impl Query {
     }
 }
 
-/// Whether `fields` have `key` at their top with a value written as `json`.
+/// Whether `fields` have `key` at their top with a value written as `json`:
+/// the last of a key written twice, the value a read gives for it.
 fn has(fields: &Fields, key: &str, json: &str) -> bool {
-    fields.iter().any(|(name, value)| name == key && value == json)
+    fields.json(key) == Some(json)
 }
 
 /// Whether an event holds `text`, which is in lower case: in its message, in
@@ -193,7 +194,8 @@ impl List {
 
     /// `key` with this value, at the top of an event's fields or of its
     /// context, by the JSON the value is written as: `42` finds `42`, and
-    /// neither `"42"` nor `42.0`.
+    /// neither `"42"` nor `42.0`. A key written twice is found by its last
+    /// value, the one [`Fields::get`] reads.
     pub fn filter(mut self, key: &str, value: &impl Serialize) -> Self {
         match serde_json::to_string(value) {
             Ok(json) => self.query.filters.push((key.to_owned(), json)),

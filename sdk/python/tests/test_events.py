@@ -225,6 +225,17 @@ async def test_a_stores_logger_keeps_its_lines_their_fields_and_the_context_of_b
     assert log.dropped == 0
 
 
+# contract: LOG-10
+async def test_a_key_a_nested_bind_gives_again_is_kept_and_found_by_its_new_value_alone(store: tinystore.Store) -> None:
+    log = store.logger("access", console="off")
+    log.bind(component="http", user=7).bind(component="access").info("request completed")
+    await log.flush()
+    access = store.events("access")
+    assert [event.context for event in (await access.list()).events] == [{"component": "access", "user": 7}]
+    found = [len((await access.list(where={"component": c})).events) for c in ("access", "http")]
+    assert found == [1, 0]
+
+
 async def test_a_handler_gives_logging_the_stores_logger(store: tinystore.Store) -> None:
     worker = logging.getLogger("tinystore-test-worker")
     worker.propagate = False

@@ -156,6 +156,22 @@ describe('a logger of the console alone', () => {
 		})
 	})
 
+	// contract: LOG-10
+	test('a key a nested with gives again takes the new value where the outer one stood', () => {
+		const pretty: string[] = []
+		const look = { console: 'pretty', time: 'off' } as const
+		const http = newLogger(undefined, 'api', look, { write: t => pretty.push(t) }).with({
+			component: 'http',
+			user: 7,
+		})
+		http.with({ component: 'access' }).info('request completed', { status: 200 })
+		http.info('served')
+		expect(pretty).toEqual([
+			'INFO  api  request completed  component=access user=7 status=200\n',
+			'INFO  api  served  component=http user=7\n',
+		])
+	})
+
 	test('is pretty on a terminal and JSON elsewhere, keeps its level, and off writes nothing', () => {
 		const terminal: string[] = []
 		const pipe: string[] = []

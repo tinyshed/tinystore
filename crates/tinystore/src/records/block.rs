@@ -510,6 +510,12 @@ struct Column<'a, 'b> {
 impl Column<'_, '_> {
     /// Which events hold `key` with the value `json`: in a field or in their
     /// context, or maybe in fields kept whole, which the read checks whole.
+    /// A key written twice is held by its last value, as a read gives it.
+    ///
+    /// A column is a key's place in the shapes that have it, so one column
+    /// may hold the last `tag` of one shape and the first of another: its
+    /// values are read for every event that has it, and only the events
+    /// whose last `tag` it is are found by them.
     fn holding(
         &self,
         contexts: &[i64],
@@ -524,24 +530,22 @@ impl Column<'_, '_> {
             .iter()
             .map(|shape| {
                 let in_context = shape.has(HAS_CONTEXT)
-                    && context(context_ids.next())
-                        .is_some_and(|fields| fields.iter().any(|(name, value)| name == key && value == json));
+                    && context(context_ids.next()).is_some_and(|fields| fields.json(key) == Some(json.as_str()));
                 shape.has(WHOLE_FIELDS) || in_context
             })
             .collect();
-        let columns: BTreeSet<usize> = self
-            .shapes
-            .iter()
-            .flat_map(|shape| {
-                shape.keys.iter().zip(&shape.columns).filter(|(name, _)| *name == key).map(|(_, column)| *column)
-            })
-            .collect();
+        let last_column = |shape: &Shape| {
+            shape.keys.iter().zip(&shape.columns).rev().find(|(name, _)| *name == key).map(|(_, column)| *column)
+        };
+        let columns: BTreeSet<usize> = self.shapes.iter().filter_map(|shape| last_column(shape)).collect();
         for column in columns {
             let places: Vec<usize> =
                 (0..self.shapes.len()).filter(|place| self.shapes[*place].columns.contains(&column)).collect();
             let at: Vec<i64> = places.iter().map(|place| self.times[*place]).collect();
             let equal = self.opened.equal(FIXED + column, &at, decoder, json)?;
-            places.iter().zip(equal).for_each(|(place, equal)| holds[*place] |= equal);
+            for (place, equal) in places.into_iter().zip(equal) {
+                holds[place] |= equal && last_column(self.shapes[place]) == Some(column);
+            }
         }
         Ok(holds)
     }

@@ -261,6 +261,22 @@ for (const way of ways) {
 			expect(log.dropped).toBe(0)
 		})
 
+		// contract: LOG-10
+		test('a key a nested with gives again is kept and found by its new value alone', async () => {
+			const log = store.logger('access', { console: 'off' })
+			log
+				.with({ component: 'http', user: 7 })
+				.with({ component: 'access' })
+				.info('request completed')
+			await log.flush()
+			const access = store.events('access')
+			const { events } = await access.list()
+			expect(events.map(event => event.context)).toEqual([{ component: 'access', user: 7 }])
+			const found = async (component: string) =>
+				(await access.list({ where: { component } })).events.length
+			expect([await found('access'), await found('http')]).toEqual([1, 0])
+		})
+
 		// contract: LOG-09, REC-01
 		test('a field given as undefined is left out of what is kept, and null stays null', async () => {
 			const kept = store.events('kept')

@@ -169,6 +169,30 @@ fn a_secret_is_hidden_where_it_prints_and_where_it_is_kept() {
     assert!(printed[0].contains(r#""api_key":"[redacted]""#) && printed[0].contains(r#""password":"[redacted]""#));
 }
 
+// contract: LOG-10
+#[test]
+fn a_key_an_inner_span_gives_again_replaces_the_outer_ones_where_it_prints_is_kept_and_is_found() {
+    let (f, printed) = (fixture(), Printed::default());
+    let log = logger(&f, &printed).layer().unwrap();
+    logged(&log, || {
+        let http = tracing::info_span!("http", component = "http", user = 7);
+        let _in_http = http.enter();
+        let access = tracing::info_span!("access", component = "access");
+        let _in_access = access.enter();
+        tracing::info!(status = 200, "request completed");
+    });
+    log.flush();
+    assert_eq!(
+        printed.untimed(),
+        [r#"{"level":"INFO","stream":"api","msg":"request completed","component":"access","user":7,"status":200}"#]
+    );
+    let api = f.events("api");
+    let events = api.list().page().unwrap().events;
+    assert_eq!(events[0].context.iter().collect::<Vec<_>>(), [("component", r#""access""#), ("user", "7")]);
+    assert_eq!(api.list().filter("component", &"access").page().unwrap().events.len(), 1);
+    assert!(api.list().filter("component", &"http").page().unwrap().events.is_empty());
+}
+
 // contract: LOG-02
 #[test]
 fn a_logger_dropped_with_lines_waiting_loses_none_of_them() {

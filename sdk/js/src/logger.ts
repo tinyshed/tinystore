@@ -460,12 +460,15 @@ export class Logger {
 		this.#emit({ event: name }, attrs)
 	}
 
-	/** The logger of the same stream, buffer and console, its context these fields besides its own. */
+	/**
+	 * The logger of the same stream, buffer and console, its context these
+	 * fields besides its own: a key it had already takes the new value where
+	 * it stood, as an object spread does, where it prints, in what is kept
+	 * and for a query's `where`.
+	 */
 	with(context: Fields): Logger {
-		return new Logger(this.#shared, [
-			...this.#context,
-			...encodeFields(context, this.#shared.redact, this.#shared.replace),
-		])
+		const added = encodeFields(context, this.#shared.redact, this.#shared.replace)
+		return new Logger(this.#shared, onceEach(this.#context, added))
 	}
 
 	/** Hands what the buffer holds to the server now, as the timer does every second. */
@@ -541,6 +544,27 @@ export class Logger {
 			void this.flush()
 		}
 	}
+}
+
+/**
+ * A context's key, JSON pairs with `added`'s after them, each key once: where
+ * it was first given, holding the value given last.
+ *
+ * ```text
+ * component=http user=7, then component=access  →  component=access user=7
+ * ```
+ */
+function onceEach(context: readonly string[], added: readonly string[]): string[] {
+	const once = [...context]
+	for (let i = 0; i < added.length; i += 2) {
+		const at = once.findIndex((key, place) => place % 2 === 0 && key === added[i])
+		if (at === -1) {
+			once.push(added[i] as string, added[i + 1] as string)
+		} else {
+			once[at + 1] = added[i + 1] as string
+		}
+	}
+	return once
 }
 
 /** Whether a logger prints a line of level: it has a console, and the level is the level printed or above. */

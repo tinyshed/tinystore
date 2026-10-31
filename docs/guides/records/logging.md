@@ -68,6 +68,16 @@ A field whose value is `undefined` in TypeScript is left out of the line and
 of what is kept, as `JSON.stringify` and pino leave it out. `null` is kept as
 `null`, and so are Python's `None` and Go's `nil`.
 
+A key that a nested `with` gives again takes the new value where the outer
+one stood, as an object spread does: the line prints it once, the event keeps
+it once, and a read's `where` finds it by the new value alone.
+
+```ts
+const http = log.with({ component: 'http', user: 7 })
+http.with({ component: 'access' }).info('request completed')
+// INFO  api  request completed  component=access user=7
+```
+
 So `store.events('api')` reads the logger's lines beside any events appended
 to the same stream, and every read finds both. See [Reading](reading.md).
 

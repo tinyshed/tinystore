@@ -301,10 +301,14 @@ class Logger:
         self._emit(None, name, None, fields)
 
     def bind(self, **context: Any) -> Logger:
-        """The logger of the same stream, buffer and console, its context these fields besides its own."""
+        """The logger of the same stream, buffer and console, its context these fields besides its own.
+
+        A key it had already takes the new value where it stood, as a dict's
+        update does, where it prints, in what is kept and for a query's where.
+        """
         shared = self._shared
         encoded = encode_fields(((k, _shown(v)) for k, v in context.items()), shared.redact, shared.replace)
-        return Logger(shared, [*self._context, *encoded])
+        return Logger(shared, _once_each(self._context, encoded))
 
     async def flush(self) -> None:
         """Hands what the buffer holds to the store now, as the timer does every second."""
@@ -341,7 +345,7 @@ class Logger:
             stream=shared.stream,
             level=level,
             msg=record.getMessage(),
-            context=[*self._context, *encode_fields([("logger", record.name)], shared.redact)],
+            context=_once_each(self._context, encode_fields([("logger", record.name)], shared.redact)),
             attrs=fields,
         )
         traced = current_trace()
@@ -384,6 +388,16 @@ class Logger:
         if traced is not None:
             line.trace_id, line.span_id = traced
         self.take(line)
+
+
+def _once_each(context: list[tuple[str, str]], added: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """A context with added's fields after its own, each key once: where first given, holding the last value.
+
+    component=http user=7, then component=access  ->  component=access user=7
+    """
+    once = dict(context)
+    once.update(added)
+    return list(once.items())
 
 
 def _prints(shared: _Shared, level: int) -> bool:

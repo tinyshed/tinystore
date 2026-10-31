@@ -183,11 +183,29 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	for _, a := range attrs {
 		flat = h.flatten(flat, h.groups, h.prefix, a)
 	}
-	next.context = h.redact.fields(append(slices.Clone(h.context), spelled(flat, spell)...))
+	next.context = h.redact.fields(onceEach(h.context, spelled(flat, spell)))
 	if h.echo != nil && h.echo.Pretty {
-		next.shown = h.redact.fields(append(slices.Clone(h.shown), spelled(flat, show)...))
+		next.shown = h.redact.fields(onceEach(h.shown, spelled(flat, show)))
 	}
 	return &next
+}
+
+// onceEach is context with added after it, each key once: where it was first
+// given, holding the value given last, so that a With inside another replaces
+// the outer one's key where it prints, in what is kept and for a query's where.
+//
+//	component=http user=7, then component=access  →  component=access user=7
+func onceEach(context, added []Field) []Field {
+	once := slices.Clone(context)
+	for _, field := range added {
+		at := slices.IndexFunc(once, func(held Field) bool { return held.Key == field.Key })
+		if at < 0 {
+			once = append(once, field)
+		} else {
+			once[at].Value = field.Value
+		}
+	}
+	return once
 }
 
 func (h *Handler) WithGroup(name string) slog.Handler {

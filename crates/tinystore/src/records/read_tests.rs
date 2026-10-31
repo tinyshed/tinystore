@@ -311,6 +311,35 @@ fn a_filter_finds_a_key_in_the_fields_or_the_context_by_the_json_of_its_value() 
     assert!(found(api.list().filter("cause", &["ECONNRESET"])).is_empty());
 }
 
+// contract: REC-12
+#[test]
+fn a_key_written_twice_is_found_by_its_last_value_waiting_and_packed() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let twice = |name: &str, fields: &str, context: &str| {
+        let mut event = NewEvent::new(name);
+        (event.fields, event.context) = (Fields::read(fields).unwrap(), Fields::read(context).unwrap());
+        event
+    };
+    api.append_all([
+        twice("log", r#"{"tag": "a", "tag": "b"}"#, r#"{"component": "http", "component": "access"}"#),
+        twice("click", r#"{"tag": "a"}"#, r#"{"component": "http"}"#),
+    ])
+    .unwrap();
+    let found = |list: List| names(&list.page().unwrap().events).into_iter().map(str::to_owned).collect::<Vec<_>>();
+    let finds = || {
+        assert_eq!(found(api.list().filter("component", &"access")), ["log"]);
+        assert_eq!(found(api.list().filter("component", &"http")), ["click"]);
+        assert_eq!(found(api.list().filter("tag", &"b")), ["log"]);
+        assert_eq!(found(api.list().filter("tag", &"a")), ["click"]);
+    };
+    finds();
+    fixture.pass(Duration::from_secs(60 * 60));
+    maintain(&fixture.store).unwrap();
+    assert_eq!((fixture.rows("heads"), fixture.rows("blocks")), (0, 1), "packed");
+    finds();
+}
+
 #[test]
 fn a_search_finds_its_phrase_in_the_message_the_name_and_the_values_whatever_its_case() {
     let fixture = fixture();

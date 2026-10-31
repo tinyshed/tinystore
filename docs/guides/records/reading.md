@@ -111,7 +111,9 @@ as, a number as a number.
   [Events with the same time](#events-with-the-same-time) says how events
   that share a time are ordered.
 - `where` finds a key at the top of `fields` or `context`, by the JSON its
-  value was written as: `42` finds `42`, and neither `'42'` nor `42.0`.
+  value was written as: `42` finds `42`, and neither `'42'` nor `42.0`. A
+  key written twice, as another program's line may write it, is found by
+  its last value, the one the event reads back with.
 - `search` finds a phrase in the message, the name, and a value at any depth.
   It does not look at keys; `fieldNames` lists those.
 - A condition given as `undefined` is `invalid`, never left out: a trace id

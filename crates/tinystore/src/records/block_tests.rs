@@ -300,6 +300,9 @@ fn a_read_rebuilds_only_the_events_its_columns_leave_and_no_other_column_when_no
     // a value its context holds, and one of a key written twice, are narrowed by as well
     assert_eq!(places(wanted(&[], &[pair("tenant", "7"), pair("ok", "true")])), [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]);
     assert_eq!(places(wanted(&[], &[pair("e", "\"caf\u{e9}\"")])), [23]);
+    // a key written twice by its last value alone
+    assert_eq!(places(wanted(&[], &[pair("n", "null")])), [23]);
+    assert!(places(wanted(&[], &[pair("n", "-0")])).is_empty());
     let grave =
         Wanted { first: 0, last: i64::MAX, names: &[], min_level: Some(Level::ERROR), trace: None, filters: &[] };
     assert_eq!(places(parse_wanted(&schema, (1, &row.body), &mut codec, &grave).unwrap()), [2, 5, 8, 11, 14, 17, 24]);

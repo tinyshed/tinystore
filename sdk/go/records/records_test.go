@@ -455,6 +455,34 @@ func TestAStoresHandlerKeepsItsLinesTheirFieldsAndTheContextOfWith(t *testing.T)
 	})
 }
 
+// contract: LOG-10
+func TestAKeyAnInnerWithGivesAgainReplacesTheOuterOnesWhereItPrintsIsKeptAndIsFound(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		var printed bytes.Buffer
+		handler := records.NewHandler(store, "access", console.JSON, console.To(&printed))
+		http := slog.New(handler).With("component", "http", "user", 7)
+		http.With("component", "access").Info("request completed", "status", 200)
+		ways.Must(0, handler.Flush(ctx))
+		line := printed.String()
+		want := `"level":"INFO","stream":"access","msg":"request completed","component":"access","user":7,"status":200}` + "\n"
+		if !strings.HasSuffix(line, want) || strings.Count(line, "component") != 1 {
+			t.Fatalf("printed %q, want it to end %q", line, want)
+		}
+		events := ways.Must(records.OpenEvents(store, "access"))
+		listed := ways.Must(events.List(ctx, records.Query{})).Events
+		if kept := string(listed[0].Context.(json.RawMessage)); kept != `{"component":"access","user":7}` {
+			t.Fatalf("context %s", kept)
+		}
+		for component, want := range map[string]int{"access": 1, "http": 0} {
+			found := ways.Must(events.List(ctx, records.Query{Where: records.Where{"component": component}})).Events
+			if len(found) != want {
+				t.Fatalf("where component=%s finds %d, want %d", component, len(found), want)
+			}
+		}
+	})
+}
+
 func TestAStoresHandlerHandsOverItsLinesAsTheStoreCloses(t *testing.T) {
 	ways.EachWay(t, func(t *testing.T, way ways.Way) {
 		if !way.Shared {

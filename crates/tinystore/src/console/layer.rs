@@ -432,7 +432,7 @@ impl Layer {
     /// Gives a line its spans' context, changed and hidden, and their trace
     /// where the line has none of its own.
     fn add_scope(&self, line: &mut Line, spanned: Spanned) {
-        line.context = self.console.fields(spanned.fields);
+        line.context = once_each(self.console.fields(spanned.fields));
         line.trace = line.trace.or(spanned.trace);
         line.span = line.span.or(spanned.span);
     }
@@ -485,6 +485,25 @@ fn spanned<'a, R: LookupSpan<'a>>(scope: Scope<'a, R>, least: Option<i32>) -> Sp
         }
     }
     scoped
+}
+
+/// A context with each key once, where it was first given and holding the
+/// value given last: a span inside another replaces the outer one's key, as
+/// a nested `with` does in every SDK, so that the line printed, the event
+/// kept and a filter by the key agree on one value.
+///
+/// ```text
+/// component=http user=7, then component=access  →  component=access user=7
+/// ```
+fn once_each(fields: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut once: Vec<(String, String)> = Vec::with_capacity(fields.len());
+    for (key, json) in fields {
+        match once.iter_mut().find(|(held, _)| *held == key) {
+            Some((_, value)) => *value = json,
+            None => once.push((key, json)),
+        }
+    }
+    once
 }
 
 impl<S> tracing_subscriber::Layer<S> for Layer

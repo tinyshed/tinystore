@@ -156,6 +156,7 @@ These contracts are what does not.
 - **REC-09** A stream's `keep` MUST be its own; another `keep` for an open stream MUST be refused, naming both.
 - **REC-10** Another program's lines MUST become events however they were cut; a stack trace's or a JSON value's lines MUST become one event.
 - **REC-11** An event's id MUST name one event of its stream while the stream holds that event for a read or a poll, and MUST be let go once no part the stream keeps spans the event's time, or a drop removed it: an append of an id the stream holds, or of one an earlier event of its list has, MUST write nothing and say so, the rest of its list written whole, and the first event of an id stands whatever a later one carries.
+- **REC-12** A filter MUST find a key written twice by its last value, the one a read gives for it, before the event is packed and after.
 
 ### Logger and console
 
@@ -168,6 +169,7 @@ These contracts are what does not.
 - **LOG-07** A store's logger MUST follow the config `log`, its level live for every logger of the store, Python's `log_handler` among them: the level kept, and the level printed too unless the code's `level` has a `console` part.
 - **LOG-08** A store's logger's `level` MUST set what it keeps and what it prints, one level both and `{ store, console }` each apart, a part left out as `level` left out: no `store` part keeps every level, and no `console` part prints what is kept. The `console` part MUST change only what is printed: every line at the `store` level MUST be kept with the same fields and context whatever the `console` part, and an event, which has no level, MUST be printed and kept.
 - **LOG-09** A field given no value, `undefined` in TypeScript or what a `replace` drops (`undefined` in TypeScript, `None` in Rust, an empty `slog.Attr` in Go), MUST be left out of the console line and of what is kept, in a logger's fields and context and in an appended event's, and `null` MUST stay `null`; Python's `None`, which a Python `replace` cannot drop a field with, and Go's `nil` are values and stay `null`, and a Rust field's `None` stays what `tracing` and serde make of it.
+- **LOG-10** A key a nested `with` gives again (`bind` in Python, a span inside another in Rust) MUST replace the outer one's value where that stood, once, on the console, in what is kept and for a filter.
 
 ### Metrics
 
