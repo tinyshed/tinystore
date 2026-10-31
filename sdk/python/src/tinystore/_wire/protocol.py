@@ -9872,6 +9872,12 @@ def _write_search_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(14)
         w.str(x)
         n += 1
+    if (x := v.get("layouts")) is not None:
+        w.uint(15)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
     w.close_map(head, n)
 
 
@@ -9912,6 +9918,10 @@ def _read_search_open(r: Reader) -> dict[str, Any]:
                 read["key"] = r.str()
             case 14:
                 read["vector_column"] = r.str()
+            case 15:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["layouts"] = items0
             case _:
                 r.skip()
     r.leave()
@@ -9952,6 +9962,8 @@ SearchOpen = Message(
         "key": (13, str_),
         # the column of each row's vector, a blob of little-endian floats
         "vector_column": (14, str_),
+        # the keyboard layouts its readers type with: ru and en, or none
+        "layouts": (15, list_(str_)),
     },
     _write_search_open,
     _read_search_open,

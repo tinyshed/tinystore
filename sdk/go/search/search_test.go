@@ -105,6 +105,35 @@ func TestAWordTypedHalfwayFindsTheWordsItBeginsWithPrefixAndNothingWithout(t *te
 	})
 }
 
+// contract: SRCH-12
+func TestAWordTypedWithTheOtherLayoutOnIsReadAsItsKeysTypeThereAndCorrectedSaysSo(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		courses := ways.Must(search.OpenIndex[course](store, "catalogue", search.Fields{"name": 1}, search.Layouts("ru", "en")))
+		ways.Must(0, courses.SetMany(ctx, []search.Doc[course]{
+			{ID: "1", Value: course{"Криптографические методы защиты информации"}},
+			{ID: "2", Value: course{"Линейная алгебра"}},
+			{ID: "3", Value: course{"Python для анализа данных"}},
+			{ID: "4", Value: course{"Инженерная графика"}},
+		}))
+		for _, asked := range []struct {
+			text, corrected string
+			want            []string
+		}{
+			{"rhbgnj", "крипто", []string{"1"}},
+			{"kby fku", "kby алг", []string{"2"}},
+			{"by; uhfa", "by; граф", []string{"4"}},
+			{"знерщт", "python", []string{"3"}},
+			{"python", "", []string{"3"}},
+		} {
+			result := ways.Must(courses.Search(ctx, asked.text, search.Prefix()))
+			if got := ids(result); !reflect.DeepEqual(got, asked.want) || result.Corrected != asked.corrected {
+				t.Fatalf("%q: %v %q, want %v %q", asked.text, got, result.Corrected, asked.want, asked.corrected)
+			}
+		}
+	})
+}
+
 func TestAVectorFindsTheNearestByItsCosineAndWithWordsBothAreSummedOrReranked(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

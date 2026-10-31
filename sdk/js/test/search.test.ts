@@ -72,6 +72,29 @@ for (const way of ways) {
 			expect(await found('crypt ', true)).toEqual([])
 		})
 
+		// contract: SRCH-12
+		test('a word typed with the other layout on is read as its keys type there, and corrected says so', async () => {
+			const courses = store.index<{ name: string }>('catalogue', {
+				fields: { name: 1 },
+				layouts: ['ru', 'en'],
+			})
+			await courses.setMany([
+				{ id: 1, value: { name: 'Криптографические методы защиты информации' } },
+				{ id: 2, value: { name: 'Линейная алгебра' } },
+				{ id: 3, value: { name: 'Python для анализа данных' } },
+				{ id: 4, value: { name: 'Инженерная графика' } },
+			])
+			const found = async (text: string) => {
+				const result = await courses.search({ text, prefix: true })
+				return [ids(result), result.corrected]
+			}
+			expect(await found('rhbgnj')).toEqual([['1'], 'крипто'])
+			expect(await found('kby fku')).toEqual([['2'], 'kby алг'])
+			expect(await found('by; uhfa')).toEqual([['4'], 'by; граф'])
+			expect(await found('знерщт')).toEqual([['3'], 'python'])
+			expect(await found('python')).toEqual([['3'], undefined])
+		})
+
 		test('a vector finds the nearest by its cosine, and with words both are summed or reranked', async () => {
 			const shoes = store.index<Product>('shoes', {
 				fields: ['title'],

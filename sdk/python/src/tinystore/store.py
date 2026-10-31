@@ -47,7 +47,17 @@ from .logger import Level, Levels, Logger, LoggerOptions, LogHandler, new_store_
 from .metrics import Metrics
 from .once import Once, once_open
 from .records import AllEvents, Events, open_events
-from .search import Fields, Hybrid, IndexInfo, SearchIndex, Vectors, drop_index, index_open, list_indexes
+from .search import (
+    Fields,
+    Hybrid,
+    IndexInfo,
+    KeyboardLayout,
+    SearchIndex,
+    Vectors,
+    drop_index,
+    index_open,
+    list_indexes,
+)
 from .sql import Database, Migrations, open_database
 from .tx import Tx, run_tx
 
@@ -420,6 +430,7 @@ class Store:
         fields: Fields | None = None,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -433,6 +444,7 @@ class Store:
         fields: Fields | None = None,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -445,6 +457,7 @@ class Store:
         fields: Fields | None = None,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -457,13 +470,17 @@ class Store:
         Opening an index with other settings than it holds changes it, and
         one that needs every document read again does so beside it, the old
         rows answering until the new ones switch in; ``rebuild="manual"``
-        waits for ``store.reindex``.
+        waits for ``store.reindex``. With ``layouts=["ru", "en"]``, a word
+        that finds nothing as typed is read as the same keys type in the
+        other keyboard layout, when it finds something there, and
+        ``corrected`` says so.
         """
         opener = index_open(
             name,
             fields=fields,
             filters=filters,
             typo_tolerance=typo_tolerance,
+            layouts=layouts,
             vectors=vectors,
             hybrid=hybrid,
             rebuild=rebuild,
@@ -478,6 +495,7 @@ class Store:
         fields: Fields | None = None,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -488,6 +506,7 @@ class Store:
             fields=fields,
             filters=filters,
             typo_tolerance=typo_tolerance,
+            layouts=layouts,
             vectors=vectors,
             hybrid=hybrid,
             rebuild=rebuild,

@@ -5072,6 +5072,13 @@
         "key": {
           "str": "key"
         },
+        "layouts": {
+          "list": [
+            {
+              "str": "layouts"
+            }
+          ]
+        },
         "manual": {
           "bool": true
         },
@@ -5100,7 +5107,7 @@
           "float": "3ff8000000000000"
         }
       },
-      "hex": "8e01a46e616d6502918201a47061746802cb3ff80000000000000391a766696c7465727304c305cd01fb06cb3ff800000000000007cb3ff800000000000008c309c30ac30bcd04530ca57461626c650da36b65790eac766563746f72436f6c756d6e",
+      "hex": "8f01a46e616d6502918201a47061746802cb3ff80000000000000391a766696c7465727304c305cd01fb06cb3ff800000000000007cb3ff800000000000008c309c30ac30bcd04530ca57461626c650da36b65790eac766563746f72436f6c756d6e0f91a76c61796f757473",
       "message": "search.Open",
       "name": "search.Open with every field"
     },

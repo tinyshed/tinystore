@@ -9450,6 +9450,8 @@ pub(crate) struct SearchOpen {
     pub(crate) key: Option<String>,
     /// The column of each row's vector, a blob of little-endian floats.
     pub(crate) vector_column: Option<String>,
+    /// The keyboard layouts its readers type with: ru and en, or none.
+    pub(crate) layouts: Vec<String>,
 }
 
 #[cfg(feature = "search")]
@@ -9475,6 +9477,7 @@ impl Message for SearchOpen {
                 12 => message.table = Some(codec::str(r, "table")?),
                 13 => message.key = Some(codec::str(r, "key")?),
                 14 => message.vector_column = Some(codec::str(r, "vectorColumn")?),
+                15 => message.layouts = codec::list(r, "layouts", codec::str)?,
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -9539,6 +9542,10 @@ impl Message for SearchOpen {
             map.field(out, 14);
             codec::write_str(out, vector_column);
         }
+        if !self.layouts.is_empty() {
+            map.field(out, 15);
+            codec::write_list(out, &self.layouts, codec::write_str);
+        }
         map.close(out);
     }
 
@@ -9558,6 +9565,7 @@ impl Message for SearchOpen {
             + self.table.as_ref().map_or(0, |table| 1 + 5 + table.len())
             + self.key.as_ref().map_or(0, |key| 1 + 5 + key.len())
             + self.vector_column.as_ref().map_or(0, |vector_column| 1 + 5 + vector_column.len())
+            + 1 + codec::list_size(&self.layouts, |item| 5 + item.len())
     }
 
     fn is_zero(&self) -> bool {
@@ -9575,6 +9583,7 @@ impl Message for SearchOpen {
             && self.table.is_none()
             && self.key.is_none()
             && self.vector_column.is_none()
+            && self.layouts.is_empty()
     }
 }
 

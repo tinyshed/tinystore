@@ -116,6 +116,18 @@ fn every_way_a_row_changes_reaches_its_index_and_a_hit_is_the_row() {
     assert!(dairy.hits.iter().all(|hit| hit.value.category.as_deref() == Some("dairy")));
 }
 
+// contract: SRCH-12
+#[test]
+fn a_tables_index_reads_a_word_typed_with_the_other_layout_on_in_its_layouts() {
+    let f = fixture();
+    f.insert(1, "Хлеб на закваске", "мука, вода и соль");
+    let opened = f.db.search_index::<Article>("articles_search").table("articles").field("title", 2.0);
+    let articles = opened.field("body", 1.0).layouts(["ru", "en"]).open().unwrap();
+    f.ready(&articles);
+    let found = articles.search("[kt,").run().unwrap();
+    assert_eq!((ids(&found), found.corrected.as_deref()), (vec!["1"], Some("хлеб")));
+}
+
 // contract: SRCH-07
 #[test]
 fn a_search_in_the_transaction_that_wrote_sees_its_writes() {

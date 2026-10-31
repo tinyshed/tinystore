@@ -206,6 +206,7 @@ These contracts are what does not.
 - **SRCH-09** A misspelt word MUST be read as its nearest and `corrected` MUST say so; a word that matches MUST never be changed.
 - **SRCH-10** An index MUST answer after a restart as before.
 - **SRCH-11** A search with `prefix` MUST find every document holding a word its last word begins, of the 64 most held it begins in a field, unless a space follows that word or it is a single letter, and MUST answer what scoring every document answers.
+- **SRCH-12** An index with `layouts` MUST read a piece of a search's text whose words find nothing as typed as the same keys type in its other layout when every word that reading gives finds something, and `corrected` MUST say so; a word that finds something as typed MUST never be read so.
 
 ## 5. Replication
 

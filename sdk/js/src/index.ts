@@ -179,6 +179,7 @@ export {
 	type IndexInfo,
 	type IndexOptions,
 	type IndexStatus,
+	type KeyboardLayout,
 	type Query as SearchQuery,
 	SearchIndex,
 	search,

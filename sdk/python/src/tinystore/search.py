@@ -65,6 +65,9 @@ Vector = Sequence[float]
 Fields = Mapping[str, float] | Sequence[str]
 """The fields whose words are read, each with what a word found there weighs, or a list that weighs each 1."""
 
+KeyboardLayout = Literal["ru", "en"]
+"""A keyboard layout an index's readers type with: ЙЦУКЕН, or QWERTY."""
+
 
 @dataclass(frozen=True, slots=True)
 class Vectors:
@@ -317,6 +320,7 @@ def index_open(
     fields: Fields | None = None,
     filters: Sequence[str] = (),
     typo_tolerance: bool | None = None,
+    layouts: Sequence[KeyboardLayout] = (),
     vectors: Vectors | None = None,
     hybrid: Hybrid | None = None,
     rebuild: Literal["automatic", "manual"] | None = None,
@@ -331,11 +335,15 @@ def index_open(
         raise InvalidError(f"index {name}: a rebuild of {rebuild!r}, not automatic or manual")
     if isinstance(filters, str):
         raise InvalidError(f"index {name}: filters {filters!r}, a list of fields")
+    if isinstance(layouts, str):
+        raise InvalidError(f"index {name}: layouts {layouts!r}, a list of layouts")
     return SearchOpen.encode(
         name=name,
         fields=_fields_of(fields),
         filters=list(filters),
         typo_tolerance=typo_tolerance,
+        # none left out, so that a server before layouts reads the open
+        layouts=list(layouts) or None,
         dimensions=None if vectors is None else vectors.dimensions,
         recall=None if vectors is None else vectors.recall,
         vector_weight=None if hybrid is None else hybrid.vector_weight,

@@ -67,6 +67,14 @@ func TypoTolerance(on bool) Option {
 	return optionFunc(func(o *wire.SearchOpen) { o.TypoTolerance = &on })
 }
 
+// Layouts are the keyboard layouts the index's readers type with, "ru" and
+// "en" for ЙЦУКЕН and QWERTY: a word that finds nothing as typed is read as
+// the same keys type in the other layout, when it finds something there,
+// and Result.Corrected says so.
+func Layouts(names ...string) Option {
+	return optionFunc(func(o *wire.SearchOpen) { o.Layouts = append(o.Layouts, names...) })
+}
+
 // Vectors is a vector the program's model gives each document, of these
 // Dimensions, and Recall for searches from clusters, exact without it. A
 // table's index names the Column of blobs that holds them.

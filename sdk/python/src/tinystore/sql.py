@@ -48,7 +48,7 @@ from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
 from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
-from .search import Fields, Hybrid, TableIndex, Vectors, drop_index, index_open
+from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
 
 if TYPE_CHECKING:
     import os
@@ -705,6 +705,7 @@ class Database:
         fields: Fields,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -720,6 +721,7 @@ class Database:
         fields: Fields,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -734,6 +736,7 @@ class Database:
         fields: Fields,
         filters: Sequence[str] = (),
         typo_tolerance: bool | None = None,
+        layouts: Sequence[KeyboardLayout] = (),
         vectors: Vectors | None = None,
         hybrid: Hybrid | None = None,
         rebuild: Literal["automatic", "manual"] | None = None,
@@ -751,6 +754,7 @@ class Database:
             "fields": fields,
             "filters": filters,
             "typo_tolerance": typo_tolerance,
+            "layouts": layouts,
             "vectors": vectors,
             "hybrid": hybrid,
             "rebuild": rebuild,

@@ -38,6 +38,12 @@ export interface IndexOptions {
 	filters?: readonly string[] | undefined
 	/** a misspelt word read as the index's nearest; on unless false */
 	typoTolerance?: boolean | undefined
+	/**
+	 * the keyboard layouts the index's readers type with, `['ru', 'en']`: a
+	 * word that finds nothing as typed is read as the same keys type in the
+	 * other layout, when it finds something there, and `corrected` says so
+	 */
+	layouts?: readonly KeyboardLayout[] | undefined
 	/** a vector the program's model gives each document, and `recall` for searches from clusters */
 	vectors?: { dimensions: number; recall?: number | undefined } | undefined
 	/** how a search by words and a vector at once combines them unless it says */
@@ -45,6 +51,9 @@ export interface IndexOptions {
 	/** whether a change that needs every document read again waits for `store.reindex` */
 	rebuild?: 'automatic' | 'manual' | undefined
 }
+
+/** A keyboard layout an index's readers type with: ЙЦУКЕН, or QWERTY. */
+export type KeyboardLayout = 'ru' | 'en'
 
 /** A vector the program's own model gave, of the index's dimensions. */
 export type Vector = readonly number[] | Float32Array
@@ -139,6 +148,7 @@ export interface TableIndexOptions {
 	/** the columns a search may keep its hits to; a boolean is the 1 or 0 SQLite keeps */
 	filters?: readonly string[] | undefined
 	typoTolerance?: boolean | undefined
+	layouts?: readonly KeyboardLayout[] | undefined
 	/** a column of blobs of little-endian floats, one a row or null, and `recall` for searches from clusters */
 	vectors?: { column: string; dimensions: number; recall?: number | undefined } | undefined
 	hybrid?: { vectorWeight?: number | undefined; rerank?: boolean | undefined } | undefined
@@ -323,6 +333,7 @@ export function tableIndexOpen(
 		fields: fieldsOf(options.fields),
 		filters: [...(options.filters ?? [])],
 		typoTolerance: options.typoTolerance,
+		layouts: layoutsOf(options.layouts),
 		dimensions: options.vectors?.dimensions,
 		recall: options.vectors?.recall,
 		vectorWeight: options.hybrid?.vectorWeight,
@@ -342,6 +353,11 @@ function fieldsOf(fields: IndexOptions['fields']): { path: string; weight: numbe
 		: Object.entries(fields ?? {}).map(([path, weight]) => ({ path, weight }))
 }
 
+/** The layouts asked for; none left out, so that a server before them reads the open. */
+function layoutsOf(layouts: readonly KeyboardLayout[] | undefined): KeyboardLayout[] | undefined {
+	return layouts?.length ? [...layouts] : undefined
+}
+
 /** The open of an index: its name, settings, and whether it reads the index again. */
 export function indexOpen(name: string, options: IndexOptions = {}, reindex = false): Uint8Array {
 	checkName(name, 'index')
@@ -350,6 +366,7 @@ export function indexOpen(name: string, options: IndexOptions = {}, reindex = fa
 		fields: fieldsOf(options.fields),
 		filters: [...(options.filters ?? [])],
 		typoTolerance: options.typoTolerance,
+		layouts: layoutsOf(options.layouts),
 		dimensions: options.vectors?.dimensions,
 		recall: options.vectors?.recall,
 		vectorWeight: options.hybrid?.vectorWeight,

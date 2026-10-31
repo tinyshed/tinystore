@@ -616,6 +616,7 @@ pub(crate) fn wanted_of(settings: &Settings) -> Wanted {
         fields: settings.fields.iter().map(|field| (field.path.clone(), field.weight)).collect(),
         filters: settings.filters.iter().map(|filter| filter.path.clone()).collect(),
         typo_tolerance: settings.typo_tolerance,
+        layouts: settings.layouts.iter().map(|layout| layout.name().to_owned()).collect(),
         dimensions: settings.vectors.map(|vectors| vectors.dimensions),
         recall: settings.vectors.and_then(|vectors| vectors.recall),
         vector_weight: settings.vectors.map(|_| settings.hybrid.vector_weight),

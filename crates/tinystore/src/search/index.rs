@@ -32,9 +32,6 @@ const MOST_ID: usize = 1 << 10;
 /// The longest text a search reads, and the words of it it reads.
 const MOST_TEXT: usize = SEARCH_TEXT.bound as usize;
 const MOST_WORDS: usize = 32;
-/// The letters a word needs before a `prefix` search reads it as the start
-/// of others: one letter would read every word that starts with it.
-const LEAST_PREFIX: usize = 2;
 /// The hits a search reaches at most, `offset` and `limit` together.
 const MOST_HITS: usize = SEARCH_HITS.bound as usize;
 /// The hits a search answers unless it says.
@@ -91,6 +88,16 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
     /// turned off.
     pub fn typo_tolerance(mut self, on: bool) -> Self {
         self.wanted.typo_tolerance = on;
+        self
+    }
+
+    /// The keyboard layouts the index's readers type with, `["ru", "en"]`
+    /// for ЙЦУКЕН and QWERTY: a word that finds nothing as typed is read as
+    /// the same keys type in the other layout, when it finds something
+    /// there, and `corrected` says so: `rhbgnj` reads as `крипто`. None
+    /// unless said; `ru` and `en` are the layouts known.
+    pub fn layouts<S: AsRef<str>>(mut self, names: impl IntoIterator<Item = S>) -> Self {
+        self.wanted.layouts.extend(names.into_iter().map(|name| name.as_ref().to_owned()));
         self
     }
 
@@ -612,19 +619,13 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
             return Err(SEARCH_HITS.refuse(reached as u64, refused));
         }
         let normal = analyzer::normalize(&self.text);
-        let mut words = analyzer::words_of(&normal);
-        words.truncate(MOST_WORDS);
-        let prefix = self.prefix
-            && words
-                .last()
-                .is_some_and(|last| last.at.end == normal.len() && last.text.chars().count() >= LEAST_PREFIX);
         Ok(Query {
+            words: words_read(&normal),
             normal,
-            words,
             vector: self.question()?,
             vector_weight: self.vector_weight,
             rerank: self.rerank,
-            prefix,
+            prefix: self.prefix,
             filter: if self.filter.is_empty() { None } else { Some(filter::asked(&self.filter)?) },
             offset: self.offset,
             limit: self.limit,
@@ -646,6 +647,13 @@ impl<'i, T: DeserializeOwned> SearchCall<'i, T> {
         }
         Question::new(vector).map(Some)
     }
+}
+
+/// The words a search reads of its normalized text, the first 32.
+pub(super) fn words_read(normal: &str) -> Vec<analyzer::Word> {
+    let mut words = analyzer::words_of(normal);
+    words.truncate(MOST_WORDS);
+    words
 }
 
 /// A document ready to set: its id checked, its value as JSON, its words as

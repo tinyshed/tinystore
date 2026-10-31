@@ -29,7 +29,8 @@ fn opened(dir: &tempfile::TempDir, background: bool) -> Store {
 }
 
 fn articles(store: &Store) -> Index<Article> {
-    store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).filters(["author_id"]).open().unwrap()
+    let builder = store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).filters(["author_id"]);
+    builder.layouts(["en", "ru"]).open().unwrap()
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -134,6 +135,9 @@ async fn an_awaited_index_answers_as_the_blocking_one_on_the_same_store() {
     let typed = articles.search("sourd").prefix().run().await.unwrap();
     assert_eq!(typed.hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["a-17"]);
     assert_eq!(typed, blocking.search("sourd").prefix().run().unwrap());
+    let swapped = articles.search("ызуде").run().await.unwrap();
+    assert_eq!(swapped.corrected.as_deref(), Some("spelt"), "typed with the other layout on");
+    assert_eq!(swapped, blocking.search("ызуде").run().unwrap());
     assert_eq!(articles.status().await.unwrap(), blocking.status().unwrap());
 
     assert!(articles.delete("a-17").await.unwrap());

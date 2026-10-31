@@ -1,13 +1,15 @@
 //! An index's settings: its fields, each with its weight and a number of
 //! its own for good, its filters, numbered the same way, whether a misspelt
-//! word is read as the nearest, its vectors' dimensions, and how a search
-//! by words and a vector at once combines them, and for a table's index the
-//! table it follows. They are kept as JSON in the index's row, and an open
-//! that asks for others changes them.
+//! word is read as the nearest, the keyboard layouts its readers type with,
+//! its vectors' dimensions, and how a search by words and a vector at once
+//! combines them, and for a table's index the table it follows. They are
+//! kept as JSON in the index's row, and an open that asks for others
+//! changes them. An index without layouts keeps no `layouts`, and a
+//! release before them reads past the key.
 //!
 //! ```text
 //! {"fields":[{"path":"title","weight":2.0,"number":0}],"next_field":1,"typo_tolerance":true,"analysis":1,
-//!  "filters":[{"path":"category","number":0}],"next_filter":1,
+//!  "filters":[{"path":"category","number":0}],"next_filter":1,"layouts":["ru","en"],
 //!  "vectors":{"dimensions":1024,"recall":null},"hybrid":{"vector_weight":0.5,"rerank":false},
 //!  "table":{"name":"articles","key":"id","vector":"embedding"}}
 //! ```
@@ -15,6 +17,7 @@
 use serde_json::{Value, json};
 
 use super::analyzer;
+use super::layouts::{self, Layout};
 use super::vectors::MOST_DIMENSIONS;
 use crate::limits::VECTOR_DIMENSIONS;
 use crate::{Error, Result};
@@ -43,6 +46,7 @@ pub(crate) struct Settings {
     pub(crate) filters: Vec<Filter>,
     pub(crate) next_filter: u32,
     pub(crate) typo_tolerance: bool,
+    pub(crate) layouts: Vec<Layout>,
     pub(crate) analysis: u32,
     pub(crate) vectors: Option<Vectors>,
     pub(crate) hybrid: Hybrid,
@@ -101,6 +105,8 @@ pub(crate) struct Wanted {
     pub(crate) fields: Vec<(String, f64)>,
     pub(crate) filters: Vec<String>,
     pub(crate) typo_tolerance: bool,
+    /// The layouts' names, as the open gave them.
+    pub(crate) layouts: Vec<String>,
     pub(crate) dimensions: Option<usize>,
     pub(crate) recall: Option<f64>,
     pub(crate) vector_weight: Option<f64>,
@@ -117,6 +123,7 @@ impl Default for Wanted {
             fields: Vec::new(),
             filters: Vec::new(),
             typo_tolerance: true,
+            layouts: Vec::new(),
             dimensions: None,
             recall: None,
             vector_weight: None,
@@ -202,8 +209,14 @@ impl Wanted {
                 return Err(Error::invalid(format!("filter {path} is given twice")));
             }
         }
+        layouts::layouts(&self.layouts)?;
         self.check_table()?;
         self.check_vectors()
+    }
+
+    /// The layouts asked for, those of their names a release knows.
+    fn layouts(&self) -> Vec<Layout> {
+        self.layouts.iter().filter_map(|name| Layout::named(name).ok()).collect()
     }
 
     /// Refuses a table's index that reads no column as its text, a path
@@ -277,6 +290,7 @@ impl Settings {
             next_filter: filters.len() as u32,
             filters,
             typo_tolerance: wanted.typo_tolerance,
+            layouts: wanted.layouts(),
             analysis: analyzer::VERSION,
             vectors: wanted.dimensions.map(|dimensions| Vectors { dimensions, recall: wanted.recall }),
             hybrid: Hybrid::of(wanted),
@@ -286,8 +300,9 @@ impl Settings {
 
     /// What `wanted` changes of these: the settings that change at once, each
     /// change as the log says it, and what needs the index read again beside
-    /// it. A weight, a field or a filter removed, typo tolerance, vectors
-    /// added, recall and how a search by both combines them change at once,
+    /// it. A weight, a field or a filter removed, typo tolerance, layouts,
+    /// vectors added, recall and how a search by both combines them change
+    /// at once,
     /// a field or a filter removed leaving its keys for a rebuild to drop; a
     /// field or a filter added to an index that holds documents needs them
     /// read again, as do words read by another release. Other vectors than
@@ -327,6 +342,14 @@ impl Settings {
             let now = if wanted.typo_tolerance { "on" } else { "off" };
             said.push(format!("typo tolerance {now}; at once"));
             changed.typo_tolerance = wanted.typo_tolerance;
+        }
+        let layouts = wanted.layouts();
+        if layouts != self.layouts {
+            said.push(match names(&layouts) {
+                names if names.is_empty() => "layouts off; at once".to_owned(),
+                names => format!("layouts {}; at once", names.join(", ")),
+            });
+            changed.layouts = layouts;
         }
         if self.analysis != analyzer::VERSION {
             rebuild.needs("words read by another release".to_owned());
@@ -502,7 +525,7 @@ impl Settings {
         let vectors = self.vectors.map(|vectors| json!({ "dimensions": vectors.dimensions, "recall": vectors.recall }));
         let filters: Vec<Value> =
             self.filters.iter().map(|filter| json!({ "path": filter.path, "number": filter.number })).collect();
-        let settings = json!({
+        let mut settings = json!({
             "fields": fields,
             "next_field": self.next_field,
             "filters": filters,
@@ -513,6 +536,9 @@ impl Settings {
             "hybrid": { "vector_weight": self.hybrid.vector_weight, "rerank": self.hybrid.rerank },
             "table": self.table.as_ref().map(Table::to_json),
         });
+        if !self.layouts.is_empty() {
+            settings["layouts"] = json!(names(&self.layouts));
+        }
         settings.to_string()
     }
 
@@ -540,12 +566,16 @@ impl Settings {
         };
         let hybrid = &settings["hybrid"];
         let table = Table::from_json(&settings["table"]).ok_or_else(broken)?;
+        // a layout a later release added is one this one does not read
+        let layouts = settings["layouts"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let layouts = layouts.iter().filter_map(|name| Layout::named(name.as_str()?).ok()).collect();
         Ok(Settings {
             fields,
             next_field: number(&settings["next_field"])?,
             filters,
             next_filter: number(&settings["next_filter"])?,
             typo_tolerance: settings["typo_tolerance"].as_bool().ok_or_else(broken)?,
+            layouts,
             analysis: number(&settings["analysis"])?,
             vectors,
             hybrid: Hybrid {
@@ -563,6 +593,10 @@ impl Hybrid {
     }
 }
 
+fn names(layouts: &[Layout]) -> Vec<&'static str> {
+    layouts.iter().map(|layout| layout.name()).collect()
+}
+
 /// A field's path as an error or the log says it; the document itself when
 /// it is its own text.
 pub(crate) fn shown(path: &str) -> String {
@@ -578,6 +612,7 @@ mod tests {
             fields: fields.iter().map(|(path, weight)| ((*path).to_owned(), *weight)).collect(),
             filters: Vec::new(),
             typo_tolerance: true,
+            layouts: Vec::new(),
             dimensions: None,
             recall: None,
             vector_weight: None,
@@ -665,6 +700,28 @@ mod tests {
             Settings::new(&wanted(&[("title", 9.0), ("body", 1.0)]))
                 .reads_as(&Settings::new(&wanted(&[("title", 1.0), ("body", 3.0)])))
         );
+    }
+
+    #[test]
+    fn layouts_are_kept_by_their_names_change_at_once_and_an_index_without_keeps_none() {
+        let with =
+            |names: &[&str]| Wanted { layouts: names.iter().map(|name| (*name).to_owned()).collect(), ..wanted(&[]) };
+        let settings = Settings::new(&with(&["ru", "en"]));
+        assert_eq!(settings.layouts, [Layout::Ru, Layout::En]);
+        assert!(settings.to_json().contains(r#""layouts":["ru","en"]"#));
+        assert_eq!(Settings::from_json(&settings.to_json()).unwrap(), settings);
+        let without = Settings::new(&with(&[]));
+        assert!(!without.to_json().contains("layouts"), "{}", without.to_json());
+        assert_eq!(Settings::from_json(&without.to_json()).unwrap(), without);
+        let changed = settings.change(&with(&[]), 3).unwrap();
+        assert_eq!((changed.said, changed.rebuild), (vec!["layouts off; at once".to_owned()], None));
+        let changed = without.change(&with(&["en", "ru"]), 3).unwrap();
+        assert_eq!(changed.said, ["layouts en, ru; at once"]);
+        assert_eq!(changed.settings.layouts, [Layout::En, Layout::Ru]);
+        assert!(settings.reads_as(&without), "layouts read no document otherwise");
+        let later = settings.to_json().replace(r#"["ru","en"]"#, r#"["uk","ru","en"]"#);
+        assert_eq!(Settings::from_json(&later).unwrap(), settings, "a layout a later release added is passed");
+        assert_eq!(with(&["ru", "de"]).check().unwrap_err().kind(), crate::ErrorKind::Invalid);
     }
 
     #[test]

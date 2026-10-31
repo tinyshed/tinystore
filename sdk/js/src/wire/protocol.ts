@@ -11970,6 +11970,8 @@ export const SearchOpen = message(
 		key: [13, str],
 		/** the column of each row's vector, a blob of little-endian floats */
 		vectorColumn: [14, str],
+		/** the keyboard layouts its readers type with: ru and en, or none */
+		layouts: [15, list(str)],
 	},
 	{
 		write(w, v) {
@@ -12051,6 +12053,14 @@ export const SearchOpen = message(
 				w.str(v.vectorColumn)
 				n++
 			}
+			if (v.layouts !== undefined) {
+				w.field(15)
+				w.array(v.layouts.length)
+				for (const item0 of v.layouts) {
+					w.str(item0)
+				}
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
@@ -12068,6 +12078,7 @@ export const SearchOpen = message(
 			let $table: string | undefined
 			let $key: string | undefined
 			let $vectorColumn: string | undefined
+			let $layouts: string[] | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -12124,6 +12135,15 @@ export const SearchOpen = message(
 					case 14:
 						$vectorColumn = r.str()
 						break
+					case 15: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$layouts = items0
+						break
+					}
 					default:
 						r.skip()
 				}
@@ -12144,6 +12164,7 @@ export const SearchOpen = message(
 				table: $table,
 				key: $key,
 				vectorColumn: $vectorColumn,
+				layouts: $layouts,
 			}
 		},
 	},

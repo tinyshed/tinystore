@@ -41,6 +41,8 @@ An edit is a letter added, dropped or changed, or two neighbours swapped:
   finds documents with `bots`, even when `boots` is far more common.
 - With [`prefix`](prefix.md), the last word is never changed while it begins
   a word the index holds: `cardi` is typed halfway, not misspelt.
+- A word typed with the wrong keyboard layout on is no typo: an index with
+  [`layouts`](layouts.md) reads `rhbgnj` as `крипто` before it corrects.
 - Each word is corrected on its own: `runing shoes` keeps `shoes` and reads
   `running`.
 - A word is near only words of its own script: a Latin typo is never read as

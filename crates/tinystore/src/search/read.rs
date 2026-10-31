@@ -23,6 +23,7 @@ use super::execute::{Fetch, List, best, best_of};
 use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
+use super::layouts;
 use super::pack::{Stored, read_list};
 use super::postings::{Posting, decode_directory, unpack, unpack_inline};
 use super::score::{PREFIXED, Part, average, idf, score};
@@ -57,6 +58,9 @@ const AHEAD: usize = 8;
 /// The words a prefix is read as in a field at most, those most documents
 /// hold: each one's postings are read whole before the search scores.
 const MOST_PREFIXED: usize = 64;
+/// The letters a word needs before a `prefix` search reads it as the start
+/// of others: one letter would read every word that starts with it.
+const LEAST_PREFIX: usize = 2;
 /// A filter that passes no more than one document in this many of an
 /// index's has them scored alone, rather than crossed out of a search of
 /// every one; a search by a vector reads their codes by their numbers
@@ -75,8 +79,8 @@ pub(crate) struct Query {
     pub(crate) vector: Option<Question>,
     pub(crate) vector_weight: Option<f64>,
     pub(crate) rerank: bool,
-    /// The last word is read as the start of a word too: the search asked
-    /// so, nothing follows the word in its text, and it is long enough.
+    /// The search asks its last word read as the start of a word too, which
+    /// [`prefix_of`] reads it as while it may still be being typed.
     pub(crate) prefix: bool,
     pub(crate) filter: Option<filter::Asked>,
     pub(crate) offset: usize,
@@ -118,7 +122,8 @@ pub(crate) fn search(connection: &Connection, mut asked: Asked<'_>) -> Result<An
     let (moment, documents, words_version) = moment(connection, asked.index)?;
     let mode = mode(&asked)?;
     let mut behind = false;
-    let corrected = correct(connection, &mut asked, words_version, &mut behind)?;
+    let swapped = layouts::swap(connection, &mut asked)?;
+    let corrected = correct(connection, &mut asked, (words_version, &mut behind), swapped)?;
     let k = asked.query.offset + asked.query.limit;
     let both = k.max(HALF);
     let passing = passing(connection, &asked, moment)?;
@@ -322,9 +327,16 @@ fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut
     Ok(lists)
 }
 
-/// The word a search reads as the start of others: its last, when it does.
-fn prefix_of(query: &Query) -> Option<&Word> {
-    query.words.last().filter(|_| query.prefix)
+/// The word a search reads as the start of others: its last, when it asks
+/// so and the word may still be being typed.
+pub(super) fn prefix_of(query: &Query) -> Option<&Word> {
+    query.words.last().filter(|last| query.prefix && halfway(last, &query.normal))
+}
+
+/// Whether a word of `normal` may be typed halfway: nothing follows it, not
+/// a space nor a mark, and it is long enough to begin few words.
+pub(super) fn halfway(word: &Word, normal: &str) -> bool {
+    word.at.end == normal.len() && word.text.chars().count() >= LEAST_PREFIX
 }
 
 #[cfg(test)]
@@ -398,7 +410,7 @@ fn find(connection: &Connection, index: i64, part: Part, term: &str) -> Result<O
 }
 
 /// How many documents hold `word`, a document counted once for each of its keys.
-fn held(connection: &Connection, asked: &Asked<'_>, word: &Word) -> Result<u64> {
+pub(super) fn held(connection: &Connection, asked: &Asked<'_>, word: &Word) -> Result<u64> {
     let mut documents = 0;
     for (part, term) in forms(std::slice::from_ref(word), asked.settings) {
         let found = find(connection, asked.index, part, &term)?;
@@ -408,20 +420,26 @@ fn held(connection: &Connection, asked: &Asked<'_>, word: &Word) -> Result<u64> 
 }
 
 /// Reads each word that matches nothing as its nearest the index holds,
-/// and says the search's text as it was read when any was.
-fn correct(connection: &Connection, asked: &mut Asked<'_>, version: i64, behind: &mut bool) -> Result<Option<String>> {
+/// and says the search's text as it was read when any was, or when a piece
+/// of it was read in another layout, `swapped`.
+fn correct(
+    connection: &Connection,
+    asked: &mut Asked<'_>,
+    (version, behind): (i64, &mut bool),
+    swapped: bool,
+) -> Result<Option<String>> {
     if !asked.settings.typo_tolerance {
-        return Ok(None);
+        return Ok(swapped.then(|| asked.query.normal.clone()));
     }
     let mut replaced = Vec::new();
-    let last = asked.query.words.len().saturating_sub(1);
+    let prefix = prefix_of(&asked.query).map(|word| word.at.clone());
     for at in 0..asked.query.words.len() {
         let word = &asked.query.words[at];
         if word.text.chars().count() < 5 || held(connection, asked, word)? > 0 {
             continue;
         }
         // a word typed halfway is no typo while it begins one the index holds
-        if asked.query.prefix && at == last && begins_a_word(connection, asked, &word.text)? {
+        if prefix.as_ref() == Some(&word.at) && begins_a_word(connection, asked, &word.text)? {
             continue;
         }
         let corrector = corrector(connection, asked, version, behind)?;
@@ -438,7 +456,7 @@ fn correct(connection: &Connection, asked: &mut Asked<'_>, version: i64, behind:
             asked.query.words[at] = read;
         }
     }
-    if replaced.is_empty() {
+    if replaced.is_empty() && !swapped {
         return Ok(None);
     }
     Ok(Some(written(&asked.query.normal, replaced)))
@@ -580,7 +598,7 @@ fn words_starting(
 }
 
 /// Whether a field holds a word that starts with `prefix` and is longer.
-fn begins_a_word(connection: &Connection, asked: &Asked<'_>, prefix: &str) -> Result<bool> {
+pub(super) fn begins_a_word(connection: &Connection, asked: &Asked<'_>, prefix: &str) -> Result<bool> {
     let Some(past) = past(prefix) else { return Ok(false) };
     let failed = |error| sql_error("find a word a prefix begins", error);
     let mut select = connection.prepare_cached(BEGINS_A_WORD).map_err(failed)?;

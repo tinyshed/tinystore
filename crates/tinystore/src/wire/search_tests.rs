@@ -79,6 +79,23 @@ fn an_index_sets_reads_searches_and_deletes_documents_over_the_wire() {
 }
 
 #[test]
+fn an_index_opened_with_layouts_reads_a_word_typed_with_the_other_on_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let layouts = vec!["ru".to_owned(), "en".to_owned()];
+    let asked = SearchOpen { name: "courses".to_owned(), layouts, ..SearchOpen::default() };
+    let handle = client.call::<Handle>(method::SEARCH_OPEN, &asked).unwrap().handle;
+    let course = r#""Криптография""#.to_owned();
+    let asked_set = SearchSet { handle, id: "1".to_owned(), value: course, vector: None, no_vector: false };
+    client.call::<Empty>(method::SEARCH_SET, &asked_set).unwrap();
+    let typed = SearchQuery { prefix: true, ..query(handle, "rhbgnj") };
+    let found: SearchFound = client.call(method::SEARCH_SEARCH, &typed).unwrap();
+    assert_eq!((ids(&found), found.corrected.as_deref()), (vec!["1"], Some("крипто")));
+    let unknown = SearchOpen { layouts: vec!["ru".to_owned(), "de".to_owned()], ..asked };
+    assert_eq!(client.call::<Handle>(method::SEARCH_OPEN, &unknown).unwrap_err().code, "invalid");
+}
+
+#[test]
 fn a_refusal_over_the_wire_names_what_failed() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());

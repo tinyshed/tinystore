@@ -74,6 +74,30 @@ async def test_a_word_typed_halfway_finds_the_words_it_begins_with_prefix_and_no
     assert ids(await courses.search("crypt ", prefix=True)) == []
 
 
+# contract: SRCH-12
+async def test_a_word_typed_with_the_other_layout_on_is_read_as_its_keys_type_there_and_corrected_says_so(
+    store: tinystore.Store,
+) -> None:
+    courses = store.index("catalogue", Course, fields={"name": 1}, layouts=["ru", "en"])
+    names = [
+        "Криптографические методы защиты информации",
+        "Линейная алгебра",
+        "Python для анализа данных",
+        "Инженерная графика",
+    ]
+    await courses.set_many([(str(n), Course(name)) for n, name in enumerate(names, start=1)])
+
+    async def found(text: str) -> tuple[list[str], str | None]:
+        result = await courses.search(text, prefix=True)
+        return ids(result), result.corrected
+
+    assert await found("rhbgnj") == (["1"], "крипто")
+    assert await found("kby fku") == (["2"], "kby алг")
+    assert await found("by; uhfa") == (["4"], "by; граф")
+    assert await found("знерщт") == (["3"], "python")
+    assert await found("python") == (["3"], None)
+
+
 async def test_a_vector_finds_the_nearest_by_its_cosine_and_with_words_both_are_summed_or_reranked(
     store: tinystore.Store,
 ) -> None:

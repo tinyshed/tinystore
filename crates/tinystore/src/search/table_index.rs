@@ -173,6 +173,12 @@ impl<T: DeserializeOwned> TableIndexBuilder<T> {
         self
     }
 
+    /// As [`IndexBuilder::layouts`](super::IndexBuilder::layouts).
+    pub fn layouts<S: AsRef<str>>(mut self, names: impl IntoIterator<Item = S>) -> Self {
+        self.wanted.layouts.extend(names.into_iter().map(|name| name.as_ref().to_owned()));
+        self
+    }
+
     /// Reads each row's vector from `column`: a blob of `dimensions`
     /// little-endian floats that the program's own model gave it, or null
     /// for a row without one. The store runs no model: a changed text keeps

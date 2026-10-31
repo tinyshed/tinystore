@@ -129,6 +129,11 @@ impl<'s, T: Serialize + DeserializeOwned> IndexBuilder<'s, T> {
         self.changed(|builder| builder.typo_tolerance(on))
     }
 
+    /// As [`crate::search::IndexBuilder::layouts`].
+    pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self {
+        self.changed(|builder| builder.layouts(names))
+    }
+
     /// As [`crate::search::IndexBuilder::vectors`].
     pub fn vectors(self, dimensions: usize) -> Self {
         self.changed(|builder| builder.vectors(dimensions))
@@ -469,6 +474,11 @@ impl<T: DeserializeOwned + Send + 'static> TableIndexBuilder<T> {
     /// As [`crate::search::TableIndexBuilder::typo_tolerance`].
     pub fn typo_tolerance(self, on: bool) -> Self {
         self.changed(|builder| builder.typo_tolerance(on))
+    }
+
+    /// As [`crate::search::TableIndexBuilder::layouts`].
+    pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self {
+        self.changed(|builder| builder.layouts(names))
     }
 
     /// As [`crate::search::TableIndexBuilder::vectors`].

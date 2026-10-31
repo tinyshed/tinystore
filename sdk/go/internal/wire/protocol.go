@@ -10726,6 +10726,8 @@ type SearchOpen struct {
 	Key *string `wire:"13,key"`
 	// the column of each row's vector, a blob of little-endian floats
 	VectorColumn *string `wire:"14,vectorColumn"`
+	// the keyboard layouts its readers type with: ru and en, or none
+	Layouts []string `wire:"15,layouts"`
 }
 
 func (m SearchOpen) Write(w *Writer) {
@@ -10807,6 +10809,14 @@ func (m SearchOpen) Write(w *Writer) {
 		w.Str(*m.VectorColumn)
 		n++
 	}
+	if len(m.Layouts) > 0 {
+		w.Uint(15)
+		w.Array(len(m.Layouts))
+		for _, item0 := range m.Layouts {
+			w.Str(item0)
+		}
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -10864,6 +10874,14 @@ func (m *SearchOpen) Read(r *Reader) {
 		case 14:
 			v := r.Str()
 			m.VectorColumn = &v
+		case 15:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Layouts = v
 		default:
 			r.Skip()
 		}
@@ -10886,7 +10904,8 @@ func (m SearchOpen) IsZero() bool {
 		m.Database == nil &&
 		m.Table == nil &&
 		m.Key == nil &&
-		m.VectorColumn == nil
+		m.VectorColumn == nil &&
+		len(m.Layouts) == 0
 }
 
 // SearchField is the schema's search.Field.

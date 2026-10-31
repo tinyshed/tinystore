@@ -23,6 +23,7 @@ message search.Open {
   12 table: str?            # the table a database's index follows
   13 key: str?              # the table's column of unique values; its primary key when absent
   14 vectorColumn: str?     # the column of each row's vector, a blob of little-endian floats
+  15 layouts: [str]         # the keyboard layouts its readers type with: ru and en, or none
 }
 
 # A field a search reads, by its path into the document, and what a word
