@@ -363,3 +363,51 @@ pub(crate) fn queues(store: &Store) -> Result<Vec<String>> {
         rows.and_then(Iterator::collect).map_err(|error| crate::sqlite::sql_error("jobs: its queues", error))
     })
 }
+
+/// A queue's jobs as `get` finds them, those that wait or run, those that
+/// failed for good and the done ones kept for their ids, and what their
+/// ids, values, errors and steps' answers weigh.
+#[cfg(feature = "client")]
+const SELECT_HELD: &str = "select
+    (select count(*) from _tinystore_jobs where queue = ?1)
+        + (select count(*) from _tinystore_jobs_failed where queue = ?1)
+        + (select count(*) from _tinystore_jobs_done where queue = ?1 and until > ?2),
+    (select coalesce(sum(coalesce(octet_length(j.key), 0) + coalesce(length(s.value), length(j.value), 0)), 0)
+        from _tinystore_jobs as j left join _tinystore_jobs_spilled as s on s.id = j.spill where j.queue = ?1)
+    + (select coalesce(sum(coalesce(octet_length(f.key), 0) + octet_length(f.error)
+            + coalesce(length(s.value), length(f.value), 0)), 0)
+        from _tinystore_jobs_failed as f left join _tinystore_jobs_spilled as s on s.id = f.spill where f.queue = ?1)
+    + (select coalesce(sum(octet_length(d.key) + coalesce(length(s.value), length(d.value), 0)), 0)
+        from _tinystore_jobs_done as d left join _tinystore_jobs_spilled as s on s.id = d.spill
+        where d.queue = ?1 and d.until > ?2)
+    + (select coalesce(sum(length(t.answer)), 0) from _tinystore_jobs_steps as t
+        where t.job in (select id from _tinystore_jobs where queue = ?1))";
+
+/// What each queue of jobs.db holds: its jobs and what they weigh, read a
+/// queue at a time, so that a big store keeps no reader open for long.
+#[cfg(feature = "client")]
+pub(crate) fn held(store: &Store) -> Result<Vec<crate::engine::Held>> {
+    const SELECT_IDS: &str = "select id, name from _tinystore_jobs_queues order by name";
+    if !store.dir().join("jobs.db").exists() {
+        return Ok(Vec::new());
+    }
+    let jobs = Jobs::of(store)?;
+    let queues: Vec<(i64, String)> = jobs.file().read(|c| {
+        crate::sqlite::query_cached(c, (SELECT_IDS, "jobs: its queues"), [], |row| Ok((row.get(0)?, row.get(1)?)))
+    })?;
+    let now = jobs.now();
+    let held_in = |(id, name): (i64, String)| {
+        let (count, bytes): (i64, i64) = jobs
+            .file()
+            .read(|c| {
+                c.prepare_cached(SELECT_HELD)
+                    .and_then(|mut select| {
+                        select.query_row(rusqlite::params![id, now], |row| Ok((row.get(0)?, row.get(1)?)))
+                    })
+                    .map_err(|error| crate::sqlite::sql_error("what a queue holds", error))
+            })
+            .map_err(|error| error.within(format!("jobs queue {name}")))?;
+        Ok(crate::engine::Held { name, count: count.unsigned_abs(), bytes: bytes.unsigned_abs() })
+    };
+    queues.into_iter().map(held_in).collect()
+}

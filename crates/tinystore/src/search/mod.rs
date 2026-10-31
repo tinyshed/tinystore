@@ -44,6 +44,8 @@ mod filter;
 mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
+#[cfg(feature = "client")]
+mod held;
 mod hybrid;
 mod index;
 mod kept;
@@ -67,6 +69,8 @@ mod write;
 pub(crate) use awaited::Encoded;
 pub use engine::Maintenance;
 pub use filter::{Condition, and, eq, is_in, missing, or, range};
+#[cfg(feature = "client")]
+pub(crate) use held::held;
 pub use index::{Document, DocumentCall, Found, Hit, Index, IndexBuilder, Rebuild, SearchCall};
 pub use open::Status;
 pub use rebuild::Listed;

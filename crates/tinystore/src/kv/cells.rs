@@ -136,6 +136,15 @@ const HOLDS_BUCKETS: &str =
 const SELECT_A_KEY: &str = "select key from _tinystore_kv_buckets where key is not null limit 1";
 #[cfg(feature = "backup")]
 const SELECT_KEYS: &str = "select distinct key from _tinystore_kv_buckets where key is not null";
+/// A bucket's live cells and what their paths and values weigh, a spilled
+/// value's row in place of the cell's empty one; an integer counts its digits.
+#[cfg(feature = "client")]
+const SELECT_HELD: &str = concat!(
+    "select count(*), coalesce(sum(length(c.path) + coalesce(length(s.value), octet_length(c.value), 0)), 0)
+        from _tinystore_kv_cells as c left join _tinystore_kv_spilled as s on s.id = c.spill
+        where c.bucket = ?1 and (c.expires is null or c.expires > ?2) and not ",
+    hidden!()
+);
 
 /// A live cell as a read finds it.
 #[derive(Debug)]
@@ -497,6 +506,17 @@ pub(crate) fn bucket_keys(connection: &Connection) -> rusqlite::Result<Vec<Strin
     let mut select = connection.prepare_cached(SELECT_KEYS)?;
     let kept = select.query_map([], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(kept.iter().flat_map(|ids| ids.split(' ')).map(str::to_owned).collect())
+}
+
+/// How many live keys `bucket` holds, and what their paths and values weigh:
+/// one scan of the bucket's range, which reads no spilled value's bytes.
+#[cfg(feature = "client")]
+pub(crate) fn held(connection: &Connection, bucket: i64, now: i64) -> Result<(u64, u64)> {
+    let (count, bytes): (i64, i64) = connection
+        .prepare_cached(SELECT_HELD)
+        .and_then(|mut select| select.query_row(params![bucket, now], |row| Ok((row.get(0)?, row.get(1)?))))
+        .map_err(|error| sql_error("what a bucket holds", error))?;
+    Ok((count.unsigned_abs(), bytes.unsigned_abs()))
 }
 
 /// Keeps the ids of the keys a bucket's values are sealed with, or none

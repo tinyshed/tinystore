@@ -39,6 +39,7 @@ const EXPOSITION_FIELDS: usize = 64;
 #[cfg(feature = "metrics")]
 const LABEL_FIELDS: usize = 10;
 
+pub use crate::engine::Held;
 #[cfg(feature = "metrics")]
 pub use crate::metrics::prometheus::PrometheusStream;
 #[cfg(feature = "channels")]
@@ -108,6 +109,41 @@ pub fn queues(store: &crate::Store) -> Result<Vec<String>> {
 #[cfg(feature = "blobs")]
 pub fn file_sets(store: &crate::Store) -> Result<Vec<String>> {
     crate::blobs::sets(store)
+}
+
+/// What each bucket of a store's kv.db holds, its live keys and what they
+/// weigh, read beside whoever holds it, a bucket a read, for the command
+/// line's `status --names`: a scan of every bucket.
+pub fn buckets_held(store: &crate::Store) -> Result<Vec<Held>> {
+    crate::kv::held(store)
+}
+
+/// What each queue holds, its jobs and what they weigh, read as
+/// `buckets_held` is.
+#[cfg(feature = "jobs")]
+pub fn queues_held(store: &crate::Store) -> Result<Vec<Held>> {
+    crate::jobs::held(store)
+}
+
+/// What each set of files holds, its files and their sizes, read as
+/// `buckets_held` is.
+#[cfg(feature = "blobs")]
+pub fn file_sets_held(store: &crate::Store) -> Result<Vec<Held>> {
+    crate::blobs::held(store)
+}
+
+/// What each stream with events holds of what it keeps, its events and
+/// what they weigh, read as `buckets_held` is.
+#[cfg(feature = "records")]
+pub fn streams_held(store: &crate::Store) -> Result<Vec<Held>> {
+    crate::records::held(store)
+}
+
+/// What each index holds, its documents and what they weigh, read as
+/// `buckets_held` is.
+#[cfg(feature = "search")]
+pub fn indexes_held(store: &crate::Store) -> Result<Vec<Held>> {
+    crate::search::held(store)
 }
 
 /// An event to append: its name, and what it carries.
@@ -529,3 +565,7 @@ fn error_of(failure: Failure, within: &str) -> Error {
 #[cfg(all(test, feature = "metrics"))]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "jobs", feature = "blobs", feature = "records", feature = "search"))]
+#[path = "client_held_tests.rs"]
+mod held_tests;

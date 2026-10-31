@@ -87,3 +87,13 @@ impl Store {
         Ok(AllEvents { records: engine::Records::of(self)? })
     }
 }
+
+/// What each stream with events holds, for the command line. None while the
+/// store has no records.db, which a read beside would otherwise try to make.
+#[cfg(feature = "client")]
+pub(crate) fn held(store: &Store) -> Result<Vec<crate::engine::Held>> {
+    if !store.dir().join("records.db").exists() {
+        return Ok(Vec::new());
+    }
+    engine::Records::of(store)?.held()
+}

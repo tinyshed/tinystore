@@ -100,6 +100,20 @@ pub(crate) fn to_copy<'a>(file: &crate::sqlite::File, name: &str, engine: &'stat
     Ok(Copying { files: vec![(copied, file.source()?)], at_the_moment: None })
 }
 
+/// What a store holds under one name, a bucket, a queue, a set of files, a
+/// stream or an index, as the command line's `status --names` shows it.
+#[cfg(feature = "client")]
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Held {
+    pub name: String,
+    /// Its keys, jobs, files, events or documents, as a program counts them.
+    pub count: u64,
+    /// What its keys, values and bodies weigh as SQLite keeps them, without
+    /// its pages' and indexes' own bytes: near what the file gives the name.
+    pub bytes: u64,
+}
+
 /// Rows one maintenance transaction removes, so that no pass holds the
 /// writer long, and transactions of each kind one pass runs at most.
 #[cfg(any(feature = "jobs", feature = "blobs"))]

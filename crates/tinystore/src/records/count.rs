@@ -243,6 +243,15 @@ impl AllEvents {
 const TIMES_HELD: &str = "select min(first_at), max(last_at) from
     (select first_at, last_at from heads where stream = ?1 and last_at >= ?2
      union all select first_at, last_at from segments where stream = ?1 and holder is null and last_at >= ?2)";
+/// The events of a stream's rows that `TIMES_HELD` reads, and what the head
+/// rows' bodies, the segments' with their blocks' and the events' ids weigh.
+/// A merge's places hold none of either: their holder counts and keeps them.
+#[cfg(feature = "client")]
+const EVENTS_HELD: &str = "select coalesce(sum(events), 0), coalesce(sum(bytes), 0) from
+    (select count as events, size as bytes from heads where stream = ?1 and last_at >= ?2
+     union all select s.held, length(s.body) + (select coalesce(sum(b.size), 0) from blocks as b where b.segment = s.id)
+        from segments as s where s.stream = ?1 and s.holder is null and s.last_at >= ?2
+     union all select 0, coalesce(sum(octet_length(id)), 0) from event_ids where stream = ?1)";
 
 impl Records {
     fn streams_held(&self) -> Result<Vec<StreamInfo>> {
@@ -259,6 +268,34 @@ impl Records {
                     newest: time(newest),
                 };
                 held.push(info);
+            }
+        }
+        held.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(held)
+    }
+
+    /// What each stream with events holds of what it keeps, as `streams`
+    /// finds them: its events and what they weigh, a stream a read, so that
+    /// a big store keeps no reader open for long.
+    #[cfg(feature = "client")]
+    pub(crate) fn held(&self) -> Result<Vec<crate::engine::Held>> {
+        let now = self.now();
+        let mut held = Vec::new();
+        for stream in self.every_stream() {
+            let cutoff = now.saturating_sub(nanos(stream.keeps()));
+            let (count, bytes): (i64, i64) = self
+                .file
+                .read(|connection| {
+                    let select = connection.prepare_cached(EVENTS_HELD);
+                    let row = select.and_then(|mut select| {
+                        select.query_row(params![stream.id, cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
+                    });
+                    row.map_err(|error| sql_error("read what a stream holds", error))
+                })
+                .map_err(|error| error.within(format!("stream {}", stream.name)))?;
+            if count > 0 {
+                let name = stream.name.to_string();
+                held.push(crate::engine::Held { name, count: count.unsigned_abs(), bytes: bytes.unsigned_abs() });
             }
         }
         held.sort_by(|a, b| a.name.cmp(&b.name));

@@ -89,6 +89,11 @@ pub(crate) fn span_text(span: Duration) -> String {
     }
 }
 
+/// A time's date in this machine's zone: `2026-10-31`.
+pub(crate) fn date(at: SystemTime) -> String {
+    local(at, &TimeZone::system()).strftime("%Y-%m-%d").to_string()
+}
+
 /// How long ago a time was, as a person reads it: `2s ago`, `3h ago`.
 pub(crate) fn ago(at: SystemTime) -> String {
     let past = SystemTime::now().duration_since(at).unwrap_or_default().as_secs();

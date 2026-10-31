@@ -543,6 +543,41 @@ pub(crate) fn sets(store: &Store) -> Result<Vec<String>> {
     })
 }
 
+/// A set's live files and their sizes, which a copy that shares its content
+/// with another counts again.
+#[cfg(feature = "client")]
+const SELECT_HELD: &str = concat!(
+    "select count(*), coalesce(sum(f.size), 0) from _tinystore_blobs_files as f
+        where f.set_id = ?1 and (f.expires is null or f.expires > ?2) and not ",
+    super::change::hidden!()
+);
+
+/// What each set of files holds: its files and their sizes, read a set at a
+/// time, so that a big store keeps no reader open for long.
+#[cfg(feature = "client")]
+pub(crate) fn held(store: &Store) -> Result<Vec<crate::engine::Held>> {
+    const SELECT_IDS: &str = "select id, name from _tinystore_blobs_sets order by name";
+    if !store.dir().join(DIR).join(FILE).exists() {
+        return Ok(Vec::new());
+    }
+    let blobs = Blobs::of(store)?;
+    let sets: Vec<(i64, String)> =
+        blobs.file.read(|c| rows_of(c, (SELECT_IDS, "blobs: its sets"), [], |row| Ok((row.get(0)?, row.get(1)?))))?;
+    let now = blobs.now();
+    let held_in = |(id, name): (i64, String)| {
+        let (count, bytes): (i64, i64) = blobs
+            .file
+            .read(|c| {
+                c.prepare_cached(SELECT_HELD)
+                    .and_then(|mut select| select.query_row(params![id, now], |row| Ok((row.get(0)?, row.get(1)?))))
+                    .map_err(|error| sql_error("what a set of files holds", error))
+            })
+            .map_err(|error| error.within(format!("files {name}")))?;
+        Ok(crate::engine::Held { name, count: count.unsigned_abs(), bytes: bytes.unsigned_abs() })
+    };
+    sets.into_iter().map(held_in).collect()
+}
+
 #[cfg(all(test, feature = "replication"))]
 mod tests {
     use super::*;

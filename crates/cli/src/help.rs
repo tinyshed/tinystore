@@ -48,9 +48,13 @@ pub(crate) const STATUS: Command = Command {
     name: "status",
     takes: "[dir]",
     does: "what the store holds, who serves it, how its node stands",
-    flags: &[JSON],
-    examples: &["tinystore status ./data", "tinystore status ./data --json"],
-    more: "A directory no server holds says so and exits 0.",
+    flags: &[
+        flag("--names", "", "each bucket, queue, set of files, stream, metric and index, with its count and bytes"),
+        JSON,
+    ],
+    examples: &["tinystore status ./data", "tinystore status ./data --names", "tinystore status ./data --json"],
+    more: "A directory no server holds says so and exits 0. --names reads every bucket, queue, set of files, stream \
+           and index whole, so it takes longer on a big store; a metric shows its series without bytes.",
 };
 
 pub(crate) const LOGS: Command = Command {

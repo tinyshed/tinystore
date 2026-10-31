@@ -82,9 +82,9 @@ pub(crate) use {bucket::clear_work, tx::call_on_branch, tx::call_on_key};
 #[cfg(feature = "backup")]
 #[cfg(feature = "backup")]
 pub(crate) use encrypted::keys_sealed_in;
-// What the command line lists of a store's names.
+// What the command line lists of a store's names, and what each holds.
 #[cfg(feature = "client")]
-pub(crate) use engine::buckets;
+pub(crate) use engine::{buckets, held};
 
 use crate::{Result, Store};
 

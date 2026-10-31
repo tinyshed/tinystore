@@ -4,9 +4,15 @@
       "does": "what the store holds, who serves it, how its node stands",
       "examples": [
         "tinystore status ./data",
+        "tinystore status ./data --names",
         "tinystore status ./data --json"
       ],
       "flags": [
+        {
+          "means": "each bucket, queue, set of files, stream, metric and index, with its count and bytes",
+          "name": "--names",
+          "value": ""
+        },
         {
           "means": "one JSON document, for scripts",
           "name": "--json",
@@ -14,7 +20,7 @@
         }
       ],
       "group": "Look",
-      "more": "A directory no server holds says so and exits 0.",
+      "more": "A directory no server holds says so and exits 0. --names reads every bucket, queue, set of files, stream and index whole, so it takes longer on a big store; a metric shows its series without bytes.",
       "name": "status",
       "takes": "[dir]"
     },

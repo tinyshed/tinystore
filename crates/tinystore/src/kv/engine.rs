@@ -492,3 +492,24 @@ pub(crate) fn buckets(store: &Store) -> Result<Vec<(String, String)>> {
         rows.and_then(Iterator::collect).map_err(|error| crate::sqlite::sql_error("kv: its buckets", error))
     })
 }
+
+/// What each bucket of kv.db holds: its live keys and what they weigh, read
+/// a bucket at a time, so that a big store keeps no reader open for long.
+#[cfg(feature = "client")]
+pub(crate) fn held(store: &Store) -> Result<Vec<crate::engine::Held>> {
+    const SELECT_IDS: &str = "select id, name from _tinystore_kv_buckets order by name";
+    if !store.dir().join("kv.db").exists() {
+        return Ok(Vec::new());
+    }
+    let kv = Kv::of(store)?;
+    let buckets: Vec<(i64, String)> = kv.file().read(|c| {
+        crate::sqlite::query_cached(c, (SELECT_IDS, "kv: its buckets"), [], |row| Ok((row.get(0)?, row.get(1)?)))
+    })?;
+    let now = kv.now();
+    let held_in = |(id, name): (i64, String)| {
+        let (count, bytes) =
+            kv.file().read(|c| cells::held(c, id, now)).map_err(|error| error.within(format!("kv bucket {name}")))?;
+        Ok(crate::engine::Held { name, count, bytes })
+    };
+    buckets.into_iter().map(held_in).collect()
+}

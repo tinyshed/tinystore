@@ -36,6 +36,64 @@ tinystore status ./data --json | jq '.names'
  "streams": ["audit"], "metrics": ["ping_rtt_ms"], "databases": ["app"], "indexes": []}
 ```
 
+## What each name holds
+
+```sh
+tinystore status ./data --names
+```
+
+```text
+○ ./data  not served
+
+  kv       2.0 MiB
+    sessions        500 keys       1.9 MiB
+    pins             50 keys         790 B
+  search   808 KiB
+    courses        3000 documents  273 KiB
+  records   38 KiB
+    audit          2000 events     1.7 KiB   keep 400d   2026-10-31 … 2026-10-31
+    client-errors     1 event         62 B   keep 90d    2026-10-31 … 2026-10-31
+  ────────────────
+  total    2.8 MiB
+```
+
+`--names` lists every bucket, queue, set of files, stream, metric and search
+index under its engine's file, the heaviest first. Each name shows its count
+and its bytes. A stream and a metric also show how long they keep data, and
+the dates of their oldest and newest entries. Use it to find which bucket
+grows with your users, or which stream keeps too much.
+
+| Engine  | Counts                                       | Bytes                                                      |
+|---------|----------------------------------------------|------------------------------------------------------------|
+| kv      | live keys, without expired or cleared ones   | the keys and their values                                  |
+| jobs    | jobs that wait, run, failed or are kept done | their ids, values, errors and step answers                 |
+| blobs   | files                                        | the files' sizes, so a copy that shares bytes counts twice |
+| records | events                                       | the compressed rows and blocks, and the events' ids        |
+| search  | documents                                    | the documents, their words and their postings              |
+| metrics | series                                       | none: a metric's blocks are not stored per name            |
+
+The bytes leave out SQLite's pages, its indexes and its free space, so the
+names under a file add up to less than the file.
+
+> **`--names` reads every name whole.** It scans each bucket, queue, set of
+> files, stream and index, one name per read, so on a big store it takes
+> longer than `status`. Plain `status`, Tab completion and the MCP server's
+> status tool read only the names, as before.
+
+With `--json`, each name becomes an object with its `name`, `count` and
+`bytes`. A bucket adds its `role`. A stream and a metric add `keep`, `oldest`
+and `newest`. A metric's `bytes` and a database's `count` are `null`, and a
+database's `bytes` is its file's size.
+
+```sh
+tinystore status ./data --names --json | jq '.names.buckets'
+```
+
+```json
+[{"name": "sessions", "role": "values", "count": 500, "bytes": 2002890},
+ {"name": "pins", "role": "values", "count": 50, "bytes": 790}]
+```
+
 ## logs
 
 ```sh
