@@ -558,7 +558,10 @@ An event of the stream: a record named for it, with no level and no body.
 with(context: Fields): Logger
 ```
 
-The logger of the same stream, buffer and console, its context these fields besides its own.
+The logger of the same stream, buffer and console, its context these
+fields besides its own: a key it had already takes the new value where
+it stood, as an object spread does, where it prints, in what is kept
+and for a query's `where`.
 
 ### Logger.flush
 

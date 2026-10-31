@@ -1001,7 +1001,8 @@ pub fn filter(self, key: &str, value: &impl Serialize) -> Self
 
 `key` with this value, at the top of an event's fields or of its
 context, by the JSON the value is written as: `42` finds `42`, and
-neither `"42"` nor `42.0`.
+neither `"42"` nor `42.0`. A key written twice is found by its last
+value, the one `Fields::get` reads.
 
 ### List.search
 

@@ -393,6 +393,9 @@ def bind(**context: Any) -> Logger: ...
 
 The logger of the same stream, buffer and console, its context these fields besides its own.
 
+A key it had already takes the new value where it stood, as a dict's
+update does, where it prints, in what is kept and for a query's where.
+
 ### Logger.flush
 
 ```python
