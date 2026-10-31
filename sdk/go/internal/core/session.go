@@ -5,11 +5,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
 	"tinyshed.org/tinystore/internal/wire"
+	"tinyshed.org/tinystore/limits"
 )
 
 // A session is a connection's protocol, without its bytes' way there and
@@ -157,6 +160,30 @@ func (s *Session) GoingAway() bool {
 	return s.going
 }
 
+// methodNames is each method's name by its number, as the schema spells it:
+// search.setMany.
+var methodNames = func() map[uint16]string {
+	names := make(map[uint16]string)
+	for name, number := range wire.Methods() {
+		names[number] = name
+	}
+	return names
+}()
+
+// pastTheBody is the limit error of a request of size bytes, past the body
+// the connection agreed, named by its call and by the bound every SDK names.
+func pastTheBody(method uint16, size int, body uint64) *Error {
+	name, ok := methodNames[method]
+	if !ok {
+		name = fmt.Sprintf("method %d", method)
+	}
+	message := fmt.Sprintf("%s: a request of %d bytes, past the %d a body holds", name, size, body)
+	what := map[string]string{
+		"limit": limits.RequestBytes.Name, "wanted": strconv.Itoa(size), "bound": strconv.FormatUint(body, 10),
+	}
+	return Failed(string(Limit), message, what)
+}
+
 // OnEnd calls listener once the session ends, at once when it has.
 func (s *Session) OnEnd(listener func(error)) {
 	s.mu.Lock()
@@ -179,7 +206,7 @@ func (s *Session) Open(ctx context.Context, method uint16, body []byte, end bool
 		return nil, err
 	}
 	if uint64(len(body)) > agreed.MaxBody {
-		return nil, Errorf(Limit, "a request of %d bytes, past the %d a body holds", len(body), agreed.MaxBody)
+		return nil, pastTheBody(method, len(body), agreed.MaxBody)
 	}
 	s.mu.Lock()
 	for uint64(len(s.streams)) >= agreed.InFlight && s.refused() == nil {

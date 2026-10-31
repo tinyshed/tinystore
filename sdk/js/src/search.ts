@@ -261,7 +261,12 @@ export class SearchIndex<T> extends Searchable<T> {
 		)
 	}
 
-	/** Sets every document in one commit, all of them or none: 1,000 and 16 MiB at most. */
+	/**
+	 * Sets every document in one commit, all of them or none: 1,000 at most,
+	 * `limits.setManyDocuments`, and no more than one request body holds,
+	 * 2 MiB, `limits.requestBytes`. Past either it fails with a LimitError
+	 * that names the bound.
+	 */
 	async setMany(documents: readonly IndexDocument<T>[]): Promise<void> {
 		const encoded = documents.map(document => ({
 			id: keyText(document.id),

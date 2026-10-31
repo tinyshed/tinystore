@@ -7,6 +7,7 @@
         await sessions.under(user.id).set(digest(token), session)
 """
 
+from . import bounds
 from .backup import Backup
 from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
 from .channels import Channel, Message, Missed, Subscription, TxChannel
@@ -214,6 +215,7 @@ __all__ = [
     "Vectors",
     "WindowUse",
     "Worker",
+    "bounds",
     "connect",
     "env",
     "exponential_buckets",

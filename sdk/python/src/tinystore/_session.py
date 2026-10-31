@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ._wire import frame as f
-from ._wire.protocol import Failure, GoAway, Hello, Welcome
+from ._wire.protocol import Failure, GoAway, Hello, Welcome, methods
+from .bounds import REQUEST_BYTES
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -38,6 +39,14 @@ DOWNLOAD_WINDOW = 2 << 20
 
 _WELCOME_MOST = 1 << 20
 """The largest body a WELCOME may come in, before a body is agreed."""
+
+_METHOD_NAMES = {number: name for name, number in methods.items()}
+"""Each method's name by its number, as the schema spells it: ``search.setMany``."""
+
+
+def _method_name(method: int) -> str:
+    """A method's name as the schema spells it, for an error the SDK says itself."""
+    return _METHOD_NAMES.get(method, f"method {method}")
 
 
 class ConnectionLostError(ClosedError):
@@ -270,7 +279,10 @@ class Session:
         """
         agreed = await asyncio.shield(self.welcomed)
         if len(body) > agreed.max_body:
-            raise LimitError(f"a request of {len(body)} bytes, past the {agreed.max_body} a body holds")
+            said = f"{_method_name(method)}: a request of {len(body)} bytes, past the {agreed.max_body} a body holds"
+            raise LimitError(
+                said, {"limit": REQUEST_BYTES.name, "wanted": str(len(body)), "bound": str(agreed.max_body)}
+            )
         while len(self._streams) >= agreed.in_flight and self._refused() is None:
             waiter: asyncio.Future[None] = self.loop.create_future()
             self._waiting_to_open.append(waiter)

@@ -368,7 +368,7 @@ for (const way of ways) {
 			const error = await caught(app.all`select zeroblob(70 * 1024 * 1024)`)
 			expect(error).toBeInstanceOf(LimitError)
 			const limit = error as LimitError
-			expect([limit.limit, limit.bound]).toEqual([limits.rowBytes, 64 * 1024 * 1024])
+			expect([limit.limit, limit.bound]).toEqual([limits.rowsBytes.name, limits.rowsBytes.bound])
 			expect(limit.wanted).toBeGreaterThan(64 * 1024 * 1024)
 		})
 

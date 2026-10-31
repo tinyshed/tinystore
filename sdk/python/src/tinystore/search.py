@@ -253,7 +253,12 @@ class SearchIndex[T](_Searchable[T]):
         )
 
     async def set_many(self, documents: Sequence[tuple[Key, T] | tuple[Key, T, Vector | None]]) -> None:
-        """Sets every document in one commit, all of them or none: (id, value) or (id, value, vector), 1,000 at most."""
+        """Sets every document in one commit, all of them or none: (id, value) or (id, value, vector).
+
+        A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and no
+        more than one request body holds, 2 MiB, ``bounds.REQUEST_BYTES``. Past
+        either it raises a ``LimitError`` that names the bound.
+        """
         encoded = [
             {
                 "id": key_text(each[0]),

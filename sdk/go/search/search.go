@@ -265,7 +265,10 @@ type Doc[T any] struct {
 	NoVector bool
 }
 
-// SetMany sets every document in one commit, all of them or none, 1,000 at most.
+// SetMany sets every document in one commit, all of them or none. A call
+// holds 1,000 documents at most, limits.SetManyDocuments, and no more than one
+// request body holds, 2 MiB, limits.RequestBytes. Past either it fails with a
+// limit error that names the bound.
 func (x *Index[T]) SetMany(ctx context.Context, docs []Doc[T]) error {
 	documents := make([]wire.SearchDocument, len(docs))
 	for i, doc := range docs {

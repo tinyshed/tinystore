@@ -98,9 +98,10 @@ export class InvalidError extends TinystoreError {
 }
 
 /**
- * A bound: memory, size or count. Later, or smaller, it may go through. A
- * limit the store names says which, what the call would have taken of it,
- * and the bound: `decoded samples`, 120000, 100000.
+ * A bound: memory, size or count. Later, or smaller, it may go through. The
+ * error names the bound, what the call would have taken of it, and the
+ * bound: `set_many documents`, 1001, 1000. `limits` holds the bounds a call
+ * meets by those names.
  */
 export class LimitError extends TinystoreError {
 	readonly limit: string | undefined
@@ -115,30 +116,91 @@ export class LimitError extends TinystoreError {
 	}
 }
 
+/** A bound one call meets: its name, as a LimitError's `limit` says it, and the most it takes. */
+export interface Limit {
+	readonly name: string
+	readonly bound: number
+}
+
+const limit = (name: string, bound: number): Limit => Object.freeze({ name, bound })
+
 /**
- * The names a LimitError's `limit` holds, as Go's constants and Python's
- * `tinystore.limits` spell them, to map a limit without matching its text.
+ * The bounds one call meets, the same in every SDK and in Rust's
+ * `tinystore::limits`. A program cuts its batches to them before it calls,
+ * and tells which bound a LimitError met without reading its text:
  *
  * ```ts
- * if (err instanceof LimitError && err.limit === limits.decodedSamples) { … }
+ * for (let at = 0; at < courses.length; at += limits.setManyDocuments.bound) { … }
+ * if (err instanceof LimitError && err.limit === limits.requestBytes.name) { … }
  * ```
+ *
+ * A bound the store's options set, its memory (`store memory`) or its
+ * `maxSeries` (`series in a store`), is named the same way and is not here.
  */
 export const limits = Object.freeze({
-	storeMemory: 'store memory',
-	storeMemoryNow: 'store memory, now',
-	matchedSeries: 'matched series',
-	decodedBlocks: 'decoded blocks',
-	fetchedBytes: 'fetched bytes',
-	decodedSamples: 'decoded samples',
-	outputSamples: 'output samples',
-	outputBuckets: 'output buckets',
-	recordBytes: "bytes of a record, a block's",
-	appendBytes: "bytes of records in one Append, a segment's; split it",
-	jobValueBytes: "bytes of a job's value",
-	stepBytes: "bytes of a step's answer",
-	objectBytes: "bytes of an object, the bucket's MaxSize",
-	rowBytes: "bytes of a call's rows",
-} as const)
+	/** A bucket's value, as it is stored. */
+	valueBytes: limit('value bytes', 1 << 20),
+	/** A live setting's change, as JSON. */
+	settingBytes: limit('setting bytes', 16 << 10),
+	/** Every change a config keeps, together. */
+	configBytes: limit('config bytes', 256 << 10),
+	/** The callers that wait for one lock or semaphore at once. */
+	lockWaiters: limit('lock waiters', 10_000),
+	/** The subscriptions to the store's channels at once. */
+	subscriptions: limit('subscriptions', 10_000),
+	/** A job's payload, its result or a step's answer, as JSON. */
+	jobBytes: limit('job bytes', 1 << 20),
+	/** A run's progress, as JSON. */
+	progressBytes: limit('progress bytes', 4 << 10),
+	/** The values one call reads from a database: past them, read a page at a time. */
+	rowsBytes: limit("bytes of a call's rows", 64 << 20),
+	/** One event, its name, fields and text together. */
+	eventBytes: limit('event bytes', 256 << 10),
+	/** The events of one append together. */
+	appendBytes: limit('append bytes', 4 << 20),
+	/** The rows one `aggregate` answers. */
+	aggregateRows: limit('aggregate rows', 10_000),
+	/** The different values one `top` or `distinct` holds, as JSON. */
+	countBytes: limit('count bytes', 64 << 20),
+	/** The samples of one `ingest`. */
+	ingestSamples: limit('ingest samples', 10_000),
+	/** The bytes of one `ingest`'s samples, each with its labels. */
+	ingestBytes: limit('ingest bytes', 4 << 20),
+	/** The samples of one exporter's text. */
+	textSamples: limit('text samples', 100_000),
+	/** One exporter's text, and the bytes of its samples. */
+	textBytes: limit('text bytes', 32 << 20),
+	/** The series one query finds. */
+	querySeries: limit('series', 1000),
+	/** What one query reads from the file. */
+	queryBytes: limit('bytes read', 16 << 20),
+	/** The samples one query decodes. */
+	querySamples: limit('samples decoded', 1 << 20),
+	/** The samples or buckets one query answers. */
+	queryAnswer: limit('answer', 100_000),
+	/** The documents of one `setMany`. */
+	setManyDocuments: limit('set_many documents', 1000),
+	/** The documents of one `setMany` as JSON; one request body, `requestBytes`, bounds it first. */
+	setManyBytes: limit('set_many bytes', 16 << 20),
+	/** One document as JSON, or a table's row as its index reads it. */
+	documentBytes: limit('document bytes', 1 << 20),
+	/** The hits a search reaches, its offset and its limit together. */
+	searchHits: limit('search hits', 1000),
+	/** A search's text, in bytes. */
+	searchText: limit('search text', 1 << 10),
+	/** The conditions of one search's filter. */
+	filterConditions: limit('filter conditions', 8),
+	/** The values the lists of one search's conditions hold together. */
+	filterValues: limit('filter values', 100),
+	/** A text a filter keeps or asks for, in bytes. */
+	filterText: limit('filter text', 256),
+	/** A vector's dimensions. */
+	vectorDimensions: limit('vector dimensions', 4096),
+	/** One request, its message as the SDK sends it: a larger one fails before it is sent. */
+	requestBytes: limit('request bytes', 2 << 20),
+	/** One answer, its message as the store sends it. */
+	answerBytes: limit('answer bytes', 2 << 20),
+})
 
 /** What the call needs is not there: a file to copy or rename. */
 export class NotFoundError extends TinystoreError {

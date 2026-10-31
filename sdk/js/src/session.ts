@@ -12,6 +12,7 @@ import {
 	ClosedError,
 	errorOf,
 	LimitError,
+	limits,
 	ProtocolError,
 	type TinystoreError,
 	UnavailableError,
@@ -31,9 +32,19 @@ import {
 	putHeader,
 } from './wire/frame.ts'
 import { Reader, Writer } from './wire/msgpack.ts'
-import { Failure, GoAway, Hello, Welcome } from './wire/protocol.ts'
+import { Failure, GoAway, Hello, methods, Welcome } from './wire/protocol.ts'
 
 export const protocol = 1
+
+/** Each method's name by its number, as the schema spells it: `search.setMany`. */
+const methodNames = new Map<number, string>(
+	Object.entries(methods).map(([name, number]) => [number, name]),
+)
+
+/** A method's name as the schema spells it, for an error the SDK says itself. */
+function methodName(method: number): string {
+	return methodNames.get(method) ?? `method ${method}`
+}
 
 /** What this client lets the server send on a stream before it grants more: a body at least. */
 export const downloadWindow = 2 << 20
@@ -365,7 +376,12 @@ export class Session {
 		const agreed = await unlessCancelled(this.welcomed, signal)
 		if (body.length > agreed.maxBody) {
 			throw new LimitError(
-				`a request of ${body.length} bytes, past the ${agreed.maxBody} a body holds`,
+				`${methodName(method)}: a request of ${body.length} bytes, past the ${agreed.maxBody} a body holds`,
+				{
+					limit: limits.requestBytes.name,
+					wanted: String(body.length),
+					bound: String(agreed.maxBody),
+				},
 			)
 		}
 		while (this.#streams.size >= agreed.inFlight && this.#usable() === undefined) {

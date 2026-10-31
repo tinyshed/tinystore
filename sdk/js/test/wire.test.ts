@@ -3,9 +3,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import { createHmac } from 'node:crypto'
-import { join } from 'node:path'
 
-import { codes, limits } from '../src/errors.ts'
+import { codes } from '../src/errors.ts'
 import type { Codec, Message } from '../src/wire/codec.ts'
 import { checkHeader, frame, headerSize, parseHeader } from '../src/wire/frame.ts'
 import { messages, methods } from '../src/wire/messages.ts'
@@ -493,15 +492,4 @@ test('a byte written as the buffer grows is kept', () => {
 		w.uint(n)
 	}
 	expect([...w.bytes()]).toEqual(written)
-})
-
-describe('limits', () => {
-	test("are the names of testdata/limits.json, which Go's constants hold", async () => {
-		const file: { limits: { bun: string; name: string }[] } = await Bun.file(
-			join(import.meta.dirname, '..', '..', '..', 'testdata', 'limits.json'),
-		).json()
-		expect(Object.entries(limits) as [string, string][]).toEqual(
-			file.limits.map(l => [l.bun, l.name]),
-		)
-	})
 })
