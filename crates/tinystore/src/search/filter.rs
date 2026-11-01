@@ -464,7 +464,7 @@ impl Reader<'_> {
         let failed = |error| sql_error(format!("read key {key}'s postings"), error);
         let mut docs: Vec<u32> = Vec::new();
         match read_list(self.connection, key).map_err(within)? {
-            Stored::Packed(directory) => {
+            Stored::Packed(directory, _) => {
                 docs.extend(pack::documents(self.connection, &Directory::decode(&directory)?).map_err(within)?);
             }
             Stored::Legacy(_) => docs.extend(legacy::documents(self.connection, key).map_err(within)?),

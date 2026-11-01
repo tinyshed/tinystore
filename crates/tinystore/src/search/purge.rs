@@ -12,8 +12,10 @@ use std::collections::{BTreeMap, HashSet};
 use rusqlite::Connection;
 
 use super::legacy::Legacy;
-use super::pack::{DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, read_list, read_run, write_directory};
-use super::packed::{self, Directory, Placed, Run};
+use super::pack::{
+    DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, note_lists, read_list, read_run, write_directory,
+};
+use super::packed::{self, Directory, Placed, Run, decode_best};
 use super::postings::{Posting, decode_keys, pack_inline, unpack_inline};
 use super::write::execute;
 use crate::Result;
@@ -75,6 +77,7 @@ impl Purge {
         for (key, docs) in &self.keys[self.at..end] {
             take_out(tx, index, *key, docs).map_err(|error| error.within(format!("key {key}")))?;
         }
+        note_lists(tx, index)?;
         if end == self.keys.len() {
             for doc in &self.docs {
                 execute(tx, FORGET_GONE, (index, doc), "forget a document gone")?;
@@ -104,11 +107,14 @@ impl Purge {
 fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Result<()> {
     let gone: HashSet<u32> = docs.iter().copied().collect();
     let left = match read_list(connection, key)? {
-        Stored::Packed(directory) => take_out_of_runs(connection, key, Directory::decode(&directory)?, docs, &gone)?,
+        Stored::Packed(directory, best) => {
+            let best = decode_best(&best)?;
+            take_out_of_runs(connection, key, (Directory::decode(&directory)?, best), docs, &gone)?
+        }
         Stored::Legacy(directory) => {
             let average = average_of(connection, index, key)?;
             let runs = Legacy::decode(key, &directory)?.into_runs(connection, average)?;
-            take_out_of_runs(connection, key, runs.finish(connection)?, docs, &gone)?
+            take_out_of_runs(connection, key, (runs.finish(connection)?, Vec::new()), docs, &gone)?
         }
         Stored::Inline(inline) => {
             let mut postings = unpack_inline(&inline)?;
@@ -132,10 +138,11 @@ fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Resu
 fn take_out_of_runs(
     connection: &Connection,
     key: i64,
-    directory: Directory,
+    (directory, mut best): (Directory, Vec<Posting>),
     docs: &[u32],
     gone: &HashSet<u32>,
 ) -> Result<usize> {
+    best.retain(|posting| !gone.contains(&posting.doc));
     let blocks = &directory.blocks;
     let mut touched: Vec<usize> = docs
         .iter()
@@ -166,7 +173,7 @@ fn take_out_of_runs(
         }
     }
     if !kept.blocks.is_empty() {
-        write_directory(connection, key, &kept)?;
+        write_directory(connection, key, &kept, &best)?;
     }
     Ok(kept.blocks.len())
 }

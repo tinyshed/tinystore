@@ -1930,6 +1930,46 @@ fn an_index_reopened_in_the_middle_of_a_rebuild_goes_on_from_where_it_stood() {
     }
 }
 
+/// Pages search.db holds, and of them those free.
+fn pages(dir: &Path) -> (i64, i64) {
+    let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
+    let count = |pragma: &str| connection.query_row(pragma, [], |row| row.get::<_, i64>(0)).unwrap();
+    (count("pragma page_count"), count("pragma freelist_count"))
+}
+
+#[test]
+fn a_dropped_index_gives_its_pages_back_to_the_disk_once_they_stayed_free() {
+    use crate::Clock;
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(crate::TestClock::new(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000)));
+    let options = crate::Options { clock: Some(clock.clone()), background: false, ..crate::Options::default() };
+    let store = crate::Store::open(dir.path(), options).unwrap();
+    let old = store.index::<Article>("catalog-v2").field("title", 2.0).field("body", 1.0).open().unwrap();
+    let mut random = Random::new(29);
+    for start in (0..3000).step_by(500) {
+        let articles: Vec<(String, Article)> =
+            (start..start + 500).map(|n| (format!("d{n}"), random_article(&mut random))).collect();
+        old.set_many(articles.iter().map(|(id, value)| (id.as_str(), value))).unwrap();
+    }
+    maintain(&store).unwrap();
+    let (held, _) = pages(dir.path());
+    assert!(store.drop_index("catalog-v2").unwrap());
+    maintain(&store).unwrap();
+    let (dropped, free) = pages(dir.path());
+    assert!(dropped == held && free * 2 > held, "the drop frees its pages and the file keeps them a while");
+    clock.set(clock.now() + std::time::Duration::from_mins(11)).unwrap();
+    for _ in 0..100 {
+        maintain(&store).unwrap();
+        if pages(dir.path()).1 == 0 {
+            break;
+        }
+        clock.set(clock.now() + std::time::Duration::from_secs(10)).unwrap();
+    }
+    let (given, free) = pages(dir.path());
+    assert!(given * 2 < held && free == 0, "{held} pages before, {given} after, {free} free");
+    drop(store);
+}
+
 #[test]
 fn a_dropped_index_refuses_its_handles_and_leaves_no_row() {
     let fixture = fixture();

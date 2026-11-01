@@ -15,7 +15,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use super::execute::List;
-use super::pack::{Runs, average_of};
+use super::pack::{Runs, average_of, note_lists};
 use super::packed::bound_of;
 use super::postings::{BLOCK, Posting, after, frequency, number};
 use crate::compress::varint::Reader;
@@ -67,6 +67,11 @@ impl Legacy {
         Ok(Legacy { key, entries })
     }
 
+    /// How many blocks it names.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Its blocks onto a search's list, each bounded by its largest frequency
     /// over its shortest length.
     pub(crate) fn onto(&self, list: &mut List) {
@@ -79,7 +84,7 @@ impl Legacy {
     /// read: each block is bounded at `average` as its entry bounded it, by
     /// its largest frequency over its shortest length, which no posting of
     /// it passes.
-    pub(crate) fn into_runs(self, connection: &Connection, average: u16) -> Result<Runs> {
+    pub(super) fn into_runs(self, connection: &Connection, average: u16) -> Result<Runs> {
         let key = self.key;
         let mut list = Runs::new(key)?;
         let blocks = blocks(connection, key)?;
@@ -145,6 +150,7 @@ pub(crate) fn convert_step(tx: &Tx<'_>, most_blocks: usize) -> Result<bool> {
         converted += legacy.entries.len();
         let average = average_of(tx, index, key).map_err(within)?;
         legacy.into_runs(tx, average).and_then(|list| list.finish(tx)).map_err(within)?;
+        note_lists(tx, index)?;
     }
     Ok(next_key(tx)?.is_some())
 }
@@ -256,7 +262,7 @@ pub(crate) mod written {
                 }
                 connection.execute("delete from _tinystore_search_runs where id = ?1", [run.id]).unwrap();
             }
-            let update = "update _tinystore_search_lists set directory = ?2, packed = null where key = ?1";
+            let update = "update _tinystore_search_lists set directory = ?2, packed = null, best = null where key = ?1";
             connection.execute(update, (key, directory(&entries))).unwrap();
         }
         connection.execute_batch("commit").unwrap();

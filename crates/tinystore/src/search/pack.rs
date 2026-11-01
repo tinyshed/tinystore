@@ -18,7 +18,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::kept::{NORMS, bytes_of, lengths_of};
 use super::legacy::Legacy;
-use super::packed::{self, Directory, Placed, RUN_BYTES, Run, bound_of, reference};
+use super::packed::{self, Directory, Placed, RUN_BYTES, Run, best_of, bound_of, decode_best, encode_best, reference};
 use super::postings::{BLOCK, INLINE, Posting, decode_lengths, pack_inline, unpack_inline};
 use super::score::average;
 use super::write::execute;
@@ -35,15 +35,16 @@ const HEAD_FIRST: &str = "select key, doc, tf, len from _tinystore_search_head w
 const HEAD_OF: &str =
     "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key >= ?2 and key <= ?3";
-const READ_LIST: &str = "select directory, inline, packed from _tinystore_search_lists where key = ?1";
+const READ_LIST: &str = "select directory, inline, packed, best from _tinystore_search_lists where key = ?1";
 pub(super) const WRITE_LIST: &str =
     "insert or replace into _tinystore_search_lists (key, directory, inline) values (?1, ?2, ?3)";
-const WRITE_PACKED: &str = "insert or replace into _tinystore_search_lists (key, packed) values (?1, ?2)";
+const WRITE_PACKED: &str = "insert or replace into _tinystore_search_lists (key, packed, best) values (?1, ?2, ?3)";
 use super::kept::READ_NORMS;
 const READ_RUN: &str = "select blocks from _tinystore_search_runs where id = ?1";
 pub(super) const WRITE_RUN: &str = "insert or replace into _tinystore_search_runs (id, blocks) values (?1, ?2)";
 pub(super) const DROP_RUN: &str = "delete from _tinystore_search_runs where id = ?1";
 const READ_PART: &str = "select part from _tinystore_search_keys where id = ?1";
+const NOTE_LISTS: &str = "update _tinystore_search_indexes set lists_version = lists_version + 1 where id = ?1";
 const READ_TOKENS: &str = "select p.tokens, i.documents from _tinystore_search_parts as p
     join _tinystore_search_indexes as i on i.id = p.index_id where p.index_id = ?1 and p.part = ?2";
 
@@ -79,6 +80,7 @@ pub(crate) fn step(tx: &Tx<'_>, index: i64, most_rows: usize) -> Result<Packed> 
         packed.map_err(|error| error.within(format!("key {key}")))?;
     }
     execute(tx, DROP_HEAD, (index, first, last), "drop packed postings")?;
+    note_lists(tx, index)?;
     Ok(Packed { postings: rows.len() as u64, done })
 }
 
@@ -208,11 +210,14 @@ pub(super) fn average_of(connection: &Connection, index: i64, key: i64) -> Resul
 /// its runs, each bounded at `average`.
 fn append(connection: &Connection, key: i64, fresh: &[Posting], average: u16) -> Result<()> {
     let mut list = match read_list(connection, key)? {
-        Stored::Packed(directory) => Runs::of(connection, key, Directory::decode(&directory)?)?,
+        Stored::Packed(directory, best) => {
+            Runs::of(connection, key, Directory::decode(&directory)?, decode_best(&best)?)?
+        }
         Stored::Legacy(directory) => Legacy::decode(key, &directory)?.into_runs(connection, average)?,
         Stored::Inline(inline) => return append_inline(connection, key, unpack_inline(&inline)?, fresh, average),
         Stored::Nothing => return append_inline(connection, key, Vec::new(), fresh, average),
     };
+    list.consider(fresh, average);
     let filled = list.fill(fresh)?;
     for block in fresh[filled..].chunks(BLOCK) {
         list.push(connection, block, bound_of(block, average), average)?;
@@ -234,6 +239,7 @@ fn append_inline(
         return execute(connection, WRITE_LIST, (key, None::<Vec<u8>>, pack_inline(&all)), "write a list").map(drop);
     }
     let mut list = Runs::new(key)?;
+    list.consider(&all, average);
     for block in all.chunks(BLOCK) {
         list.push(connection, block, bound_of(block, average), average)?;
     }
@@ -248,6 +254,7 @@ pub(super) struct Runs {
     key: i64,
     directory: Directory,
     last: Vec<u8>,
+    best: Vec<Posting>,
 }
 
 impl Runs {
@@ -256,16 +263,21 @@ impl Runs {
         if key >> (63 - RUN_BITS) != 0 {
             return Err(Error::limit(format!("key {key}: past the keys a run's id can name")));
         }
-        Ok(Runs { key, directory: Directory::default(), last: Vec::new() })
+        Ok(Runs { key, directory: Directory::default(), last: Vec::new(), best: Vec::new() })
     }
 
-    /// A key's list as its directory and its last run hold it.
-    pub(super) fn of(connection: &Connection, key: i64, directory: Directory) -> Result<Runs> {
+    /// A key's list as its directory, its best postings and its last run hold it.
+    pub(super) fn of(connection: &Connection, key: i64, directory: Directory, best: Vec<Posting>) -> Result<Runs> {
         let last = match directory.runs.last() {
             Some(run) => read_run(connection, run.id)?,
             None => Vec::new(),
         };
-        Ok(Runs { directory, last, ..Runs::new(key)? })
+        Ok(Runs { directory, last, best, ..Runs::new(key)? })
+    }
+
+    /// Keeps the best of `postings` among the list's best, at `average`.
+    fn consider(&mut self, postings: &[Posting], average: u16) {
+        self.best = best_of(std::mem::take(&mut self.best), postings, average);
     }
 
     /// Fills the last block with the first of `fresh` while it holds fewer
@@ -325,13 +337,24 @@ impl Runs {
         if let Some(run) = self.directory.runs.last() {
             execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
         }
-        write_directory(connection, self.key, &self.directory)?;
+        write_directory(connection, self.key, &self.directory, &self.best)?;
         Ok(self.directory)
     }
 }
 
-pub(super) fn write_directory(connection: &Connection, key: i64, directory: &Directory) -> Result<()> {
-    execute(connection, WRITE_PACKED, (key, directory.encode()), "write a list").map(drop)
+/// Counts a commit that changes the index's lists, so that a list a search
+/// keeps from before is read again.
+pub(super) fn note_lists(connection: &Connection, index: i64) -> Result<()> {
+    execute(connection, NOTE_LISTS, [index], "count a change of lists").map(drop)
+}
+
+pub(super) fn write_directory(
+    connection: &Connection,
+    key: i64,
+    directory: &Directory,
+    best: &[Posting],
+) -> Result<()> {
+    execute(connection, WRITE_PACKED, (key, directory.encode(), encode_best(best)), "write a list").map(drop)
 }
 
 /// Every document a key's runs hold, in order.
@@ -359,8 +382,8 @@ pub(super) fn read_run(connection: &Connection, id: i64) -> Result<Vec<u8>> {
 /// A key's list as its row keeps it.
 #[derive(Debug)]
 pub(super) enum Stored {
-    /// The directory of its blocks in runs.
-    Packed(Vec<u8>),
+    /// The directory of its blocks in runs, and its best postings.
+    Packed(Vec<u8>, Vec<u8>),
     /// The directory of its rows of blocks, as a release before 0002 wrote it.
     Legacy(Vec<u8>),
     /// Its postings themselves.
@@ -373,7 +396,7 @@ pub(super) fn read_list(connection: &Connection, key: i64) -> Result<Stored> {
     let failed = |error| sql_error("read a list", error);
     let stored = |row: &rusqlite::Row<'_>| {
         Ok(match (row.get(2)?, row.get(0)?, row.get(1)?) {
-            (Some(packed), _, _) => Stored::Packed(packed),
+            (Some(packed), _, _) => Stored::Packed(packed, row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default()),
             (None, Some(directory), _) => Stored::Legacy(directory),
             (None, None, Some(inline)) => Stored::Inline(inline),
             (None, None, None) => Stored::Nothing,

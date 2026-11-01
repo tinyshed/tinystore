@@ -42,6 +42,9 @@ pub(crate) const FILE: &str = "search.db";
 /// Steps of writing a release's lists again in runs a pass of maintenance
 /// takes at most: 65,536 rows of blocks, about eight million postings.
 const CONVERT_STEPS: usize = 16;
+/// What a pass gives back at most of the pages the file holds free: a page
+/// given back writes a few, so a pass's commit stays a few MiB.
+const GIVE_BACK: usize = 4 << 20;
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
 /// The bytes of JSON an awaited set makes the words of in its poll, on the
@@ -138,7 +141,9 @@ impl Search {
     pub(crate) fn of(store: &Store) -> Result<Arc<Search>> {
         store.engine(|store| {
             let claim = store.claim(FILE)?;
-            let file = Arc::new(store.open_file(claim.name(), Config::committing(store.durability()))?);
+            // A dropped index, a purge and a rebuild free pages the file gives back.
+            let config = Config { incremental_vacuum: true, ..Config::committing(store.durability()) };
+            let file = Arc::new(store.open_file(claim.name(), config)?);
             Search::start(store, file, None, Some(claim))
         })
     }
@@ -562,6 +567,7 @@ impl Search {
         }
         self.drop_rows()?;
         self.convert_legacy(everything)?;
+        self.file.give_back(GIVE_BACK, self.clock.now())?;
         failed.map_or(Ok(done), Err)
     }
 

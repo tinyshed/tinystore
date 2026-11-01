@@ -191,6 +191,36 @@ pub(crate) fn bound_of(block: &[Posting], average: u16) -> f32 {
     up(most)
 }
 
+/// Postings of a key it keeps as its best, which a search scores first.
+pub(crate) const BEST: usize = 10;
+
+/// `best` with `fresh` among them, the `BEST` that saturate most at
+/// `average`, the earlier document first of equals.
+pub(crate) fn best_of(mut best: Vec<Posting>, fresh: &[Posting], average: u16) -> Vec<Posting> {
+    best.extend_from_slice(fresh);
+    let saturates = |posting: &Posting| saturated(posting.tf, posting.len, f64::from(average));
+    best.sort_by(|a, b| saturates(b).total_cmp(&saturates(a)).then(a.doc.cmp(&b.doc)));
+    best.truncate(BEST);
+    best
+}
+
+pub(crate) fn encode_best(best: &[Posting]) -> Vec<u8> {
+    best.iter().flat_map(|posting| [posting.doc, posting.tf, posting.len]).flat_map(u32::to_le_bytes).collect()
+}
+
+pub(crate) fn decode_best(bytes: &[u8]) -> Result<Vec<Posting>> {
+    let (postings, tail) = bytes.as_chunks::<12>();
+    if !tail.is_empty() || postings.len() > BEST {
+        return Err(Error::corrupt("a key's best postings: not whole postings of twelve bytes, ten at most"));
+    }
+    let posting = |bytes: &[u8; 12]| Posting {
+        doc: u32::from_le_bytes(word(bytes, 0)),
+        tf: u32::from_le_bytes(word(bytes, 4)),
+        len: u32::from_le_bytes(word(bytes, 8)),
+    };
+    Ok(postings.iter().map(posting).collect())
+}
+
 /// The least f32 at `value` or above it.
 fn up(value: f64) -> f32 {
     let near = value as f32;

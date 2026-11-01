@@ -9,6 +9,10 @@
 //!   search whose documents in that row are all below `n`.
 //! - The documents gone change with sets and purges, and the index counts
 //!   every change: a set read at one count serves a search at that count.
+//! - A key's list changes only when packing, a purge or upkeep writes it,
+//!   and the index counts each such commit: a list read at one count serves
+//!   a search at that count. A set changes the head, which searches read
+//!   anew. search-fast measured keeping directories so at 10 % of the median.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -16,6 +20,10 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::correct::Corrector;
+use super::legacy::Legacy;
+use super::pack::{Stored, read_list};
+use super::packed::{Directory, decode_best};
+use super::postings::{Posting, unpack_inline};
 use super::score::Part;
 use crate::sqlite::sql_error;
 use crate::sync::lock;
@@ -32,6 +40,7 @@ const READ_GONE: &str = "select doc from _tinystore_search_gone where index_id =
 pub(crate) struct Kept {
     norms: Mutex<HashMap<(Part, u32), Arc<Chunk>>>,
     gone: Mutex<Option<Arc<Gone>>>,
+    lists: Mutex<Lists>,
     pub(super) corrector: Mutex<Option<Arc<Corrector>>>,
     pub(super) clusters: Mutex<Option<Arc<super::clusters::Clusters>>>,
 }
@@ -68,6 +77,56 @@ pub(crate) struct Moment {
     pub(crate) index: i64,
     pub(crate) normed: u32,
     pub(crate) gone_version: i64,
+    pub(crate) lists_version: i64,
+}
+
+/// A key's list as searches read it: its directory decoded, or its
+/// postings when its own row holds them.
+pub(crate) enum Listed {
+    /// Its directory, and its best postings.
+    Packed(Arc<Directory>, Vec<Posting>),
+    Legacy(Legacy),
+    Inline(Vec<Posting>),
+    Nothing,
+}
+
+impl Listed {
+    fn read(connection: &Connection, key: i64) -> Result<Listed> {
+        Ok(match read_list(connection, key)? {
+            Stored::Packed(directory, best) => {
+                Listed::Packed(Arc::new(Directory::decode(&directory)?), decode_best(&best)?)
+            }
+            Stored::Legacy(directory) => Listed::Legacy(Legacy::decode(key, &directory)?),
+            Stored::Inline(inline) => Listed::Inline(unpack_inline(&inline)?),
+            Stored::Nothing => Listed::Nothing,
+        })
+    }
+
+    /// The bytes it holds, about.
+    fn bytes(&self) -> u64 {
+        let held = match self {
+            Listed::Packed(directory, best) => {
+                directory.blocks.len() * 24 + directory.runs.len() * 16 + best.len() * 12
+            }
+            Listed::Legacy(legacy) => legacy.len() * 16,
+            Listed::Inline(postings) => postings.len() * 12,
+            Listed::Nothing => 0,
+        };
+        held as u64 + 64
+    }
+}
+
+/// The lists kept, all of one `lists_version`.
+#[derive(Default)]
+struct Lists {
+    version: i64,
+    keys: HashMap<i64, Arc<Held<Listed>>>,
+}
+
+/// What a cache keeps, with the store's memory it holds.
+pub(crate) struct Held<T> {
+    pub(crate) value: T,
+    _reserved: Option<Reservation>,
 }
 
 impl Kept {
@@ -82,6 +141,7 @@ impl Kept {
         Kept {
             norms: Mutex::new(lock(&self.norms).clone()),
             gone: Mutex::default(),
+            lists: Mutex::default(),
             corrector: Mutex::new(lock(&self.corrector).clone()),
             clusters: Mutex::new(lock(&self.clusters).clone()),
         }
@@ -98,6 +158,39 @@ impl Kept {
         let gone = Arc::new(Gone { version: moment.gone_version, docs: docs.map_err(failed)? });
         *lock(&self.gone) = Some(Arc::clone(&gone));
         Ok(gone)
+    }
+
+    /// A key's list as `moment` has it, read again unless one of its
+    /// `lists_version` is kept.
+    pub(crate) fn list(
+        &self,
+        connection: &Connection,
+        memory: &Arc<Memory>,
+        moment: Moment,
+        key: i64,
+    ) -> Result<Arc<Held<Listed>>> {
+        {
+            let lists = lock(&self.lists);
+            if lists.version == moment.lists_version
+                && let Some(kept) = lists.keys.get(&key)
+            {
+                return Ok(Arc::clone(kept));
+            }
+        }
+        let listed = Listed::read(connection, key)?;
+        // a short list's own row reads as fast as a lookup here would
+        let decoded = matches!(listed, Listed::Packed(..) | Listed::Legacy(_));
+        let reserved = if decoded { keep(memory, listed.bytes()) } else { None };
+        let keep = reserved.is_some();
+        let read = Arc::new(Held { value: listed, _reserved: reserved });
+        let mut lists = lock(&self.lists);
+        if lists.version < moment.lists_version {
+            *lists = Lists { version: moment.lists_version, keys: HashMap::new() };
+        }
+        if keep && lists.version == moment.lists_version {
+            lists.keys.insert(key, Arc::clone(&read));
+        }
+        Ok(read)
     }
 
     /// The row of `part`'s lengths that holds `chunk`, as `moment` has it.

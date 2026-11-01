@@ -25,13 +25,12 @@ use super::correct::Corrector;
 use super::execute::{Fetch, List, best, best_of, held_by_all};
 use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
-use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
+use super::kept::{Chunk, Gone, Kept, Listed, Moment, NORMS};
 use super::layouts;
-use super::legacy::{self, Legacy};
+use super::legacy;
 use super::matches::{Ask, Sought};
-use super::pack::{Stored, read_list};
 use super::packed::{self, Directory};
-use super::postings::{Posting, unpack_inline};
+use super::postings::Posting;
 use super::score::{PREFIXED, Part, average, idf, score};
 use super::settings::Settings;
 use super::vectors::{self, Among, Question, Scan};
@@ -40,7 +39,7 @@ use crate::sync::lock;
 use crate::{Error, Memory, Result};
 
 const READ_INDEX: &str =
-    "select documents, normed, gone_version, words_version from _tinystore_search_indexes where id = ?1";
+    "select documents, normed, gone_version, words_version, lists_version from _tinystore_search_indexes where id = ?1";
 const READ_PARTS: &str = "select part, tokens from _tinystore_search_parts where index_id = ?1";
 const FIND_KEY: &str =
     "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
@@ -391,7 +390,7 @@ fn by_vector(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usiz
 fn moment(connection: &Connection, index: i64) -> Result<(Moment, u64, i64)> {
     let mut select = connection.prepare_cached(READ_INDEX).map_err(|error| sql_error("read an index", error))?;
     let row = select.query_row([index], |row| {
-        let moment = Moment { index, normed: row.get(1)?, gone_version: row.get(2)? };
+        let moment = Moment { index, normed: row.get(1)?, gone_version: row.get(2)?, lists_version: row.get(4)? };
         Ok((moment, row.get::<_, i64>(0)?.max(0) as u64, row.get(3)?))
     });
     row.map_err(|error| sql_error("read an index", error))
@@ -701,17 +700,18 @@ fn keyed(
     let mut list = List::new(key, part, scale, average(tokens, stats.documents), Vec::new());
     let gone = &stats.gone.docs;
     let within = |error: Error| error.within(format!("key {key}"));
-    match read_list(connection, key).map_err(within)? {
-        Stored::Packed(directory) => {
-            let directory = Directory::decode(&directory).map_err(within)?;
+    let listed = asked.kept.list(connection, asked.memory, source.moment, key).map_err(within)?;
+    match &listed.value {
+        Listed::Packed(directory, best) => {
             for block in &directory.blocks {
                 list.push(list.packed(block));
             }
-            source.packed.insert(key, directory);
+            list.seed(best.iter().filter(|posting| !gone.contains(&posting.doc)));
+            source.packed.insert(key, Arc::clone(directory));
         }
-        Stored::Legacy(directory) => Legacy::decode(key, &directory).map_err(within)?.onto(&mut list),
-        Stored::Inline(inline) => push_held(&mut list, unpack_inline(&inline).map_err(within)?, gone),
-        Stored::Nothing => {}
+        Listed::Legacy(legacy) => legacy.onto(&mut list),
+        Listed::Inline(postings) => push_held(&mut list, postings.clone(), gone),
+        Listed::Nothing => {}
     }
     push_held(&mut list, head(connection, asked.index, key)?, gone);
     Ok((!list.is_empty()).then_some(list))
@@ -862,7 +862,7 @@ struct Source<'a> {
     gone: &'a HashSet<u32>,
     chunks: HashMap<(Part, u32), Arc<Chunk>>,
     /// The directory of each list whose blocks are in runs, by its key.
-    packed: HashMap<i64, Directory>,
+    packed: HashMap<i64, Arc<Directory>>,
     /// Each such list's handle, by its key, and the run it is on.
     handles: HashMap<i64, (i64, Blob<'a>)>,
     bytes: Vec<u8>,

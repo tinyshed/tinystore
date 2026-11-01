@@ -35,6 +35,9 @@ fn list(key: i64, postings: &[Posting], random: &mut Random, memory: &mut Memory
         }
         at += size;
     }
+    // any of its postings seed it, as a key's best do
+    let seeded: Vec<Posting> = postings.iter().filter(|_| random.below(4) == 0).take(10).copied().collect();
+    list.seed(seeded.iter());
     list
 }
 
