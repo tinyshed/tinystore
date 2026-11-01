@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::LazyLock;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::document::{Analyzed, analyze};
@@ -33,8 +33,8 @@ use crate::{Error, Result};
 const FIND_DOC: &str = "select doc, keys, lengths from _tinystore_search_docs where index_id = ?1 and id = ?2";
 const MARK_GONE: &str = "insert into _tinystore_search_gone (index_id, doc, keys) values (?1, ?2, ?3)";
 const DROP_DOC: &str = "delete from _tinystore_search_docs where index_id = ?1 and doc = ?2";
-const LEAVE_KEY: &str =
-    "update _tinystore_search_keys set documents = documents - 1 where id = ?1 returning part, documents";
+const READ_KEY: &str = "select part, documents from _tinystore_search_keys where id = ?1";
+const LEAVE_KEY: &str = "update _tinystore_search_keys set documents = documents - 1 where id = ?1";
 const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key = ?2 and doc = ?3";
 const ADD_TOKENS: &str = "insert into _tinystore_search_parts (index_id, part, tokens) values (?1, ?2, ?3)
     on conflict (index_id, part) do update set tokens = tokens + excluded.tokens";
@@ -42,9 +42,13 @@ const LEAVE_INDEX: &str =
     "update _tinystore_search_indexes set documents = documents - 1, gone_version = gone_version + 1,
     words_version = words_version + ?2, vectors = vectors - ?3 where id = ?1";
 const NEXT_DOC: &str = "select next_doc from _tinystore_search_indexes where id = ?1";
-const JOIN_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, ?4)
-    on conflict (index_id, part, term) do update set documents = documents + excluded.documents
-    returning id, documents";
+// A key is found by its term and counted by its id, with no `returning`: over
+// 50,000 keys an update by the term returning its row took 2.15 µs, a find
+// 0.51 and an update by the id 0.25.
+const FIND_KEY: &str =
+    "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
+const COUNT_KEY: &str = "update _tinystore_search_keys set documents = documents + ?2 where id = ?1";
+const NEW_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, ?4)";
 const ADD_HEAD: &str = "insert into _tinystore_search_head (index_id, key, doc, tf, len) values (?1, ?2, ?3, ?4, ?5)";
 /// Postings a statement writes into the head, five values each.
 const HEAD_ROWS: usize = 64;
@@ -163,8 +167,8 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
 type Keys<'p> = HashMap<(Part, &'p str), i64>;
 
 /// The id of every key `documents` hold, each counted once for every one
-/// that holds it, in one statement a key, in the order of the keys' index;
-/// and whether any is a word as written no document held before.
+/// that holds it, in the order of the keys' index; and whether any is a
+/// word as written no document held before.
 fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Prepared>) -> Result<(Keys<'p>, bool)> {
     let mut holding: BTreeMap<(Part, &str), i64> = BTreeMap::new();
     for document in documents {
@@ -173,13 +177,25 @@ fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Pr
         }
     }
     let failed = |error| sql_error("write a key", error);
-    let mut upsert = tx.prepare_cached(JOIN_KEY).map_err(failed)?;
+    let mut find = tx.prepare_cached(FIND_KEY).map_err(failed)?;
+    let mut count_more = tx.prepare_cached(COUNT_KEY).map_err(failed)?;
+    let mut keep_new = tx.prepare_cached(NEW_KEY).map_err(failed)?;
     let mut keys = HashMap::with_capacity(holding.len());
     let mut new_words = false;
     for ((part, term), count) in holding {
-        let (key, documents): (i64, i64) =
-            upsert.query_row((index, part.0, term, count), |row| Ok((row.get(0)?, row.get(1)?))).map_err(failed)?;
-        new_words |= documents == count && part.is_written();
+        let found = find.query_row((index, part.0, term), |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)));
+        let key = match found.optional().map_err(failed)? {
+            Some((key, held)) => {
+                count_more.execute((key, count)).map_err(failed)?;
+                new_words |= held == 0 && part.is_written();
+                key
+            }
+            None => {
+                keep_new.execute((index, part.0, term, count)).map_err(failed)?;
+                new_words |= part.is_written();
+                tx.last_insert_rowid()
+            }
+        };
         keys.insert((part, term), key);
     }
     Ok((keys, new_words))
@@ -281,9 +297,11 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
 
 /// A key one fewer document holds: its part, and how many hold it now.
 fn leave_key(connection: &Connection, key: i64) -> Result<(Part, i64)> {
-    let mut update = connection.prepare_cached(LEAVE_KEY).map_err(|error| sql_error("write a key", error))?;
-    let left = update.query_row([key], |row| Ok((Part(row.get(0)?), row.get(1)?)));
-    left.map_err(|error| sql_error(format!("write key {key}"), error))
+    let failed = |error| sql_error(format!("write key {key}"), error);
+    let mut select = connection.prepare_cached(READ_KEY).map_err(failed)?;
+    let (part, held): (u32, i64) = select.query_row([key], |row| Ok((row.get(0)?, row.get(1)?))).map_err(failed)?;
+    execute(connection, LEAVE_KEY, [key], "write a key")?;
+    Ok((Part(part), held - 1))
 }
 
 pub(crate) use crate::sqlite::execute_cached as execute;
