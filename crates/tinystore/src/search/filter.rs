@@ -35,11 +35,10 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::head;
 use super::legacy;
-use super::pack::{self, Stored, read_list};
-use super::postings::unpack_inline;
+use super::merge;
 use super::score::Part;
+use super::segments;
 use super::settings::Settings;
 use crate::limits::{FILTER_CONDITIONS, FILTER_TEXT, FILTER_VALUES};
 use crate::sqlite::sql_error;
@@ -457,22 +456,16 @@ impl Reader<'_> {
         select.query_row((self.index, part.0, term), |row| row.get(0)).optional().map_err(failed)
     }
 
-    /// Every document a key's postings hold, those gone left out, in order.
+    /// Every document a key's postings hold, those gone left out, in order:
+    /// a list a release before 0002 wrote, then its pieces.
     fn docs_of(&self, key: i64) -> Result<Vec<u32>> {
         let within = |error: Error| error.within(format!("key {key}"));
-        let mut docs: Vec<u32> = Vec::new();
-        match read_list(self.connection, key).map_err(within)? {
-            Stored::Packed(header, _) => {
-                let directory = pack::read_directory(self.connection, key, &header).map_err(within)?;
-                docs.extend(pack::documents(self.connection, &directory).map_err(within)?);
+        let mut docs = legacy::documents(self.connection, self.index, key).map_err(within)?;
+        for segment in segments::of_index(self.connection, self.index)? {
+            if let Some((_, piece)) = segments::piece(self.connection, &segment, key).map_err(within)? {
+                docs.extend(merge::documents(self.connection, &piece).map_err(within)?);
             }
-            Stored::Legacy(_) => docs.extend(legacy::documents(self.connection, key).map_err(within)?),
-            Stored::Inline(inline) => {
-                docs.extend(unpack_inline(&inline).map_err(within)?.iter().map(|posting| posting.doc));
-            }
-            Stored::Nothing => {}
         }
-        docs.extend(head::read(self.connection, self.index, key)?.iter().map(|posting| posting.doc));
         if !docs.is_sorted_by(|a, b| a < b) {
             return Err(Error::corrupt(format!("key {key}'s documents are out of their order")));
         }

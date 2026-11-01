@@ -1,14 +1,19 @@
-//! A key's postings in its own row, and what a document's row keeps of its
-//! keys and lengths. A key in more documents keeps them in blocks, as
+//! A key's postings in a short piece, and what a document's row keeps of
+//! its keys and lengths. A longer piece keeps them in blocks, as
 //! `packed.rs` lays them out.
 //!
 //! ```text
-//! lists (key) → inline
+//! pieces (segment, key) → postings
 //!
-//! inline      (doc − doc before, tf, len) a posting, a key in at most 16 docs   varints
+//! postings        (doc − the segment's first, tf, len) a posting               varints
+//! inline          (doc − doc before, tf, len) a posting, a key's best           varints
 //! a doc's keys    (key − key before) a key it holds                             varints
 //! a doc's lengths (part, length) a part it has words in                         varints
 //! ```
+//!
+//! A piece's documents count from its segment's first rather than from the
+//! one before, so that a set appends to a piece of the open segment by
+//! joining bytes, in SQL, without reading the piece.
 
 use crate::Result;
 use crate::compress::varint::{Reader, put_count};
@@ -44,6 +49,32 @@ pub(crate) fn unpack_inline(bytes: &[u8]) -> Result<Vec<Posting>> {
     let mut doc = 0;
     while !reader.remaining().is_empty() {
         doc = after(&mut reader, doc, "a key's postings out of order");
+        let tf = frequency(&mut reader);
+        out.push(Posting { doc, tf, len: number(&mut reader) });
+    }
+    reader.finish()?;
+    Ok(out)
+}
+
+/// A piece's postings, its segment's documents from `first`.
+pub(crate) fn pack_piece(postings: &[Posting], first: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(postings.len() * 4);
+    for posting in postings {
+        put_count(&mut out, u64::from(posting.doc - first));
+        put_count(&mut out, u64::from(posting.tf));
+        put_count(&mut out, u64::from(posting.len));
+    }
+    out
+}
+
+pub(crate) fn unpack_piece(bytes: &[u8], first: u32) -> Result<Vec<Posting>> {
+    let mut reader = Reader::new(bytes);
+    let mut out = Vec::with_capacity(INLINE);
+    while !reader.remaining().is_empty() {
+        let doc = first.saturating_add(number(&mut reader));
+        if out.last().is_some_and(|last: &Posting| last.doc >= doc) {
+            reader.fail("a piece's postings out of order");
+        }
         let tf = frequency(&mut reader);
         out.push(Posting { doc, tf, len: number(&mut reader) });
     }
@@ -135,6 +166,9 @@ mod tests {
     fn a_short_list_and_a_documents_keys_and_lengths_read_back_as_written() {
         let postings = [posting(3, 1, 9), posting(300, 4, 120), posting(70_000, 2, 5)];
         assert_eq!(unpack_inline(&pack_inline(&postings)).unwrap(), postings);
+        let (front, back) = postings.split_at(1);
+        let joined = [pack_piece(front, 3), pack_piece(back, 3)].concat();
+        assert_eq!(unpack_piece(&joined, 3).unwrap(), postings, "a piece appended to as bytes");
         assert_eq!(decode_keys(&encode_keys(&[2, 9, 10, 4000])).unwrap(), [2, 9, 10, 4000]);
         assert_eq!(decode_lengths(&encode_lengths(&[(0, 12), (1, 3)])).unwrap(), [(0, 12), (1, 3)]);
     }
@@ -145,5 +179,9 @@ mod tests {
         let broken = |error: crate::Error| error.to_string();
         assert_eq!(broken(unpack_inline(&pack_inline(&twice)).unwrap_err()), "a key's postings out of order: corrupt");
         assert_eq!(broken(decode_keys(&[3, 0]).unwrap_err()), "a document's keys out of order: corrupt");
+        assert_eq!(
+            broken(unpack_piece(&pack_piece(&twice, 5), 5).unwrap_err()),
+            "a piece's postings out of order: corrupt"
+        );
     }
 }

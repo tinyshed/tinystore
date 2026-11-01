@@ -353,7 +353,7 @@ const NAMES: &[(&str, Made, &str, &str)] = &[
     ("tinystore_locks_busy_total", Made::Counter, "asks", "Asks whose key stayed held past their wait."),
     ("tinystore_locks_lost_total", Made::Counter, "leases", "Leases that ran out or were revoked while held."),
     ("tinystore_search_ms", Made::Timer, "", "A search of an index."),
-    ("tinystore_search_head_sets", Made::Gauge, "documents", "Sets an index holds in its head, waiting to be packed."),
+    ("tinystore_search_head_sets", Made::Gauge, "documents", "Documents set into an index since maintenance last ran."),
     ("tinystore_blobs_written_total", Made::Counter, "files", "Files written."),
     ("tinystore_blobs_written_bytes_total", Made::Counter, "bytes", "The bytes of the files written."),
     ("tinystore_blobs_read_total", Made::Counter, "files", "Files opened to be read."),

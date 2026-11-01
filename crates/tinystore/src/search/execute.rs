@@ -139,6 +139,11 @@ impl List {
         self.blocks.is_empty()
     }
 
+    /// How many blocks it holds.
+    pub(crate) fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
     /// The most the key adds to any document.
     pub(crate) fn most(&self) -> u64 {
         self.blocks.iter().map(|block| block.bound).max().unwrap_or(0)

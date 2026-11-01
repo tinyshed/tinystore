@@ -41,23 +41,24 @@ macro_rules! integer_bytes {
 }
 
 /// What an index's rows weigh: its documents, with their ids, keys and
-/// lengths; its words and their postings, packed and in the head, where a
-/// posting is a row of integers until a thousand documents set since the
-/// last packing pack it; its lengths; its vectors, their codes and their
-/// places among clusters.
+/// lengths; its words and their postings, in segments' pieces and runs and
+/// in lists and a head a release before 0002 wrote, where a posting is a
+/// row of integers; its lengths; its vectors, their codes and their places
+/// among clusters.
 const SELECT_BYTES: &str = concat!(
     "select
     (select coalesce(sum(octet_length(id) + length(keys) + length(lengths) + length(value)), 0)
         from _tinystore_search_docs where index_id = ?1)
-    + (select coalesce(sum(octet_length(k.term) + coalesce(length(l.directory), 0) + coalesce(length(l.inline), 0)
-        + coalesce(length(l.packed), 0) + coalesce(length(l.best), 0)), 0)
+    + (select coalesce(sum(octet_length(k.term) + coalesce(length(l.directory), 0) + coalesce(length(l.inline), 0)), 0)
         from _tinystore_search_keys as k left join _tinystore_search_lists as l on l.key = k.id where k.index_id = ?1)
     + (select coalesce(sum(length(b.payload)), 0)
         from _tinystore_search_keys as k join _tinystore_search_blocks as b on b.key = k.id where k.index_id = ?1)
-    + (select coalesce(sum(length(d.entries)), 0) from _tinystore_search_keys as k
-        join _tinystore_search_directory as d on d.key = k.id where k.index_id = ?1)
-    + (select coalesce(sum(length(r.blocks)), 0) from _tinystore_search_keys as k
-        join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20 where k.index_id = ?1)
+    + (select coalesce(sum(coalesce(length(p.postings), 0) + coalesce(length(p.directory), 0)
+        + coalesce(length(p.best), 0) + 16), 0)
+        from _tinystore_search_segments as s join _tinystore_search_pieces as p on p.segment = s.id
+        where s.index_id = ?1)
+    + (select coalesce(sum(length(r.blocks)), 0) from _tinystore_search_segments as s
+        join _tinystore_search_runs as r on r.id >= s.id << 24 and r.id < (s.id + 1) << 24 where s.index_id = ?1)
     + (select coalesce(sum(",
     integer_bytes!("key"),
     " + ",
@@ -67,7 +68,6 @@ const SELECT_BYTES: &str = concat!(
     " + ",
     integer_bytes!("len"),
     "), 0) from _tinystore_search_head where index_id = ?1)
-    + (select coalesce(sum(length(postings) + 16), 0) from _tinystore_search_fresh where index_id = ?1)
     + (select coalesce(sum(length(lengths)), 0) from _tinystore_search_norms where index_id = ?1)
     + (select coalesce(sum(length(vector)), 0) from _tinystore_search_vectors where key >= ?2 and key < ?3)
     + (select coalesce(sum(length(code)), 0) from _tinystore_search_codes where key >= ?2 and key < ?3)

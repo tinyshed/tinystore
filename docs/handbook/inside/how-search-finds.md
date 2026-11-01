@@ -40,6 +40,12 @@ without decoding, and it reads a block at its place in its row without
 running a query for it. On MS MARCO's passages, research measured this
 layout at about 2 bytes a posting.
 
+The postings live in segments, as in Lucene and SQLite's FTS5. A segment
+holds every word's postings for a run of documents, all next to each other
+in the file, and a search reads a word's piece in each segment as one list.
+Writes go to the newest segment, so a batch of documents writes about as
+many pages as its postings fill, however many words it has.
+
 ## Exact, and still fast
 
 A search by words scores documents with BM25, which weighs a word by how rare
@@ -50,16 +56,20 @@ best possible total cannot beat the tenth best score found so far is skipped
 without reading a posting.
 
 The answer is the same as scoring every document (contract SRCH-01). Scores
-are kept in whole points, so packing or cleaning up the index never changes a
+are kept in whole points, so merging or cleaning up the index never changes a
 score or the order of a tie.
 
 ## New documents and old ones
 
 A document set is visible to the next search at once (contract SRCH-04),
-because a search reads a small head of recent changes beside the blocks.
-Every commit packs a part of the head into the blocks, 2,048 rows at a time,
-so the head stays small. A deleted document is marked gone; once the gone
-documents pass half a percent of the index, they are purged from the blocks.
+because a set writes its postings into the newest segment, which searches
+read like any other. The newest segment takes documents until it holds a
+thousand; then the next set starts another. Background work merges eight
+segments of a size into one of the next, a few thousand words per commit, so
+a posting is written again only once per size and a search reads a handful
+of segments. A deleted document is marked gone; merges leave it out, and
+once the gone documents pass half a percent of the index, they are purged
+from the rest.
 
 A misspelt word that matches nothing is read as the nearest word the index
 holds, one letter off from five letters and two from nine, and `corrected`

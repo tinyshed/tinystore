@@ -1,29 +1,28 @@
 //! Sets and deletes, each a grouped write of search.db.
 //!
-//! A set gives its document a new number and writes its postings to the
-//! head, where searches read them beside the blocks, so the head's
-//! documents always come after every block's and packing appends to each
-//! key's list. The number the document had is marked gone: searches leave
-//! it out of the head and every block until a purge takes it out of both.
+//! A set gives its document a new number and writes its postings into the
+//! newest segment, so a segment's documents always come after every older
+//! one's. The number the document had is marked gone: searches leave it out
+//! of every piece until a merge or a purge takes it out of them.
 //!
 //! A document's vector is kept beside it and goes with it: a set keeps the
 //! new number's and forgets the old one's, so a scan of vectors never meets
 //! a document gone.
 //!
 //! Every count a score reads changes here and nowhere else: how many
-//! documents the index holds, how many hold each key, how many words each
-//! part has. Packing and purging move postings and change no count, so they
-//! change no score.
+//! documents the index holds, how many hold each key, its row's and its
+//! pieces' counts, how many words each part has. Merges and purges move
+//! postings and counts and change no sum, so they change no score.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::document::{Analyzed, analyze};
-use super::head;
 use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
+use super::segments;
 use super::settings::Settings;
 use super::vectors::{self, Vector};
 use crate::limits::Limit;
@@ -41,13 +40,10 @@ const LEAVE_INDEX: &str =
     "update _tinystore_search_indexes set documents = documents - 1, gone_version = gone_version + 1,
     words_version = words_version + ?2, vectors = vectors - ?3 where id = ?1";
 const NEXT_DOC: &str = "select next_doc from _tinystore_search_indexes where id = ?1";
-// A key is found by its term and counted by its id, with no `returning`: over
-// 50,000 keys an update by the term returning its row took 2.15 µs, a find
-// 0.51 and an update by the id 0.25.
-const FIND_KEY: &str =
-    "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
-const COUNT_KEY: &str = "update _tinystore_search_keys set documents = documents + ?2 where id = ?1";
-const NEW_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, ?4)";
+// A set counts a key in its piece, not its row: a set of a thousand passages
+// held some 12,000 keys, and counting each in its row wrote a page a key.
+const FIND_KEY: &str = "select id from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
+const NEW_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, 0)";
 const KEEP_DOC: &str =
     "insert into _tinystore_search_docs (index_id, doc, id, value, keys, lengths) values (?1, ?2, ?3, ?4, ?5, ?6)";
 const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2, documents = documents + ?3,
@@ -114,15 +110,16 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
 
 /// Sets documents of one index in their order, each replacing the one of its
 /// id. What they change is written once for them all rather than once a
-/// document: a key's count once however many of them hold it, the index's
-/// counts and each part's words once, and their postings into the head in
-/// the order of its keys, many a statement. A set of 1,000 passages of 50
-/// words wrote some 80 statements a document before.
+/// document: a key's piece once however many of them hold it, the index's
+/// counts and each part's words once, and their postings into the newest
+/// segment in the order of its keys, many a statement. A set of 1,000
+/// passages of 50 words wrote some 80 statements a document before.
 pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepared> + Clone) -> Result<()> {
     let Some(index) = documents.clone().next().map(|document| document.index) else { return Ok(()) };
     let (keys, new_words) = join_keys(tx, index, documents.clone())?;
-    let mut head = Vec::new();
-    let mut next = next_doc(tx, index)?;
+    let mut postings = Vec::new();
+    let first = next_doc(tx, index)?;
+    let mut next = first;
     let (mut count, mut vectors) = (0_i64, 0_i64);
     let mut tokens: BTreeMap<Part, i64> = BTreeMap::new();
     for document in documents {
@@ -132,7 +129,7 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
         let mut held = Vec::with_capacity(document.analyzed.terms.len());
         for (part, term, tf) in &document.analyzed.terms {
             let key = keys[&(*part, term.as_str())];
-            head.push((key, doc, *tf, document.analyzed.length(*part)));
+            postings.push((key, doc, *tf, document.analyzed.length(*part)));
             held.push(key);
         }
         for (part, len) in &document.analyzed.lengths {
@@ -142,7 +139,7 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
         count += 1;
         vectors += i64::from(document.vector.is_some());
     }
-    head::write(tx, index, &mut head)?;
+    segments::write_set(tx, index, (number(first)?, number(next)?, count as u64), &mut postings)?;
     for (part, len) in tokens {
         execute(tx, ADD_TOKENS, (index, part.0, len), "count a part's words")?;
     }
@@ -153,32 +150,24 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
 /// Keys' ids by their part and term.
 type Keys<'p> = HashMap<(Part, &'p str), i64>;
 
-/// The id of every key `documents` hold, each counted once for every one
-/// that holds it, in the order of the keys' index; and whether any is a
-/// word as written no document held before.
+/// The id of every key `documents` hold, in the order of the keys' index,
+/// a key kept for each word none held before; and whether any is a word as
+/// written that no key was kept for.
 fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Prepared>) -> Result<(Keys<'p>, bool)> {
-    let mut holding: BTreeMap<(Part, &str), i64> = BTreeMap::new();
+    let mut held: BTreeSet<(Part, &str)> = BTreeSet::new();
     for document in documents {
-        for (part, term, _) in &document.analyzed.terms {
-            *holding.entry((*part, term.as_str())).or_default() += 1;
-        }
+        held.extend(document.analyzed.terms.iter().map(|(part, term, _)| (*part, term.as_str())));
     }
     let failed = |error| sql_error("write a key", error);
     let mut find = tx.prepare_cached(FIND_KEY).map_err(failed)?;
-    let mut count_more = tx.prepare_cached(COUNT_KEY).map_err(failed)?;
     let mut keep_new = tx.prepare_cached(NEW_KEY).map_err(failed)?;
-    let mut keys = HashMap::with_capacity(holding.len());
+    let mut keys = HashMap::with_capacity(held.len());
     let mut new_words = false;
-    for ((part, term), count) in holding {
-        let found = find.query_row((index, part.0, term), |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)));
-        let key = match found.optional().map_err(failed)? {
-            Some((key, held)) => {
-                count_more.execute((key, count)).map_err(failed)?;
-                new_words |= held == 0 && part.is_written();
-                key
-            }
+    for (part, term) in held {
+        let key = match find.query_row((index, part.0, term), |row| row.get::<_, i64>(0)).optional().map_err(failed)? {
+            Some(key) => key,
             None => {
-                keep_new.execute((index, part.0, term, count)).map_err(failed)?;
+                keep_new.execute((index, part.0, term)).map_err(failed)?;
                 new_words |= part.is_written();
                 tx.last_insert_rowid()
             }
@@ -224,9 +213,10 @@ pub(crate) fn delete(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     forget(tx, index, id)
 }
 
-/// Marks the document of `id` gone and takes it out of every count and of
-/// the head's rows it wrote alone; its postings in rows a set of many wrote
-/// and in blocks wait for packing or a purge.
+/// Takes the document of `id` out of every count, and out of the open
+/// segment's pieces when a set wrote it there lately, so that a document
+/// set again and again leaves no postings behind; else marks it gone, its
+/// postings waiting in their pieces for a merge or a purge.
 fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     let failed = |error| sql_error("find a document", error);
     let found: Option<(i64, Vec<u8>, Vec<u8>)> = {
@@ -239,16 +229,24 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     };
     let Some((doc, keys, lengths)) = found else { return Ok(false) };
     let within = |error: Error| error.within(format!("document {doc}"));
+    let open = segments::open_of(tx, index)?.filter(|open| (open.first..open.past).contains(&(doc as u32)));
     let mut words_left = false;
     for key in decode_keys(&keys).map_err(within)? {
+        // a piece taken from counts the document out itself
+        if let Some(open) = &open
+            && segments::take_out(tx, open, key, doc as u32)?
+        {
+            continue;
+        }
         let (part, documents) = leave_key(tx, key)?;
         words_left |= documents == 0 && part.is_written();
-        head::forget(tx, index, key, doc as u32)?;
     }
     for (part, len) in decode_lengths(&lengths).map_err(within)? {
         execute(tx, ADD_TOKENS, (index, part, -i64::from(len)), "count a part's words")?;
     }
-    execute(tx, MARK_GONE, (index, doc, &keys), "mark a document gone")?;
+    if open.is_none() {
+        execute(tx, MARK_GONE, (index, doc, &keys), "mark a document gone")?;
+    }
     execute(tx, DROP_DOC, (index, doc), "drop a document")?;
     let had_vector = vectors::forget(tx, index, doc as u32)?;
     execute(tx, LEAVE_INDEX, (index, i64::from(words_left), i64::from(had_vector)), "count a document")?;

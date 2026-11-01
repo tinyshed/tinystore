@@ -549,9 +549,9 @@ fn a_search_reading_every_word_as_a_prefix_takes() {
     }
 }
 
-/// How long setting 20,000 passages of 50 words a thousand at a time takes,
-/// each thousand packed as background work packs them, and where the time
-/// goes. Run by hand:
+/// How long setting 100,000 passages of 50 words a thousand at a time takes,
+/// their segments merged as background work merges them, then merged into
+/// one, and where the time goes. Run by hand:
 /// `cargo test -p tinystore --release --lib setting_passages -- --ignored --nocapture`.
 #[test]
 #[ignore = "a timing, run by hand"]
@@ -560,24 +560,30 @@ fn setting_passages_a_thousand_at_a_time_takes() {
     let index = fixture.store.index::<String>("timing").typo_tolerance(false).open().unwrap();
     let mut random = Random::new(3);
     let zipf = Zipf::new(50_000);
-    let (mut setting, mut packing) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
-    for batch in 0..20 {
+    let (mut setting, mut merging) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+    for batch in 0..100 {
         let passages: Vec<String> = (0..1000).map(|_| zipf.text(&mut random, 50)).collect();
         let ids: Vec<String> = (0..1000).map(|n| format!("{batch}-{n}")).collect();
         let started = std::time::Instant::now();
         index.set_many(ids.iter().zip(&passages)).unwrap();
         setting += started.elapsed();
         let started = std::time::Instant::now();
-        maintain(&fixture.store).unwrap();
-        packing += started.elapsed();
+        while !index.search.merge_step(&index.open, crate::search::merge::STEP_PIECES, false).unwrap().done {}
+        merging += started.elapsed();
     }
+    let started = std::time::Instant::now();
+    maintain(&fixture.store).unwrap();
+    let into_one = started.elapsed();
     let fields = [crate::search::settings::Field { path: String::new(), weight: 1.0, number: 0 }];
-    let passages: Vec<serde_json::Value> = (0..20_000).map(|_| zipf.text(&mut random, 50).into()).collect();
+    let passages: Vec<serde_json::Value> = (0..100_000).map(|_| zipf.text(&mut random, 50).into()).collect();
     let started = std::time::Instant::now();
     for passage in &passages {
         std::hint::black_box(document::analyze(passage, &fields, &[]).unwrap());
     }
-    eprintln!("20,000 passages: sets {setting:?}, packing {packing:?}, their words alone {:?}", started.elapsed());
+    eprintln!(
+        "100,000 passages: sets {setting:?}, merges {merging:?}, into one {into_one:?}, their words alone {:?}",
+        started.elapsed()
+    );
 }
 
 /// How long a search by words takes over 200,000 passages of 50 words each,
@@ -627,18 +633,18 @@ fn a_search_by_words_over_two_hundred_thousand_passages_takes() {
         }
     };
     let space = |layout: &str| eprintln!("{layout}: {}", tables(fixture.dir.path()));
-    space("runs");
-    timed("runs");
+    space("a segment");
+    timed("a segment");
     crate::search::execute::SEEDED.set(false);
-    timed("runs, no seeds");
+    timed("a segment, no seeds");
     crate::search::execute::SEEDED.set(true);
-    timed("runs");
+    timed("a segment");
     crate::search::legacy::written::rewrite(fixture.dir.path(), "timing");
     space("rows of blocks");
     timed("rows of blocks");
     maintain(&fixture.store).unwrap();
-    space("runs again");
-    timed("runs again");
+    space("a segment again");
+    timed("a segment again");
 }
 
 /// What the tables that hold postings take, in bytes a posting: their
@@ -665,10 +671,17 @@ fn tables(dir: &Path) -> String {
         (
             "lists",
             payload(
-                "select sum(coalesce(length(directory), 0) + coalesce(length(inline), 0)
-                + coalesce(length(packed), 0)) from _tinystore_search_lists",
+                "select sum(coalesce(length(directory), 0) + coalesce(length(inline), 0)) from _tinystore_search_lists",
             ),
             pages("_tinystore_search_lists"),
+        ),
+        (
+            "pieces",
+            payload(
+                "select sum(coalesce(length(postings), 0) + coalesce(length(directory), 0) + coalesce(length(best), 0))
+                from _tinystore_search_pieces",
+            ),
+            pages("_tinystore_search_pieces"),
         ),
     ];
     let mut said = format!("{postings} postings;");
@@ -785,8 +798,8 @@ fn postings_in(dir: &Path) -> String {
     for sql in [
         "select key, first, payload from _tinystore_search_blocks order by key, first",
         "select id, blocks from _tinystore_search_runs order by id",
-        "select key, first, postings from _tinystore_search_fresh order by key, first",
-        "select key, chunk, entries from _tinystore_search_directory order by key, chunk",
+        "select * from _tinystore_search_pieces order by segment, key",
+        "select * from _tinystore_search_segments order by id",
         "select * from _tinystore_search_lists order by key",
     ] {
         let mut select = connection.prepare(sql).unwrap();
@@ -1139,7 +1152,7 @@ fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packi
                     index.set_many(ids.iter().zip(&values)).unwrap();
                     ids.into_iter().zip(values).for_each(|(id, value)| model.set(&settings, id, value));
                 }
-                86..88 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                86..88 => drop(index.search.merge_step(&index.open, 1 + random.below(3000) as usize, true).unwrap()),
                 88..89 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
                 _ => agrees(&index, &model, &mut random, seed),
             }
@@ -1152,11 +1165,15 @@ fn a_search_answers_what_scoring_every_document_answers_under_sets_deletes_packi
 
 // contract: DUR-09
 #[test]
-fn packing_and_purging_change_no_answer() {
+fn merging_and_purging_change_no_answer() {
     let fixture = fixture();
     let articles = fixture.articles::<Article>("articles");
     let mut random = Random::new(7);
     for n in 0..600 {
+        // the first 300 merged, so that the last 300 leave documents gone in them
+        if n == 300 {
+            maintain(&fixture.store).unwrap();
+        }
         articles.set(n % 300, &random_article(&mut random)).unwrap();
     }
     let texts: Vec<String> = (0..30).map(|_| words(&mut random, 4)).collect();
@@ -1165,8 +1182,8 @@ fn packing_and_purging_change_no_answer() {
     };
     let before = answers(&articles);
     loop {
-        let step = articles.search.pack_step(&articles.open, 700).unwrap();
-        assert_eq!(answers(&articles), before, "a step of packing");
+        let step = articles.search.merge_step(&articles.open, 700, true).unwrap();
+        assert_eq!(answers(&articles), before, "a step of merging");
         if step.done {
             break;
         }
@@ -1257,11 +1274,15 @@ fn crash_image(dir: &Path) -> tempfile::TempDir {
 
 // contract: DUR-09
 #[test]
-fn a_crash_between_steps_of_packing_or_purging_leaves_the_last_commit() {
+fn a_crash_between_steps_of_merging_or_purging_leaves_the_last_commit() {
     let fixture = fixture();
     let articles = fixture.articles::<Article>("articles");
     let mut random = Random::new(11);
     for n in 0..300 {
+        // the first 200 merged, so that the last 100 leave documents gone in them
+        if n == 200 {
+            maintain(&fixture.store).unwrap();
+        }
         articles.set(n % 200, &random_article(&mut random)).unwrap();
     }
     let texts: Vec<String> = (0..10).map(|_| words(&mut random, 3)).collect();
@@ -1270,17 +1291,17 @@ fn a_crash_between_steps_of_packing_or_purging_leaves_the_last_commit() {
     };
     let before = answers(&articles);
     let mut images = vec![crash_image(fixture.dir.path())];
-    while !articles.search.pack_step(&articles.open, 500).unwrap().done {
+    while !articles.search.merge_step(&articles.open, 100, true).unwrap().done {
         images.push(crash_image(fixture.dir.path()));
     }
     articles.search.purge_in_steps(&articles.open, 30, || images.push(crash_image(fixture.dir.path()))).unwrap();
-    assert!(images.len() > 4, "packing and purging took several steps");
+    assert!(images.len() > 4, "merging and purging took several steps");
     for image in images {
         let store = open(image.path());
         let reopened = store.index::<Article>("articles").field("title", 2.0).field("body", 1.0).open().unwrap();
         assert_eq!(answers(&reopened), before);
         maintain(&store).unwrap();
-        assert_eq!(answers(&reopened), before, "and once its packing and purging go on");
+        assert_eq!(answers(&reopened), before, "and once its merging and purging go on");
     }
 }
 
@@ -1318,8 +1339,11 @@ fn through_a_long_mix_the_file_stays_near_a_fresh_build_of_the_same_documents() 
     }
     maintain(&fresh.store).unwrap();
     let ((mixed, mixed_log), (built, _)) = (sizes(fixture.dir.path()), sizes(fresh.dir.path()));
-    eprintln!("{mixed} bytes after the mix, {built} built afresh, a log of {mixed_log}");
-    assert!(mixed <= built * 2, "{mixed} bytes after the mix, {built} built afresh");
+    // what the last merges and rebuilds freed stays free a while, and upkeep
+    // gives it back then, as it does a dropped index's pages
+    let used = mixed - pages(fixture.dir.path()).1.unsigned_abs() * 4096;
+    eprintln!("{mixed} bytes after the mix, {used} of them used, {built} built afresh, a log of {mixed_log}");
+    assert!(used <= built * 3 / 2, "{used} bytes used after the mix, {built} built afresh");
     assert!(mixed_log <= 8 << 20, "the write-ahead log holds {mixed_log} bytes");
 }
 
@@ -1503,7 +1527,7 @@ fn searches_by_a_vector_and_by_both_answer_what_scoring_every_document_answers()
                         model.set_with(&settings, id, value, Some(vector));
                     }
                 }
-                76..78 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                76..78 => drop(index.search.merge_step(&index.open, 1 + random.below(3000) as usize, true).unwrap()),
                 78..79 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
                 79..85 => agrees(&index, &model, &mut random, seed),
                 _ => agrees_by_vector(&index, &model, &mut random, seed),
@@ -1681,7 +1705,7 @@ fn a_filtered_search_answers_what_scoring_every_document_it_passes_answers() {
                     assert_eq!(index.delete(&id).unwrap(), model.docs.remove(&id).is_some());
                 }
                 70..72 => drop(maintain(&fixture.store).unwrap()),
-                72..74 => drop(index.search.pack_step(&index.open, 1 + random.below(3000) as usize).unwrap()),
+                72..74 => drop(index.search.merge_step(&index.open, 1 + random.below(3000) as usize, true).unwrap()),
                 74..75 => index.search.purge_in_steps(&index.open, 1 + random.below(40) as usize, || {}).unwrap(),
                 _ => agrees_filtered(&index, &model, &mut random, seed),
             }

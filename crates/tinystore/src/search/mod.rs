@@ -25,8 +25,8 @@
 //! A search answers what scoring every document would, never an estimate,
 //! and the next search sees a set. Under the surface, postings are blocks
 //! of 128 documents that a search skips while their bound cannot reach the
-//! best ten; a set writes to a head that searches read beside them, and the
-//! store's background work packs it into the blocks. A search by a vector
+//! best ten; a set writes its postings as a segment, and the store's
+//! background work merges segments into fewer and larger ones. A search by a vector
 //! reads a code of every vector, a byte a dimension, and scores again only
 //! those whose bound reaches the best; on an index opened with `recall`, it
 //! reads only the clusters nearest its question.
@@ -44,7 +44,6 @@ mod filter;
 mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
-mod head;
 #[cfg(feature = "client")]
 mod held;
 mod hybrid;
@@ -53,8 +52,8 @@ mod kept;
 mod layouts;
 mod legacy;
 mod matches;
+mod merge;
 mod open;
-mod pack;
 mod packed;
 mod postings;
 mod purge;
@@ -62,6 +61,7 @@ mod rabitq;
 mod read;
 mod rebuild;
 mod score;
+mod segments;
 mod settings;
 mod table;
 #[cfg(feature = "sql")]
@@ -126,9 +126,9 @@ pub fn list(store: &Store) -> Result<Vec<Listed>> {
 }
 
 /// Runs the store's search maintenance now, as a store opened without
-/// background work has to: every head packed and the documents gone purged,
-/// in search.db and in each database a table's index was opened in, and a
-/// table's rows read the first time.
+/// background work has to: each index's segments merged into one and the
+/// documents gone purged, in search.db and in each database a table's index
+/// was opened in, and a table's rows read the first time.
 pub fn maintain(store: &Store) -> Result<Maintenance> {
     crate::sqlite::own_work(|| {
         let mut done = engine::Search::of(store)?.maintain(true)?;

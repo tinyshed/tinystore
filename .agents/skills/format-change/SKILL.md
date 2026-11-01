@@ -13,10 +13,10 @@ reads to the newest when it would write it anyway.
 
 ## Which case it is
 
-| What changes                                            | How                                       | Example                                        |
-|---------------------------------------------------------|-------------------------------------------|------------------------------------------------|
-| A row's bytes, its table the same                       | a version byte, one parser that branches  | records' blocks 2 to 4, metrics' codec         |
-| The tables a format lives in, or a key's rows of them   | a module of the old format, `legacy`      | search's rows of blocks, now runs (0002)       |
+| What changes                                          | How                                      | Example                                      |
+|-------------------------------------------------------|------------------------------------------|----------------------------------------------|
+| A row's bytes, its table the same                     | a version byte, one parser that branches | records' blocks 2 to 4, metrics' codec       |
+| The tables a format lives in, or a key's rows of them | a module of the old format, `legacy`     | search's rows of blocks, now segments (0002) |
 
 A new layout starts with a version byte in its first release (search's
 packed directory), so that its next change is the first case, a branch in
@@ -35,15 +35,15 @@ a migration a release shipped.
   (`records/block.rs`, `Opened::of`); everything after reads what it
   returns. No second parser of an old version anywhere.
 - A row of an old version changes only where the engine rewrites it anyway:
-  a merge, a pack, a purge.
+  a merge, a purge.
 
 ## A legacy module
 
 When the tables themselves change, the old format goes into one module of
 its engine, `<engine>/legacy.rs` (a folder `<engine>/legacy/`, a file a
 format, once there are two). The new format has its own module beside it
-(search's `packed.rs`), and the module that writes the file (search's
-`pack.rs`) knows only the new one.
+(search's `segments.rs` and `packed.rs`), and the module that writes the
+file (search's `merge.rs`) knows only the new one.
 
 What the legacy module holds, and nothing outside it may:
 
@@ -52,8 +52,9 @@ What the legacy module holds, and nothing outside it may:
 - what a reader needs of it: a list onto a search, a block's postings, every
   document of a key (search's `Legacy::onto`, `legacy::block`,
   `legacy::documents`);
-- its conversion to the new format (`Legacy::into_runs`), which a writer
-  calls when it would rewrite the thing anyway, a pack or a purge;
+- its conversion to the new format (search's `legacy::convert_key`, into
+  the index's base segment), which a writer calls when it would rewrite the
+  thing anyway, a purge;
 - a step of upkeep that converts what no write reaches (`convert_step`,
   bounded by rows a step and by steps a maintenance pass), so that the old
   format leaves a file soon after a release opens it and a cold key is not

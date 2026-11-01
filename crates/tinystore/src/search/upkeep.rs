@@ -1,5 +1,5 @@
 //! What maintenance does for an index's rows, the serving ones and those a
-//! rebuild makes beside them alike: packing their head into blocks, purging
+//! rebuild makes beside them alike: merging their segments, purging
 //! the documents gone, building again a dictionary of words that fell
 //! behind, and keeping the clusters of their vectors.
 
@@ -9,54 +9,36 @@ use std::time::Duration;
 use super::clusters::{self, HEAD, Phase};
 use super::correct::Corrector;
 use super::engine::{Search, count};
-use super::head;
+use super::merge;
 use super::open::{Data, OpenIndex};
-use super::pack;
 use super::purge;
 use super::score::Part;
 use crate::Result;
-use crate::sqlite::sql_error;
 use crate::sync::lock;
 
-/// Documents set since a head was packed that make it due: search-compact
-/// packed every thousand writes, which kept `or`'s p99 at 14–16 ms through
-/// 15,000 writes where a head never packed reached 37.
-pub(crate) const PACK_AT: u64 = 1000;
 /// How long a dictionary of an index's words serves after they change
 /// before background work builds it again.
 const DICTIONARY_AGE: Duration = Duration::from_secs(60);
 
-/// The documents set since packing last reached the head.
-const READ_WAITING: &str = "select count(*) from _tinystore_search_docs
-    where index_id = ?1 and doc >= (select normed from _tinystore_search_indexes where id = ?1)";
 const READ_WORDS_VERSION: &str = "select words_version from _tinystore_search_indexes where id = ?1";
 
 impl Search {
-    /// Packs the head of an index's rows whole, a step a commit, once it is
-    /// due: a thousand documents set since, or a pass that a failure stopped
-    /// and no set followed.
-    pub(crate) fn pack(&self, data: &Data, everything: bool) -> Result<u64> {
-        let id = data.id;
-        let (waiting, held) = self.file.read(|connection| {
-            let failed = |error| sql_error("read the head", error);
-            let mut select = connection.prepare_cached(READ_WAITING).map_err(failed)?;
-            let waiting = select.query_row([id], |row| row.get::<_, i64>(0)).map_err(failed)?;
-            Ok((waiting, head::any(connection, id)?))
-        })?;
-        if !held || !everything && waiting > 0 && waiting < PACK_AT as i64 {
-            return Ok(0);
-        }
-        let mut packed = 0;
+    /// Merges an index's segments, a step a commit, while a merge is due:
+    /// `MERGE_AT` of a level, or with `everything`, every segment into one
+    /// folded, as a store without background work asks. Says how many
+    /// postings it merged.
+    pub(crate) fn merge(&self, data: &Data, everything: bool) -> Result<u64> {
+        let mut merged = 0;
         loop {
-            let step = self.file.transaction(|tx| pack::step(tx, id, pack::STEP_ROWS))?;
-            packed += step.postings;
+            let step = self.file.transaction(|tx| merge::step(tx, data.id, merge::STEP_PIECES, everything))?;
+            merged += step.postings;
             if step.done {
-                return Ok(packed);
+                return Ok(merged);
             }
         }
     }
 
-    /// Takes the documents gone out of an index's blocks, a step a commit,
+    /// Takes the documents gone out of an index's pieces, a step a commit,
     /// once they are due. A purge stopped by a failure goes on from where it
     /// stood at the next pass; one stopped by a restart begins again.
     pub(crate) fn purge(&self, data: &Data, everything: bool) -> Result<u64> {

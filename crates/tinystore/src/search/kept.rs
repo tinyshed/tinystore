@@ -3,16 +3,17 @@
 //! kept with what makes it right for a later one, so that no search ever
 //! reads a length or a gone document of another moment than its blocks'.
 //!
-//! - A document's lengths are written once, when packing first reaches it,
+//! - A document's lengths are written once, when a merge first reaches it,
 //!   and never change: a row of lengths read where `normed` was `n` holds
 //!   every document below `n` that it ever will, and serves any later
 //!   search whose documents in that row are all below `n`.
 //! - The documents gone change with sets and purges, and the index counts
 //!   every change: a set read at one count serves a search at that count.
-//! - A key's list changes only when packing, a purge or upkeep writes it,
-//!   and the index counts each such commit: a list read at one count serves
-//!   a search at that count. A set changes the head, which searches read
-//!   anew. search-fast measured keeping directories so at 10 % of the median.
+//! - A long piece changes only when a merge, a purge or upkeep writes it,
+//!   and the index counts each such commit: a piece read at one count
+//!   serves a search at that count. A set writes short pieces, which
+//!   searches read anew. search-fast measured keeping directories so at 10 %
+//!   of the median.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -20,11 +21,11 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::correct::Corrector;
-use super::legacy::Legacy;
-use super::pack::{Stored, read_directory, read_list};
-use super::packed::{Directory, decode_best};
-use super::postings::{Posting, unpack_inline};
+use super::legacy::{self, Legacy};
+use super::packed::Directory;
+use super::postings::Posting;
 use super::score::Part;
+use super::segments::{self, Piece, Segment};
 use crate::sqlite::sql_error;
 use crate::sync::lock;
 use crate::{Error, Memory, Reservation, Result};
@@ -80,26 +81,22 @@ pub(crate) struct Moment {
     pub(crate) lists_version: i64,
 }
 
-/// A key's list as searches read it: its directory decoded, or its
-/// postings when its own row holds them.
+/// A key's postings in a segment, or in a list a release before 0002
+/// wrote, as searches read them: a directory decoded, or postings in hand.
 pub(crate) enum Listed {
     /// Its directory, and its best postings.
     Packed(Arc<Directory>, Vec<Posting>),
+    Short(Vec<Posting>),
     Legacy(Legacy),
-    Inline(Vec<Posting>),
     Nothing,
 }
 
 impl Listed {
-    fn read(connection: &Connection, key: i64) -> Result<Listed> {
-        Ok(match read_list(connection, key)? {
-            Stored::Packed(header, best) => {
-                Listed::Packed(Arc::new(read_directory(connection, key, &header)?), decode_best(&best)?)
-            }
-            Stored::Legacy(directory) => Listed::Legacy(Legacy::decode(key, &directory)?),
-            Stored::Inline(inline) => Listed::Inline(unpack_inline(&inline)?),
-            Stored::Nothing => Listed::Nothing,
-        })
+    fn of(piece: Piece) -> Listed {
+        match piece {
+            Piece::Short(postings) => Listed::Short(postings),
+            Piece::Packed(directory, best) => Listed::Packed(Arc::new(directory), best),
+        }
     }
 
     /// The bytes it holds, about.
@@ -109,19 +106,29 @@ impl Listed {
                 directory.blocks.len() * 24 + directory.runs.len() * 16 + best.len() * 12
             }
             Listed::Legacy(legacy) => legacy.len() * 16,
-            Listed::Inline(postings) => postings.len() * 12,
+            Listed::Short(postings) => postings.len() * 12,
             Listed::Nothing => 0,
         };
         held as u64 + 64
     }
+
+    /// Whether keeping it saves a search more than a lookup: a short piece
+    /// reads as fast as one would.
+    fn decoded(&self) -> bool {
+        matches!(self, Listed::Packed(..) | Listed::Legacy(_))
+    }
 }
 
-/// The lists kept, all of one `lists_version`.
+/// The pieces kept, all of one `lists_version`, by their segment and key;
+/// a list a release before 0002 wrote by segment 0.
 #[derive(Default)]
 struct Lists {
     version: i64,
-    keys: HashMap<i64, Arc<Held<Listed>>>,
+    pieces: HashMap<(i64, i64), KeptPiece>,
 }
+
+/// A piece or a list as searches keep it between them, with its count.
+pub(crate) type KeptPiece = Arc<Held<(i64, Listed)>>;
 
 /// What a cache keeps, with the store's memory it holds.
 pub(crate) struct Held<T> {
@@ -160,37 +167,59 @@ impl Kept {
         Ok(gone)
     }
 
-    /// A key's list as `moment` has it, read again unless one of its
-    /// `lists_version` is kept.
-    pub(crate) fn list(
+    /// A key's piece in `segment` as `moment` has it, with its count, read
+    /// again unless one of its `lists_version` is kept; none when the
+    /// segment holds none of the key's postings.
+    pub(crate) fn piece(
         &self,
         connection: &Connection,
-        memory: &Arc<Memory>,
-        moment: Moment,
+        (memory, moment): (&Arc<Memory>, Moment),
+        segment: &Segment,
         key: i64,
-    ) -> Result<Arc<Held<Listed>>> {
-        {
-            let lists = lock(&self.lists);
-            if lists.version == moment.lists_version
-                && let Some(kept) = lists.keys.get(&key)
-            {
-                return Ok(Arc::clone(kept));
-            }
+    ) -> Result<Option<KeptPiece>> {
+        if let Some(kept) = self.kept((segment.id, key), moment) {
+            return Ok(Some(kept));
         }
-        let listed = Listed::read(connection, key)?;
-        // a short list's own row reads as fast as a lookup here would
-        let decoded = matches!(listed, Listed::Packed(..) | Listed::Legacy(_));
-        let reserved = if decoded { keep(memory, listed.bytes()) } else { None };
+        let Some((count, piece)) = segments::piece(connection, segment, key)? else { return Ok(None) };
+        Ok(Some(self.keep((segment.id, key), (memory, moment), (count, Listed::of(piece)))))
+    }
+
+    /// A key's list as a release before 0002 wrote it, as `moment` has it.
+    pub(crate) fn legacy(
+        &self,
+        connection: &Connection,
+        (memory, moment): (&Arc<Memory>, Moment),
+        key: i64,
+    ) -> Result<KeptPiece> {
+        if let Some(kept) = self.kept((0, key), moment) {
+            return Ok(kept);
+        }
+        let listed = legacy::list(connection, key)?;
+        Ok(self.keep((0, key), (memory, moment), (0, listed)))
+    }
+
+    fn kept(&self, at: (i64, i64), moment: Moment) -> Option<KeptPiece> {
+        let lists = lock(&self.lists);
+        if lists.version != moment.lists_version {
+            return None;
+        }
+        lists.pieces.get(&at).map(Arc::clone)
+    }
+
+    /// `read`, kept for later searches when it is worth keeping and the
+    /// store's memory allows.
+    fn keep(&self, at: (i64, i64), (memory, moment): (&Arc<Memory>, Moment), read: (i64, Listed)) -> KeptPiece {
+        let reserved = if read.1.decoded() { keep(memory, read.1.bytes()) } else { None };
         let keep = reserved.is_some();
-        let read = Arc::new(Held { value: listed, _reserved: reserved });
+        let read = Arc::new(Held { value: read, _reserved: reserved });
         let mut lists = lock(&self.lists);
         if lists.version < moment.lists_version {
-            *lists = Lists { version: moment.lists_version, keys: HashMap::new() };
+            *lists = Lists { version: moment.lists_version, pieces: HashMap::new() };
         }
         if keep && lists.version == moment.lists_version {
-            lists.keys.insert(key, Arc::clone(&read));
+            lists.pieces.insert(at, Arc::clone(&read));
         }
-        Ok(read)
+        read
     }
 
     /// The row of `part`'s lengths that holds `chunk`, as `moment` has it.

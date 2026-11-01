@@ -1,11 +1,11 @@
-//! A key's blocks as search.db keeps them since its migration 0002: each
-//! bit-packed, a run of them in a row one after another, and a directory of
-//! fixed width that says where each one is and bounds what it adds.
+//! A long piece's blocks as search.db keeps them since its migration 0002:
+//! each bit-packed, a run of them in a row one after another, and a
+//! directory of fixed width that says where each one is and bounds what it
+//! adds.
 //!
 //! ```text
-//! runs      (id)         → blocks one after another, a row taking more till it holds 32 KiB
-//! lists     (key)        → packed: the directory's header
-//! directory (key, chunk) → entries: blocks chunk × 256 to the next chunk's
+//! runs   (id)           → blocks one after another, a row taking more till it holds 32 KiB
+//! pieces (segment, key) → directory: its header, then its blocks' entries
 //!
 //! header      version u8, block count u32, run count u32, then a run's (id i64, its first block u32)
 //! entry       first u32, last u32, bound f32, average u16, at u16                       little-endian
@@ -25,12 +25,8 @@
 //! search-fast measured this layout at 1.99 bytes a posting on MS MARCO
 //! against varint blocks' 3.18, and reading it, a block at its place through
 //! one blob handle rather than a statement a block, took 41 % of the median.
-//! A run rather than one row a key keeps a pack's append to the last run's
-//! bytes, where one row would be written again whole at every append; and a
-//! directory in chunks keeps it to the last chunk's entries. A directory
-//! whole in the list's row was written again at every append: on MS MARCO
-//! the third million passages took 659 s to set where the first took 292,
-//! the most held words' directories a few MiB each.
+//! A merge writes a piece once and only a purge takes from it, so its
+//! directory is one row; a run of 32 KiB keeps a block's place in an u16.
 //!
 //! The directory's version says how its blocks and itself are laid out: a
 //! layout after this one is a version of its own, which [`Directory::decode`]
@@ -46,16 +42,13 @@ use crate::{Error, Result};
 /// Tests take 1 KiB, so that a few thousand documents fill many runs.
 pub(crate) const RUN_BYTES: usize = if cfg!(test) { 1 << 10 } else { 32 << 10 };
 
-/// A header's first byte.
+/// A directory's first byte.
 const VERSION: u8 = 1;
 const HEADER: usize = 3;
 const RUN_ENTRY: usize = 12;
 const BLOCK_ENTRY: usize = 16;
-/// Blocks a chunk of a directory holds, but the last: 4 KiB of entries.
-/// Tests take 4, so that a few thousand documents fill many chunks.
-pub(crate) const CHUNK: usize = if cfg!(test) { 4 } else { 256 };
 
-/// A block as its key's directory gives it.
+/// A block as its piece's directory gives it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Placed {
     pub(crate) first: u32,
@@ -67,88 +60,15 @@ pub(crate) struct Placed {
     pub(crate) at: u16,
 }
 
-/// A run of a key's blocks: its row, and the place of its first block among
-/// the key's.
+/// A run of a piece's blocks: its row, and the place of its first block
+/// among the piece's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Run {
     pub(crate) id: i64,
     pub(crate) first_block: u32,
 }
 
-/// A directory's header: how many blocks the key holds, and its runs.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Header {
-    pub(crate) blocks: u32,
-    pub(crate) runs: Vec<Run>,
-}
-
-impl Header {
-    pub(crate) fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(9 + self.runs.len() * RUN_ENTRY);
-        out.push(VERSION);
-        out.extend_from_slice(&self.blocks.to_le_bytes());
-        out.extend_from_slice(&(self.runs.len() as u32).to_le_bytes());
-        for run in &self.runs {
-            out.extend_from_slice(&run.id.to_le_bytes());
-            out.extend_from_slice(&run.first_block.to_le_bytes());
-        }
-        out
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Header> {
-        let broken = |invariant: &str| Error::corrupt(format!("a key's directory: {invariant}"));
-        let Some((&VERSION, bytes)) = bytes.split_first() else { return Err(broken("its version")) };
-        let (blocks, bytes) = bytes.split_first_chunk::<4>().ok_or_else(|| broken("no count of blocks"))?;
-        let (count, runs) = bytes.split_first_chunk::<4>().ok_or_else(|| broken("no count of runs"))?;
-        let (runs, tail) = runs.as_chunks::<RUN_ENTRY>();
-        if !tail.is_empty() || runs.len() != u32::from_le_bytes(*count) as usize {
-            return Err(broken("its runs are not its count's"));
-        }
-        let runs = runs
-            .iter()
-            .map(|entry| Run {
-                id: i64::from_le_bytes(word(entry, 0)),
-                first_block: u32::from_le_bytes(word(entry, 8)),
-            })
-            .collect();
-        Ok(Header { blocks: u32::from_le_bytes(*blocks), runs })
-    }
-
-    /// How many chunks its blocks fill.
-    pub(crate) fn chunks(&self) -> u32 {
-        (self.blocks as usize).div_ceil(CHUNK) as u32
-    }
-}
-
-pub(crate) fn encode_entries(blocks: &[Placed]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(blocks.len() * BLOCK_ENTRY);
-    for block in blocks {
-        out.extend_from_slice(&block.first.to_le_bytes());
-        out.extend_from_slice(&block.last.to_le_bytes());
-        out.extend_from_slice(&block.bound.to_le_bytes());
-        out.extend_from_slice(&block.average.to_le_bytes());
-        out.extend_from_slice(&block.at.to_le_bytes());
-    }
-    out
-}
-
-/// A chunk's entries, appended to `out`.
-pub(crate) fn decode_entries(bytes: &[u8], out: &mut Vec<Placed>) -> Result<()> {
-    let (entries, tail) = bytes.as_chunks::<BLOCK_ENTRY>();
-    if !tail.is_empty() {
-        return Err(Error::corrupt("a key's directory: a block's entry cut short"));
-    }
-    out.extend(entries.iter().map(|entry| Placed {
-        first: u32::from_le_bytes(word(entry, 0)),
-        last: u32::from_le_bytes(word(entry, 4)),
-        bound: f32::from_le_bytes(word(entry, 8)),
-        average: u16::from_le_bytes(word(entry, 12)),
-        at: u16::from_le_bytes(word(entry, 14)),
-    }));
-    Ok(())
-}
-
-/// A key's directory: its runs, the first holding block 0, and its blocks
+/// A piece's directory: its runs, the first holding block 0, and its blocks
 /// in their documents' order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Directory {
@@ -157,19 +77,60 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
-    /// A directory of a header and every entry its chunks hold, checked.
-    pub(crate) fn of(header: Header, blocks: Vec<Placed>) -> Result<Directory> {
-        let broken = |invariant: &str| Error::corrupt(format!("a key's directory: {invariant}"));
-        if blocks.len() != header.blocks as usize {
-            return Err(broken("its chunks hold not the blocks its header counts"));
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(9 + self.runs.len() * RUN_ENTRY + self.blocks.len() * BLOCK_ENTRY);
+        out.push(VERSION);
+        out.extend_from_slice(&(self.blocks.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(self.runs.len() as u32).to_le_bytes());
+        for run in &self.runs {
+            out.extend_from_slice(&run.id.to_le_bytes());
+            out.extend_from_slice(&run.first_block.to_le_bytes());
         }
-        let directory = Directory { runs: header.runs, blocks };
-        directory.check().map_err(broken)?;
-        Ok(directory)
+        for block in &self.blocks {
+            out.extend_from_slice(&block.first.to_le_bytes());
+            out.extend_from_slice(&block.last.to_le_bytes());
+            out.extend_from_slice(&block.bound.to_le_bytes());
+            out.extend_from_slice(&block.average.to_le_bytes());
+            out.extend_from_slice(&block.at.to_le_bytes());
+        }
+        out
     }
 
-    pub(crate) fn header(&self) -> Header {
-        Header { blocks: self.blocks.len() as u32, runs: self.runs.clone() }
+    /// A directory of its bytes, checked.
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Directory> {
+        let broken = |invariant: &str| Error::corrupt(format!("a piece's directory: {invariant}"));
+        let Some((&VERSION, bytes)) = bytes.split_first() else { return Err(broken("its version")) };
+        let (blocks, bytes) = bytes.split_first_chunk::<4>().ok_or_else(|| broken("no count of blocks"))?;
+        let (runs, bytes) = bytes.split_first_chunk::<4>().ok_or_else(|| broken("no count of runs"))?;
+        let (blocks, runs) = (u32::from_le_bytes(*blocks) as usize, u32::from_le_bytes(*runs) as usize);
+        let runs_end = runs.checked_mul(RUN_ENTRY).filter(|end| *end <= bytes.len());
+        let (runs, entries) = bytes.split_at(runs_end.ok_or_else(|| broken("its runs cut short"))?);
+        let (entries, tail) = entries.as_chunks::<BLOCK_ENTRY>();
+        if !tail.is_empty() || entries.len() != blocks {
+            return Err(broken("its entries are not its count's"));
+        }
+        let runs = runs
+            .as_chunks::<RUN_ENTRY>()
+            .0
+            .iter()
+            .map(|entry| Run {
+                id: i64::from_le_bytes(word(entry, 0)),
+                first_block: u32::from_le_bytes(word(entry, 8)),
+            })
+            .collect();
+        let blocks = entries
+            .iter()
+            .map(|entry| Placed {
+                first: u32::from_le_bytes(word(entry, 0)),
+                last: u32::from_le_bytes(word(entry, 4)),
+                bound: f32::from_le_bytes(word(entry, 8)),
+                average: u16::from_le_bytes(word(entry, 12)),
+                at: u16::from_le_bytes(word(entry, 14)),
+            })
+            .collect();
+        let directory = Directory { runs, blocks };
+        directory.check().map_err(broken)?;
+        Ok(directory)
     }
 
     /// Which invariant of a directory its bytes break, if any.
@@ -364,41 +325,23 @@ mod tests {
         assert_eq!(out, [(1, u32::MAX), (u32::MAX, 1)]);
     }
 
-    /// A directory written as its header and its chunks, and read back.
-    fn round_trip(directory: &Directory) -> Result<Directory> {
-        let header = Header::decode(&directory.header().encode())?;
-        let mut blocks = Vec::new();
-        for chunk in directory.blocks.chunks(CHUNK) {
-            decode_entries(&encode_entries(chunk), &mut blocks)?;
-        }
-        Directory::of(header, blocks)
-    }
-
     #[test]
-    fn a_directory_reads_back_from_its_chunks_and_says_where_each_block_lies() {
+    fn a_directory_reads_back_as_written_and_says_where_each_block_lies() {
         let placed = |first, last, at| Placed { first, last, bound: 1.5, average: 40, at };
         let directory = Directory {
             runs: vec![Run { id: 7, first_block: 0 }, Run { id: 9, first_block: 2 }],
             blocks: vec![placed(1, 90, 0), placed(95, 300, 120), placed(301, 302, 0)],
         };
-        let read = round_trip(&directory).unwrap();
+        let read = Directory::decode(&directory.encode()).unwrap();
         assert_eq!(read, directory);
         assert_eq!((read.run_of(0), read.run_of(1), read.run_of(2)), (0, 0, 1));
         assert_eq!(read.bytes_of(0, 200), 0..120);
         assert_eq!(read.bytes_of(1, 200), 120..200);
         assert_eq!(read.bytes_of(2, 31), 0..31);
-        assert_eq!(round_trip(&Directory::default()).unwrap(), Directory::default());
-        let many = Directory {
-            runs: vec![Run { id: 1, first_block: 0 }, Run { id: 2, first_block: 300 }],
-            blocks: (0..600).map(|n| placed(n * 10 + 1, n * 10 + 5, (n % 300) as u16)).collect(),
-        };
-        assert_eq!(
-            (round_trip(&many).unwrap(), many.header().chunks()),
-            (many.clone(), 600_u32.div_ceil(CHUNK as u32))
-        );
-        let mut later = directory.header().encode();
+        assert_eq!(Directory::decode(&Directory::default().encode()).unwrap(), Directory::default());
+        let mut later = directory.encode();
         later[0] = VERSION + 1;
-        assert_eq!(Header::decode(&later).unwrap_err().to_string(), "a key's directory: its version: corrupt");
+        assert_eq!(Directory::decode(&later).unwrap_err().to_string(), "a piece's directory: its version: corrupt");
     }
 
     #[test]
@@ -423,11 +366,15 @@ mod tests {
                 Placed { first: 10, last: 20, bound: 1.0, average: 3, at: 9 },
             ],
         };
-        assert_eq!(broken(round_trip(&backwards).unwrap_err()), "a key's directory: its blocks out of order: corrupt");
-        let short = Directory::of(Header { blocks: 3, runs: backwards.runs.clone() }, backwards.blocks.clone());
         assert_eq!(
-            broken(short.unwrap_err()),
-            "a key's directory: its chunks hold not the blocks its header counts: corrupt"
+            broken(Directory::decode(&backwards.encode()).unwrap_err()),
+            "a piece's directory: its blocks out of order: corrupt"
+        );
+        let mut short = backwards.encode();
+        short.truncate(short.len() - 1);
+        assert_eq!(
+            broken(Directory::decode(&short).unwrap_err()),
+            "a piece's directory: its entries are not its count's: corrupt"
         );
     }
 

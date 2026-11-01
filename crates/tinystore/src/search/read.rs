@@ -1,5 +1,5 @@
 //! A search, in one snapshot of search.db: the index's statistics, its
-//! words' keys, their lists from the blocks and the head, the best of them,
+//! words' keys, their lists from their pieces in each segment, the best of them,
 //! the best of its vectors, the two summed, and the hits' values.
 //!
 //! The read lasts the whole search rather than fetching its bytes alone:
@@ -24,15 +24,15 @@ use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
 use super::execute::{Fetch, List, best, best_of, held_by_all};
 use super::filter::{self, Docs, Reader};
-use super::head;
 use super::hybrid::{self, HALF};
-use super::kept::{Chunk, Gone, Kept, Listed, Moment, NORMS};
+use super::kept::{Chunk, Gone, Kept, KeptPiece, Listed, Moment, NORMS};
 use super::layouts;
 use super::legacy;
 use super::matches::{Ask, Sought};
 use super::packed::{self, Directory};
 use super::postings::Posting;
 use super::score::{PREFIXED, Part, average, idf, score};
+use super::segments::{self, Segment};
 use super::settings::Settings;
 use super::vectors::{self, Among, Question, Scan};
 use crate::sqlite::sql_error;
@@ -47,12 +47,17 @@ const FIND_KEY: &str =
 /// The words of a part that start with a prefix and are longer, between
 /// `?3` and `?4`, the most held first: a range of the keys' index by term,
 /// read to its end, since how many documents hold a word is no order that
-/// index keeps.
-const FIND_PREFIXED: &str = "select id, documents, term from _tinystore_search_keys
-    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0
+/// index keeps. A word only segments not folded hold counts none in its
+/// row, and comes after those whose rows count them.
+const FIND_PREFIXED: &str = "select id, documents, term from _tinystore_search_keys as k
+    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and (documents > 0 or exists (select 1
+        from _tinystore_search_segments as s join _tinystore_search_pieces as p on p.segment = s.id and p.key = k.id
+        where s.index_id = ?1 and s.folded = 0))
     order by documents desc, term limit cast(?5 as integer)";
-const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys
-    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0)";
+const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys as k
+    where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and (documents > 0 or exists (select 1
+        from _tinystore_search_segments as s join _tinystore_search_pieces as p on p.segment = s.id and p.key = k.id
+        where s.index_id = ?1 and s.folded = 0)))";
 const RUNS: &CStr = c"_tinystore_search_runs";
 const BLOCKS: &CStr = c"blocks";
 const READ_HIT: &str = "select id, value from _tinystore_search_docs where index_id = ?1 and doc = ?2";
@@ -276,8 +281,12 @@ thread_local! {
 /// The best `k` by the search's words, with their scores.
 fn by_words(connection: &Connection, asked: &Asked<'_>, held: Held<'_>, k: usize) -> Result<Vec<(f64, u32)>> {
     let Held { moment, documents, .. } = held;
-    let stats =
-        Stats { documents, tokens: tokens(connection, asked.index)?, gone: asked.kept.gone(connection, moment)? };
+    let stats = Stats {
+        documents,
+        tokens: tokens(connection, asked.index)?,
+        gone: asked.kept.gone(connection, moment)?,
+        segments: segments::of_index(connection, asked.index)?,
+    };
     let mut source = Source::new(connection, asked, moment, &stats);
     let Lists { mut lists, words } = lists(connection, asked, &stats, &mut source)?;
     let found = match asked.query.prefix {
@@ -397,11 +406,13 @@ fn moment(connection: &Connection, index: i64) -> Result<(Moment, u64, i64)> {
 }
 
 /// What scores a snapshot's postings: how many documents the index holds,
-/// how many words each part has in all of them, and the documents gone.
+/// how many words each part has in all of them, the documents gone, and
+/// the segments its keys' pieces are in.
 struct Stats {
     documents: u64,
     tokens: HashMap<Part, u64>,
     gone: Arc<Gone>,
+    segments: Vec<Segment>,
 }
 
 /// A search's lists, and for each of its words the places among them of
@@ -579,20 +590,22 @@ pub(super) fn forms(words: &[Word], settings: &Settings) -> Vec<(Part, String)> 
     forms
 }
 
-/// A key's id and how many documents hold it now.
-fn find(connection: &Connection, index: i64, part: Part, term: &str) -> Result<Option<(i64, u64)>> {
+/// A key's id and how many documents its row counts.
+fn find(connection: &Connection, index: i64, part: Part, term: &str) -> Result<Option<(i64, i64)>> {
     let mut select = connection.prepare_cached(FIND_KEY).map_err(|error| sql_error("find a key", error))?;
-    let found = select.query_row((index, part.0, term), |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.max(0) as u64)));
+    let found = select.query_row((index, part.0, term), |row| Ok((row.get(0)?, row.get(1)?)));
     let found = found.optional();
     found.map_err(|error| sql_error("find a key", error))
 }
 
 /// How many documents hold `word`, a document counted once for each of its keys.
 pub(super) fn held(connection: &Connection, asked: &Asked<'_>, word: &Word) -> Result<u64> {
+    let segments = segments::of_index(connection, asked.index)?;
     let mut documents = 0;
     for (part, term) in forms(std::slice::from_ref(word), asked.settings) {
-        let found = find(connection, asked.index, part, &term)?;
-        documents += found.map_or(0, |(_, documents)| documents);
+        if let Some((key, counted)) = find(connection, asked.index, part, &term)? {
+            documents += segments::holding(connection, &segments, key, counted)?;
+        }
     }
     Ok(documents)
 }
@@ -682,16 +695,20 @@ fn list(
     keyed(connection, asked, (stats, source), (*part, found))
 }
 
-/// A key's list, `holding` documents holding it: its blocks by its
-/// directory, which `source` keeps to read them by, or its postings in its
-/// own row, then its head; nothing when no document holds it.
+/// A key's list, its row counting `documents`: a list a release before
+/// 0002 wrote and the head it kept, then its piece in each segment, its
+/// blocks by their directory, which `source` keeps to read them by, or its
+/// postings in hand; nothing when no document holds it.
 fn keyed(
     connection: &Connection,
     asked: &Asked<'_>,
     (stats, source): (&Stats, &mut Source<'_>),
-    (part, (key, holding)): (Part, (i64, u64)),
+    (part, (key, documents)): (Part, (i64, i64)),
 ) -> Result<Option<List>> {
     let Some(weight) = asked.settings.weight(part.field()) else { return Ok(None) };
+    let within = |error: Error| error.within(format!("key {key}"));
+    let (released, listed, holding) =
+        pieces(connection, asked, (stats, source.moment), (key, documents)).map_err(within)?;
     if holding == 0 {
         return Ok(None);
     }
@@ -699,22 +716,54 @@ fn keyed(
     let scale = part.weight(weight) * idf(stats.documents, holding);
     let mut list = List::new(key, part, scale, average(tokens, stats.documents), Vec::new());
     let gone = &stats.gone.docs;
-    let within = |error: Error| error.within(format!("key {key}"));
-    let listed = asked.kept.list(connection, asked.memory, source.moment, key).map_err(within)?;
-    match &listed.value {
+    onto(&mut list, &released.value.1, source, gone);
+    push_held(&mut list, legacy::head(connection, asked.index, key)?, gone);
+    for piece in &listed {
+        onto(&mut list, &piece.value.1, source, gone);
+    }
+    Ok((!list.is_empty()).then_some(list))
+}
+
+/// A list's or a piece's blocks onto a search's list of its key: by their
+/// directory, which `source` keeps to read them by, or in hand.
+fn onto(list: &mut List, listed: &Listed, source: &mut Source<'_>, gone: &HashSet<u32>) {
+    match listed {
         Listed::Packed(directory, best) => {
+            source.place(list.key, list.len(), directory);
             for block in &directory.blocks {
                 list.push(list.packed(block));
             }
             list.seed(best.iter().filter(|posting| !gone.contains(&posting.doc)));
-            source.packed.insert(key, Arc::clone(directory));
         }
-        Listed::Legacy(legacy) => legacy.onto(&mut list),
-        Listed::Inline(postings) => push_held(&mut list, postings.clone(), gone),
+        Listed::Short(postings) => push_held(list, postings.clone(), gone),
+        Listed::Legacy(legacy) => legacy.onto(list),
         Listed::Nothing => {}
     }
-    push_held(&mut list, head::read(connection, asked.index, key)?, gone);
-    Ok((!list.is_empty()).then_some(list))
+}
+
+/// What a key's postings are read from: a list a release before 0002
+/// wrote, and its pieces in the order of their documents; and how many
+/// documents hold it, its row's `documents` and the counts of its pieces
+/// not folded.
+fn pieces(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    (stats, moment): (&Stats, Moment),
+    (key, documents): (i64, i64),
+) -> Result<(KeptPiece, Vec<KeptPiece>, u64)> {
+    let kept = (asked.memory, moment);
+    let released = asked.kept.legacy(connection, kept, key)?;
+    let mut listed = Vec::new();
+    let mut holding = documents;
+    for segment in &stats.segments {
+        if let Some(piece) = asked.kept.piece(connection, kept, segment, key)? {
+            if !segment.folded {
+                holding += piece.value.0;
+            }
+            listed.push(piece);
+        }
+    }
+    Ok((released, listed, holding.max(0) as u64))
 }
 
 /// The words of `part` that start with `prefix` and are longer, read as one
@@ -770,12 +819,11 @@ fn words_starting(
     index: i64,
     part: Part,
     (prefix, past): (&str, &str),
-) -> Result<Vec<(i64, u64)>> {
+) -> Result<Vec<(i64, i64)>> {
     let failed = |error| sql_error("find the words a prefix begins", error);
     let mut select = connection.prepare_cached(FIND_PREFIXED).map_err(failed)?;
     let most = MOST_PREFIXED as i64;
-    let rows = select
-        .query_map((index, part.0, prefix, past, most), |row| Ok((row.get(0)?, row.get::<_, i64>(1)?.max(0) as u64)));
+    let rows = select.query_map((index, part.0, prefix, past, most), |row| Ok((row.get(0)?, row.get(1)?)));
     rows.and_then(Iterator::collect).map_err(failed)
 }
 
@@ -853,8 +901,9 @@ struct Source<'a> {
     moment: Moment,
     gone: &'a HashSet<u32>,
     chunks: HashMap<(Part, u32), Arc<Chunk>>,
-    /// The directory of each list whose blocks are in runs, by its key.
-    packed: HashMap<i64, Arc<Directory>>,
+    /// The directory of each piece in runs of a list, by its key, with the
+    /// place of its first block among the list's.
+    placed: HashMap<i64, Vec<(usize, Arc<Directory>)>>,
     /// Each such list's handle, by its key, and the run it is on.
     handles: HashMap<i64, (i64, Blob<'a>)>,
     bytes: Vec<u8>,
@@ -863,14 +912,13 @@ struct Source<'a> {
 
 impl Fetch for Source<'_> {
     fn block(&mut self, list: &List, index: usize) -> Result<Vec<Posting>> {
-        if self.packed.contains_key(&list.key) {
-            return self.packed_block(list.key, list.part, index).map_err(|error| {
-                error.within(format!("key {}: block at document {}", list.key, list.first_of(index)))
-            });
+        let within =
+            |error: Error| error.within(format!("key {}: block at document {}", list.key, list.first_of(index)));
+        if let Some((first, directory)) = self.placed_at(list.key, index) {
+            return self.packed_block(list.key, list.part, (&directory, index - first)).map_err(within);
         }
         let pairs = legacy::block(self.connection, list.key, list.first_of(index));
-        let postings = pairs.and_then(|pairs| self.lengthened(list.part, pairs.into_iter()));
-        postings.map_err(|error| error.within(format!("key {}: block at document {}", list.key, list.first_of(index))))
+        pairs.and_then(|pairs| self.lengthened(list.part, pairs.into_iter())).map_err(within)
     }
 }
 
@@ -882,19 +930,31 @@ impl<'a> Source<'a> {
             moment,
             gone: &stats.gone.docs,
             chunks: HashMap::new(),
-            packed: HashMap::new(),
+            placed: HashMap::new(),
             handles: HashMap::new(),
             bytes: Vec::new(),
             pairs: Vec::new(),
         }
     }
 
+    /// Keeps a piece's directory, its first block at `first` among its key's list's.
+    fn place(&mut self, key: i64, first: usize, directory: &Arc<Directory>) {
+        self.placed.entry(key).or_default().push((first, Arc::clone(directory)));
+    }
+
+    /// The piece in runs that holds block `index` of a key's list, with the
+    /// place of its first block.
+    fn placed_at(&self, key: i64, index: usize) -> Option<(usize, Arc<Directory>)> {
+        let pieces = self.placed.get(&key)?;
+        let (first, directory) = &pieces[pieces.partition_point(|(first, _)| *first <= index).checked_sub(1)?];
+        (index < first + directory.blocks.len()).then(|| (*first, Arc::clone(directory)))
+    }
+
     /// A block of a run, its bytes read at their place through its list's
     /// handle, which moves from run to run rather than a statement a block:
     /// search-fast measured 12 % of p99 so.
-    fn packed_block(&mut self, key: i64, part: Part, index: usize) -> Result<Vec<Posting>> {
+    fn packed_block(&mut self, key: i64, part: Part, (directory, index): (&Directory, usize)) -> Result<Vec<Posting>> {
         let failed = |error| sql_error("read a run", error);
-        let directory = &self.packed[&key];
         let run = directory.runs[directory.run_of(index)].id;
         let handle = match self.handles.entry(key) {
             Entry::Occupied(held) => {

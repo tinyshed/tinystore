@@ -19,7 +19,12 @@ use crate::Result;
 use crate::sqlite::sql_error;
 use crate::typos::Dictionary;
 
-const READ_WORDS: &str = "select part, term from _tinystore_search_keys where index_id = ?1 and documents > 0";
+/// The words documents hold: those their keys' rows count, and those only
+/// segments not folded yet count.
+const READ_WORDS: &str = "select part, term from _tinystore_search_keys where index_id = ?1 and documents > 0
+    union all select k.part, k.term from _tinystore_search_segments as s
+    join _tinystore_search_pieces as p on p.segment = s.id join _tinystore_search_keys as k on k.id = p.key
+    where s.index_id = ?1 and s.folded = 0";
 /// Candidates a word takes at most, of its nearest.
 const MOST: usize = 8;
 

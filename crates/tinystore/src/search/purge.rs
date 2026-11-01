@@ -1,7 +1,8 @@
-//! Purging: the documents gone so far taken out of the blocks that hold
+//! Purging: the documents gone so far taken out of the pieces that hold
 //! them, a step of keys a commit, rewriting only the blocks whose range
 //! holds one. Searches leave the gone out meanwhile, as they did before, so
-//! no step changes an answer; the last forgets them.
+//! no step changes an answer; the last forgets them. A merge leaves them out
+//! of what it writes too, but the largest segments merge seldom.
 //!
 //! A purge runs once the gone pass 0.5 % of an index's documents, which
 //! search-wchurn measured to keep the blocks' bounds tight at a cost as
@@ -11,14 +12,11 @@ use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::Connection;
 
-use super::head;
-use super::legacy::Legacy;
-use super::pack::{
-    DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, note_lists, read_directory, read_list, read_packed, read_run,
-    write_directory,
-};
-use super::packed::{self, Directory, Placed, Run, decode_best};
-use super::postings::{Posting, decode_keys, pack_inline, unpack_inline};
+use super::legacy;
+use super::merge::{drop_run, note_lists, read_run, write_run};
+use super::packed::{self, Directory, Placed, Run, encode_best};
+use super::postings::{Posting, decode_keys};
+use super::segments::{self, Piece, Segment, Written};
 use super::write::execute;
 use crate::Result;
 use crate::sqlite::{Tx, sql_error};
@@ -26,9 +24,8 @@ use crate::sqlite::{Tx, sql_error};
 const READ_GONE: &str = "select doc, keys from _tinystore_search_gone where index_id = ?1";
 const COUNT_GONE: &str = "select (select count(*) from _tinystore_search_gone where index_id = ?1), documents
     from _tinystore_search_indexes where id = ?1";
-const DROP_LIST: &str = "delete from _tinystore_search_lists where key = ?1";
-const DROP_CHUNKS: &str = "delete from _tinystore_search_directory where key = ?1";
 const DROP_EMPTY_KEY: &str = "delete from _tinystore_search_keys where id = ?1 and documents = 0";
+const COUNT_KEY: &str = "update _tinystore_search_keys set documents = documents + ?2 where id = ?1";
 const FORGET_GONE: &str = "delete from _tinystore_search_gone where index_id = ?1 and doc = ?2";
 const NOTE_PURGED: &str = "update _tinystore_search_indexes set gone_version = gone_version + 1 where id = ?1";
 
@@ -102,52 +99,69 @@ impl Purge {
     }
 }
 
-/// Takes `docs`, sorted, out of a key's head and its list: out of its own row if short,
-/// else out of each block whose range holds one, its run written again or
-/// dropped once empty, its directory with them. A key a release before 0002
-/// wrote in rows of blocks is written in runs first. A key no document holds
-/// any more and whose list is empty is forgotten.
-fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Result<()> {
+/// Takes `docs`, sorted, out of a key's pieces: out of a short one's own
+/// postings, else out of each block whose range holds one, its run written
+/// again or dropped once empty, its directory with them. A key's list a
+/// release before 0002 wrote is written into the base segment first. A key
+/// no document holds any more and no piece is left of is forgotten.
+fn take_out(tx: &Tx<'_>, index: i64, key: i64, docs: &[u32]) -> Result<()> {
     let gone: HashSet<u32> = docs.iter().copied().collect();
-    head::take_out(connection, index, key, &gone)?;
-    let left = match read_list(connection, key)? {
-        Stored::Packed(header, best) => {
-            let directory = read_directory(connection, key, &header)?;
-            take_out_of_runs(connection, key, (directory, decode_best(&best)?), docs, &gone)?
-        }
-        Stored::Legacy(directory) => {
-            let average = average_of(connection, index, key)?;
-            Legacy::decode(key, &directory)?.into_runs(connection, average)?.finish(connection)?;
-            take_out_of_runs(connection, key, (read_packed(connection, key)?, Vec::new()), docs, &gone)?
-        }
-        Stored::Inline(inline) => {
-            let mut postings = unpack_inline(&inline)?;
-            postings.retain(|posting| !gone.contains(&posting.doc));
-            if !postings.is_empty() {
-                execute(connection, WRITE_LIST, (key, None::<Vec<u8>>, pack_inline(&postings)), "write a list")?;
-            }
-            postings.len()
-        }
-        Stored::Nothing => 0,
-    };
-    if left == 0 {
-        execute(connection, DROP_CHUNKS, [key], "drop a directory's chunks")?;
-        execute(connection, DROP_LIST, [key], "drop a list")?;
-        execute(connection, DROP_EMPTY_KEY, [key], "drop a key")?;
+    legacy::take_out_of_head(tx, index, key, &gone)?;
+    legacy::convert_key(tx, index, key)?;
+    let mut left = false;
+    for segment in segments::of_index(tx, index)? {
+        let Some((count, piece)) = segments::piece(tx, &segment, key)? else { continue };
+        let holds = docs.iter().any(|doc| (segment.first..segment.past).contains(doc));
+        let kept = if holds { take_out_of_piece(tx, (&segment, key), (count, piece), (docs, &gone))? } else { count };
+        left |= kept > 0;
+    }
+    if !left {
+        execute(tx, DROP_EMPTY_KEY, [key], "drop a key")?;
     }
     Ok(())
 }
 
+/// Takes `docs` out of a key's piece in `segment`, which holds `count`
+/// postings, and counts in its key's row those a segment not folded no
+/// longer counts; says how many postings it keeps.
+fn take_out_of_piece(
+    tx: &Tx<'_>,
+    (segment, key): (&Segment, i64),
+    (count, piece): (i64, Piece),
+    (docs, gone): (&[u32], &HashSet<u32>),
+) -> Result<i64> {
+    let (kept, written) = match piece {
+        Piece::Short(mut postings) => {
+            postings.retain(|posting| !gone.contains(&posting.doc));
+            (postings.len() as i64, Written::Short(postings))
+        }
+        Piece::Packed(directory, mut best) => {
+            let (kept, taken) = take_out_of_runs(tx, directory, docs, gone)?;
+            best.retain(|posting| !gone.contains(&posting.doc));
+            let best = if best.is_empty() { Vec::new() } else { encode_best(&best) };
+            (count - taken, Written::Packed(kept, best))
+        }
+    };
+    if kept == 0 {
+        segments::drop_piece(tx, segment, key)?;
+    } else if kept != count {
+        segments::write_piece(tx, (segment, key), kept, &written)?;
+    }
+    if !segment.folded && kept != count {
+        execute(tx, COUNT_KEY, (key, count - kept), "count a key's documents")?;
+    }
+    Ok(kept)
+}
+
 /// Takes `docs` out of the blocks that may hold them, each run that holds
-/// one written again; says how many blocks the list keeps.
+/// one written again; says the directory it keeps and how many postings it
+/// took.
 fn take_out_of_runs(
     connection: &Connection,
-    key: i64,
-    (directory, mut best): (Directory, Vec<Posting>),
+    directory: Directory,
     docs: &[u32],
     gone: &HashSet<u32>,
-) -> Result<usize> {
-    best.retain(|posting| !gone.contains(&posting.doc));
+) -> Result<(Directory, i64)> {
     let blocks = &directory.blocks;
     let mut touched: Vec<usize> = docs
         .iter()
@@ -158,9 +172,9 @@ fn take_out_of_runs(
         .collect();
     touched.dedup();
     if touched.is_empty() {
-        return Ok(blocks.len());
+        return Ok((directory, 0));
     }
-    let mut kept = Directory::default();
+    let (mut kept, mut taken) = (Directory::default(), 0);
     for (place, run) in directory.runs.iter().enumerate() {
         let range = directory.blocks_of(place);
         let first_block = kept.blocks.len() as u32;
@@ -169,34 +183,32 @@ fn take_out_of_runs(
             kept.blocks.extend_from_slice(&blocks[range]);
             continue;
         }
-        let written = take_out_of_run(connection, (&directory, place), (&touched, gone), &mut kept.blocks)?;
+        let (written, took) = take_out_of_run(connection, (&directory, place), (&touched, gone), &mut kept.blocks)?;
+        taken += took;
         if written.is_empty() {
-            execute(connection, DROP_RUN, [run.id], "drop a run")?;
+            drop_run(connection, run.id)?;
         } else {
-            execute(connection, WRITE_RUN, (run.id, &written), "write a run")?;
+            write_run(connection, run.id, &written)?;
             kept.runs.push(Run { first_block, ..*run });
         }
     }
-    if !kept.blocks.is_empty() {
-        write_directory(connection, key, &kept, &best)?;
-    }
-    Ok(kept.blocks.len())
+    Ok((kept, taken))
 }
 
 /// The bytes of the run at `place` once the gone are out of its `touched`
-/// blocks, a block left empty dropped; each block it keeps onto `kept`, at
-/// its new place. A block keeps its bound, which fewer postings never pass,
-/// so that no length is read again.
+/// blocks, a block left empty dropped, and how many postings it took; each
+/// block it keeps onto `kept`, at its new place. A block keeps its bound,
+/// which fewer postings never pass, so that no length is read again.
 fn take_out_of_run(
     connection: &Connection,
     (directory, place): (&Directory, usize),
     (touched, gone): (&[usize], &HashSet<u32>),
     kept: &mut Vec<Placed>,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, i64)> {
     let run = directory.runs[place].id;
     let bytes = read_run(connection, run)?;
     let mut written = Vec::with_capacity(bytes.len());
-    let mut held = Vec::new();
+    let (mut held, mut taken) = (Vec::new(), 0);
     for at in directory.blocks_of(place) {
         let block = directory.blocks[at];
         let lying = directory.bytes_of(at, bytes.len());
@@ -209,10 +221,11 @@ fn take_out_of_run(
         packed::unpack(&bytes[lying], block.first, &mut held).map_err(|error| error.within(format!("run {run}")))?;
         let left: Vec<Posting> =
             held.iter().filter(|(doc, _)| !gone.contains(doc)).map(|&(doc, tf)| Posting { doc, tf, len: 0 }).collect();
+        taken += (held.len() - left.len()) as i64;
         if let (Some(first), Some(last)) = (left.first(), left.last()) {
             packed::pack(&left, &mut written);
             kept.push(Placed { first: first.doc, last: last.doc, at: start, ..block });
         }
     }
-    Ok(written)
+    Ok((written, taken))
 }

@@ -66,23 +66,29 @@ const WRITE_OPENED: &str = "update _tinystore_search_indexes set opened_at = ?2 
 const LIST: &str = "select id, name, documents, vectors, opened_at from _tinystore_search_indexes
     where dropping = 0 and beside_of is null order by name";
 
-/// What a step of dropping deletes, each a few rows of one table: a key's
-/// runs and blocks go before its list and the key, so that no block outlives
-/// the key that names it. A key's runs are the ids of its id × 2²⁰ onward.
+/// What a step of dropping deletes, each a few rows of one table: a
+/// segment's runs and pieces go before the segment, and a key's rows of
+/// blocks before its list and the key, so that nothing outlives what names
+/// it. A segment's runs are the ids of its id × 2²⁴ onward.
 const DROP_STEPS: &[&str] = &[
     "delete from _tinystore_search_runs where id in
-        (select r.id from (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64) as k
-        join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20)",
+        (select r.id from (select id from _tinystore_search_segments where index_id = ?1 order by id limit 1) as s
+        join _tinystore_search_runs as r on r.id >= s.id << 24 and r.id < (s.id + 1) << 24 limit 256)",
+    "delete from _tinystore_search_pieces where (segment, key) in
+        (select p.segment, p.key
+        from (select id from _tinystore_search_segments where index_id = ?1 order by id limit 1) as s
+        join _tinystore_search_pieces as p on p.segment = s.id limit 4096)",
+    "delete from _tinystore_search_segments where id in
+        (select s.id from _tinystore_search_segments as s where s.index_id = ?1
+        and not exists (select 1 from _tinystore_search_pieces where segment = s.id)
+        and not exists (select 1 from _tinystore_search_runs where id >= s.id << 24 and id < (s.id + 1) << 24)
+        order by s.id limit 1)",
     "delete from _tinystore_search_blocks where key in
-        (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
-    "delete from _tinystore_search_directory where key in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_lists where key in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_keys where id in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
-    "delete from _tinystore_search_fresh where (index_id, key, first) in
-        (select index_id, key, first from _tinystore_search_fresh where index_id = ?1 limit 1024)",
     "delete from _tinystore_search_head where (index_id, key, doc) in
         (select index_id, key, doc from _tinystore_search_head where index_id = ?1 limit 4096)",
     "delete from _tinystore_search_docs where (index_id, doc) in

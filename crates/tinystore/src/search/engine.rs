@@ -22,9 +22,9 @@ use super::legacy;
 use super::open::{Beside, Current, Data, OpenIndex};
 use super::read::{self, Answer, Asked, Query};
 use super::rebuild;
+use super::segments::OPEN_DOCS;
 use super::settings::{Changed, Settings, Table, Wanted};
 use super::table;
-use super::upkeep::PACK_AT;
 use super::write::{self, Prepared};
 use crate::clock::Clock;
 use crate::engine::{Claim, Engine, Host, Wake};
@@ -34,13 +34,13 @@ use crate::{Error, Memory, Result, Store};
 
 const MIGRATIONS: &[Migration] = &[
     Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
-    Migration::of(2, "0002_packed.sql", include_str!("migrations/0002_packed.sql")),
+    Migration::of(2, "0002_segments.sql", include_str!("migrations/0002_segments.sql")),
 ];
 
 /// search's file in the store's directory.
 pub(crate) const FILE: &str = "search.db";
-/// Steps of writing a release's lists again in runs a pass of maintenance
-/// takes at most: 65,536 rows of blocks, about eight million postings.
+/// Steps of writing a release's lists again into base segments a pass of
+/// maintenance takes at most: about eight million postings.
 const CONVERT_STEPS: usize = 16;
 /// What a pass gives back at most of the pages the file holds free: a page
 /// given back writes a few, so a pass's commit stays a few MiB.
@@ -85,7 +85,7 @@ pub(crate) struct Search {
 /// What one pass of maintenance did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Maintenance {
-    /// Postings packed from heads into blocks.
+    /// Postings merges packed into blocks.
     pub packed: u64,
     /// Documents gone taken out of the blocks.
     pub purged: u64,
@@ -196,14 +196,14 @@ impl Search {
     }
 
     /// Counts a row a settle set in the index `name`, which maintenance
-    /// then keeps, and wakes it once enough wait to be packed.
+    /// then keeps, and wakes it once a segment's worth wait.
     pub(crate) fn table_set(&self, name: &str) {
         let mut reached = lock(&self.reached);
         if !reached.contains(name) {
             reached.insert(name.to_owned());
         }
         drop(reached);
-        if self.table_sets.fetch_add(1, Ordering::Relaxed) + 1 == PACK_AT {
+        if self.table_sets.fetch_add(1, Ordering::Relaxed) + 1 == OPEN_DOCS {
             self.wake();
         }
     }
@@ -422,11 +422,11 @@ impl Search {
         open.queued();
     }
 
-    /// Counts `count` sets that wait in an index's head, waking maintenance
-    /// once enough of them wait to be packed.
+    /// Counts `count` documents set since maintenance last ran, waking it
+    /// once a segment's worth wait, which may make a merge due.
     fn count_sets(&self, open: &OpenIndex, count: u64) {
         let before = open.sets.fetch_add(count, Ordering::Relaxed);
-        if before < PACK_AT && before + count >= PACK_AT {
+        if before < OPEN_DOCS && before + count >= OPEN_DOCS {
             self.wake();
         }
     }
@@ -557,6 +557,9 @@ impl Search {
         self.keep_reached()?;
         self.table_sets.store(0, Ordering::Relaxed);
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
+        // Lists a release before wrote go into their base segments before
+        // any merge would join every segment into one.
+        self.convert_legacy(everything)?;
         // One index that fails keeps no other from its maintenance; the
         // first failure is the pass's error, which the scheduler says once.
         let mut failed = None;
@@ -566,21 +569,21 @@ impl Search {
             }
         }
         self.drop_rows()?;
-        self.convert_legacy(everything)?;
         self.file.give_back(GIVE_BACK, self.clock.now())?;
         failed.map_or(Ok(done), Err)
     }
 
-    /// Writes again in runs, a step a commit, the lists a release before
-    /// 0002 wrote, `CONVERT_STEPS` steps a pass unless `everything`, so that
-    /// a pass that meets a large file still comes back to its heads soon.
+    /// Writes again into base segments, a step a commit, the lists and heads
+    /// a release before 0002 wrote, `CONVERT_STEPS` steps a pass unless
+    /// `everything`, so that a pass that meets a large file still comes back
+    /// to its merges soon.
     fn convert_legacy(&self, everything: bool) -> Result<()> {
         if !self.file.read(legacy::any)? {
             return Ok(());
         }
         let steps = if everything { usize::MAX } else { CONVERT_STEPS };
         for _ in 0..steps {
-            if !self.file.transaction(|tx| legacy::convert_step(tx, legacy::CONVERT_BLOCKS))? {
+            if !self.file.transaction(|tx| legacy::convert_step(tx, legacy::CONVERT_POSTINGS))? {
                 break;
             }
         }
@@ -591,7 +594,7 @@ impl Search {
         self.fill(open)?;
         let current = open.current();
         for data in current.written() {
-            done.packed += self.pack(data, everything)?;
+            done.packed += self.merge(data, everything)?;
             if data.id == current.serving.id {
                 open.sets.store(0, Ordering::Relaxed);
             }
@@ -706,10 +709,10 @@ impl Search {
         lock(&self.maintaining)
     }
 
-    /// One step of packing an index's head, as maintenance takes them.
-    pub(crate) fn pack_step(&self, open: &OpenIndex, most_rows: usize) -> Result<super::pack::Packed> {
+    /// One step of merging an index's segments, as maintenance takes them.
+    pub(crate) fn merge_step(&self, open: &OpenIndex, most: usize, all: bool) -> Result<super::merge::Merged> {
         let id = open.id();
-        self.file.transaction(|tx| super::pack::step(tx, id, most_rows))
+        self.file.transaction(|tx| super::merge::step(tx, id, most, all))
     }
 
     /// Purges what an index has gone now, `most_keys` keys a step, calling
@@ -740,7 +743,7 @@ pub(crate) fn check_name(name: &str) -> Result<()> {
 }
 
 impl crate::probe::Sample for Search {
-    /// The sets each open index holds in its head, waiting to be packed.
+    /// The documents each open index was set since maintenance last ran.
     fn sample(&self, probe: &crate::probe::Probe) {
         let indexes: Vec<Arc<OpenIndex>> = lock(&self.indexes).values().cloned().collect();
         for index in indexes {
