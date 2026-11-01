@@ -63,6 +63,16 @@ pub(crate) fn pass_on(store: &Store, set: &Set<'_>, call: &Call<'_>) -> Result<b
 /// or found a file.
 pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     let mut at = In { bytes, at: 0 };
+    let files = open_set(store, &mut at)?;
+    let did = run_call(files, &mut at)?;
+    if !at.done() {
+        return Err(corrupt("a call that holds more than its fields"));
+    }
+    Ok(vec![u8::from(did)])
+}
+
+/// Opens the set a call names, with the bounds it was opened with.
+fn open_set(store: &Store, at: &mut In<'_>) -> Result<Files> {
     let name = at.text()?;
     let ttl = at.maybe_long()?.map(Duration::from_millis);
     let max_file_size = at.maybe_long()?;
@@ -73,54 +83,57 @@ pub(crate) fn run(store: &Store, bytes: &[u8]) -> Result<Vec<u8>> {
     if let Some(most) = max_file_size {
         builder = builder.max_file_size(most);
     }
-    let files: Files = builder.open()?;
-    let did = match at.byte()? {
+    builder.open()
+}
+
+fn run_call(files: Files, at: &mut In<'_>) -> Result<bool> {
+    match at.byte()? {
         call @ (0 | 1) => {
             let path = at.text()?;
-            let options = options_in(&mut at)?;
+            let options = options_in(at)?;
             let body = at.bytes()?;
-            files.call(&path, options).written(body, call == 1)?.is_some()
+            Ok(files.call(&path, options).written(body, call == 1)?.is_some())
         }
-        2 => {
-            let path = at.text()?;
-            let if_match = at.maybe_text()?;
-            let mut call = files.key(&path);
-            if let Some(etag) = if_match {
-                call = call.if_match(etag);
-            }
-            call.delete()?;
-            true
-        }
-        call @ (3 | 4) => {
-            let (from, to) = (at.text()?, at.text()?);
-            let options = options_in(&mut at)?;
-            let call_on = files.call(&to, options);
-            if call == 4 {
-                call_on.rename_from(&from)?
-            } else {
-                call_on.copy_from(&from)?
-            };
-            true
-        }
+        2 => delete(&files, at),
+        call @ (3 | 4) => copy(&files, at, call == 4),
         5 => {
             let path = at.text()?;
-            files.expire(&path, at.span()?)?
+            files.expire(&path, at.span()?)
         }
-        6 => {
-            let prefix = at.text()?;
-            let folder = prefix
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .fold(files, |in_it, segment| in_it.folder(segment));
-            folder.clear()?;
-            true
-        }
-        _ => return Err(corrupt("a call")),
-    };
-    if !at.done() {
-        return Err(corrupt("a call that holds more than its fields"));
+        6 => clear(files, at),
+        _ => Err(corrupt("a call")),
     }
-    Ok(vec![u8::from(did)])
+}
+
+fn delete(files: &Files, at: &mut In<'_>) -> Result<bool> {
+    let path = at.text()?;
+    let if_match = at.maybe_text()?;
+    let mut call = files.key(&path);
+    if let Some(etag) = if_match {
+        call = call.if_match(etag);
+    }
+    call.delete()?;
+    Ok(true)
+}
+
+fn copy(files: &Files, at: &mut In<'_>, rename: bool) -> Result<bool> {
+    let (from, to) = (at.text()?, at.text()?);
+    let options = options_in(at)?;
+    let call_on = files.call(&to, options);
+    if rename {
+        call_on.rename_from(&from)?
+    } else {
+        call_on.copy_from(&from)?
+    };
+    Ok(true)
+}
+
+fn clear(files: Files, at: &mut In<'_>) -> Result<bool> {
+    let prefix = at.text()?;
+    let folder =
+        prefix.split('/').filter(|segment| !segment.is_empty()).fold(files, |in_it, segment| in_it.folder(segment));
+    folder.clear()?;
+    Ok(true)
 }
 
 fn options_out<'a>(out: &'a mut Out, options: &Options) -> &'a mut Out {
