@@ -14,7 +14,8 @@ use rusqlite::Connection;
 use super::head;
 use super::legacy::Legacy;
 use super::pack::{
-    DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, note_lists, read_list, read_run, write_directory,
+    DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, note_lists, read_directory, read_list, read_packed, read_run,
+    write_directory,
 };
 use super::packed::{self, Directory, Placed, Run, decode_best};
 use super::postings::{Posting, decode_keys, pack_inline, unpack_inline};
@@ -26,6 +27,7 @@ const READ_GONE: &str = "select doc, keys from _tinystore_search_gone where inde
 const COUNT_GONE: &str = "select (select count(*) from _tinystore_search_gone where index_id = ?1), documents
     from _tinystore_search_indexes where id = ?1";
 const DROP_LIST: &str = "delete from _tinystore_search_lists where key = ?1";
+const DROP_CHUNKS: &str = "delete from _tinystore_search_directory where key = ?1";
 const DROP_EMPTY_KEY: &str = "delete from _tinystore_search_keys where id = ?1 and documents = 0";
 const FORGET_GONE: &str = "delete from _tinystore_search_gone where index_id = ?1 and doc = ?2";
 const NOTE_PURGED: &str = "update _tinystore_search_indexes set gone_version = gone_version + 1 where id = ?1";
@@ -109,14 +111,14 @@ fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Resu
     let gone: HashSet<u32> = docs.iter().copied().collect();
     head::take_out(connection, index, key, &gone)?;
     let left = match read_list(connection, key)? {
-        Stored::Packed(directory, best) => {
-            let best = decode_best(&best)?;
-            take_out_of_runs(connection, key, (Directory::decode(&directory)?, best), docs, &gone)?
+        Stored::Packed(header, best) => {
+            let directory = read_directory(connection, key, &header)?;
+            take_out_of_runs(connection, key, (directory, decode_best(&best)?), docs, &gone)?
         }
         Stored::Legacy(directory) => {
             let average = average_of(connection, index, key)?;
-            let runs = Legacy::decode(key, &directory)?.into_runs(connection, average)?;
-            take_out_of_runs(connection, key, (runs.finish(connection)?, Vec::new()), docs, &gone)?
+            Legacy::decode(key, &directory)?.into_runs(connection, average)?.finish(connection)?;
+            take_out_of_runs(connection, key, (read_packed(connection, key)?, Vec::new()), docs, &gone)?
         }
         Stored::Inline(inline) => {
             let mut postings = unpack_inline(&inline)?;
@@ -129,6 +131,7 @@ fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Resu
         Stored::Nothing => 0,
     };
     if left == 0 {
+        execute(connection, DROP_CHUNKS, [key], "drop a directory's chunks")?;
         execute(connection, DROP_LIST, [key], "drop a list")?;
         execute(connection, DROP_EMPTY_KEY, [key], "drop a key")?;
     }

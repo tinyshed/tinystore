@@ -75,6 +75,8 @@ const DROP_STEPS: &[&str] = &[
         join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20)",
     "delete from _tinystore_search_blocks where key in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
+    "delete from _tinystore_search_directory where key in
+        (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_lists where key in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_keys where id in

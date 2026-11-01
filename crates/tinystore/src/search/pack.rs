@@ -20,7 +20,8 @@ use super::head;
 use super::kept::{NORMS, bytes_of, lengths_of};
 use super::legacy::{self, Legacy};
 use super::packed::{
-    self, BEST_AT, Directory, Placed, RUN_BYTES, Run, best_of, bound_of, decode_best, encode_best, reference,
+    self, BEST_AT, CHUNK, Directory, Header, Placed, RUN_BYTES, Run, best_of, bound_of, decode_best, decode_entries,
+    encode_best, encode_entries, reference,
 };
 use super::postings::{BLOCK, INLINE, Posting, decode_lengths, pack_inline, unpack_inline};
 use super::score::average;
@@ -37,6 +38,11 @@ const READ_LIST: &str = "select directory, inline, packed, best from _tinystore_
 pub(super) const WRITE_LIST: &str =
     "insert or replace into _tinystore_search_lists (key, directory, inline) values (?1, ?2, ?3)";
 const WRITE_PACKED: &str = "insert or replace into _tinystore_search_lists (key, packed, best) values (?1, ?2, ?3)";
+const READ_CHUNK: &str = "select entries from _tinystore_search_directory where key = ?1 and chunk = ?2";
+const READ_CHUNKS: &str = "select entries from _tinystore_search_directory where key = ?1 order by chunk";
+const WRITE_CHUNK: &str =
+    "insert or replace into _tinystore_search_directory (key, chunk, entries) values (?1, ?2, ?3)";
+const DROP_CHUNKS_FROM: &str = "delete from _tinystore_search_directory where key = ?1 and chunk >= ?2";
 use super::kept::READ_NORMS;
 const READ_RUN: &str = "select blocks from _tinystore_search_runs where id = ?1";
 pub(super) const WRITE_RUN: &str = "insert or replace into _tinystore_search_runs (id, blocks) values (?1, ?2)";
@@ -197,9 +203,7 @@ pub(super) fn average_of(connection: &Connection, index: i64, key: i64) -> Resul
 /// its runs, each bounded at `average`.
 fn append(connection: &Connection, key: i64, fresh: &[Posting], average: u16) -> Result<()> {
     let mut list = match read_list(connection, key)? {
-        Stored::Packed(directory, best) => {
-            Runs::of(connection, key, Directory::decode(&directory)?, decode_best(&best)?)?
-        }
+        Stored::Packed(header, best) => Runs::of(connection, key, Header::decode(&header)?, decode_best(&best)?)?,
         Stored::Legacy(directory) => Legacy::decode(key, &directory)?.into_runs(connection, average)?,
         Stored::Inline(inline) => return append_inline(connection, key, unpack_inline(&inline)?, fresh, average),
         Stored::Nothing => return append_inline(connection, key, Vec::new(), fresh, average),
@@ -233,13 +237,17 @@ fn append_inline(
     list.finish(connection).map(drop)
 }
 
-/// A key's list in runs as packing or a purge writes it: its directory, and
-/// the bytes of its last run, which takes the blocks pushed till it holds
-/// 32 KiB. Every other run is written as it fills; the last and the
-/// directory when it finishes.
+/// A key's list in runs as packing or a purge writes it: its runs, the
+/// last chunk of its directory, and the bytes of its last run, which takes
+/// the blocks pushed till it holds 32 KiB. Every other run and chunk is
+/// written as it fills; the last of each and the header when it finishes.
 pub(super) struct Runs {
     key: i64,
-    directory: Directory,
+    runs: Vec<Run>,
+    /// Blocks in the chunks before `tail`.
+    before: u32,
+    /// The entries of the directory's last chunk.
+    tail: Vec<Placed>,
     last: Vec<u8>,
     best: Vec<Posting>,
 }
@@ -250,16 +258,28 @@ impl Runs {
         if key >> (63 - RUN_BITS) != 0 {
             return Err(Error::limit(format!("key {key}: past the keys a run's id can name")));
         }
-        Ok(Runs { key, directory: Directory::default(), last: Vec::new(), best: Vec::new() })
+        Ok(Runs { key, runs: Vec::new(), before: 0, tail: Vec::new(), last: Vec::new(), best: Vec::new() })
     }
 
-    /// A key's list as its directory, its best postings and its last run hold it.
-    pub(super) fn of(connection: &Connection, key: i64, directory: Directory, best: Vec<Posting>) -> Result<Runs> {
-        let last = match directory.runs.last() {
-            Some(run) => read_run(connection, run.id)?,
-            None => Vec::new(),
-        };
-        Ok(Runs { directory, last, best, ..Runs::new(key)? })
+    /// A key's list as its header, its best postings, its directory's last
+    /// chunk and its last run hold it.
+    pub(super) fn of(connection: &Connection, key: i64, header: Header, best: Vec<Posting>) -> Result<Runs> {
+        let mut list = Runs { best, ..Runs::new(key)? };
+        if let Some(run) = header.runs.last() {
+            let chunk = header.chunks() - 1;
+            decode_entries(&read_chunk(connection, key, chunk)?, &mut list.tail)?;
+            list.before = chunk * CHUNK as u32;
+            if list.before as usize + list.tail.len() != header.blocks as usize {
+                return Err(Error::corrupt("a key's directory: its last chunk holds not what its header counts"));
+            }
+            list.last = read_run(connection, run.id)?;
+        }
+        list.runs = header.runs;
+        Ok(list)
+    }
+
+    fn blocks(&self) -> u32 {
+        self.before + self.tail.len() as u32
     }
 
     /// Keeps the best of `postings` among the list's best, at `average`.
@@ -271,39 +291,47 @@ impl Runs {
     /// than a block's postings, bounded at its own average; says how many it
     /// took. The block's own postings keep its bound, their lengths unread.
     fn fill(&mut self, fresh: &[Posting]) -> Result<usize> {
-        let Some(index) = self.directory.blocks.len().checked_sub(1) else { return Ok(0) };
-        let placed = self.directory.blocks[index];
-        let bytes = self.directory.bytes_of(index, self.last.len());
+        let Some(placed) = self.tail.last().copied() else { return Ok(0) };
+        // the last block is the last of the last run
+        let start = usize::from(placed.at).min(self.last.len());
         let mut held = Vec::new();
-        packed::unpack(&self.last[bytes.clone()], placed.first, &mut held)?;
+        packed::unpack(&self.last[start..], placed.first, &mut held)?;
         let room = BLOCK.saturating_sub(held.len()).min(fresh.len());
         if room == 0 {
             return Ok(0);
         }
         let mut block: Vec<Posting> = held.into_iter().map(|(doc, tf)| Posting { doc, tf, len: 0 }).collect();
         block.extend_from_slice(&fresh[..room]);
-        self.last.truncate(bytes.start);
+        self.last.truncate(start);
         packed::pack(&block, &mut self.last);
         let bound = placed.bound.max(bound_of(&fresh[..room], placed.average));
-        self.directory.blocks[index] = Placed { last: block[block.len() - 1].doc, bound, ..placed };
+        if let Some(entry) = self.tail.last_mut() {
+            *entry = Placed { last: block[block.len() - 1].doc, bound, ..placed };
+        }
         Ok(room)
     }
 
-    /// Appends a block to the last run, or to a new one once it holds 32 KiB.
+    /// Appends a block to the last run, or to a new one once it holds 32
+    /// KiB, and its entry to the directory's last chunk, or to a new one.
     pub(super) fn push(&mut self, connection: &Connection, block: &[Posting], bound: f32, average: u16) -> Result<()> {
-        if self.directory.runs.is_empty() || self.last.len() >= RUN_BYTES {
+        if self.runs.is_empty() || self.last.len() >= RUN_BYTES {
             self.next_run(connection)?;
+        }
+        if self.tail.len() == CHUNK {
+            write_chunk(connection, self.key, self.before / CHUNK as u32, &self.tail)?;
+            self.before += CHUNK as u32;
+            self.tail.clear();
         }
         let at = u16::try_from(self.last.len()).map_err(|_| Error::internal("a block starts past its run's place"))?;
         packed::pack(block, &mut self.last);
         let (first, last) = (block[0].doc, block[block.len() - 1].doc);
-        self.directory.blocks.push(Placed { first, last, bound, average, at });
+        self.tail.push(Placed { first, last, bound, average, at });
         Ok(())
     }
 
     /// Writes the last run and begins the next, numbered after it.
     fn next_run(&mut self, connection: &Connection) -> Result<()> {
-        let number = match self.directory.runs.last() {
+        let number = match self.runs.last() {
             Some(run) => {
                 execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
                 (run.id & ((1 << RUN_BITS) - 1)) + 1
@@ -313,20 +341,23 @@ impl Runs {
         if number >> RUN_BITS != 0 {
             return Err(Error::limit("a key's postings past the runs its directory can name"));
         }
-        let first_block = self.directory.blocks.len() as u32;
-        self.directory.runs.push(Run { id: self.key << RUN_BITS | number, first_block });
+        let first_block = self.blocks();
+        self.runs.push(Run { id: self.key << RUN_BITS | number, first_block });
         self.last.clear();
         Ok(())
     }
 
-    /// Writes the last run and the directory; says the directory.
-    pub(super) fn finish(self, connection: &Connection) -> Result<Directory> {
-        if let Some(run) = self.directory.runs.last() {
+    /// Writes the last run, the directory's last chunk and its header.
+    pub(super) fn finish(self, connection: &Connection) -> Result<()> {
+        if let Some(run) = self.runs.last() {
             execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
         }
-        let best = if self.directory.blocks.len() >= BEST_AT { self.best.as_slice() } else { &[] };
-        write_directory(connection, self.key, &self.directory, best)?;
-        Ok(self.directory)
+        if !self.tail.is_empty() {
+            write_chunk(connection, self.key, self.before / CHUNK as u32, &self.tail)?;
+        }
+        let blocks = self.blocks();
+        let best = if blocks as usize >= BEST_AT { self.best.as_slice() } else { &[] };
+        write_header(connection, self.key, &Header { blocks, runs: self.runs }, best)
     }
 }
 
@@ -336,13 +367,59 @@ pub(super) fn note_lists(connection: &Connection, index: i64) -> Result<()> {
     execute(connection, NOTE_LISTS, [index], "count a change of lists").map(drop)
 }
 
+/// Writes a key's directory whole, its header and every chunk, and drops
+/// the chunks past its last.
 pub(super) fn write_directory(
     connection: &Connection,
     key: i64,
     directory: &Directory,
     best: &[Posting],
 ) -> Result<()> {
-    execute(connection, WRITE_PACKED, (key, directory.encode(), encode_best(best)), "write a list").map(drop)
+    for (chunk, entries) in (0..).zip(directory.blocks.chunks(CHUNK)) {
+        write_chunk(connection, key, chunk, entries)?;
+    }
+    let header = directory.header();
+    execute(connection, DROP_CHUNKS_FROM, (key, header.chunks()), "drop a directory's chunks")?;
+    write_header(connection, key, &header, best)
+}
+
+fn write_header(connection: &Connection, key: i64, header: &Header, best: &[Posting]) -> Result<()> {
+    execute(connection, WRITE_PACKED, (key, header.encode(), encode_best(best)), "write a list").map(drop)
+}
+
+fn write_chunk(connection: &Connection, key: i64, chunk: u32, entries: &[Placed]) -> Result<()> {
+    execute(connection, WRITE_CHUNK, (key, chunk, encode_entries(entries)), "write a directory's chunk").map(drop)
+}
+
+fn read_chunk(connection: &Connection, key: i64, chunk: u32) -> Result<Vec<u8>> {
+    let failed = |error| sql_error("read a directory's chunk", error);
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(READ_CHUNK)
+        .and_then(|mut select| select.query_row((key, chunk), |row| row.get(0)).optional())
+        .map_err(failed)?;
+    bytes.ok_or_else(|| Error::corrupt(format!("key {key}: chunk {chunk} its directory's header counts is missing")))
+}
+
+/// A key's directory whole, of the header its list's row holds and its chunks.
+pub(super) fn read_directory(connection: &Connection, key: i64, header: &[u8]) -> Result<Directory> {
+    let header = Header::decode(header)?;
+    let failed = |error| sql_error("read a directory", error);
+    let mut select = connection.prepare_cached(READ_CHUNKS).map_err(failed)?;
+    let mut rows = select.query([key]).map_err(failed)?;
+    let mut blocks = Vec::with_capacity(header.blocks as usize);
+    while let Some(row) = rows.next().map_err(failed)? {
+        let bytes = row.get_ref(0).and_then(|value| Ok(value.as_blob()?)).map_err(failed)?;
+        decode_entries(bytes, &mut blocks)?;
+    }
+    Directory::of(header, blocks)
+}
+
+/// A key's directory whole, as its rows hold it now.
+pub(super) fn read_packed(connection: &Connection, key: i64) -> Result<Directory> {
+    match read_list(connection, key)? {
+        Stored::Packed(header, _) => read_directory(connection, key, &header),
+        _ => Err(Error::internal(format!("key {key}: no directory in runs"))),
+    }
 }
 
 /// Every document a key's runs hold, in order.
@@ -370,7 +447,8 @@ pub(super) fn read_run(connection: &Connection, id: i64) -> Result<Vec<u8>> {
 /// A key's list as its row keeps it.
 #[derive(Debug)]
 pub(super) enum Stored {
-    /// The directory of its blocks in runs, and its best postings.
+    /// The header of its directory, whose chunks hold its blocks in runs,
+    /// and its best postings.
     Packed(Vec<u8>, Vec<u8>),
     /// The directory of its rows of blocks, as a release before 0002 wrote it.
     Legacy(Vec<u8>),

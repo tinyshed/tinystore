@@ -21,7 +21,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::correct::Corrector;
 use super::legacy::Legacy;
-use super::pack::{Stored, read_list};
+use super::pack::{Stored, read_directory, read_list};
 use super::packed::{Directory, decode_best};
 use super::postings::{Posting, unpack_inline};
 use super::score::Part;
@@ -93,8 +93,8 @@ pub(crate) enum Listed {
 impl Listed {
     fn read(connection: &Connection, key: i64) -> Result<Listed> {
         Ok(match read_list(connection, key)? {
-            Stored::Packed(directory, best) => {
-                Listed::Packed(Arc::new(Directory::decode(&directory)?), decode_best(&best)?)
+            Stored::Packed(header, best) => {
+                Listed::Packed(Arc::new(read_directory(connection, key, &header)?), decode_best(&best)?)
             }
             Stored::Legacy(directory) => Listed::Legacy(Legacy::decode(key, &directory)?),
             Stored::Inline(inline) => Listed::Inline(unpack_inline(&inline)?),

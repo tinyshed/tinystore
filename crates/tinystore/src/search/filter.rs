@@ -38,7 +38,6 @@ use serde_json::Value;
 use super::head;
 use super::legacy;
 use super::pack::{self, Stored, read_list};
-use super::packed::Directory;
 use super::postings::unpack_inline;
 use super::score::Part;
 use super::settings::Settings;
@@ -463,8 +462,9 @@ impl Reader<'_> {
         let within = |error: Error| error.within(format!("key {key}"));
         let mut docs: Vec<u32> = Vec::new();
         match read_list(self.connection, key).map_err(within)? {
-            Stored::Packed(directory, _) => {
-                docs.extend(pack::documents(self.connection, &Directory::decode(&directory)?).map_err(within)?);
+            Stored::Packed(header, _) => {
+                let directory = pack::read_directory(self.connection, key, &header).map_err(within)?;
+                docs.extend(pack::documents(self.connection, &directory).map_err(within)?);
             }
             Stored::Legacy(_) => docs.extend(legacy::documents(self.connection, key).map_err(within)?),
             Stored::Inline(inline) => {

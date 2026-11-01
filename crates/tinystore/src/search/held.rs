@@ -54,6 +54,8 @@ const SELECT_BYTES: &str = concat!(
         from _tinystore_search_keys as k left join _tinystore_search_lists as l on l.key = k.id where k.index_id = ?1)
     + (select coalesce(sum(length(b.payload)), 0)
         from _tinystore_search_keys as k join _tinystore_search_blocks as b on b.key = k.id where k.index_id = ?1)
+    + (select coalesce(sum(length(d.entries)), 0) from _tinystore_search_keys as k
+        join _tinystore_search_directory as d on d.key = k.id where k.index_id = ?1)
     + (select coalesce(sum(length(r.blocks)), 0) from _tinystore_search_keys as k
         join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20 where k.index_id = ?1)
     + (select coalesce(sum(",

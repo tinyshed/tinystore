@@ -786,6 +786,7 @@ fn postings_in(dir: &Path) -> String {
         "select key, first, payload from _tinystore_search_blocks order by key, first",
         "select id, blocks from _tinystore_search_runs order by id",
         "select key, first, postings from _tinystore_search_fresh order by key, first",
+        "select key, chunk, entries from _tinystore_search_directory order by key, chunk",
         "select * from _tinystore_search_lists order by key",
     ] {
         let mut select = connection.prepare(sql).unwrap();

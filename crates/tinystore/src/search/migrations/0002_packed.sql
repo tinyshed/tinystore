@@ -6,8 +6,17 @@ create table _tinystore_search_runs (
     blocks blob    not null
 ) strict;
 
--- packed: the directory of a key whose blocks are in runs, of fixed width,
--- as search's packed.rs lays it out. A key a release before wrote keeps its
+-- a key's directory in chunks of 256 blocks' entries, of fixed width, as
+-- search's packed.rs lays them out, so that packing writes the last chunk
+-- again and not the directory whole
+create table _tinystore_search_directory (
+    key     integer not null,
+    chunk   integer not null,
+    entries blob    not null,
+    primary key (key, chunk)
+) without rowid, strict;
+
+-- packed: the header of the directory of a key whose blocks are in runs. A key a release before wrote keeps its
 -- directory and its rows of blocks until packing or a purge writes it again,
 -- whole, in runs; a release before refuses the file at this step rather
 -- than take a list without a directory for one that holds nothing

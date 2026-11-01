@@ -306,7 +306,7 @@ pub(crate) mod written {
     use super::Entry;
     use crate::compress::varint::put_count;
     use crate::search::kept::{NORMS, lengths_of};
-    use crate::search::packed::{self, Directory};
+    use crate::search::packed;
     use crate::search::postings::Posting;
 
     /// Writes every list of the index `name` that is in runs again as rows
@@ -344,7 +344,7 @@ pub(crate) mod written {
         connection.execute_batch("begin").unwrap();
         let mut pairs = Vec::new();
         for (key, part, packed) in lists {
-            let runs = Directory::decode(&packed).unwrap();
+            let runs = crate::search::pack::read_directory(&connection, key, &packed).unwrap();
             let mut entries = Vec::new();
             for (place, run) in runs.runs.iter().enumerate() {
                 let bytes: Vec<u8> = connection
@@ -360,6 +360,7 @@ pub(crate) mod written {
                 }
                 connection.execute("delete from _tinystore_search_runs where id = ?1", [run.id]).unwrap();
             }
+            connection.execute("delete from _tinystore_search_directory where key = ?1", [key]).unwrap();
             let update = "update _tinystore_search_lists set directory = ?2, packed = null, best = null where key = ?1";
             connection.execute(update, (key, directory(&entries))).unwrap();
         }
