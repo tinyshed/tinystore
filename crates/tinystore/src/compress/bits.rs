@@ -3,12 +3,20 @@
 //! integer some.
 
 /// The bytes `count` values of `width` bits take.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn packed_len(count: usize, width: u32) -> usize {
     (count * width as usize).div_ceil(8)
 }
 
 /// Appends `values`, each in `width` bits; a value wider than that loses its
 /// high bits, which a caller's width never lets happen.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: u32) {
     let mut writer = BitWriter::onto(std::mem::take(out));
     values.for_each(|value| writer.write(value, width));
@@ -17,6 +25,10 @@ pub(crate) fn pack(out: &mut Vec<u8>, values: impl Iterator<Item = u64>, width: 
 
 /// `count` values of `width` bits, 64 at most, from `data`, which holds the
 /// `packed_len` of them.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) fn unpack(data: &[u8], count: usize, width: u32) -> Vec<u64> {
     let mut reader = BitReader::of(data);
     let values = (0..count).map(|_| reader.read(width)).collect();
@@ -106,6 +118,10 @@ impl<'a> BitReader<'a> {
     }
 
     /// Whether a read went past the end.
+    #[cfg_attr(
+        all(not(test), not(any(feature = "records", feature = "metrics"))),
+        expect(dead_code, reason = "records and metrics use it")
+    )]
     pub(crate) fn short(&self) -> bool {
         self.short
     }
