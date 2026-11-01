@@ -35,8 +35,10 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::pack::{Stored, read_list};
-use super::postings::{unpack, unpack_inline};
+use super::legacy;
+use super::pack::{self, Stored, read_list};
+use super::packed::Directory;
+use super::postings::unpack_inline;
 use super::score::Part;
 use super::settings::Settings;
 use crate::limits::{FILTER_CONDITIONS, FILTER_TEXT, FILTER_VALUES};
@@ -44,7 +46,6 @@ use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
 const FIND_KEY: &str = "select id from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
-const READ_PAYLOADS: &str = "select payload from _tinystore_search_blocks where key = ?1 order by first";
 const READ_HEAD: &str = "select doc from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 
 /// The longest text a filter keeps as a value.
@@ -463,14 +464,10 @@ impl Reader<'_> {
         let failed = |error| sql_error(format!("read key {key}'s postings"), error);
         let mut docs: Vec<u32> = Vec::new();
         match read_list(self.connection, key).map_err(within)? {
-            Stored::Blocks(_) => {
-                let mut select = self.connection.prepare_cached(READ_PAYLOADS).map_err(failed)?;
-                let mut rows = select.query([key]).map_err(failed)?;
-                while let Some(row) = rows.next().map_err(failed)? {
-                    let payload = row.get_ref(0).and_then(|value| Ok(value.as_blob()?)).map_err(failed)?;
-                    docs.extend(unpack(payload).map_err(within)?.into_iter().map(|(doc, _)| doc));
-                }
+            Stored::Packed(directory) => {
+                docs.extend(pack::documents(self.connection, &Directory::decode(&directory)?).map_err(within)?);
             }
+            Stored::Legacy(_) => docs.extend(legacy::documents(self.connection, key).map_err(within)?),
             Stored::Inline(inline) => {
                 docs.extend(unpack_inline(&inline).map_err(within)?.iter().map(|posting| posting.doc));
             }

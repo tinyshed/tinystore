@@ -49,10 +49,13 @@ const SELECT_BYTES: &str = concat!(
     "select
     (select coalesce(sum(octet_length(id) + length(keys) + length(lengths) + length(value)), 0)
         from _tinystore_search_docs where index_id = ?1)
-    + (select coalesce(sum(octet_length(k.term) + coalesce(length(l.directory), 0) + coalesce(length(l.inline), 0)), 0)
+    + (select coalesce(sum(octet_length(k.term) + coalesce(length(l.directory), 0) + coalesce(length(l.inline), 0)
+        + coalesce(length(l.packed), 0)), 0)
         from _tinystore_search_keys as k left join _tinystore_search_lists as l on l.key = k.id where k.index_id = ?1)
     + (select coalesce(sum(length(b.payload)), 0)
         from _tinystore_search_keys as k join _tinystore_search_blocks as b on b.key = k.id where k.index_id = ?1)
+    + (select coalesce(sum(length(r.blocks)), 0) from _tinystore_search_keys as k
+        join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20 where k.index_id = ?1)
     + (select coalesce(sum(",
     integer_bytes!("key"),
     " + ",

@@ -33,6 +33,13 @@ document in it could reach.
            block 3: docs 2,051…3,890 best possible 2.2
 ```
 
+Each block stores the gaps between its documents and their frequencies in as
+few bits as its largest needs, and a word's blocks lie one after another in
+rows of about 32 KiB. The directory has a fixed width, so a search reads it
+without decoding, and it reads a block at its place in its row without
+running a query for it. On MS MARCO's passages, research measured this
+layout at about 2 bytes a posting.
+
 ## Exact, and still fast
 
 A search by words scores documents with BM25, which weighs a word by how rare

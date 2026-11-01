@@ -23,8 +23,9 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::Range;
 
+use super::packed::Placed;
 use super::postings::{BLOCK, Posting};
-use super::score::{Part, points};
+use super::score::{Part, bound, points};
 use crate::Result;
 
 /// Documents a window holds. Tests read windows of 512, so that an index of
@@ -107,9 +108,17 @@ impl List {
         Block { first, last, bound: bound.unwrap_or(0), held: Some(postings) }
     }
 
-    /// A block of `blocks` as its directory gives it.
+    /// A block bounded by its largest frequency over its shortest length,
+    /// which no posting of it passes, as a list a release before 0002 wrote
+    /// bounds its blocks.
     pub(crate) fn stored(&self, first: u32, last: u32, most_tf: u32, least_len: u32) -> Block {
         Block { first, last, bound: points(self.scale, most_tf, least_len, self.average), held: None }
+    }
+
+    /// A block of a run as its directory gives it.
+    pub(crate) fn packed(&self, block: &Placed) -> Block {
+        let bound = bound(self.scale, block.bound, block.average, self.average);
+        Block { first: block.first, last: block.last, bound, held: None }
     }
 
     pub(crate) fn push(&mut self, block: Block) {
@@ -177,6 +186,33 @@ impl List {
         &self.blocks[self.block.min(self.blocks.len())..]
     }
 
+    /// The decoded block's postings from the cursor to the first at `end` or
+    /// after it, the cursor moved past them.
+    fn take_before(&mut self, end: u32) -> &[Posting] {
+        let from = self.at.min(self.postings.len());
+        let taken = self.postings[from..].partition_point(|posting| posting.doc < end);
+        self.at = from + taken;
+        &self.postings[from..self.at]
+    }
+
+    /// The place of the first block that could hold `doc` or a later one,
+    /// for [`List::bound_walking`] to walk on from.
+    fn walk_from(&self, doc: u32) -> usize {
+        let from = self.block.min(self.blocks.len());
+        from + self.blocks[from..].partition_point(|block| block.last < doc)
+    }
+
+    /// The bound of the block that could hold `doc`, nothing when none
+    /// could, `walk` stepped on to it from the block that could hold an
+    /// earlier document: documents of a window are completed in their order,
+    /// so the blocks are passed once rather than searched for each.
+    fn bound_walking(&self, walk: &mut usize, doc: u32) -> u64 {
+        while self.blocks.get(*walk).is_some_and(|block| block.last < doc) {
+            *walk += 1;
+        }
+        self.blocks.get(*walk).filter(|block| block.first <= doc).map_or(0, |block| block.bound)
+    }
+
     /// The bound of the block that could hold `doc`, nothing when none could.
     fn bound_at(&self, doc: u32) -> u64 {
         self.block_at(doc).map_or(0, |block| block.bound)
@@ -208,20 +244,8 @@ impl List {
         points(self.scale, posting.tf, posting.len, self.average)
     }
 
-    /// The index of the next stored block after `index` that the list holds
-    /// in no row of its own, to read ahead with it.
-    pub(crate) fn stored_after(&self, index: usize, most: usize) -> usize {
-        let run = self.blocks[index + 1..].iter().take(most).take_while(|block| block.held.is_none()).count();
-        index + run
-    }
-
     pub(crate) fn first_of(&self, index: usize) -> u32 {
         self.blocks[index].first
-    }
-
-    /// Whether the cursor reached `index` from the block just before it.
-    pub(crate) fn in_order(&self, index: usize) -> bool {
-        index > 0 && self.decoded == index - 1
     }
 }
 
@@ -286,7 +310,17 @@ pub(crate) fn best(
 ) -> Result<Vec<(u64, u32)>> {
     let best = Best { k, heap: BinaryHeap::with_capacity(k + 1) };
     let pass = passing.map(|docs| Pass { docs, at: 0 });
-    let mut run = Run { lists, source, best, pass, points: Vec::new(), touched: Vec::new(), docs: Vec::new() };
+    let mut run = Run {
+        lists,
+        source,
+        best,
+        pass,
+        points: Vec::new(),
+        touched: Vec::new(),
+        docs: Vec::new(),
+        walks: Vec::new(),
+        bounds: Vec::new(),
+    };
     let mut start = run.start(0);
     while start != END && k > 0 {
         let end = start.saturating_add(WINDOW);
@@ -400,6 +434,10 @@ struct Run<'a> {
     points: Vec<u64>,
     touched: Vec<bool>,
     docs: Vec<u32>,
+    /// Where each passive list's walk stands, in the order of the passive lists.
+    walks: Vec<usize>,
+    /// Each passive list's bound at the document being completed.
+    bounds: Vec<u64>,
 }
 
 /// A document no later than the first any list holds at `end` or after it.
@@ -440,6 +478,8 @@ impl Run<'_> {
         }
         self.docs.sort_unstable();
         let rest = order[..passive].iter().fold(0_u64, |sum, at| sum.saturating_add(bounds[*at]));
+        self.walks.clear();
+        self.walks.extend(order[..passive].iter().map(|at| self.lists[*at].walk_from(documents.start)));
         for doc in std::mem::take(&mut self.docs) {
             let slot = (doc - documents.start) as usize;
             let points = std::mem::take(&mut self.points[slot]);
@@ -472,19 +512,23 @@ impl Run<'_> {
             .count()
     }
 
-    /// Adds every posting list `at` has in the window into its slot.
+    /// Adds every posting list `at` has in the window into its slot, a
+    /// decoded block's at a time.
     fn add(&mut self, at: usize, documents: &Range<u32>) -> Result<()> {
-        let list = &mut self.lists[at];
-        let mut doc = list.seek(documents.start, self.source)?;
+        let Run { lists, source, points: sums, touched, docs, .. } = self;
+        let list = &mut lists[at];
+        let mut doc = list.seek(documents.start, *source)?;
         while doc < documents.end {
-            let slot = (doc - documents.start) as usize;
-            if !self.touched[slot] {
-                self.touched[slot] = true;
-                self.docs.push(doc);
+            let (scale, average) = (list.scale, list.average);
+            for posting in list.take_before(documents.end) {
+                let slot = (posting.doc - documents.start) as usize;
+                if !touched[slot] {
+                    touched[slot] = true;
+                    docs.push(posting.doc);
+                }
+                sums[slot] = sums[slot].saturating_add(points(scale, posting.tf, posting.len, average));
             }
-            self.points[slot] = self.points[slot].saturating_add(list.points());
-            list.next();
-            doc = list.doc(self.source)?;
+            doc = list.doc(*source)?;
         }
         Ok(())
     }
@@ -493,12 +537,16 @@ impl Run<'_> {
     /// asked while their bounds may still lift it past θ.
     fn complete(&mut self, passive: &[usize], doc: u32, mut points: u64) -> Result<u64> {
         let (full, theta) = (self.best.full(), self.best.theta());
-        let mut rest = passive.iter().fold(0_u64, |sum, at| sum.saturating_add(self.lists[*at].bound_at(doc)));
-        for &at in passive.iter().rev() {
+        self.bounds.clear();
+        for (walk, at) in self.walks.iter_mut().zip(passive) {
+            self.bounds.push(self.lists[*at].bound_walking(walk, doc));
+        }
+        let mut rest = self.bounds.iter().fold(0_u64, |sum, bound| sum.saturating_add(*bound));
+        for (place, &at) in passive.iter().enumerate().rev() {
             if full && points.saturating_add(rest) <= theta {
                 break;
             }
-            let bound = self.lists[at].bound_at(doc);
+            let bound = self.bounds[place];
             rest = rest.saturating_sub(bound);
             if bound > 0 && self.lists[at].seek(doc, self.source)? == doc {
                 points = points.saturating_add(self.lists[at].points());

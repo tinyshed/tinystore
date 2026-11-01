@@ -65,8 +65,11 @@ adds a step to that file's migrations too, an empty one when no table
 changes: an older release then refuses the file at its open, where it would
 read the new bytes as damage and suspend what holds them. Readers keep every
 version a release wrote, with its bytes in a test; writers write the newest,
-and old rows change only where the engine rewrites them anyway. Names may
-still change in a minor release until `1.0`, and its notes say which.
+and old rows change only where the engine rewrites them anyway, or in steps
+of upkeep. An old layout of tables lives in its engine's `legacy` module and
+nowhere else, and no program chooses a format: the `format-change` skill.
+Names may still change in a minor release until `1.0`, and its notes say
+which.
 
 Do not describe unbuilt behaviour as though it works.
 
@@ -434,9 +437,10 @@ bytes a sample in a real file.
 | [tinyshed/research](https://github.com/tinyshed/research/tree/main/tinystore)              | the rounds, every number, the prototypes and the open questions                                 |
 
 How recurring work is done is a skill in `.agents/skills/`, which
-`.claude/skills/` points to: `api-change`, `sdk`, `wire-change`, `verify`,
-`release`, `platform-traps`, `docs` and `delegate`; fix one where it is wrong before
-relying on it, as you would this file.
+`.claude/skills/` points to: `api-change`, `sdk`, `wire-change`,
+`format-change`, `verify`, `release`, `platform-traps`, `docs` and
+`delegate`; fix one where it is wrong before relying on it, as you would
+this file.
 
 ## Rules that are gates
 

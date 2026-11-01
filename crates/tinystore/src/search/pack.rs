@@ -7,16 +7,20 @@
 //! in `norms`, and only then appends: a posting in a block finds its length
 //! there, and a document's lengths are written once and never change. A key
 //! is packed whole in one step, so a key's head always follows its blocks.
+//!
+//! A key's blocks are appended to its runs, as `packed.rs` lays them out; a
+//! key a release before 0002 wrote is written in runs first, as
+//! `legacy.rs` writes it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{Connection, OptionalExtension};
 
 use super::kept::{NORMS, bytes_of, lengths_of};
-use super::postings::{
-    BLOCK, Entry, INLINE, Posting, decode_directory, decode_lengths, encode_directory, entry_of, pack, pack_inline,
-    unpack, unpack_inline,
-};
+use super::legacy::Legacy;
+use super::packed::{self, Directory, Placed, RUN_BYTES, Run, bound_of, reference};
+use super::postings::{BLOCK, INLINE, Posting, decode_lengths, pack_inline, unpack_inline};
+use super::score::average;
 use super::write::execute;
 use crate::sqlite::{Tx, sql_error};
 use crate::{Error, Result};
@@ -31,13 +35,20 @@ const HEAD_FIRST: &str = "select key, doc, tf, len from _tinystore_search_head w
 const HEAD_OF: &str =
     "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key >= ?2 and key <= ?3";
-const READ_LIST: &str = "select directory, inline from _tinystore_search_lists where key = ?1";
+const READ_LIST: &str = "select directory, inline, packed from _tinystore_search_lists where key = ?1";
 pub(super) const WRITE_LIST: &str =
     "insert or replace into _tinystore_search_lists (key, directory, inline) values (?1, ?2, ?3)";
+const WRITE_PACKED: &str = "insert or replace into _tinystore_search_lists (key, packed) values (?1, ?2)";
 use super::kept::READ_NORMS;
-use super::read::READ_BLOCK;
-pub(super) const WRITE_BLOCK: &str =
-    "insert or replace into _tinystore_search_blocks (key, first, payload) values (?1, ?2, ?3)";
+const READ_RUN: &str = "select blocks from _tinystore_search_runs where id = ?1";
+pub(super) const WRITE_RUN: &str = "insert or replace into _tinystore_search_runs (id, blocks) values (?1, ?2)";
+pub(super) const DROP_RUN: &str = "delete from _tinystore_search_runs where id = ?1";
+const READ_PART: &str = "select part from _tinystore_search_keys where id = ?1";
+const READ_TOKENS: &str = "select p.tokens, i.documents from _tinystore_search_parts as p
+    join _tinystore_search_indexes as i on i.id = p.index_id where p.index_id = ?1 and p.part = ?2";
+
+/// A run's number among its key's is the low bits of its id, the key's id above them.
+const RUN_BITS: u32 = 20;
 
 /// Head rows a step packs at most, unless one key holds more.
 pub(crate) const STEP_ROWS: usize = 2048;
@@ -60,9 +71,12 @@ pub(crate) fn step(tx: &Tx<'_>, index: i64, most_rows: usize) -> Result<Packed> 
     let (Some(first), Some(last)) = (rows.first().map(|row| row.0), rows.last().map(|row| row.0)) else {
         return Ok(Packed { done: true, ..Packed::default() });
     };
+    let mut averages = Averages::of(index);
     for run in rows.chunk_by(|a, b| a.0 == b.0) {
+        let key = run[0].0;
         let fresh: Vec<Posting> = run.iter().map(|(_, posting)| *posting).collect();
-        append(tx, run[0].0, &fresh).map_err(|error| error.within(format!("key {}", run[0].0)))?;
+        let packed = averages.of_key(tx, key).and_then(|average| append(tx, key, &fresh, average));
+        packed.map_err(|error| error.within(format!("key {key}")))?;
     }
     execute(tx, DROP_HEAD, (index, first, last), "drop packed postings")?;
     Ok(Packed { postings: rows.len() as u64, done })
@@ -148,56 +162,207 @@ fn posting(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Posting)> {
     Ok((row.get(0)?, Posting { doc: row.get(1)?, tf: row.get(2)?, len: row.get(3)? }))
 }
 
-/// Appends a key's head postings to its list: a key short enough stays in
-/// its row, a list's short last block is filled before new blocks follow it.
-fn append(connection: &Connection, key: i64, fresh: &[Posting]) -> Result<()> {
-    let directory = match read_list(connection, key)? {
-        Stored::Blocks(directory) => directory,
-        Stored::Inline(inline) => return append_inline(connection, key, unpack_inline(&inline)?, fresh),
-        Stored::Nothing => return append_inline(connection, key, Vec::new(), fresh),
-    };
-    let mut entries = decode_directory(&directory)?;
-    let Some(last) = entries.pop() else { return write_blocks(connection, key, entries, fresh) };
-    let held = read_block(connection, key, last.first)?;
-    let room = BLOCK.saturating_sub(held.len()).min(fresh.len());
-    let (filling, rest) = fresh.split_at(room);
-    if filling.is_empty() {
-        entries.push(last);
-        return write_blocks(connection, key, entries, rest);
+/// The average a key's new blocks are bounded at, its part's now, each part
+/// read once a step.
+struct Averages {
+    index: i64,
+    parts: HashMap<u32, u16>,
+}
+
+impl Averages {
+    fn of(index: i64) -> Averages {
+        Averages { index, parts: HashMap::new() }
     }
-    // The block's own postings bound it by its entry; their lengths are not needed again.
-    let mut block: Vec<Posting> = held.iter().map(|&(doc, tf)| Posting { doc, tf, len: last.least_len }).collect();
-    block.extend_from_slice(filling);
-    let bound = entry_of(&block);
-    entries.push(Entry { most_tf: bound.most_tf.max(last.most_tf), ..bound });
-    execute(connection, WRITE_BLOCK, (key, last.first, pack(&block)), "write a block")?;
-    write_blocks(connection, key, entries, rest)
+
+    fn of_key(&mut self, connection: &Connection, key: i64) -> Result<u16> {
+        let failed = |error| sql_error("read a key's part", error);
+        let part: u32 = connection
+            .prepare_cached(READ_PART)
+            .and_then(|mut select| select.query_row([key], |row| row.get(0)))
+            .map_err(failed)?;
+        if let Some(average) = self.parts.get(&part) {
+            return Ok(*average);
+        }
+        let failed = |error| sql_error("read a part's lengths", error);
+        let (tokens, documents): (i64, i64) = connection
+            .prepare_cached(READ_TOKENS)
+            .and_then(|mut select| {
+                select.query_row((self.index, part), |row| Ok((row.get(0)?, row.get(1)?))).optional()
+            })
+            .map_err(failed)?
+            .unwrap_or((0, 0));
+        let bounded_at = reference(average(tokens.max(0) as u64, documents.max(0) as u64));
+        self.parts.insert(part, bounded_at);
+        Ok(bounded_at)
+    }
+}
+
+/// The average a key's blocks are bounded at when a purge writes them,
+/// read for the one key.
+pub(super) fn average_of(connection: &Connection, index: i64, key: i64) -> Result<u16> {
+    Averages::of(index).of_key(connection, key)
+}
+
+/// Appends a key's head postings to its list: a key short enough stays in
+/// its row, else its last block is filled before new blocks follow it in
+/// its runs, each bounded at `average`.
+fn append(connection: &Connection, key: i64, fresh: &[Posting], average: u16) -> Result<()> {
+    let mut list = match read_list(connection, key)? {
+        Stored::Packed(directory) => Runs::of(connection, key, Directory::decode(&directory)?)?,
+        Stored::Legacy(directory) => Legacy::decode(key, &directory)?.into_runs(connection, average)?,
+        Stored::Inline(inline) => return append_inline(connection, key, unpack_inline(&inline)?, fresh, average),
+        Stored::Nothing => return append_inline(connection, key, Vec::new(), fresh, average),
+    };
+    let filled = list.fill(fresh)?;
+    for block in fresh[filled..].chunks(BLOCK) {
+        list.push(connection, block, bound_of(block, average), average)?;
+    }
+    list.finish(connection).map(drop)
 }
 
 /// Appends to a key that keeps its postings in its own row: in it still
-/// while they are few enough, else in blocks.
-fn append_inline(connection: &Connection, key: i64, mut all: Vec<Posting>, fresh: &[Posting]) -> Result<()> {
+/// while they are few enough, else in runs.
+fn append_inline(
+    connection: &Connection,
+    key: i64,
+    mut all: Vec<Posting>,
+    fresh: &[Posting],
+    average: u16,
+) -> Result<()> {
     all.extend_from_slice(fresh);
     if all.len() <= INLINE {
         return execute(connection, WRITE_LIST, (key, None::<Vec<u8>>, pack_inline(&all)), "write a list").map(drop);
     }
-    write_blocks(connection, key, Vec::new(), &all)
+    let mut list = Runs::new(key)?;
+    for block in all.chunks(BLOCK) {
+        list.push(connection, block, bound_of(block, average), average)?;
+    }
+    list.finish(connection).map(drop)
 }
 
-/// Writes `fresh` in new blocks after `entries`, and the list's directory.
-fn write_blocks(connection: &Connection, key: i64, mut entries: Vec<Entry>, fresh: &[Posting]) -> Result<()> {
-    for block in fresh.chunks(BLOCK) {
-        entries.push(entry_of(block));
-        execute(connection, WRITE_BLOCK, (key, block[0].doc, pack(block)), "write a block")?;
+/// A key's list in runs as packing or a purge writes it: its directory, and
+/// the bytes of its last run, which takes the blocks pushed till it holds
+/// 32 KiB. Every other run is written as it fills; the last and the
+/// directory when it finishes.
+pub(super) struct Runs {
+    key: i64,
+    directory: Directory,
+    last: Vec<u8>,
+}
+
+impl Runs {
+    pub(super) fn new(key: i64) -> Result<Runs> {
+        // a run's id holds its key's above its own number
+        if key >> (63 - RUN_BITS) != 0 {
+            return Err(Error::limit(format!("key {key}: past the keys a run's id can name")));
+        }
+        Ok(Runs { key, directory: Directory::default(), last: Vec::new() })
     }
-    execute(connection, WRITE_LIST, (key, encode_directory(&entries), None::<Vec<u8>>), "write a list").map(drop)
+
+    /// A key's list as its directory and its last run hold it.
+    pub(super) fn of(connection: &Connection, key: i64, directory: Directory) -> Result<Runs> {
+        let last = match directory.runs.last() {
+            Some(run) => read_run(connection, run.id)?,
+            None => Vec::new(),
+        };
+        Ok(Runs { directory, last, ..Runs::new(key)? })
+    }
+
+    /// Fills the last block with the first of `fresh` while it holds fewer
+    /// than a block's postings, bounded at its own average; says how many it
+    /// took. The block's own postings keep its bound, their lengths unread.
+    fn fill(&mut self, fresh: &[Posting]) -> Result<usize> {
+        let Some(index) = self.directory.blocks.len().checked_sub(1) else { return Ok(0) };
+        let placed = self.directory.blocks[index];
+        let bytes = self.directory.bytes_of(index, self.last.len());
+        let mut held = Vec::new();
+        packed::unpack(&self.last[bytes.clone()], placed.first, &mut held)?;
+        let room = BLOCK.saturating_sub(held.len()).min(fresh.len());
+        if room == 0 {
+            return Ok(0);
+        }
+        let mut block: Vec<Posting> = held.into_iter().map(|(doc, tf)| Posting { doc, tf, len: 0 }).collect();
+        block.extend_from_slice(&fresh[..room]);
+        self.last.truncate(bytes.start);
+        packed::pack(&block, &mut self.last);
+        let bound = placed.bound.max(bound_of(&fresh[..room], placed.average));
+        self.directory.blocks[index] = Placed { last: block[block.len() - 1].doc, bound, ..placed };
+        Ok(room)
+    }
+
+    /// Appends a block to the last run, or to a new one once it holds 32 KiB.
+    pub(super) fn push(&mut self, connection: &Connection, block: &[Posting], bound: f32, average: u16) -> Result<()> {
+        if self.directory.runs.is_empty() || self.last.len() >= RUN_BYTES {
+            self.next_run(connection)?;
+        }
+        let at = u16::try_from(self.last.len()).map_err(|_| Error::internal("a block starts past its run's place"))?;
+        packed::pack(block, &mut self.last);
+        let (first, last) = (block[0].doc, block[block.len() - 1].doc);
+        self.directory.blocks.push(Placed { first, last, bound, average, at });
+        Ok(())
+    }
+
+    /// Writes the last run and begins the next, numbered after it.
+    fn next_run(&mut self, connection: &Connection) -> Result<()> {
+        let number = match self.directory.runs.last() {
+            Some(run) => {
+                execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
+                (run.id & ((1 << RUN_BITS) - 1)) + 1
+            }
+            None => 0,
+        };
+        if number >> RUN_BITS != 0 {
+            return Err(Error::limit("a key's postings past the runs its directory can name"));
+        }
+        let first_block = self.directory.blocks.len() as u32;
+        self.directory.runs.push(Run { id: self.key << RUN_BITS | number, first_block });
+        self.last.clear();
+        Ok(())
+    }
+
+    /// Writes the last run and the directory; says the directory.
+    pub(super) fn finish(self, connection: &Connection) -> Result<Directory> {
+        if let Some(run) = self.directory.runs.last() {
+            execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
+        }
+        write_directory(connection, self.key, &self.directory)?;
+        Ok(self.directory)
+    }
+}
+
+pub(super) fn write_directory(connection: &Connection, key: i64, directory: &Directory) -> Result<()> {
+    execute(connection, WRITE_PACKED, (key, directory.encode()), "write a list").map(drop)
+}
+
+/// Every document a key's runs hold, in order.
+pub(super) fn documents(connection: &Connection, directory: &Directory) -> Result<Vec<u32>> {
+    let (mut docs, mut pairs) = (Vec::new(), Vec::new());
+    for (place, run) in directory.runs.iter().enumerate() {
+        let bytes = read_run(connection, run.id)?;
+        for at in directory.blocks_of(place) {
+            packed::unpack(&bytes[directory.bytes_of(at, bytes.len())], directory.blocks[at].first, &mut pairs)?;
+            docs.extend(pairs.iter().map(|(doc, _)| *doc));
+        }
+    }
+    Ok(docs)
+}
+
+pub(super) fn read_run(connection: &Connection, id: i64) -> Result<Vec<u8>> {
+    let failed = |error| sql_error("read a run", error);
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(READ_RUN)
+        .and_then(|mut select| select.query_row([id], |row| row.get(0)).optional())
+        .map_err(failed)?;
+    bytes.ok_or_else(|| Error::corrupt(format!("run {id} a directory names is missing")))
 }
 
 /// A key's list as its row keeps it.
 #[derive(Debug)]
 pub(super) enum Stored {
-    /// The directory of its blocks.
-    Blocks(Vec<u8>),
+    /// The directory of its blocks in runs.
+    Packed(Vec<u8>),
+    /// The directory of its rows of blocks, as a release before 0002 wrote it.
+    Legacy(Vec<u8>),
     /// Its postings themselves.
     Inline(Vec<u8>),
     /// No row: the key's postings, if any, are all in the head.
@@ -207,23 +372,13 @@ pub(super) enum Stored {
 pub(super) fn read_list(connection: &Connection, key: i64) -> Result<Stored> {
     let failed = |error| sql_error("read a list", error);
     let stored = |row: &rusqlite::Row<'_>| {
-        Ok(match (row.get(0)?, row.get(1)?) {
-            (Some(directory), _) => Stored::Blocks(directory),
-            (None, Some(inline)) => Stored::Inline(inline),
-            (None, None) => Stored::Nothing,
+        Ok(match (row.get(2)?, row.get(0)?, row.get(1)?) {
+            (Some(packed), _, _) => Stored::Packed(packed),
+            (None, Some(directory), _) => Stored::Legacy(directory),
+            (None, None, Some(inline)) => Stored::Inline(inline),
+            (None, None, None) => Stored::Nothing,
         })
     };
     let row = connection.prepare_cached(READ_LIST).and_then(|mut select| select.query_row([key], stored).optional());
     Ok(row.map_err(failed)?.unwrap_or(Stored::Nothing))
-}
-
-pub(super) fn read_block(connection: &Connection, key: i64, first: u32) -> Result<Vec<(u32, u32)>> {
-    let failed = |error| sql_error("read a block", error);
-    let payload: Option<Vec<u8>> = connection
-        .prepare_cached(READ_BLOCK)
-        .and_then(|mut select| select.query_row((key, first), |row| row.get(0)).optional())
-        .map_err(failed)?;
-    let payload =
-        payload.ok_or_else(|| Error::corrupt(format!("block at document {first} its directory names is missing")))?;
-    unpack(&payload).map_err(|error| error.within(format!("block at document {first}")))
 }

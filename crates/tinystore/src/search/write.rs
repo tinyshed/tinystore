@@ -15,8 +15,10 @@
 //! part has. Packing and purging move postings and change no count, so they
 //! change no score.
 
-use rusqlite::Connection;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::LazyLock;
 
+use rusqlite::Connection;
 use serde_json::Value;
 
 use super::document::{Analyzed, analyze};
@@ -40,13 +42,20 @@ const LEAVE_INDEX: &str =
     "update _tinystore_search_indexes set documents = documents - 1, gone_version = gone_version + 1,
     words_version = words_version + ?2, vectors = vectors - ?3 where id = ?1";
 const NEXT_DOC: &str = "select next_doc from _tinystore_search_indexes where id = ?1";
-const JOIN_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, 1)
-    on conflict (index_id, part, term) do update set documents = documents + 1 returning id, documents";
+const JOIN_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, ?4)
+    on conflict (index_id, part, term) do update set documents = documents + excluded.documents
+    returning id, documents";
 const ADD_HEAD: &str = "insert into _tinystore_search_head (index_id, key, doc, tf, len) values (?1, ?2, ?3, ?4, ?5)";
+/// Postings a statement writes into the head, five values each.
+const HEAD_ROWS: usize = 64;
+static ADD_HEAD_ROWS: LazyLock<String> = LazyLock::new(|| {
+    let rows = vec!["(?, ?, ?, ?, ?)"; HEAD_ROWS].join(", ");
+    format!("insert into _tinystore_search_head (index_id, key, doc, tf, len) values {rows}")
+});
 const KEEP_DOC: &str =
     "insert into _tinystore_search_docs (index_id, doc, id, value, keys, lengths) values (?1, ?2, ?3, ?4, ?5, ?6)";
-const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2 + 1, documents = documents + 1,
-    words_version = words_version + ?3, vectors = vectors + ?4 where id = ?1";
+const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2, documents = documents + ?3,
+    words_version = words_version + ?4, vectors = vectors + ?5 where id = ?1";
 
 /// The last number an index gives: past it, [`END`](super::execute::END).
 const LAST_DOC: i64 = u32::MAX as i64 - 1;
@@ -104,41 +113,135 @@ impl Prepared {
 
 /// Sets a document, replacing the one of its id.
 pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
-    let index = document.index;
-    forget(tx, index, &document.id)?;
-    let doc: i64 = tx
-        .prepare_cached(NEXT_DOC)
+    set_all(tx, std::iter::once(document))
+}
+
+/// Sets documents of one index in their order, each replacing the one of its
+/// id. What they change is written once for them all rather than once a
+/// document: a key's count once however many of them hold it, the index's
+/// counts and each part's words once, and their postings into the head in
+/// the order of its keys, many a statement. A set of 1,000 passages of 50
+/// words wrote some 80 statements a document before.
+pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepared> + Clone) -> Result<()> {
+    let Some(index) = documents.clone().next().map(|document| document.index) else { return Ok(()) };
+    let (keys, new_words) = join_keys(tx, index, documents.clone())?;
+    let mut head = Head::default();
+    let mut next = next_doc(tx, index)?;
+    let (mut count, mut vectors) = (0_i64, 0_i64);
+    let mut tokens: BTreeMap<Part, i64> = BTreeMap::new();
+    let mut set_now: HashSet<&str> = HashSet::new();
+    for document in documents {
+        if !set_now.insert(&document.id) {
+            // the forget below finds the postings this batch gave its id
+            head.write(tx, index)?;
+        }
+        forget(tx, index, &document.id)?;
+        let doc = number(next)?;
+        next += 1;
+        let mut held = Vec::with_capacity(document.analyzed.terms.len());
+        for (part, term, tf) in &document.analyzed.terms {
+            let key = keys[&(*part, term.as_str())];
+            head.rows.push((key, doc, *tf, document.analyzed.length(*part)));
+            held.push(key);
+        }
+        for (part, len) in &document.analyzed.lengths {
+            *tokens.entry(*part).or_default() += i64::from(*len);
+        }
+        keep(tx, (index, doc), document, held)?;
+        count += 1;
+        vectors += i64::from(document.vector.is_some());
+    }
+    head.write(tx, index)?;
+    for (part, len) in tokens {
+        execute(tx, ADD_TOKENS, (index, part.0, len), "count a part's words")?;
+    }
+    let counted = (index, next, count, i64::from(new_words), vectors);
+    execute(tx, JOIN_INDEX, counted, "count documents").map(drop)
+}
+
+/// Keys' ids by their part and term.
+type Keys<'p> = HashMap<(Part, &'p str), i64>;
+
+/// The id of every key `documents` hold, each counted once for every one
+/// that holds it, in one statement a key, in the order of the keys' index;
+/// and whether any is a word as written no document held before.
+fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Prepared>) -> Result<(Keys<'p>, bool)> {
+    let mut holding: BTreeMap<(Part, &str), i64> = BTreeMap::new();
+    for document in documents {
+        for (part, term, _) in &document.analyzed.terms {
+            *holding.entry((*part, term.as_str())).or_default() += 1;
+        }
+    }
+    let failed = |error| sql_error("write a key", error);
+    let mut upsert = tx.prepare_cached(JOIN_KEY).map_err(failed)?;
+    let mut keys = HashMap::with_capacity(holding.len());
+    let mut new_words = false;
+    for ((part, term), count) in holding {
+        let (key, documents): (i64, i64) =
+            upsert.query_row((index, part.0, term, count), |row| Ok((row.get(0)?, row.get(1)?))).map_err(failed)?;
+        new_words |= documents == count && part.is_written();
+        keys.insert((part, term), key);
+    }
+    Ok((keys, new_words))
+}
+
+fn next_doc(tx: &Tx<'_>, index: i64) -> Result<i64> {
+    tx.prepare_cached(NEXT_DOC)
         .and_then(|mut select| select.query_row([index], |row| row.get(0)))
-        .map_err(|error| sql_error("number a document", error))?;
-    if doc > LAST_DOC {
+        .map_err(|error| sql_error("number a document", error))
+}
+
+/// The number `next` as a document's, while the index has numbers left.
+fn number(next: i64) -> Result<u32> {
+    if next > LAST_DOC {
         return Err(
             DOCUMENT_NUMBERS.run_out(format!("the index gave its {LAST_DOC} numbers: a set takes a number each"))
         );
     }
-    let mut keys = Vec::with_capacity(document.analyzed.terms.len());
-    let mut new_words = false;
-    for (part, term, tf) in &document.analyzed.terms {
-        let (key, documents) = join_key(tx, index, *part, term)?;
-        new_words |= documents == 1 && part.is_written();
-        let len = document.analyzed.length(*part);
-        execute(tx, ADD_HEAD, (index, key, doc, tf, len), "write a posting")?;
-        keys.push(key);
-    }
-    for (part, len) in &document.analyzed.lengths {
-        execute(tx, ADD_TOKENS, (index, part.0, len), "count a part's words")?;
-    }
+    Ok(next as u32)
+}
+
+/// Keeps a document's row, numbered `doc`, holding `keys`, and its vector.
+fn keep(tx: &Tx<'_>, (index, doc): (i64, u32), document: &Prepared, mut keys: Vec<i64>) -> Result<()> {
     keys.sort_unstable();
     let lengths: Vec<(u32, u32)> = document.analyzed.lengths.iter().map(|(part, len)| (part.0, *len)).collect();
     let row = (index, doc, &document.id, &document.value, encode_keys(&keys), encode_lengths(&lengths));
     execute(tx, KEEP_DOC, row, "keep a document")?;
     if let Some(vector) = &document.vector {
-        vectors::keep(tx, index, doc as u32, vector)?;
+        vectors::keep(tx, index, doc, vector)?;
         if document.clustered {
-            vectors::join_head(tx, index, doc as u32)?;
+            vectors::join_head(tx, index, doc)?;
         }
     }
-    let counted = (index, doc, i64::from(new_words), i64::from(document.vector.is_some()));
-    execute(tx, JOIN_INDEX, counted, "count a document").map(drop)
+    Ok(())
+}
+
+/// Postings of a set waiting for the head, as (key, doc, tf, len).
+#[derive(Default)]
+struct Head {
+    rows: Vec<(i64, u32, u32, u32)>,
+}
+
+impl Head {
+    /// Writes the postings waiting in the order of the head's keys,
+    /// `HEAD_ROWS` a statement, each insert near the one before it.
+    fn write(&mut self, tx: &Tx<'_>, index: i64) -> Result<()> {
+        self.rows.sort_unstable();
+        let failed = |error| sql_error("write postings", error);
+        let mut many = tx.prepare_cached(&ADD_HEAD_ROWS).map_err(failed)?;
+        let (chunks, rest) = self.rows.as_chunks::<HEAD_ROWS>();
+        for chunk in chunks {
+            let values = chunk
+                .iter()
+                .flat_map(|&(key, doc, tf, len)| [index, key, i64::from(doc), i64::from(tf), i64::from(len)]);
+            many.execute(rusqlite::params_from_iter(values)).map_err(failed)?;
+        }
+        for &(key, doc, tf, len) in rest {
+            execute(tx, ADD_HEAD, (index, key, doc, tf, len), "write a posting")?;
+        }
+        self.rows.clear();
+        Ok(())
+    }
 }
 
 /// Deletes the document of `id`; says whether there was one.
@@ -174,13 +277,6 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     let had_vector = vectors::forget(tx, index, doc as u32)?;
     execute(tx, LEAVE_INDEX, (index, i64::from(words_left), i64::from(had_vector)), "count a document")?;
     Ok(true)
-}
-
-/// A key one more document holds: its id, and how many hold it now.
-fn join_key(connection: &Connection, index: i64, part: Part, term: &str) -> Result<(i64, i64)> {
-    let mut upsert = connection.prepare_cached(JOIN_KEY).map_err(|error| sql_error("write a key", error))?;
-    let joined = upsert.query_row((index, part.0, term), |row| Ok((row.get(0)?, row.get(1)?)));
-    joined.map_err(|error| sql_error("write a key", error))
 }
 
 /// A key one fewer document holds: its part, and how many hold it now.

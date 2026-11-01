@@ -10,11 +10,14 @@
 //! by a vector reads every code of the index in it, a scan whose work is the
 //! fetch itself.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::ffi::CStr;
 use std::ops::Range;
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::blob::Blob;
+use rusqlite::{Connection, MAIN_DB, OptionalExtension};
 
 use super::analyzer::{self, Word};
 use super::clusters::{self, Phase, Probe};
@@ -24,9 +27,11 @@ use super::filter::{self, Docs, Reader};
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Moment, NORMS};
 use super::layouts;
+use super::legacy::{self, Legacy};
 use super::matches::{Ask, Sought};
 use super::pack::{Stored, read_list};
-use super::postings::{Posting, decode_directory, unpack, unpack_inline};
+use super::packed::{self, Directory};
+use super::postings::{Posting, unpack_inline};
 use super::score::{PREFIXED, Part, average, idf, score};
 use super::settings::Settings;
 use super::vectors::{self, Among, Question, Scan};
@@ -49,13 +54,10 @@ const FIND_PREFIXED: &str = "select id, documents, term from _tinystore_search_k
 const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys
     where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0)";
 const READ_HEAD: &str = "select doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
-pub(super) const READ_BLOCK: &str = "select payload from _tinystore_search_blocks where key = ?1 and first = ?2";
-const READ_BLOCKS: &str =
-    "select first, payload from _tinystore_search_blocks where key = ?1 and first >= ?2 and first <= ?3 order by first";
+const RUNS: &CStr = c"_tinystore_search_runs";
+const BLOCKS: &CStr = c"blocks";
 const READ_HIT: &str = "select id, value from _tinystore_search_docs where index_id = ?1 and doc = ?2";
 
-/// Blocks a statement reads at once while a list is read in order.
-const AHEAD: usize = 8;
 /// The words a prefix is read as in a field at most, those most documents
 /// hold: each one's postings are read whole before the search scores.
 const MOST_PREFIXED: usize = 64;
@@ -413,7 +415,7 @@ struct Lists {
 /// The lists of a search's keys, and in each field the list of the words
 /// each word it reads as a prefix begins.
 fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut Source<'_>) -> Result<Lists> {
-    let mut found = keyed_lists(connection, asked, stats)?;
+    let mut found = keyed_lists(connection, asked, (stats, &mut *source))?;
     let mut begun: HashMap<&str, Vec<usize>> = HashMap::new();
     for at in prefixes(&asked.query) {
         let text = asked.query.words[at].text.as_str();
@@ -435,11 +437,15 @@ fn lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats, source: &mut
 
 /// The lists of the keys a search's words are found by, each once, and
 /// which find each word.
-fn keyed_lists(connection: &Connection, asked: &Asked<'_>, stats: &Stats) -> Result<Lists> {
+fn keyed_lists(
+    connection: &Connection,
+    asked: &Asked<'_>,
+    (stats, source): (&Stats, &mut Source<'_>),
+) -> Result<Lists> {
     let mut lists = Vec::new();
     let mut placed: HashMap<(Part, String), usize> = HashMap::new();
     for form in forms(&asked.query.words, asked.settings) {
-        if let Some(list) = list(connection, asked, stats, &form)? {
+        if let Some(list) = list(connection, asked, (stats, &mut *source), &form)? {
             placed.insert(form, lists.len());
             lists.push(list);
         }
@@ -670,20 +676,20 @@ fn corrector(connection: &Connection, asked: &Asked<'_>, version: i64, behind: &
 fn list(
     connection: &Connection,
     asked: &Asked<'_>,
-    stats: &Stats,
+    (stats, source): (&Stats, &mut Source<'_>),
     (part, term): &(Part, String),
 ) -> Result<Option<List>> {
     let Some(found) = find(connection, asked.index, *part, term)? else { return Ok(None) };
-    keyed(connection, asked, stats, (*part, found))
+    keyed(connection, asked, (stats, source), (*part, found))
 }
 
 /// A key's list, `holding` documents holding it: its blocks by its
-/// directory, or its postings in its own row, then its head; nothing when
-/// no document holds it.
+/// directory, which `source` keeps to read them by, or its postings in its
+/// own row, then its head; nothing when no document holds it.
 fn keyed(
     connection: &Connection,
     asked: &Asked<'_>,
-    stats: &Stats,
+    (stats, source): (&Stats, &mut Source<'_>),
     (part, (key, holding)): (Part, (i64, u64)),
 ) -> Result<Option<List>> {
     let Some(weight) = asked.settings.weight(part.field()) else { return Ok(None) };
@@ -696,11 +702,14 @@ fn keyed(
     let gone = &stats.gone.docs;
     let within = |error: Error| error.within(format!("key {key}"));
     match read_list(connection, key).map_err(within)? {
-        Stored::Blocks(directory) => {
-            for entry in decode_directory(&directory).map_err(within)? {
-                list.push(list.stored(entry.first, entry.last, entry.most_tf, entry.least_len));
+        Stored::Packed(directory) => {
+            let directory = Directory::decode(&directory).map_err(within)?;
+            for block in &directory.blocks {
+                list.push(list.packed(block));
             }
+            source.packed.insert(key, directory);
         }
+        Stored::Legacy(directory) => Legacy::decode(key, &directory).map_err(within)?.onto(&mut list),
         Stored::Inline(inline) => push_held(&mut list, unpack_inline(&inline).map_err(within)?, gone),
         Stored::Nothing => {}
     }
@@ -727,7 +736,7 @@ fn prefixed(
     let Some(past) = past(prefix) else { return Ok(None) };
     let mut postings = Vec::new();
     for found in words_starting(connection, asked.index, part, (prefix, &past))? {
-        if let Some(list) = keyed(connection, asked, stats, (part, found))? {
+        if let Some(list) = keyed(connection, asked, (stats, &mut *source), (part, found))? {
             postings.extend(list.into_postings(source)?);
         }
     }
@@ -843,72 +852,88 @@ fn hit(connection: &Connection, index: i64, doc: u32, score: f64) -> Result<(Str
     Ok((id, value, score))
 }
 
-/// Where a search's blocks come from: SQLite, a statement a block or eight
-/// of them read in order, their lengths from the rows of lengths kept.
+/// Where a search's blocks come from: a run's at its place through a blob
+/// handle a list, or a list a release before 0002 wrote as `legacy.rs` reads
+/// it; their lengths from the rows of lengths kept.
 struct Source<'a> {
     connection: &'a Connection,
     asked: &'a Asked<'a>,
     moment: Moment,
     gone: &'a HashSet<u32>,
     chunks: HashMap<(Part, u32), Arc<Chunk>>,
-    /// Blocks read ahead of the one asked for, by key and place.
-    ahead: HashMap<(i64, usize), Vec<Posting>>,
+    /// The directory of each list whose blocks are in runs, by its key.
+    packed: HashMap<i64, Directory>,
+    /// Each such list's handle, by its key, and the run it is on.
+    handles: HashMap<i64, (i64, Blob<'a>)>,
+    bytes: Vec<u8>,
+    pairs: Vec<(u32, u32)>,
 }
 
 impl Fetch for Source<'_> {
     fn block(&mut self, list: &List, index: usize) -> Result<Vec<Posting>> {
-        if let Some(postings) = self.ahead.remove(&(list.key, index)) {
-            return Ok(postings);
+        if self.packed.contains_key(&list.key) {
+            return self.packed_block(list.key, list.part, index).map_err(|error| {
+                error.within(format!("key {}: block at document {}", list.key, list.first_of(index)))
+            });
         }
-        let last = if list.in_order(index) { list.stored_after(index, AHEAD - 1) } else { index };
-        let payloads = self.payloads(list, index, last).map_err(|error| error.within(format!("key {}", list.key)))?;
-        let mut wanted = Vec::new();
-        for (offset, payload) in payloads.into_iter().enumerate() {
-            let postings = self.postings(list.part, &payload).map_err(|error| {
-                error.within(format!("key {}: block at document {}", list.key, list.first_of(index + offset)))
-            })?;
-            if offset == 0 {
-                wanted = postings;
-            } else {
-                self.ahead.insert((list.key, index + offset), postings);
-            }
-        }
-        Ok(wanted)
+        let pairs = legacy::block(self.connection, list.key, list.first_of(index));
+        let postings = pairs.and_then(|pairs| self.lengthened(list.part, pairs.into_iter()));
+        postings.map_err(|error| error.within(format!("key {}: block at document {}", list.key, list.first_of(index))))
     }
 }
 
 impl<'a> Source<'a> {
     fn new(connection: &'a Connection, asked: &'a Asked<'a>, moment: Moment, stats: &'a Stats) -> Source<'a> {
-        Source { connection, asked, moment, gone: &stats.gone.docs, chunks: HashMap::new(), ahead: HashMap::new() }
+        Source {
+            connection,
+            asked,
+            moment,
+            gone: &stats.gone.docs,
+            chunks: HashMap::new(),
+            packed: HashMap::new(),
+            handles: HashMap::new(),
+            bytes: Vec::new(),
+            pairs: Vec::new(),
+        }
     }
 
-    /// The payloads of blocks `index` to `last` of a list, each the one its
-    /// directory names.
-    fn payloads(&self, list: &List, index: usize, last: usize) -> Result<Vec<Vec<u8>>> {
-        let failed = |error| sql_error("read a block", error);
-        let missing =
-            || Error::corrupt(format!("block at document {} its directory names is missing", list.first_of(index)));
-        if last == index {
-            let mut select = self.connection.prepare_cached(READ_BLOCK).map_err(failed)?;
-            let payload = select.query_row((list.key, list.first_of(index)), |row| row.get(0)).optional();
-            return Ok(vec![payload.map_err(failed)?.ok_or_else(missing)?]);
-        }
-        let mut select = self.connection.prepare_cached(READ_BLOCKS).map_err(failed)?;
-        let range = (list.key, list.first_of(index), list.first_of(last));
-        let rows = select.query_map(range, |row| Ok((row.get::<_, u32>(0)?, row.get::<_, Vec<u8>>(1)?)));
-        let rows: Vec<(u32, Vec<u8>)> = rows.and_then(Iterator::collect).map_err(failed)?;
-        let named = rows.iter().zip(index..=last).all(|((first, _), at)| *first == list.first_of(at));
-        if rows.len() != last - index + 1 || !named {
-            return Err(missing());
-        }
-        Ok(rows.into_iter().map(|(_, payload)| payload).collect())
+    /// A block of a run, its bytes read at their place through its list's
+    /// handle, which moves from run to run rather than a statement a block:
+    /// search-fast measured 12 % of p99 so.
+    fn packed_block(&mut self, key: i64, part: Part, index: usize) -> Result<Vec<Posting>> {
+        let failed = |error| sql_error("read a run", error);
+        let directory = &self.packed[&key];
+        let run = directory.runs[directory.run_of(index)].id;
+        let handle = match self.handles.entry(key) {
+            Entry::Occupied(held) => {
+                let held = held.into_mut();
+                if held.0 != run {
+                    held.1.reopen(run).map_err(failed)?;
+                    held.0 = run;
+                }
+                &held.1
+            }
+            Entry::Vacant(free) => {
+                let connection: &'a Connection = self.connection;
+                &free.insert((run, connection.blob_open(MAIN_DB, RUNS, BLOCKS, run, true).map_err(failed)?)).1
+            }
+        };
+        let lying = directory.bytes_of(index, handle.len());
+        self.bytes.resize(lying.len(), 0);
+        handle.read_at_exact(&mut self.bytes, lying.start).map_err(failed)?;
+        packed::unpack(&self.bytes, directory.blocks[index].first, &mut self.pairs)?;
+        let pairs = std::mem::take(&mut self.pairs);
+        let postings = self.lengthened(part, pairs.iter().copied());
+        self.pairs = pairs;
+        postings
     }
 
-    /// A block's postings, documents gone left out, each with its length.
-    fn postings(&mut self, part: Part, payload: &[u8]) -> Result<Vec<Posting>> {
+    /// Documents and their frequencies as postings, those gone left out, each
+    /// with its length.
+    fn lengthened(&mut self, part: Part, pairs: impl Iterator<Item = (u32, u32)>) -> Result<Vec<Posting>> {
         let mut postings = Vec::with_capacity(super::postings::BLOCK);
         let mut chunk: Option<(u32, Arc<Chunk>)> = None;
-        for (doc, tf) in unpack(payload)? {
+        for (doc, tf) in pairs {
             if self.gone.contains(&doc) {
                 continue;
             }

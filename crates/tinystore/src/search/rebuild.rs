@@ -67,9 +67,12 @@ const LIST: &str = "select id, name, documents, vectors, opened_at from _tinysto
     where dropping = 0 and beside_of is null order by name";
 
 /// What a step of dropping deletes, each a few rows of one table: a key's
-/// blocks go before its list and the key, so that no block outlives the key
-/// that names it.
+/// runs and blocks go before its list and the key, so that no block outlives
+/// the key that names it. A key's runs are the ids of its id × 2²⁰ onward.
 const DROP_STEPS: &[&str] = &[
+    "delete from _tinystore_search_runs where id in
+        (select r.id from (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64) as k
+        join _tinystore_search_runs as r on r.id >= k.id << 20 and r.id < (k.id + 1) << 20)",
     "delete from _tinystore_search_blocks where key in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_lists where key in
@@ -209,14 +212,16 @@ fn copy(tx: &Tx<'_>, (serving, beside): (i64, i64), step: &Copy) -> Result<bool>
     if !live.map_err(failed)? {
         return Ok(false);
     }
+    let mut still = Vec::with_capacity(step.documents.len());
     for (doc, prepared) in &step.documents {
         let there = tx
             .prepare_cached(STILL_THERE)
             .and_then(|mut select| select.query_row((serving, doc), |row| row.get::<_, bool>(0)));
         if there.map_err(failed)? {
-            write::set(tx, prepared)?;
+            still.push(prepared);
         }
     }
+    write::set_all(tx, still.into_iter())?;
     execute(tx, WRITE_COPIED, (beside, step.through), "write how far a rebuild read")?;
     Ok(true)
 }

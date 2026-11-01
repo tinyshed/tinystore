@@ -28,7 +28,7 @@ fn list(key: i64, postings: &[Posting], random: &mut Random, memory: &mut Memory
             let held = list.in_hand(block.to_vec());
             list.push(held);
         } else {
-            let entry = crate::search::postings::entry_of(block);
+            let entry = crate::search::legacy::written::entry_of(block);
             memory.0.insert((key, list.blocks.len()), block.to_vec());
             let stored = list.stored(entry.first, entry.last, entry.most_tf, entry.least_len);
             list.push(stored);

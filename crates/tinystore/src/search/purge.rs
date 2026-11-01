@@ -11,10 +11,10 @@ use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::Connection;
 
-use super::pack::{Stored, WRITE_BLOCK, WRITE_LIST, read_block, read_list};
-use super::postings::{
-    Entry, Posting, decode_directory, decode_keys, encode_directory, entry_of, pack, pack_inline, unpack_inline,
-};
+use super::legacy::Legacy;
+use super::pack::{DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, read_list, read_run, write_directory};
+use super::packed::{self, Directory, Placed, Run};
+use super::postings::{Posting, decode_keys, pack_inline, unpack_inline};
 use super::write::execute;
 use crate::Result;
 use crate::sqlite::{Tx, sql_error};
@@ -22,7 +22,6 @@ use crate::sqlite::{Tx, sql_error};
 const READ_GONE: &str = "select doc, keys from _tinystore_search_gone where index_id = ?1";
 const COUNT_GONE: &str = "select (select count(*) from _tinystore_search_gone where index_id = ?1), documents
     from _tinystore_search_indexes where id = ?1";
-const DROP_BLOCK: &str = "delete from _tinystore_search_blocks where key = ?1 and first = ?2";
 const DROP_LIST: &str = "delete from _tinystore_search_lists where key = ?1";
 const DROP_EMPTY_KEY: &str = "delete from _tinystore_search_keys where id = ?1 and documents = 0";
 const FORGET_GONE: &str = "delete from _tinystore_search_gone where index_id = ?1 and doc = ?2";
@@ -74,7 +73,7 @@ impl Purge {
     pub(crate) fn step(&self, tx: &Tx<'_>, index: i64, most_keys: usize) -> Result<usize> {
         let end = (self.at + most_keys).min(self.keys.len());
         for (key, docs) in &self.keys[self.at..end] {
-            take_out(tx, *key, docs).map_err(|error| error.within(format!("key {key}")))?;
+            take_out(tx, index, *key, docs).map_err(|error| error.within(format!("key {key}")))?;
         }
         if end == self.keys.len() {
             for doc in &self.docs {
@@ -98,13 +97,19 @@ impl Purge {
 }
 
 /// Takes `docs`, sorted, out of a key's list: out of its own row if short,
-/// else out of each block whose range holds one, written again or dropped
-/// once empty, its directory with them. A key no document holds any more
-/// and whose list is empty is forgotten.
-fn take_out(connection: &Connection, key: i64, docs: &[u32]) -> Result<()> {
+/// else out of each block whose range holds one, its run written again or
+/// dropped once empty, its directory with them. A key a release before 0002
+/// wrote in rows of blocks is written in runs first. A key no document holds
+/// any more and whose list is empty is forgotten.
+fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Result<()> {
     let gone: HashSet<u32> = docs.iter().copied().collect();
     let left = match read_list(connection, key)? {
-        Stored::Blocks(directory) => take_out_of_blocks(connection, key, decode_directory(&directory)?, docs, &gone)?,
+        Stored::Packed(directory) => take_out_of_runs(connection, key, Directory::decode(&directory)?, docs, &gone)?,
+        Stored::Legacy(directory) => {
+            let average = average_of(connection, index, key)?;
+            let runs = Legacy::decode(key, &directory)?.into_runs(connection, average)?;
+            take_out_of_runs(connection, key, runs.finish(connection)?, docs, &gone)?
+        }
         Stored::Inline(inline) => {
             let mut postings = unpack_inline(&inline)?;
             postings.retain(|posting| !gone.contains(&posting.doc));
@@ -122,46 +127,80 @@ fn take_out(connection: &Connection, key: i64, docs: &[u32]) -> Result<()> {
     Ok(())
 }
 
-/// Takes `docs` out of the blocks that may hold them; says how many blocks
-/// the list keeps.
-fn take_out_of_blocks(
+/// Takes `docs` out of the blocks that may hold them, each run that holds
+/// one written again; says how many blocks the list keeps.
+fn take_out_of_runs(
     connection: &Connection,
     key: i64,
-    mut entries: Vec<Entry>,
+    directory: Directory,
     docs: &[u32],
     gone: &HashSet<u32>,
 ) -> Result<usize> {
+    let blocks = &directory.blocks;
     let mut touched: Vec<usize> = docs
         .iter()
         .filter_map(|doc| {
-            let at = entries.partition_point(|entry| entry.first <= *doc).checked_sub(1)?;
-            (*doc <= entries[at].last).then_some(at)
+            let at = blocks.partition_point(|block| block.first <= *doc).checked_sub(1)?;
+            (*doc <= blocks[at].last).then_some(at)
         })
         .collect();
     touched.dedup();
-    for at in touched.into_iter().rev() {
-        let first = entries[at].first;
-        let held = read_block(connection, key, first)?;
-        let kept: Vec<Posting> = held
-            .iter()
-            .filter(|(doc, _)| !gone.contains(doc))
-            .map(|&(doc, tf)| Posting { doc, tf, len: entries[at].least_len })
-            .collect();
-        if kept.len() == held.len() {
+    if touched.is_empty() {
+        return Ok(blocks.len());
+    }
+    let mut kept = Directory::default();
+    for (place, run) in directory.runs.iter().enumerate() {
+        let range = directory.blocks_of(place);
+        let first_block = kept.blocks.len() as u32;
+        if !touched.iter().any(|at| range.contains(at)) {
+            kept.runs.push(Run { first_block, ..*run });
+            kept.blocks.extend_from_slice(&blocks[range]);
             continue;
         }
-        execute(connection, DROP_BLOCK, (key, first), "drop a block")?;
-        if kept.is_empty() {
-            entries.remove(at);
+        let written = take_out_of_run(connection, (&directory, place), (&touched, gone), &mut kept.blocks)?;
+        if written.is_empty() {
+            execute(connection, DROP_RUN, [run.id], "drop a run")?;
+        } else {
+            execute(connection, WRITE_RUN, (run.id, &written), "write a run")?;
+            kept.runs.push(Run { first_block, ..*run });
+        }
+    }
+    if !kept.blocks.is_empty() {
+        write_directory(connection, key, &kept)?;
+    }
+    Ok(kept.blocks.len())
+}
+
+/// The bytes of the run at `place` once the gone are out of its `touched`
+/// blocks, a block left empty dropped; each block it keeps onto `kept`, at
+/// its new place. A block keeps its bound, which fewer postings never pass,
+/// so that no length is read again.
+fn take_out_of_run(
+    connection: &Connection,
+    (directory, place): (&Directory, usize),
+    (touched, gone): (&[usize], &HashSet<u32>),
+    kept: &mut Vec<Placed>,
+) -> Result<Vec<u8>> {
+    let run = directory.runs[place].id;
+    let bytes = read_run(connection, run)?;
+    let mut written = Vec::with_capacity(bytes.len());
+    let mut held = Vec::new();
+    for at in directory.blocks_of(place) {
+        let block = directory.blocks[at];
+        let lying = directory.bytes_of(at, bytes.len());
+        let start = written.len() as u16;
+        if touched.binary_search(&at).is_err() {
+            written.extend_from_slice(&bytes[lying]);
+            kept.push(Placed { at: start, ..block });
             continue;
         }
-        // Lengths are not read again: the block keeps its least as a bound.
-        let bound = entry_of(&kept);
-        entries[at] = Entry { most_tf: bound.most_tf, least_len: entries[at].least_len, ..bound };
-        execute(connection, WRITE_BLOCK, (key, kept[0].doc, pack(&kept)), "write a block")?;
+        packed::unpack(&bytes[lying], block.first, &mut held).map_err(|error| error.within(format!("run {run}")))?;
+        let left: Vec<Posting> =
+            held.iter().filter(|(doc, _)| !gone.contains(doc)).map(|&(doc, tf)| Posting { doc, tf, len: 0 }).collect();
+        if let (Some(first), Some(last)) = (left.first(), left.last()) {
+            packed::pack(&left, &mut written);
+            kept.push(Placed { first: first.doc, last: last.doc, at: start, ..block });
+        }
     }
-    if !entries.is_empty() {
-        execute(connection, WRITE_LIST, (key, encode_directory(&entries), None::<Vec<u8>>), "write a list")?;
-    }
-    Ok(entries.len())
+    Ok(written)
 }

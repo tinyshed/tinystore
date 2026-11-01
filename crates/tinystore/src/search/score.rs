@@ -74,7 +74,7 @@ pub(crate) fn idf(documents: u64, holding: u64) -> f64 {
 
 /// What a key `tf` times in a part of `len` words adds, before its weight
 /// and idf.
-fn saturated(tf: u32, len: u32, average: f64) -> f64 {
+pub(crate) fn saturated(tf: u32, len: u32, average: f64) -> f64 {
     let tf = f64::from(tf);
     tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * f64::from(len) / average))
 }
@@ -83,6 +83,16 @@ fn saturated(tf: u32, len: u32, average: f64) -> f64 {
 pub(crate) fn points(scale: f64, tf: u32, len: u32, average: f64) -> u64 {
     // `as` saturates: an absurd weight caps a score rather than wrapping it.
     (scale * saturated(tf, len, average) * POINT).round() as u64
+}
+
+/// The most a block adds at `average` whose postings saturate `bound` at
+/// most at `packed`, the average it was packed at: no posting saturates
+/// more than bound × max(1, average / packed), as `packed.rs` shows. Its
+/// few products round by far less than the margin, so that the bound stays
+/// above every posting's points as [`points`] rounds them.
+pub(crate) fn bound(scale: f64, bound: f32, packed: u16, average: f64) -> u64 {
+    let grown = (average / f64::from(packed)).max(1.0);
+    ((scale * f64::from(bound) * grown * POINT) * (1.0 + 1e-9)).ceil().max(0.0) as u64 + 1
 }
 
 /// A score as a hit says it.
@@ -111,6 +121,21 @@ mod tests {
                                 assert!(points(scale, tf, len, average) <= bound);
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bound_packed_at_one_average_is_never_below_a_postings_points_at_another() {
+        for scale in [0.001, 0.37, 1.0, 7.5, 312.0] {
+            for packed in [1_u16, 2, 13, 120, 9_000] {
+                for average in [1.0, 1.7, 12.9, 120.0, 400.0, 65_535.0] {
+                    for (tf, len) in [(1, 0), (1, 1), (3, 7), (40, 2), (1, 65_535), (900, 400)] {
+                        let posting = crate::search::postings::Posting { doc: 1, tf, len };
+                        let at_most = crate::search::packed::bound_of(&[posting], packed);
+                        assert!(points(scale, tf, len, average) <= bound(scale, at_most, packed, average));
                     }
                 }
             }

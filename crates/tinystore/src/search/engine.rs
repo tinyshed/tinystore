@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::legacy;
 use super::open::{Beside, Current, Data, OpenIndex};
 use super::read::{self, Answer, Asked, Query};
 use super::rebuild;
@@ -31,10 +32,16 @@ use crate::sqlite::{Config, File, Migration, Tx, sql_error};
 use crate::sync::lock;
 use crate::{Error, Memory, Result, Store};
 
-const MIGRATIONS: &[Migration] = &[Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql"))];
+const MIGRATIONS: &[Migration] = &[
+    Migration::of(1, "0001_schema.sql", include_str!("migrations/0001_schema.sql")),
+    Migration::of(2, "0002_packed.sql", include_str!("migrations/0002_packed.sql")),
+];
 
 /// search's file in the store's directory.
 pub(crate) const FILE: &str = "search.db";
+/// Steps of writing a release's lists again in runs a pass of maintenance
+/// takes at most: 65,536 rows of blocks, about eight million postings.
+const CONVERT_STEPS: usize = 16;
 /// How often maintenance looks for work, unless a set wakes it sooner.
 const MAINTENANCE: Duration = Duration::from_secs(10);
 /// The bytes of JSON an awaited set makes the words of in its poll, on the
@@ -358,7 +365,7 @@ impl Search {
             return Ok(());
         }
         let bytes = prepared.iter().map(Prepared::bytes).sum();
-        self.file.write(bytes, move |tx| prepared.iter().try_for_each(|document| write::set(tx, document)))?;
+        self.file.write(bytes, move |tx| write::set_all(tx, prepared.iter()))?;
         drop(current);
         self.count_sets(open, count);
         Ok(())
@@ -397,7 +404,7 @@ impl Search {
         }
         let bytes = prepared.iter().map(Prepared::bytes).sum();
         let search = Arc::clone(self);
-        let write = move |tx: &Tx<'_>| prepared.iter().try_for_each(|document| write::set(tx, document));
+        let write = move |tx: &Tx<'_>| write::set_all(tx, prepared.iter());
         self.file.submit(bytes, write, move |written| {
             let open = Arc::clone(held.open());
             drop(held);
@@ -554,7 +561,24 @@ impl Search {
             }
         }
         self.drop_rows()?;
+        self.convert_legacy(everything)?;
         failed.map_or(Ok(done), Err)
+    }
+
+    /// Writes again in runs, a step a commit, the lists a release before
+    /// 0002 wrote, `CONVERT_STEPS` steps a pass unless `everything`, so that
+    /// a pass that meets a large file still comes back to its heads soon.
+    fn convert_legacy(&self, everything: bool) -> Result<()> {
+        if !self.file.read(legacy::any)? {
+            return Ok(());
+        }
+        let steps = if everything { usize::MAX } else { CONVERT_STEPS };
+        for _ in 0..steps {
+            if !self.file.transaction(|tx| legacy::convert_step(tx, legacy::CONVERT_BLOCKS))? {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn maintain_one(&self, open: &OpenIndex, everything: bool, done: &mut Maintenance) -> Result<()> {

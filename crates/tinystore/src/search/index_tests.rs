@@ -107,9 +107,19 @@ fn set_many_sets_every_document_in_one_commit_or_none() {
     let articles = fixture.articles::<Article>("articles");
     let (first, second) = (article("Rye bread", "flour"), article("Sourdough", "starter"));
     articles.set_many([("a-1", &first), ("a-2", &second), ("a-1", &article("Baguette", "crust"))]).unwrap();
-    assert_eq!(articles.get("a-2").unwrap(), Some(second));
+    assert_eq!(articles.get("a-2").unwrap(), Some(second.clone()));
     assert_eq!(articles.get("a-1").unwrap(), Some(article("Baguette", "crust")), "a later place wins");
     assert!(search(&articles, "rye").hits.is_empty());
+    let one_by_one = fixture.articles::<Article>("one-by-one");
+    for (id, value) in [("a-1", &first), ("a-2", &second), ("a-1", &article("Baguette", "crust"))] {
+        one_by_one.set(id, value).unwrap();
+    }
+    let hits = |index: &Index<Article>, text| -> Vec<(String, f64)> {
+        search(index, text).hits.into_iter().map(|hit| (hit.id, hit.score)).collect()
+    };
+    for text in ["flour", "baguette crust", "sourdough starter bread"] {
+        assert_eq!(hits(&articles, text), hits(&one_by_one, text), "{text}: counted as sets one by one count");
+    }
     let notes = fixture.store.index::<serde_json::Value>("notes").field("title", 1.0).open().unwrap();
     let (good, bad) = (serde_json::json!({ "title": "kept" }), serde_json::json!({ "title": 7 }));
     let refused = notes.set_many([("n-1", &good), ("n-2", &bad)]).unwrap_err();
@@ -539,6 +549,176 @@ fn a_search_reading_every_word_as_a_prefix_takes() {
     }
 }
 
+/// How long setting 20,000 passages of 50 words a thousand at a time takes,
+/// each thousand packed as background work packs them, and where the time
+/// goes. Run by hand:
+/// `cargo test -p tinystore --release --lib setting_passages -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing, run by hand"]
+fn setting_passages_a_thousand_at_a_time_takes() {
+    let fixture = fixture();
+    let index = fixture.store.index::<String>("timing").typo_tolerance(false).open().unwrap();
+    let mut random = Random::new(3);
+    let zipf = Zipf::new(50_000);
+    let (mut setting, mut packing) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+    for batch in 0..20 {
+        let passages: Vec<String> = (0..1000).map(|_| zipf.text(&mut random, 50)).collect();
+        let ids: Vec<String> = (0..1000).map(|n| format!("{batch}-{n}")).collect();
+        let started = std::time::Instant::now();
+        index.set_many(ids.iter().zip(&passages)).unwrap();
+        setting += started.elapsed();
+        let started = std::time::Instant::now();
+        maintain(&fixture.store).unwrap();
+        packing += started.elapsed();
+    }
+    let fields = [crate::search::settings::Field { path: String::new(), weight: 1.0, number: 0 }];
+    let passages: Vec<serde_json::Value> = (0..20_000).map(|_| zipf.text(&mut random, 50).into()).collect();
+    let started = std::time::Instant::now();
+    for passage in &passages {
+        std::hint::black_box(document::analyze(passage, &fields, &[]).unwrap());
+    }
+    eprintln!("20,000 passages: sets {setting:?}, packing {packing:?}, their words alone {:?}", started.elapsed());
+}
+
+/// How long a search by words takes over 200,000 passages of 50 words each,
+/// the words of a vocabulary of 50,000 drawn by Zipf's law as a language's
+/// are, asked by 400 questions of 3 to 8 words drawn the same way: the lists
+/// in runs, then the same lists written again as a release before 0002
+/// wrote them, in the same run, with what each layout's tables take. Run by
+/// hand: `cargo test -p tinystore --release --lib a_search_by_words_over -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing, run by hand"]
+fn a_search_by_words_over_two_hundred_thousand_passages_takes() {
+    let fixture = fixture();
+    let index = fixture.store.index::<String>("timing").typo_tolerance(false).open().unwrap();
+    let mut random = Random::new(3);
+    let zipf = Zipf::new(50_000);
+    let started = std::time::Instant::now();
+    for batch in 0..200 {
+        let passages: Vec<String> = (0..1000).map(|_| zipf.text(&mut random, 50)).collect();
+        let ids: Vec<String> = (0..1000).map(|n| format!("{batch}-{n}")).collect();
+        index.set_many(ids.iter().zip(&passages)).unwrap();
+    }
+    let set = started.elapsed();
+    maintain(&fixture.store).unwrap();
+    eprintln!("built: sets {set:?}, packing {:?}", started.elapsed() - set);
+    let questions: Vec<String> = (0..400)
+        .map(|_| {
+            let count = 3 + random.below(6) as usize;
+            zipf.text(&mut random, count)
+        })
+        .collect();
+    let timed = |layout: &str| {
+        for question in &questions {
+            index.search(question).run().unwrap();
+        }
+        for pass in 0..2 {
+            let mut took: Vec<f64> = questions
+                .iter()
+                .map(|question| {
+                    let started = std::time::Instant::now();
+                    std::hint::black_box(index.search(question).run().unwrap());
+                    started.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            took.sort_by(f64::total_cmp);
+            let at = |share: f64| took[((took.len() as f64 * share) as usize).min(took.len() - 1)];
+            eprintln!("{layout}, pass {pass}: p50 {:.2} ms, p90 {:.2}, p99 {:.2}", at(0.5), at(0.9), at(0.99));
+        }
+    };
+    let space = |layout: &str| eprintln!("{layout}: {}", tables(fixture.dir.path()));
+    space("runs");
+    timed("runs");
+    crate::search::legacy::written::rewrite(fixture.dir.path(), "timing");
+    space("rows of blocks");
+    timed("rows of blocks");
+    maintain(&fixture.store).unwrap();
+    space("runs again");
+    timed("runs again");
+}
+
+/// What the tables that hold postings take, in bytes a posting: their
+/// payloads, and their pages in the file.
+fn tables(dir: &Path) -> String {
+    let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
+    let postings: f64 = connection
+        .query_row("select sum(documents) from _tinystore_search_keys where part < 1073741824", [], |row| row.get(0))
+        .unwrap();
+    let payload = |sql: &str| -> f64 {
+        connection.query_row(sql, [], |row| row.get::<_, Option<f64>>(0)).unwrap().unwrap_or(0.0)
+    };
+    let pages = |table: &str| -> f64 {
+        let sql = "select sum(pgsize) from dbstat where name = ?1";
+        connection.query_row(sql, [table], |row| row.get::<_, Option<f64>>(0)).unwrap().unwrap_or(0.0)
+    };
+    let shown = [
+        ("runs", payload("select sum(length(blocks)) from _tinystore_search_runs"), pages("_tinystore_search_runs")),
+        (
+            "blocks",
+            payload("select sum(length(payload)) from _tinystore_search_blocks"),
+            pages("_tinystore_search_blocks"),
+        ),
+        (
+            "lists",
+            payload(
+                "select sum(coalesce(length(directory), 0) + coalesce(length(inline), 0)
+                + coalesce(length(packed), 0)) from _tinystore_search_lists",
+            ),
+            pages("_tinystore_search_lists"),
+        ),
+    ];
+    let mut said = format!("{postings} postings;");
+    for (name, payload, pages) in shown {
+        said += &format!(" {name} {:.3} B payload, {:.3} B pages;", payload / postings, pages / postings);
+    }
+    said
+}
+
+/// Words drawn by Zipf's law: the word of rank r about 1/r as often as the first.
+struct Zipf {
+    cumulative: Vec<f64>,
+}
+
+impl Zipf {
+    fn new(words: usize) -> Zipf {
+        let mut total = 0.0;
+        let cumulative = (1..=words)
+            .map(|rank| {
+                total += 1.0 / rank as f64;
+                total
+            })
+            .collect();
+        Zipf { cumulative }
+    }
+
+    fn text(&self, random: &mut Random, words: usize) -> String {
+        let total = self.cumulative[self.cumulative.len() - 1];
+        let picked: Vec<String> = (0..words)
+            .map(|_| {
+                let at = random.below(1 << 53) as f64 / (1_u64 << 53) as f64 * total;
+                Zipf::word(self.cumulative.partition_point(|sum| *sum < at))
+            })
+            .collect();
+        picked.join(" ")
+    }
+
+    /// The word of a rank: syllables of a consonant and a vowel, two at least.
+    fn word(rank: usize) -> String {
+        const CONSONANTS: &[u8] = b"bdfgklmnprstvz";
+        const VOWELS: &[u8] = b"aeiou";
+        let syllables = CONSONANTS.len() * VOWELS.len();
+        let mut rest = rank + syllables;
+        let mut word = String::new();
+        while rest > 0 {
+            let syllable = rest % syllables;
+            word.push(char::from(CONSONANTS[syllable / VOWELS.len()]));
+            word.push(char::from(VOWELS[syllable % VOWELS.len()]));
+            rest /= syllables;
+        }
+        word
+    }
+}
+
 #[test]
 fn a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_again() {
     let fixture = fixture();
@@ -554,12 +734,54 @@ fn a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_
     assert!(gone.hits.is_empty() && gone.corrected.is_none(), "a word gone since is never read");
 }
 
+// contract: STORE-11
+// contract: SRCH-01
+#[test]
+fn lists_a_release_wrote_in_rows_of_blocks_answer_as_before_until_maintenance_writes_them_in_runs() {
+    let fixture = fixture();
+    let released = fixture.articles::<Article>("released");
+    let fresh = fixture.articles::<Article>("fresh");
+    let mut random = Random::new(11);
+    let write = |random: &mut Random, count: u32, deletes: u32| {
+        for _ in 0..count {
+            let (id, value) = (format!("d{}", random.below(4000)), random_article(random));
+            released.set(&id, &value).unwrap();
+            fresh.set(&id, &value).unwrap();
+        }
+        for _ in 0..deletes {
+            let id = format!("d{}", random.below(4000));
+            assert_eq!(released.delete(&id).unwrap(), fresh.delete(&id).unwrap());
+        }
+        maintain(&fixture.store).unwrap();
+    };
+    let texts: Vec<String> = (0..40).map(|_| words(&mut random, 4)).collect();
+    let answers = |index: &Index<Article>| -> Vec<Vec<(String, f64)>> {
+        let found = |text: &String| search(index, text).hits.into_iter().map(|hit| (hit.id, hit.score)).collect();
+        texts.iter().map(found).collect()
+    };
+    write(&mut random, 3000, 0);
+    crate::search::legacy::written::rewrite(fixture.dir.path(), "released");
+    assert!(
+        crate::search::legacy::written::blocks(fixture.dir.path()) > 0,
+        "the released index's lists are rows of blocks"
+    );
+    assert_eq!(answers(&released), answers(&fresh), "read as a release wrote them");
+    write(&mut random, 400, 200);
+    assert_eq!(
+        crate::search::legacy::written::blocks(fixture.dir.path()),
+        0,
+        "packing, a purge and upkeep wrote them in runs"
+    );
+    assert_eq!(answers(&released), answers(&fresh), "after packing and a purge");
+}
+
 /// Every row that holds a posting, as one string.
 fn postings_in(dir: &Path) -> String {
     let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
     let mut rows = String::new();
     for sql in [
         "select key, first, payload from _tinystore_search_blocks order by key, first",
+        "select id, blocks from _tinystore_search_runs order by id",
         "select * from _tinystore_search_lists order by key",
     ] {
         let mut select = connection.prepare(sql).unwrap();

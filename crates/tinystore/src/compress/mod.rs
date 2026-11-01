@@ -2,9 +2,10 @@
 //! width and a reader that bounds every length before it takes it, bits
 //! packed and read a word at a time, rice codes, zstd frames, and the CRC-32
 //! every stored row ends with. Neither engine imports the other: both stand
-//! on this, and search reads its postings' integers with the same reader.
+//! on this, and search reads its postings' integers with the same reader and
+//! packs their blocks in the same bits.
 
-#[cfg(any(feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "records", feature = "metrics", feature = "search"))]
 pub(crate) mod bits;
 pub(crate) mod checksum;
 #[cfg(any(feature = "records", feature = "metrics"))]
