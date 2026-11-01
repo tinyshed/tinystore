@@ -75,65 +75,25 @@ fn text(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+fn any(description: &str) -> Value {
+    json!({ "description": description })
+}
+
+fn object(description: &str) -> Value {
+    json!({ "type": "object", "description": description })
+}
+
+fn database() -> Value {
+    text("the database the program opened it from, as app, when it is kept there")
+}
+
 /// What a tool takes, and what of it is required.
 fn inputs(name: &str) -> (Value, Vec<&'static str>) {
-    let database = text("the database the program opened it from, as app, when it is kept there");
-    let any = |description: &str| json!({ "description": description });
-    let object = |description: &str| json!({ "type": "object", "description": description });
-    let changes = "each live setting's path and its value, as {\"model.max_tokens\": \"2048\"}: text is read by \
-                   the setting's kind, other JSON taken as it is";
     match name {
-        "kv_set" => (
-            json!({
-                "bucket": text("the bucket"),
-                "key": text("the key"),
-                "value": text("the value, as text"),
-                "as": text("text, int or json: what the value is; text when absent"),
-                "ttl": text("expire it this long from now, as 1h"),
-                "database": database,
-            }),
-            vec!["bucket", "key", "value"],
-        ),
-        "kv_delete" => (
-            json!({ "bucket": text("the bucket"), "key": text("the key"), "database": database }),
-            vec!["bucket", "key"],
-        ),
-        "jobs_add" => (
-            json!({
-                "queue": text("the queue"),
-                "job": any("the job, any JSON"),
-                "id": text("what names the job; cancel needs it"),
-                "delay": text("run it this long from now, as 1m"),
-                "database": database,
-            }),
-            vec!["queue", "job"],
-        ),
-        "jobs_cancel" => (
-            json!({ "queue": text("the queue"), "id": text("the job's id"), "database": database }),
-            vec!["queue", "id"],
-        ),
-        "files_put" => (
-            json!({
-                "set": text("the set of files"),
-                "path": text("the file's path in it"),
-                "text": text("its text"),
-                "type": text("its content type, as text/markdown"),
-            }),
-            vec!["set", "path", "text"],
-        ),
-        "files_delete" => {
-            (json!({ "set": text("the set of files"), "path": text("the file's path in it") }), vec!["set", "path"])
-        }
-        "events_append" => (
-            json!({
-                "stream": text("the stream"),
-                "name": text("the event's name, as role.changed"),
-                "fields": object("what it carries"),
-                "level": text("trace, debug, info, warn or error"),
-                "id": text("what names it in its stream"),
-            }),
-            vec!["stream", "name"],
-        ),
+        "kv_set" | "kv_delete" => kv_inputs(name),
+        "jobs_add" | "jobs_cancel" => jobs_inputs(name),
+        "files_put" | "files_delete" => files_inputs(name),
+        "events_append" => events_inputs(),
         "channels_publish" => (
             json!({
                 "channel": text("the channel"),
@@ -142,18 +102,92 @@ fn inputs(name: &str) -> (Value, Vec<&'static str>) {
             }),
             vec!["channel", "message"],
         ),
-        "config_update" => {
-            (json!({ "config": text("the config"), "changes": object(changes) }), vec!["config", "changes"])
-        }
-        "config_reset" => {
-            let path = text("a setting or a group; every change when absent");
-            (json!({ "config": text("the config"), "path": path }), vec!["config"])
-        }
+        "config_update" | "config_reset" => config_inputs(name),
         _ => {
             let statement = text("one statement that writes");
             (json!({ "database": text("the database, as app"), "statement": statement }), vec!["database", "statement"])
         }
     }
+}
+
+fn kv_inputs(name: &str) -> (Value, Vec<&'static str>) {
+    if name == "kv_delete" {
+        return (
+            json!({ "bucket": text("the bucket"), "key": text("the key"), "database": database() }),
+            vec!["bucket", "key"],
+        );
+    }
+    (
+        json!({
+            "bucket": text("the bucket"),
+            "key": text("the key"),
+            "value": text("the value, as text"),
+            "as": text("text, int or json: what the value is; text when absent"),
+            "ttl": text("expire it this long from now, as 1h"),
+            "database": database(),
+        }),
+        vec!["bucket", "key", "value"],
+    )
+}
+
+fn jobs_inputs(name: &str) -> (Value, Vec<&'static str>) {
+    if name == "jobs_cancel" {
+        return (
+            json!({ "queue": text("the queue"), "id": text("the job's id"), "database": database() }),
+            vec!["queue", "id"],
+        );
+    }
+    (
+        json!({
+            "queue": text("the queue"),
+            "job": any("the job, any JSON"),
+            "id": text("what names the job; cancel needs it"),
+            "delay": text("run it this long from now, as 1m"),
+            "database": database(),
+        }),
+        vec!["queue", "job"],
+    )
+}
+
+fn files_inputs(name: &str) -> (Value, Vec<&'static str>) {
+    if name == "files_delete" {
+        return (
+            json!({ "set": text("the set of files"), "path": text("the file's path in it") }),
+            vec!["set", "path"],
+        );
+    }
+    (
+        json!({
+            "set": text("the set of files"),
+            "path": text("the file's path in it"),
+            "text": text("its text"),
+            "type": text("its content type, as text/markdown"),
+        }),
+        vec!["set", "path", "text"],
+    )
+}
+
+fn events_inputs() -> (Value, Vec<&'static str>) {
+    (
+        json!({
+            "stream": text("the stream"),
+            "name": text("the event's name, as role.changed"),
+            "fields": object("what it carries"),
+            "level": text("trace, debug, info, warn or error"),
+            "id": text("what names it in its stream"),
+        }),
+        vec!["stream", "name"],
+    )
+}
+
+fn config_inputs(name: &str) -> (Value, Vec<&'static str>) {
+    if name == "config_reset" {
+        let path = text("a setting or a group; every change when absent");
+        return (json!({ "config": text("the config"), "path": path }), vec!["config"]);
+    }
+    let changes = "each live setting's path and its value, as {\"model.max_tokens\": \"2048\"}: text is read by \
+                   the setting's kind, other JSON taken as it is";
+    (json!({ "config": text("the config"), "changes": object(changes) }), vec!["config", "changes"])
 }
 
 /// A tool's answer when it is one that writes and `allowed` names it; none
