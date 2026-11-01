@@ -4,7 +4,7 @@
 //! head, where searches read them beside the blocks, so the head's
 //! documents always come after every block's and packing appends to each
 //! key's list. The number the document had is marked gone: searches leave
-//! it out of every block until a purge takes it out.
+//! it out of the head and every block until a purge takes it out of both.
 //!
 //! A document's vector is kept beside it and goes with it: a set keeps the
 //! new number's and forgets the old one's, so a scan of vectors never meets
@@ -15,13 +15,13 @@
 //! part has. Packing and purging move postings and change no count, so they
 //! change no score.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::LazyLock;
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::document::{Analyzed, analyze};
+use super::head;
 use super::postings::{decode_keys, decode_lengths, encode_keys, encode_lengths};
 use super::score::Part;
 use super::settings::Settings;
@@ -35,7 +35,6 @@ const MARK_GONE: &str = "insert into _tinystore_search_gone (index_id, doc, keys
 const DROP_DOC: &str = "delete from _tinystore_search_docs where index_id = ?1 and doc = ?2";
 const READ_KEY: &str = "select part, documents from _tinystore_search_keys where id = ?1";
 const LEAVE_KEY: &str = "update _tinystore_search_keys set documents = documents - 1 where id = ?1";
-const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key = ?2 and doc = ?3";
 const ADD_TOKENS: &str = "insert into _tinystore_search_parts (index_id, part, tokens) values (?1, ?2, ?3)
     on conflict (index_id, part) do update set tokens = tokens + excluded.tokens";
 const LEAVE_INDEX: &str =
@@ -49,13 +48,6 @@ const FIND_KEY: &str =
     "select id, documents from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
 const COUNT_KEY: &str = "update _tinystore_search_keys set documents = documents + ?2 where id = ?1";
 const NEW_KEY: &str = "insert into _tinystore_search_keys (index_id, part, term, documents) values (?1, ?2, ?3, ?4)";
-const ADD_HEAD: &str = "insert into _tinystore_search_head (index_id, key, doc, tf, len) values (?1, ?2, ?3, ?4, ?5)";
-/// Postings a statement writes into the head, five values each.
-const HEAD_ROWS: usize = 64;
-static ADD_HEAD_ROWS: LazyLock<String> = LazyLock::new(|| {
-    let rows = vec!["(?, ?, ?, ?, ?)"; HEAD_ROWS].join(", ");
-    format!("insert into _tinystore_search_head (index_id, key, doc, tf, len) values {rows}")
-});
 const KEEP_DOC: &str =
     "insert into _tinystore_search_docs (index_id, doc, id, value, keys, lengths) values (?1, ?2, ?3, ?4, ?5, ?6)";
 const JOIN_INDEX: &str = "update _tinystore_search_indexes set next_doc = ?2, documents = documents + ?3,
@@ -129,23 +121,18 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
 pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepared> + Clone) -> Result<()> {
     let Some(index) = documents.clone().next().map(|document| document.index) else { return Ok(()) };
     let (keys, new_words) = join_keys(tx, index, documents.clone())?;
-    let mut head = Head::default();
+    let mut head = Vec::new();
     let mut next = next_doc(tx, index)?;
     let (mut count, mut vectors) = (0_i64, 0_i64);
     let mut tokens: BTreeMap<Part, i64> = BTreeMap::new();
-    let mut set_now: HashSet<&str> = HashSet::new();
     for document in documents {
-        if !set_now.insert(&document.id) {
-            // the forget below finds the postings this batch gave its id
-            head.write(tx, index)?;
-        }
         forget(tx, index, &document.id)?;
         let doc = number(next)?;
         next += 1;
         let mut held = Vec::with_capacity(document.analyzed.terms.len());
         for (part, term, tf) in &document.analyzed.terms {
             let key = keys[&(*part, term.as_str())];
-            head.rows.push((key, doc, *tf, document.analyzed.length(*part)));
+            head.push((key, doc, *tf, document.analyzed.length(*part)));
             held.push(key);
         }
         for (part, len) in &document.analyzed.lengths {
@@ -155,7 +142,7 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
         count += 1;
         vectors += i64::from(document.vector.is_some());
     }
-    head.write(tx, index)?;
+    head::write(tx, index, &mut head)?;
     for (part, len) in tokens {
         execute(tx, ADD_TOKENS, (index, part.0, len), "count a part's words")?;
     }
@@ -232,41 +219,14 @@ fn keep(tx: &Tx<'_>, (index, doc): (i64, u32), document: &Prepared, mut keys: Ve
     Ok(())
 }
 
-/// Postings of a set waiting for the head, as (key, doc, tf, len).
-#[derive(Default)]
-struct Head {
-    rows: Vec<(i64, u32, u32, u32)>,
-}
-
-impl Head {
-    /// Writes the postings waiting in the order of the head's keys,
-    /// `HEAD_ROWS` a statement, each insert near the one before it.
-    fn write(&mut self, tx: &Tx<'_>, index: i64) -> Result<()> {
-        self.rows.sort_unstable();
-        let failed = |error| sql_error("write postings", error);
-        let mut many = tx.prepare_cached(&ADD_HEAD_ROWS).map_err(failed)?;
-        let (chunks, rest) = self.rows.as_chunks::<HEAD_ROWS>();
-        for chunk in chunks {
-            let values = chunk
-                .iter()
-                .flat_map(|&(key, doc, tf, len)| [index, key, i64::from(doc), i64::from(tf), i64::from(len)]);
-            many.execute(rusqlite::params_from_iter(values)).map_err(failed)?;
-        }
-        for &(key, doc, tf, len) in rest {
-            execute(tx, ADD_HEAD, (index, key, doc, tf, len), "write a posting")?;
-        }
-        self.rows.clear();
-        Ok(())
-    }
-}
-
 /// Deletes the document of `id`; says whether there was one.
 pub(crate) fn delete(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     forget(tx, index, id)
 }
 
 /// Marks the document of `id` gone and takes it out of every count and of
-/// the head; its postings in blocks wait for a purge.
+/// the head's rows it wrote alone; its postings in rows a set of many wrote
+/// and in blocks wait for packing or a purge.
 fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     let failed = |error| sql_error("find a document", error);
     let found: Option<(i64, Vec<u8>, Vec<u8>)> = {
@@ -283,7 +243,7 @@ fn forget(tx: &Tx<'_>, index: i64, id: &str) -> Result<bool> {
     for key in decode_keys(&keys).map_err(within)? {
         let (part, documents) = leave_key(tx, key)?;
         words_left |= documents == 0 && part.is_written();
-        execute(tx, DROP_HEAD, (index, key, doc), "drop a posting")?;
+        head::forget(tx, index, key, doc as u32)?;
     }
     for (part, len) in decode_lengths(&lengths).map_err(within)? {
         execute(tx, ADD_TOKENS, (index, part, -i64::from(len)), "count a part's words")?;

@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use rusqlite::Connection;
 
+use super::head;
 use super::legacy::Legacy;
 use super::pack::{
     DROP_RUN, Stored, WRITE_LIST, WRITE_RUN, average_of, note_lists, read_list, read_run, write_directory,
@@ -99,13 +100,14 @@ impl Purge {
     }
 }
 
-/// Takes `docs`, sorted, out of a key's list: out of its own row if short,
+/// Takes `docs`, sorted, out of a key's head and its list: out of its own row if short,
 /// else out of each block whose range holds one, its run written again or
 /// dropped once empty, its directory with them. A key a release before 0002
 /// wrote in rows of blocks is written in runs first. A key no document holds
 /// any more and whose list is empty is forgotten.
 fn take_out(connection: &Connection, index: i64, key: i64, docs: &[u32]) -> Result<()> {
     let gone: HashSet<u32> = docs.iter().copied().collect();
+    head::take_out(connection, index, key, &gone)?;
     let left = match read_list(connection, key)? {
         Stored::Packed(directory, best) => {
             let best = decode_best(&best)?;

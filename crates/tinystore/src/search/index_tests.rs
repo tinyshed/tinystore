@@ -629,6 +629,10 @@ fn a_search_by_words_over_two_hundred_thousand_passages_takes() {
     let space = |layout: &str| eprintln!("{layout}: {}", tables(fixture.dir.path()));
     space("runs");
     timed("runs");
+    crate::search::execute::SEEDED.set(false);
+    timed("runs, no seeds");
+    crate::search::execute::SEEDED.set(true);
+    timed("runs");
     crate::search::legacy::written::rewrite(fixture.dir.path(), "timing");
     space("rows of blocks");
     timed("rows of blocks");
@@ -737,7 +741,7 @@ fn a_word_new_since_the_dictionary_was_built_is_read_once_maintenance_builds_it_
 // contract: STORE-11
 // contract: SRCH-01
 #[test]
-fn lists_a_release_wrote_in_rows_of_blocks_answer_as_before_until_maintenance_writes_them_in_runs() {
+fn lists_and_a_head_a_release_wrote_answer_as_before_until_maintenance_writes_them_anew() {
     let fixture = fixture();
     let released = fixture.articles::<Article>("released");
     let fresh = fixture.articles::<Article>("fresh");
@@ -760,18 +764,17 @@ fn lists_a_release_wrote_in_rows_of_blocks_answer_as_before_until_maintenance_wr
         texts.iter().map(found).collect()
     };
     write(&mut random, 3000, 0);
+    for _ in 0..60 {
+        let (id, value) = (format!("d{}", random.below(4000)), random_article(&mut random));
+        released.set(&id, &value).unwrap();
+        fresh.set(&id, &value).unwrap();
+    }
     crate::search::legacy::written::rewrite(fixture.dir.path(), "released");
-    assert!(
-        crate::search::legacy::written::blocks(fixture.dir.path()) > 0,
-        "the released index's lists are rows of blocks"
-    );
+    let (blocks, head) = crate::search::legacy::written::rows(fixture.dir.path());
+    assert!(blocks > 0 && head > 0, "the released index's lists are rows of blocks, its head a row a posting");
     assert_eq!(answers(&released), answers(&fresh), "read as a release wrote them");
     write(&mut random, 400, 200);
-    assert_eq!(
-        crate::search::legacy::written::blocks(fixture.dir.path()),
-        0,
-        "packing, a purge and upkeep wrote them in runs"
-    );
+    assert_eq!(crate::search::legacy::written::rows(fixture.dir.path()), (0, 0), "maintenance wrote them anew");
     assert_eq!(answers(&released), answers(&fresh), "after packing and a purge");
 }
 
@@ -782,6 +785,7 @@ fn postings_in(dir: &Path) -> String {
     for sql in [
         "select key, first, payload from _tinystore_search_blocks order by key, first",
         "select id, blocks from _tinystore_search_runs order by id",
+        "select key, first, postings from _tinystore_search_fresh order by key, first",
         "select * from _tinystore_search_lists order by key",
     ] {
         let mut select = connection.prepare(sql).unwrap();

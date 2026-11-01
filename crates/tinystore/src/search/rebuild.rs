@@ -79,6 +79,8 @@ const DROP_STEPS: &[&str] = &[
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
     "delete from _tinystore_search_keys where id in
         (select id from _tinystore_search_keys where index_id = ?1 order by id limit 64)",
+    "delete from _tinystore_search_fresh where (index_id, key, first) in
+        (select index_id, key, first from _tinystore_search_fresh where index_id = ?1 limit 1024)",
     "delete from _tinystore_search_head where (index_id, key, doc) in
         (select index_id, key, doc from _tinystore_search_head where index_id = ?1 limit 4096)",
     "delete from _tinystore_search_docs where (index_id, doc) in

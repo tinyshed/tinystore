@@ -35,6 +35,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::head;
 use super::legacy;
 use super::pack::{self, Stored, read_list};
 use super::packed::Directory;
@@ -46,7 +47,6 @@ use crate::sqlite::sql_error;
 use crate::{Error, Result};
 
 const FIND_KEY: &str = "select id from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
-const READ_HEAD: &str = "select doc from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 
 /// The longest text a filter keeps as a value.
 pub(crate) const MOST_VALUE: usize = FILTER_TEXT.bound as usize;
@@ -461,7 +461,6 @@ impl Reader<'_> {
     /// Every document a key's postings hold, those gone left out, in order.
     fn docs_of(&self, key: i64) -> Result<Vec<u32>> {
         let within = |error: Error| error.within(format!("key {key}"));
-        let failed = |error| sql_error(format!("read key {key}'s postings"), error);
         let mut docs: Vec<u32> = Vec::new();
         match read_list(self.connection, key).map_err(within)? {
             Stored::Packed(directory, _) => {
@@ -473,9 +472,7 @@ impl Reader<'_> {
             }
             Stored::Nothing => {}
         }
-        let mut select = self.connection.prepare_cached(READ_HEAD).map_err(failed)?;
-        let head = select.query_map((self.index, key), |row| row.get::<_, u32>(0));
-        docs.extend(head.and_then(Iterator::collect::<rusqlite::Result<Vec<u32>>>).map_err(failed)?);
+        docs.extend(head::read(self.connection, self.index, key)?.iter().map(|posting| posting.doc));
         if !docs.is_sorted_by(|a, b| a < b) {
             return Err(Error::corrupt(format!("key {key}'s documents are out of their order")));
         }

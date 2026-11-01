@@ -12,13 +12,16 @@
 //! key a release before 0002 wrote is written in runs first, as
 //! `legacy.rs` writes it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension};
 
+use super::head;
 use super::kept::{NORMS, bytes_of, lengths_of};
-use super::legacy::Legacy;
-use super::packed::{self, Directory, Placed, RUN_BYTES, Run, best_of, bound_of, decode_best, encode_best, reference};
+use super::legacy::{self, Legacy};
+use super::packed::{
+    self, BEST_AT, Directory, Placed, RUN_BYTES, Run, best_of, bound_of, decode_best, encode_best, reference,
+};
 use super::postings::{BLOCK, INLINE, Posting, decode_lengths, pack_inline, unpack_inline};
 use super::score::average;
 use super::write::execute;
@@ -30,11 +33,6 @@ const READ_LENGTHS: &str = "select doc, lengths from _tinystore_search_docs wher
 const WRITE_NORMS: &str =
     "insert or replace into _tinystore_search_norms (index_id, part, chunk, lengths) values (?1, ?2, ?3, ?4)";
 const SET_NORMED: &str = "update _tinystore_search_indexes set normed = ?2 where id = ?1";
-const HEAD_FIRST: &str = "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 order by key, doc
-    limit cast(?2 as integer)";
-const HEAD_OF: &str =
-    "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
-const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key >= ?2 and key <= ?3";
 const READ_LIST: &str = "select directory, inline, packed, best from _tinystore_search_lists where key = ?1";
 pub(super) const WRITE_LIST: &str =
     "insert or replace into _tinystore_search_lists (key, directory, inline) values (?1, ?2, ?3)";
@@ -44,6 +42,7 @@ const READ_RUN: &str = "select blocks from _tinystore_search_runs where id = ?1"
 pub(super) const WRITE_RUN: &str = "insert or replace into _tinystore_search_runs (id, blocks) values (?1, ?2)";
 pub(super) const DROP_RUN: &str = "delete from _tinystore_search_runs where id = ?1";
 const READ_PART: &str = "select part from _tinystore_search_keys where id = ?1";
+const READ_GONE: &str = "select doc from _tinystore_search_gone where index_id = ?1";
 const NOTE_LISTS: &str = "update _tinystore_search_indexes set lists_version = lists_version + 1 where id = ?1";
 const READ_TOKENS: &str = "select p.tokens, i.documents from _tinystore_search_parts as p
     join _tinystore_search_indexes as i on i.id = p.index_id where p.index_id = ?1 and p.part = ?2";
@@ -62,26 +61,49 @@ pub(crate) struct Packed {
     pub(crate) done: bool,
 }
 
-/// Packs a step of an index's head, `most_rows` of its rows at most unless
-/// its first key holds more.
-pub(crate) fn step(tx: &Tx<'_>, index: i64, most_rows: usize) -> Result<Packed> {
+/// Packs a step of an index's head: its first keys whole, till they hold
+/// `most` postings, or, while a release before 0002 left a head of a row a
+/// posting, a step of that head, whose documents are all before this one's.
+pub(crate) fn step(tx: &Tx<'_>, index: i64, most: usize) -> Result<Packed> {
     norm(tx, index)?;
-    let rows = head_rows(tx, index, most_rows)?;
-    let done = rows.len() <= most_rows;
-    let rows = whole_keys(tx, index, rows, most_rows)?;
-    let (Some(first), Some(last)) = (rows.first().map(|row| row.0), rows.last().map(|row| row.0)) else {
+    if legacy::any_head(tx, index)? {
+        return legacy::head_step(tx, index, most);
+    }
+    let (keys, done) = head::first_keys(tx, index, most)?;
+    let (Some(first), Some(last)) = (keys.first().map(|key| key.0), keys.last().map(|key| key.0)) else {
         return Ok(Packed { done: true, ..Packed::default() });
     };
+    let postings = append_keys(tx, index, &keys)?;
+    head::drop_keys(tx, index, (first, last))?;
+    Ok(Packed { postings, done })
+}
+
+/// Appends each key's postings to its list, those of documents gone left
+/// out: a set that replaces a document leaves the old one's in the head,
+/// and they never reach a block. Says how many it appended.
+pub(super) fn append_keys(tx: &Tx<'_>, index: i64, keys: &[(i64, Vec<Posting>)]) -> Result<u64> {
+    let gone = gone(tx, index)?;
     let mut averages = Averages::of(index);
-    for run in rows.chunk_by(|a, b| a.0 == b.0) {
-        let key = run[0].0;
-        let fresh: Vec<Posting> = run.iter().map(|(_, posting)| *posting).collect();
-        let packed = averages.of_key(tx, key).and_then(|average| append(tx, key, &fresh, average));
+    let mut appended = 0;
+    for (key, postings) in keys {
+        let fresh: Vec<Posting> = postings.iter().filter(|posting| !gone.contains(&posting.doc)).copied().collect();
+        if fresh.is_empty() {
+            continue;
+        }
+        let packed = averages.of_key(tx, *key).and_then(|average| append(tx, *key, &fresh, average));
         packed.map_err(|error| error.within(format!("key {key}")))?;
+        appended += fresh.len() as u64;
     }
-    execute(tx, DROP_HEAD, (index, first, last), "drop packed postings")?;
     note_lists(tx, index)?;
-    Ok(Packed { postings: rows.len() as u64, done })
+    Ok(appended)
+}
+
+/// The index's documents gone, not purged yet.
+fn gone(connection: &Connection, index: i64) -> Result<HashSet<u32>> {
+    let failed = |error| sql_error("read the documents gone", error);
+    let mut select = connection.prepare_cached(READ_GONE).map_err(failed)?;
+    let docs = select.query_map([index], |row| row.get::<_, u32>(0));
+    docs.and_then(Iterator::collect).map_err(failed)
 }
 
 /// Gives every document set since the last step its lengths, row of
@@ -127,41 +149,6 @@ fn write_norms(connection: &Connection, index: i64, (part, chunk): (u32, u32), l
         row[at] = u16::try_from(len).unwrap_or(u16::MAX);
     }
     execute(connection, WRITE_NORMS, (index, part, chunk, bytes_of(&row)), "write lengths").map(drop)
-}
-
-/// The head's first rows in key order, one more than a step takes, to tell
-/// whether a key goes on past it.
-fn head_rows(connection: &Connection, index: i64, most_rows: usize) -> Result<Vec<(i64, Posting)>> {
-    let failed = |error| sql_error("read the head", error);
-    let mut select = connection.prepare_cached(HEAD_FIRST).map_err(failed)?;
-    let rows = select.query_map((index, most_rows as i64 + 1), posting);
-    rows.and_then(Iterator::collect).map_err(failed)
-}
-
-/// The rows of whole keys: the last key left for the next step when a row
-/// of it lies past the step, or read whole when it is the only key.
-fn whole_keys(
-    connection: &Connection,
-    index: i64,
-    mut rows: Vec<(i64, Posting)>,
-    most_rows: usize,
-) -> Result<Vec<(i64, Posting)>> {
-    if rows.len() <= most_rows {
-        return Ok(rows);
-    }
-    let last = rows[rows.len() - 1].0;
-    if rows[0].0 != last {
-        rows.retain(|(key, _)| *key != last);
-        return Ok(rows);
-    }
-    let failed = |error| sql_error("read the head", error);
-    let mut select = connection.prepare_cached(HEAD_OF).map_err(failed)?;
-    let rows = select.query_map((index, last), posting);
-    rows.and_then(Iterator::collect).map_err(failed)
-}
-
-fn posting(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Posting)> {
-    Ok((row.get(0)?, Posting { doc: row.get(1)?, tf: row.get(2)?, len: row.get(3)? }))
 }
 
 /// The average a key's new blocks are bounded at, its part's now, each part
@@ -337,7 +324,8 @@ impl Runs {
         if let Some(run) = self.directory.runs.last() {
             execute(connection, WRITE_RUN, (run.id, &self.last), "write a run")?;
         }
-        write_directory(connection, self.key, &self.directory, &self.best)?;
+        let best = if self.directory.blocks.len() >= BEST_AT { self.best.as_slice() } else { &[] };
+        write_directory(connection, self.key, &self.directory, best)?;
         Ok(self.directory)
     }
 }

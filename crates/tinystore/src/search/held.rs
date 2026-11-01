@@ -65,6 +65,7 @@ const SELECT_BYTES: &str = concat!(
     " + ",
     integer_bytes!("len"),
     "), 0) from _tinystore_search_head where index_id = ?1)
+    + (select coalesce(sum(length(postings) + 16), 0) from _tinystore_search_fresh where index_id = ?1)
     + (select coalesce(sum(length(lengths)), 0) from _tinystore_search_norms where index_id = ?1)
     + (select coalesce(sum(length(vector)), 0) from _tinystore_search_vectors where key >= ?2 and key < ?3)
     + (select coalesce(sum(length(code)), 0) from _tinystore_search_codes where key >= ?2 and key < ?3)

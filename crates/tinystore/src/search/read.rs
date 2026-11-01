@@ -24,6 +24,7 @@ use super::clusters::{self, Phase, Probe};
 use super::correct::Corrector;
 use super::execute::{Fetch, List, best, best_of, held_by_all};
 use super::filter::{self, Docs, Reader};
+use super::head;
 use super::hybrid::{self, HALF};
 use super::kept::{Chunk, Gone, Kept, Listed, Moment, NORMS};
 use super::layouts;
@@ -52,7 +53,6 @@ const FIND_PREFIXED: &str = "select id, documents, term from _tinystore_search_k
     order by documents desc, term limit cast(?5 as integer)";
 const BEGINS_A_WORD: &str = "select exists (select 1 from _tinystore_search_keys
     where index_id = ?1 and part = ?2 and term > ?3 and term < ?4 and documents > 0)";
-const READ_HEAD: &str = "select doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
 const RUNS: &CStr = c"_tinystore_search_runs";
 const BLOCKS: &CStr = c"blocks";
 const READ_HIT: &str = "select id, value from _tinystore_search_docs where index_id = ?1 and doc = ?2";
@@ -713,7 +713,7 @@ fn keyed(
         Listed::Inline(postings) => push_held(&mut list, postings.clone(), gone),
         Listed::Nothing => {}
     }
-    push_held(&mut list, head(connection, asked.index, key)?, gone);
+    push_held(&mut list, head::read(connection, asked.index, key)?, gone);
     Ok((!list.is_empty()).then_some(list))
 }
 
@@ -834,14 +834,6 @@ fn push_held(list: &mut List, mut postings: Vec<Posting>, gone: &HashSet<u32>) {
         let block = list.in_hand(postings);
         list.push(block);
     }
-}
-
-fn head(connection: &Connection, index: i64, key: i64) -> Result<Vec<Posting>> {
-    let failed = |error| sql_error(format!("read key {key}'s head"), error);
-    let mut select = connection.prepare_cached(READ_HEAD).map_err(failed)?;
-    let rows =
-        select.query_map((index, key), |row| Ok(Posting { doc: row.get(0)?, tf: row.get(1)?, len: row.get(2)? }));
-    rows.and_then(Iterator::collect).map_err(failed)
 }
 
 fn hit(connection: &Connection, index: i64, doc: u32, score: f64) -> Result<(String, Vec<u8>, f64)> {

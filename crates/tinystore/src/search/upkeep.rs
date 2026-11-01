@@ -9,6 +9,7 @@ use std::time::Duration;
 use super::clusters::{self, HEAD, Phase};
 use super::correct::Corrector;
 use super::engine::{Search, count};
+use super::head;
 use super::open::{Data, OpenIndex};
 use super::pack;
 use super::purge;
@@ -25,12 +26,9 @@ pub(crate) const PACK_AT: u64 = 1000;
 /// before background work builds it again.
 const DICTIONARY_AGE: Duration = Duration::from_secs(60);
 
-/// The documents set since packing last reached the head, and whether the
-/// head holds a posting.
-const READ_WAITING: &str = "select
-    (select count(*) from _tinystore_search_docs
-        where index_id = ?1 and doc >= (select normed from _tinystore_search_indexes where id = ?1)),
-    exists (select 1 from _tinystore_search_head where index_id = ?1)";
+/// The documents set since packing last reached the head.
+const READ_WAITING: &str = "select count(*) from _tinystore_search_docs
+    where index_id = ?1 and doc >= (select normed from _tinystore_search_indexes where id = ?1)";
 const READ_WORDS_VERSION: &str = "select words_version from _tinystore_search_indexes where id = ?1";
 
 impl Search {
@@ -42,7 +40,8 @@ impl Search {
         let (waiting, held) = self.file.read(|connection| {
             let failed = |error| sql_error("read the head", error);
             let mut select = connection.prepare_cached(READ_WAITING).map_err(failed)?;
-            select.query_row([id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))).map_err(failed)
+            let waiting = select.query_row([id], |row| row.get::<_, i64>(0)).map_err(failed)?;
+            Ok((waiting, head::any(connection, id)?))
         })?;
         if !held || !everything && waiting > 0 && waiting < PACK_AT as i64 {
             return Ok(0);

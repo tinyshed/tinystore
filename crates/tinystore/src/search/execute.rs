@@ -331,6 +331,10 @@ impl Best {
 /// document of the best `k` scores less. Nothing when they seed fewer.
 /// search-fast opened 6 % fewer blocks on MS MARCO with a key's ten best.
 fn floor(lists: &[List], k: usize, passing: Option<&[u32]>) -> u64 {
+    #[cfg(test)]
+    if !SEEDED.get() {
+        return 0;
+    }
     let mut seeded: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
     for list in lists {
         for &(doc, points) in &list.seeds {
@@ -346,6 +350,12 @@ fn floor(lists: &[List], k: usize, passing: Option<&[u32]>) -> u64 {
     let mut sums: Vec<u64> = seeded.into_values().collect();
     let at = sums.len() - k;
     sums.select_nth_unstable(at).1.saturating_sub(1)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread's searches start from their keys' best, for a timing.
+    pub(crate) static SEEDED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// The best `k` documents of every one the lists hold, or of those `passing`

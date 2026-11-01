@@ -4,18 +4,24 @@
 //! at the first chance, so that the format leaves a file soon after a
 //! release opens it. Nothing outside this file reads its bytes.
 //!
+//! The head too was a row a posting, which a search reads beside the new
+//! one and packing drains first: its documents were all set before.
+//!
 //! ```text
 //! lists  (key)        → directory
 //! blocks (key, first) → payload
+//! head   (index_id, key, doc) → tf, len
 //!
 //! directory   (first − last before, last − first, most tf, least len) a block    varints
 //! payload     (doc − doc before, tf) a posting; its length is in norms           varints
 //! ```
 
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension};
 
 use super::execute::List;
-use super::pack::{Runs, average_of, note_lists};
+use super::pack::{Packed, Runs, append_keys, average_of, note_lists};
 use super::packed::bound_of;
 use super::postings::{BLOCK, Posting, after, frequency, number};
 use crate::compress::varint::Reader;
@@ -29,6 +35,14 @@ const READ_DIRECTORY: &str = "select directory from _tinystore_search_lists wher
 const READ_INDEX_OF: &str = "select index_id from _tinystore_search_keys where id = ?1";
 const NEXT_KEY: &str = "select key from _tinystore_search_blocks order by key limit 1";
 const ANY_BLOCK: &str = "select exists (select 1 from _tinystore_search_blocks)";
+const READ_HEAD: &str = "select doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
+const ANY_HEAD: &str = "select exists (select 1 from _tinystore_search_head where index_id = ?1)";
+const HEAD_FIRST: &str = "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 order by key, doc
+    limit cast(?2 as integer)";
+const HEAD_OF: &str =
+    "select key, doc, tf, len from _tinystore_search_head where index_id = ?1 and key = ?2 order by doc";
+const DROP_HEAD: &str = "delete from _tinystore_search_head where index_id = ?1 and key >= ?2 and key <= ?3";
+const DROP_POSTING: &str = "delete from _tinystore_search_head where index_id = ?1 and key = ?2 and doc = ?3";
 
 /// Rows of blocks a step of upkeep writes again in runs at most, unless its
 /// one key holds more: a step holds the writer about as long as packing's.
@@ -111,6 +125,89 @@ pub(crate) fn block(connection: &Connection, key: i64, first: u32) -> Result<Vec
         .map_err(failed)?;
     let missing = || Error::corrupt(format!("block at document {first} its directory names is missing"));
     unpack(&payload.ok_or_else(missing)?)
+}
+
+/// A key's postings in the head a release before 0002 kept.
+pub(crate) fn head(connection: &Connection, index: i64, key: i64) -> Result<Vec<Posting>> {
+    let failed = |error| sql_error(format!("read key {key}'s head"), error);
+    let mut select = connection.prepare_cached(READ_HEAD).map_err(failed)?;
+    let rows =
+        select.query_map((index, key), |row| Ok(Posting { doc: row.get(0)?, tf: row.get(1)?, len: row.get(2)? }));
+    rows.and_then(Iterator::collect).map_err(failed)
+}
+
+/// Whether the head a release before 0002 kept holds a posting of the index.
+pub(crate) fn any_head(connection: &Connection, index: i64) -> Result<bool> {
+    let failed = |error| sql_error("read the head", error);
+    connection
+        .prepare_cached(ANY_HEAD)
+        .and_then(|mut select| select.query_row([index], |row| row.get(0)))
+        .map_err(failed)
+}
+
+/// Packs a step of the head a release before 0002 kept: `most_rows` of its
+/// rows at most unless its first key holds more, a key whole.
+pub(crate) fn head_step(tx: &Tx<'_>, index: i64, most_rows: usize) -> Result<Packed> {
+    let rows = head_rows(tx, index, most_rows)?;
+    let rows = whole_keys(tx, index, rows, most_rows)?;
+    let (Some(first), Some(last)) = (rows.first().map(|row| row.0), rows.last().map(|row| row.0)) else {
+        return Ok(Packed { done: true, ..Packed::default() });
+    };
+    let keys: Vec<(i64, Vec<Posting>)> = rows
+        .chunk_by(|a, b| a.0 == b.0)
+        .map(|run| (run[0].0, run.iter().map(|(_, posting)| *posting).collect()))
+        .collect();
+    let postings = append_keys(tx, index, &keys)?;
+    tx.prepare_cached(DROP_HEAD)
+        .and_then(|mut delete| delete.execute((index, first, last)))
+        .map_err(|error| sql_error("drop packed postings", error))?;
+    // the old head drained, the new one's step follows
+    Ok(Packed { postings, done: false })
+}
+
+/// Takes the documents `gone` out of a key's postings in the old head.
+pub(crate) fn take_out_of_head(connection: &Connection, index: i64, key: i64, gone: &HashSet<u32>) -> Result<()> {
+    let failed = |error| sql_error("take postings out of the head", error);
+    let mut delete = connection.prepare_cached(DROP_POSTING).map_err(failed)?;
+    for doc in gone {
+        delete.execute((index, key, doc)).map_err(failed)?;
+    }
+    Ok(())
+}
+
+/// The old head's first rows in key order, one more than a step takes, to
+/// tell whether a key goes on past it.
+fn head_rows(connection: &Connection, index: i64, most_rows: usize) -> Result<Vec<(i64, Posting)>> {
+    let failed = |error| sql_error("read the head", error);
+    let mut select = connection.prepare_cached(HEAD_FIRST).map_err(failed)?;
+    let rows = select.query_map((index, most_rows as i64 + 1), posting);
+    rows.and_then(Iterator::collect).map_err(failed)
+}
+
+/// The rows of whole keys: the last key left for the next step when a row
+/// of it lies past the step, or read whole when it is the only key.
+fn whole_keys(
+    connection: &Connection,
+    index: i64,
+    mut rows: Vec<(i64, Posting)>,
+    most_rows: usize,
+) -> Result<Vec<(i64, Posting)>> {
+    if rows.len() <= most_rows {
+        return Ok(rows);
+    }
+    let last = rows[rows.len() - 1].0;
+    if rows[0].0 != last {
+        rows.retain(|(key, _)| *key != last);
+        return Ok(rows);
+    }
+    let failed = |error| sql_error("read the head", error);
+    let mut select = connection.prepare_cached(HEAD_OF).map_err(failed)?;
+    let rows = select.query_map((index, last), posting);
+    rows.and_then(Iterator::collect).map_err(failed)
+}
+
+fn posting(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, Posting)> {
+    Ok((row.get(0)?, Posting { doc: row.get(1)?, tf: row.get(2)?, len: row.get(3)? }))
 }
 
 /// Every document a key's rows of blocks hold, in order.
@@ -213,7 +310,8 @@ pub(crate) mod written {
     use crate::search::postings::Posting;
 
     /// Writes every list of the index `name` that is in runs again as rows
-    /// of blocks, as a release before 0002 wrote them, beside the store.
+    /// of blocks, and its head a row a posting, as a release before 0002
+    /// wrote them, beside the store.
     pub(crate) fn rewrite(dir: &Path, name: &str) {
         let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
         let index: i64 = connection
@@ -265,13 +363,33 @@ pub(crate) mod written {
             let update = "update _tinystore_search_lists set directory = ?2, packed = null, best = null where key = ?1";
             connection.execute(update, (key, directory(&entries))).unwrap();
         }
+        let fresh: Vec<(i64, Vec<u8>)> = connection
+            .prepare("select key, postings from _tinystore_search_fresh where index_id = ?1")
+            .unwrap()
+            .query_map([index], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (key, bytes) in fresh {
+            for posting in crate::search::postings::unpack_inline(&bytes).unwrap() {
+                let insert =
+                    "insert into _tinystore_search_head (index_id, key, doc, tf, len) values (?1, ?2, ?3, ?4, ?5)";
+                connection.execute(insert, (index, key, posting.doc, posting.tf, posting.len)).unwrap();
+            }
+        }
+        connection.execute("delete from _tinystore_search_fresh where index_id = ?1", [index]).unwrap();
+        // as a file another release wrote: what the store keeps of its lists is behind
+        let behind = "update _tinystore_search_indexes set lists_version = lists_version + 1 where id = ?1";
+        connection.execute(behind, [index]).unwrap();
         connection.execute_batch("commit").unwrap();
     }
 
-    /// The rows of blocks search.db holds.
-    pub(crate) fn blocks(dir: &Path) -> i64 {
+    /// The rows of blocks and of the old head search.db holds.
+    pub(crate) fn rows(dir: &Path) -> (i64, i64) {
         let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
-        connection.query_row("select count(*) from _tinystore_search_blocks", [], |row| row.get(0)).unwrap()
+        let count =
+            |table: &str| connection.query_row(&format!("select count(*) from {table}"), [], |row| row.get(0)).unwrap();
+        (count("_tinystore_search_blocks"), count("_tinystore_search_head"))
     }
 
     pub(crate) fn entry_of(block: &[Posting]) -> Entry {

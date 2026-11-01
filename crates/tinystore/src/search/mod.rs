@@ -44,6 +44,7 @@ mod filter;
 mod fixture;
 #[cfg(feature = "replication")]
 pub(crate) mod forward;
+mod head;
 #[cfg(feature = "client")]
 mod held;
 mod hybrid;
