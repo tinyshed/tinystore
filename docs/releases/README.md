@@ -4,6 +4,9 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.5.0](v0.5.0.md)** · 1 November 2026\
+  Every word as a prefix, the other keyboard layout, where each hit matched,
+  a bucket's `update`, limits by name and `status --names`.
 - **[TinyStore 0.4.1](v0.4.1.md)** · 31 October 2026\
   Search as you type with `prefix`, and one value for a key that a nested
   `with` gives again.
