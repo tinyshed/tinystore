@@ -631,114 +631,124 @@ export const jsonValues: Values<unknown> = {
 	},
 }
 
+/** A row of nothing reads as the empty string. */
+const stringValues: Values<unknown> = {
+	encode: v => {
+		if (typeof v !== 'string') {
+			throw new InvalidError(`a ${typeof v} in a bucket of strings`)
+		}
+		return tagged(kinds.text, utf8.encode(v))
+	},
+	decode: raw => {
+		if (raw === null) {
+			return ''
+		}
+		const text = textOf(bodyOf(raw, kinds.text, 'text'))
+		if (text === undefined) {
+			throw new CorruptError('a stored value is text that is not UTF-8')
+		}
+		return text
+	},
+}
+
+/** A row of nothing reads as no bytes. */
+const bytesValues: Values<unknown> = {
+	keeps: true,
+	encode: v => {
+		if (!(v instanceof Uint8Array)) {
+			throw new InvalidError(`a ${typeof v} in a bucket of bytes`)
+		}
+		return tagged(kinds.bytes, v)
+	},
+	decode: raw => (raw === null ? new Uint8Array(0) : bodyOf(raw, kinds.bytes, 'bytes')),
+}
+
+const intValues: Values<unknown> = {
+	encode: v => {
+		if (typeof v !== 'number' || !Number.isSafeInteger(v)) {
+			throw new InvalidError(
+				`${String(v)} is not an integer a number holds exactly; open the bucket with type 'bigint'`,
+			)
+		}
+		return BigInt(v)
+	},
+	decode: raw => {
+		if (typeof raw !== 'bigint') {
+			throw new CorruptError(`a stored value is ${describe(raw)} where an integer was written`)
+		}
+		if (raw > BigInt(Number.MAX_SAFE_INTEGER) || raw < BigInt(Number.MIN_SAFE_INTEGER)) {
+			throw new CorruptError(
+				`${raw} does not fit a number exactly; open the bucket with type 'bigint'`,
+			)
+		}
+		return Number(raw)
+	},
+}
+
+const bigintValues: Values<unknown> = {
+	encode: v => {
+		if (typeof v !== 'bigint' && !(typeof v === 'number' && Number.isSafeInteger(v))) {
+			throw new InvalidError(`${String(v)} is not an integer`)
+		}
+		return BigInt(v)
+	},
+	decode: raw => {
+		if (typeof raw !== 'bigint') {
+			throw new CorruptError(`a stored value is ${describe(raw)} where an integer was written`)
+		}
+		return raw
+	},
+}
+
+const floatValues: Values<unknown> = {
+	encode: v => {
+		if (typeof v !== 'number') {
+			throw new InvalidError(`a ${typeof v} in a bucket of floats`)
+		}
+		const bytes = new Uint8Array(8)
+		new DataView(bytes.buffer).setFloat64(0, v)
+		return tagged(kinds.float, bytes)
+	},
+	decode: raw => {
+		const bits = bodyOf(raw, kinds.float, 'a float')
+		if (bits.length !== 8) {
+			throw new CorruptError(`a float from ${bits.length} bytes rather than 8`)
+		}
+		return new DataView(bits.buffer, bits.byteOffset, 8).getFloat64(0)
+	},
+}
+
+const boolValues: Values<unknown> = {
+	encode: v => {
+		if (typeof v !== 'boolean') {
+			throw new InvalidError(`a ${typeof v} in a bucket of booleans`)
+		}
+		return v ? 1n : 0n
+	},
+	decode: raw => {
+		if (typeof raw !== 'bigint') {
+			throw new CorruptError(`a stored value is ${describe(raw)} where a boolean was written`)
+		}
+		return raw !== 0n
+	},
+}
+
 export function valuesOf(type: ValueType | undefined): Values<unknown> {
 	switch (type) {
 		case undefined:
 			return jsonValues
 		case 'string':
-			return {
-				encode: v => {
-					if (typeof v !== 'string') {
-						throw new InvalidError(`a ${typeof v} in a bucket of strings`)
-					}
-					return tagged(kinds.text, utf8.encode(v))
-				},
-				decode: raw => {
-					if (raw === null) {
-						return ''
-					}
-					const text = textOf(bodyOf(raw, kinds.text, 'text'))
-					if (text === undefined) {
-						throw new CorruptError('a stored value is text that is not UTF-8')
-					}
-					return text
-				},
-			}
+			return stringValues
 		case 'bytes':
-			return {
-				keeps: true,
-				encode: v => {
-					if (!(v instanceof Uint8Array)) {
-						throw new InvalidError(`a ${typeof v} in a bucket of bytes`)
-					}
-					return tagged(kinds.bytes, v)
-				},
-				decode: raw => (raw === null ? new Uint8Array(0) : bodyOf(raw, kinds.bytes, 'bytes')),
-			}
+			return bytesValues
 		case 'int':
-			return {
-				encode: v => {
-					if (typeof v !== 'number' || !Number.isSafeInteger(v)) {
-						throw new InvalidError(
-							`${String(v)} is not an integer a number holds exactly; open the bucket with type 'bigint'`,
-						)
-					}
-					return BigInt(v)
-				},
-				decode: raw => {
-					if (typeof raw !== 'bigint') {
-						throw new CorruptError(
-							`a stored value is ${describe(raw)} where an integer was written`,
-						)
-					}
-					if (raw > BigInt(Number.MAX_SAFE_INTEGER) || raw < BigInt(Number.MIN_SAFE_INTEGER)) {
-						throw new CorruptError(
-							`${raw} does not fit a number exactly; open the bucket with type 'bigint'`,
-						)
-					}
-					return Number(raw)
-				},
-			}
+			return intValues
 		case 'bigint':
-			return {
-				encode: v => {
-					if (typeof v !== 'bigint' && !(typeof v === 'number' && Number.isSafeInteger(v))) {
-						throw new InvalidError(`${String(v)} is not an integer`)
-					}
-					return BigInt(v)
-				},
-				decode: raw => {
-					if (typeof raw !== 'bigint') {
-						throw new CorruptError(
-							`a stored value is ${describe(raw)} where an integer was written`,
-						)
-					}
-					return raw
-				},
-			}
+			return bigintValues
 		case 'float':
-			return {
-				encode: v => {
-					if (typeof v !== 'number') {
-						throw new InvalidError(`a ${typeof v} in a bucket of floats`)
-					}
-					const bytes = new Uint8Array(8)
-					new DataView(bytes.buffer).setFloat64(0, v)
-					return tagged(kinds.float, bytes)
-				},
-				decode: raw => {
-					const bits = bodyOf(raw, kinds.float, 'a float')
-					if (bits.length !== 8) {
-						throw new CorruptError(`a float from ${bits.length} bytes rather than 8`)
-					}
-					return new DataView(bits.buffer, bits.byteOffset, 8).getFloat64(0)
-				},
-			}
+			return floatValues
 		case 'bool':
-			return {
-				encode: v => {
-					if (typeof v !== 'boolean') {
-						throw new InvalidError(`a ${typeof v} in a bucket of booleans`)
-					}
-					return v ? 1n : 0n
-				},
-				decode: raw => {
-					if (typeof raw !== 'bigint') {
-						throw new CorruptError(`a stored value is ${describe(raw)} where a boolean was written`)
-					}
-					return raw !== 0n
-				},
-			}
+			return boolValues
 	}
 	throw new InvalidError(
 		`a bucket's type is string, bytes, int, bigint, float or bool, not ${String(type)}`,

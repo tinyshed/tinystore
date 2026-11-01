@@ -35,14 +35,17 @@ func (f *Files) write(ctx context.Context, path string, body io.Reader, opts []W
 	if f.inside {
 		return f.writeInside(ctx, path, body, message)
 	}
-	seeker, replayable := body.(io.Seeker)
-	var start int64
-	if replayable {
-		var err error
-		if start, err = seeker.Seek(0, io.SeekCurrent); err != nil {
-			replayable = false
-		}
+	written, err := f.sent(ctx, path, body, message, known)
+	if err != nil || written == nil {
+		return FileInfo{}, false, err
 	}
+	return infoOf(*written), true, nil
+}
+
+// sent sends a body of known bytes, or -1 when it does not say, on each
+// connection Run tries: in one call when it fits a piece, else as an upload.
+func (f *Files) sent(ctx context.Context, path string, body io.Reader, message wire.BlobsWrite, known int) (*wire.BlobsInfo, error) {
+	seeker, start, replayable := replayFrom(body)
 	var written *wire.BlobsInfo
 	// a body sent in one call, read once: a call sent again on another
 	// connection sends the same bytes, from a reader that cannot seek too
@@ -68,17 +71,8 @@ func (f *Files) write(ctx context.Context, path string, body io.Reader, opts []W
 					return core.Wrap(core.Invalid, err, "files %s: %s: its body", f.name, path)
 				}
 			}
-			m.Bytes = whole
-			answer, err := c.Session.Call(ctx, wire.MethodBlobsPut, wire.Encode(&m))
-			if err != nil {
-				return err
-			}
-			var w wire.BlobsWritten
-			if err := decode(answer, &w); err != nil {
-				return err
-			}
-			written = w.Info
-			return nil
+			written, err = put(ctx, c, m, whole)
+			return err
 		}
 		stream, err := c.Session.Open(ctx, wire.MethodBlobsUpload, wire.Encode(&m), false)
 		if err != nil {
@@ -87,10 +81,35 @@ func (f *Files) write(ctx context.Context, path string, body io.Reader, opts []W
 		written, err = uploaded(ctx, stream, body, piece, replayable)
 		return err
 	})
-	if err != nil || written == nil {
-		return FileInfo{}, false, err
+	return written, err
+}
+
+// replayFrom is where a body that seeks starts, so that a call sent again
+// reads it again from there; false for one that does not seek.
+func replayFrom(body io.Reader) (io.Seeker, int64, bool) {
+	seeker, replayable := body.(io.Seeker)
+	var start int64
+	if replayable {
+		var err error
+		if start, err = seeker.Seek(0, io.SeekCurrent); err != nil {
+			replayable = false
+		}
 	}
-	return infoOf(*written), true, nil
+	return seeker, start, replayable
+}
+
+// put writes a body whole in one call.
+func put(ctx context.Context, c *core.Connection, m wire.BlobsWrite, whole []byte) (*wire.BlobsInfo, error) {
+	m.Bytes = whole
+	answer, err := c.Session.Call(ctx, wire.MethodBlobsPut, wire.Encode(&m))
+	if err != nil {
+		return nil, err
+	}
+	var w wire.BlobsWritten
+	if err := decode(answer, &w); err != nil {
+		return nil, err
+	}
+	return w.Info, nil
 }
 
 // uploaded sends an upload's pieces as DATA within the stream's credit, the

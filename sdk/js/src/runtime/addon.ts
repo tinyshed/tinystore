@@ -40,61 +40,72 @@ export function openAddon(
 	events: AddonEvents,
 ): Transport {
 	const addon = createRequire(import.meta.url)(path) as Addon
-
-	// What the session writes while it reads: its frames wait for the read's
-	// end, since an answer handed back meanwhile would reach the session in
-	// the middle of the bytes it is reading.
-	let reading = false
-	const waiting: Uint8Array[] = []
-
-	const take = (bytes: Uint8Array | null): void => {
-		reading = true
-		try {
-			let next = bytes
-			while (next !== null && pipe !== undefined) {
-				events.data(next)
-				next = pipe.recv()
-			}
-		} finally {
-			reading = false
-		}
-		const queued = waiting.shift()
-		if (queued !== undefined) {
-			send(queued)
-		}
-	}
-
-	const send = (bytes: Uint8Array): void => {
-		if (pipe === undefined) {
-			return
-		}
-		if (reading) {
-			waiting.push(bytes)
-			return
-		}
-		take(pipe.send(bytes))
-	}
-
-	let pipe: AddonPipe | undefined
+	const reader = new PipeReader(events)
 	try {
-		pipe = addon.open(dir, options, () => {
-			if (!reading) {
-				take(pipe?.recv() ?? null)
-			}
-		})
+		reader.pipe = addon.open(dir, options, () => reader.woken())
 	} catch (err) {
 		throw openFailure(dir, (err as Error).message)
 	}
 	return {
-		write: turning(send),
+		write: turning(bytes => reader.send(bytes)),
 		close() {
-			const closing = pipe
+			const closing = reader.pipe
 			if (closing === undefined) {
 				return
 			}
-			pipe = undefined
+			reader.pipe = undefined
 			closing.close()
 			events.end(new ClosedError('the store closed'))
 		},
+	}
+}
+
+/** The addon's pipe as the session reads and writes it. */
+class PipeReader {
+	pipe: AddonPipe | undefined
+	readonly #events: AddonEvents
+	// What the session writes while it reads: its frames wait for the read's
+	// end, since an answer handed back meanwhile would reach the session in
+	// the middle of the bytes it is reading.
+	#reading = false
+	readonly #waiting: Uint8Array[] = []
+
+	constructor(events: AddonEvents) {
+		this.#events = events
+	}
+
+	/** The core's wake: what it has ready, unless a read under way, which reads until nothing is, takes it. */
+	woken(): void {
+		if (!this.#reading) {
+			this.#take(this.pipe?.recv() ?? null)
+		}
+	}
+
+	send(bytes: Uint8Array): void {
+		if (this.pipe === undefined) {
+			return
+		}
+		if (this.#reading) {
+			this.#waiting.push(bytes)
+			return
+		}
+		this.#take(this.pipe.send(bytes))
+	}
+
+	#take(bytes: Uint8Array | null): void {
+		this.#reading = true
+		try {
+			let next = bytes
+			while (next !== null && this.pipe !== undefined) {
+				this.#events.data(next)
+				next = this.pipe.recv()
+			}
+		} finally {
+			this.#reading = false
+		}
+		const queued = this.#waiting.shift()
+		if (queued !== undefined) {
+			this.send(queued)
+		}
 	}
 }

@@ -149,75 +149,117 @@ func (v Values[T]) Encode(value T) (wire.Raw, error) {
 func (v Values[T]) Decode(raw wire.Raw) (T, error) {
 	var value T
 	r := reflect.ValueOf(&value).Elem()
+	var err error
 	switch v.kind {
 	case asText:
-		if raw == nil {
-			return value, nil
-		}
-		text, err := bodyOf(raw, kindText, "text")
-		if err != nil {
-			return value, err
-		}
-		if !utf8.Valid(text) {
-			return value, Errorf(Corrupt, "a stored value is text that is not UTF-8")
-		}
-		r.SetString(string(text))
+		err = decodeText(r, raw)
 	case asBytes:
-		if raw == nil {
-			return value, nil
-		}
-		bytes, err := bodyOf(raw, kindBytes, "bytes")
-		if err != nil {
-			return value, err
-		}
-		r.SetBytes(append([]byte{}, bytes...))
+		err = decodeBytes(r, raw)
 	case asBool, asInt, asUint:
-		n, ok := raw.(int64)
-		if !ok {
-			return value, Errorf(Corrupt, "a stored value is %s where an integer was written", described(raw))
-		}
-		switch {
-		case v.kind == asBool:
-			r.SetBool(n != 0)
-		case v.kind == asInt && !r.OverflowInt(n):
-			r.SetInt(n)
-		case v.kind == asUint && n >= 0 && !r.OverflowUint(uint64(n)):
-			r.SetUint(uint64(n))
-		default:
-			return value, Errorf(Corrupt, "a stored value is the integer %d, which a %s does not hold", n, r.Type())
-		}
+		err = decodeInteger(r, raw, v.kind)
 	case asU64:
-		n, err := u64Of(raw)
-		if err != nil {
-			return value, err
-		}
-		r.SetUint(n)
+		err = decodeU64(r, raw)
 	case asFloat:
-		bits, err := fixedOf(raw, kindFloat, "a float", 8)
-		if err != nil {
-			return value, err
-		}
-		r.SetFloat(math.Float64frombits(binary.BigEndian.Uint64(bits)))
+		err = decodeFloat(r, raw)
 	case asF32:
-		f, err := f32Of(raw)
-		if err != nil {
-			return value, err
-		}
-		r.Set(reflect.ValueOf(f).Convert(r.Type()))
+		err = decodeF32(r, raw)
 	case asNothing:
 	default:
-		if raw == nil {
-			return value, nil
-		}
-		text, err := bodyOf(raw, kindJSON, "JSON")
-		if err != nil {
-			return value, err
-		}
-		if err := json.Unmarshal(text, &value); err != nil {
-			return value, Wrap(Corrupt, err, "a stored value does not read as %s", reflect.TypeFor[T]())
-		}
+		err = decodeJSON(&value, raw)
 	}
-	return value, nil
+	return value, err
+}
+
+// decodeText reads text into r; a row of nothing leaves it empty.
+func decodeText(r reflect.Value, raw wire.Raw) error {
+	if raw == nil {
+		return nil
+	}
+	text, err := bodyOf(raw, kindText, "text")
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(text) {
+		return Errorf(Corrupt, "a stored value is text that is not UTF-8")
+	}
+	r.SetString(string(text))
+	return nil
+}
+
+// decodeBytes reads bytes into r, copied from the row's; a row of nothing
+// leaves it empty.
+func decodeBytes(r reflect.Value, raw wire.Raw) error {
+	if raw == nil {
+		return nil
+	}
+	bytes, err := bodyOf(raw, kindBytes, "bytes")
+	if err != nil {
+		return err
+	}
+	r.SetBytes(append([]byte{}, bytes...))
+	return nil
+}
+
+// decodeInteger reads an integer row into r as kind says: a bool, a signed
+// or an unsigned integer, refusing one r does not hold.
+func decodeInteger(r reflect.Value, raw wire.Raw, kind valueKind) error {
+	n, ok := raw.(int64)
+	if !ok {
+		return Errorf(Corrupt, "a stored value is %s where an integer was written", described(raw))
+	}
+	switch {
+	case kind == asBool:
+		r.SetBool(n != 0)
+	case kind == asInt && !r.OverflowInt(n):
+		r.SetInt(n)
+	case kind == asUint && n >= 0 && !r.OverflowUint(uint64(n)):
+		r.SetUint(uint64(n))
+	default:
+		return Errorf(Corrupt, "a stored value is the integer %d, which a %s does not hold", n, r.Type())
+	}
+	return nil
+}
+
+func decodeU64(r reflect.Value, raw wire.Raw) error {
+	n, err := u64Of(raw)
+	if err != nil {
+		return err
+	}
+	r.SetUint(n)
+	return nil
+}
+
+func decodeFloat(r reflect.Value, raw wire.Raw) error {
+	bits, err := fixedOf(raw, kindFloat, "a float", 8)
+	if err != nil {
+		return err
+	}
+	r.SetFloat(math.Float64frombits(binary.BigEndian.Uint64(bits)))
+	return nil
+}
+
+func decodeF32(r reflect.Value, raw wire.Raw) error {
+	f, err := f32Of(raw)
+	if err != nil {
+		return err
+	}
+	r.Set(reflect.ValueOf(f).Convert(r.Type()))
+	return nil
+}
+
+// decodeJSON reads a JSON row into value; a row of nothing leaves it zero.
+func decodeJSON[T any](value *T, raw wire.Raw) error {
+	if raw == nil {
+		return nil
+	}
+	text, err := bodyOf(raw, kindJSON, "JSON")
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(text, value); err != nil {
+		return Wrap(Corrupt, err, "a stored value does not read as %s", reflect.TypeFor[T]())
+	}
+	return nil
 }
 
 // fixedOf is the body of a row that kind wrote, of size bytes.

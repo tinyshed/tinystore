@@ -216,27 +216,21 @@ class _Searchable[T]:
         """
         if prefix not in (True, False, "every"):
             raise InvalidError(f"a prefix of {prefix!r}: True, False or 'every'")
-        vector_bytes = None if vector is None else _vector_bytes(vector)
-        asked = None if where is None else where_json(where)
-
-        def body(handle: int) -> bytes:
-            return SearchQuery.encode(
-                handle=handle,
-                text=text,
-                vector=vector_bytes,
-                vector_weight=None if hybrid is None else hybrid.vector_weight,
-                rerank=None if hybrid is None else hybrid.rerank,
-                prefix=prefix is True,
-                # none unless asked, so that a server before it reads the search
-                prefix_every=True if prefix == "every" else None,
-                # Python slices a str by its code points
-                matches="chars" if matches else None,
-                where=asked,
-                offset=offset,
-                limit=limit,
-            )
-
+        body = _query(
+            text,
+            vector_bytes=None if vector is None else _vector_bytes(vector),
+            where=None if where is None else where_json(where),
+            hybrid=hybrid,
+            prefix=prefix,
+            matches=matches,
+            limit=limit,
+            offset=offset,
+        )
         found = SearchFound.decode(await self._call("search.search", body, "read"))
+        return self._result_of(found)
+
+    def _result_of(self, found: dict[str, Any]) -> Result[T]:
+        """The hits a search found, each value read as this index reads its documents."""
         return Result(
             [
                 Hit(
@@ -425,6 +419,39 @@ def _status_of(status: dict[str, Any]) -> IndexStatus:
     if state == "failed":
         return IndexStatus("failed", error=status.get("error", ""))
     return IndexStatus("ready")
+
+
+def _query(
+    text: str,
+    *,
+    vector_bytes: bytes | None,
+    where: str | None,
+    hybrid: Hybrid | None,
+    prefix: bool | Literal["every"],
+    matches: bool,
+    limit: int | None,
+    offset: int | None,
+) -> Callable[[int], bytes]:
+    """A search's body, written for the handle the index is opened with on each connection."""
+
+    def body(handle: int) -> bytes:
+        return SearchQuery.encode(
+            handle=handle,
+            text=text,
+            vector=vector_bytes,
+            vector_weight=None if hybrid is None else hybrid.vector_weight,
+            rerank=None if hybrid is None else hybrid.rerank,
+            prefix=prefix is True,
+            # none unless asked, so that a server before it reads the search
+            prefix_every=True if prefix == "every" else None,
+            # Python slices a str by its code points
+            matches="chars" if matches else None,
+            where=where,
+            offset=offset,
+            limit=limit,
+        )
+
+    return body
 
 
 def _matches_of(found: list[dict[str, Any]] | None) -> list[Match] | None:

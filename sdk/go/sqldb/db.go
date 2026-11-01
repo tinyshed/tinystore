@@ -286,18 +286,7 @@ func (db *DB) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error]
 			yield(nil, statement.err)
 			return
 		}
-		c, err := db.store.Link.Connection(ctx)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		handle, err := db.Handle(ctx, c)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		body := wire.Encode(&wire.SqlQuery{Handle: handle, Text: statement.text, Values: statement.values, Want: "all"})
-		stream, err := c.Session.Open(ctx, wire.MethodSqlQuery, body, true)
+		stream, err := db.openQuery(ctx, statement)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -308,30 +297,7 @@ func (db *DB) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error]
 			yield(nil, err)
 			return
 		}
-		var columns []string
-		read := func(body []byte) bool {
-			var part wire.SqlRows
-			if err := decode(body, &part); err != nil {
-				yield(nil, err)
-				return false
-			}
-			if columns == nil {
-				columns = part.Columns
-				if err := checkColumns(columns); err != nil {
-					yield(nil, err)
-					return false
-				}
-				if !yield(append([]any{columnsMark{}}, toAny(columns)...), nil) {
-					return false
-				}
-			}
-			for _, row := range part.Rows {
-				if !yield(row, nil) {
-					return false
-				}
-			}
-			return true
-		}
+		read := yieldingParts(yield)
 		if head.End {
 			read(head.Body)
 			return
@@ -347,6 +313,50 @@ func (db *DB) each(ctx context.Context, statement Piece) iter.Seq2[[]any, error]
 				return
 			}
 		}
+	}
+}
+
+// openQuery asks for every row of a statement, on the store's connection now.
+func (db *DB) openQuery(ctx context.Context, statement Piece) (*core.Stream, error) {
+	c, err := db.store.Link.Connection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := db.Handle(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	body := wire.Encode(&wire.SqlQuery{Handle: handle, Text: statement.text, Values: statement.values, Want: "all"})
+	return c.Session.Open(ctx, wire.MethodSqlQuery, body, true)
+}
+
+// yieldingParts reads each part of a query's rows to yield: the columns
+// first, behind columnsMark, then the rows. It says false once yield stops
+// or a part does not read.
+func yieldingParts(yield func([]any, error) bool) func(body []byte) bool {
+	var columns []string
+	return func(body []byte) bool {
+		var part wire.SqlRows
+		if err := decode(body, &part); err != nil {
+			yield(nil, err)
+			return false
+		}
+		if columns == nil {
+			columns = part.Columns
+			if err := checkColumns(columns); err != nil {
+				yield(nil, err)
+				return false
+			}
+			if !yield(append([]any{columnsMark{}}, toAny(columns)...), nil) {
+				return false
+			}
+		}
+		for _, row := range part.Rows {
+			if !yield(row, nil) {
+				return false
+			}
+		}
+		return true
 	}
 }
 

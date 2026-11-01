@@ -884,11 +884,40 @@ func render(p parts) Piece {
 	if p.err != nil {
 		return Piece{err: p.err}
 	}
-	var values []any
+	source := sourceText(p)
+	columns := columnsText(p)
+	if columns.err != nil {
+		return columns
+	}
+	text := "select " + columns.text + " from " + source
+	values := columns.values
+	for _, join := range p.joins {
+		text += " " + join.text
+		values = append(values, join.values...)
+	}
+	filters := filtersText(p)
+	if filters.err != nil {
+		return filters
+	}
+	page := pageText(p)
+	text += filters.text + page.text
+	values = append(append(values, filters.values...), page.values...)
+	return Piece{text: text, values: values}
+}
+
+// sourceText is the table a query reads, as its alias names it.
+func sourceText(p parts) string {
 	source := mustIdent(p.table)
 	if p.alias != "" {
 		source += " as " + mustIdent(p.alias)
 	}
+	return source
+}
+
+// columnsText is what a query selects: the columns it chose or its table's
+// own, then each included query's rows as a column.
+func columnsText(p parts) Piece {
+	var values []any
 	columns := "*"
 	switch {
 	case p.selected != nil:
@@ -909,11 +938,13 @@ func render(p parts) Piece {
 		columns += ", " + listed.text + " as " + mustIdent(each.name)
 		values = append(values, listed.values...)
 	}
-	text := "select " + columns + " from " + source
-	for _, join := range p.joins {
-		text += " " + join.text
-		values = append(values, join.values...)
-	}
+	return Piece{text: columns, values: values}
+}
+
+// filtersText is a query's where, group by and having, each after a space.
+func filtersText(p parts) Piece {
+	var text string
+	var values []any
 	if len(p.conditions) > 0 {
 		where := conditionsText(p.conditions)
 		if where.err != nil {
@@ -933,6 +964,13 @@ func render(p parts) Piece {
 		text += " having " + having.text
 		values = append(values, having.values...)
 	}
+	return Piece{text: text, values: values}
+}
+
+// pageText is a query's order, limit and offset, each after a space.
+func pageText(p parts) Piece {
+	var text string
+	var values []any
 	if len(p.order) > 0 {
 		by := make([]string, len(p.order))
 		for i, each := range p.order {

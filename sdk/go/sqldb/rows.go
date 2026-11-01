@@ -301,30 +301,35 @@ func readValue(into reflect.Value, value any, column string) error {
 		into.Set(v)
 		return nil
 	case t == timeType:
-		switch v := value.(type) {
-		case int64:
-			into.Set(reflect.ValueOf(time.UnixMilli(v).UTC()))
-		case string:
-			parsed, err := time.Parse(time.RFC3339Nano, v)
-			if err != nil {
-				return refused()
-			}
-			into.Set(reflect.ValueOf(parsed))
-		default:
+		return readTime(into, value, refused)
+	}
+	return readKind(into, value, column, refused)
+}
+
+// readTime reads a time kept as milliseconds since the epoch, or as RFC 3339 text.
+func readTime(into reflect.Value, value any, refused func() error) error {
+	switch v := value.(type) {
+	case int64:
+		into.Set(reflect.ValueOf(time.UnixMilli(v).UTC()))
+	case string:
+		parsed, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
 			return refused()
 		}
-		return nil
+		into.Set(reflect.ValueOf(parsed))
+	default:
+		return refused()
 	}
+	return nil
+}
+
+// readKind reads a value into a field by the field's kind: a number, text,
+// bytes, or JSON for a slice, a map, a struct or an array.
+func readKind(into reflect.Value, value any, column string, refused func() error) error {
+	t := into.Type()
 	switch t.Kind() {
 	case reflect.String:
-		switch v := value.(type) {
-		case string:
-			into.SetString(v)
-		case []byte:
-			into.SetString(string(v))
-		default:
-			return refused()
-		}
+		return readString(into, value, refused)
 	case reflect.Bool:
 		n, ok := value.(int64)
 		if !ok || (n != 0 && n != 1) {
@@ -344,29 +349,51 @@ func readValue(into reflect.Value, value any, column string) error {
 		}
 		into.SetUint(uint64(n))
 	case reflect.Float32, reflect.Float64:
-		switch v := value.(type) {
-		case float64:
-			into.SetFloat(v)
-		case int64:
-			into.SetFloat(float64(v))
-		default:
-			return refused()
-		}
+		return readFloat(into, value, refused)
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
-			switch v := value.(type) {
-			case []byte:
-				into.SetBytes(append([]byte{}, v...))
-			case string:
-				into.SetBytes([]byte(v))
-			default:
-				return refused()
-			}
-			return nil
+			return readBytes(into, value, refused)
 		}
 		return readJSON(into, value, column, refused)
 	case reflect.Map, reflect.Struct, reflect.Array:
 		return readJSON(into, value, column, refused)
+	default:
+		return refused()
+	}
+	return nil
+}
+
+func readString(into reflect.Value, value any, refused func() error) error {
+	switch v := value.(type) {
+	case string:
+		into.SetString(v)
+	case []byte:
+		into.SetString(string(v))
+	default:
+		return refused()
+	}
+	return nil
+}
+
+func readFloat(into reflect.Value, value any, refused func() error) error {
+	switch v := value.(type) {
+	case float64:
+		into.SetFloat(v)
+	case int64:
+		into.SetFloat(float64(v))
+	default:
+		return refused()
+	}
+	return nil
+}
+
+// readBytes reads bytes into a field, copied from the value's.
+func readBytes(into reflect.Value, value any, refused func() error) error {
+	switch v := value.(type) {
+	case []byte:
+		into.SetBytes(append([]byte{}, v...))
+	case string:
+		into.SetBytes([]byte(v))
 	default:
 		return refused()
 	}

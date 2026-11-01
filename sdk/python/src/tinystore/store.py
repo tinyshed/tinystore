@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from types import TracebackType
     from typing import TextIO
 
+    from ._connection import Connection
     from ._console import Console, ConsoleTime
     from .config import Layer
 
@@ -700,14 +701,45 @@ async def open(
       running keeps its own.
     """
     where = _directory(directory)
+    _check_open(durability, max_series, clock, private=private, embedded=embedded)
+    started = _started(
+        durability=durability,
+        encryption_key_file=encryption_key_file,
+        older_encryption_keys=older_encryption_keys,
+        idle=idle,
+        self_metrics=self_metrics,
+        max_series=max_series,
+    )
+    dial = _dial(where, started, private=private, embedded=embedded, library=library, binary=binary, clock=clock)
+    link = Link(asking(dial, where, durability))
+    await _reached(link, f"open {directory}")
+    return Store(link)
+
+
+def _check_open(
+    durability: Durability | None, max_series: int | None, clock: datetime | None, *, private: bool, embedded: bool
+) -> None:
+    """Refuses what open was given that no store opens with, before anything starts."""
     check_durability(durability, "open")
     check_max_series(max_series)
     if clock is not None and not private:
         raise InvalidError("a clock is a private server's: a shared sidecar runs on the system's time")
     if private and embedded:
         raise InvalidError("a store is private or embedded, not both")
+
+
+def _started(
+    *,
+    durability: Durability | None,
+    encryption_key_file: str | os.PathLike[str] | None,
+    older_encryption_keys: Sequence[str | os.PathLike[str]],
+    idle: Duration | None,
+    self_metrics: bool | SelfMetrics,
+    max_series: int | None,
+) -> Started:
+    """What a server or a core that open starts is started with, as open's options say."""
     key = None if encryption_key_file is None else str(encryption_key_file)
-    started = Started(
+    return Started(
         durability=durability,
         encryption_key_file=key,
         older_encryption_keys=tuple(str(older) for older in older_encryption_keys),
@@ -717,18 +749,27 @@ async def open(
         max_series=max_series,
     )
 
+
+def _dial(
+    where: str,
+    started: Started,
+    *,
+    private: bool,
+    embedded: bool,
+    library: str | None,
+    binary: str | None,
+    clock: datetime | None,
+) -> Callable[[], Awaitable[Connection]]:
+    """How open reaches the store: the core in this process, a private child, or the directory's sidecar."""
+
     def find() -> str:
         return _runtime.find_binary(binary)
 
     if embedded:
-        dial = in_process(where, library, started)
-    elif private:
-        dial = private_child(where, find, clock, started)
-    else:
-        dial = sidecar(where, find, started)
-    link = Link(asking(dial, where, durability))
-    await _reached(link, f"open {directory}")
-    return Store(link)
+        return in_process(where, library, started)
+    if private:
+        return private_child(where, find, clock, started)
+    return sidecar(where, find, started)
 
 
 async def connect(url: str, *, token: str, tls: ssl.SSLContext | None = None) -> Store:

@@ -4,7 +4,7 @@
 // memory of the core's comes back: it reads our frames where they are and
 // writes its own where we say. Bun alone: bun:ffi.
 
-import { dlopen, FFIType, JSCallback, type Pointer, ptr } from 'bun:ffi'
+import { dlopen, FFIType, JSCallback, type Library, type Pointer, ptr } from 'bun:ffi'
 
 import { ClosedError } from '../errors.ts'
 import type { Transport } from '../runtime.ts'
@@ -37,6 +37,8 @@ const symbols = {
 	tinystore_close: { args: [FFIType.ptr], returns: FFIType.void },
 } as const
 
+type Core = Library<typeof symbols>
+
 /** What the pipe tells the session reading it. */
 export interface PipeEvents {
 	/**
@@ -65,106 +67,40 @@ export function openPipe(
 	events: PipeEvents,
 ): Transport {
 	const lib = dlopen(library, symbols)
-	const name = new TextEncoder().encode(dir)
-	const opened = new BigUint64Array(1)
-	const failure = new Uint8Array(1024)
-	let connection: Pointer | null = null
-
-	// where the core writes what it owes: whole frames are read from the
-	// front, and a frame's first part is held there for its rest
-	const inbox = new Uint8Array(room)
-	let held = 0
-	// A frame longer than the inbox, in bytes as long as it is, and how much
-	// of it came: the core writes its rest there, and the session keeps them,
-	// so that a file's mebibyte is written once here rather than copied out
-	// of an inbox grown for it (issue #10).
-	let large: Uint8Array | undefined
-	let filledLarge = 0
-
-	// where the core writes next, and how many bytes it may
-	const into = (): [Uint8Array, number, number] =>
-		large === undefined
-			? [inbox, held, inbox.length - held]
-			: [large, filledLarge, large.length - filledLarge]
-
-	// reads what the core wrote where `into` said, and says whether it filled
-	// that room, which means more may wait
-	const read = (written: number): boolean => {
-		if (large !== undefined) {
-			filledLarge += written
-			if (filledLarge < large.length) {
-				return false
-			}
-			const whole = large
-			large = undefined
-			events.frame(whole)
-			return true
-		}
-		const length = held + written
-		const filled = length === inbox.length
-		const taken = written === 0 ? 0 : events.frames(inbox, length)
-		inbox.copyWithin(0, taken, length)
-		held = length - taken
-		const frameLength = held < headerSize ? 0 : headerSize + bodyLength(inbox)
-		if (frameLength > inbox.length) {
-			large = new Uint8Array(frameLength)
-			large.set(inbox.subarray(0, held))
-			filledLarge = held
-			held = 0
-		}
-		return filled
-	}
-
-	// What the session writes while it reads: its frames wait for the read's
-	// end, since a call of the core made meanwhile would write over the bytes
-	// being read.
-	let reading = false
-	const waiting: Uint8Array[] = []
-
-	// reads what a call of the core wrote, and on while the core fills the
-	// room, since no wake comes for what waits; then sends what was written
-	// meanwhile
-	const readOn = (written: number | undefined): void => {
-		reading = true
-		try {
-			let filled = written === undefined || read(written)
-			while (filled && connection !== null) {
-				const [bytes, at, free] = into()
-				filled = read(Number(lib.symbols.tinystore_recv(connection, 0, ptr(bytes, at), free)))
-			}
-		} finally {
-			reading = false
-		}
-		const next = waiting.shift()
-		if (next !== undefined) {
-			send(next)
-		}
-	}
-
-	const send = (bytes: Uint8Array): void => {
-		if (connection === null) {
-			return
-		}
-		if (reading) {
-			waiting.push(bytes)
-			return
-		}
-		const [owed, at, free] = into()
-		const written = lib.symbols.tinystore_send(
-			connection,
-			ptr(bytes),
-			bytes.length,
-			ptr(owed, at),
-			free,
-		)
-		readOn(Number(written))
-	}
-
-	const wake = new JSCallback(() => readOn(undefined), {
+	const pipe = new CorePipe(lib, new Inbox(events))
+	const wake = new JSCallback(() => pipe.readOn(undefined), {
 		args: [FFIType.ptr],
 		returns: FFIType.void,
 		threadsafe: true,
 	})
+	pipe.connection = connect(lib, dir, options, wake)
+	// Bun's loop with no timer armed spins while it waits for a threadsafe
+	// callback from another thread: a write waiting for its sync burned a
+	// whole processor (research release-2026-10-23). A timer armed, however
+	// far off, lets the loop sleep until the core wakes it; it also keeps the
+	// process alive while the store is open, as a sidecar's socket does.
+	const sleeps = setInterval(() => {}, 2 ** 30)
+	return {
+		write: turning(bytes => pipe.send(bytes)),
+		close() {
+			const closing = pipe.connection
+			if (closing === null) {
+				return
+			}
+			pipe.connection = null
+			clearInterval(sleeps)
+			lib.symbols.tinystore_close(closing)
+			wake.close()
+			events.end(new ClosedError('the store closed'))
+		},
+	}
+}
+
+/** Opens the store through the core; a store that does not open lets the core and the wake go. */
+function connect(lib: Core, dir: string, options: Uint8Array, wake: JSCallback): Pointer {
+	const name = new TextEncoder().encode(dir)
+	const opened = new BigUint64Array(1)
+	const failure = new Uint8Array(1024)
 	const failed = Number(
 		lib.symbols.tinystore_open(
 			ptr(name),
@@ -184,25 +120,121 @@ export function openPipe(
 		lib.close()
 		throw openFailure(dir, message)
 	}
-	connection = Number(opened[0]) as Pointer
-	// Bun's loop with no timer armed spins while it waits for a threadsafe
-	// callback from another thread: a write waiting for its sync burned a
-	// whole processor (research release-2026-10-23). A timer armed, however
-	// far off, lets the loop sleep until the core wakes it; it also keeps the
-	// process alive while the store is open, as a sidecar's socket does.
-	const sleeps = setInterval(() => {}, 2 ** 30)
-	return {
-		write: turning(send),
-		close() {
-			if (connection === null) {
-				return
+	return Number(opened[0]) as Pointer
+}
+
+/**
+ * Where the core writes what it owes: whole frames are read from the front,
+ * and a frame's first part is held there for its rest.
+ */
+class Inbox {
+	readonly #events: PipeEvents
+	readonly #inbox = new Uint8Array(room)
+	#held = 0
+	// A frame longer than the inbox, in bytes as long as it is, and how much
+	// of it came: the core writes its rest there, and the session keeps them,
+	// so that a file's mebibyte is written once here rather than copied out
+	// of an inbox grown for it (issue #10).
+	#large: Uint8Array | undefined
+	#filledLarge = 0
+
+	constructor(events: PipeEvents) {
+		this.#events = events
+	}
+
+	/** Where the core writes next, and how many bytes it may. */
+	into(): [Uint8Array, number, number] {
+		return this.#large === undefined
+			? [this.#inbox, this.#held, this.#inbox.length - this.#held]
+			: [this.#large, this.#filledLarge, this.#large.length - this.#filledLarge]
+	}
+
+	/**
+	 * Reads what the core wrote where `into` said, and says whether it filled
+	 * that room, which means more may wait.
+	 */
+	read(written: number): boolean {
+		if (this.#large !== undefined) {
+			this.#filledLarge += written
+			if (this.#filledLarge < this.#large.length) {
+				return false
 			}
-			const closing = connection
-			connection = null
-			clearInterval(sleeps)
-			lib.symbols.tinystore_close(closing)
-			wake.close()
-			events.end(new ClosedError('the store closed'))
-		},
+			const whole = this.#large
+			this.#large = undefined
+			this.#events.frame(whole)
+			return true
+		}
+		const length = this.#held + written
+		const filled = length === this.#inbox.length
+		const taken = written === 0 ? 0 : this.#events.frames(this.#inbox, length)
+		this.#inbox.copyWithin(0, taken, length)
+		this.#held = length - taken
+		const frameLength = this.#held < headerSize ? 0 : headerSize + bodyLength(this.#inbox)
+		if (frameLength > this.#inbox.length) {
+			this.#large = new Uint8Array(frameLength)
+			this.#large.set(this.#inbox.subarray(0, this.#held))
+			this.#filledLarge = this.#held
+			this.#held = 0
+		}
+		return filled
+	}
+}
+
+/** One connection's calls into the core, which write what it owes into the inbox. */
+class CorePipe {
+	connection: Pointer | null = null
+	readonly #lib: Core
+	readonly #inbox: Inbox
+	// What the session writes while it reads: its frames wait for the read's
+	// end, since a call of the core made meanwhile would write over the bytes
+	// being read.
+	#reading = false
+	readonly #waiting: Uint8Array[] = []
+
+	constructor(lib: Core, inbox: Inbox) {
+		this.#lib = lib
+		this.#inbox = inbox
+	}
+
+	/**
+	 * Reads what a call of the core wrote, and on while the core fills the
+	 * room, since no wake comes for what waits; then sends what was written
+	 * meanwhile.
+	 */
+	readOn(written: number | undefined): void {
+		this.#reading = true
+		try {
+			let filled = written === undefined || this.#inbox.read(written)
+			while (filled && this.connection !== null) {
+				const [bytes, at, free] = this.#inbox.into()
+				const read = this.#lib.symbols.tinystore_recv(this.connection, 0, ptr(bytes, at), free)
+				filled = this.#inbox.read(Number(read))
+			}
+		} finally {
+			this.#reading = false
+		}
+		const next = this.#waiting.shift()
+		if (next !== undefined) {
+			this.send(next)
+		}
+	}
+
+	send(bytes: Uint8Array): void {
+		if (this.connection === null) {
+			return
+		}
+		if (this.#reading) {
+			this.#waiting.push(bytes)
+			return
+		}
+		const [owed, at, free] = this.#inbox.into()
+		const written = this.#lib.symbols.tinystore_send(
+			this.connection,
+			ptr(bytes),
+			bytes.length,
+			ptr(owed, at),
+			free,
+		)
+		this.readOn(Number(written))
 	}
 }
