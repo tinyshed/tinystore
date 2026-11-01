@@ -2,11 +2,13 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use super::{CROWD, OUTPUT_MOST, Route, Session, route};
+use super::routing::route;
+use super::{CROWD, OUTPUT_MOST, Session};
 use crate::pipe::fixture::{Client, answered};
 use crate::pipe::{Connect, Pipe};
 use crate::pool::{MOST, Pool};
 use crate::sync::lock;
+use crate::wire::Route;
 use crate::wire::codec::Message;
 use crate::wire::codec::Row;
 use crate::wire::frame::{self, Frame, Kind, Reader};
