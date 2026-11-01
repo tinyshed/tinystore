@@ -202,6 +202,7 @@ pub struct Hit<T> {
     pub id: String,
     pub value: T,
     pub score: f64,
+    pub matches: Vec<Match>,
 }
 ```
 
@@ -298,7 +299,8 @@ Sets each document to its value, all of them in one commit or none:
 and in a list where some have none `(id, &value, Some(&vector[..]))`
 and `(id, &value, None)`. A refused one names its place in the list
 and its id. A call holds 1,000 documents and 16 MiB of them as JSON
-at most; a larger import goes in calls of that size.
+at most, `SET_MANY_DOCUMENTS` and `SET_MANY_BYTES`; a larger
+import goes in calls of that size.
 
 ### Index.delete
 
@@ -361,6 +363,18 @@ pub fn typo_tolerance(self, on: bool) -> Self
 
 Whether a misspelt word is read as the index's nearest: on unless
 turned off.
+
+### IndexBuilder.layouts
+
+```rust
+pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
+```
+
+The keyboard layouts the index's readers type with, `["ru", "en"]`
+for ЙЦУКЕН and QWERTY: a word that finds nothing as typed is read as
+the same keys type in the other layout, when it finds something
+there, and `corrected` says so: `rhbgnj` reads as `крипто`. None
+unless said; `ru` and `en` are the layouts known.
 
 ### IndexBuilder.vectors
 
@@ -503,6 +517,33 @@ box does while its reader types: `crypt` finds `cryptography` as
 well, at half its field's weight. A word followed by a space or a
 mark is whole, and so is one of a single letter.
 
+### SearchCall.prefix_every
+
+```rust
+pub fn prefix_every(self) -> Self
+```
+
+Reads every word of the text as the start of a word too, as people
+shorten each word of a name: `лин алг` finds `Линейная алгебра`, at
+half its field's weight. Each word of two letters or more is read so,
+the first eight, whatever follows it. A document that holds a word
+for each word of the text comes before any that does not, its score
+raised by the most any other could score, so that scores descend
+down the page. In place of [`prefix`](Self::prefix).
+
+### SearchCall.matches
+
+```rust
+pub fn matches(self) -> Self
+```
+
+Says in each hit's [`matches`](Hit::matches) where the search's words
+matched it, as a search box shows them in bold: in each field, the
+bytes of its text that a word matched as written, by its stem or once
+corrected, and the letters typed of a word a prefix began, each with
+the query's word that found it. `алгебре` matches `алгебра` of
+`Линейная алгебра`, bytes 17..31.
+
 ### SearchCall.filter
 
 ```rust
@@ -536,6 +577,22 @@ The hits it passes before the first it answers.
 ```rust
 pub fn run(self) -> Result<Found<T>>
 ```
+
+## Match
+
+```rust
+pub struct Match {
+    pub field: String,
+    pub item: Option<usize>,
+    pub at: Range<usize>,
+    pub word: String,
+}
+```
+
+Where a search's word matched a hit: a range of a field's text, and the
+query's word that found it. `&text[at.clone()]` is the whole word for a
+word found as written, by its stem or once corrected, and the letters
+typed for a word a [`prefix`](super::SearchCall::prefix) began.
 
 ## Status
 
@@ -673,6 +730,14 @@ pub fn typo_tolerance(self, on: bool) -> Self
 
 Whether a misspelt word is read as the index's nearest: on unless
 turned off.
+
+### TableIndexBuilder.layouts
+
+```rust
+pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
+```
+
+As [`IndexBuilder::layouts`](super::IndexBuilder::layouts).
 
 ### TableIndexBuilder.vectors
 
@@ -827,6 +892,14 @@ pub fn typo_tolerance(self, on: bool) -> Self
 ```
 
 As `crate::search::IndexBuilder::typo_tolerance`.
+
+### aio::search::IndexBuilder.layouts
+
+```rust
+pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
+```
+
+As `crate::search::IndexBuilder::layouts`.
 
 ### aio::search::IndexBuilder.vectors
 
@@ -1079,6 +1152,22 @@ pub fn prefix(self) -> Self
 
 As `crate::search::SearchCall::prefix`.
 
+### aio::search::SearchCall.prefix_every
+
+```rust
+pub fn prefix_every(self) -> Self
+```
+
+As `crate::search::SearchCall::prefix_every`.
+
+### aio::search::SearchCall.matches
+
+```rust
+pub fn matches(self) -> Self
+```
+
+As `crate::search::SearchCall::matches`.
+
 ### aio::search::SearchCall.filter
 
 ```rust
@@ -1172,6 +1261,14 @@ pub fn typo_tolerance(self, on: bool) -> Self
 ```
 
 As `crate::search::TableIndexBuilder::typo_tolerance`.
+
+### aio::search::TableIndexBuilder.layouts
+
+```rust
+pub fn layouts<S: AsRef<str>>(self, names: impl IntoIterator<Item = S>) -> Self
+```
+
+As `crate::search::TableIndexBuilder::layouts`.
 
 ### aio::search::TableIndexBuilder.vectors
 

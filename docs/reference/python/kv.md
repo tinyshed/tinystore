@@ -117,6 +117,26 @@ async def create(
 
 Writes the value only where no live key is, and says whether it did.
 
+### Bucket.update
+
+```python
+async def update(key: Key, change: Callable[[T | None], T | None]) -> T | None: ...
+```
+
+Writes what change makes of the key's value without losing a write made meanwhile.
+
+It reads the key, calls change with its value, or None where it holds
+none, and writes what change returns at the version it read, or
+creates the key. When another write came first it reads again and
+calls change again, eight times at most, then raises ConflictError:
+change may run more than once, so it must do nothing else. A change
+that returns None, or the very value it was given, writes nothing. It
+returns the value written, or the one there when nothing was. A key
+that is there keeps its expiry, and one it creates takes the bucket's,
+as set and create do:
+
+    await pinned.update(student_id, lambda courses: [*(courses or []), 2518])
+
 ### Bucket.add
 
 ```python

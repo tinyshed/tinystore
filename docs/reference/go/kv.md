@@ -274,6 +274,20 @@ func (b *Bucket[T]) Under(owners ...any) *Bucket[T]
 
 Under is the branch the owners name below this one: whose keys these are.
 
+### Bucket.Update
+
+```go
+func (b *Bucket[T]) Update(ctx context.Context, key string, change func(current T, found bool) (T, bool)) (T, bool, error)
+```
+
+Update writes what change makes of the key's value without losing a write made meanwhile: it reads the key, calls change with its value and whether it holds one, and writes what change returns at the version it read, or creates the key. When another write came first it reads again and calls change again, eight times at most, then fails with a Conflict: change may run more than once, so it must do nothing else. A change that returns false writes nothing. Update returns the value written, or the one there when nothing was, and whether there is one. A key that is there keeps its expiry, and one it creates takes the bucket's, as Set and Create do.
+
+	pinned, _, err := courses.Update(ctx, studentID, func(pinned []int, found bool) ([]int, bool) {
+		return append(pinned, 2518), true
+	})
+
+A store's transaction refuses it, since the transaction runs its function again when a key it read changed: read with Get and write with Set there.
+
 ## BucketOption
 
 ```go

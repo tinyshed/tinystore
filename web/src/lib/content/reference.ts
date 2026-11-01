@@ -54,8 +54,9 @@ const sources: Record<string, Sources> = {
 	store: {
 		go: '',
 		goFiles: ['store.go', 'tinystore.go', 'calendar.go'],
+		goAlso: ['limits'],
 		bun: ['store', 'connection', 'clock', 'errors', 'handles', 'cancel', 'time', 'wire/codec'],
-		python: ['store', 'clock', 'errors'],
+		python: ['store', 'clock', 'errors', 'bounds'],
 	},
 	sql: { go: 'sqldb', bun: ['sql', 'query'], python: ['sql', 'query'] },
 	kv: {

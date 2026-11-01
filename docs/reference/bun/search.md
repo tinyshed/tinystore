@@ -12,6 +12,12 @@ interface IndexOptions {
     filters?: readonly string[] | undefined
     /** a misspelt word read as the index's nearest; on unless false */
     typoTolerance?: boolean | undefined
+    /**
+     * the keyboard layouts the index's readers type with, `['ru', 'en']`: a
+     * word that finds nothing as typed is read as the same keys type in the
+     * other layout, when it finds something there, and `corrected` says so
+     */
+    layouts?: readonly KeyboardLayout[] | undefined
     /** a vector the program's model gives each document, and `recall` for searches from clusters */
     vectors?: {
         dimensions: number
@@ -28,6 +34,14 @@ interface IndexOptions {
 ```
 
 How an index reads its documents and combines its halves, given where it opens.
+
+## KeyboardLayout
+
+```ts
+type KeyboardLayout = 'ru' | 'en'
+```
+
+A keyboard layout an index's readers type with: ЙЦУКЕН, or QWERTY.
 
 ## Vector
 
@@ -75,9 +89,19 @@ interface Query {
     /**
      * the last word read as the start of a word too, as a search box types:
      * `crypt` finds `cryptography` as well, at half its field's weight; a
-     * word a space follows is whole, and so is one of a single letter
+     * word a space follows is whole, and so is one of a single letter. With
+     * `'every'`, every word of two letters or more is read so, the first
+     * eight, as people shorten each word of a name: `лин алг` finds
+     * `Линейная алгебра`; a document that holds a word for each word of the
+     * text comes first, its score raised above the rest
      */
-    prefix?: boolean | undefined
+    prefix?: boolean | 'every' | undefined
+    /**
+     * each hit says where the search's words matched it, in `matches`, as a
+     * search box shows them in bold: a word found as written, by its stem or
+     * once corrected whole, and a word a prefix began by the letters typed
+     */
+    matches?: boolean | undefined
     /** 10 unless said; offset and limit together 1000 at most */
     limit?: number | undefined
     offset?: number | undefined
@@ -86,6 +110,24 @@ interface Query {
 
 What a search asks: its words, its vector, or both, and what it keeps to.
 
+## Match
+
+```ts
+interface Match {
+    /** the field's path, or a table's column; `''` for a document that is its own text */
+    field: string
+    /** the string's place in a field that holds a list */
+    item?: number
+    start: number
+    end: number
+    /** the query's word, as its text wrote it */
+    word: string
+}
+```
+
+Where a search's word matched a hit: `start` to `end` of a field's text in
+UTF-16 units, so that `text.slice(start, end)` is what matched.
+
 ## Hit
 
 ```ts
@@ -93,6 +135,8 @@ interface Hit<T> {
     id: string
     value: T
     score: number
+    /** where the search's words matched it, when the search asked with `matches` */
+    matches?: Match[]
 }
 ```
 
@@ -153,6 +197,7 @@ interface TableIndexOptions {
     /** the columns a search may keep its hits to; a boolean is the 1 or 0 SQLite keeps */
     filters?: readonly string[] | undefined
     typoTolerance?: boolean | undefined
+    layouts?: readonly KeyboardLayout[] | undefined
     /** a column of blobs of little-endian floats, one a row or null, and `recall` for searches from clusters */
     vectors?: {
         column: string
@@ -208,7 +253,10 @@ a document only its words find.
 setMany(documents: readonly IndexDocument<T>[]): Promise<void>
 ```
 
-Sets every document in one commit, all of them or none: 1,000 and 16 MiB at most.
+Sets every document in one commit, all of them or none: 1,000 at most,
+`limits.setManyDocuments`, and no more than one request body holds,
+2 MiB, `limits.requestBytes`. Past either it fails with a LimitError
+that names the bound.
 
 ### SearchIndex.delete
 

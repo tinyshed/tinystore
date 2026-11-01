@@ -27,6 +27,20 @@ class Hybrid:
 
 How a search by words and a vector at once combines them: a vector weight, or the words' best reranked.
 
+## Match
+
+```python
+@dataclass(frozen=True, slots=True)
+class Match:
+    field: str  # the field's path, or a table's column; "" for a document that is its own text
+    start: int
+    end: int
+    word: str  # the query's word, as its text wrote it
+    item: int | None = None  # the string's place in a field that holds a list
+```
+
+Where a search's word matched a hit: ``text[start:end]`` of a field's text, in code points.
+
 ## Hit
 
 ```python
@@ -35,6 +49,7 @@ class Hit[T]:
     id: str
     value: T
     score: float
+    matches: list[Match] | None = None  # where the search's words matched it, when the search asked with matches
 ```
 
 A document a search found, and the score that ordered it among this search's hits.
@@ -104,7 +119,11 @@ async def set_many(
 ) -> None: ...
 ```
 
-Sets every document in one commit, all of them or none: (id, value) or (id, value, vector), 1,000 at most.
+Sets every document in one commit, all of them or none: (id, value) or (id, value, vector).
+
+A call holds 1,000 documents at most, ``bounds.SET_MANY_DOCUMENTS``, and no
+more than one request body holds, 2 MiB, ``bounds.REQUEST_BYTES``. Past
+either it raises a ``LimitError`` that names the bound.
 
 ### SearchIndex.delete
 

@@ -175,6 +175,34 @@ pub fn create(&self, key: impl Key, value: &V) -> Result<bool>
 Writes `value` only when `key` is not there, and says whether it did; an
 expired key is not there. A key that is there is `false`, never an error.
 
+### Bucket.update
+
+```rust
+pub fn update(&self, key: impl Key, change: impl FnMut(Option<V>) -> Option<V>) -> Result<Option<V>>
+```
+
+Writes what `change` makes of the value under `key` without losing a
+write made meanwhile: it reads the key, calls `change` with its value,
+or `None` where there is none, and writes what `change` returns at the
+version it read, or creates the key. When another write came first it
+reads again and calls `change` again, eight tries at most, then fails
+`Conflict`; so `change` may run more than once, and must change
+nothing else. A `change` that returns `None` writes nothing. It answers
+the value written, or the one there when nothing was.
+
+A key that is there keeps its expiry, and one it creates takes the
+bucket's, as `set` and `create` do.
+
+```rust
+let pinned = store.bucket::<Vec<i64>>("pinned-courses").open()?;
+// a phone and a laptop pinning at once both keep their course
+pinned.update("97516", |courses| {
+    let mut courses = courses.unwrap_or_default();
+    courses.push(2518);
+    Some(courses)
+})?;
+```
+
 ### Bucket.key
 
 ```rust
@@ -1018,6 +1046,27 @@ pub fn create(
 ```
 
 Writes `value` only when `key` is not there, and says whether it did.
+
+### aio::kv::Bucket.update
+
+```rust
+pub fn update(
+    &self,
+    key: impl Key,
+    change: impl FnMut(Option<V>) -> Option<V> + Send + 'static,
+) -> impl Future<Output = Result<Option<V>>> + Send + 'static
+```
+
+Writes what `change` makes of the value under `key` without losing a
+write made meanwhile, as `crate::kv::Bucket::update` does: another
+write that came first has it read again and call `change` again, eight
+tries at most, so `change` must change nothing else. It answers the
+value written, or the one there when `change` returns `None`.
+
+Each read runs as `get`'s, `change` in the poll on the thread that
+polls the future, and each write is queued as `set`'s. Once polled,
+the try submitted commits whether or not the future is still awaited;
+a try after a conflict is made only while it is polled.
 
 ### aio::kv::Bucket.key
 

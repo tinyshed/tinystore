@@ -662,37 +662,102 @@ class LimitError extends TinystoreError {
 }
 ```
 
-A bound: memory, size or count. Later, or smaller, it may go through. A
-limit the store names says which, what the call would have taken of it,
-and the bound: `decoded samples`, 120000, 100000.
+A bound: memory, size or count. Later, or smaller, it may go through. The
+error names the bound, what the call would have taken of it, and the
+bound: `set_many documents`, 1001, 1000. `limits` holds the bounds a call
+meets by those names.
+
+## Limit
+
+```ts
+interface Limit {
+    readonly name: string
+    readonly bound: number
+}
+```
+
+A bound one call meets: its name, as a LimitError's `limit` says it, and the most it takes.
 
 ## limits
 
 ```ts
 const limits: Readonly<{
-    readonly storeMemory: "store memory"
-    readonly storeMemoryNow: "store memory, now"
-    readonly matchedSeries: "matched series"
-    readonly decodedBlocks: "decoded blocks"
-    readonly fetchedBytes: "fetched bytes"
-    readonly decodedSamples: "decoded samples"
-    readonly outputSamples: "output samples"
-    readonly outputBuckets: "output buckets"
-    readonly recordBytes: "bytes of a record, a block's"
-    readonly appendBytes: "bytes of records in one Append, a segment's; split it"
-    readonly jobValueBytes: "bytes of a job's value"
-    readonly stepBytes: "bytes of a step's answer"
-    readonly objectBytes: "bytes of an object, the bucket's MaxSize"
-    readonly rowBytes: "bytes of a call's rows"
+    /** A bucket's value, as it is stored. */
+    valueBytes: Limit
+    /** A live setting's change, as JSON. */
+    settingBytes: Limit
+    /** Every change a config keeps, together. */
+    configBytes: Limit
+    /** The callers that wait for one lock or semaphore at once. */
+    lockWaiters: Limit
+    /** The subscriptions to the store's channels at once. */
+    subscriptions: Limit
+    /** A job's payload, its result or a step's answer, as JSON. */
+    jobBytes: Limit
+    /** A run's progress, as JSON. */
+    progressBytes: Limit
+    /** The values one call reads from a database: past them, read a page at a time. */
+    rowsBytes: Limit
+    /** One event, its name, fields and text together. */
+    eventBytes: Limit
+    /** The events of one append together. */
+    appendBytes: Limit
+    /** The rows one `aggregate` answers. */
+    aggregateRows: Limit
+    /** The different values one `top` or `distinct` holds, as JSON. */
+    countBytes: Limit
+    /** The samples of one `ingest`. */
+    ingestSamples: Limit
+    /** The bytes of one `ingest`'s samples, each with its labels. */
+    ingestBytes: Limit
+    /** The samples of one exporter's text. */
+    textSamples: Limit
+    /** One exporter's text, and the bytes of its samples. */
+    textBytes: Limit
+    /** The series one query finds. */
+    querySeries: Limit
+    /** What one query reads from the file. */
+    queryBytes: Limit
+    /** The samples one query decodes. */
+    querySamples: Limit
+    /** The samples or buckets one query answers. */
+    queryAnswer: Limit
+    /** The documents of one `setMany`. */
+    setManyDocuments: Limit
+    /** The documents of one `setMany` as JSON; one request body, `requestBytes`, bounds it first. */
+    setManyBytes: Limit
+    /** One document as JSON, or a table's row as its index reads it. */
+    documentBytes: Limit
+    /** The hits a search reaches, its offset and its limit together. */
+    searchHits: Limit
+    /** A search's text, in bytes. */
+    searchText: Limit
+    /** The conditions of one search's filter. */
+    filterConditions: Limit
+    /** The values the lists of one search's conditions hold together. */
+    filterValues: Limit
+    /** A text a filter keeps or asks for, in bytes. */
+    filterText: Limit
+    /** A vector's dimensions. */
+    vectorDimensions: Limit
+    /** One request, its message as the SDK sends it: a larger one fails before it is sent. */
+    requestBytes: Limit
+    /** One answer, its message as the store sends it. */
+    answerBytes: Limit
 }>
 ```
 
-The names a LimitError's `limit` holds, as Go's constants and Python's
-`tinystore.limits` spell them, to map a limit without matching its text.
+The bounds one call meets, the same in every SDK and in Rust's
+`tinystore::limits`. A program cuts its batches to them before it calls,
+and tells which bound a LimitError met without reading its text:
 
 ```ts
-if (err instanceof LimitError && err.limit === limits.decodedSamples) { … }
+for (let at = 0; at < courses.length; at += limits.setManyDocuments.bound) { … }
+if (err instanceof LimitError && err.limit === limits.requestBytes.name) { … }
 ```
+
+A bound the store's options set, its memory (`store memory`) or its
+`maxSeries` (`series in a store`), is named the same way and is not here.
 
 ## NotFoundError
 

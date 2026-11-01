@@ -77,13 +77,14 @@ Or is conditions any of which passes.
 
 ```go
 type Hit[T any] struct {
-	ID    string
-	Value T
-	Score float64
+	ID      string
+	Value   T
+	Score   float64
+	Matches []Match
 }
 ```
 
-Hit is a document a search found, and the score that ordered it among this search's hits.
+Hit is a document a search found, and the score that ordered it among this search's hits; Matches says where the search's words matched it, when the search asked with Matches.
 
 ## Hybrid
 
@@ -176,7 +177,7 @@ Set sets the document id to value, replacing it whole; the next search sees it.
 func (x *Index[T]) SetMany(ctx context.Context, docs []Doc[T]) error
 ```
 
-SetMany sets every document in one commit, all of them or none, 1,000 at most.
+SetMany sets every document in one commit, all of them or none. A call holds 1,000 documents at most, limits.SetManyDocuments, and no more than one request body holds, 2 MiB, limits.RequestBytes. Past either it fails with a limit error that names the bound.
 
 ### Index.Status
 
@@ -207,6 +208,20 @@ func List(ctx context.Context, store *tinystore.Store) ([]Listed, error)
 ```
 
 List is every index the store holds, by name.
+
+## Match
+
+```go
+type Match struct {
+	Field string
+	Item  int
+	Start int
+	End   int
+	Word  string
+}
+```
+
+Match is where a search's word matched a hit: bytes Start to End of a field's text, so that text\[m.Start:m.End] is what matched. Field is its path, or a table's column, and "" for a document that is its own text; Item is the string's place in a field that holds a list, 0 in one that holds a string; Word is the query's word, as its text wrote it.
 
 ## Option
 
@@ -242,6 +257,14 @@ func Key(column string) Option
 
 Key is a table's column of unique values the index names rows by; its primary key unless given.
 
+### Layouts
+
+```go
+func Layouts(names ...string) Option
+```
+
+Layouts are the keyboard layouts the index's readers type with, "ru" and "en" for ЙЦУКЕН and QWERTY: a word that finds nothing as typed is read as the same keys type in the other layout, when it finds something there, and Result.Corrected says so.
+
 ### Rebuild
 
 ```go
@@ -274,7 +297,7 @@ type QueryOption interface {
 }
 ```
 
-QueryOption is how a search reads: Vector, Where, Or, Prefix, Limit, Offset, Hybrid.
+QueryOption is how a search reads: Vector, Where, Or, Prefix, PrefixEvery, Matches, Limit, Offset, Hybrid.
 
 ### Limit
 
@@ -283,6 +306,14 @@ func Limit(n int) QueryOption
 ```
 
 Limit is how many hits a search gives, 10 unless given; Offset and Limit together 1000 at most.
+
+### Matches
+
+```go
+func Matches() QueryOption
+```
+
+Matches has each hit say where the search's words matched it, in Hit.Matches, as a search box shows them in bold: a word found as written, by its stem or once corrected whole, and a word a prefix began by the letters typed.
 
 ### Offset
 
@@ -299,6 +330,14 @@ func Prefix() QueryOption
 ```
 
 Prefix reads the last word as the start of a word too, as a search box types: "crypt" finds "cryptography" as well, at half its field's weight. A word a space follows is whole, and so is one of a single letter.
+
+### PrefixEvery
+
+```go
+func PrefixEvery() QueryOption
+```
+
+PrefixEvery reads every word as the start of a word too, as people shorten each word of a name: "лин алг" finds "Линейная алгебра". Each word of two letters or more is read so, the first eight, whatever follows it; a document that holds a word for each word of the text comes first, its score raised above the rest. In place of Prefix.
 
 ## Range
 

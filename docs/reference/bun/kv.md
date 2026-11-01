@@ -146,6 +146,25 @@ create(key: Key, value: T, options?: Omit<WriteOptions, 'ifVersion'>): Promise<b
 
 Writes the value only where no live key is, and says whether it did.
 
+### Bucket.update
+
+```ts
+update(key: Key, change: (current: T | undefined) => T | undefined): Promise<T | undefined>
+```
+
+Writes what `change` makes of the key's value without losing a write
+made meanwhile: it reads the key, calls `change` with its value, or
+undefined where it holds none, and writes what `change` returns at the
+version it read, or creates the key. When another write came first it
+reads again and calls `change` again, eight times at most, then throws
+ConflictError: `change` may run more than once, so it must do nothing
+else. A change that returns undefined, or the very value it was given,
+writes nothing. It returns the value written, or the one there when
+nothing was. A key that is there keeps its expiry, and one it creates
+takes the bucket's, as set and create do.
+
+    await pinned.update(studentId, courses => [...(courses ?? []), 2518])
+
 ### Bucket.add
 
 ```ts
