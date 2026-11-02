@@ -83,7 +83,14 @@ pub struct EventsBuilder<'s> {
     pool: &'s Arc<Pool>,
 }
 
-impl EventsBuilder<'_> {
+impl<'s> EventsBuilder<'s> {
+    /// The builder of a stream opened through a database, its calls run on
+    /// `pool`.
+    #[cfg(feature = "sql")]
+    pub(crate) fn new(builder: crate::records::EventsBuilder<'s>, pool: &'s Arc<Pool>) -> Self {
+        EventsBuilder { builder, pool }
+    }
+
     /// How long the stream keeps its events, as
     /// [`crate::records::EventsBuilder::keep`] says.
     pub fn keep(mut self, keep: Duration) -> Self {
@@ -184,7 +191,7 @@ pub struct EventCall<'e> {
     event: NewEvent,
 }
 
-impl EventCall<'_> {
+impl<'e> EventCall<'e> {
     /// What names it in its stream, as [`crate::records::EventCall::id`]
     /// has: an append of an id the stream holds writes nothing.
     pub fn id(mut self, id: impl AsRef<str>) -> Self {
@@ -224,6 +231,27 @@ impl EventCall<'_> {
     /// and answers whether it did: `false` when its stream holds its id.
     pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<bool>> + Send + 'static {
         one(self.events.append_all([self.event.fields(fields)]))
+    }
+
+    /// The same call, for the blocking handle's verbs: a batch's append.
+    #[cfg(feature = "sql")]
+    pub(crate) fn into_blocking(self) -> crate::records::EventCall<'e> {
+        self.events.events.call(self.event)
+    }
+}
+
+#[cfg(feature = "sql")]
+impl crate::transaction::sealed::Sealed for Events {}
+
+/// A stream whose calls are awaited joins a transaction of the database it
+/// was opened from as the blocking one does: `tx.with(&audit)` inside
+/// `db.tx`'s closure gives its blocking appends there.
+#[cfg(feature = "sql")]
+impl crate::TxHandle for Events {
+    type InTx<'t> = crate::records::TxEvents<'t>;
+
+    fn in_tx<'t>(&'t self, tx: &'t crate::Transaction<'t>) -> crate::records::TxEvents<'t> {
+        crate::TxHandle::in_tx(&self.events, tx)
     }
 }
 

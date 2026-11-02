@@ -548,7 +548,7 @@ Statement is a write of a batch: a piece of SQL, or a queue's Adding.
 func CoreLent(write core.Lent) Statement
 ```
 
-CoreLent is how this module's packages put a write of their own in a batch, as a queue's Adding does; a program has no use for it.
+CoreLent is how this module's packages put a write of their own in a batch, as a queue's Adding and a stream's Appending do; a program has no use for it.
 
 ## Table
 

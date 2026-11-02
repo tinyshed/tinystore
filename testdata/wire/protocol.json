@@ -4040,6 +4040,9 @@
     },
     {
       "fields": {
+        "database": {
+          "uint": "307"
+        },
         "keep": {
           "uint": "1500"
         },
@@ -4047,7 +4050,7 @@
           "str": "stream"
         }
       },
-      "hex": "8201a673747265616d02cd05dc",
+      "hex": "8301a673747265616d02cd05dc03cd0133",
       "message": "records.Open",
       "name": "records.Open with every field"
     },

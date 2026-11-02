@@ -331,7 +331,10 @@ impl Shared {
             #[cfg(feature = "blobs")]
             0x04 => blobs::call(&self.store, &self.blobs, &lent, method, body, max_body),
             #[cfg(feature = "records")]
-            0x05 => records::call(&self.store, &self.records, method, body, self.read_only.load(Ordering::Relaxed)),
+            0x05 => {
+                let read_only = self.read_only.load(Ordering::Relaxed);
+                records::call(&self.store, &self.records, &lent, (method, body), read_only)
+            }
             #[cfg(feature = "metrics")]
             0x06 => metrics::call(&self.store, method, body, max_body),
             #[cfg(feature = "config")]

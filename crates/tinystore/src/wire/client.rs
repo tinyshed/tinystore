@@ -334,7 +334,10 @@ impl<S: Read + Write> Client<S> {
     /// The handle of the stream named `stream`, made with its first event.
     #[cfg(feature = "records")]
     fn events(&mut self, stream: &str) -> Result<u64> {
-        self.handle(method::RECORDS_OPEN, &wire::RecordsOpen { stream: stream.to_owned(), keep: None })
+        self.handle(
+            method::RECORDS_OPEN,
+            &wire::RecordsOpen { stream: stream.to_owned(), ..wire::RecordsOpen::default() },
+        )
     }
 
     /// Sends one call and reads its answer as an `M`.

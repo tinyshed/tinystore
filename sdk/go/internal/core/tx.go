@@ -49,11 +49,14 @@ type JobOp struct {
 }
 
 // Lent is a write of another engine that a database's batch carries: a
-// queue's add, for a queue kept in the database's file. Body writes its
-// request once the queue's handle is open on the batch's connection.
+// queue's add, for a queue kept in the database's file, or a stream's
+// append, for a stream opened through the database. Body writes its request
+// once the handle is open on the batch's connection.
 type Lent struct {
 	// Home is the database whose file keeps the handle; nil for the store's own files.
 	Home Database
+	// File is the store's own file the handle is kept in when Home is nil: "jobs.db".
+	File string
 	// What names the handle as an error says it: "jobs queue indexing".
 	What   string
 	Opener *Opener

@@ -173,6 +173,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Logging](guides/records/logging.md)
 - [Console output](guides/records/console.md)
 - [Events](guides/records/events.md)
+- [An audit that commits with the change](guides/records/audit.md)
 - [Reading](guides/records/reading.md)
 - [Traces](guides/records/traces.md)
 - [Tail and poll](guides/records/tail-and-poll.md)

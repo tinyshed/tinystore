@@ -8263,7 +8263,11 @@ export const MetricsAck = message(
 )
 
 /**
- * Opens a stream of events by name, made with its first event.
+ * Opens a stream of events by name, made with its first event. Opened
+ * through a database, the stream is records.db's all the same, and its
+ * appends inside the database's transactions and batches are kept in the
+ * database's file until they commit, then written to the stream before the
+ * transaction or the batch answers.
  */
 export const RecordsOpen = message(
 	'records.Open',
@@ -8272,6 +8276,8 @@ export const RecordsOpen = message(
 		stream: [1, str],
 		/** how long it keeps its events: its own, kept in the file */
 		keep: [2, uint],
+		/** a database's handle: its appends join its transactions and batches; none when absent */
+		database: [3, uint],
 	},
 	{
 		write(w, v) {
@@ -8287,11 +8293,17 @@ export const RecordsOpen = message(
 				w.uint(v.keep)
 				n++
 			}
+			if (v.database !== undefined) {
+				w.field(3)
+				w.uint(v.database)
+				n++
+			}
 			w.closeMap(head, n)
 		},
 		read(r) {
 			let $stream: string | undefined
 			let $keep: number | undefined
+			let $database: number | undefined
 			for (let n = r.message(); n > 0; n--) {
 				switch (r.field()) {
 					case 1:
@@ -8300,12 +8312,15 @@ export const RecordsOpen = message(
 					case 2:
 						$keep = r.uint()
 						break
+					case 3:
+						$database = r.uint()
+						break
 					default:
 						r.skip()
 				}
 			}
 			r.leave()
-			return { stream: $stream, keep: $keep }
+			return { stream: $stream, keep: $keep, database: $database }
 		},
 	},
 )
@@ -11198,15 +11213,17 @@ export const SqlOpen = message(
 
 /**
  * A statement's text and the values of its ?s, in order. In a batch it may
- * be a call of jobs on a queue kept in the database's file instead, jobs.add
- * with its request in body and no text, which commits with the batch's rows.
+ * be a call of another engine instead, with its request in body and no
+ * text, which commits with the batch's rows: jobs.add on a queue kept in the
+ * database's file, or records.append on a stream opened through the
+ * database, whose events reach the stream before the batch answers.
  */
 export const SqlText = message(
 	'sql.Text',
 	{
 		text: [1, str],
 		values: [2, list(sqlValue)],
-		/** in a batch, jobs.add: the call in body */
+		/** in a batch, jobs.add or records.append: the call in body */
 		method: [3, uint],
 		body: [4, bin],
 	},
@@ -11700,7 +11717,8 @@ export const SqlDone = message(
 
 /**
  * Writes known before they run, written as one in a shared commit: its
- * statements, and the adds of a queue kept in the database's file.
+ * statements, the adds of a queue kept in the database's file, and the
+ * appends of a stream opened through the database.
  */
 export const SqlBatch = message(
 	'sql.Batch',
@@ -11756,7 +11774,8 @@ export const SqlBatch = message(
 
 /**
  * What each write of a batch did, in their order: a job's add changed one
- * job, or none when its id was taken.
+ * job, or none when its id was taken, and a stream's append the events its
+ * stream holds no id of.
  */
 export const SqlBatched = message(
 	'sql.Batched',
@@ -11841,7 +11860,9 @@ export const SqlTxOpen = message(
  * A transaction's call, or its end: the last DATA commits, or not. A call is
  * a statement, or a call of kv or jobs on a bucket or a queue kept in the
  * database's file: a method of theirs with its request, kv.set or jobs.add,
- * which runs in the transaction.
+ * which runs in the transaction; or records.append on a stream opened
+ * through the database, whose events reach the stream once the transaction
+ * commits, before its last DATA answers.
  */
 export const SqlTxCall = message(
 	'sql.TxCall',

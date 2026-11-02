@@ -678,6 +678,56 @@ async def test_a_batch_writes_its_statements_and_a_queues_adds_together_or_none_
     assert await app.scalar(int, "select count(*) from notes where author_id = 13") == 1
 
 
+# contract: REC-13
+async def test_a_stream_opened_from_the_database_appends_with_its_transaction_and_its_batch_or_never(
+    store: tinystore.Store, app: tinystore.Database
+) -> None:
+    audit = app.events("notes-audit")
+
+    async def streamed() -> list[str | None]:
+        return [each.id for each in (await store.events("notes-audit").list()).events]
+
+    async def insert(tx: tinystore.SqlTx, note_id: str) -> None:
+        await tx.exec("insert into notes (id, author_id, title) values (?, 21, 'a')", note_id)
+
+    async def rolled_back(tx: tinystore.SqlTx) -> None:
+        await insert(tx, "e1")
+        assert await tx.with_(audit).append("note.added", {"note": "e1"}, id="e0")
+        await insert(tx, "e1")
+
+    with pytest.raises(tinystore.ConflictError):
+        await app.tx(rolled_back)
+    assert await streamed() == []
+
+    async def committed(tx: tinystore.SqlTx) -> None:
+        await insert(tx, "e1")
+        assert await tx.with_(audit).append("note.added", {"note": "e1"}, id="e1")
+        assert not await tx.with_(audit).append("note.added", {"note": "e1"}, id="e1")
+
+    await app.tx(committed)
+    assert await streamed() == ["e1"]
+
+    done = await app.batch(
+        [
+            sql("insert into notes (id, author_id, title) values ('e2', 21, 'b')"),
+            audit.appending("note.added", {"note": "e2"}, id="e2"),
+            audit.appending("note.added", {"note": "e1"}, id="e1"),
+        ]
+    )
+    assert [each.changes for each in done] == [1, 1, 0]
+    assert await streamed() == ["e1", "e2"]
+
+    with pytest.raises(tinystore.InvalidError, match=r"kept in records\.db, outside this batch of sql app"):
+        await app.batch([store.events("notes-audit").appending("never")])
+
+    async def around(tx: tinystore.SqlTx) -> None:
+        await audit.append("around")
+
+    with pytest.raises(tinystore.InvalidError):
+        await app.tx(around)
+    assert await audit.count() == 2
+
+
 # contract: JOB-02
 async def test_a_worker_runs_a_job_its_batch_added_once_the_batch_commits(app: tinystore.Database) -> None:
     sent = app.queue("batched", dict[str, str])

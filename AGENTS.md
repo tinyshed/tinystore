@@ -180,8 +180,9 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   and metrics both pack with. A file one engine lends another,
   a database's to its buckets, queues and files, goes through `engine::SharedFile`,
   and three files alone name two engines: `inside.rs`, `db.bucket`,
-  `db.queue`, `db.files`, `db.search_index` and `queue.adding`, a job of a database's
-  batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
+  `db.queue`, `db.files`, `db.search_index`, `db.events`, and `queue.adding` and
+  `events.appending`, a job or an event of a database's batch, whose write goes
+  through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
   Config stands at the root, since `config::load` opens no store, and only its
@@ -235,7 +236,10 @@ opened from an SQL database, `db.bucket(…)`, lives in that database's file
 and commits with its rows, a set of files' bytes in `sql/<name>.blobs/`
 beside it, and a table's index, `db.search_index(…)`, with the rows it
 follows: what shares a file shares its writer, by the application's choice
-and never by default.
+and never by default. A stream opened from a database, `db.events(…)`, stays
+in `records.db`; what its appends in the database's transaction or batch
+write waits in an outbox of records' in the database's file, and moves to
+the stream once it commits, its ids making a second move write nothing.
 
 **Writes known before they run share a commit; a transaction does not.** A
 grouped write is one savepoint of a commit built before it takes the writer,

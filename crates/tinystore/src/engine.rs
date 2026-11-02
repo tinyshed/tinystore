@@ -16,7 +16,7 @@ mod shared;
 pub(crate) use shared::Home;
 #[cfg(any(feature = "sql", feature = "wire"))]
 pub(crate) use shared::SharedFile;
-#[cfg(all(feature = "sql", feature = "jobs"))]
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 pub(crate) use shared::{LentWrite, Wrote};
 
 /// An engine as its store sees it: something to close at the store's close.

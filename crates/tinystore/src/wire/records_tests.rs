@@ -122,7 +122,8 @@ fn a_query_reads_by_what_events_hold_and_counts_and_aggregates_them() {
 fn every_stream_says_what_it_keeps_and_the_keys_its_events_hold() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = Client::open(dir.path());
-    let open_keep = RecordsOpen { stream: "audit".to_owned(), keep: Some(30 * 24 * 3_600_000) };
+    let open_keep =
+        RecordsOpen { stream: "audit".to_owned(), keep: Some(30 * 24 * 3_600_000), ..RecordsOpen::default() };
     let audit = client.call::<Handle>(method::RECORDS_OPEN, &open_keep).unwrap().handle;
     append(&mut client, audit, vec![event("signup", r#"{"plan":"pro","user":42}"#)]);
     let streams: RecordsStreams = client.call(method::RECORDS_STREAMS, &Empty {}).unwrap();
@@ -184,7 +185,7 @@ fn a_read_connection_reads_and_gives_no_stream_a_keep_nor_appends() {
     let page: RecordsPage =
         client.call(method::RECORDS_LIST, &RecordsQuery { handle: Some(audit), ..RecordsQuery::default() }).unwrap();
     assert!(page.events.is_empty());
-    let keep = RecordsOpen { stream: "audit".to_owned(), keep: Some(3_600_000) };
+    let keep = RecordsOpen { stream: "audit".to_owned(), keep: Some(3_600_000), ..RecordsOpen::default() };
     assert_eq!(client.call::<Handle>(method::RECORDS_OPEN, &keep).unwrap_err().code, "permission");
     let append = RecordsAppend { handle: audit, events: vec![event("signup", "{}")] };
     assert_eq!(client.call::<Empty>(method::RECORDS_APPEND, &append).unwrap_err().code, "permission");

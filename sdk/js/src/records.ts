@@ -8,7 +8,7 @@
 import { type Connection, type Link, pieceOf } from './connection.ts'
 import { type ConsoleLine, jsonOf } from './console.ts'
 import { ClosedError, InvalidError } from './errors.ts'
-import { checkName, handleOn, type Via, viaLink } from './handles.ts'
+import { checkName, type Home, handleOn, type Open, type Via, viaLink } from './handles.ts'
 import { parseJson } from './json.ts'
 import {
 	encodeFields,
@@ -405,25 +405,57 @@ abstract class Reads {
 
 /** Opens a stream of events: lazily, at its first call on a connection. */
 export function openEvents(link: Link, stream: string, options?: EventsOptions): Events {
+	return new Events(link, stream, eventsOpen(stream, options))
+}
+
+/** A stream's open, through the database of `database`, a handle on the connection, when given. */
+export function eventsOpen(stream: string, options?: EventsOptions, database?: number): Uint8Array {
 	checkName(stream, 'stream')
 	const keep = options?.keep === undefined ? undefined : ms(options.keep)
-	return new Events(link, stream, RecordsOpen.encode({ stream, keep }))
+	return RecordsOpen.encode({ stream, keep, database })
 }
+
+/** What a stream's appends in a database's transaction and batch need of it. */
+interface EventsParts {
+	stream: string
+	open: Open
+	home: Home | undefined
+}
+
+let eventsPartsOf: (events: Events) => EventsParts
 
 /** A stream of events: written with `append`, which waits for the file, and read back. */
 export class Events extends Reads {
 	readonly stream: string
 	readonly #link: Link
 	readonly #via: Via
-	readonly #open: Uint8Array
+	readonly #open: Open
+	readonly #home: Home | undefined
 
-	/** Events come from `store.events(stream)`. */
-	constructor(link: Link, stream: string, open: Uint8Array) {
+	/** Events come from `store.events(stream)`, or `db.events(stream)` through a database. */
+	constructor(link: Link, stream: string, open: Open, home?: Home) {
 		super()
 		this.stream = stream
 		this.#link = link
-		this.#via = viaLink(link)
+		this.#via = home === undefined ? viaLink(link) : home.via(`events ${stream}`)
 		this.#open = open
+		this.#home = home
+	}
+
+	static {
+		eventsPartsOf = events => ({ stream: events.stream, open: events.#open, home: events.#home })
+	}
+
+	/**
+	 * An event's append for a batch of the database the stream was opened
+	 * from, `db.events`: it is kept with the batch's rows and reaches the
+	 * stream once they commit, before the batch returns, or never.
+	 *
+	 *     await db.batch([sql`update roles set role = ${role} where user_id = ${id}`, audit.appending('role.changed', { userId: id, role })])
+	 */
+	appending(name: string, fields?: Fields, options?: AppendOptions): Appending {
+		const event = newEventOf(oneEvent(name, fields, options), 0)
+		return new Appending({ ...eventsPartsOf(this), event })
 	}
 
 	/**
@@ -515,6 +547,92 @@ export class Events extends Reads {
 		idempotence: 'read' | 'write',
 	): Promise<Uint8Array> {
 		return this.#via.call(methods['records.open'], this.#open, methods[method], body, idempotence)
+	}
+}
+
+/** The parts of a stream, when `handle` is one. */
+export function eventsParts(handle: unknown): EventsParts | undefined {
+	return handle instanceof Events ? eventsPartsOf(handle) : undefined
+}
+
+/**
+ * A stream's appends inside a transaction of the database it was opened
+ * from, `tx.with(audit)`: each is kept with the transaction's rows and
+ * reaches the stream once it commits, before `db.tx` returns. A read goes
+ * through the stream itself, and finds what committed.
+ */
+export class TxEvents {
+	readonly stream: string
+	readonly #open: Open
+	readonly #via: Via
+
+	/** TxEvents come from `tx.with(events)`. */
+	constructor(parts: EventsParts, via: Via) {
+		this.stream = parts.stream
+		this.#open = parts.open
+		this.#via = via
+	}
+
+	/**
+	 * Appends an event once the transaction commits, and says whether it
+	 * will be written: false when its stream, or this transaction, holds its id.
+	 */
+	async append(name: string, fields?: Fields, options?: AppendOptions): Promise<boolean> {
+		const event = newEventOf(oneEvent(name, fields, options), 0)
+		const answer = await this.#via.call(
+			methods['records.open'],
+			this.#open,
+			methods['records.append'],
+			handle => RecordsAppend.encode({ handle, events: [event] }),
+			'write',
+		)
+		return (RecordsAppended.decode(answer).held ?? 0) === 0
+	}
+}
+
+interface AppendingParts extends EventsParts {
+	event: Parameters<typeof RecordsNewEvent.encode>[0]
+}
+
+let appendingPartsOf: (appending: Appending) => AppendingParts
+
+/** An event's append for a database's batch, from `events.appending`. */
+export class Appending {
+	readonly #parts: AppendingParts
+
+	/** Comes from `events.appending`. */
+	constructor(parts: AppendingParts) {
+		this.#parts = parts
+	}
+
+	static {
+		appendingPartsOf = appending => appending.#parts
+	}
+}
+
+/**
+ * What a batch of `home` sends of an append, on the connection it goes on:
+ * the append's call, its stream's handle opened there first. A stream opened
+ * from the store or another database is refused, since its event would not
+ * commit with the rows.
+ */
+export function appendingIn(
+	appending: Appending,
+	home: Home,
+): (connection: Connection) => Promise<{ method: number; body: Uint8Array }> {
+	const { stream, open, home: kept, event } = appendingPartsOf(appending)
+	if (kept !== home) {
+		const where = kept === undefined ? 'records.db' : kept.describe
+		throw new InvalidError(
+			`${home.describe}: events ${stream}: kept in ${where}, outside this batch of ${home.describe}`,
+		)
+	}
+	return async connection => {
+		const handle = await handleOn(connection, methods['records.open'], open)
+		return {
+			method: methods['records.append'],
+			body: RecordsAppend.encode({ handle, events: [event] }),
+		}
 	}
 }
 

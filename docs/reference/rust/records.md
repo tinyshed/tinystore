@@ -604,6 +604,17 @@ pub struct EventCall<'e> { /* private fields */ }
 
 One event on its way into a stream.
 
+### EventCall.appending
+
+```rust
+pub fn appending(self, fields: &impl Serialize) -> Write
+```
+
+The event's append for a batch of the database its stream was opened
+from, with what the call carries beside its fields, its id, its time;
+see [`Events::appending`](crate::records::Events::appending). One made
+through a transaction runs in it, and fails the batch.
+
 ### EventCall.id
 
 ```rust
@@ -657,7 +668,8 @@ pub fn append(self, fields: &impl Serialize) -> Result<bool>
 ```
 
 Writes the event, and says whether it did: `false` when its stream
-holds its id.
+holds its id. Made through a database's transaction, it is written
+once the transaction commits, and says whether it will be.
 
 ## Events
 
@@ -667,6 +679,27 @@ pub struct Events { /* private fields */ }
 
 A stream of events: written with `append`, which waits for the file, and
 read back by time and by what they hold.
+
+### Events.appending
+
+```rust
+pub fn appending(&self, name: &str, fields: &impl Serialize) -> Write
+```
+
+An event's append for a batch of the database the stream was opened
+from: in `Database::batch` it is kept with the batch's rows and
+written to the stream once the batch commits, before the batch
+returns. A stream opened from the store, or from another database,
+fails the batch, `Invalid`.
+
+```rust
+let db = store.database("app").open()?;
+let audit = db.events("audit").open()?;
+db.batch([
+    tinystore::sql!("update roles set role = ? where user_id = ?", "admin", 42).into(),
+    audit.appending("role.changed", &serde_json::json!({ "user_id": 42, "role": "admin" })),
+])?;
+```
 
 ### Events.append
 
@@ -1245,6 +1278,36 @@ pub struct TailBatch {
 A batch of a tail: its events, and how many events left the store's hold
 before the tail read them.
 
+## TxEvents
+
+```rust
+pub struct TxEvents<'t> { /* private fields */ }
+```
+
+A stream's appends inside a transaction of the database it was opened
+from, `tx.with(&audit)`: each is kept with the transaction's rows and
+written to the stream once it commits, before `db.tx` returns. A read goes
+through the stream's own handle, and finds what committed.
+
+### TxEvents.append
+
+```rust
+pub fn append(&self, name: &str, fields: &impl Serialize) -> Result<bool>
+```
+
+Appends an event of `name` with `fields`, as `Events::append` does,
+once the transaction commits: always `true`, since only an event with
+an id can be one its stream holds.
+
+### TxEvents.event
+
+```rust
+pub fn event(&self, name: &str) -> EventCall<'t>
+```
+
+An append of one event, what it carries beside its fields before its
+verb, as `Events::event` has: its id, its time, its level.
+
 ## Layer
 
 ```rust
@@ -1584,6 +1647,16 @@ A writer of another program's output, as
 `crate::records::Events::lines` opens one: a write never waits, and
 a flush is awaited.
 
+### aio::records::Events.appending
+
+```rust
+pub fn appending(&self, name: &str, fields: &impl Serialize) -> Write
+```
+
+An event's append for a batch of the database the stream was opened
+from, as [`Events::appending`](crate::records::Events::appending)
+makes one: it checks the event, with no I/O, and the batch is awaited.
+
 ## aio::records::EventCall
 
 ```rust
@@ -1644,6 +1717,16 @@ pub fn append(self, fields: &impl Serialize) -> impl Future<Output = Result<bool
 
 Writes the event with `fields`, as `Events::append_all` writes one,
 and answers whether it did: `false` when its stream holds its id.
+
+### aio::records::EventCall.appending
+
+```rust
+pub fn appending(self, fields: &impl Serialize) -> Write
+```
+
+The event's append for a batch of the database its stream was opened
+from, with what the call carries beside its fields; see
+[`Events::appending`](crate::records::Events::appending).
 
 ## aio::records::AllEvents
 

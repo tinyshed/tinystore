@@ -73,7 +73,7 @@ let page = messages.filter(sql::eq("chat_id", &chat_id)).order_by("id", Directio
 | [Stopping a slow query](cancel.md)                        | a cancel or a timeout that stops a query at once        |
 | [Tables and queries](tables.md)                           | the builder: conditions, joins, pages, updates, deletes |
 | [Rows that include rows](include.md)                      | `include`: each row with the rows of a query            |
-| [Buckets and queues in a database](buckets-and-queues.md) | keys and jobs that commit with rows                     |
+| [Buckets and queues in a database](buckets-and-queues.md) | keys, jobs, files and events that commit with rows      |
 | [FTS5 and R*Tree](fts5.md)                                | SQLite's own full-text and spatial indexes              |
 
 New to SQL in TinyStore? [Messages](../../handbook/chat/messages.md) in the
@@ -180,9 +180,12 @@ A bucket, a queue or a table's search index opens from the async database
 with the same builder as in blocking Rust, and its calls are awaited. It
 lives in the database's file, so a bucket or a queue joins `db.tx` through
 `tx.with(&handle)` and `db.batch` through `queue.adding(&job)`, and commits
-with the rows or not at all (contract DUR-06). To drop a table's search
-index, await `db.drop_search_index(name)`. The drop waits for its turn with
-the database's transactions, and once polled it runs to its end.
+with the rows or not at all (contract DUR-06). A stream opened from it,
+`db.events("audit")`, joins them the same way, through `tx.with(&audit)` and
+`audit.appending(name, &fields)`, and its events reach the stream once the
+rows commit (contract REC-13). To drop a table's search index, await
+`db.drop_search_index(name)`. The drop waits for its turn with the
+database's transactions, and once polled it runs to its end.
 
 `Database::from(db)` and `db.blocking()` cross between the two APIs. Both
 are cheap copies of one database, never a second one.

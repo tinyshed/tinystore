@@ -48,6 +48,7 @@ from .channels import Channel, TxChannel
 from .errors import InvalidError, OutcomeUnknownError, error_of
 from .jobs import Adding, Backoff, Concurrency, Job, Queue, QueueOptions, adding_in, open_queue
 from .kv import Bucket, Parts, bucket_open
+from .records import Appending, Events, TxEvents, appending_in, events_open
 from .search import Fields, Hybrid, KeyboardLayout, TableIndex, Vectors, drop_index, index_open
 
 if TYPE_CHECKING:
@@ -694,6 +695,25 @@ class Database:
         opener = self.keep(methods["blobs.open"], body, make)
         return Files(self._link, name, opener, (), self)
 
+    def events(self, stream: str, *, keep: Duration | None = None) -> Events:
+        """The store's stream of events, opened through this database.
+
+        The same calls and reads as ``store.events(stream)`` gives, the stream
+        in records.db where every stream lives. Its appends inside ``db.tx``,
+        through ``tx.with_(audit)``, and in ``db.batch``, through
+        ``audit.appending``, are kept in this database's file with the rows
+        and reach the stream once they commit, before the call returns: an
+        event exists exactly when the change it records does::
+
+            audit = db.events("audit")
+        """
+        body = events_open(stream, keep)
+
+        async def make(connection: Connection) -> bytes:
+            return events_open(stream, keep, await self.handle(connection))
+
+        return Events(self._link, stream, self.keep(methods["records.open"], body, make), self)
+
     @overload
     def search_index[T](
         self,
@@ -903,13 +923,14 @@ class Database:
         """Runs a write once it is durable; writes from many callers share a commit, each failing alone."""
         return await self.exec_piece(statement_of(statement, values))
 
-    async def batch(self, writes: Sequence[Sql | Adding]) -> list[Done]:
+    async def batch(self, writes: Sequence[Sql | Adding | Appending]) -> list[Done]:
         """Writes known before they run, written as one: all of them or none, in a shared commit.
 
-        A write is a statement, or a job's add of a queue opened from the
+        A write is a statement, a job's add of a queue opened from the
         database, ``queue.adding``, which commits with the rows and changed 1
-        job, or 0 when its id was taken. The answer says what each did, in
-        their order.
+        job, or 0 when its id was taken, or an event's append of a stream
+        opened from it, ``audit.appending``, which reaches the stream before
+        the batch returns. The answer says what each did, in their order.
 
             await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
         """
@@ -917,10 +938,12 @@ class Database:
         for each in writes:
             if isinstance(each, Sql):
                 parts.append({"text": each.text, "values": list(each.values)})
-            elif isinstance(each, Adding):  # pyright: ignore[reportUnnecessaryIsInstance]
+            elif isinstance(each, Adding):
                 parts.append(adding_in(each, self))
+            elif isinstance(each, Appending):  # pyright: ignore[reportUnnecessaryIsInstance]
+                parts.append(appending_in(each, self))
             else:
-                raise InvalidError("a batch takes pieces of SQL, sql(...), and a queue's adding")
+                raise InvalidError("a batch takes pieces of SQL, sql(...), a queue's adding and a stream's appending")
         self.refuse_around("a batch")
 
         async def attempt(connection: Connection) -> bytes:
@@ -1132,14 +1155,20 @@ class SqlTx:
     def with_[T](self, handle: Channel[T]) -> TxChannel[T]: ...
     @overload
     def with_(self, handle: Files) -> Files: ...
+    @overload
+    def with_(self, handle: Events) -> TxEvents: ...
     def with_(
-        self, handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files
-    ) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files:
-        """A bucket, a queue or files opened from this database, or a channel, inside the transaction.
+        self, handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files | Events
+    ) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files | TxEvents:
+        """A bucket, a queue, files or events opened from this database, or a channel, inside the transaction.
 
         What it writes commits with the rows or not at all, and what it reads
-        sees what the transaction wrote; a message is handed over at the commit.
+        sees what the transaction wrote; a message is handed over at the
+        commit, and an event reaches its stream then.
         """
+        if isinstance(handle, Events):
+            self._takes(handle.home, handle.opener, f"events {handle.stream}")
+            return TxEvents(handle, self._via)
         if isinstance(handle, Channel):
 
             async def publish(body: bytes) -> None:
@@ -1158,7 +1187,7 @@ class SqlTx:
             self._takes(handle.home, handle.opener, f"files {handle.name}")
             return handle.through(self._via)
         raise InvalidError(
-            f"{self.describe}: a transaction takes in a bucket, a queue or files opened from its database"
+            f"{self.describe}: a transaction takes in a bucket, a queue, files or events opened from its database"
         )
 
     @overload

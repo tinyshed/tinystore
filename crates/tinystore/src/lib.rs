@@ -30,7 +30,10 @@ mod encryption;
 #[cfg(feature = "store")]
 pub mod engine;
 mod error;
-#[cfg(all(feature = "sql", any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")))]
+#[cfg(all(
+    feature = "sql",
+    any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")
+))]
 mod inside;
 #[cfg(feature = "jobs")]
 pub mod jobs;

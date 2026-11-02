@@ -149,6 +149,7 @@ between the two can leave the message without its job.
 | buckets of `kv.db`                                                          | yes, in `store.tx`                                |
 | queues of `jobs.db`                                                         | yes, in `store.tx`                                |
 | a database's rows and the buckets, queues, files and indexes opened from it | yes, in `db.tx`                                   |
+| a database's rows and the events appended through `db.events`               | yes, in `db.tx`: they reach the stream at commit  |
 | a bucket of `kv.db` and a queue of `jobs.db`                                | no: `store.tx` refuses the second file's handle   |
 | a file in `blobs/`, its metadata in a bucket, its document in an index      | no: three files, each written whole on its own    |
 | a backup                                                                    | one moment of the whole store, every file at once |

@@ -7869,7 +7869,11 @@ impl Message for MetricsAck {
     }
 }
 
-/// Opens a stream of events by name, made with its first event.
+/// Opens a stream of events by name, made with its first event. Opened
+/// through a database, the stream is records.db's all the same, and its
+/// appends inside the database's transactions and batches are kept in the
+/// database's file until they commit, then written to the stream before the
+/// transaction or the batch answers.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RecordsOpen {
@@ -7877,6 +7881,8 @@ pub(crate) struct RecordsOpen {
     pub(crate) stream: String,
     /// How long it keeps its events: its own, kept in the file. Milliseconds.
     pub(crate) keep: Option<u64>,
+    /// A database's handle: its appends join its transactions and batches; none when absent.
+    pub(crate) database: Option<u64>,
 }
 
 #[cfg(feature = "records")]
@@ -7890,6 +7896,7 @@ impl Message for RecordsOpen {
             match codec::field(r, Self::NAME, &mut seen)? {
                 1 => message.stream = codec::str(r, "stream")?,
                 2 => message.keep = Some(codec::uint(r, "keep")?),
+                3 => message.database = Some(codec::uint(r, "database")?),
                 number => return Err(codec::unknown(number, Self::NAME)),
             }
         }
@@ -7906,6 +7913,10 @@ impl Message for RecordsOpen {
             map.field(out, 2);
             codec::write_uint(out, keep);
         }
+        if let Some(database) = &self.database {
+            map.field(out, 3);
+            codec::write_uint(out, database);
+        }
         map.close(out);
     }
 
@@ -7913,11 +7924,13 @@ impl Message for RecordsOpen {
         3
             + 1 + 5 + self.stream.len()
             + self.keep.map_or(0, |_| 10)
+            + self.database.map_or(0, |_| 10)
     }
 
     fn is_zero(&self) -> bool {
         self.stream.is_empty()
             && self.keep.is_none()
+            && self.database.is_none()
     }
 }
 
@@ -11036,14 +11049,16 @@ impl Message for SqlOpen {
 }
 
 /// A statement's text and the values of its ?s, in order. In a batch it may
-/// be a call of jobs on a queue kept in the database's file instead, jobs.add
-/// with its request in body and no text, which commits with the batch's rows.
+/// be a call of another engine instead, with its request in body and no
+/// text, which commits with the batch's rows: jobs.add on a queue kept in the
+/// database's file, or records.append on a stream opened through the
+/// database, whose events reach the stream before the batch answers.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlText {
     pub(crate) text: String,
     pub(crate) values: Vec<Cell>,
-    /// In a batch, jobs.add: the call in body.
+    /// In a batch, jobs.add or records.append: the call in body.
     pub(crate) method: Option<u64>,
     pub(crate) body: Option<Vec<u8>>,
 }
@@ -11477,7 +11492,8 @@ impl Message for SqlDone {
 }
 
 /// Writes known before they run, written as one in a shared commit: its
-/// statements, and the adds of a queue kept in the database's file.
+/// statements, the adds of a queue kept in the database's file, and the
+/// appends of a stream opened through the database.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlBatch {
@@ -11528,7 +11544,8 @@ impl Message for SqlBatch {
 }
 
 /// What each write of a batch did, in their order: a job's add changed one
-/// job, or none when its id was taken.
+/// job, or none when its id was taken, and a stream's append the events its
+/// stream holds no id of.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlBatched {
@@ -11616,7 +11633,9 @@ impl Message for SqlTxOpen {
 /// A transaction's call, or its end: the last DATA commits, or not. A call is
 /// a statement, or a call of kv or jobs on a bucket or a queue kept in the
 /// database's file: a method of theirs with its request, kv.set or jobs.add,
-/// which runs in the transaction.
+/// which runs in the transaction; or records.append on a stream opened
+/// through the database, whose events reach the stream once the transaction
+/// commits, before its last DATA answers.
 #[cfg(feature = "sql")]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct SqlTxCall {

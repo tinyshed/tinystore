@@ -36,14 +36,30 @@ use crate::memory::PATIENCE;
 /// What opens a stream of events: its name, and how long it keeps them.
 #[derive(Debug)]
 pub struct EventsBuilder<'s> {
-    store: &'s Store,
+    home: Home<'s>,
     stream: String,
     keep: Option<Duration>,
 }
 
+/// Where a stream opens: from the store, or from a database, whose
+/// transactions and batches its appends join.
+#[derive(Debug)]
+enum Home<'s> {
+    Store(&'s Store),
+    #[cfg(feature = "sql")]
+    Database(Arc<crate::engine::SharedFile>),
+}
+
 impl<'s> EventsBuilder<'s> {
     pub(crate) fn new(store: &'s Store, stream: &str) -> Self {
-        EventsBuilder { store, stream: stream.to_owned(), keep: None }
+        EventsBuilder { home: Home::Store(store), stream: stream.to_owned(), keep: None }
+    }
+
+    /// The store's stream `stream`, opened from the database whose file
+    /// `shared` is.
+    #[cfg(feature = "sql")]
+    pub(crate) fn in_file(shared: Arc<crate::engine::SharedFile>, stream: &str) -> EventsBuilder<'static> {
+        EventsBuilder { home: Home::Database(shared), stream: stream.to_owned(), keep: None }
     }
 
     /// How long the stream keeps its events. It is the stream's own, kept in
@@ -56,10 +72,13 @@ impl<'s> EventsBuilder<'s> {
     }
 
     pub fn open(self) -> Result<Events> {
-        let records = Records::of(self.store)?;
-        let opened = records.open_stream(&self.stream, self.keep);
-        let stream = opened.map_err(|error| error.within(format!("events {}", self.stream)))?;
-        Ok(Events { records, stream })
+        let EventsBuilder { home, stream, keep } = self;
+        let opened = match home {
+            Home::Store(store) => Events::open(store, &stream, keep),
+            #[cfg(feature = "sql")]
+            Home::Database(shared) => Events::open_in(&shared, &stream, keep),
+        };
+        opened.map_err(|error| error.within(format!("events {stream}")))
     }
 }
 
@@ -69,6 +88,31 @@ impl<'s> EventsBuilder<'s> {
 pub struct Events {
     pub(super) records: Arc<Records>,
     pub(super) stream: Stream,
+    /// What its appends in a transaction or a batch of the database it was
+    /// opened from are kept in until they commit.
+    #[cfg(feature = "sql")]
+    pub(super) outbox: Option<Arc<super::outbox::Outbox>>,
+}
+
+impl Events {
+    fn open(store: &Store, name: &str, keep: Option<Duration>) -> Result<Events> {
+        let records = Records::of(store)?;
+        let stream = records.open_stream(name, keep)?;
+        #[cfg(feature = "sql")]
+        return Ok(Events { records, stream, outbox: None });
+        #[cfg(not(feature = "sql"))]
+        Ok(Events { records, stream })
+    }
+
+    /// The stream opened from a database: its outbox's table made in the
+    /// database's file the first time, and what a crash left there moved.
+    #[cfg(feature = "sql")]
+    fn open_in(shared: &crate::engine::SharedFile, name: &str, keep: Option<Duration>) -> Result<Events> {
+        let opened = Events::open(&shared.store()?, name, keep)?;
+        let outbox = super::outbox::Outbox::in_file(shared, &opened.records)?;
+        outbox.move_left();
+        Ok(Events { outbox: Some(outbox), ..opened })
+    }
 }
 
 impl fmt::Debug for Events {
@@ -97,7 +141,15 @@ impl Events {
     /// # }
     /// ```
     pub fn event(&self, name: &str) -> EventCall<'_> {
-        EventCall { events: self, event: NewEvent::new(name) }
+        self.call(NewEvent::new(name))
+    }
+
+    /// An append of `event`, made outside a transaction.
+    pub(crate) fn call(&self, event: NewEvent) -> EventCall<'_> {
+        #[cfg(feature = "sql")]
+        return EventCall { events: self, event, tx: None };
+        #[cfg(not(feature = "sql"))]
+        EventCall { events: self, event }
     }
 
     /// Writes a list of events, all of them or none, and says how many it
@@ -105,8 +157,24 @@ impl Events {
     /// list holds, is nothing. A refused one names its place in the list and
     /// its name.
     pub fn append_all(&self, events: impl IntoIterator<Item = NewEvent>) -> Result<usize> {
-        let appended = self.records.append(&self.stream, events.into_iter().collect());
+        let appended =
+            self.refuse_around().and_then(|()| self.records.append(&self.stream, events.into_iter().collect()));
         appended.map_err(|error| error.within(format!("events {}", self.stream.name)))
+    }
+
+    /// Refuses an append made around a transaction of the database the
+    /// stream was opened from, inside its function: it would be written
+    /// whether or not the rows commit, the mistake the database's stream is
+    /// there to prevent.
+    fn refuse_around(&self) -> Result<()> {
+        #[cfg(feature = "sql")]
+        if let Some(outbox) = &self.outbox
+            && outbox.file().held_here()
+        {
+            let why = "appended around its database's transaction, inside it: append through tx.with(&events)";
+            return Err(Error::invalid(why));
+        }
+        Ok(())
     }
 
     /// The stream's events, found by the conditions the answer adds.
@@ -284,8 +352,12 @@ impl Records {
 /// One event on its way into a stream.
 #[derive(Debug)]
 pub struct EventCall<'e> {
-    events: &'e Events,
-    event: NewEvent,
+    pub(super) events: &'e Events,
+    pub(super) event: NewEvent,
+    /// The database's transaction the call runs in, when it was made
+    /// through one.
+    #[cfg(feature = "sql")]
+    pub(super) tx: Option<&'e crate::Transaction<'e>>,
 }
 
 impl EventCall<'_> {
@@ -327,8 +399,13 @@ impl EventCall<'_> {
     }
 
     /// Writes the event, and says whether it did: `false` when its stream
-    /// holds its id.
+    /// holds its id. Made through a database's transaction, it is written
+    /// once the transaction commits, and says whether it will be.
     pub fn append(self, fields: &impl Serialize) -> Result<bool> {
+        #[cfg(feature = "sql")]
+        if let Some(tx) = self.tx {
+            return self.events.keep_in(tx, vec![self.event.fields(fields)]).map(|kept| kept == 1);
+        }
         self.events.append_all([self.event.fields(fields)]).map(|written| written == 1)
     }
 }
@@ -603,6 +680,36 @@ fn held_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<HashSet<Strin
     Ok(held)
 }
 
+#[cfg(feature = "sql")]
+impl Records {
+    /// Whether `stream` holds the id `id`, as a reader of the file sees it.
+    pub(super) fn holds_id(&self, stream: &Stream, id: &str) -> Result<bool> {
+        self.file.read(|connection| {
+            let found = connection.prepare_cached(HELD).and_then(|mut select| select.exists(params![stream.id, id]));
+            found.map_err(|error| sql_error("look up an event's id", error))
+        })
+    }
+
+    /// Appends events a database kept for `stream` as they were kept, their
+    /// times and ids, an append's worth at a time; says how many it wrote.
+    /// Of the events of one id the first stands, and one whose id the stream
+    /// holds is nothing, so that appending them again writes none twice.
+    pub(super) fn append_kept(self: &Arc<Self>, stream: &Stream, events: Vec<Kept>) -> Result<usize> {
+        let now = self.now();
+        let mut ids = HashSet::new();
+        let (mut written, mut piece, mut weight) = (0, Vec::new(), 0);
+        for event in events.into_iter().filter(|event| event.id.as_ref().is_none_or(|id| ids.insert(id.clone()))) {
+            if weight + event.weight() > MAX_APPEND && !piece.is_empty() {
+                written += self.write_checked(stream, std::mem::take(&mut piece), now)?;
+                weight = 0;
+            }
+            weight += event.weight();
+            piece.push(event);
+        }
+        Ok(written + self.write_checked(stream, piece, now)?)
+    }
+}
+
 /// Holds the ids of `written`, none of which its stream holds.
 fn hold_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<()> {
     for event in written.events() {
@@ -615,13 +722,13 @@ fn hold_ids(tx: &Tx<'_>, stream: i64, written: &Written) -> Result<()> {
 
 /// The times a stream takes an event at: from what it keeps to ten minutes
 /// ahead of `now`.
-fn window(stream: &Stream, now: i64) -> (i64, i64) {
+pub(super) fn window(stream: &Stream, now: i64) -> (i64, i64) {
     (now.saturating_sub(nanos(stream.keeps())), now.saturating_add(nanos(AHEAD)))
 }
 
 /// An event with its time, once it is one the file keeps: a name, fields
 /// within their bounds, a time within its stream's window.
-fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept> {
+pub(super) fn check(event: NewEvent, now: i64, (oldest, newest): (i64, i64)) -> Result<Kept> {
     if let Some(refused) = &event.refused {
         return Err(Error::invalid(refused.clone()));
     }

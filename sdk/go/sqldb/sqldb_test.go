@@ -16,6 +16,7 @@ import (
 	"tinyshed.org/tinystore/internal/ways"
 	"tinyshed.org/tinystore/jobs"
 	"tinyshed.org/tinystore/kv"
+	"tinyshed.org/tinystore/records"
 	"tinyshed.org/tinystore/sqldb"
 )
 
@@ -594,6 +595,70 @@ func TestABatchWritesItsStatementsAndAQueuesAddsTogetherOrNoneOfThem(t *testing.
 		is(t, err, tinystore.ErrInvalid)
 		if ways.Must(sqldb.Scalar[int64](ctx, db, `select count(*) from notes where author_id = 13`)) != 1 {
 			t.Fatal("a refused batch writes nothing")
+		}
+	})
+}
+
+// contract: REC-13
+func TestAStreamOpenedThroughTheDatabaseAppendsWithItsTransactionAndItsBatchOrNever(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		db := app(t, store)
+		audit := ways.Must(records.OpenEvents(db, "notes-audit"))
+		inRecords := ways.Must(records.OpenEvents(store, "notes-audit"))
+		streamed := func() []string {
+			page := ways.Must(inRecords.List(ctx, records.Query{}))
+			ids := make([]string, len(page.Events))
+			for i, event := range page.Events {
+				ids[i] = event.ID
+			}
+			return ids
+		}
+		insert := func(tx *sqldb.Tx, id string) error {
+			_, err := tx.Exec(ctx, `insert into notes (id, author_id, title) values (?, 21, 'a')`, id)
+			return err
+		}
+		err := db.Tx(ctx, func(tx *sqldb.Tx) error {
+			if err := insert(tx, "e1"); err != nil {
+				return err
+			}
+			if kept, err := audit.In(tx).Append(ctx, "note.added", map[string]string{"note": "e1"}, records.ID("e0")); !kept || err != nil {
+				t.Fatalf("kept for the commit: %v %v", kept, err)
+			}
+			return insert(tx, "e1")
+		})
+		is(t, err, tinystore.ErrConflict)
+		if ids := streamed(); len(ids) != 0 {
+			t.Fatalf("a rolled back event reached the stream: %v", ids)
+		}
+
+		ways.Must(0, db.Tx(ctx, func(tx *sqldb.Tx) error {
+			if err := insert(tx, "e1"); err != nil {
+				return err
+			}
+			if kept, err := audit.In(tx).Append(ctx, "note.added", map[string]string{"note": "e1"}, records.ID("e1")); !kept || err != nil {
+				t.Fatalf("kept for the commit: %v %v", kept, err)
+			}
+			if again, err := audit.In(tx).Append(ctx, "note.added", nil, records.ID("e1")); again || err != nil {
+				t.Fatalf("an id the transaction holds: %v %v", again, err)
+			}
+			return nil
+		}))
+		if ids := streamed(); !slices.Equal(ids, []string{"e1"}) {
+			t.Fatalf("in the stream when db.Tx returned: %v", ids)
+		}
+
+		ways.Must(0, db.Batch(ctx, sqldb.SQL(`insert into notes (id, author_id, title) values ('e2', 21, 'b')`),
+			audit.Appending("note.added", map[string]string{"note": "e2"}, records.ID("e2"))))
+		if ids := streamed(); !slices.Equal(ids, []string{"e1", "e2"}) {
+			t.Fatalf("in the stream when db.Batch returned: %v", ids)
+		}
+		err = db.Batch(ctx, inRecords.Appending("never", nil))
+		if !errors.Is(err, tinystore.ErrInvalid) || !strings.Contains(err.Error(), "kept in records.db, outside this batch of sql app") {
+			t.Fatalf("a stream opened on the store is refused: %v", err)
+		}
+		if count := ways.Must(audit.Count(ctx, records.Query{})); count != 2 {
+			t.Fatalf("%d events", count)
 		}
 	})
 }

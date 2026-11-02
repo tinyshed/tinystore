@@ -28,9 +28,10 @@ type Piece struct {
 type Statement = Piece
 
 // CoreLent is how this module's packages put a write of their own in a
-// batch, as a queue's Adding does; a program has no use for it.
+// batch, as a queue's Adding and a stream's Appending do; a program has no use
+// for it.
 func CoreLent(write core.Lent) Statement {
-	refused := core.Errorf(core.Invalid, "%s: a queue's Adding goes in a batch, not in a piece of SQL", write.What)
+	refused := core.Errorf(core.Invalid, "%s: a queue's Adding or a stream's Appending goes in a batch, not in a piece of SQL", write.What)
 	return Piece{lent: &write, err: refused}
 }
 

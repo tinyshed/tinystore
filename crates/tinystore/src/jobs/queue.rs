@@ -512,7 +512,8 @@ where
             write: Box::new(move |tx| {
                 let due = write(tx)?;
                 let wake = due.map(|at| Box::new(move || state.wake(at)) as Box<dyn FnOnce() + Send>);
-                Ok(Wrote { changed: change == Change::Set || due.is_some(), committed: wake })
+                let changes = u64::from(change == Change::Set || due.is_some());
+                Ok(Wrote { changes, committed: wake, before_answer: None })
             }),
         })
     }

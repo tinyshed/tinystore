@@ -46,8 +46,10 @@ let db = store.database("app").migrations("migrations").open()?;
 pub struct Write(_)
 ```
 
-A write of a batch: a statement, or a job's add of a queue opened from
-the database, `queue.adding(&job)`. A statement becomes one by `into`:
+A write of a batch: a statement, a job's add of a queue opened from the
+database, `queue.adding(&job)`, or an event's append of a stream opened
+from it, `audit.appending(name, &fields)`. A statement becomes one by
+`into`:
 
 ```rust
 let db = store.database("app").open()?;
@@ -146,6 +148,34 @@ Drops the table's index `name` this database keeps: its triggers come
 off the table in one commit and its rows go in the background; says
 whether there was one. A handle of it is refused from then on.
 
+### Database.events
+
+```rust
+pub fn events(&self, stream: &str) -> EventsBuilder<'static>
+```
+
+The store's stream of events `stream`, opened through this database:
+the same handle as [`Store::events`](crate::Store::events) opens, with
+the same calls and reads, the stream in records.db where every stream
+lives. Its appends inside `Database::tx`, through `tx.with(&audit)`,
+and in `Database::batch`, through
+[`appending`](crate::records::Events::appending), are kept in this
+database's file with the rows and written to the stream once they
+commit, before the call returns: an event exists exactly when the
+change it records does. An append outside them goes to the stream at
+once, and no write is atomic across two files.
+
+```rust
+let db = store.database("app").open()?;
+let audit = db.events("audit").open()?;
+db.tx(|tx| {
+    tx.exec(tinystore::sql!("update roles set role = ? where user_id = ?", "admin", 42))?;
+    tx.with(&audit).append("role.changed", &RoleChanged { user_id: 42, role: "admin" })?;
+    Ok::<_, tinystore::Error>(())
+})?;
+let page = audit.list().newest().limit(50).page()?; // the line is in the stream
+```
+
 ### Database.name
 
 ```rust
@@ -201,10 +231,12 @@ where
 
 Runs writes known before they run as one, all of them or none, in one
 savepoint of the next shared commit: it costs what one write does, and
-gives what each did, in their order. A write is a statement, or a job's
+gives what each did, in their order. A write is a statement, a job's
 add of a queue opened from the database, `queue.adding(&job)`, which
 commits with the rows and changes one job, or none when its id was
-taken; see `Write`.
+taken, or an event's append of a stream opened from it,
+`audit.appending(name, &fields)`, written to the stream before the
+batch returns; see `Write`.
 
 ### Database.tx
 
@@ -217,7 +249,9 @@ depend on what its reads found: `Ok` commits, an error or a panic rolls
 back. It runs once. Past five seconds it rolls back and is `limit`.
 
 A bucket or a queue opened from the database joins it through
-`tx.with(&handle)`, so that its keys and jobs commit with the rows.
+`tx.with(&handle)`, so that its keys and jobs commit with the rows,
+and so does a stream opened from it: its events are written to the
+stream once the transaction commits, before this returns.
 
 ### Database.table
 
@@ -968,6 +1002,18 @@ pub fn bucket<V: Value>(&self, name: &str) -> BucketBuilder<V>
 A bucket kept in this database's file, as `Database::bucket` opens
 one, its calls awaited: its writes commit with the rows in
 [`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
+
+### aio::sql::Database.events
+
+```rust
+pub fn events(&self, stream: &str) -> EventsBuilder<'_>
+```
+
+The store's stream `stream` opened through this database, as
+`Database::events` opens it, its calls awaited: its appends commit
+with the rows in [`tx`](crate::aio::sql::Database::tx) through
+`tx.with(&audit)`, and in [`batch`](crate::aio::sql::Database::batch)
+through [`appending`](crate::aio::records::Events::appending).
 
 ### aio::sql::Database.files
 

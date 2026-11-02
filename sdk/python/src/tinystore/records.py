@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, overloa
 
 from ._connection import check_name, piece_of
 from ._console import Line, encode_fields
-from ._handles import handle_on, via_link
+from ._handles import Home, Opener, Via, handle_on, via_link
 from ._time import Calendar, Duration, ms, spelled_keep
 from ._values import to_json
 from ._wire.protocol import (
@@ -56,7 +56,7 @@ from .errors import ClosedError, InvalidError
 from .trace import current_trace
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
     from types import TracebackType
 
     from ._connection import Connection, Idempotence, Link
@@ -507,20 +507,56 @@ async def _stream_of(connection: Connection, method: int, body: bytes, end: bool
 
 def open_events(link: Link, stream: str, keep: Duration | None) -> Events:
     """Opens a stream of events: lazily, at its first call on a connection."""
+    return Events(link, stream, events_open(stream, keep))
+
+
+def events_open(stream: str, keep: Duration | None, database: int | None = None) -> bytes:
+    """A stream's open, through the database of the handle database on the connection when given."""
     check_name(stream, "stream")
-    return Events(
-        link, stream, RecordsOpen.encode(stream=stream, keep=None if keep is None else ms(keep, "a stream's keep"))
+    return RecordsOpen.encode(
+        stream=stream, keep=None if keep is None else ms(keep, "a stream's keep"), database=database
     )
 
 
 class Events(_Reads):
     """A stream of events: written with append, which waits for the file, and read back."""
 
-    def __init__(self, link: Link, stream: str, opener: bytes) -> None:
+    def __init__(self, link: Link, stream: str, opener: Opener, home: Home | None = None) -> None:
         self.stream = stream
         self._link = link
-        self._via = via_link(link)
+        self._via = via_link(link) if home is None else home.via(f"events {stream}")
         self._opener = opener
+        self.home = home
+        """the database the stream was opened through, whose transactions and batches its appends join"""
+
+    @property
+    def opener(self) -> Opener:
+        return self._opener
+
+    def appending(
+        self,
+        name: str,
+        fields: Mapping[str, Any] | None = None,
+        /,
+        *,
+        id: str | None = None,
+        at: datetime | None = None,
+        context: Mapping[str, Any] | None = None,
+        level: EventLevel | None = None,
+        message: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> Appending:
+        """An event's append for a batch of the database the stream was opened from, ``db.events``.
+
+        It is kept with the batch's rows and reaches the stream once they
+        commit, before the batch returns, or never::
+
+            changed = sql("update roles set role = ? where user_id = ?", role, user_id)
+            await db.batch([changed, audit.appending("role.changed", {"user_id": user_id})])
+        """
+        event = Event(name, fields or {}, at, context or {}, level, message, trace_id, span_id, id=id)
+        return Appending(self, _new_event(event, 0))
 
     @overload
     async def append(
@@ -619,6 +655,80 @@ class Events(_Reads):
 
     async def _call(self, method: str, body: Callable[[int], bytes], idempotence: Idempotence) -> bytes:
         return await self._via.call(methods["records.open"], self._opener, methods[method], body, idempotence)
+
+
+class TxEvents:
+    """A stream's appends inside a transaction of the database it was opened from, ``tx.with_(audit)``.
+
+    Each is kept with the transaction's rows and reaches the stream once it
+    commits, before ``db.tx`` returns. A read goes through the stream itself,
+    and finds what committed.
+    """
+
+    def __init__(self, events: Events, via: Via) -> None:
+        self.stream = events.stream
+        self._opener = events.opener
+        self._via = via
+
+    async def append(
+        self,
+        name: str,
+        fields: Mapping[str, Any] | None = None,
+        /,
+        *,
+        id: str | None = None,
+        at: datetime | None = None,
+        context: Mapping[str, Any] | None = None,
+        level: EventLevel | None = None,
+        message: str | None = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+    ) -> bool:
+        """Appends an event once the transaction commits.
+
+        It says whether it will be written: False when its stream, or this
+        transaction, holds its id.
+        """
+        event = Event(name, fields or {}, at, context or {}, level, message, trace_id, span_id, id=id)
+        encoded = [_new_event(event, 0)]
+        answer = await self._via.call(
+            methods["records.open"],
+            self._opener,
+            methods["records.append"],
+            lambda handle: RecordsAppend.encode(handle=handle, events=encoded),
+            "write",
+        )
+        return RecordsAppended.decode(answer).get("held", 0) == 0
+
+
+@dataclass(frozen=True, slots=True)
+class Appending:
+    """An event's append that a database's batch carries, from ``events.appending``."""
+
+    events: Events = field(repr=False)
+    event: dict[str, Any] = field(repr=False)
+    """the event as the wire carries it"""
+
+
+def appending_in(appending: Appending, home: Home) -> Callable[[Connection], Awaitable[dict[str, Any]]]:
+    """What a batch of home sends of an append, on the connection it goes on: its stream's handle opened there.
+
+    A stream opened from the store or another database is refused, since its
+    event would not commit with the rows.
+    """
+    events, event = appending.events, appending.event
+    if events.home is not home:
+        kept = "records.db" if events.home is None else events.home.describe
+        raise InvalidError(
+            f"{home.describe}: events {events.stream}: kept in {kept}, outside this batch of {home.describe}"
+        )
+
+    async def sent(connection: Connection) -> dict[str, Any]:
+        handle = await handle_on(connection, methods["records.open"], events.opener)
+        body = RecordsAppend.encode(handle=handle, events=[event])
+        return {"text": "", "values": [], "method": methods["records.append"], "body": body}
+
+    return sent
 
 
 class AllEvents(_Reads):

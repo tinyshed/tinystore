@@ -1,9 +1,10 @@
 //! A database's batch: writes known before they run, in one savepoint of the
-//! next shared commit, all of them or none. A write is a statement, or a
-//! queue's add for a queue kept in the database's file, so that a job
-//! commits with the rows it is about and still shares the commit with every
-//! other write of the file, where `db.tx` holds the writer and pays a sync
-//! of its own.
+//! next shared commit, all of them or none. A write is a statement, a
+//! queue's add for a queue kept in the database's file, or a stream's append
+//! for a stream opened from the database, so that a job or an event commits
+//! with the rows it is about and still shares the commit with every other
+//! write of the file, where `db.tx` holds the writer and pays a sync of its
+//! own.
 
 use std::fmt;
 
@@ -11,14 +12,16 @@ use super::database::Done;
 use super::run;
 use super::statement::Sql;
 use crate::Result;
-#[cfg(feature = "jobs")]
+#[cfg(any(feature = "jobs", feature = "records"))]
 use crate::engine::LentWrite;
 use crate::sqlite::{File, Tx as SqlTx};
-#[cfg(feature = "jobs")]
+#[cfg(any(feature = "jobs", feature = "records"))]
 use crate::{Error, ErrorKind};
 
-/// A write of a batch: a statement, or a job's add of a queue opened from
-/// the database, `queue.adding(&job)`. A statement becomes one by `into`:
+/// A write of a batch: a statement, a job's add of a queue opened from the
+/// database, `queue.adding(&job)`, or an event's append of a stream opened
+/// from it, `audit.appending(name, &fields)`. A statement becomes one by
+/// `into`:
 ///
 /// ```no_run
 /// # #[derive(serde::Serialize, serde::Deserialize)]
@@ -39,18 +42,18 @@ pub struct Write(Kind);
 
 enum Kind {
     Statement(Sql),
-    #[cfg(feature = "jobs")]
+    #[cfg(any(feature = "jobs", feature = "records"))]
     Lent(LentWrite),
     /// What made the write could not: its batch fails with it, and runs
     /// nothing.
-    #[cfg(feature = "jobs")]
+    #[cfg(any(feature = "jobs", feature = "records"))]
     Refused(Error),
 }
 
 impl Write {
     /// A write of a handle kept in a file another engine lends, or why it
     /// could not be made.
-    #[cfg(feature = "jobs")]
+    #[cfg(any(feature = "jobs", feature = "records"))]
     pub(crate) fn lent(made: Result<LentWrite>) -> Write {
         Write(made.map_or_else(Kind::Refused, Kind::Lent))
     }
@@ -84,9 +87,9 @@ impl fmt::Debug for Write {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
             Kind::Statement(statement) => f.debug_tuple("Write").field(statement).finish(),
-            #[cfg(feature = "jobs")]
+            #[cfg(any(feature = "jobs", feature = "records"))]
             Kind::Lent(lent) => f.debug_tuple("Write").field(lent).finish(),
-            #[cfg(feature = "jobs")]
+            #[cfg(any(feature = "jobs", feature = "records"))]
             Kind::Refused(error) => f.debug_tuple("Write").field(error).finish(),
         }
     }
@@ -103,15 +106,28 @@ pub(super) struct Batch {
 pub(super) struct Ran {
     done: Vec<Done>,
     committed: Vec<Box<dyn FnOnce() + Send>>,
+    /// What runs before the batch answers, and may wait for another file.
+    before_answer: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 impl Ran {
-    /// What each write did, once what waited for the commit ran.
+    /// What each write did, once what waited for the commit ran, on this
+    /// thread, which may wait.
     pub(super) fn finish(self) -> Vec<Done> {
         for committed in self.committed {
             committed();
         }
+        for before_answer in self.before_answer {
+            before_answer();
+        }
         self.done
+    }
+
+    /// Whether finishing the batch waits for another file, which the thread
+    /// that committed it must not: the commits after it would wait too.
+    #[cfg(all(feature = "records", any(feature = "wire", feature = "async")))]
+    pub(super) fn waits(&self) -> bool {
+        !self.before_answer.is_empty()
     }
 }
 
@@ -132,7 +148,7 @@ impl Batch {
         for write in self.writes {
             match write {
                 Kind::Statement(statement) => statements.push(statement),
-                #[cfg(feature = "jobs")]
+                #[cfg(any(feature = "jobs", feature = "records"))]
                 Kind::Lent(_) | Kind::Refused(_) => {}
             }
         }
@@ -145,21 +161,23 @@ impl Batch {
         let weight = self.writes.iter().map(weight_of).sum();
         let writes = self.writes;
         let write = move |tx: &SqlTx<'_>| {
-            let mut ran = Ran { done: Vec::with_capacity(writes.len()), committed: Vec::new() };
+            let mut ran =
+                Ran { done: Vec::with_capacity(writes.len()), committed: Vec::new(), before_answer: Vec::new() };
             for write in writes {
                 match write {
                     Kind::Statement(statement) => {
                         let done = run::exec(tx, &statement).map_err(|error| error.within(statement.describe()))?;
                         ran.done.push(done);
                     }
-                    #[cfg(feature = "jobs")]
+                    #[cfg(any(feature = "jobs", feature = "records"))]
                     Kind::Lent(lent) => {
                         let describe = lent.describe;
                         let wrote = (lent.write)(tx).map_err(|error| error.within(describe))?;
-                        ran.done.push(Done { changes: u64::from(wrote.changed), last_insert_rowid: 0 });
+                        ran.done.push(Done { changes: wrote.changes, last_insert_rowid: 0 });
                         ran.committed.extend(wrote.committed);
+                        ran.before_answer.extend(wrote.before_answer);
                     }
-                    #[cfg(feature = "jobs")]
+                    #[cfg(any(feature = "jobs", feature = "records"))]
                     Kind::Refused(error) => return Err(error),
                 }
             }
@@ -171,7 +189,7 @@ impl Batch {
 
 /// A write a batch on `file` can run: a statement, or a lent write of a
 /// handle kept in `file` while `file` is not a copy.
-#[cfg(feature = "jobs")]
+#[cfg(any(feature = "jobs", feature = "records"))]
 fn kept_in(write: Kind, file: &File, owner: &str) -> Result<Kind> {
     match write {
         Kind::Refused(error) => Err(error),
@@ -180,15 +198,16 @@ fn kept_in(write: Kind, file: &File, owner: &str) -> Result<Kind> {
             Err(Error::invalid(why).within(lent.describe))
         }
         Kind::Lent(lent) if file.is_copy() => {
-            let why = "a batch that writes a queue's job runs at its file's home, which this copy is not";
+            let why = "a batch that writes a job or an event runs at its file's home, which this copy is not";
             Err(Error::new(ErrorKind::Unavailable, why).within(lent.describe))
         }
         write => Ok(write),
     }
 }
 
-/// Without jobs a batch holds statements alone, which any file runs.
-#[cfg(not(feature = "jobs"))]
+/// Without jobs and records a batch holds statements alone, which any file
+/// runs.
+#[cfg(not(any(feature = "jobs", feature = "records")))]
 fn kept_in(write: Kind, _file: &File, _owner: &str) -> Result<Kind> {
     Ok(write)
 }
@@ -196,9 +215,9 @@ fn kept_in(write: Kind, _file: &File, _owner: &str) -> Result<Kind> {
 fn weight_of(write: &Kind) -> usize {
     match write {
         Kind::Statement(statement) => statement.weight(),
-        #[cfg(feature = "jobs")]
+        #[cfg(any(feature = "jobs", feature = "records"))]
         Kind::Lent(lent) => lent.weight,
-        #[cfg(feature = "jobs")]
+        #[cfg(any(feature = "jobs", feature = "records"))]
         Kind::Refused(_) => 0,
     }
 }

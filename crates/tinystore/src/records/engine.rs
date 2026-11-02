@@ -29,7 +29,7 @@ const MIGRATIONS: &[Migration] = &[
 ];
 
 /// records' file in the store's directory.
-const FILE: &str = "records.db";
+pub(super) const FILE: &str = "records.db";
 
 /// How long a stream keeps its events until an open says.
 pub(crate) const KEEP: Duration = Duration::from_hours(14 * 24);
@@ -69,6 +69,10 @@ pub(crate) struct Records {
     /// What reads, packing, merges and polls met that no longer reads, kept
     /// while the store runs for a drop to remove.
     pub(super) damaged: Mutex<Damaged>,
+    /// The outboxes of the databases whose streams the store opened, which
+    /// maintenance moves what a failed move or a crash left in from.
+    #[cfg(feature = "sql")]
+    pub(super) outboxes: Mutex<Vec<std::sync::Weak<super::outbox::Outbox>>>,
     _claim: Claim,
 }
 
@@ -156,6 +160,8 @@ impl Records {
                 recent: Recent::default(),
                 held: Mutex::default(),
                 damaged: Mutex::default(),
+                #[cfg(feature = "sql")]
+                outboxes: Mutex::default(),
                 _claim: claim,
             });
             // A copy's packing and expiry are its home's, and reach it as pages.

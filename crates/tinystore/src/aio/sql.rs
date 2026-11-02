@@ -129,7 +129,7 @@ impl Database {
         &self.db
     }
 
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "records"))]
     pub(crate) fn pool(&self) -> &Arc<Pool> {
         &self.pool
     }

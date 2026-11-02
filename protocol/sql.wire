@@ -19,12 +19,14 @@ message sql.Open {
 }
 
 # A statement's text and the values of its ?s, in order. In a batch it may
-# be a call of jobs on a queue kept in the database's file instead, jobs.add
-# with its request in body and no text, which commits with the batch's rows.
+# be a call of another engine instead, with its request in body and no
+# text, which commits with the batch's rows: jobs.add on a queue kept in the
+# database's file, or records.append on a stream opened through the
+# database, whose events reach the stream before the batch answers.
 message sql.Text {
   1 text: str
   2 values: [cell]
-  3 method: uint?     # in a batch, jobs.add: the call in body
+  3 method: uint?     # in a batch, jobs.add or records.append: the call in body
   4 body: bin?
 }
 
@@ -82,14 +84,16 @@ message sql.Done {
 }
 
 # Writes known before they run, written as one in a shared commit: its
-# statements, and the adds of a queue kept in the database's file.
+# statements, the adds of a queue kept in the database's file, and the
+# appends of a stream opened through the database.
 message sql.Batch {
   1 handle: uint
   2 statements: [sql.Text]
 }
 
 # What each write of a batch did, in their order: a job's add changed one
-# job, or none when its id was taken.
+# job, or none when its id was taken, and a stream's append the events its
+# stream holds no id of.
 message sql.Batched {
   1 done: [sql.Done]
 }
@@ -103,7 +107,9 @@ message sql.TxOpen {
 # A transaction's call, or its end: the last DATA commits, or not. A call is
 # a statement, or a call of kv or jobs on a bucket or a queue kept in the
 # database's file: a method of theirs with its request, kv.set or jobs.add,
-# which runs in the transaction.
+# which runs in the transaction; or records.append on a stream opened
+# through the database, whose events reach the stream once the transaction
+# commits, before its last DATA answers.
 message sql.TxCall {
   1 text: str
   2 values: [cell]

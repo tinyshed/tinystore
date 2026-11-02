@@ -27,18 +27,19 @@ pub(crate) struct SharedFile {
             feature = "jobs",
             feature = "blobs",
             feature = "search",
+            feature = "records",
             feature = "replication",
             feature = "async"
         )),
         expect(
             dead_code,
-            reason = "read by kv's, jobs', blobs' and search's guests, a copy's writes and the async API's databases"
+            reason = "read by kv's, jobs', blobs', search's and records' guests, a copy's writes and the async API's databases"
         )
     )]
     store: WeakStore,
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
+        expect(dead_code, reason = "only kv's, jobs', blobs', search's and records' handles are guests")
     )]
     guests: Mutex<crate::store::Engines>,
 }
@@ -50,7 +51,7 @@ impl SharedFile {
     }
 
     /// The store the file is open in, while it is open.
-    #[cfg(all(feature = "sql", any(feature = "replication", feature = "async")))]
+    #[cfg(all(feature = "sql", any(feature = "records", feature = "replication", feature = "async")))]
     pub(crate) fn store(&self) -> Result<Store> {
         self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))
     }
@@ -60,8 +61,8 @@ impl SharedFile {
     }
 
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
+        expect(dead_code, reason = "only kv's, jobs', blobs', search's and records' handles are guests")
     )]
     pub(crate) fn owner(&self) -> &str {
         &self.owner
@@ -70,8 +71,8 @@ impl SharedFile {
     /// The engine of type `E` kept in this file, or the one `open` makes; every
     /// handle opened from the file shares it.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
-        expect(dead_code, reason = "only kv's, jobs', blobs' and search's handles are guests")
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
+        expect(dead_code, reason = "only kv's, jobs', blobs', search's and records' handles are guests")
     )]
     pub(crate) fn engine<E: Engine>(&self, open: impl FnOnce(&Store) -> Result<Arc<E>>) -> Result<Arc<E>> {
         let store = self.store.upgrade().ok_or_else(|| Error::closed(format!("{}: the store closed", self.owner)))?;
@@ -101,7 +102,7 @@ pub(crate) enum Home {
 /// A write of a handle kept in a file another engine lends, which the
 /// lender's batch runs in its own savepoint: a queue's add in a database's
 /// batch, which commits with the batch's rows and shares the batch's commit.
-#[cfg(all(feature = "sql", feature = "jobs"))]
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 pub(crate) struct LentWrite {
     /// The file the handle is kept in, which must be the batch's.
     pub(crate) file: Arc<File>,
@@ -116,20 +117,25 @@ pub(crate) struct LentWrite {
 }
 
 /// What a lent write runs on the writer, inside the batch's savepoint.
-#[cfg(all(feature = "sql", feature = "jobs"))]
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 pub(crate) type LentWork = Box<dyn FnOnce(&crate::sqlite::Tx<'_>) -> Result<Wrote> + Send>;
 
-#[cfg(all(feature = "sql", feature = "jobs"))]
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 impl fmt::Debug for LentWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LentWrite({})", self.describe)
     }
 }
 
-/// What a lent write did: whether it changed anything, and what runs once
-/// its commit is durable, as a queue's workers wake for the job it added.
-#[cfg(all(feature = "sql", feature = "jobs"))]
+/// What a lent write did: the jobs or events it changed, and what runs once
+/// its commit is durable.
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 pub(crate) struct Wrote {
-    pub(crate) changed: bool,
+    pub(crate) changes: u64,
+    /// Runs on the thread that committed, and waits for nothing: a queue's
+    /// workers woken for the job it added.
     pub(crate) committed: Option<Box<dyn FnOnce() + Send>>,
+    /// Runs before the batch answers, off the thread that committed, and may
+    /// wait for another file: a stream's events moved into records.db.
+    pub(crate) before_answer: Option<Box<dyn FnOnce() + Send>>,
 }

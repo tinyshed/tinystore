@@ -4,10 +4,15 @@
 # Times are nanoseconds since 1970, a level is slog's number, and fields and
 # a context are a JSON object each, every value spelled as it was written.
 
-# Opens a stream of events by name, made with its first event.
+# Opens a stream of events by name, made with its first event. Opened
+# through a database, the stream is records.db's all the same, and its
+# appends inside the database's transactions and batches are kept in the
+# database's file until they commit, then written to the stream before the
+# transaction or the batch answers.
 message records.Open {
   1 stream: str          # [a-z0-9][a-z0-9_-]{0,63}
   2 keep: duration?      # how long it keeps its events: its own, kept in the file
+  3 database: uint?      # a database's handle: its appends join its transactions and batches; none when absent
 }
 
 # An event to write.

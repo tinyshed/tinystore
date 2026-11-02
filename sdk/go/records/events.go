@@ -23,6 +23,7 @@ import (
 	"tinyshed.org/tinystore/internal/core"
 	"tinyshed.org/tinystore/internal/logline"
 	"tinyshed.org/tinystore/internal/wire"
+	"tinyshed.org/tinystore/sqldb"
 )
 
 // Fields is what an event holds: any value JSON writes, by key.
@@ -256,36 +257,135 @@ type Events struct {
 	store  *core.Store
 	name   string
 	opener *core.Opener
+	via    core.Via
+	// home is the database the stream was opened through, whose transactions
+	// and batches its appends join; nil for the store.
+	home core.Database
+	// inTx says the stream was taken into a database's transaction, where its
+	// appends go.
+	inTx bool
+	// err is why the stream cannot join the transaction it was taken into.
+	err error
 }
 
-// OpenEvents opens a stream of events. It opens at its first call; its error
-// is a name or an option it refuses.
-func OpenEvents(store *tinystore.Store, stream string, opts ...Option) (*Events, error) {
+// OpenEvents opens a stream of events on a store, or through a database: the
+// stream is the store's either way, in records.db, and through a database
+// its appends in the database's transaction, taken in with In, and in its
+// batch, Appending, are kept in the database's file with the rows and reach
+// the stream once they commit, before the call returns. It opens at its
+// first call; its error is a name or an option it refuses.
+//
+//	audit, err := records.OpenEvents(db, "audit")
+//	err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+//		if _, err := tx.Exec(ctx, `update roles set role = ? where user_id = ?`, "admin", 42); err != nil {
+//			return err
+//		}
+//		_, err := audit.In(tx).Append(ctx, "role.changed", RoleChanged{UserID: 42, Role: "admin"})
+//		return err
+//	})
+func OpenEvents(home tinystore.Home, stream string, opts ...Option) (*Events, error) {
 	var o openOptions
 	for _, opt := range opts {
 		opt.open(&o)
 	}
-	return openEvents(store.CoreHome().Store, stream, o.keep)
-}
-
-func openEvents(store *core.Store, stream string, kept *time.Duration) (*Events, error) {
-	if err := core.CheckName(stream, "stream"); err != nil {
+	of := home.CoreHome()
+	if of.Database == nil {
+		return openEvents(of.Store, stream, o.keep)
+	}
+	message, err := openMessage(stream, o.keep)
+	if err != nil {
 		return nil, err
 	}
-	message := wire.RecordsOpen{Stream: stream}
-	if kept != nil {
-		ms, err := core.Millis(*kept, "stream "+stream+": keep")
+	db := of.Database
+	opener := db.Keep(wire.MethodRecordsOpen, wire.Encode(&message), func(ctx context.Context, c *core.Connection) ([]byte, error) {
+		handle, err := db.Handle(ctx, c)
 		if err != nil {
 			return nil, err
 		}
-		message.Keep = &ms
+		inDB := message
+		inDB.Database = &handle
+		return wire.Encode(&inDB), nil
+	})
+	return &Events{store: of.Store, name: stream, opener: opener, via: db.Via("events " + stream), home: db}, nil
+}
+
+func openEvents(store *core.Store, stream string, kept *time.Duration) (*Events, error) {
+	message, err := openMessage(stream, kept)
+	if err != nil {
+		return nil, err
 	}
 	opener := &core.Opener{Method: wire.MethodRecordsOpen, Body: wire.Encode(&message)}
-	return &Events{store: store, name: stream, opener: opener}, nil
+	return &Events{store: store, name: stream, opener: opener, via: core.ViaLink{Link: store.Link}}, nil
+}
+
+// openMessage is a stream's open, as the store's own files take it.
+func openMessage(stream string, kept *time.Duration) (wire.RecordsOpen, error) {
+	message := wire.RecordsOpen{Stream: stream}
+	if err := core.CheckName(stream, "stream"); err != nil {
+		return message, err
+	}
+	if kept != nil {
+		ms, err := core.Millis(*kept, "stream "+stream+": keep")
+		if err != nil {
+			return message, err
+		}
+		message.Keep = &ms
+	}
+	return message, nil
 }
 
 // Name is the stream's name.
 func (e *Events) Name() string { return e.name }
+
+// In is the stream inside a transaction of the database it was opened
+// through: an append there is kept with the transaction's rows and reaches
+// the stream once it commits, before db.Tx returns. A read goes through the
+// stream itself, and finds what committed.
+func (e *Events) In(tx tinystore.InTx) *Events {
+	in := *e
+	in.inTx = true
+	of := tx.CoreTx()
+	switch {
+	case of.Database != nil && e.home != nil && e.home == of.Database.Database():
+		in.via = of.Database.Via()
+	case of.Database != nil:
+		kept := "records.db"
+		if e.home != nil {
+			kept = e.home.Describe()
+		}
+		in.err = core.Errorf(core.Invalid, "events %s: kept in %s, outside this transaction of %s",
+			e.name, kept, of.Database.Database().Describe())
+	default:
+		in.err = core.Errorf(core.Invalid,
+			"events %s: a stream's appends join a database's transaction, not the store's: open it through the database", e.name)
+	}
+	return &in
+}
+
+// Appending is an event's append for a batch of the database the stream was
+// opened through: db.Batch writes it with its statements, so the event is
+// kept with the rows and reaches the stream once they commit, before the
+// batch returns, or never.
+//
+//	err = db.Batch(ctx, sqldb.SQL(`update roles set role = ? where user_id = ?`, "admin", 42), audit.Appending("role.changed", RoleChanged{UserID: 42, Role: "admin"}))
+func (e *Events) Appending(name string, fields any, opts ...AppendOption) sqldb.Statement {
+	event := Event{Name: name, Fields: fields}
+	for _, opt := range opts {
+		opt.append(&event)
+	}
+	written, err := newEvent(context.Background(), event, 0)
+	switch {
+	case e.err != nil:
+		err = e.err
+	case e.inTx:
+		err = core.Errorf(core.Invalid, "events %s: a stream taken into a transaction appends there, not in a batch", e.name)
+	}
+	body := func(handle uint64) []byte {
+		return wire.Encode(&wire.RecordsAppend{Handle: handle, Events: []wire.RecordsNewEvent{written}})
+	}
+	lent := core.Lent{Home: e.home, File: "records.db", What: "events " + e.name, Opener: e.opener, Method: wire.MethodRecordsAppend, Body: body, Err: err}
+	return sqldb.CoreLent(lent)
+}
 
 // Append writes an event: fields any value JSON writes as an object, a Fields
 // or a struct. It returns once the event is written, and a read finds it at
@@ -321,7 +421,10 @@ func (e *Events) AppendMany(ctx context.Context, events []Event) (int, error) {
 
 // appendWire sends an append and gives how many of its events it held.
 func (e *Events) appendWire(ctx context.Context, message wire.RecordsAppend) (int, error) {
-	answer, err := core.ViaLink{Link: e.store.Link}.Call(ctx, e.opener, wire.MethodRecordsAppend, func(handle uint64) []byte {
+	if e.err != nil {
+		return 0, e.err
+	}
+	answer, err := e.via.Call(ctx, e.opener, wire.MethodRecordsAppend, func(handle uint64) []byte {
 		message.Handle = handle
 		return wire.Encode(&message)
 	}, core.Writing)

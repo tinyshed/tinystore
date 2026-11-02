@@ -81,10 +81,12 @@ const DROP_SEGMENTS: &str = "delete from segments where stream = ?1 and holder i
 const GIVE_BACK: usize = 4 << 20;
 
 impl Records {
-    /// One pass, and one at a time: give back the pages that stayed free a
-    /// while, which the appends meanwhile did not need, then expire, pack
-    /// and merge.
+    /// One pass, and one at a time: move what databases' outboxes hold, give
+    /// back the pages that stayed free a while, which the appends meanwhile
+    /// did not need, then expire, pack and merge.
     pub(crate) fn maintain(&self) -> Result<Maintenance> {
+        #[cfg(feature = "sql")]
+        self.move_outboxes();
         let _one = self.maintaining.lock().unwrap_or_else(PoisonError::into_inner);
         let given_back = self.file.give_back(GIVE_BACK, self.clock().now());
         let done = self.expire_pack_and_merge()?;

@@ -250,10 +250,19 @@ Events is a stream of events: written with Append, which returns once the file h
 ### OpenEvents
 
 ```go
-func OpenEvents(store *tinystore.Store, stream string, opts ...Option) (*Events, error)
+func OpenEvents(home tinystore.Home, stream string, opts ...Option) (*Events, error)
 ```
 
-OpenEvents opens a stream of events. It opens at its first call; its error is a name or an option it refuses.
+OpenEvents opens a stream of events on a store, or through a database: the stream is the store's either way, in records.db, and through a database its appends in the database's transaction, taken in with In, and in its batch, Appending, are kept in the database's file with the rows and reach the stream once they commit, before the call returns. It opens at its first call; its error is a name or an option it refuses.
+
+	audit, err := records.OpenEvents(db, "audit")
+	err = db.Tx(ctx, func(tx *sqldb.Tx) error {
+		if _, err := tx.Exec(ctx, `update roles set role = ? where user_id = ?`, "admin", 42); err != nil {
+			return err
+		}
+		_, err := audit.In(tx).Append(ctx, "role.changed", RoleChanged{UserID: 42, Role: "admin"})
+		return err
+	})
 
 ### Events.Aggregate
 
@@ -287,6 +296,16 @@ func (e *Events) AppendMany(ctx context.Context, events []Event) (int, error)
 
 AppendMany writes a list of events whole or not at all, and says how many it wrote: an event whose ID the stream holds, or an earlier event of the list has, is nothing. A refused event names its place in the list and its name.
 
+### Events.Appending
+
+```go
+func (e *Events) Appending(name string, fields any, opts ...AppendOption) sqldb.Statement
+```
+
+Appending is an event's append for a batch of the database the stream was opened through: db.Batch writes it with its statements, so the event is kept with the rows and reaches the stream once they commit, before the batch returns, or never.
+
+	err = db.Batch(ctx, sqldb.SQL(`update roles set role = ? where user_id = ?`, "admin", 42), audit.Appending("role.changed", RoleChanged{UserID: 42, Role: "admin"}))
+
 ### Events.Count
 
 ```go
@@ -302,6 +321,14 @@ func (e *Events) FieldNames(ctx context.Context, q Query) ([]string, error)
 ```
 
 FieldNames is the keys the events hold, in fields and in context, sorted; Prefix narrows them.
+
+### Events.In
+
+```go
+func (e *Events) In(tx tinystore.InTx) *Events
+```
+
+In is the stream inside a transaction of the database it was opened through: an append there is kept with the transaction's rows and reaches the stream once it commits, before db.Tx returns. A read goes through the stream itself, and finds what committed.
 
 ### Events.Lines
 

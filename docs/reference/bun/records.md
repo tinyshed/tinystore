@@ -312,6 +312,18 @@ class Events extends Reads {
 
 A stream of events: written with `append`, which waits for the file, and read back.
 
+### Events.appending
+
+```ts
+appending(name: string, fields?: Fields, options?: AppendOptions): Appending
+```
+
+An event's append for a batch of the database the stream was opened
+from, `db.events`: it is kept with the batch's rows and reaches the
+stream once they commit, before the batch returns, or never.
+
+    await db.batch([sql`update roles set role = ${role} where user_id = ${id}`, audit.appending('role.changed', { userId: id, role })])
+
 ### Events.append
 
 ```ts
@@ -346,6 +358,36 @@ value's lines one, and a write never waits.
     const out = store.events('worker').lines()
     child.stdout.on('data', chunk => out.write(chunk))
     child.on('close', () => out.end())
+
+## TxEvents
+
+```ts
+class TxEvents {
+    readonly stream: string
+}
+```
+
+A stream's appends inside a transaction of the database it was opened
+from, `tx.with(audit)`: each is kept with the transaction's rows and
+reaches the stream once it commits, before `db.tx` returns. A read goes
+through the stream itself, and finds what committed.
+
+### TxEvents.append
+
+```ts
+append(name: string, fields?: Fields, options?: AppendOptions): Promise<boolean>
+```
+
+Appends an event once the transaction commits, and says whether it
+will be written: false when its stream, or this transaction, holds its id.
+
+## Appending
+
+```ts
+class Appending {}
+```
+
+An event's append for a database's batch, from `events.appending`.
 
 ## AllEvents
 

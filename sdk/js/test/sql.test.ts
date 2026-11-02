@@ -845,6 +845,48 @@ for (const way of ways) {
 			expect(await app.scalar<number>`select count(*) from notes where author_id = 13`).toBe(1)
 		})
 
+		// contract: REC-13
+		test('a stream opened from the database appends with its transaction and its batch, or never', async () => {
+			const audit = app.events('notes-audit')
+			const streamed = async () =>
+				(await store.events('notes-audit').list()).events.map(each => each.id)
+			const insert = (tx: SqlTx, id: string) =>
+				tx.exec`insert into notes (id, author_id, title) values (${id}, 21, 'a')`
+			const rolledBack = await caught(
+				app.tx(async tx => {
+					await insert(tx, 'e1')
+					expect(await tx.with(audit).append('note.added', { note: 'e1' }, { id: 'e0' })).toBe(true)
+					await insert(tx, 'e1')
+				}),
+			)
+			expect(rolledBack).toBeInstanceOf(ConflictError)
+			expect(await streamed()).toEqual([])
+
+			await app.tx(async tx => {
+				await insert(tx, 'e1')
+				expect(await tx.with(audit).append('note.added', { note: 'e1' }, { id: 'e1' })).toBe(true)
+				expect(await tx.with(audit).append('note.added', { note: 'e1' }, { id: 'e1' })).toBe(false)
+			})
+			expect(await streamed()).toEqual(['e1'])
+
+			const done = await app.batch([
+				sql`insert into notes (id, author_id, title) values ('e2', 21, 'b')`,
+				audit.appending('note.added', { note: 'e2' }, { id: 'e2' }),
+				audit.appending('note.added', { note: 'e1' }, { id: 'e1' }),
+			])
+			expect(done.map(each => each.changes)).toEqual([1, 1, 0])
+			expect(await streamed()).toEqual(['e1', 'e2'])
+
+			const elsewhere = await caught(app.batch([store.events('notes-audit').appending('never')]))
+			expect(elsewhere).toBeInstanceOf(InvalidError)
+			expect((elsewhere as Error).message).toContain(
+				'kept in records.db, outside this batch of sql app',
+			)
+			const around = await caught(app.tx(() => audit.append('around')))
+			expect(around).toBeInstanceOf(InvalidError)
+			expect(await audit.count()).toBe(2)
+		})
+
 		// contract: JOB-02
 		test('a worker runs a job its batch added, once the batch commits', async () => {
 			const sent = app.queue<{ note: string }>('batched')

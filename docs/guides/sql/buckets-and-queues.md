@@ -81,6 +81,7 @@ db.tx(|tx| -> tinystore::Result<()> {
 | a queue of the database  | `add`, `set`, `update`, `cancel`, `get`                 | `work`, `watch`, pages |
 | a channel                | `publish`, handed over at the commit                    | subscriptions          |
 | files of the database    | `put`, `create`, `delete`, `copy`, `rename`, `head`     | reads, uploads, lists  |
+| events of the database   | `append`, written to the stream at the commit           | every call             |
 
 What the transaction writes through them commits with the rows, or not at
 all, and what it reads sees what the transaction wrote. A worker never sees a
@@ -188,6 +189,14 @@ A search index can live in the database too, following a table: every change
 of a row reaches it in the same commit. See [A table's
 index](../search/table-index.md).
 
+## Events
+
+A stream of events opened from the database, `db.events('audit')`, stays in
+`records.db` with every other stream. Its appends inside a transaction or a
+batch of the database wait in the database's file and reach the stream when
+the rows commit, or never. An audit line then exists exactly when its change
+does. See [An audit that commits with the change](../records/audit.md).
+
 ## Why not two files
 
 Every engine has a file of its own so that no engine waits on another's
@@ -196,7 +205,9 @@ order in `shop.db` and then adding a job to `jobs.db` leaves a moment when a
 crash keeps one without the other. The usual cure is an outbox table and a
 process that copies its rows into the queue. Opening the queue from the
 database removes the moment instead, by the application's choice and never by
-default.
+default. A stream of events opened from the database is that outbox, run by
+the store: its events wait in the database's file until the store writes
+them to the stream.
 
 ## See also
 

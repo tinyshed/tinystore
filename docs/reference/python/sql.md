@@ -143,6 +143,23 @@ folder beside the database's file:
 
     packages = db.files("packages", max_file_size="10MiB")
 
+### Database.events
+
+```python
+def events(stream: str, *, keep: Duration | None = None) -> Events: ...
+```
+
+The store's stream of events, opened through this database.
+
+The same calls and reads as ``store.events(stream)`` gives, the stream
+in records.db where every stream lives. Its appends inside ``db.tx``,
+through ``tx.with_(audit)``, and in ``db.batch``, through
+``audit.appending``, are kept in this database's file with the rows
+and reach the stream once they commit, before the call returns: an
+event exists exactly when the change it records does:
+
+    audit = db.events("audit")
+
 ### Database.search_index
 
 ```python
@@ -349,15 +366,16 @@ Runs a write once it is durable; writes from many callers share a commit, each f
 ### Database.batch
 
 ```python
-async def batch(writes: Sequence[Sql | Adding]) -> list[Done]: ...
+async def batch(writes: Sequence[Sql | Adding | Appending]) -> list[Done]: ...
 ```
 
 Writes known before they run, written as one: all of them or none, in a shared commit.
 
-A write is a statement, or a job's add of a queue opened from the
+A write is a statement, a job's add of a queue opened from the
 database, ``queue.adding``, which commits with the rows and changed 1
-job, or 0 when its id was taken. The answer says what each did, in
-their order.
+job, or 0 when its id was taken, or an event's append of a stream
+opened from it, ``audit.appending``, which reaches the stream before
+the batch returns. The answer says what each did, in their order.
 
     await db.batch([sql("update notes set body = ? where id = ?", body, id), indexing.adding(Index(id))])
 
@@ -467,15 +485,18 @@ def with_[T](handle: Queue[T]) -> TxQueue[T]: ...
 def with_[T](handle: Channel[T]) -> TxChannel[T]: ...
 @overload
 def with_(handle: Files) -> Files: ...
+@overload
+def with_(handle: Events) -> TxEvents: ...
 def with_(
-    handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files,
-) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files: ...
+    handle: Bucket[Any] | Queue[Any] | Channel[Any] | Files | Events,
+) -> Bucket[Any] | TxQueue[Any] | TxChannel[Any] | Files | TxEvents: ...
 ```
 
-A bucket, a queue or files opened from this database, or a channel, inside the transaction.
+A bucket, a queue, files or events opened from this database, or a channel, inside the transaction.
 
 What it writes commits with the rows or not at all, and what it reads
-sees what the transaction wrote; a message is handed over at the commit.
+sees what the transaction wrote; a message is handed over at the
+commit, and an event reaches its stream then.
 
 ### SqlTx.all
 

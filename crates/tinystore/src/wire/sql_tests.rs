@@ -448,8 +448,9 @@ fn the_queries_of_a_client_that_leaves_stop() {
     store.close().unwrap();
 }
 
-/// A call of kv or jobs inside a transaction: its method and its request.
-#[cfg(feature = "jobs")]
+/// A call of kv, jobs or records inside a transaction: its method and its
+/// request.
+#[cfg(any(feature = "jobs", feature = "records"))]
 fn nested(client: &mut Client, stream: u32, called: u16, request: &impl Message) -> SqlTxAnswer {
     let call = SqlTxCall {
         want: "call".to_owned(),
@@ -879,5 +880,71 @@ fn files_opened_from_a_database_write_inside_its_transactions() {
             assert_eq!(got.bytes, package);
         }
     }
+    assert_eq!(client.pipe.streams(), 0);
+}
+
+// contract: REC-13
+#[cfg(feature = "records")]
+#[test]
+fn a_stream_opened_through_a_database_appends_with_its_transactions_and_batches() {
+    use crate::wire::protocol::{
+        RecordsAppend, RecordsAppended, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsQuery,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let database = open(&mut client);
+    let mut stream_of = |database| {
+        let open = RecordsOpen { stream: "audit".to_owned(), database, ..RecordsOpen::default() };
+        client.call::<Handle>(method::RECORDS_OPEN, &open).unwrap().handle
+    };
+    let (audit, in_records) = (stream_of(Some(database)), stream_of(None));
+    let append = |handle, name: &str, id: Option<&str>| RecordsAppend {
+        handle,
+        events: vec![RecordsNewEvent {
+            name: name.to_owned(),
+            id: id.map(str::to_owned),
+            fields: Some(r#"{"note":"n1"}"#.to_owned()),
+            ..RecordsNewEvent::default()
+        }],
+    };
+    let names = |client: &mut Client| {
+        let page: RecordsPage = client.call(method::RECORDS_LIST, &RecordsQuery::default()).unwrap();
+        page.events.into_iter().map(|event| event.name).collect::<Vec<_>>()
+    };
+
+    for commit in [false, true] {
+        let stream = begin(&mut client, database);
+        call(&mut client, stream, "insert into notes (id, title) values ('n1', 'a')", Vec::new(), "exec");
+        let kept = nested(&mut client, stream, method::RECORDS_APPEND, &append(audit, "note.added", Some("n1")));
+        assert_eq!(RecordsAppended::decode(&kept.body.unwrap()).unwrap().held, 0);
+        let refused = nested(&mut client, stream, method::RECORDS_APPEND, &append(in_records, "never", None));
+        let refused = refused.failure.unwrap();
+        assert!(refused.message.contains("kept in records.db, outside this transaction of sql app"), "{refused:?}");
+        assert_eq!(end(&mut client, stream, commit).flags, frame::END);
+        let expected: &[&str] = if commit { &["note.added"] } else { &[] };
+        assert_eq!(names(&mut client), expected, "commit {commit}: in the stream once the last DATA answered");
+    }
+
+    let insert = SqlText { text: "insert into notes (id, title) values ('n2', 'b')".to_owned(), ..SqlText::default() };
+    let appending = |request: RecordsAppend| SqlText {
+        method: Some(u64::from(method::RECORDS_APPEND)),
+        body: Some(request.encode()),
+        ..SqlText::default()
+    };
+    let batch = SqlBatch {
+        handle: database,
+        statements: vec![
+            insert,
+            appending(append(audit, "note.added", Some("n2"))),
+            appending(append(audit, "x", Some("n1"))),
+        ],
+    };
+    let batched: SqlBatched = client.call(method::SQL_BATCH, &batch).unwrap();
+    assert_eq!(batched.done.iter().map(|done| done.changes).collect::<Vec<_>>(), [1, 1, 0], "the stream holds n1");
+    assert_eq!(names(&mut client), ["note.added", "note.added"], "in the stream once the batch answered");
+    let elsewhere = SqlBatch { handle: database, statements: vec![appending(append(in_records, "never", None))] };
+    let refused = client.call::<SqlBatched>(method::SQL_BATCH, &elsewhere).unwrap_err();
+    assert_eq!(refused.code, "invalid", "{refused:?}");
     assert_eq!(client.pipe.streams(), 0);
 }

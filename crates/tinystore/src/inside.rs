@@ -1,10 +1,11 @@
-//! kv, jobs, blobs and search inside an application's database: a bucket, a
-//! queue or a set of files opened from a database lives in its file, beside
-//! its tables, and commits with its rows in `db.tx`, and a queue's job in
-//! `db.batch` too; a table's index follows a table, changed in the commit
-//! that changes a row. This is the one place two engines meet, so that
-//! neither imports the other, and so the async API's database opens its own
-//! here.
+//! kv, jobs, blobs, search and records inside an application's database: a
+//! bucket, a queue or a set of files opened from a database lives in its
+//! file, beside its tables, and commits with its rows in `db.tx`, and a
+//! queue's job in `db.batch` too; a table's index follows a table, changed in
+//! the commit that changes a row; a stream's events appended in either are
+//! kept in the file until they commit, then moved into records.db. This is
+//! the one place two engines meet, so that neither imports the other, and so
+//! the async API's database opens its own here.
 
 #[cfg(feature = "jobs")]
 use serde::Serialize;
@@ -146,6 +147,76 @@ impl Database {
     }
 }
 
+#[cfg(feature = "records")]
+impl Database {
+    /// The store's stream of events `stream`, opened through this database:
+    /// the same handle as [`Store::events`](crate::Store::events) opens, with
+    /// the same calls and reads, the stream in records.db where every stream
+    /// lives. Its appends inside [`Database::tx`], through `tx.with(&audit)`,
+    /// and in [`Database::batch`], through
+    /// [`appending`](crate::records::Events::appending), are kept in this
+    /// database's file with the rows and written to the stream once they
+    /// commit, before the call returns: an event exists exactly when the
+    /// change it records does. An append outside them goes to the stream at
+    /// once, and no write is atomic across two files.
+    ///
+    /// ```no_run
+    /// # #[derive(serde::Serialize)]
+    /// # struct RoleChanged { user_id: i64, role: &'static str }
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let audit = db.events("audit").open()?;
+    /// db.tx(|tx| {
+    ///     tx.exec(tinystore::sql!("update roles set role = ? where user_id = ?", "admin", 42))?;
+    ///     tx.with(&audit).append("role.changed", &RoleChanged { user_id: 42, role: "admin" })?;
+    ///     Ok::<_, tinystore::Error>(())
+    /// })?;
+    /// let page = audit.list().newest().limit(50).page()?; // the line is in the stream
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn events(&self, stream: &str) -> crate::records::EventsBuilder<'static> {
+        crate::records::EventsBuilder::in_file(std::sync::Arc::clone(self.shared()), stream)
+    }
+}
+
+#[cfg(feature = "records")]
+impl crate::records::Events {
+    /// An event's append for a batch of the database the stream was opened
+    /// from: in [`Database::batch`] it is kept with the batch's rows and
+    /// written to the stream once the batch commits, before the batch
+    /// returns. A stream opened from the store, or from another database,
+    /// fails the batch, `Invalid`.
+    ///
+    /// ```no_run
+    /// # fn main() -> tinystore::Result<()> {
+    /// # let store = tinystore::Store::open("data", Default::default())?;
+    /// let db = store.database("app").open()?;
+    /// let audit = db.events("audit").open()?;
+    /// db.batch([
+    ///     tinystore::sql!("update roles set role = ? where user_id = ?", "admin", 42).into(),
+    ///     audit.appending("role.changed", &serde_json::json!({ "user_id": 42, "role": "admin" })),
+    /// ])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn appending(&self, name: &str, fields: &impl serde::Serialize) -> crate::sql::Write {
+        self.event(name).appending(fields)
+    }
+}
+
+#[cfg(feature = "records")]
+impl crate::records::EventCall<'_> {
+    /// The event's append for a batch of the database its stream was opened
+    /// from, with what the call carries beside its fields, its id, its time;
+    /// see [`Events::appending`](crate::records::Events::appending). One made
+    /// through a transaction runs in it, and fails the batch.
+    pub fn appending(self, fields: &impl serde::Serialize) -> crate::sql::Write {
+        crate::sql::Write::lent(self.lent(fields))
+    }
+}
+
 #[cfg(all(feature = "kv", feature = "async"))]
 impl crate::aio::sql::Database {
     /// A bucket kept in this database's file, as [`Database::bucket`] opens
@@ -153,6 +224,38 @@ impl crate::aio::sql::Database {
     /// [`tx`](crate::aio::sql::Database::tx) through `tx.with(&bucket)`.
     pub fn bucket<V: crate::kv::Value>(&self, name: &str) -> crate::aio::kv::BucketBuilder<V> {
         crate::aio::kv::BucketBuilder::new(self.blocking().bucket(name), std::sync::Arc::clone(self.pool()))
+    }
+}
+
+#[cfg(all(feature = "records", feature = "async"))]
+impl crate::aio::sql::Database {
+    /// The store's stream `stream` opened through this database, as
+    /// [`Database::events`] opens it, its calls awaited: its appends commit
+    /// with the rows in [`tx`](crate::aio::sql::Database::tx) through
+    /// `tx.with(&audit)`, and in [`batch`](crate::aio::sql::Database::batch)
+    /// through [`appending`](crate::aio::records::Events::appending).
+    pub fn events(&self, stream: &str) -> crate::aio::records::EventsBuilder<'_> {
+        crate::aio::records::EventsBuilder::new(self.blocking().events(stream), self.pool())
+    }
+}
+
+#[cfg(all(feature = "records", feature = "async"))]
+impl crate::aio::records::Events {
+    /// An event's append for a batch of the database the stream was opened
+    /// from, as [`Events::appending`](crate::records::Events::appending)
+    /// makes one: it checks the event, with no I/O, and the batch is awaited.
+    pub fn appending(&self, name: &str, fields: &impl serde::Serialize) -> crate::sql::Write {
+        self.blocking().appending(name, fields)
+    }
+}
+
+#[cfg(all(feature = "records", feature = "async"))]
+impl crate::aio::records::EventCall<'_> {
+    /// The event's append for a batch of the database its stream was opened
+    /// from, with what the call carries beside its fields; see
+    /// [`Events::appending`](crate::records::Events::appending).
+    pub fn appending(self, fields: &impl serde::Serialize) -> crate::sql::Write {
+        self.into_blocking().appending(fields)
     }
 }
 

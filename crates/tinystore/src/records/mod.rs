@@ -34,6 +34,8 @@ mod logfmt;
 mod logger;
 mod maintain;
 mod merge;
+#[cfg(feature = "sql")]
+mod outbox;
 mod pack;
 mod poll;
 mod read;
@@ -42,6 +44,8 @@ mod segment;
 mod stamp;
 mod tail;
 mod text;
+#[cfg(feature = "sql")]
+mod tx;
 mod values;
 
 pub use carried::{FieldInfo, Kind, NameCount, StreamFields};
@@ -55,6 +59,8 @@ pub use poll::PollBatch;
 pub use read::{All, List, PAGE_EVENTS, Page};
 pub use repair::{Damage, Part};
 pub use tail::{Tail, TailBatch};
+#[cfg(feature = "sql")]
+pub use tx::TxEvents;
 
 use crate::{Result, Store};
 

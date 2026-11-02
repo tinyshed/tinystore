@@ -190,6 +190,22 @@ folder beside the database's file.
 
     const packages = db.files('packages', { maxFileSize: '10MiB' })
 
+### Database.events
+
+```ts
+events(stream: string, options?: EventsOptions): Events
+```
+
+The store's stream of events `stream`, opened through this database:
+the same calls and reads as `store.events(stream)` gives, the stream in
+records.db where every stream lives. Its appends inside `db.tx`,
+through `tx.with(audit)`, and in `db.batch`, through `audit.appending`,
+are kept in this database's file with the rows and reach the stream
+once they commit, before the call returns: an event exists exactly when
+the change it records does.
+
+    const audit = db.events('audit')
+
 ### Database.searchIndex
 
 ```ts
@@ -277,13 +293,15 @@ first call; open each once, in the module that owns it.
 ### Database.batch
 
 ```ts
-batch(writes: readonly (Sql | Adding)[]): Promise<Done[]>
+batch(writes: readonly (Sql | Adding | Appending)[]): Promise<Done[]>
 ```
 
 Writes known before they run, written as one: all of them or none, in a
 shared commit, and what each did, in their order. A write is a statement,
-or a job's add of a queue opened from the database, `queue.adding`, which
-commits with the rows and changed 1 job, or 0 when its id was taken.
+a job's add of a queue opened from the database, `queue.adding`, which
+commits with the rows and changed 1 job, or 0 when its id was taken, or
+an event's append of a stream opened from it, `audit.appending`, which
+reaches the stream before the batch returns.
 
     await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
 
@@ -337,6 +355,7 @@ with<T>(bucket: Bucket<T>): Bucket<T>
 with<T>(queue: Queue<T>): TxQueue<T>
 with<T>(channel: Channel<T>): TxChannel<T>
 with(files: Files): Files
+with(events: Events): TxEvents
 ```
 
 A bucket or a queue opened from this database, inside the transaction:

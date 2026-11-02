@@ -22,7 +22,7 @@ use super::protocol::{
     RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream, RecordsStreamFields,
     RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
-use super::{Link, Route};
+use super::{Lent, Link, Route};
 use crate::records::{
     Aggregate, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats,
     Tail, TailBatch, TraceId,
@@ -127,10 +127,17 @@ impl Handles {
     }
 }
 
-/// Answers a call of one message.
-pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], read_only: bool) -> Answered {
+/// Answers a call of one message; a stream opened through a database finds
+/// its file through `lent`.
+pub(crate) fn call(
+    store: &Store,
+    handles: &Handles,
+    lent: Lent<'_>,
+    (called, body): (u16, &[u8]),
+    read_only: bool,
+) -> Answered {
     match called {
-        method::RECORDS_OPEN => open(store, handles, RecordsOpen::decode(body)?, read_only),
+        method::RECORDS_OPEN => open(store, handles, lent, RecordsOpen::decode(body)?, read_only),
         method::RECORDS_APPEND => append(handles, RecordsAppend::decode(body)?),
         method::RECORDS_LIST => list(store, handles, &RecordsQuery::decode(body)?),
         method::RECORDS_COUNT => count(store, handles, &RecordsQuery::decode(body)?),
@@ -146,10 +153,20 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], r
     }
 }
 
-/// Opens a stream as the call says. A connection that only reads changes
-/// no stream's keep: what one keeps is the writer's to say.
-fn open(store: &Store, handles: &Handles, asked: RecordsOpen, read_only: bool) -> Answered {
-    let mut events = store.events(&asked.stream);
+/// Opens a stream as the call says, through a database when it names one.
+/// A connection that only reads changes no stream's keep: what one keeps is
+/// the writer's to say.
+fn open(store: &Store, handles: &Handles, lent: Lent<'_>, asked: RecordsOpen, read_only: bool) -> Answered {
+    let mut events = match asked.database {
+        #[cfg(feature = "sql")]
+        Some(database) => crate::records::EventsBuilder::in_file(lent(database)?, &asked.stream),
+        #[cfg(not(feature = "sql"))]
+        Some(database) => {
+            let _ = lent;
+            return Err(Failure::invalid(format!("database {database}: this server keeps no databases")));
+        }
+        None => store.events(&asked.stream),
+    };
     if let Some(keep) = asked.keep {
         if read_only {
             return Err(Failure::permission("a read connection gives a stream no keep"));
@@ -162,12 +179,39 @@ fn open(store: &Store, handles: &Handles, asked: RecordsOpen, read_only: bool) -
 }
 
 fn append(handles: &Handles, asked: RecordsAppend) -> Answered {
-    let events = handles.events(asked.handle)?;
-    let new = asked.events.into_iter().enumerate().map(|(place, event)| new_event(place, event));
-    let new = new.collect::<Result<Vec<_>, Failure>>()?;
+    let (events, new) = appended(handles, asked)?;
     let given = new.len();
     let written = events.append_all(new)?;
     Ok(RecordsAppended { held: (given - written) as u64 }.encode())
+}
+
+/// The stream an append names, and its events as the client wrote them.
+fn appended(handles: &Handles, asked: RecordsAppend) -> Result<(Events, Vec<NewEvent>), Failure> {
+    let events = handles.events(asked.handle)?;
+    let new = asked.events.into_iter().enumerate().map(|(place, event)| new_event(place, event));
+    Ok((events, new.collect::<Result<Vec<_>, Failure>>()?))
+}
+
+/// Answers an append made inside a database's transaction, on its stream:
+/// its events are kept with the rows and reach the stream once the
+/// transaction commits, and `held` counts those whose id it holds already.
+#[cfg(feature = "sql")]
+pub(crate) fn call_in(handles: &Handles, tx: &crate::Transaction<'_>, called: u16, body: &[u8]) -> Answered {
+    if called != method::RECORDS_APPEND {
+        return Err(Failure::invalid(format!("method {called:#06x} is not a stream's call inside a transaction")));
+    }
+    let (events, new) = appended(handles, RecordsAppend::decode(body)?)?;
+    let given = new.len();
+    let kept = events.keep_in(tx, new)?;
+    Ok(RecordsAppended { held: (given - kept) as u64 }.encode())
+}
+
+/// An append that a database's batch carries, for a stream opened through
+/// it: its events commit with the batch's rows, or not at all.
+#[cfg(feature = "sql")]
+pub(crate) fn lend(handles: &Handles, body: &[u8]) -> Result<crate::sql::Write, Failure> {
+    let (events, new) = appended(handles, RecordsAppend::decode(body)?)?;
+    Ok(crate::sql::Write::lent(events.lent(new)))
 }
 
 /// An event as the client wrote it; what cannot be one names its place in

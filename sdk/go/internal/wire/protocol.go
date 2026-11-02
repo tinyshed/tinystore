@@ -9033,12 +9033,18 @@ func (m MetricsAck) IsZero() bool {
 
 // RecordsOpen is the schema's records.Open.
 //
-// Opens a stream of events by name, made with its first event.
+// Opens a stream of events by name, made with its first event. Opened
+// through a database, the stream is records.db's all the same, and its
+// appends inside the database's transactions and batches are kept in the
+// database's file until they commit, then written to the stream before the
+// transaction or the batch answers.
 type RecordsOpen struct {
 	// [a-z0-9][a-z0-9_-]{0,63}
 	Stream string `wire:"1,stream"`
 	// how long it keeps its events: its own, kept in the file
 	Keep *uint64 `wire:"2,keep"`
+	// a database's handle: its appends join its transactions and batches; none when absent
+	Database *uint64 `wire:"3,database"`
 }
 
 func (m RecordsOpen) Write(w *Writer) {
@@ -9054,6 +9060,11 @@ func (m RecordsOpen) Write(w *Writer) {
 		w.Uint(*m.Keep)
 		n++
 	}
+	if m.Database != nil {
+		w.Uint(3)
+		w.Uint(*m.Database)
+		n++
+	}
 	w.CloseMap(head, n)
 }
 
@@ -9067,6 +9078,9 @@ func (m *RecordsOpen) Read(r *Reader) {
 		case 2:
 			v := r.Uint()
 			m.Keep = &v
+		case 3:
+			v := r.Uint()
+			m.Database = &v
 		default:
 			r.Skip()
 		}
@@ -9077,7 +9091,8 @@ func (m *RecordsOpen) Read(r *Reader) {
 // IsZero says whether RecordsOpen writes as no field at all.
 func (m RecordsOpen) IsZero() bool {
 	return m.Stream == "" &&
-		m.Keep == nil
+		m.Keep == nil &&
+		m.Database == nil
 }
 
 // RecordsNewEvent is the schema's records.NewEvent.
@@ -12419,12 +12434,14 @@ func (m SqlOpen) IsZero() bool {
 // SqlText is the schema's sql.Text.
 //
 // A statement's text and the values of its ?s, in order. In a batch it may
-// be a call of jobs on a queue kept in the database's file instead, jobs.add
-// with its request in body and no text, which commits with the batch's rows.
+// be a call of another engine instead, with its request in body and no
+// text, which commits with the batch's rows: jobs.add on a queue kept in the
+// database's file, or records.append on a stream opened through the
+// database, whose events reach the stream before the batch answers.
 type SqlText struct {
 	Text   string `wire:"1,text"`
 	Values []Cell `wire:"2,values"`
-	// in a batch, jobs.add: the call in body
+	// in a batch, jobs.add or records.append: the call in body
 	Method *uint64 `wire:"3,method"`
 	Body   *[]byte `wire:"4,body"`
 }
@@ -12918,7 +12935,8 @@ func (m SqlDone) IsZero() bool {
 // SqlBatch is the schema's sql.Batch.
 //
 // Writes known before they run, written as one in a shared commit: its
-// statements, and the adds of a queue kept in the database's file.
+// statements, the adds of a queue kept in the database's file, and the
+// appends of a stream opened through the database.
 type SqlBatch struct {
 	Handle     uint64    `wire:"1,handle"`
 	Statements []SqlText `wire:"2,statements"`
@@ -12975,7 +12993,8 @@ func (m SqlBatch) IsZero() bool {
 // SqlBatched is the schema's sql.Batched.
 //
 // What each write of a batch did, in their order: a job's add changed one
-// job, or none when its id was taken.
+// job, or none when its id was taken, and a stream's append the events its
+// stream holds no id of.
 type SqlBatched struct {
 	Done []SqlDone `wire:"1,done"`
 }
@@ -13063,7 +13082,9 @@ func (m SqlTxOpen) IsZero() bool {
 // A transaction's call, or its end: the last DATA commits, or not. A call is
 // a statement, or a call of kv or jobs on a bucket or a queue kept in the
 // database's file: a method of theirs with its request, kv.set or jobs.add,
-// which runs in the transaction.
+// which runs in the transaction; or records.append on a stream opened
+// through the database, whose events reach the stream once the transaction
+// commits, before its last DATA answers.
 type SqlTxCall struct {
 	Text   string `wire:"1,text"`
 	Values []Cell `wire:"2,values"`

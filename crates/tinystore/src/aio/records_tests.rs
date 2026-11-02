@@ -445,3 +445,30 @@ async fn a_handle_crosses_to_and_from_the_blocking_api_and_answers_closed_once_i
     let closed = Events::from(blocking).append("later", &()).await.unwrap_err();
     assert_eq!(closed.kind(), ErrorKind::Closed, "{closed}");
 }
+
+// contract: REC-13
+#[cfg(feature = "sql")]
+#[tokio::test]
+async fn a_databases_stream_appends_with_an_awaited_transaction_and_batch_or_not_at_all() {
+    let fixture = fixture();
+    let db = awaited(&fixture).database("app").open().unwrap();
+    db.exec("create table roles (user_id integer primary key, role text not null)").await.unwrap();
+    let audit = db.events("audit").open().unwrap();
+    let insert = || crate::sql!("insert into roles (user_id, role) values (?, ?)", 42, "admin");
+    let changed = json!({ "user_id": 42, "role": "admin" });
+    let (in_tx, kept) = (audit.clone(), changed.clone());
+    let committed = db.tx(move |tx| {
+        tx.exec(insert())?;
+        tx.with(&in_tx).append("role.changed", &kept)
+    });
+    assert!(spawnable(committed).await.unwrap());
+    let (elsewhere, kept) = (awaited(&fixture).events("audit").open().unwrap(), changed.clone());
+    let refused = db.tx(move |tx| tx.with(&elsewhere).append("never", &kept)).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Invalid, "{refused}");
+    let refused = db.batch([audit.appending("role.lost", &changed), insert().into()]).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Conflict, "{refused}");
+    let done = spawnable(db.batch([audit.event("role.seen").id("seen-1").appending(&changed)])).await.unwrap();
+    assert_eq!(done[0].changes, 1);
+    let read = fixture.store.events("audit").open().unwrap().list().page().unwrap().events;
+    assert_eq!(names(&read), ["role.changed", "role.seen"], "in the stream when each returned");
+}

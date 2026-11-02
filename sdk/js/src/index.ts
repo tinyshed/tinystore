@@ -151,6 +151,7 @@ export type { ColumnType, Query, RowPage, Table, TableOptions, UpsertOptions } f
 export type {
 	Aggregate as EventsAggregate,
 	AllEvents,
+	Appending,
 	AppendOptions,
 	Counted,
 	Damage,
@@ -176,6 +177,7 @@ export type {
 	TailBatch,
 	TailQuery,
 	Top,
+	TxEvents,
 	ValueKind,
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'

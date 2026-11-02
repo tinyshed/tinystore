@@ -589,7 +589,7 @@ func (db *DB) takes(lent *core.Lent) error {
 		return lent.Err
 	}
 	if lent.Home != core.Database(db) {
-		kept := "jobs.db"
+		kept := lent.File
 		if lent.Home != nil {
 			kept = lent.Home.Describe()
 		}

@@ -96,7 +96,10 @@ impl fmt::Debug for Tx<'_> {
 pub struct Transaction<'t> {
     writer: &'t dyn Writer,
     bound: Option<&'t dyn Fn() -> Result<()>>,
-    #[cfg_attr(not(feature = "jobs"), expect(dead_code, reason = "only a queue asks for what runs once it ends"))]
+    #[cfg_attr(
+        not(any(feature = "jobs", all(feature = "records", feature = "sql"))),
+        expect(dead_code, reason = "only a queue and a database's stream ask for what runs once it ends")
+    )]
     ended: &'t Ended,
 }
 
@@ -178,14 +181,15 @@ impl Transaction<'_> {
 
     /// Refuses a handle kept in another file than the transaction's, `place`:
     /// what it wrote would not commit with the rest.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     pub(crate) fn takes(&self, file: &File, place: &str) -> Result<()> {
         self.writer.takes(file, place)
     }
 
     /// Runs `hook` once the transaction ends, told whether it committed: a
-    /// queue wakes its workers only for jobs that are there to find.
-    #[cfg(feature = "jobs")]
+    /// queue wakes its workers only for jobs that are there to find, and a
+    /// database's stream moves only events that committed.
+    #[cfg(any(feature = "jobs", all(feature = "records", feature = "sql")))]
     pub(crate) fn after(&self, hook: impl FnOnce(bool) + 'static) {
         self.ended.0.borrow_mut().push(Box::new(hook));
     }
@@ -204,7 +208,7 @@ impl fmt::Debug for Transaction<'_> {
 /// What holds a transaction's writer and says which file it is of.
 trait Writer {
     /// Refuses a handle kept in another file than the transaction's.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     fn takes(&self, file: &File, place: &str) -> Result<()>;
 
     /// Runs `work` on the writer the transaction holds.
@@ -221,19 +225,19 @@ trait Writer {
 struct OneFile<'t> {
     raw: &'t SqlTx<'t>,
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
         expect(
             dead_code,
-            reason = "only kv's, jobs', blobs' and search's handles ask whether they are kept in a file"
+            reason = "only kv's, jobs', blobs', search's and records' handles ask whether they are kept in a file"
         )
     )]
     file: &'t File,
     /// What an error calls the file: `sql app`.
     #[cfg_attr(
-        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search")),
+        not(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records")),
         expect(
             dead_code,
-            reason = "only kv's, jobs', blobs' and search's handles ask whether they are kept in a file"
+            reason = "only kv's, jobs', blobs', search's and records' handles ask whether they are kept in a file"
         )
     )]
     owner: &'t str,
@@ -241,7 +245,7 @@ struct OneFile<'t> {
 
 #[cfg(feature = "sql")]
 impl Writer for OneFile<'_> {
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     fn takes(&self, file: &File, place: &str) -> Result<()> {
         if std::ptr::eq(self.file, file) {
             return Ok(());

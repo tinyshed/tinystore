@@ -6781,6 +6781,10 @@ def _write_records_open(w: Writer, v: Mapping[str, Any]) -> None:
         w.uint(2)
         w.uint(x)
         n += 1
+    if (x := v.get("database")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
     w.close_map(head, n)
 
 
@@ -6793,13 +6797,19 @@ def _read_records_open(r: Reader) -> dict[str, Any]:
                 read["stream"] = r.str()
             case 2:
                 read["keep"] = r.uint()
+            case 3:
+                read["database"] = r.uint()
             case _:
                 r.skip()
     r.leave()
     return read
 
 
-# Opens a stream of events by name, made with its first event.
+# Opens a stream of events by name, made with its first event. Opened
+# through a database, the stream is records.db's all the same, and its
+# appends inside the database's transactions and batches are kept in the
+# database's file until they commit, then written to the stream before the
+# transaction or the batch answers.
 RecordsOpen = Message(
     "records.Open",
     {
@@ -6807,6 +6817,8 @@ RecordsOpen = Message(
         "stream": (1, str_),
         # how long it keeps its events: its own, kept in the file
         "keep": (2, uint),
+        # a database's handle: its appends join its transactions and batches; none when absent
+        "database": (3, uint),
     },
     _write_records_open,
     _read_records_open,
@@ -9262,14 +9274,16 @@ def _read_sql_text(r: Reader) -> dict[str, Any]:
 
 
 # A statement's text and the values of its ?s, in order. In a batch it may
-# be a call of jobs on a queue kept in the database's file instead, jobs.add
-# with its request in body and no text, which commits with the batch's rows.
+# be a call of another engine instead, with its request in body and no
+# text, which commits with the batch's rows: jobs.add on a queue kept in the
+# database's file, or records.append on a stream opened through the
+# database, whose events reach the stream before the batch answers.
 SqlText = Message(
     "sql.Text",
     {
         "text": (1, str_),
         "values": (2, list_(sql_value)),
-        # in a batch, jobs.add: the call in body
+        # in a batch, jobs.add or records.append: the call in body
         "method": (3, uint),
         "body": (4, bin_),
     },
@@ -9653,7 +9667,8 @@ def _read_sql_batch(r: Reader) -> dict[str, Any]:
 
 
 # Writes known before they run, written as one in a shared commit: its
-# statements, and the adds of a queue kept in the database's file.
+# statements, the adds of a queue kept in the database's file, and the
+# appends of a stream opened through the database.
 SqlBatch = Message(
     "sql.Batch",
     {
@@ -9693,7 +9708,8 @@ def _read_sql_batched(r: Reader) -> dict[str, Any]:
 
 
 # What each write of a batch did, in their order: a job's add changed one
-# job, or none when its id was taken.
+# job, or none when its id was taken, and a stream's append the events its
+# stream holds no id of.
 SqlBatched = Message(
     "sql.Batched",
     {
@@ -9799,7 +9815,9 @@ def _read_sql_tx_call(r: Reader) -> dict[str, Any]:
 # A transaction's call, or its end: the last DATA commits, or not. A call is
 # a statement, or a call of kv or jobs on a bucket or a queue kept in the
 # database's file: a method of theirs with its request, kv.set or jobs.add,
-# which runs in the transaction.
+# which runs in the transaction; or records.append on a stream opened
+# through the database, whose events reach the stream once the transaction
+# commits, before its last DATA answers.
 SqlTxCall = Message(
     "sql.TxCall",
     {

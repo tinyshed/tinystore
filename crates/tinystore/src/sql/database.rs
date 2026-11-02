@@ -11,7 +11,7 @@ use super::rows::{Answer, Held, Rows};
 use super::run::{self, Read, Wanted};
 use super::statement::Sql;
 use super::tx::Tx;
-#[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
+#[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
 use crate::engine::SharedFile;
 use crate::{Durability, Error, Result, Store, Transaction};
 
@@ -154,10 +154,12 @@ impl Database {
 
     /// Runs writes known before they run as one, all of them or none, in one
     /// savepoint of the next shared commit: it costs what one write does, and
-    /// gives what each did, in their order. A write is a statement, or a job's
+    /// gives what each did, in their order. A write is a statement, a job's
     /// add of a queue opened from the database, `queue.adding(&job)`, which
     /// commits with the rows and changes one job, or none when its id was
-    /// taken; see [`Write`].
+    /// taken, or an event's append of a stream opened from it,
+    /// `audit.appending(name, &fields)`, written to the stream before the
+    /// batch returns; see [`Write`].
     pub fn batch<I>(&self, writes: I) -> Result<Vec<Done>>
     where
         I: IntoIterator,
@@ -185,7 +187,9 @@ impl Database {
     /// back. It runs once. Past five seconds it rolls back and is `limit`.
     ///
     /// A bucket or a queue opened from the database joins it through
-    /// `tx.with(&handle)`, so that its keys and jobs commit with the rows.
+    /// `tx.with(&handle)`, so that its keys and jobs commit with the rows,
+    /// and so does a stream opened from it: its events are written to the
+    /// stream once the transaction commits, before this returns.
     pub fn tx<T, E: From<Error>>(&self, work: impl FnOnce(&Tx<'_>) -> Result<T, E>) -> Result<T, E> {
         self.tx_since(self.base.now(), work)
     }
@@ -213,7 +217,7 @@ impl Database {
 
     /// The file the database lends to the buckets, queues, files and indexes
     /// opened from it.
-    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search"))]
+    #[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "search", feature = "records"))]
     pub(crate) fn shared(&self) -> &Arc<SharedFile> {
         &self.base.shared
     }
@@ -248,8 +252,22 @@ impl Database {
             Ok(batch) => batch.write(),
             Err(error) => return done(Err(error.within(owner))),
         };
-        let ran = move |ran: Result<Ran>| done(ran.map(Ran::finish).map_err(|error| error.within(owner)));
-        self.base.file().submit(weight, write, ran);
+        let answer = move |ran: Result<Ran>| done(ran.map(Ran::finish).map_err(|error| error.within(owner)));
+        // A stream's events move to records.db before the batch answers, and
+        // the move waits for records.db's writer: on the pool, not here.
+        #[cfg(feature = "records")]
+        let answer = {
+            let shared = Arc::clone(&self.base.shared);
+            move |ran: Result<Ran>| match ran {
+                Ok(ran) if ran.waits() => match shared.store().and_then(|store| crate::pool::Pool::of(&store)) {
+                    Ok(pool) => pool.run(Box::new(move || answer(Ok(ran)))),
+                    // a store that closed fails the move at once, which waits for nothing then
+                    Err(_) => answer(Ok(ran)),
+                },
+                ran => answer(ran),
+            }
+        };
+        self.base.file().submit(weight, write, answer);
     }
 
     /// `rows_of` without waiting for a commit: a read's rows come before this

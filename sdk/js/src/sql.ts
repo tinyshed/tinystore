@@ -35,6 +35,15 @@ import {
 } from './jobs.ts'
 import { Bucket, type BucketOptions, bucketOpen, partsOf, type Values, valuesOf } from './kv.ts'
 import { Table, type TableOptions } from './query.ts'
+import {
+	Appending,
+	appendingIn,
+	Events,
+	type EventsOptions,
+	eventsOpen,
+	eventsParts,
+	TxEvents,
+} from './records.ts'
 import type { StandardSchemaV1 } from './schema.ts'
 import { TableIndex, type TableIndexOptions, tableIndexOpen } from './search.ts'
 import { ConnectionLostError, type Stream } from './session.ts'
@@ -792,6 +801,25 @@ export class Database implements Runner, Home {
 	}
 
 	/**
+	 * The store's stream of events `stream`, opened through this database:
+	 * the same calls and reads as `store.events(stream)` gives, the stream in
+	 * records.db where every stream lives. Its appends inside `db.tx`,
+	 * through `tx.with(audit)`, and in `db.batch`, through `audit.appending`,
+	 * are kept in this database's file with the rows and reach the stream
+	 * once they commit, before the call returns: an event exists exactly when
+	 * the change it records does.
+	 *
+	 *     const audit = db.events('audit')
+	 */
+	events(stream: string, options?: EventsOptions): Events {
+		const bytes = eventsOpen(stream, options)
+		const open = this.keep(methods['records.open'], bytes, async connection =>
+			eventsOpen(stream, options, await this.handle(connection)),
+		)
+		return new Events(this.#link, stream, open, this)
+	}
+
+	/**
 	 * An index of a table of this database, kept in its file: its rows found
 	 * again by their words, vectors or both, each hit's value its row as
 	 * `all` reads it. The table owns the rows and the index follows them:
@@ -911,12 +939,14 @@ export class Database implements Runner, Home {
 	/**
 	 * Writes known before they run, written as one: all of them or none, in a
 	 * shared commit, and what each did, in their order. A write is a statement,
-	 * or a job's add of a queue opened from the database, `queue.adding`, which
-	 * commits with the rows and changed 1 job, or 0 when its id was taken.
+	 * a job's add of a queue opened from the database, `queue.adding`, which
+	 * commits with the rows and changed 1 job, or 0 when its id was taken, or
+	 * an event's append of a stream opened from it, `audit.appending`, which
+	 * reaches the stream before the batch returns.
 	 *
 	 *     await db.batch([sql`update notes set body = ${body} where id = ${id}`, indexing.adding({ noteId: id })])
 	 */
-	async batch(writes: readonly (Sql | Adding)[]): Promise<Done[]> {
+	async batch(writes: readonly (Sql | Adding | Appending)[]): Promise<Done[]> {
 		const parts = writes.map(each => {
 			if (each instanceof Sql) {
 				return { text: each.text, values: [...each.values] }
@@ -924,7 +954,12 @@ export class Database implements Runner, Home {
 			if (each instanceof Adding) {
 				return addingIn(each, this)
 			}
-			throw new InvalidError("a batch takes pieces of SQL, sql`…`, and a queue's adding")
+			if (each instanceof Appending) {
+				return appendingIn(each, this)
+			}
+			throw new InvalidError(
+				"a batch takes pieces of SQL, sql`…`, a queue's adding and a stream's appending",
+			)
 		})
 		this.#refuseAround('a batch')
 		const answered = await this.#link.run('write', async connection => {
@@ -1077,9 +1112,10 @@ export class SqlTx implements Runner {
 	with<T>(queue: Queue<T>): TxQueue<T>
 	with<T>(channel: Channel<T>): TxChannel<T>
 	with(files: Files): Files
+	with(events: Events): TxEvents
 	with(
-		handle: Bucket<unknown> | Queue<unknown> | Channel<unknown> | Files,
-	): Bucket<unknown> | TxQueue<unknown> | TxChannel<unknown> | Files {
+		handle: Bucket<unknown> | Queue<unknown> | Channel<unknown> | Files | Events,
+	): Bucket<unknown> | TxQueue<unknown> | TxChannel<unknown> | Files | TxEvents {
 		const channel = channelParts(handle)
 		if (channel !== undefined) {
 			// a message published here is handed over once the transaction commits, at the writer
@@ -1103,8 +1139,13 @@ export class SqlTx implements Runner {
 			this.#takes(files.home, files.open, `files ${files.name}`)
 			return files.inside(this.#via)
 		}
+		const events = eventsParts(handle)
+		if (events !== undefined) {
+			this.#takes(events.home, events.open, `events ${events.stream}`)
+			return new TxEvents(events, this.#via)
+		}
 		throw new InvalidError(
-			`${this.describe}: a transaction takes in a bucket, a queue or files opened from its database`,
+			`${this.describe}: a transaction takes in a bucket, a queue, files or events opened from its database`,
 		)
 	}
 

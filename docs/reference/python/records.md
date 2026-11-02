@@ -176,9 +176,43 @@ What a list finds, and how its page reads.
 ```python
 class Events(_Reads):
     stream: str
+    home: Home | None  # the database the stream was opened through, whose transactions and batches its appends join
 ```
 
 A stream of events: written with append, which waits for the file, and read back.
+
+### Events.opener
+
+```python
+@property
+def opener() -> Opener: ...
+```
+
+### Events.appending
+
+```python
+def appending(
+    name: str,
+    fields: Mapping[str, Any] | None = None,
+    /,
+    *,
+    id: str | None = None,
+    at: datetime | None = None,
+    context: Mapping[str, Any] | None = None,
+    level: EventLevel | None = None,
+    message: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+) -> Appending: ...
+```
+
+An event's append for a batch of the database the stream was opened from, ``db.events``.
+
+It is kept with the batch's rows and reaches the stream once they
+commit, before the batch returns, or never:
+
+    changed = sql("update roles set role = ? where user_id = ?", role, user_id)
+    await db.batch([changed, audit.appending("role.changed", {"user_id": user_id})])
 
 ### Events.append
 
@@ -243,6 +277,53 @@ A stack trace's or a JSON value's lines make one, and a write never waits:
     async with store.events("worker").lines() as out:
         async for chunk in child.stdout:
             await out.write(chunk)
+
+## TxEvents
+
+```python
+class TxEvents:
+    ...
+```
+
+A stream's appends inside a transaction of the database it was opened from, ``tx.with_(audit)``.
+
+Each is kept with the transaction's rows and reaches the stream once it
+commits, before ``db.tx`` returns. A read goes through the stream itself,
+and finds what committed.
+
+### TxEvents.append
+
+```python
+async def append(
+    name: str,
+    fields: Mapping[str, Any] | None = None,
+    /,
+    *,
+    id: str | None = None,
+    at: datetime | None = None,
+    context: Mapping[str, Any] | None = None,
+    level: EventLevel | None = None,
+    message: str | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+) -> bool: ...
+```
+
+Appends an event once the transaction commits.
+
+It says whether it will be written: False when its stream, or this
+transaction, holds its id.
+
+## Appending
+
+```python
+@dataclass(frozen=True, slots=True)
+class Appending:
+    events: Events = field(repr=False)
+    event: dict[str, Any] = field(repr=False)  # the event as the wire carries it
+```
+
+An event's append that a database's batch carries, from ``events.appending``.
 
 ## AllEvents
 

@@ -92,6 +92,7 @@ from .once import Once
 from .query import Query, RowPage, Table
 from .records import (
     AllEvents,
+    Appending,
     Damage,
     Event,
     EventPage,
@@ -106,6 +107,7 @@ from .records import (
     StreamInfo,
     TailBatch,
     Top,
+    TxEvents,
 )
 from .search import Hit, Hybrid, IndexInfo, IndexStatus, Match, Result, SearchIndex, TableIndex, Vectors
 from .sql import Database, Done, Sql, SqlTx, TxQueue, sql
@@ -119,6 +121,7 @@ __all__ = [
     "AggregateBucket",
     "AllEvents",
     "Allowance",
+    "Appending",
     "Backoff",
     "Backup",
     "Bucket",
@@ -230,6 +233,7 @@ __all__ = [
     "TxBucket",
     "TxChannel",
     "TxCounters",
+    "TxEvents",
     "TxQueue",
     "UnauthenticatedError",
     "UnavailableError",

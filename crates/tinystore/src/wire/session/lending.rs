@@ -1,6 +1,6 @@
 //! What one engine lends another inside a database's file: the file to a
-//! bucket or a queue opened in it, a queue's add to its batch, and the calls
-//! a transaction carries.
+//! bucket, a queue or a stream opened in it, a queue's add and a stream's
+//! append to its batch, and the calls a transaction carries.
 
 use std::sync::Arc;
 
@@ -17,8 +17,10 @@ use crate::wire::jobs;
 #[cfg(feature = "sql")]
 use crate::wire::kv;
 use crate::wire::protocol::Failure;
-#[cfg(all(feature = "sql", feature = "jobs"))]
+#[cfg(all(feature = "sql", any(feature = "jobs", feature = "records")))]
 use crate::wire::protocol::method;
+#[cfg(all(feature = "sql", feature = "records"))]
+use crate::wire::records;
 
 impl Shared {
     /// The file of a database this connection opened, for a bucket or a
@@ -31,14 +33,17 @@ impl Shared {
     }
 
     /// A call of another engine that a database's batch carries: a queue's
-    /// add, for a queue kept in the database's file.
+    /// add, for a queue kept in the database's file, or a stream's append,
+    /// for a stream opened through the database.
     #[cfg(feature = "sql")]
     pub(super) fn lend(&self, called: u16, body: &[u8]) -> std::result::Result<crate::sql::Write, Failure> {
         match called {
             #[cfg(feature = "jobs")]
             method::JOBS_ADD => jobs::lend(&self.jobs, body),
+            #[cfg(feature = "records")]
+            method::RECORDS_APPEND => records::lend(&self.records, body),
             _ => Err(Failure::invalid(format!(
-                "method {called:#06x} does not run in a batch, which takes a queue's add"
+                "method {called:#06x} does not run in a batch, which takes a queue's add and a stream's append"
             ))),
         }
     }
@@ -58,6 +63,8 @@ impl Shared {
             0x02 => jobs::call_in(&self.jobs, tx, method, body, max_body),
             #[cfg(feature = "blobs")]
             0x04 => blobs::call_in(&self.blobs, tx, method, body),
+            #[cfg(feature = "records")]
+            0x05 => records::call_in(&self.records, tx, method, body),
             #[cfg(feature = "channels")]
             0x0a => channels::call_in(&self.store, tx, method, body),
             _ => Err(Failure::invalid(format!("method {method:#06x} does not run inside a transaction"))),

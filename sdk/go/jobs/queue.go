@@ -225,7 +225,7 @@ func (q *Queue[T]) Adding(value T, opts ...AddOption) sqldb.Statement {
 		c.Handle = handle
 		return wire.Encode(&c)
 	}
-	return sqldb.CoreLent(core.Lent{Home: q.home, What: "jobs queue " + q.name, Opener: q.opener, Method: wire.MethodJobsAdd, Body: body, Err: err})
+	return sqldb.CoreLent(core.Lent{Home: q.home, File: "jobs.db", What: "jobs queue " + q.name, Opener: q.opener, Method: wire.MethodJobsAdd, Body: body, Err: err})
 }
 
 // Set makes the id's job this value at this time, whatever it was: one
