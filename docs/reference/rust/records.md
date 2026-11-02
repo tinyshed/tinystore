@@ -899,7 +899,7 @@ pub struct All { /* private fields */ }
 ```
 
 Every event of an answer, read a page at a time as it is walked, and
-several pages at once while they hold fewer events than a page.
+several windows at once while they hold fewer events than a page.
 
 ## List
 
@@ -1044,9 +1044,10 @@ it, in the range the first page had.
 pub fn page(&self) -> Result<Page>
 ```
 
-One page, from one moment of the file. It never splits a time, and
-may hold fewer events than its limit, or none, and still have a
-`next`: a read ends at what it may fetch rather than failing.
+One page: its limit of events that match, less those of a time the
+limit would split, or fewer on the last page, which has no `next`.
+It reads on past the events that match nothing, several windows at
+once as `all` does, each from a moment of the file of its own.
 
 ### List.field_names
 
@@ -1731,7 +1732,7 @@ A page's `next`, with the rest of the read as it was.
 pub fn page(&self) -> impl Future<Output = Result<Page>> + Send + 'static
 ```
 
-One page, from one moment of the file, as
+One page of events that match, full but for the last, as
 `crate::records::List::page` reads it.
 
 ### aio::records::List.field_names

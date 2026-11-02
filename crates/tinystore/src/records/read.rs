@@ -2,8 +2,8 @@
 //! time, in the order of their times.
 //!
 //! ```text
-//! pick rows by their times ─► fetch their bodies ─► parse ─► keep what matches ─► order ─► cut a page
-//! └────────── one read of the file ──────────┘   └───────────────── after it ─────────────────┘
+//! pick rows by their times ─► fetch their bodies ─► parse ─► keep what matches ─► order ─► cut a window
+//! └────────── one read of the file ──────────┘   └────────────────── after it ──────────────────┘
 //! ```
 //!
 //! An event is in a head row until its stream is packed and in a block after
@@ -13,9 +13,13 @@
 //! block fetched has the columns the read asks about read first, and its
 //! others only when an event in it may be kept.
 //!
-//! `all` and the counts read several pages at once while they come back
-//! holding fewer events than a page, as a search for a rare word does: see
-//! `ahead`.
+//! A window is what one read of the file fetches: rows up to a page's events
+//! or one read's rows and bytes, and of them the events that match, which
+//! may be none, as one user's events behind every other user's. A page reads
+//! windows on until it holds its limit of events that match or the range
+//! ends. A page, `all` and the counts read several windows at once while
+//! they come back holding fewer events than they want, as a search for a
+//! rare word does: see `ahead`.
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
@@ -43,7 +47,7 @@ use crate::{Error, Result, unix_nanos};
 pub const PAGE_EVENTS: usize = 1000;
 /// The events a page holds at most.
 const MOST_EVENTS: usize = 10_000;
-/// The rows and the bytes one page fetches before it ends early.
+/// The rows and the bytes one window fetches before it ends early.
 const FETCH_ROWS: usize = 1024;
 const FETCH_BYTES: usize = 16 << 20;
 /// What a read reserves for each event its rows hold, beside their bytes.
@@ -231,9 +235,10 @@ impl List {
         self
     }
 
-    /// One page, from one moment of the file. It never splits a time, and
-    /// may hold fewer events than its limit, or none, and still have a
-    /// `next`: a read ends at what it may fetch rather than failing.
+    /// One page: its limit of events that match, less those of a time the
+    /// limit would split, or fewer on the last page, which has no `next`.
+    /// It reads on past the events that match nothing, several windows at
+    /// once as `all` does, each from a moment of the file of its own.
     pub fn page(&self) -> Result<Page> {
         self.records.page(self.stream.as_ref(), &self.query).map_err(|error| self.within(error))
     }
@@ -317,12 +322,12 @@ impl List {
     /// ranges at once to begin with.
     #[cfg(test)]
     pub(super) fn read_ahead(&self, wide: usize) -> Result<(Page, usize)> {
-        self.records.read_ahead(self.stream.as_ref(), &self.query, wide)
+        self.records.read_ahead(self.stream.as_ref(), &self.query, wide, self.query.page_events())
     }
 }
 
 /// Every event of an answer, read a page at a time as it is walked, and
-/// several pages at once while they hold fewer events than a page.
+/// several windows at once while they hold fewer events than a page.
 #[derive(Debug)]
 pub struct All {
     list: List,
@@ -358,8 +363,8 @@ impl Iterator for All {
             if !self.more {
                 return None;
             }
-            let list = &self.list;
-            match list.records.read_ahead(list.stream.as_ref(), &list.query, self.wide) {
+            let (list, wanted) = (&self.list, self.list.query.page_events());
+            match list.records.read_ahead(list.stream.as_ref(), &list.query, self.wide, wanted) {
                 Ok((page, wide)) => {
                     self.wide = wide;
                     self.more = page.next.is_some();
@@ -410,7 +415,7 @@ impl Asked {
     }
 
     /// Whether a row reaches over the end of the range a read begins at, and
-    /// so may hold the first event of the page.
+    /// so may hold the first event of the window.
     fn reaches_over(&self, row: &Picked) -> bool {
         !self.past(self.edge(row), self.start())
     }
@@ -429,10 +434,15 @@ impl Asked {
     pub(super) fn between(&self, start: i64, bound: i64) -> (i64, i64) {
         if self.newest { (bound + 1, start) } else { (start, bound - 1) }
     }
+
+    /// The range from just past the time `edge` to the end of a read's own.
+    fn beyond(&self, edge: i64) -> (i64, i64) {
+        if self.newest { (self.first, edge - 1) } else { (edge + 1, self.last) }
+    }
 }
 
-/// Whether the rows a page has taken are as many as it fetches: the events
-/// it holds, or the rows or the bytes one read fetches.
+/// Whether the rows a window has taken are as many as it fetches: the
+/// events it holds, or the rows or the bytes one read fetches.
 fn full(events: u64, rows: usize, bytes: usize, limit: usize) -> bool {
     events >= limit as u64 || rows >= FETCH_ROWS || bytes >= FETCH_BYTES
 }
@@ -508,9 +518,35 @@ const TRACES_BLOOM: &str = "select bloom from block_traces where block = ?1";
 const FIELD_BLOOM: &str = "select bloom from block_filters where block = ?1 and key = ?2";
 
 impl Records {
-    /// One page: work out the range → pick and fetch its rows → parse and
-    /// keep what matches → cut the page.
+    /// One page: work out the range → read windows on from where the read
+    /// stands, several at once while they hold few, until they hold the
+    /// page's events or the range ends → cut the page.
+    ///
+    /// The range is written into the read once, so that every window reads
+    /// within the one `since` gave as the page began. A window that fails
+    /// after others held events ends the page before it, as pages one after
+    /// another would end, and the next page fails there.
     pub(super) fn page(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
+        let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
+        let (mut events, mut wide) = (Vec::new(), 1);
+        let mut from = query.over(written((asked.first, asked.last)));
+        loop {
+            let (window, widened) = match self.read_ahead(stream, &from, wide, asked.limit - events.len()) {
+                Ok(read) => read,
+                Err(error) if events.is_empty() => return Err(error),
+                Err(_) => return Ok(Page { events, next: from.after }),
+            };
+            events.extend(window.events);
+            match window.next {
+                Some(next) if events.len() < asked.limit => (from, wide) = (from.over(next), widened),
+                next => return filled(events, &asked, next),
+            }
+        }
+    }
+
+    /// One window: work out the range → pick and fetch its rows → parse and
+    /// keep what matches → cut the window as a page is cut.
+    pub(super) fn window(&self, stream: Option<&Stream>, query: &Query) -> Result<Page> {
         let Some(asked) = self.asked(stream, query)? else { return Ok(Page { events: Vec::new(), next: None }) };
         let (fetched, horizon) = self.fetch(&asked, query)?;
         let bytes: usize = fetched.rows.iter().map(|(picked, _)| picked.size).sum();
@@ -522,8 +558,8 @@ impl Records {
 
     /// Where each range after `start` would begin, `ranges` of them at most,
     /// read from the index of times alone: a range ends once its rows are
-    /// what one page fetches, the blocks a filter would pass counted with
-    /// the rest, so that a range read alone is a page, or a few.
+    /// what one window fetches, the blocks a filter would pass counted with
+    /// the rest, so that a range read alone is a window, or a few.
     pub(super) fn bounds(&self, asked: &Asked, start: i64, ranges: usize) -> Result<Vec<i64>> {
         let asked = asked.narrowed(asked.from(start));
         self.file.read(|connection| {
@@ -617,11 +653,11 @@ impl Records {
     /// index and then fetched, in one read of the file, with the edge of the
     /// rows left behind.
     ///
-    /// A page is whole up to that edge and no further: a row left behind
+    /// A window is whole up to that edge and no further: a row left behind
     /// begins at it, oldest first, or ends at it, newest first, so every
     /// event on the near side of it is in a row fetched. A row that reaches
-    /// over the range's own end is fetched whatever the page holds already,
-    /// so that the edge lies inside the range and the next page begins past
+    /// over the range's own end is fetched whatever the window holds already,
+    /// so that the edge lies inside the range and the next window begins past
     /// this one.
     fn fetch(&self, asked: &Asked, query: &Query) -> Result<(Fetched, Option<i64>)> {
         self.file.read(|connection| {
@@ -870,28 +906,46 @@ impl Records {
     }
 }
 
-/// A page of what was found: the limit's worth, less the events of a time
-/// the limit would split, and where the next page begins.
+/// A window of what was found: the limit's worth, less the events of a time
+/// the limit would split, and where the next window begins.
 fn cut(mut found: Vec<Found>, asked: &Asked, horizon: Option<i64>) -> Result<Page> {
     let mut next = horizon.map(|edge| asked.from(edge));
-    if found.len() > asked.limit {
-        let mut whole = asked.limit;
-        while whole > 0 && found[whole].at == found[whole - 1].at {
-            whole -= 1;
-        }
-        if whole == 0 {
-            let limit = asked.limit;
-            let at_once = found.iter().take_while(|event| event.at == found[0].at).count();
-            let page = Limit { name: "page events", bound: limit as u64 };
-            let refused = format!("more events at one time than a page of {limit} holds");
-            return Err(page.refuse(at_once as u64, refused));
-        }
-        let edge = found[whole - 1].at;
-        next = Some(if asked.newest { (asked.first, edge - 1) } else { (edge + 1, asked.last) });
+    if let Some(whole) = whole(&found, asked.limit, |found| found.at)? {
+        next = Some(asked.beyond(found[whole - 1].at));
         found.truncate(whole);
     }
     let next = next.map(written);
     Ok(Page { events: found.into_iter().map(|found| found.event.into_event(&found.stream)).collect(), next })
+}
+
+/// A page of what its windows held, cut as a window is; the last window's
+/// `next` when they hold no more than the page's events.
+fn filled(mut events: Vec<Event>, asked: &Asked, next: Option<String>) -> Result<Page> {
+    let at = |event: &Event| unix_nanos(event.at);
+    let Some(whole) = whole(&events, asked.limit, at)? else { return Ok(Page { events, next }) };
+    let next = written(asked.beyond(at(&events[whole - 1])));
+    events.truncate(whole);
+    Ok(Page { events, next: Some(next) })
+}
+
+/// How many of the events found, in a read's order, a page of `limit` holds
+/// when they are more than it: the limit's worth, less the events of a time
+/// the limit would split; none when they are no more than the limit.
+fn whole<T>(found: &[T], limit: usize, at: impl Fn(&T) -> i64) -> Result<Option<usize>> {
+    if found.len() <= limit {
+        return Ok(None);
+    }
+    let mut whole = limit;
+    while whole > 0 && at(&found[whole]) == at(&found[whole - 1]) {
+        whole -= 1;
+    }
+    if whole == 0 {
+        let at_once = found.iter().take_while(|event| at(event) == at(&found[0])).count();
+        let page = Limit { name: "page events", bound: limit as u64 };
+        let refused = format!("more events at one time than a page of {limit} holds");
+        return Err(page.refuse(at_once as u64, refused));
+    }
+    Ok(Some(whole))
 }
 
 /// The first keys in their order of those taken, as many as a read's limit.

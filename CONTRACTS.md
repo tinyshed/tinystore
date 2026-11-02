@@ -150,7 +150,7 @@ These contracts are what does not.
 - **REC-02** A list of events MUST be appended whole or not at all; a refused one names its place, and an event whose id its stream holds is nothing, not a refusal (REC-11).
 - **REC-03** An appended event MUST be readable at once, before it is packed, and MUST survive an abrupt exit.
 - **REC-04** A read MUST return events in event time, those of one time in the order they were appended, within a stream and across streams, each once, across packed segments and what waits; events of one time that v0.1.0 packed keep the order v0.1.0 read them in (NOT-12).
-- **REC-05** A page MUST NOT split one timestamp nor lose one; a budget MUST end a page rather than fail it.
+- **REC-05** A page MUST hold its `limit` of events that match, less those of a time the limit would split, unless it is the last, which has no `next`; it MUST NOT split one timestamp nor lose one.
 - **REC-06** A count MUST find what a list finds; a sum of integers MUST be exact past 2⁶³.
 - **REC-07** A poll MUST give every packed event once from its cursor, across merges, and MUST say how many `keep` removed before it reached them.
 - **REC-08** A tail MUST give the events appended after it opened, and say how many it missed when slower than the writers.

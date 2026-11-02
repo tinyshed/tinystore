@@ -12,7 +12,8 @@ import (
 
 func (e *Events) reads() reads { return reads{store: e.store, opener: e.opener} }
 
-// List is one page of the stream's events, from one moment of its file.
+// List is one page of the stream's events: Limit of them that match, fewer
+// only on the last page, whose Next is "".
 func (e *Events) List(ctx context.Context, q Query) (Page, error) { return e.reads().list(ctx, q) }
 
 // All is every event the query finds, a page after another, holding nothing between pages.
@@ -62,7 +63,7 @@ func OpenAllEvents(store *tinystore.Store) (*AllEvents, error) {
 
 func (a *AllEvents) reads() reads { return reads{store: a.store} }
 
-// List is one page of every stream's events, from one moment of the file;
+// List is one page of every stream's events, as a stream's List reads it;
 // Streams narrows them.
 func (a *AllEvents) List(ctx context.Context, q Query) (Page, error) { return a.reads().list(ctx, q) }
 

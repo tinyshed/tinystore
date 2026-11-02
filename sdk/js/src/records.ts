@@ -253,7 +253,10 @@ abstract class Reads {
 	/** Keeps a stream that follows the store for its close to cancel; it returns what lets it go. */
 	protected abstract follow(stream: Stream): () => void
 
-	/** One page, from one moment of the file: `{ events, next }`. */
+	/**
+	 * One page: `{ events, next }`, its `limit` of events that match, fewer
+	 * only on the last, which has no `next`.
+	 */
 	async list(query?: Query): Promise<Page> {
 		const asked = queryOf(query)
 		const answer = await this.ask('records.list', handle =>

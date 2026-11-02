@@ -390,7 +390,7 @@ impl List {
         self
     }
 
-    /// One page, from one moment of the file, as
+    /// One page of events that match, full but for the last, as
     /// [`crate::records::List::page`] reads it.
     pub fn page(&self) -> impl Future<Output = Result<Page>> + Send + 'static {
         let list = self.list.clone();

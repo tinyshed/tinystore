@@ -197,7 +197,56 @@ fn a_page_never_splits_a_time_and_more_at_one_time_than_it_holds_is_limit() {
 
 // contract: REC-05
 #[test]
-fn a_page_ends_at_the_rows_it_fetched_and_the_next_goes_on_from_there() {
+fn a_page_reads_on_past_the_events_that_match_nothing_until_it_holds_its_limit_or_the_range_ends() {
+    let fixture = fixture();
+    let audit = fixture.events("audit");
+    let start = fixture.now() - SECOND;
+    let at = |n: u32| start + Duration::from_millis(u64::from(n));
+    // one student uploads a file, then two hundred others sign in, an append each
+    audit.append_all([NewEvent::new("upload").fields(&json!({ "user": 1 })).at(at(0))]).unwrap();
+    for user in 2..202 {
+        audit.append_all([NewEvent::new("signed.in").fields(&json!({ "user": user })).at(at(user))]).unwrap();
+    }
+    let uploads = || audit.list().filter("user", &1).names(["upload"]).limit(50);
+    for when in ["waiting", "packed"] {
+        for list in [uploads(), uploads().newest()] {
+            let page = list.page().unwrap();
+            assert_eq!((names(&page.events), page.next), (vec!["upload"], None), "{when}");
+        }
+        fixture.pass(Duration::from_hours(1));
+        maintain(&fixture.store).unwrap();
+    }
+}
+
+// contract: REC-05
+#[test]
+fn pages_of_rare_matches_hold_their_limit_but_the_last_and_go_on_without_losing_or_repeating_one() {
+    let fixture = fixture();
+    let api = fixture.events("api");
+    let start = fixture.now() - SECOND * 10;
+    // three thousand requests in appends of ten, every hundredth a search
+    let request = |n: u32| {
+        let path = if n.is_multiple_of(100) { "/search" } else { "/health" };
+        NewEvent::new(&n.to_string()).fields(&json!({ "path": path })).at(start + Duration::from_millis(u64::from(n)))
+    };
+    for row in 0..300 {
+        api.append_all((row * 10..row * 10 + 10).map(request)).unwrap();
+    }
+    let searches: Vec<String> = (0..30).map(|n| (n * 100).to_string()).collect();
+    let paged = |searches: Vec<String>| searches.chunks(4).map(<[String]>::to_vec).collect::<Vec<_>>();
+    for when in ["waiting", "packed"] {
+        let list = api.list().filter("path", &"/search").limit(4);
+        assert_eq!(pages(&list), paged(searches.clone()), "{when}");
+        let backward: Vec<String> = searches.iter().rev().cloned().collect();
+        assert_eq!(pages(&list.newest()), paged(backward), "{when}");
+        fixture.pass(Duration::from_hours(1));
+        maintain(&fixture.store).unwrap();
+    }
+}
+
+// contract: REC-05
+#[test]
+fn a_page_of_rows_of_several_events_is_whole_up_to_its_limit_and_the_next_goes_on_from_there() {
     let fixture = fixture();
     let api = fixture.events("api");
     // a row a second, each of two events: a page of three takes two rows and is whole up to the third

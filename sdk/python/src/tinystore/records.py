@@ -360,7 +360,7 @@ class _Reads:
         raise NotImplementedError
 
     async def list(self, **query: Unpack[Query]) -> EventPage:
-        """One page, from one moment of the file: EventPage(events, next)."""
+        """One page: EventPage(events, next), its limit of events that match, fewer only on the last, without a next."""
         asked = _query_of(query)
         page = RecordsPage.decode(await self._ask("records.list", lambda h: RecordsQuery.encode(asked, handle=h)))
         return EventPage([_event_of(each) for each in page.get("events", [])], page.get("next"))

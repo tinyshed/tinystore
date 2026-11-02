@@ -1,17 +1,17 @@
-//! Reading ahead: the pages that follow one another from where `all` or a
-//! count stands, read at once on several threads while they come back
-//! holding fewer events than a page, as a search for a rare word does.
+//! Reading ahead: the windows that follow one another from where a page,
+//! `all` or a count stands, read at once on several threads while they come
+//! back holding fewer events than wanted, as a search for a rare word does.
 //!
 //! ```text
 //! this thread  cut ranges from the index of times ─► hand them out ─► take each back, in order ─► a page's worth
-//! threads      take the next range ─► read it page after page, each page in a snapshot of its own ─► the next
+//! threads      take the next range ─► read it window after window, each in a snapshot of its own ─► the next
 //! ```
 //!
-//! A range holds the rows one page fetches, so it is read as a page is, and
-//! holds the store's memory as a page does while it is read. The ranges
-//! follow one another in time and no time is in two: each event is in one
-//! range, as it is in one of the pages read one after another, and they are
-//! taken back in the order of their times.
+//! A range holds the rows one window fetches, so it is read as a window is,
+//! and holds the store's memory as a window does while it is read. The
+//! ranges follow one another in time and no time is in two: each event is in
+//! one range, as it is in one of the windows read one after another, and
+//! they are taken back in the order of their times.
 //!
 //! The ranges handed out are `AHEAD` a thread at most, and only as many as
 //! the events a page still wants need at the rate the ranges taken back
@@ -45,18 +45,25 @@ const CUT: usize = 2;
 static RANGES_UNDER_TOKENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Records {
-    /// The pages that follow one another from where a read stands, as one,
-    /// and how many ranges the next read of them begins with at once.
+    /// The windows that follow one another from where a read stands, as one
+    /// page of `wanted` events or about, and how many ranges the next read of
+    /// a page's worth begins with at once.
     ///
-    /// With `wide` 1 it reads one page alone. Otherwise it hands out `wide`
+    /// With `wide` 1 it reads one window alone. Otherwise it hands out `wide`
     /// ranges, then after each range taken back as many as the events still
-    /// wanted need at the rate the ranges taken back held them. Once a page's
-    /// worth is back it hands out no more, and takes back those still being
+    /// wanted need at the rate the ranges taken back held them. Once `wanted`
+    /// events are back it hands out no more, and takes back those still being
     /// read rather than read them again next time.
-    pub(super) fn read_ahead(&self, stream: Option<&Stream>, query: &Query, wide: usize) -> Result<(Page, usize)> {
+    pub(super) fn read_ahead(
+        &self,
+        stream: Option<&Stream>,
+        query: &Query,
+        wide: usize,
+        wanted: usize,
+    ) -> Result<(Page, usize)> {
         let (limit, most) = (query.page_events(), AHEAD * self.threads());
         if wide <= 1 {
-            let page = self.page(stream, query)?;
+            let page = self.window(stream, query)?;
             let wide = ranges_for(limit, page.events.len(), 1, most);
             return Ok((page, wide));
         }
@@ -67,7 +74,7 @@ impl Records {
             let mut threads = Threads { scope, started: 0, most: self.threads() };
             let mut events = Vec::new();
             loop {
-                let wanted = limit.saturating_sub(events.len());
+                let wanted = wanted.saturating_sub(events.len());
                 let wide =
                     if cut.back == 0 { wide.min(most) } else { ranges_for(wanted, events.len(), cut.back, most) };
                 while wanted > 0
@@ -108,12 +115,12 @@ impl Records {
         }
     }
 
-    /// The events of a range, both ends in it, read page after page.
+    /// The events of a range, both ends in it, read window after window.
     fn read_range(&self, stream: Option<&Stream>, query: &Query, range: (i64, i64)) -> Result<Vec<Event>> {
         let mut query = query.over(written(range));
         let mut events = Vec::new();
         loop {
-            let page = self.page(stream, &query)?;
+            let page = self.window(stream, &query)?;
             events.extend(page.events);
             let Some(next) = page.next else { return Ok(events) };
             query = query.over(next);

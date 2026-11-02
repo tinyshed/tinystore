@@ -126,12 +126,14 @@ it a range.
 
 ## Pages
 
-`list` gives one page from one moment of the file, and `all` every page in
-turn. A page may hold fewer events than its `limit`, or none, and still have
-a `next`: a read stops at what one read may fetch rather than failing, a
-`search` over much text soonest. The last page is the one without a `next`.
-`since` is counted once: a page asked with `after` reads the range its first
-page had.
+`list` gives one page, and `all` every page in turn. A page holds its
+`limit` of events that match, or a few fewer where the next ones share a
+time, which a page never splits. Only the last page holds fewer and has no
+`next`. To fill a page, `list` reads past the events that match nothing:
+`mine` above, one user's last 50 events, comes back in one call however many
+other users' events lie between them. So a page of a rare value reads as much
+of the range as `count` would, and skips blocks the same way. `since` is
+counted once: a page asked with `after` reads the range its first page had.
 
 ## Events with the same time
 

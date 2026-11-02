@@ -98,7 +98,7 @@ FieldNames is the keys the events hold, in fields and in context, sorted; Prefix
 func (a *AllEvents) List(ctx context.Context, q Query) (Page, error)
 ```
 
-List is one page of every stream's events, from one moment of the file; Streams narrows them.
+List is one page of every stream's events, as a stream's List reads it; Streams narrows them.
 
 ### AllEvents.Poll
 
@@ -314,7 +314,7 @@ Lines is a writer of another program's output into this stream, each line an eve
 func (e *Events) List(ctx context.Context, q Query) (Page, error)
 ```
 
-List is one page of the stream's events, from one moment of its file.
+List is one page of the stream's events: Limit of them that match, fewer only on the last page, whose Next is "".
 
 ### Events.Name
 

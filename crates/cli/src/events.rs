@@ -152,6 +152,9 @@ fn list(asked: Asked) -> Done {
     match page.next {
         Some(next) if json => outln!("{}", json!({ "next": next }))?,
         Some(next) => asked::say("events list", format!("a page of {most} events at most; --after {next} reads on")),
+        None if page.events.is_empty() && (asked.has("--where") || asked.has("--level")) => {
+            outln!("no events of {stream} match in {}", window.shown())?;
+        }
         None if page.events.is_empty() => outln!("no events of {stream} in {}", window.shown())?,
         None => {}
     }
