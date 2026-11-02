@@ -125,6 +125,7 @@ methods: dict[str, int] = {
     "records.lines": 0x050B,
     "records.damaged": 0x050C,
     "records.drop": 0x050D,
+    "records.fields": 0x050E,
     "search.open": 0x0B01,
     "search.set": 0x0B02,
     "search.setMany": 0x0B03,
@@ -7796,6 +7797,194 @@ RecordsStreams = Message(
 )
 
 
+def _write_records_fields_asked(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("stream")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_fields_asked(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["stream"] = r.str()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# What the events of a stream carry, counted as they are packed and from
+# what waits, none of it read from a packed event.
+RecordsFieldsAsked = Message(
+    "records.FieldsAsked",
+    {
+        "stream": (1, str_),
+    },
+    _write_records_fields_asked,
+    _read_records_fields_asked,
+)
+
+
+def _write_records_name_count(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("count")) is not None:
+        w.uint(2)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_name_count(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                read["count"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+RecordsNameCount = Message(
+    "records.NameCount",
+    {
+        "name": (1, str_),
+        "count": (2, uint),
+    },
+    _write_records_name_count,
+    _read_records_name_count,
+)
+
+
+def _write_records_field_info(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("name")) is not None:
+        w.uint(1)
+        w.str(x)
+        n += 1
+    if (x := v.get("kinds")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            w.str(item0)
+        n += 1
+    if (x := v.get("count")) is not None:
+        w.uint(3)
+        w.uint(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_field_info(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["name"] = r.str()
+            case 2:
+                items0 = [r.str() for _ in range(r.array())]
+                r.leave()
+                read["kinds"] = items0
+            case 3:
+                read["count"] = r.uint()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A key of a stream's events' fields or contexts.
+RecordsFieldInfo = Message(
+    "records.FieldInfo",
+    {
+        "name": (1, str_),
+        # float, integer, text, bool, object, list or null, in that order
+        "kinds": (2, list_(str_)),
+        # the events that carry it
+        "count": (3, uint),
+    },
+    _write_records_field_info,
+    _read_records_field_info,
+)
+
+
+def _write_records_stream_fields(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("event_names")) is not None:
+        w.uint(1)
+        w.array(len(x))
+        for item0 in x:
+            RecordsNameCount.write(w, item0)
+        n += 1
+    if (x := v.get("fields")) is not None:
+        w.uint(2)
+        w.array(len(x))
+        for item0 in x:
+            RecordsFieldInfo.write(w, item0)
+        n += 1
+    if (x := v.get("context")) is not None:
+        w.uint(3)
+        w.array(len(x))
+        for item0 in x:
+            RecordsFieldInfo.write(w, item0)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_records_stream_fields(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                items0 = [RecordsNameCount.read(r) for _ in range(r.array())]
+                r.leave()
+                read["event_names"] = items0
+            case 2:
+                items0 = [RecordsFieldInfo.read(r) for _ in range(r.array())]
+                r.leave()
+                read["fields"] = items0
+            case 3:
+                items0 = [RecordsFieldInfo.read(r) for _ in range(r.array())]
+                r.leave()
+                read["context"] = items0
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+RecordsStreamFields = Message(
+    "records.StreamFields",
+    {
+        "event_names": (1, list_(RecordsNameCount)),
+        "fields": (2, list_(RecordsFieldInfo)),
+        "context": (3, list_(RecordsFieldInfo)),
+    },
+    _write_records_stream_fields,
+    _read_records_stream_fields,
+)
+
+
 def _write_records_field_names_asked(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -10445,6 +10634,10 @@ messages: dict[str, Message] = {
     "records.Rows": RecordsRows,
     "records.Stream": RecordsStream,
     "records.Streams": RecordsStreams,
+    "records.FieldsAsked": RecordsFieldsAsked,
+    "records.NameCount": RecordsNameCount,
+    "records.FieldInfo": RecordsFieldInfo,
+    "records.StreamFields": RecordsStreamFields,
     "records.FieldNamesAsked": RecordsFieldNamesAsked,
     "records.Names": RecordsNames,
     "records.PollAsked": RecordsPollAsked,

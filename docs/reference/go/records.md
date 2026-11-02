@@ -92,6 +92,14 @@ func (a *AllEvents) FieldNames(ctx context.Context, q Query) ([]string, error)
 
 FieldNames is the keys the events hold, in fields and in context, sorted; Prefix narrows them.
 
+### AllEvents.Fields
+
+```go
+func (a *AllEvents) Fields(ctx context.Context, stream string) (StreamFields, error)
+```
+
+Fields is what the events of stream carry, none of it read from a packed event: each name with how many events have it, and each key of their fields and contexts with the kinds of value it holds and how many events carry it. A stream with no events carries nothing.
+
 ### AllEvents.List
 
 ```go
@@ -340,6 +348,20 @@ func (e *Events) Top(ctx context.Context, key string, q Query) ([]Top, error)
 
 Top is a key's most frequent values and how many events hold each: ten unless Limit asks for more, 1000 at most. The key is a field's or a context's, or stream, name or level.
 
+## FieldInfo
+
+```go
+type FieldInfo struct {
+	Name string
+	// Kinds are the kinds of value it holds, in the order of the Kind constants.
+	Kinds []Kind
+	// Count is the events that carry it: one that writes it twice, once.
+	Count int
+}
+```
+
+FieldInfo is a key of a stream's events' fields or contexts.
+
 ## Fields
 
 ```go
@@ -427,6 +449,30 @@ func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler
 func (h *Handler) WithGroup(name string) slog.Handler
 ```
 
+## Kind
+
+```go
+type Kind string
+```
+
+Kind is what a value is, as its JSON is spelled.
+
+### KindFloat
+
+```go
+const (
+	// KindFloat has a fraction or an exponent: 12.5, 1e3.
+	KindFloat Kind = "float"
+	// KindInteger is a whole number: 42, -7.
+	KindInteger Kind = "integer"
+	KindText    Kind = "text"
+	KindBool    Kind = "bool"
+	KindObject  Kind = "object"
+	KindList    Kind = "list"
+	KindNull    Kind = "null"
+)
+```
+
 ## Levels
 
 ```go
@@ -480,6 +526,17 @@ func (l *Lines) Write(p []byte) (int, error)
 ```
 
 Write takes a piece of output, cut anywhere; it never waits.
+
+## NameCount
+
+```go
+type NameCount struct {
+	Name  string
+	Count int
+}
+```
+
+NameCount is a name a stream's events have, and how many have it.
 
 ## Option
 
@@ -592,6 +649,18 @@ type Stream struct {
 ```
 
 Stream is a stream with events: what it keeps, where that begins, and its newest event's time.
+
+## StreamFields
+
+```go
+type StreamFields struct {
+	EventNames []NameCount
+	Fields     []FieldInfo
+	Context    []FieldInfo
+}
+```
+
+StreamFields is what a stream's events carry, each by name.
 
 ## TailBatch
 

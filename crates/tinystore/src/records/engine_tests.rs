@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::super::fixture::{DAY, Fixture, fixture, fixture_of};
+use super::super::fixture::{DAY, Fixture, carried_by, fixture, fixture_of};
 use super::MIGRATIONS;
 use crate::ErrorKind;
 use crate::records::{AllEvents, Event, NewEvent, maintain};
@@ -147,6 +147,29 @@ fn events_appended_after_v0_1_0_come_after_its_own_of_one_time_in_the_order_appe
     assert_eq!(fixture.rows("heads"), 0);
     let fixture = fixture.reopen();
     read_every_way(&fixture, &expected, "reopened");
+}
+
+// contract: REC-14, STORE-11
+#[test]
+fn what_v0_1_0_packed_is_counted_by_upkeep_and_a_release_before_the_counts_refuses_the_file() {
+    let fixture = released();
+    let all = fixture.store.all_events().unwrap();
+    let read = |stream: &str| fixture.events(stream).list().all().map(Result::unwrap).collect::<Vec<_>>();
+    // the segments v0.1.0 packed are left out till upkeep counts them, and what waits is counted
+    let waiting: Vec<String> = all.fields("api").unwrap().event_names.into_iter().map(|name| name.name).collect();
+    assert_eq!(waiting, ["wait-api", "wait-late"]);
+    maintain(&fixture.store).unwrap();
+    for stream in ["api", "web"] {
+        assert_eq!(all.fields(stream).unwrap(), carried_by(&read(stream)), "{stream}");
+    }
+    assert_eq!(fixture.rows("segment_keys where events is null"), 0);
+    let path = fixture.dir.path().join("records.db");
+    fixture.store.close().unwrap();
+    // v0.5.1 knows three steps, and refuses the file a fourth migrated
+    let file = File::open(&path, Config { page_size: 1024, ..Config::default() }).unwrap();
+    let refused = file.migrate("records", &MIGRATIONS[..3]).unwrap_err();
+    assert!(refused.to_string().contains("a newer program migrated it"), "{refused}");
+    file.close().unwrap();
 }
 
 #[test]

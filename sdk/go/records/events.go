@@ -107,6 +107,43 @@ type Stream struct {
 	Newest       time.Time
 }
 
+// StreamFields is what a stream's events carry, each by name.
+type StreamFields struct {
+	EventNames []NameCount
+	Fields     []FieldInfo
+	Context    []FieldInfo
+}
+
+// NameCount is a name a stream's events have, and how many have it.
+type NameCount struct {
+	Name  string
+	Count int
+}
+
+// FieldInfo is a key of a stream's events' fields or contexts.
+type FieldInfo struct {
+	Name string
+	// Kinds are the kinds of value it holds, in the order of the Kind constants.
+	Kinds []Kind
+	// Count is the events that carry it: one that writes it twice, once.
+	Count int
+}
+
+// Kind is what a value is, as its JSON is spelled.
+type Kind string
+
+const (
+	// KindFloat has a fraction or an exponent: 12.5, 1e3.
+	KindFloat Kind = "float"
+	// KindInteger is a whole number: 42, -7.
+	KindInteger Kind = "integer"
+	KindText    Kind = "text"
+	KindBool    Kind = "bool"
+	KindObject  Kind = "object"
+	KindList    Kind = "list"
+	KindNull    Kind = "null"
+)
+
 // Batch is every event once, a batch a poll: its events, where the next
 // poll begins, and what expired before it.
 type Batch struct {

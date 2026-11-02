@@ -77,6 +77,65 @@ pub fn all_events(&self) -> Result<AllEvents>
 Every stream's events, to read. The first opens the records engine,
 a plain call made once at start, since it may migrate records.db.
 
+## FieldInfo
+
+```rust
+pub struct FieldInfo {
+    pub name: String,
+    pub kinds: Vec<Kind>,
+    pub count: u64,
+}
+```
+
+A key of a stream's events' fields or contexts.
+
+## Kind
+
+```rust
+pub enum Kind {
+    Float,
+    Integer,
+    Text,
+    Bool,
+    Object,
+    List,
+    Null,
+}
+```
+
+What a value is, as its JSON is spelled.
+
+### Kind.name
+
+```rust
+pub fn name(self) -> &'static str
+```
+
+How the wire and every SDK spell it.
+
+## NameCount
+
+```rust
+pub struct NameCount {
+    pub name: String,
+    pub count: u64,
+}
+```
+
+A name a stream's events have, and how many have it.
+
+## StreamFields
+
+```rust
+pub struct StreamFields {
+    pub event_names: Vec<NameCount>,
+    pub fields: Vec<FieldInfo>,
+    pub context: Vec<FieldInfo>,
+}
+```
+
+What a stream's events carry, by name.
+
 ## Aggregate
 
 ```rust
@@ -454,6 +513,29 @@ pub struct AllEvents { /* private fields */ }
 ```
 
 Every stream's events, to read.
+
+### AllEvents.fields
+
+```rust
+pub fn fields(&self, stream: &str) -> Result<StreamFields>
+```
+
+What the events of `stream` carry, none of it read from a packed
+event: each name with how many events have it, and each key of their
+fields and of their contexts with the kinds of value it holds and how
+many events carry it, each by name. It counts every event the stream
+holds, as `streams` finds them: one older than the stream's keep
+among them while it shares a segment with newer ones, since expiry
+removes a segment whole. A stream with no events carries nothing, and
+a name no stream could have is `invalid`.
+
+```rust
+let store = tinystore::Store::open("data", Default::default())?;
+let orders = store.all_events()?.fields("orders")?;
+for field in &orders.fields {
+    println!("{} {:?} in {} events", field.name, field.kinds, field.count);
+}
+```
 
 ### AllEvents.streams
 
@@ -1596,6 +1678,15 @@ pub fn streams(&self) -> impl Future<Output = Result<Vec<StreamInfo>>> + Send + 
 
 Every stream with events, by name, as
 `crate::records::AllEvents::streams` lists them.
+
+### aio::records::AllEvents.fields
+
+```rust
+pub fn fields(&self, stream: &str) -> impl Future<Output = Result<StreamFields>> + Send + 'static
+```
+
+What the events of `stream` carry, as
+`crate::records::AllEvents::fields` counts it.
 
 ### aio::records::AllEvents.poll
 

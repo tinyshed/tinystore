@@ -160,6 +160,40 @@ for (const way of ways) {
 			expect(await kept.fieldNames({ prefix: 'p' })).toEqual(['plan'])
 		})
 
+		// contract: REC-14
+		test('a stream says which names and fields its events carry, with their kinds and counts', async () => {
+			const orders = store.events('orders')
+			for (let orderId = 0; orderId < 100; orderId++) {
+				await orders.append('order.paid', {
+					orderId,
+					amount: 12.5,
+					currency: 'EUR',
+					paid: orderId % 3 !== 0,
+				})
+			}
+			await orders.append('order.refunded', { orderId: 3, note: null }, { context: { actor: 7 } })
+			expect(await store.events().fields('orders')).toEqual({
+				eventNames: [
+					{ name: 'order.paid', count: 100 },
+					{ name: 'order.refunded', count: 1 },
+				],
+				fields: [
+					{ name: 'amount', kinds: ['float'], count: 100 },
+					{ name: 'currency', kinds: ['text'], count: 100 },
+					{ name: 'note', kinds: ['null'], count: 1 },
+					{ name: 'orderId', kinds: ['integer'], count: 101 },
+					{ name: 'paid', kinds: ['bool'], count: 100 },
+				],
+				context: [{ name: 'actor', kinds: ['integer'], count: 1 }],
+			})
+			expect(await store.events().fields('nothing')).toEqual({
+				eventNames: [],
+				fields: [],
+				context: [],
+			})
+			expect(await caught(store.events().fields('Not A Name'))).toBeInstanceOf(InvalidError)
+		})
+
 		test('a poll gives a cursor, and nothing not packed yet', async () => {
 			const batch = await store.events().poll()
 			expect(batch.events).toEqual([])

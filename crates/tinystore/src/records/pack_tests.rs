@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use super::super::fixture::{DAY, Fixture, SECOND, fixture, names};
@@ -185,7 +184,7 @@ fn a_head_row_that_left_while_it_was_packed_fails_the_whole_and_leaves_nothing_w
         events: 1,
         weight: 1,
         shared: Vec::new(),
-        keys: BTreeSet::new(),
+        keys: Vec::new(),
         blocks: Vec::new(),
         blooms: Vec::new(),
     };

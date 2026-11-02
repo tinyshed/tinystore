@@ -56,7 +56,8 @@ rules the block out:
 - bloom filters of its trace ids and of values that rarely repeat, such as a
   request id, so `traceId` and `where: { requestId }` open only blocks that
   may hold them;
-- the names of the keys its events hold, so `fieldNames` answers without
+- the names of the keys its events hold, with how many events carry each and
+  the kinds of value it holds, so `fieldNames` and `fields` answer without
   opening a block.
 
 A block that passes is opened, and only the columns the query asked about are

@@ -17,14 +17,15 @@ use serde_json::value::RawValue;
 use super::codec::Message;
 use super::protocol::{
     Empty, Failure, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount,
-    RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent,
-    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats,
-    RecordsStream, RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
+    RecordsDamage, RecordsDamages, RecordsDropped, RecordsEvent, RecordsFieldInfo, RecordsFieldNamesAsked,
+    RecordsFieldsAsked, RecordsNameCount, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage, RecordsPiece,
+    RecordsPollAsked, RecordsQuery, RecordsRow, RecordsRows, RecordsStats, RecordsStream, RecordsStreamFields,
+    RecordsStreams, RecordsTailBatch, RecordsTop, RecordsTopAsked, RecordsTops, method,
 };
 use super::{Link, Route};
 use crate::records::{
-    Aggregate, Damage, Event, Events, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats, Tail,
-    TailBatch, TraceId,
+    Aggregate, Damage, Event, Events, FieldInfo, Fields, Level, Lines, List, NewEvent, Number, Part, SpanId, Stats,
+    Tail, TailBatch, TraceId,
 };
 use crate::sync::lock;
 use crate::{Calendar, ErrorKind, Store, unix_nanos};
@@ -140,6 +141,7 @@ pub(crate) fn call(store: &Store, handles: &Handles, called: u16, body: &[u8], r
         method::RECORDS_POLL => poll(store, &RecordsPollAsked::decode(body)?),
         method::RECORDS_DAMAGED => damaged(store),
         method::RECORDS_DROP => drop_damage(store, RecordsDamage::decode(body)?),
+        method::RECORDS_FIELDS => fields(store, &RecordsFieldsAsked::decode(body)?),
         other => Err(Failure::unimplemented(format!("method {other:#06x}"))),
     }
 }
@@ -240,6 +242,25 @@ fn streams(store: &Store) -> Answered {
         newest: unix_nanos(stream.newest),
     });
     Ok(RecordsStreams { streams: streams.collect() }.encode())
+}
+
+fn fields(store: &Store, asked: &RecordsFieldsAsked) -> Answered {
+    let carried = store.all_events()?.fields(&asked.stream)?;
+    let info = |info: FieldInfo| RecordsFieldInfo {
+        name: info.name,
+        kinds: info.kinds.iter().map(|kind| kind.name().to_owned()).collect(),
+        count: info.count,
+    };
+    Ok(RecordsStreamFields {
+        event_names: carried
+            .event_names
+            .into_iter()
+            .map(|name| RecordsNameCount { name: name.name, count: name.count })
+            .collect(),
+        fields: carried.fields.into_iter().map(info).collect(),
+        context: carried.context.into_iter().map(info).collect(),
+    }
+    .encode())
 }
 
 fn field_names(store: &Store, handles: &Handles, asked: &RecordsFieldNamesAsked) -> Answered {

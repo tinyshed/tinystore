@@ -9013,6 +9013,215 @@ impl Message for RecordsStreams {
     }
 }
 
+/// What the events of a stream carry, counted as they are packed and from
+/// what waits, none of it read from a packed event.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsFieldsAsked {
+    pub(crate) stream: String,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsFieldsAsked {
+    const NAME: &'static str = "records.FieldsAsked";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.stream = codec::str(r, "stream")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.stream.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.stream);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.stream.len()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.stream.is_empty()
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsNameCount {
+    pub(crate) name: String,
+    pub(crate) count: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsNameCount {
+    const NAME: &'static str = "records.NameCount";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.count = codec::uint(r, "count")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if self.count != 0 {
+            map.field(out, 2);
+            codec::write_uint(out, &self.count);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.count == 0
+    }
+}
+
+/// A key of a stream's events' fields or contexts.
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsFieldInfo {
+    pub(crate) name: String,
+    /// Float, integer, text, bool, object, list or null, in that order.
+    pub(crate) kinds: Vec<String>,
+    /// The events that carry it.
+    pub(crate) count: u64,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsFieldInfo {
+    const NAME: &'static str = "records.FieldInfo";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.name = codec::str(r, "name")?,
+                2 => message.kinds = codec::list(r, "kinds", codec::str)?,
+                3 => message.count = codec::uint(r, "count")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.name.is_empty() {
+            map.field(out, 1);
+            codec::write_str(out, &self.name);
+        }
+        if !self.kinds.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.kinds, codec::write_str);
+        }
+        if self.count != 0 {
+            map.field(out, 3);
+            codec::write_uint(out, &self.count);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + 5 + self.name.len()
+            + 1 + codec::list_size(&self.kinds, |item| 5 + item.len())
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.name.is_empty()
+            && self.kinds.is_empty()
+            && self.count == 0
+    }
+}
+
+#[cfg(feature = "records")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RecordsStreamFields {
+    pub(crate) event_names: Vec<RecordsNameCount>,
+    pub(crate) fields: Vec<RecordsFieldInfo>,
+    pub(crate) context: Vec<RecordsFieldInfo>,
+}
+
+#[cfg(feature = "records")]
+impl Message for RecordsStreamFields {
+    const NAME: &'static str = "records.StreamFields";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.event_names = codec::list(r, "eventNames", codec::message::<RecordsNameCount>)?,
+                2 => message.fields = codec::list(r, "fields", codec::message::<RecordsFieldInfo>)?,
+                3 => message.context = codec::list(r, "context", codec::message::<RecordsFieldInfo>)?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.event_names.is_empty() {
+            map.field(out, 1);
+            codec::write_list(out, &self.event_names, codec::write_message);
+        }
+        if !self.fields.is_empty() {
+            map.field(out, 2);
+            codec::write_list(out, &self.fields, codec::write_message);
+        }
+        if !self.context.is_empty() {
+            map.field(out, 3);
+            codec::write_list(out, &self.context, codec::write_message);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + codec::list_size(&self.event_names, codec::message_size)
+            + 1 + codec::list_size(&self.fields, codec::message_size)
+            + 1 + codec::list_size(&self.context, codec::message_size)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.event_names.is_empty()
+            && self.fields.is_empty()
+            && self.context.is_empty()
+    }
+}
+
 /// The keys the events a query finds hold, sorted.
 #[cfg(feature = "records")]
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -11764,6 +11973,8 @@ pub(crate) mod method {
     pub(crate) const RECORDS_DAMAGED: u16 = 0x050c;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_DROP: u16 = 0x050d;
+    #[cfg(feature = "records")]
+    pub(crate) const RECORDS_FIELDS: u16 = 0x050e;
     #[cfg(feature = "search")]
     pub(crate) const SEARCH_OPEN: u16 = 0x0b01;
     #[cfg(feature = "search")]
@@ -11998,6 +12209,8 @@ pub(crate) mod method {
             RECORDS_DAMAGED => Some(Access::Read),
             #[cfg(feature = "records")]
             RECORDS_DROP => Some(Access::Write),
+            #[cfg(feature = "records")]
+            RECORDS_FIELDS => Some(Access::Read),
             #[cfg(feature = "search")]
             SEARCH_OPEN => Some(Access::Read),
             #[cfg(feature = "search")]
@@ -12225,6 +12438,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("records.damaged", 0x050c, "call"),
     #[cfg(feature = "records")]
     ("records.drop", 0x050d, "call"),
+    #[cfg(feature = "records")]
+    ("records.fields", 0x050e, "call"),
     #[cfg(feature = "search")]
     ("search.open", 0x0b01, "call"),
     #[cfg(feature = "search")]
@@ -12530,6 +12745,14 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "records.Stream" => RecordsStream::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.Streams" => RecordsStreams::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.FieldsAsked" => RecordsFieldsAsked::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.NameCount" => RecordsNameCount::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.FieldInfo" => RecordsFieldInfo::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "records")]
+        "records.StreamFields" => RecordsStreamFields::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]
         "records.FieldNamesAsked" => RecordsFieldNamesAsked::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "records")]

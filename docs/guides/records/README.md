@@ -110,16 +110,16 @@ start, because the first open may migrate `records.db`. `append` returns
 after the event is written, as in the blocking API. Every read runs on the
 store's own threads, so your executor's thread never waits for the disk.
 
-| Blocking                                           | Async                                      | Where it runs                                           | If you drop the future after its first poll |
-|----------------------------------------------------|--------------------------------------------|---------------------------------------------------------|---------------------------------------------|
-| `append`, `append_all`, `event(...).append`        | the same, awaited                          | checked in the poll, committed on the store's threads   | the events are still written                |
-| `page`, `count`, `top`, `aggregate`, `field_names` | the same, awaited                          | on the store's threads                                  | the read stops, and its reader goes back    |
-| `all()`, an `Iterator`                             | `all()`, a `Stream`                        | a page at a time on the store's threads                 | the page being read stops                   |
-| `tail()` with `next_within`                        | `tail()`, a `Stream`                       | waits on no thread, each batch taken from memory        | the tail closes                             |
-| `poll`, `poll_limit`, `streams`, `damaged`         | the same, awaited                          | on the store's threads                                  | the read stops                              |
-| `drop(&damage)`                                    | the same, awaited                          | on the store's threads                                  | it runs to its end                          |
-| `Lines`, a `std::io::Write`                        | `write`, a plain call, and `flush().await` | `write` into the buffer, `flush` on the store's threads | the flush runs to its end                   |
-| `logger(...)`, `records::maintain`                 | the same, blocking                         | the logger's buffer; maintenance on the caller's thread | not a future                                |
+| Blocking                                             | Async                                      | Where it runs                                           | If you drop the future after its first poll |
+|------------------------------------------------------|--------------------------------------------|---------------------------------------------------------|---------------------------------------------|
+| `append`, `append_all`, `event(...).append`          | the same, awaited                          | checked in the poll, committed on the store's threads   | the events are still written                |
+| `page`, `count`, `top`, `aggregate`, `field_names`   | the same, awaited                          | on the store's threads                                  | the read stops, and its reader goes back    |
+| `all()`, an `Iterator`                               | `all()`, a `Stream`                        | a page at a time on the store's threads                 | the page being read stops                   |
+| `tail()` with `next_within`                          | `tail()`, a `Stream`                       | waits on no thread, each batch taken from memory        | the tail closes                             |
+| `poll`, `poll_limit`, `streams`, `fields`, `damaged` | the same, awaited                          | on the store's threads                                  | the read stops                              |
+| `drop(&damage)`                                      | the same, awaited                          | on the store's threads                                  | it runs to its end                          |
+| `Lines`, a `std::io::Write`                          | `write`, a plain call, and `flush().await` | `write` into the buffer, `flush` on the store's threads | the flush runs to its end                   |
+| `logger(...)`, `records::maintain`                   | the same, blocking                         | the logger's buffer; maintenance on the caller's thread | not a future                                |
 
 An append's events are checked in the poll that starts it, at most 4 MiB
 per append. An append of up to 256 KiB is also compressed in that poll. A

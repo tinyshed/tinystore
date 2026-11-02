@@ -116,6 +116,7 @@ const (
 	MethodRecordsLines      = 0x050b
 	MethodRecordsDamaged    = 0x050c
 	MethodRecordsDrop       = 0x050d
+	MethodRecordsFields     = 0x050e
 	MethodSearchOpen        = 0x0b01
 	MethodSearchSet         = 0x0b02
 	MethodSearchSetMany     = 0x0b03
@@ -237,6 +238,7 @@ var methodNames = []struct {
 	{"records.lines", MethodRecordsLines},
 	{"records.damaged", MethodRecordsDamaged},
 	{"records.drop", MethodRecordsDrop},
+	{"records.fields", MethodRecordsFields},
 	{"search.open", MethodSearchOpen},
 	{"search.set", MethodSearchSet},
 	{"search.setMany", MethodSearchSetMany},
@@ -541,6 +543,14 @@ func NewMessage(name string) Message {
 		return &RecordsStream{}
 	case "records.Streams":
 		return &RecordsStreams{}
+	case "records.FieldsAsked":
+		return &RecordsFieldsAsked{}
+	case "records.NameCount":
+		return &RecordsNameCount{}
+	case "records.FieldInfo":
+		return &RecordsFieldInfo{}
+	case "records.StreamFields":
+		return &RecordsStreamFields{}
 	case "records.FieldNamesAsked":
 		return &RecordsFieldNamesAsked{}
 	case "records.Names":
@@ -10288,6 +10298,237 @@ func (m *RecordsStreams) Read(r *Reader) {
 // IsZero says whether RecordsStreams writes as no field at all.
 func (m RecordsStreams) IsZero() bool {
 	return len(m.Streams) == 0
+}
+
+// RecordsFieldsAsked is the schema's records.FieldsAsked.
+//
+// What the events of a stream carry, counted as they are packed and from
+// what waits, none of it read from a packed event.
+type RecordsFieldsAsked struct {
+	Stream string `wire:"1,stream"`
+}
+
+func (m RecordsFieldsAsked) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Stream != "" {
+		w.Uint(1)
+		w.Str(m.Stream)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsFieldsAsked) Read(r *Reader) {
+	*m = RecordsFieldsAsked{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Stream = r.Str()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsFieldsAsked writes as no field at all.
+func (m RecordsFieldsAsked) IsZero() bool {
+	return m.Stream == ""
+}
+
+// RecordsNameCount is the schema's records.NameCount.
+type RecordsNameCount struct {
+	Name  string `wire:"1,name"`
+	Count uint64 `wire:"2,count"`
+}
+
+func (m RecordsNameCount) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if m.Count != 0 {
+		w.Uint(2)
+		w.Uint(m.Count)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsNameCount) Read(r *Reader) {
+	*m = RecordsNameCount{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			m.Count = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsNameCount writes as no field at all.
+func (m RecordsNameCount) IsZero() bool {
+	return m.Name == "" &&
+		m.Count == 0
+}
+
+// RecordsFieldInfo is the schema's records.FieldInfo.
+//
+// A key of a stream's events' fields or contexts.
+type RecordsFieldInfo struct {
+	Name string `wire:"1,name"`
+	// float, integer, text, bool, object, list or null, in that order
+	Kinds []string `wire:"2,kinds"`
+	// the events that carry it
+	Count uint64 `wire:"3,count"`
+}
+
+func (m RecordsFieldInfo) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if m.Name != "" {
+		w.Uint(1)
+		w.Str(m.Name)
+		n++
+	}
+	if len(m.Kinds) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Kinds))
+		for _, item0 := range m.Kinds {
+			w.Str(item0)
+		}
+		n++
+	}
+	if m.Count != 0 {
+		w.Uint(3)
+		w.Uint(m.Count)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsFieldInfo) Read(r *Reader) {
+	*m = RecordsFieldInfo{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Name = r.Str()
+		case 2:
+			v := []string{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				item0 := r.Str()
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Kinds = v
+		case 3:
+			m.Count = r.Uint()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsFieldInfo writes as no field at all.
+func (m RecordsFieldInfo) IsZero() bool {
+	return m.Name == "" &&
+		len(m.Kinds) == 0 &&
+		m.Count == 0
+}
+
+// RecordsStreamFields is the schema's records.StreamFields.
+type RecordsStreamFields struct {
+	EventNames []RecordsNameCount `wire:"1,eventNames"`
+	Fields     []RecordsFieldInfo `wire:"2,fields"`
+	Context    []RecordsFieldInfo `wire:"3,context"`
+}
+
+func (m RecordsStreamFields) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if len(m.EventNames) > 0 {
+		w.Uint(1)
+		w.Array(len(m.EventNames))
+		for _, item0 := range m.EventNames {
+			item0.Write(w)
+		}
+		n++
+	}
+	if len(m.Fields) > 0 {
+		w.Uint(2)
+		w.Array(len(m.Fields))
+		for _, item0 := range m.Fields {
+			item0.Write(w)
+		}
+		n++
+	}
+	if len(m.Context) > 0 {
+		w.Uint(3)
+		w.Array(len(m.Context))
+		for _, item0 := range m.Context {
+			item0.Write(w)
+		}
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *RecordsStreamFields) Read(r *Reader) {
+	*m = RecordsStreamFields{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			v := []RecordsNameCount{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsNameCount
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.EventNames = v
+		case 2:
+			v := []RecordsFieldInfo{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsFieldInfo
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Fields = v
+		case 3:
+			v := []RecordsFieldInfo{}
+			for k0 := r.Array(); k0 > 0; k0-- {
+				var item0 RecordsFieldInfo
+				item0.Read(r)
+				v = append(v, item0)
+			}
+			r.Leave()
+			m.Context = v
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether RecordsStreamFields writes as no field at all.
+func (m RecordsStreamFields) IsZero() bool {
+	return len(m.EventNames) == 0 &&
+		len(m.Fields) == 0 &&
+		len(m.Context) == 0
 }
 
 // RecordsFieldNamesAsked is the schema's records.FieldNamesAsked.

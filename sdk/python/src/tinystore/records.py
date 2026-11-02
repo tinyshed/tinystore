@@ -37,6 +37,7 @@ from ._wire.protocol import (
     RecordsDamages,
     RecordsDropped,
     RecordsFieldNamesAsked,
+    RecordsFieldsAsked,
     RecordsNames,
     RecordsOpen,
     RecordsPage,
@@ -44,6 +45,7 @@ from ._wire.protocol import (
     RecordsPollAsked,
     RecordsQuery,
     RecordsRows,
+    RecordsStreamFields,
     RecordsStreams,
     RecordsTailBatch,
     RecordsTopAsked,
@@ -148,6 +150,38 @@ class StreamInfo:
     retained_from: datetime
     """its oldest event, or where its keep begins while it holds older"""
     newest: datetime
+
+
+ValueKind = Literal["float", "integer", "text", "bool", "object", "list", "null"]
+"""What a value is, as its JSON is spelled: ``float`` has a fraction or an exponent, ``integer`` is whole."""
+
+
+@dataclass(frozen=True, slots=True)
+class NameCount:
+    """A name a stream's events have, and how many have it."""
+
+    name: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class FieldInfo:
+    """A key of a stream's events' fields or contexts."""
+
+    name: str
+    kinds: list[ValueKind]
+    """the kinds of value it holds, in the order ``ValueKind`` lists them"""
+    count: int
+    """the events that carry it: one that writes it twice, once"""
+
+
+@dataclass(frozen=True, slots=True)
+class StreamFields:
+    """What a stream's events carry, each by name."""
+
+    event_names: list[NameCount]
+    fields: list[FieldInfo]
+    context: list[FieldInfo]
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,6 +639,25 @@ class AllEvents(_Reads):
             )
             for each in RecordsStreams.decode(answer).get("streams", [])
         ]
+
+    async def fields(self, stream: str) -> StreamFields:
+        """What the events of ``stream`` carry, none of it read from a packed event.
+
+        Each name with how many events have it, and each key of their fields
+        and contexts with the kinds of value it holds and how many events
+        carry it. A stream with no events carries nothing.
+        """
+        answer = await self._ask("records.fields", lambda _: RecordsFieldsAsked.encode(stream=stream))
+        carried = RecordsStreamFields.decode(answer)
+
+        def info(each: Mapping[str, Any]) -> FieldInfo:
+            return FieldInfo(each.get("name", ""), list(each.get("kinds", [])), each.get("count", 0))
+
+        return StreamFields(
+            [NameCount(each.get("name", ""), each.get("count", 0)) for each in carried.get("event_names", [])],
+            [info(each) for each in carried.get("fields", [])],
+            [info(each) for each in carried.get("context", [])],
+        )
 
     async def poll(self, cursor: str | None = None, *, limit: int | None = None) -> PollBatch:
         """Every event once, a batch a call, from a cursor the program keeps, the oldest event kept without one.

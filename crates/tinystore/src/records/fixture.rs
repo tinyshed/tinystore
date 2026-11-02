@@ -1,12 +1,17 @@
 //! What records' tests share: a store with no background work, on a clock
-//! the test moves, and a look at what lies in records.db.
+//! the test moves, a look at what lies in records.db, and what events carry
+//! counted from the events themselves.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
+
+use super::carried::{FieldInfo, Kind, NameCount, StreamFields};
 use super::engine::Records;
-use super::event::Event;
+use super::event::{Event, Fields};
 use super::events::Events;
 use crate::{Options, Store, TestClock};
 
@@ -94,4 +99,50 @@ impl Fixture {
 /// The names of events, in their order.
 pub(crate) fn names(events: &[Event]) -> Vec<&str> {
     events.iter().map(|event| event.name.as_str()).collect()
+}
+
+/// What events carry, counted from the events themselves as a program
+/// reading them would count it: each key once an event, each value's kind as
+/// serde_json reads it.
+pub(crate) fn carried_by(events: &[Event]) -> StreamFields {
+    let mut names: BTreeMap<&str, u64> = BTreeMap::new();
+    events.iter().for_each(|event| *names.entry(&event.name).or_default() += 1);
+    StreamFields {
+        event_names: names.into_iter().map(|(name, count)| NameCount { name: name.to_owned(), count }).collect(),
+        fields: keys_carried(events.iter().map(|event| &event.fields)),
+        context: keys_carried(events.iter().map(|event| &event.context)),
+    }
+}
+
+fn keys_carried<'e>(each: impl Iterator<Item = &'e Fields>) -> Vec<FieldInfo> {
+    let mut keys: BTreeMap<String, (BTreeSet<Kind>, u64)> = BTreeMap::new();
+    for pairs in each {
+        let mut once: BTreeMap<&str, BTreeSet<Kind>> = BTreeMap::new();
+        for (key, json) in pairs.iter() {
+            once.entry(key).or_default().insert(kind_read(json));
+        }
+        for (key, kinds) in once {
+            let (all, count) = keys.entry(key.to_owned()).or_default();
+            all.extend(kinds);
+            *count += 1;
+        }
+    }
+    let info = |(name, (kinds, count)): (String, (BTreeSet<Kind>, u64))| FieldInfo {
+        name,
+        kinds: kinds.into_iter().collect(),
+        count,
+    };
+    keys.into_iter().map(info).collect()
+}
+
+fn kind_read(json: &str) -> Kind {
+    match serde_json::from_str(json).unwrap() {
+        Value::Number(number) if number.is_f64() => Kind::Float,
+        Value::Number(_) => Kind::Integer,
+        Value::String(_) => Kind::Text,
+        Value::Bool(_) => Kind::Bool,
+        Value::Object(_) => Kind::Object,
+        Value::Array(_) => Kind::List,
+        Value::Null => Kind::Null,
+    }
 }

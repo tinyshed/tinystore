@@ -34,6 +34,7 @@ import {
 	RecordsDropped,
 	type RecordsEvent,
 	RecordsFieldNamesAsked,
+	RecordsFieldsAsked,
 	RecordsNames,
 	type RecordsNewEvent,
 	RecordsOpen,
@@ -42,6 +43,7 @@ import {
 	RecordsPollAsked,
 	RecordsQuery,
 	RecordsRows,
+	RecordsStreamFields,
 	RecordsStreams,
 	RecordsTailBatch,
 	RecordsTopAsked,
@@ -184,6 +186,31 @@ export interface StreamInfo {
 	retainedFrom: Date
 	newest: Date
 }
+
+/** What a stream's events carry, each by name. */
+export interface StreamFields {
+	eventNames: NameCount[]
+	fields: FieldInfo[]
+	context: FieldInfo[]
+}
+
+/** A name a stream's events have, and how many have it. */
+export interface NameCount {
+	name: string
+	count: number
+}
+
+/** A key of a stream's events' fields or contexts. */
+export interface FieldInfo {
+	name: string
+	/** the kinds of value it holds, in the order `ValueKind` lists them */
+	kinds: ValueKind[]
+	/** the events that carry it: one that writes it twice, once */
+	count: number
+}
+
+/** What a value is, as its JSON is spelled: `float` has a fraction or an exponent, `integer` is whole. */
+export type ValueKind = 'float' | 'integer' | 'text' | 'bool' | 'object' | 'list' | 'null'
 
 export interface PollBatch {
 	events: Event[]
@@ -510,6 +537,29 @@ export class AllEvents extends Reads {
 			retainedFrom: dateOf(stream.retainedFrom ?? 0n),
 			newest: dateOf(stream.newest ?? 0n),
 		}))
+	}
+
+	/**
+	 * What the events of `stream` carry, none of it read from a packed event: each name with how
+	 * many events have it, and each key of their fields and contexts with the kinds of value it
+	 * holds and how many events carry it. A stream with no events carries nothing.
+	 */
+	async fields(stream: string): Promise<StreamFields> {
+		const answer = await this.ask('records.fields', () => RecordsFieldsAsked.encode({ stream }))
+		const carried = RecordsStreamFields.decode(answer)
+		const info = (field: (typeof carried.fields & {})[number]): FieldInfo => ({
+			name: field.name ?? '',
+			kinds: (field.kinds ?? []) as ValueKind[],
+			count: field.count ?? 0,
+		})
+		return {
+			eventNames: (carried.eventNames ?? []).map(name => ({
+				name: name.name ?? '',
+				count: name.count ?? 0,
+			})),
+			fields: (carried.fields ?? []).map(info),
+			context: (carried.context ?? []).map(info),
+		}
 	}
 
 	/**

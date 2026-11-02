@@ -87,6 +87,41 @@ class StreamInfo:
 
 A stream with events: what it keeps, where that begins, and its newest event's time.
 
+## NameCount
+
+```python
+@dataclass(frozen=True, slots=True)
+class NameCount:
+    name: str
+    count: int
+```
+
+A name a stream's events have, and how many have it.
+
+## FieldInfo
+
+```python
+@dataclass(frozen=True, slots=True)
+class FieldInfo:
+    name: str
+    kinds: list[ValueKind]  # the kinds of value it holds, in the order ``ValueKind`` lists them
+    count: int  # the events that carry it: one that writes it twice, once
+```
+
+A key of a stream's events' fields or contexts.
+
+## StreamFields
+
+```python
+@dataclass(frozen=True, slots=True)
+class StreamFields:
+    event_names: list[NameCount]
+    fields: list[FieldInfo]
+    context: list[FieldInfo]
+```
+
+What a stream's events carry, each by name.
+
 ## PollBatch
 
 ```python
@@ -225,6 +260,18 @@ async def streams() -> list[StreamInfo]: ...
 ```
 
 Every stream with events, by name, with what it keeps, where that begins and its newest event's time.
+
+### AllEvents.fields
+
+```python
+async def fields(stream: str) -> StreamFields: ...
+```
+
+What the events of ``stream`` carry, none of it read from a packed event.
+
+Each name with how many events have it, and each key of their fields
+and contexts with the kinds of value it holds and how many events
+carry it. A stream with no events carries nothing.
 
 ### AllEvents.poll
 

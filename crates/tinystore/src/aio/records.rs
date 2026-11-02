@@ -52,8 +52,8 @@ use crate::sync::lock;
 use crate::{ErrorKind, Result};
 
 pub use crate::records::{
-    Aggregate, Damage, Event, Fields, Level, NewEvent, Number, PAGE_EVENTS, Page, Part, PollBatch, Row, SpanId, Stats,
-    StreamInfo, TailBatch, Top, TraceId,
+    Aggregate, Damage, Event, FieldInfo, Fields, Kind, Level, NameCount, NewEvent, Number, PAGE_EVENTS, Page, Part,
+    PollBatch, Row, SpanId, Stats, StreamFields, StreamInfo, TailBatch, Top, TraceId,
 };
 
 impl Store {
@@ -270,6 +270,13 @@ impl AllEvents {
     pub fn streams(&self) -> impl Future<Output = Result<Vec<StreamInfo>>> + Send + 'static {
         let all = self.all.clone();
         run::read(&self.pool, "events: the streams".to_owned(), move || all.streams())
+    }
+
+    /// What the events of `stream` carry, as
+    /// [`crate::records::AllEvents::fields`] counts it.
+    pub fn fields(&self, stream: &str) -> impl Future<Output = Result<StreamFields>> + Send + 'static {
+        let (all, stream) = (self.all.clone(), stream.to_owned());
+        run::read(&self.pool, "events: a stream's fields".to_owned(), move || all.fields(&stream))
     }
 
     /// Every packed event once, a batch a call, 1000 at most, from `cursor`,

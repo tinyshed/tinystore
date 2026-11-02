@@ -288,6 +288,72 @@ begins, and its newest event. `fieldNames` gives the keys events hold, which a
 page's filter menu offers. A key's values are `top`'s, and a stream's names
 `top('name')`'s.
 
+## What a stream's events carry
+
+`fields` says which names a stream's events have and which keys their fields
+hold, with how many events carry each and what kinds of value it holds. It
+doesn't read the packed events to answer, so a program can draw a chart of a
+stream it has never seen, such as orders paid per day summed by `amount`.
+
+```ts
+const orders = await store.events().fields('orders')
+// eventNames: [{ name: 'order.paid', count: 100 }]
+// fields:     [{ name: 'amount', kinds: ['float'], count: 100 },
+//              { name: 'currency', kinds: ['text'], count: 100 },
+//              { name: 'order_id', kinds: ['integer'], count: 100 },
+//              { name: 'paid', kinds: ['bool'], count: 100 }]
+// context:    []
+```
+
+```python
+orders = await store.events().fields("orders")
+# event_names: [NameCount("order.paid", 100)]
+# fields:      [FieldInfo("amount", ["float"], 100), FieldInfo("currency", ["text"], 100),
+#               FieldInfo("order_id", ["integer"], 100), FieldInfo("paid", ["bool"], 100)]
+# context:     []
+```
+
+```go
+orders, err := events.Fields(ctx, "orders")
+// EventNames: [{Name: "order.paid", Count: 100}]
+// Fields:     [{Name: "amount", Kinds: [KindFloat], Count: 100}, {Name: "currency", Kinds: [KindText], Count: 100},
+//              {Name: "order_id", Kinds: [KindInteger], Count: 100}, {Name: "paid", Kinds: [KindBool], Count: 100}]
+```
+
+```rust
+let orders = store.all_events()?.fields("orders")?;
+// event_names: [NameCount { name: "order.paid", count: 100 }]
+// fields:      [FieldInfo { name: "amount", kinds: [Kind::Float], count: 100 },
+//               FieldInfo { name: "currency", kinds: [Kind::Text], count: 100 }, …]
+```
+
+- `eventNames / event_names / EventNames / event_names` lists the names of
+  the stream's events, each with how many events have it.
+- `kinds` lists each kind of value the key holds, in this order: `float`,
+  `integer`, `text`, `bool`, `object`, `list` and `null`. `float` is a
+  number with a fraction or an exponent, such as `12.5`, and `integer` is a
+  whole number, such as `42`. A key that holds `12` in one event and `12.5`
+  in another has both.
+- `count` is how many events carry the key. An event that writes a key twice
+  counts once.
+- `context` lists the keys of the events' contexts in the same way, apart
+  from their fields.
+- The counts include every event the stream holds, the packed ones and the
+  ones that wait to be packed. When `keep` removes old events, their counts
+  go with them.
+- A stream without events carries nothing, and a name that no stream can
+  have fails with an invalid error.
+
+TinyStore counts a segment's events when it packs them and keeps the counts
+beside the segment, so a stream's packed events cost one small query
+however many there are. The events that wait to be packed, at most an hour's
+worth, are read from their rows, so `fields` takes longer on a stream that
+has many events waiting.
+
+> A store that 0.5.1 or an earlier release wrote has packed events without counts.
+> After the store opens, its maintenance counts them, 16 segments per minute.
+> Until then, `fields` leaves those events out.
+
 ## From a shell
 
 `tinystore logs ./data --since 1h --level warn` reads the same lines beside the

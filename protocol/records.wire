@@ -134,6 +134,30 @@ message records.Streams {
   1 streams: [records.Stream]
 }
 
+# What the events of a stream carry, counted as they are packed and from
+# what waits, none of it read from a packed event.
+message records.FieldsAsked {
+  1 stream: str
+}
+
+message records.NameCount {
+  1 name: str
+  2 count: uint
+}
+
+# A key of a stream's events' fields or contexts.
+message records.FieldInfo {
+  1 name: str
+  2 kinds: [str]         # float, integer, text, bool, object, list or null, in that order
+  3 count: uint          # the events that carry it
+}
+
+message records.StreamFields {
+  1 eventNames: [records.NameCount]
+  2 fields: [records.FieldInfo]
+  3 context: [records.FieldInfo]
+}
+
 # The keys the events a query finds hold, sorted.
 message records.FieldNamesAsked {
   1 query: records.Query
@@ -202,3 +226,4 @@ read  0x050a records.tail(records.Query)                 -> download records.Tai
 write 0x050b records.lines(Handle)                       -> exchange records.Dropped for records.Piece
 read  0x050c records.damaged(Empty)                      -> records.Damages
 write 0x050d records.drop(records.Damage)                -> Empty
+read  0x050e records.fields(records.FieldsAsked)         -> records.StreamFields

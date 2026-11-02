@@ -253,6 +253,44 @@ func TestAStoreSaysItsStreamsWhatEachKeepsAndTheKeysEventsHold(t *testing.T) {
 	})
 }
 
+// contract: REC-14
+func TestAStreamSaysWhichNamesAndFieldsItsEventsCarry(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		orders := ways.Must(records.OpenEvents(store, "orders"))
+		events := make([]records.Event, 100)
+		for id := range events {
+			fields := records.Fields{"order_id": id, "amount": 12.5, "currency": "EUR", "paid": id%3 != 0}
+			events[id] = records.Event{Name: "order.paid", Fields: fields}
+		}
+		ways.Must(orders.AppendMany(ctx, events))
+		refund := records.Fields{"order_id": 3, "note": nil}
+		ways.Must(orders.Append(ctx, "order.refunded", refund, records.Context(records.Fields{"actor": 7})))
+		every := ways.Must(records.OpenAllEvents(store))
+		field := func(name string, kind records.Kind, count int) records.FieldInfo {
+			return records.FieldInfo{Name: name, Kinds: []records.Kind{kind}, Count: count}
+		}
+		want := records.StreamFields{
+			EventNames: []records.NameCount{{Name: "order.paid", Count: 100}, {Name: "order.refunded", Count: 1}},
+			Fields: []records.FieldInfo{
+				field("amount", records.KindFloat, 100), field("currency", records.KindText, 100),
+				field("note", records.KindNull, 1), field("order_id", records.KindInteger, 101),
+				field("paid", records.KindBool, 100),
+			},
+			Context: []records.FieldInfo{field("actor", records.KindInteger, 1)},
+		}
+		if carried := ways.Must(every.Fields(ctx, "orders")); !reflect.DeepEqual(carried, want) {
+			t.Fatalf("fields %+v", carried)
+		}
+		none := ways.Must(every.Fields(ctx, "nothing"))
+		if len(none.EventNames)+len(none.Fields)+len(none.Context) != 0 {
+			t.Fatalf("nothing %+v", none)
+		}
+		_, err := every.Fields(ctx, "Not A Name")
+		is(t, err, tinystore.ErrInvalid)
+	})
+}
+
 func TestAPollGivesACursorAndNothingNotPackedYet(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
 		ctx := context.Background()

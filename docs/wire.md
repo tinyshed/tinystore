@@ -725,6 +725,7 @@ carries.
 | `0x050b` | records.lines      | write | `Handle`                  | exchange `records.Dropped` for `records.Piece` |
 | `0x050c` | records.damaged    | read  | `Empty`                   | `records.Damages`                              |
 | `0x050d` | records.drop       | write | `records.Damage`          | `Empty`                                        |
+| `0x050e` | records.fields     | read  | `records.FieldsAsked`     | `records.StreamFields`                         |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/records.wire`. `records.tail` sends a batch

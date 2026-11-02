@@ -123,6 +123,43 @@ func (a *AllEvents) Streams(ctx context.Context) ([]Stream, error) {
 	return out, nil
 }
 
+// Fields is what the events of stream carry, none of it read from a packed
+// event: each name with how many events have it, and each key of their
+// fields and contexts with the kinds of value it holds and how many events
+// carry it. A stream with no events carries nothing.
+func (a *AllEvents) Fields(ctx context.Context, stream string) (StreamFields, error) {
+	asked := wire.RecordsFieldsAsked{Stream: stream}
+	answer, err := a.store.Link.Call(ctx, core.Reading, wire.MethodRecordsFields, wire.Encode(&asked))
+	if err != nil {
+		return StreamFields{}, err
+	}
+	var carried wire.RecordsStreamFields
+	if err := decode(answer, &carried); err != nil {
+		return StreamFields{}, err
+	}
+	out := StreamFields{
+		EventNames: make([]NameCount, len(carried.EventNames)),
+		Fields:     fieldInfos(carried.Fields),
+		Context:    fieldInfos(carried.Context),
+	}
+	for i, each := range carried.EventNames {
+		out.EventNames[i] = NameCount{Name: each.Name, Count: int(each.Count)}
+	}
+	return out, nil
+}
+
+func fieldInfos(fields []wire.RecordsFieldInfo) []FieldInfo {
+	out := make([]FieldInfo, len(fields))
+	for i, each := range fields {
+		kinds := make([]Kind, len(each.Kinds))
+		for k, kind := range each.Kinds {
+			kinds[k] = Kind(kind)
+		}
+		out[i] = FieldInfo{Name: each.Name, Kinds: kinds, Count: int(each.Count)}
+	}
+	return out
+}
+
 // Poll is every event once, a batch a call, from a cursor the program keeps,
 // the oldest event kept from "". With no event past the cursor, the batch is
 // empty and its cursor the one given. It reads what the store has packed,

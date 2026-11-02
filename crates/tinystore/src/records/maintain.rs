@@ -1,7 +1,8 @@
 //! What the engine does on its own schedule: the pages the file holds free
 //! are given back to the disk, the events their streams keep no longer are
-//! removed, the heads that are ready are packed, and the small segments of
-//! the streams packed are merged.
+//! removed, the heads that are ready are packed, the small segments of the
+//! streams packed are merged, and a few segments an earlier release packed
+//! have their events counted.
 
 use std::sync::PoisonError;
 use std::time::Duration;
@@ -91,19 +92,22 @@ impl Records {
     }
 
     /// Expires, packs what is ready, merges the small segments of the streams
-    /// packed, and lets the appends' zstd context go, which the next append
+    /// packed, counts a few segments an earlier release packed without
+    /// counts, and lets the appends' zstd context go, which the next append
     /// makes again.
     pub(super) fn expire_pack_and_merge(&self) -> Result<Maintenance> {
         let now = self.now();
         let expired = self.expire(now)?;
         let packing = self.pack(now)?;
         let merged = self.merge(packing.streams)?;
+        let counted = self.count_uncounted();
         self.codec.lock().unwrap_or_else(PoisonError::into_inner).rest();
         self.probe.count("tinystore_records_segments_packed_total", &[], packing.segments as f64);
         self.probe.count("tinystore_records_segments_merged_total", &[], merged as f64);
         self.probe.count("tinystore_records_expired_total", &[], expired as f64);
         // a head that failed is said once the others were packed and merged
         packing.failed.map_or(Ok(()), Err)?;
+        counted?;
         Ok(Maintenance { expired, packed: packing.events, segments: packing.segments, merged })
     }
 

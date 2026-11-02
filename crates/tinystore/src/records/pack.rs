@@ -22,6 +22,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::block;
 use super::bloom::{bloom_of, id_like};
+use super::carried::{KeyRow, Tally};
 use super::engine::{Records, execute, nanos};
 use super::event::Kept;
 use super::head::{self, Codec, ROW_EVENTS, ROW_WEIGHT, Row};
@@ -78,8 +79,8 @@ pub(super) struct Made {
     /// The segment's row.
     pub(super) shared: Vec<u8>,
     /// What its events hold, by kind: their names, their fields' keys and
-    /// their contexts' keys.
-    pub(super) keys: BTreeSet<(u8, String)>,
+    /// their contexts' keys, each with how many events carry it.
+    pub(super) keys: Vec<KeyRow>,
     pub(super) blocks: Vec<Row>,
     pub(super) blooms: Vec<Blooms>,
 }
@@ -115,7 +116,7 @@ const INSERT_BLOCK: &str = "insert into blocks (segment, stream, first_at, last_
     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) returning id";
 const INSERT_TRACES: &str = "insert into block_traces (block, bloom) values (?1, ?2)";
 const INSERT_FILTER: &str = "insert into block_filters (block, key, bloom) values (?1, ?2, ?3)";
-const INSERT_KEY: &str = "insert into segment_keys (segment, kind, key) values (?1, ?2, ?3)";
+const INSERT_KEY: &str = "insert into segment_keys (segment, kind, key, events, kinds) values (?1, ?2, ?3, ?4, ?5)";
 const DROP_HEAD: &str = "delete from heads where id = ?1";
 const SUBTRACT_FROM_HEAD: &str =
     "update head_state set count = count - ?3, weight = weight - ?4 where stream = ?1 and late = ?2";
@@ -300,9 +301,10 @@ pub(super) fn insert_blocks(tx: &Connection, segment: i64, stream: i64, blocks: 
 }
 
 /// Writes what a segment's events hold.
-pub(super) fn insert_keys(tx: &Connection, segment: i64, keys: &BTreeSet<(u8, String)>) -> Result<()> {
-    keys.iter().try_for_each(|(kind, key)| {
-        execute(tx, INSERT_KEY, params![segment, kind, key], "write what a segment holds").map(drop)
+pub(super) fn insert_keys(tx: &Connection, segment: i64, keys: &[KeyRow]) -> Result<()> {
+    keys.iter().try_for_each(|(kind, key, count)| {
+        let row = params![segment, kind, key, count.events as i64, count.kinds];
+        execute(tx, INSERT_KEY, row, "write what a segment holds").map(drop)
     })
 }
 
@@ -343,7 +345,7 @@ pub(super) fn made_of(events: &[Kept], arrivals: &[i64], codec: &mut Codec) -> R
         events: events.len(),
         weight: events.iter().map(Kept::weight).sum(),
         shared: schema.encode(codec)?,
-        keys: keys_of(&schema, events),
+        keys: keys_of(events),
         blocks: Vec::new(),
         blooms: Vec::new(),
     };
@@ -359,13 +361,11 @@ pub(super) fn made_of(events: &[Kept], arrivals: &[i64], codec: &mut Codec) -> R
 }
 
 /// The names of a segment's events, the keys of their fields and the keys
-/// of their contexts.
-fn keys_of(schema: &Schema, events: &[Kept]) -> BTreeSet<(u8, String)> {
-    let names = schema.names.iter().map(|name| (NAME_KEY, name.clone()));
-    let contexts =
-        schema.contexts.iter().flat_map(|context| context.iter().map(|(key, _)| (CONTEXT_KEY, key.to_owned())));
-    let fields = events.iter().flat_map(|event| event.fields.iter().map(|(key, _)| (FIELD_KEY, key.to_owned())));
-    names.chain(contexts).chain(fields).collect()
+/// of their contexts, each counted.
+pub(super) fn keys_of(events: &[Kept]) -> Vec<KeyRow> {
+    let mut tally = Tally::default();
+    events.iter().for_each(|event| tally.add(event));
+    tally.rows()
 }
 
 /// A block's filters: of its trace ids, and of the values of each field

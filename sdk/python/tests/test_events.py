@@ -139,6 +139,30 @@ async def test_a_store_says_its_streams_what_each_keeps_and_the_keys_events_hold
     assert await kept.field_names(prefix="p") == ["plan"]
 
 
+# contract: REC-14
+async def test_a_stream_says_which_names_and_fields_its_events_carry(store: tinystore.Store) -> None:
+    orders = store.events("orders")
+    for order_id in range(100):
+        order = {"order_id": order_id, "amount": 12.5, "currency": "EUR", "paid": order_id % 3 != 0}
+        await orders.append("order.paid", order)
+    await orders.append("order.refunded", {"order_id": 3, "note": None}, context={"actor": 7})
+    field = tinystore.FieldInfo
+    assert await store.events().fields("orders") == tinystore.StreamFields(
+        [tinystore.NameCount("order.paid", 100), tinystore.NameCount("order.refunded", 1)],
+        [
+            field("amount", ["float"], 100),
+            field("currency", ["text"], 100),
+            field("note", ["null"], 1),
+            field("order_id", ["integer"], 101),
+            field("paid", ["bool"], 100),
+        ],
+        [field("actor", ["integer"], 1)],
+    )
+    assert await store.events().fields("nothing") == tinystore.StreamFields([], [], [])
+    with pytest.raises(tinystore.InvalidError):
+        await store.events().fields("Not A Name")
+
+
 async def test_a_poll_gives_a_cursor_and_nothing_not_packed_yet(store: tinystore.Store) -> None:
     batch = await store.events().poll()
     assert batch.events == []

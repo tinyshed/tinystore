@@ -105,7 +105,7 @@ async fn awaited_appends_and_reads_answer_as_the_blocking_calls_do_on_the_same_s
 }
 
 #[tokio::test]
-async fn awaited_polls_and_the_streams_answer_as_the_blocking_calls_do() {
+async fn awaited_polls_the_streams_and_their_fields_answer_as_the_blocking_calls_do() {
     let fixture = fixture();
     let store = awaited(&fixture);
     let api = store.events("api").open().unwrap();
@@ -116,6 +116,7 @@ async fn awaited_polls_and_the_streams_answer_as_the_blocking_calls_do() {
 
     let (all, blocking) = (store.all_events().unwrap(), fixture.store.all_events().unwrap());
     assert_eq!(spawnable(all.streams()).await.unwrap(), blocking.streams().unwrap());
+    assert_eq!(spawnable(all.fields("audit")).await.unwrap(), blocking.fields("audit").unwrap());
     let first = spawnable(all.poll(None)).await.unwrap();
     assert_eq!(first, blocking.poll(None).unwrap());
     let cursor = Some(first.cursor.as_str());

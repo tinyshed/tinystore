@@ -160,6 +160,7 @@ These contracts are what does not.
 - **REC-10** Another program's lines MUST become events however they were cut; a stack trace's or a JSON value's lines MUST become one event.
 - **REC-11** An event's id MUST name one event of its stream while the stream holds that event for a read or a poll, and MUST be let go once no part the stream keeps spans the event's time, or a drop removed it: an append of an id the stream holds, or of one an earlier event of its list has, MUST write nothing and say so, the rest of its list written whole, and the first event of an id stands whatever a later one carries.
 - **REC-12** A filter MUST find a key written twice by its last value, the one a read gives for it, before the event is packed and after.
+- **REC-14** A stream MUST say which names its events have and which keys their fields and contexts hold, each with how many events carry it and a key with the kinds of value it holds, without the program reading its events; the counts MUST follow what the stream holds, waiting and packed, across merges and expiry, and a segment an earlier release packed is counted once upkeep reaches it.
 
 ### Logger and console
 

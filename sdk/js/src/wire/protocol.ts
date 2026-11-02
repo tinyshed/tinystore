@@ -145,6 +145,7 @@ export const methods = {
 	'records.lines': 0x050b,
 	'records.damaged': 0x050c,
 	'records.drop': 0x050d,
+	'records.fields': 0x050e,
 	'search.open': 0x0b01,
 	'search.set': 0x0b02,
 	'search.setMany': 0x0b03,
@@ -9512,6 +9513,233 @@ export const RecordsStreams = message(
 			}
 			r.leave()
 			return { streams: $streams }
+		},
+	},
+)
+
+/**
+ * What the events of a stream carry, counted as they are packed and from
+ * what waits, none of it read from a packed event.
+ */
+export const RecordsFieldsAsked = message(
+	'records.FieldsAsked',
+	{
+		stream: [1, str],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.stream !== undefined) {
+				w.field(1)
+				w.str(v.stream)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $stream: string | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$stream = r.str()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { stream: $stream }
+		},
+	},
+)
+
+export const RecordsNameCount = message(
+	'records.NameCount',
+	{
+		name: [1, str],
+		count: [2, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(2)
+				w.uint(v.count)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $count: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2:
+						$count = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, count: $count }
+		},
+	},
+)
+
+/**
+ * A key of a stream's events' fields or contexts.
+ */
+export const RecordsFieldInfo = message(
+	'records.FieldInfo',
+	{
+		name: [1, str],
+		/** float, integer, text, bool, object, list or null, in that order */
+		kinds: [2, list(str)],
+		/** the events that carry it */
+		count: [3, uint],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.name !== undefined) {
+				w.field(1)
+				w.str(v.name)
+				n++
+			}
+			if (v.kinds !== undefined) {
+				w.field(2)
+				w.array(v.kinds.length)
+				for (const item0 of v.kinds) {
+					w.str(item0)
+				}
+				n++
+			}
+			if (v.count !== undefined) {
+				w.field(3)
+				w.uint(v.count)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $name: string | undefined
+			let $kinds: string[] | undefined
+			let $count: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$name = r.str()
+						break
+					case 2: {
+						const items0: string[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(r.str())
+						}
+						r.leave()
+						$kinds = items0
+						break
+					}
+					case 3:
+						$count = r.uint()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { name: $name, kinds: $kinds, count: $count }
+		},
+	},
+)
+
+export const RecordsStreamFields = message(
+	'records.StreamFields',
+	{
+		eventNames: [1, list(RecordsNameCount)],
+		fields: [2, list(RecordsFieldInfo)],
+		context: [3, list(RecordsFieldInfo)],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.eventNames !== undefined) {
+				w.field(1)
+				w.array(v.eventNames.length)
+				for (const item0 of v.eventNames) {
+					RecordsNameCount.write(w, item0)
+				}
+				n++
+			}
+			if (v.fields !== undefined) {
+				w.field(2)
+				w.array(v.fields.length)
+				for (const item0 of v.fields) {
+					RecordsFieldInfo.write(w, item0)
+				}
+				n++
+			}
+			if (v.context !== undefined) {
+				w.field(3)
+				w.array(v.context.length)
+				for (const item0 of v.context) {
+					RecordsFieldInfo.write(w, item0)
+				}
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $eventNames: Read<typeof RecordsNameCount.fields>[] | undefined
+			let $fields: Read<typeof RecordsFieldInfo.fields>[] | undefined
+			let $context: Read<typeof RecordsFieldInfo.fields>[] | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1: {
+						const items0: Read<typeof RecordsNameCount.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsNameCount.read(r))
+						}
+						r.leave()
+						$eventNames = items0
+						break
+					}
+					case 2: {
+						const items0: Read<typeof RecordsFieldInfo.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsFieldInfo.read(r))
+						}
+						r.leave()
+						$fields = items0
+						break
+					}
+					case 3: {
+						const items0: Read<typeof RecordsFieldInfo.fields>[] = []
+						for (let i0 = r.array(); i0 > 0; i0--) {
+							items0.push(RecordsFieldInfo.read(r))
+						}
+						r.leave()
+						$context = items0
+						break
+					}
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { eventNames: $eventNames, fields: $fields, context: $context }
 		},
 	},
 )

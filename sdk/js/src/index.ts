@@ -158,10 +158,12 @@ export type {
 	EventLevel,
 	Events,
 	EventsOptions,
+	FieldInfo,
 	Fields,
 	Level,
 	Levels,
 	Lines,
+	NameCount,
 	NewEvent,
 	Page as EventsPage,
 	PollBatch,
@@ -169,10 +171,12 @@ export type {
 	Row as EventsRow,
 	Stats,
 	StoreLoggerOptions,
+	StreamFields,
 	StreamInfo,
 	TailBatch,
 	TailQuery,
 	Top,
+	ValueKind,
 } from './records.ts'
 export type { StandardSchemaV1 } from './schema.ts'
 export {

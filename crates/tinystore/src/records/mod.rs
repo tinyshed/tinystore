@@ -16,6 +16,7 @@ mod ahead;
 mod block;
 mod bloom;
 mod buffer;
+mod carried;
 mod count;
 mod engine;
 mod event;
@@ -43,6 +44,7 @@ mod tail;
 mod text;
 mod values;
 
+pub use carried::{FieldInfo, Kind, NameCount, StreamFields};
 pub use count::{Aggregate, Number, Row, Stats, StreamInfo, Top};
 pub use event::{Event, Fields, Level, NewEvent, SpanId, TraceId};
 pub use events::{AllEvents, EventCall, Events, EventsBuilder};

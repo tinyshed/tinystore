@@ -207,6 +207,51 @@ interface StreamInfo {
 }
 ```
 
+## StreamFields
+
+```ts
+interface StreamFields {
+    eventNames: NameCount[]
+    fields: FieldInfo[]
+    context: FieldInfo[]
+}
+```
+
+What a stream's events carry, each by name.
+
+## NameCount
+
+```ts
+interface NameCount {
+    name: string
+    count: number
+}
+```
+
+A name a stream's events have, and how many have it.
+
+## FieldInfo
+
+```ts
+interface FieldInfo {
+    name: string
+    /** the kinds of value it holds, in the order `ValueKind` lists them */
+    kinds: ValueKind[]
+    /** the events that carry it: one that writes it twice, once */
+    count: number
+}
+```
+
+A key of a stream's events' fields or contexts.
+
+## ValueKind
+
+```ts
+type ValueKind = 'float' | 'integer' | 'text' | 'bool' | 'object' | 'list' | 'null'
+```
+
+What a value is, as its JSON is spelled: `float` has a fraction or an exponent, `integer` is whole.
+
 ## PollBatch
 
 ```ts
@@ -317,6 +362,16 @@ streams(): Promise<StreamInfo[]>
 ```
 
 Every stream with events, by name, with what it keeps, where that begins and its newest event's time.
+
+### AllEvents.fields
+
+```ts
+fields(stream: string): Promise<StreamFields>
+```
+
+What the events of `stream` carry, none of it read from a packed event: each name with how
+many events have it, and each key of their fields and contexts with the kinds of value it
+holds and how many events carry it. A stream with no events carries nothing.
 
 ### AllEvents.poll
 

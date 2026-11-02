@@ -4,9 +4,9 @@ use crate::wire::codec::Message;
 use crate::wire::frame::{Frame, Kind};
 use crate::wire::protocol::{
     Empty, Handle, RecordsAggregateAsked, RecordsAppend, RecordsAppended, RecordsBatch, RecordsCount, RecordsDamage,
-    RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsNames, RecordsNewEvent, RecordsOpen, RecordsPage,
-    RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreams, RecordsTailBatch, RecordsTopAsked,
-    RecordsTops, method,
+    RecordsDamages, RecordsDropped, RecordsFieldNamesAsked, RecordsFieldsAsked, RecordsNames, RecordsNewEvent,
+    RecordsOpen, RecordsPage, RecordsPiece, RecordsPollAsked, RecordsQuery, RecordsRows, RecordsStreamFields,
+    RecordsStreams, RecordsTailBatch, RecordsTopAsked, RecordsTops, method,
 };
 use crate::{Options, Store};
 
@@ -130,6 +130,33 @@ fn every_stream_says_what_it_keeps_and_the_keys_its_events_hold() {
     let asked = RecordsFieldNamesAsked { prefix: Some("p".to_owned()), ..RecordsFieldNamesAsked::default() };
     let names: RecordsNames = client.call(method::RECORDS_FIELD_NAMES, &asked).unwrap();
     assert_eq!(names.names, ["plan"]);
+}
+
+// contract: REC-14
+#[test]
+fn a_stream_says_which_names_and_fields_its_events_carry_and_a_name_no_stream_could_have_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = Client::open(dir.path());
+    let orders = open(&mut client, "orders");
+    let paid = |order: u32| event("order.paid", &format!(r#"{{"order_id":{order},"amount":12.5,"note":null}}"#));
+    append(&mut client, orders, (0..3).map(paid).chain([event("order.paid", r#"{"amount":"12"}"#)]).collect());
+    let asked = RecordsFieldsAsked { stream: "orders".to_owned() };
+    let carried: RecordsStreamFields = client.call(method::RECORDS_FIELDS, &asked).unwrap();
+    let names: Vec<(&str, u64)> = carried.event_names.iter().map(|name| (name.name.as_str(), name.count)).collect();
+    assert_eq!(names, [("order.paid", 4)]);
+    let fields: Vec<(&str, Vec<&str>, u64)> = carried
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.kinds.iter().map(String::as_str).collect(), field.count))
+        .collect();
+    let expected = [("amount", vec!["float", "text"], 4), ("note", vec!["null"], 3), ("order_id", vec!["integer"], 3)];
+    assert_eq!(fields, expected);
+    assert!(carried.context.is_empty());
+    let none: RecordsStreamFields =
+        client.call(method::RECORDS_FIELDS, &RecordsFieldsAsked { stream: "none".to_owned() }).unwrap();
+    assert_eq!(none, RecordsStreamFields::default());
+    let refused = client.call::<RecordsStreamFields>(method::RECORDS_FIELDS, &RecordsFieldsAsked::default());
+    assert_eq!(refused.unwrap_err().code, "invalid");
 }
 
 #[test]
