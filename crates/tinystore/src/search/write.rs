@@ -183,21 +183,18 @@ pub(crate) fn set_knowing<'p>(
     let Some(index) = documents.clone().next().map(|document| document.index) else {
         return Ok(Learned { era: lock(known).era, keys: Vec::new() });
     };
-    let (keys, new_words, learned) = join_keys(tx, index, documents.clone(), known)?;
+    let (ids, new_words, learned) = join_keys(tx, index, documents.clone(), known)?;
     let mut postings = Vec::new();
     let first = next_doc(tx, index)?;
     let mut next = first;
     let (mut count, mut vectors) = (0_i64, 0_i64);
     let mut tokens: BTreeMap<Part, i64> = BTreeMap::new();
-    for document in documents {
+    for (document, held) in documents.zip(ids) {
         forget(tx, index, &document.id)?;
         let doc = number(next)?;
         next += 1;
-        let mut held = Vec::with_capacity(document.analyzed.terms.len());
-        for (part, term, tf) in &document.analyzed.terms {
-            let key = keys[&(*part, term.as_str())];
-            postings.push((key, doc, *tf, document.analyzed.length(*part)));
-            held.push(key);
+        for ((part, _, tf), key) in document.analyzed.terms.iter().zip(&held) {
+            postings.push((*key, doc, *tf, document.analyzed.length(*part)));
         }
         for (part, len) in &document.analyzed.lengths {
             *tokens.entry(*part).or_default() += i64::from(*len);
@@ -215,42 +212,57 @@ pub(crate) fn set_knowing<'p>(
     Ok(learned)
 }
 
-/// Keys' ids by their part and term.
-type Keys<'p> = HashMap<(Part, &'p str), i64>;
-
-/// The id of every key `documents` hold: those `known` holds from it, the
-/// others read from their rows in the order of the keys' index, a key kept
-/// for each word none held before; whether any is a word as written that no
-/// key was kept for; and the keys read from their rows or made.
+/// The id of every key each of `documents` holds, in the order of its
+/// terms: those `known` holds from it, the others read from their rows in
+/// the order of the keys' index, a key kept for each word none held before;
+/// whether any is a word as written that no key was kept for; and the keys
+/// read from their rows or made. Each term is looked up once: three
+/// lookups of each, its text hashed every time, were most of the 6.8 s a
+/// profile of MS MARCO's first million passages found in a set's own code.
 fn join_keys<'p>(
     tx: &Tx<'_>,
     index: i64,
     documents: impl Iterator<Item = &'p Prepared>,
     known: &Mutex<Known>,
-) -> Result<(Keys<'p>, bool, Learned)> {
+) -> Result<(Vec<Vec<i64>>, bool, Learned)> {
     let known = lock(known);
-    let mut keys: Keys<'p> = HashMap::new();
-    let mut unknown: Vec<(Part, &str)> = Vec::new();
+    // a key's id, or −1 − its place among the keys `known` does not hold
+    let mut placed: HashMap<(Part, &'p str), i64> = HashMap::new();
+    let mut unknown: Vec<(Part, &'p str)> = Vec::new();
+    let mut ids: Vec<Vec<i64>> = Vec::new();
     for document in documents {
-        for (part, term, _) in &document.analyzed.terms {
-            let term = term.as_str();
-            if keys.contains_key(&(*part, term)) {
-                continue;
-            }
-            match known.get(*part, term) {
-                Some(key) => drop(keys.insert((*part, term), key)),
-                None => unknown.push((*part, term)),
-            }
-        }
+        let held = document.analyzed.terms.iter().map(|(part, term, _)| {
+            *placed.entry((*part, term.as_str())).or_insert_with(|| match known.get(*part, term) {
+                Some(key) => key,
+                None => {
+                    unknown.push((*part, term.as_str()));
+                    -(unknown.len() as i64)
+                }
+            })
+        });
+        ids.push(held.collect());
     }
-    unknown.sort_unstable();
-    unknown.dedup();
+    let mut learned = Learned { era: known.era, keys: Vec::with_capacity(unknown.len()) };
+    drop(known);
+    let (found, new_words) = find_keys(tx, index, &unknown, &mut learned)?;
+    for id in ids.iter_mut().flatten().filter(|id| **id < 0) {
+        *id = found[(-*id - 1) as usize];
+    }
+    Ok((ids, new_words, learned))
+}
+
+/// The ids of `unknown` keys, read in the order of the keys' index, a key
+/// kept for each word none held before, each learned; and whether any is a
+/// word as written that no key was kept for.
+fn find_keys(tx: &Tx<'_>, index: i64, unknown: &[(Part, &str)], learned: &mut Learned) -> Result<(Vec<i64>, bool)> {
     let failed = |error| sql_error("write a key", error);
     let mut find = tx.prepare_cached(FIND_KEY).map_err(failed)?;
     let mut keep_new = tx.prepare_cached(NEW_KEY).map_err(failed)?;
-    let mut learned = Learned { era: known.era, keys: Vec::with_capacity(unknown.len()) };
-    let mut new_words = false;
-    for (part, term) in unknown {
+    let mut order: Vec<usize> = (0..unknown.len()).collect();
+    order.sort_unstable_by_key(|at| unknown[*at]);
+    let (mut found, mut new_words) = (vec![0; unknown.len()], false);
+    for at in order {
+        let (part, term) = unknown[at];
         let key = match find.query_row((index, part.0, term), |row| row.get::<_, i64>(0)).optional().map_err(failed)? {
             Some(key) => key,
             None => {
@@ -259,10 +271,10 @@ fn join_keys<'p>(
                 tx.last_insert_rowid()
             }
         };
-        keys.insert((part, term), key);
+        found[at] = key;
         learned.keys.push((part, term.to_owned(), key));
     }
-    Ok((keys, new_words, learned))
+    Ok((found, new_words))
 }
 
 fn next_doc(tx: &Tx<'_>, index: i64) -> Result<i64> {

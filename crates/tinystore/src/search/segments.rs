@@ -69,7 +69,7 @@ static ADD_PIECES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         postings = cast(postings || excluded.postings as blob)"
     )
 });
-const WRITE_PIECE: &str =
+pub(crate) const WRITE_PIECE: &str =
     "insert or replace into _tinystore_search_pieces (segment, key, count, postings, directory, best)
     values (?1, ?2, ?3, ?4, ?5, ?6)";
 const DROP_PIECE: &str = "delete from _tinystore_search_pieces where segment = ?1 and key = ?2";
@@ -263,11 +263,16 @@ pub(crate) fn write_piece(
     count: i64,
     written: &Written,
 ) -> Result<()> {
-    let row = match written {
+    let row = bytes_of(segment, written);
+    execute(connection, WRITE_PIECE, (segment.id, key, count, row.0, row.1, row.2), "write a piece").map(drop)
+}
+
+/// A piece's row's bytes as `written` holds it, in `segment`.
+pub(crate) fn bytes_of(segment: &Segment, written: &Written) -> PieceBytes {
+    match written {
         Written::Short(postings) => (Some(pack_piece(postings, segment.first)), None, None),
         Written::Packed(directory, best) => (None, Some(directory.encode()), Some(best.clone())),
-    };
-    execute(connection, WRITE_PIECE, (segment.id, key, count, row.0, row.1, row.2), "write a piece").map(drop)
+    }
 }
 
 /// A piece as it is written: its postings, or its directory and its best's bytes.

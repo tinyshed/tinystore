@@ -37,6 +37,11 @@ const WRITE_NORMS: &str =
     "insert or replace into _tinystore_search_norms (index_id, part, chunk, lengths) values (?1, ?2, ?3, ?4)";
 const SET_NORMED: &str = "update _tinystore_search_indexes set normed = ?2 where id = ?1";
 const READ_PART: &str = "select part from _tinystore_search_keys where id = ?1";
+/// Keys whose parts a statement reads.
+const PARTS: usize = 256;
+static READ_PARTS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!("select id, part from _tinystore_search_keys where id in ({})", vec!["?"; PARTS].join(", "))
+});
 const READ_TOKENS: &str = "select p.tokens, i.documents from _tinystore_search_parts as p
     join _tinystore_search_indexes as i on i.id = p.index_id where p.index_id = ?1 and p.part = ?2";
 const READ_GONE: &str = "select doc from _tinystore_search_gone where index_id = ?1";
@@ -189,6 +194,7 @@ impl Merge {
         let (keys, mut upto) = self.next_keys(connection, through, most)?;
         let gone = gone(connection, index)?;
         let mut reading = Reading::of(index);
+        reading.averages.read_parts(connection, keys.keys().copied())?;
         let mut next_run = match self.next_run {
             Some(next_run) => next_run,
             None => next_run(connection, &self.output)?,
@@ -228,18 +234,7 @@ impl Merge {
         for input in &self.inputs {
             execute(tx, DROP_PIECES, (input.id, stepped.through, stepped.upto), "drop merged pieces")?;
         }
-        let mut postings = 0;
-        for moved in stepped.keys {
-            moved.read.iter().try_for_each(|run| drop_run(tx, *run))?;
-            moved.runs.iter().try_for_each(|(id, run)| write_run(tx, *id, run))?;
-            if let Some(written) = &moved.written {
-                segments::write_piece(tx, (&self.output, moved.key), moved.count, written)?;
-            }
-            if moved.folding != 0 {
-                execute(tx, COUNT_KEY, (moved.key, moved.folding), "count a key's documents")?;
-            }
-            postings += moved.count as u64;
-        }
+        let postings = self.write_keys(tx, stepped.keys)?;
         if stepped.upto == i64::MAX {
             self.finish(tx)?;
         } else {
@@ -308,6 +303,38 @@ impl Merge {
         let (count, written, runs, next_run) = writer.finish()?;
         let folding = if self.output.folded { unfolded } else { counted - count };
         Ok((Moved { key, count, written, runs, folding, read }, next_run))
+    }
+
+    /// Writes each key a step moved: the inputs' runs it read dropped, its
+    /// runs and its piece written and its count changed, each statement
+    /// prepared once for them all: finding one by its text again for each
+    /// key took 1.9 s of a merge's 12 s on MS MARCO's first million
+    /// passages. Says how many postings they hold.
+    fn write_keys(&self, tx: &Tx<'_>, keys: Vec<Moved>) -> Result<u64> {
+        let failed = |error| sql_error("write merged pieces", error);
+        let mut drop_run = tx.prepare_cached(DROP_RUNS).map_err(failed)?;
+        let mut write_run = tx.prepare_cached(WRITE_RUN).map_err(failed)?;
+        let mut write_piece = tx.prepare_cached(segments::WRITE_PIECE).map_err(failed)?;
+        let mut count_key = tx.prepare_cached(COUNT_KEY).map_err(failed)?;
+        let mut postings = 0;
+        for moved in keys {
+            for run in &moved.read {
+                drop_run.execute((run, run + 1)).map_err(failed)?;
+            }
+            for (id, run) in &moved.runs {
+                write_run.execute((id, run)).map_err(failed)?;
+            }
+            if let Some(written) = &moved.written {
+                let row = segments::bytes_of(&self.output, written);
+                let values = (self.output.id, moved.key, moved.count, row.0, row.1, row.2);
+                write_piece.execute(values).map_err(failed)?;
+            }
+            if moved.folding != 0 {
+                count_key.execute((moved.key, moved.folding)).map_err(failed)?;
+            }
+            postings += moved.count as u64;
+        }
+        Ok(postings)
     }
 
     /// Ends the merge: the inputs go, rows and runs, and the output is whole.
@@ -553,19 +580,45 @@ fn write_norms(connection: &Connection, index: i64, (part, chunk): (u32, u32), l
 pub(super) struct Averages {
     index: i64,
     parts: HashMap<u32, u16>,
+    /// The parts of a step's keys, read [`PARTS`] a statement: a statement
+    /// a key took 1.3 s of a merge's 12 s on MS MARCO's first million
+    /// passages, and a statement for the range of a step's keys read the
+    /// rows of many keys between them, a hundred thousand for some steps.
+    read: HashMap<i64, u32>,
 }
 
 impl Averages {
     pub(super) fn of(index: i64) -> Averages {
-        Averages { index, parts: HashMap::new() }
+        Averages { index, parts: HashMap::new(), read: HashMap::new() }
+    }
+
+    /// Reads the parts of `keys`.
+    fn read_parts(&mut self, connection: &Connection, keys: impl Iterator<Item = i64>) -> Result<()> {
+        let failed = |error| sql_error("read the keys' parts", error);
+        let mut select = connection.prepare_cached(&READ_PARTS).map_err(failed)?;
+        self.read.clear();
+        let keys: Vec<i64> = keys.collect();
+        for chunk in keys.chunks(PARTS) {
+            // a short chunk names its last key again, so that one statement serves every chunk
+            let ids = (0..PARTS).map(|at| chunk[at.min(chunk.len() - 1)]);
+            let rows = select.query_map(rusqlite::params_from_iter(ids), |row| Ok((row.get(0)?, row.get(1)?)));
+            for row in rows.map_err(failed)? {
+                let (key, part) = row.map_err(failed)?;
+                self.read.insert(key, part);
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn of_key(&mut self, connection: &Connection, key: i64) -> Result<(u32, u16)> {
         let failed = |error| sql_error("read a key's part", error);
-        let part: u32 = connection
-            .prepare_cached(READ_PART)
-            .and_then(|mut select| select.query_row([key], |row| row.get(0)))
-            .map_err(failed)?;
+        let part: u32 = match self.read.get(&key) {
+            Some(part) => *part,
+            None => connection
+                .prepare_cached(READ_PART)
+                .and_then(|mut select| select.query_row([key], |row| row.get(0)))
+                .map_err(failed)?,
+        };
         if let Some(average) = self.parts.get(&part) {
             return Ok((part, *average));
         }
