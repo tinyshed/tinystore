@@ -5,9 +5,10 @@
 //! adds inside it: those whose maxima together cannot lift a document past
 //! θ, the worst score among the best so far, are passive, and a window no
 //! list can lift past θ is passed unread. The other lists add their
-//! postings into an array one after another, and each document they touched
-//! is completed from the passive lists, the one that adds most first, while
-//! their bounds may still lift it past θ.
+//! postings into an array one after another, marking each document in a
+//! bitset, and each document marked is completed in their order from the
+//! passive lists, the one that adds most first, while their bounds may
+//! still lift it past θ.
 //!
 //! A block whose bound cannot reach θ is never opened, yet the answer is
 //! the one scoring every posting gives, [`every`], which the tests hold it
@@ -31,6 +32,9 @@ use crate::Result;
 /// Documents a window holds. Tests read windows of 512, so that an index of
 /// a few thousand documents crosses many and their bounds skip lists.
 const WINDOW: u32 = if cfg!(test) { 512 } else { 4096 };
+/// The words of a window's bitset, and of the bitset of its words that hold a bit.
+const WORDS: usize = (WINDOW as usize).div_ceil(64);
+const SUMMARY: usize = WORDS.div_ceil(64);
 /// Past every document.
 pub(crate) const END: u32 = u32::MAX;
 /// No key's id, since keys are numbered from 1: a list of postings in hand,
@@ -62,22 +66,47 @@ pub(crate) struct List {
     /// search reads a block: a key's best postings.
     seeds: Vec<(u32, u64)>,
     block: usize,
+    /// The first block that could hold a window's documents, stepped on
+    /// window by window, since windows only move forward.
+    probe: usize,
     decoded: usize,
     postings: Vec<Posting>,
+    /// Whether the decoded block's postings hold their lengths. A block a
+    /// window scores whole reads them at once, and a document a passive list
+    /// is asked for reads its own alone: search-fast scored 92,116 of a
+    /// query's 358,000 postings decoded.
+    lengthened: bool,
     at: usize,
 }
 
-/// What gives a list the postings of a block it does not hold: the
-/// documents a set replaced left out, their lengths found.
+/// What gives a list the postings of a block it does not hold, onto `out`,
+/// the documents a set replaced left out, and their lengths when asked.
 pub(crate) trait Fetch {
-    fn block(&mut self, list: &List, index: usize) -> Result<Vec<Posting>>;
+    /// A block's postings, their lengths not yet read.
+    fn block(&mut self, list: &List, index: usize, out: &mut Vec<Posting>) -> Result<()>;
+    /// The lengths in `part` of `postings`' documents, in their order, written into them.
+    fn lengths(&mut self, part: Part, postings: &mut [Posting]) -> Result<()>;
 }
 
 impl List {
     /// A list of `blocks` in their documents' order, none empty.
     pub(crate) fn new(key: i64, part: Part, scale: f64, average: f64, blocks: Vec<Block>) -> List {
-        let seeds = Vec::new();
-        List { key, part, scale, average, blocks, seeds, block: 0, decoded: usize::MAX, postings: Vec::new(), at: 0 }
+        let (seeds, postings) = (Vec::new(), Vec::new());
+        let decoded = usize::MAX;
+        List {
+            key,
+            part,
+            scale,
+            average,
+            blocks,
+            seeds,
+            block: 0,
+            probe: 0,
+            decoded,
+            postings,
+            lengthened: true,
+            at: 0,
+        }
     }
 
     /// A list of postings in hand, in their documents' order, that names no
@@ -99,6 +128,7 @@ impl List {
         for block in 0..self.blocks.len() {
             self.block = block;
             self.open(source)?;
+            self.lengthen(source)?;
             postings.append(&mut self.postings);
         }
         Ok(postings)
@@ -135,6 +165,11 @@ impl List {
         self.blocks.push(block);
     }
 
+    /// Room for `more` blocks, which a directory's whole are.
+    pub(crate) fn reserve(&mut self, more: usize) {
+        self.blocks.reserve(more);
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
@@ -168,11 +203,25 @@ impl List {
         if self.decoded == self.block {
             return Ok(());
         }
-        self.postings = match self.blocks[self.block].held.take() {
-            Some(postings) => postings,
-            None => source.block(self, self.block)?,
-        };
+        match self.blocks[self.block].held.take() {
+            Some(postings) => (self.postings, self.lengthened) = (postings, true),
+            None => {
+                // each block is read into the last one's room, a list's one allocation
+                let mut postings = std::mem::take(&mut self.postings);
+                source.block(self, self.block, &mut postings)?;
+                (self.postings, self.lengthened) = (postings, false);
+            }
+        }
         self.decoded = self.block;
+        Ok(())
+    }
+
+    /// Reads the decoded block's lengths, unless it holds them.
+    fn lengthen(&mut self, source: &mut dyn Fetch) -> Result<()> {
+        if !self.lengthened {
+            source.lengths(self.part, &mut self.postings)?;
+            self.lengthened = true;
+        }
         Ok(())
     }
 
@@ -239,24 +288,42 @@ impl List {
         ahead.get(at).filter(|block| block.first <= doc)
     }
 
-    /// The most the key adds to any document in `[start, end)`.
-    fn bound_over(&self, start: u32, end: u32) -> u64 {
-        let ahead = self.ahead();
-        let from = ahead.partition_point(|block| block.last < start);
-        ahead[from..].iter().take_while(|block| block.first < end).map(|block| block.bound).max().unwrap_or(0)
+    /// The first block from the cursor's on that could hold `doc` or a later
+    /// one, stepped to from where the last window's left the probe: search-fast
+    /// measured stepping at 3.5 % of the median against a search a window.
+    fn probe(&mut self, doc: u32) -> usize {
+        let mut at = self.probe.max(self.block);
+        while self.blocks.get(at).is_some_and(|block| block.last < doc) {
+            at += 1;
+        }
+        self.probe = at;
+        at
+    }
+
+    /// The most the key adds to any document in `[start, end)`, `start` no
+    /// earlier than the last window's.
+    fn bound_over(&mut self, start: u32, end: u32) -> u64 {
+        let from = self.probe(start);
+        let within = self.blocks[from..].iter().take_while(|block| block.first < end);
+        within.map(|block| block.bound).max().unwrap_or(0)
     }
 
     /// A document no later than the key's first at `end` or after it, read
-    /// from the blocks' ranges without opening one.
-    fn next_from(&self, end: u32) -> u32 {
-        let ahead = self.ahead();
-        let from = ahead.partition_point(|block| block.last < end);
-        ahead.get(from).map_or(END, |block| block.first.max(end))
+    /// from the blocks' ranges without opening one, `end` no earlier than
+    /// the last window's.
+    fn next_from(&mut self, end: u32) -> u32 {
+        let at = self.probe(end);
+        self.blocks.get(at).map_or(END, |block| block.first.max(end))
     }
 
-    fn points(&self) -> u64 {
+    /// The points of the posting at the cursor, its length read if its
+    /// block's are not.
+    fn points(&mut self, source: &mut dyn Fetch) -> Result<u64> {
+        if !self.lengthened {
+            source.lengths(self.part, std::slice::from_mut(&mut self.postings[self.at]))?;
+        }
         let posting = self.postings[self.at];
-        points(self.scale, posting.tf, posting.len, self.average)
+        Ok(points(self.scale, posting.tf, posting.len, self.average))
     }
 
     pub(crate) fn first_of(&self, index: usize) -> u32 {
@@ -379,10 +446,12 @@ pub(crate) fn best(
         best,
         pass,
         points: Vec::new(),
-        touched: Vec::new(),
-        docs: Vec::new(),
+        marked: Vec::new(),
+        words: [0; SUMMARY],
+        order: Vec::new(),
+        most: Vec::new(),
         walks: Vec::new(),
-        bounds: Vec::new(),
+        sums: Vec::new(),
     };
     let mut start = run.start(0);
     while start != END && k > 0 {
@@ -411,7 +480,7 @@ pub(crate) fn best_of(lists: &mut [List], source: &mut dyn Fetch, docs: &[u32], 
             }
             rest = rest.saturating_sub(lists[at].bound_at(doc));
             if lists[at].seek(doc, source)? == doc {
-                points = points.saturating_add(lists[at].points());
+                points = points.saturating_add(lists[at].points(source)?);
                 held = true;
             }
         }
@@ -495,17 +564,25 @@ struct Run<'a> {
     best: Best,
     pass: Option<Pass<'a>>,
     points: Vec<u64>,
-    touched: Vec<bool>,
-    docs: Vec<u32>,
+    /// The window's documents a list added to, a bit each, which are read in
+    /// their order rather than sorted.
+    marked: Vec<u64>,
+    /// The words of `marked` that hold a bit.
+    words: [u64; SUMMARY],
+    /// The lists by the most each adds in the window, the least first.
+    order: Vec<usize>,
+    /// The most each list adds in the window.
+    most: Vec<u64>,
     /// Where each passive list's walk stands, in the order of the passive lists.
     walks: Vec<usize>,
-    /// Each passive list's bound at the document being completed.
-    bounds: Vec<u64>,
+    /// The most the passive lists add in the window, those up to each one
+    /// in their order together.
+    sums: Vec<u64>,
 }
 
 /// A document no later than the first any list holds at `end` or after it.
-fn next_from(lists: &[List], end: u32) -> u32 {
-    lists.iter().map(|list| list.next_from(end)).min().unwrap_or(END)
+fn next_from(lists: &mut [List], end: u32) -> u32 {
+    lists.iter_mut().map(|list| list.next_from(end)).min().unwrap_or(END)
 }
 
 impl Run<'_> {
@@ -527,35 +604,63 @@ impl Run<'_> {
 
     fn window(&mut self, documents: Range<u32>) -> Result<()> {
         if self.points.is_empty() {
-            (self.points, self.touched) = (vec![0; WINDOW as usize], vec![false; WINDOW as usize]);
+            (self.points, self.marked) = (vec![0; WINDOW as usize], vec![0; WORDS]);
         }
-        let bounds: Vec<u64> = self.lists.iter().map(|list| list.bound_over(documents.start, documents.end)).collect();
-        let mut order: Vec<usize> = (0..self.lists.len()).collect();
-        order.sort_by_key(|at| bounds[*at]);
-        let passive = self.passive(&order, &bounds);
-        if passive == order.len() {
-            return Ok(());
-        }
+        self.most.clear();
+        self.most.extend(self.lists.iter_mut().map(|list| list.bound_over(documents.start, documents.end)));
+        let mut order = std::mem::take(&mut self.order);
+        order.clear();
+        order.extend(0..self.lists.len());
+        order.sort_by_key(|at| self.most[*at]);
+        let passive = self.passive(&order, &self.most);
+        let scored = if passive < order.len() { self.score(&order, passive, &documents) } else { Ok(()) };
+        self.order = order;
+        scored
+    }
+
+    /// Adds the active lists' postings in the window, those past `passive`
+    /// in `order`, and completes each document they marked, in their order.
+    fn score(&mut self, order: &[usize], passive: usize, documents: &Range<u32>) -> Result<()> {
         for &at in &order[passive..] {
-            self.add(at, &documents)?;
+            self.add(at, documents)?;
         }
-        self.docs.sort_unstable();
-        let rest = order[..passive].iter().fold(0_u64, |sum, at| sum.saturating_add(bounds[*at]));
+        let (most, mut rest) = (&self.most, 0_u64);
+        self.sums.clear();
+        self.sums.extend(order[..passive].iter().map(|at| {
+            rest = rest.saturating_add(most[*at]);
+            rest
+        }));
         self.walks.clear();
         self.walks.extend(order[..passive].iter().map(|at| self.lists[*at].walk_from(documents.start)));
-        for doc in std::mem::take(&mut self.docs) {
-            let slot = (doc - documents.start) as usize;
-            let points = std::mem::take(&mut self.points[slot]);
-            self.touched[slot] = false;
-            if self.pass.as_mut().is_some_and(|pass| !pass.passes(doc)) {
-                continue;
+        for summary in 0..SUMMARY {
+            let mut words = std::mem::take(&mut self.words[summary]);
+            while words != 0 {
+                let word = summary * 64 + words.trailing_zeros() as usize;
+                words &= words - 1;
+                let mut bits = std::mem::take(&mut self.marked[word]);
+                while bits != 0 {
+                    let slot = word * 64 + bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    self.offer(&order[..passive], (slot, documents.start + slot as u32), rest)?;
+                }
             }
-            if self.best.pruning() && points.saturating_add(rest) <= self.best.theta() {
-                continue;
-            }
-            let points = self.complete(&order[..passive], doc, points)?;
-            self.best.offer(points, doc);
         }
+        Ok(())
+    }
+
+    /// Offers a document the active lists added to, its points taken from
+    /// its slot, completed unless what the passive lists add at most in the
+    /// window, `rest`, cannot lift it past θ.
+    fn offer(&mut self, passive: &[usize], (slot, doc): (usize, u32), rest: u64) -> Result<()> {
+        let points = std::mem::take(&mut self.points[slot]);
+        if self.pass.as_mut().is_some_and(|pass| !pass.passes(doc)) {
+            return Ok(());
+        }
+        if self.best.pruning() && points.saturating_add(rest) <= self.best.theta() {
+            return Ok(());
+        }
+        let points = self.complete(passive, doc, points)?;
+        self.best.offer(points, doc);
         Ok(())
     }
 
@@ -578,17 +683,16 @@ impl Run<'_> {
     /// Adds every posting list `at` has in the window into its slot, a
     /// decoded block's at a time.
     fn add(&mut self, at: usize, documents: &Range<u32>) -> Result<()> {
-        let Run { lists, source, points: sums, touched, docs, .. } = self;
+        let Run { lists, source, points: sums, marked, words, .. } = self;
         let list = &mut lists[at];
         let mut doc = list.seek(documents.start, *source)?;
         while doc < documents.end {
+            list.lengthen(*source)?;
             let (scale, average) = (list.scale, list.average);
             for posting in list.take_before(documents.end) {
                 let slot = (posting.doc - documents.start) as usize;
-                if !touched[slot] {
-                    touched[slot] = true;
-                    docs.push(posting.doc);
-                }
+                marked[slot / 64] |= 1 << (slot % 64);
+                words[slot / 4096] |= 1 << (slot / 64 % 64);
                 sums[slot] = sums[slot].saturating_add(points(scale, posting.tf, posting.len, average));
             }
             doc = list.doc(*source)?;
@@ -597,22 +701,27 @@ impl Run<'_> {
     }
 
     /// A document's points with what the passive lists add, the most first,
-    /// asked while their bounds may still lift it past θ.
+    /// asked while what they may add may still lift it past θ: the window's
+    /// most of those not asked yet, and the bound of the block of the one
+    /// asked at the document. Lucene asks the window's alone; the bounds of
+    /// every list at the document before any is asked took a tenth longer.
     fn complete(&mut self, passive: &[usize], doc: u32, mut points: u64) -> Result<u64> {
         let (full, theta) = (self.best.pruning(), self.best.theta());
-        self.bounds.clear();
-        for (walk, at) in self.walks.iter_mut().zip(passive) {
-            self.bounds.push(self.lists[*at].bound_walking(walk, doc));
-        }
-        let mut rest = self.bounds.iter().fold(0_u64, |sum, bound| sum.saturating_add(*bound));
-        for (place, &at) in passive.iter().enumerate().rev() {
-            if full && points.saturating_add(rest) <= theta {
+        for place in (0..passive.len()).rev() {
+            if full && points.saturating_add(self.sums[place]) <= theta {
                 break;
             }
-            let bound = self.bounds[place];
-            rest = rest.saturating_sub(bound);
-            if bound > 0 && self.lists[at].seek(doc, self.source)? == doc {
-                points = points.saturating_add(self.lists[at].points());
+            let at = passive[place];
+            let bound = self.lists[at].bound_walking(&mut self.walks[place], doc);
+            if bound == 0 {
+                continue;
+            }
+            let below = place.checked_sub(1).map_or(0, |before| self.sums[before]);
+            if full && points.saturating_add(bound).saturating_add(below) <= theta {
+                break;
+            }
+            if self.lists[at].seek(doc, self.source)? == doc {
+                points = points.saturating_add(self.lists[at].points(self.source)?);
             }
         }
         Ok(points)
@@ -633,7 +742,7 @@ pub(crate) fn every(
         while list.doc(source)? != END {
             let doc = list.postings[list.at].doc;
             let total = scores.entry(doc).or_default();
-            *total = total.saturating_add(list.points());
+            *total = total.saturating_add(list.points(source)?);
             list.next();
         }
     }

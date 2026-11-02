@@ -3,13 +3,25 @@ use std::collections::HashMap;
 use super::*;
 use crate::search::fixture::Random;
 
-/// Blocks of lists kept in memory, by key and place.
+/// Blocks of lists kept in memory, by key and place, their postings without
+/// their lengths, which are kept by part and document, a list a part.
 #[derive(Default)]
-struct Memory(HashMap<(i64, usize), Vec<Posting>>);
+struct Memory {
+    blocks: HashMap<(i64, usize), Vec<Posting>>,
+    lengths: HashMap<(Part, u32), u32>,
+}
 
 impl Fetch for Memory {
-    fn block(&mut self, list: &List, index: usize) -> Result<Vec<Posting>> {
-        Ok(self.0[&(list.key, index)].clone())
+    fn block(&mut self, list: &List, index: usize, out: &mut Vec<Posting>) -> Result<()> {
+        out.clone_from(&self.blocks[&(list.key, index)]);
+        Ok(())
+    }
+
+    fn lengths(&mut self, part: Part, postings: &mut [Posting]) -> Result<()> {
+        for posting in postings {
+            posting.len = self.lengths[&(part, posting.doc)];
+        }
+        Ok(())
     }
 }
 
@@ -18,7 +30,8 @@ impl Fetch for Memory {
 fn list(key: i64, postings: &[Posting], random: &mut Random, memory: &mut Memory) -> List {
     let scale = 0.05 + random.below(500) as f64 / 100.0;
     let average = 1.0 + random.below(300) as f64;
-    let mut list = List::new(key, Part(0), scale, average, Vec::new());
+    let part = Part(key as u32);
+    let mut list = List::new(key, part, scale, average, Vec::new());
     let mut at = 0;
     while at < postings.len() {
         let size = (1 + random.below(128) as usize).min(postings.len() - at);
@@ -29,7 +42,9 @@ fn list(key: i64, postings: &[Posting], random: &mut Random, memory: &mut Memory
             list.push(held);
         } else {
             let entry = crate::search::legacy::written::entry_of(block);
-            memory.0.insert((key, list.blocks.len()), block.to_vec());
+            let unlengthened = block.iter().map(|posting| Posting { len: 0, ..*posting }).collect();
+            memory.blocks.insert((key, list.blocks.len()), unlengthened);
+            memory.lengths.extend(block.iter().map(|posting| ((part, posting.doc), posting.len)));
             let stored = list.stored(entry.first, entry.last, entry.most_tf, entry.least_len);
             list.push(stored);
         }

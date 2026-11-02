@@ -373,14 +373,14 @@ pub(super) fn each_posting(
         Piece::Short(postings) => return postings.iter().try_for_each(|posting| each(*posting)),
         Piece::Packed(directory, _) => directory,
     };
-    let mut pairs = Vec::with_capacity(BLOCK);
+    let mut block = Vec::with_capacity(BLOCK);
     for (place, run) in directory.runs.iter().enumerate() {
         let bytes = read_run(connection, run.id)?;
         for at in directory.blocks_of(place) {
             let lying = directory.bytes_of(at, bytes.len());
-            packed::unpack(&bytes[lying], directory.blocks[at].first, &mut pairs)?;
-            for &(doc, tf) in &pairs {
-                each(Posting { doc, tf, len: lengths.of(connection, part, doc)? })?;
+            packed::unpack(&bytes[lying], directory.blocks[at].first, &mut block)?;
+            for posting in &block {
+                each(Posting { len: lengths.of(connection, part, posting.doc)?, ..*posting })?;
             }
         }
     }
@@ -393,12 +393,12 @@ pub(super) fn documents(connection: &Connection, piece: &Piece) -> Result<Vec<u3
         Piece::Short(postings) => return Ok(postings.iter().map(|posting| posting.doc).collect()),
         Piece::Packed(directory, _) => directory,
     };
-    let (mut docs, mut pairs) = (Vec::new(), Vec::new());
+    let (mut docs, mut block) = (Vec::new(), Vec::new());
     for (place, run) in directory.runs.iter().enumerate() {
         let bytes = read_run(connection, run.id)?;
         for at in directory.blocks_of(place) {
-            packed::unpack(&bytes[directory.bytes_of(at, bytes.len())], directory.blocks[at].first, &mut pairs)?;
-            docs.extend(pairs.iter().map(|(doc, _)| *doc));
+            packed::unpack(&bytes[directory.bytes_of(at, bytes.len())], directory.blocks[at].first, &mut block)?;
+            docs.extend(block.iter().map(|posting| posting.doc));
         }
     }
     Ok(docs)

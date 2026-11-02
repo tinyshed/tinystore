@@ -79,10 +79,13 @@ pub(crate) fn saturated(tf: u32, len: u32, average: f64) -> f64 {
     tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * f64::from(len) / average))
 }
 
-/// A posting's points, its key's weight × idf being `scale`.
+/// A posting's points, its key's weight × idf being `scale`, the nearest,
+/// a half up.
 pub(crate) fn points(scale: f64, tf: u32, len: u32, average: f64) -> u64 {
-    // `as` saturates: an absurd weight caps a score rather than wrapping it.
-    (scale * saturated(tf, len, average) * POINT).round() as u64
+    // `as` truncates and saturates, so that an absurd weight caps a score
+    // rather than wrapping it; `round` is a call into libm on x86-64's
+    // baseline, once a posting scored.
+    (scale * saturated(tf, len, average) * POINT + 0.5) as u64
 }
 
 /// The most a block adds at `average` whose postings saturate `bound` at
@@ -92,7 +95,8 @@ pub(crate) fn points(scale: f64, tf: u32, len: u32, average: f64) -> u64 {
 /// above every posting's points as [`points`] rounds them.
 pub(crate) fn bound(scale: f64, bound: f32, packed: u16, average: f64) -> u64 {
     let grown = (average / f64::from(packed)).max(1.0);
-    ((scale * f64::from(bound) * grown * POINT) * (1.0 + 1e-9)).ceil().max(0.0) as u64 + 1
+    // truncated and two up rather than `ceil`, a call into libm, and one up
+    (scale * f64::from(bound) * grown * POINT * (1.0 + 1e-9)) as u64 + 2
 }
 
 /// A score as a hit says it.

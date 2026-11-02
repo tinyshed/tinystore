@@ -72,6 +72,10 @@ impl BitWriter {
 /// A reader of the bits a writer wrote, a word at a time: research's 239
 /// residuals of 13 bits went from 4.01 µs read a bit at a time to 0.32 µs
 /// read so. Past the end it reads zeros and says so in `short`.
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 pub(crate) struct BitReader<'a> {
     data: &'a [u8],
     held: u128,
@@ -79,6 +83,10 @@ pub(crate) struct BitReader<'a> {
     short: bool,
 }
 
+#[cfg_attr(
+    all(not(test), not(any(feature = "records", feature = "metrics"))),
+    expect(dead_code, reason = "records and metrics use it")
+)]
 impl<'a> BitReader<'a> {
     pub(crate) fn of(data: &'a [u8]) -> BitReader<'a> {
         BitReader { data, held: 0, bits: 0, short: false }

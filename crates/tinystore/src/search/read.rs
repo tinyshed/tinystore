@@ -10,7 +10,6 @@
 //! by a vector reads every code of the index in it, a scan whose work is the
 //! fetch itself.
 
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::ops::Range;
@@ -730,6 +729,7 @@ fn onto(list: &mut List, listed: &Listed, source: &mut Source<'_>, gone: &HashSe
     match listed {
         Listed::Packed(directory, best) => {
             source.place(list.key, list.len(), directory);
+            list.reserve(directory.blocks.len());
             for block in &directory.blocks {
                 list.push(list.packed(block));
             }
@@ -901,26 +901,55 @@ struct Source<'a> {
     moment: Moment,
     gone: &'a HashSet<u32>,
     chunks: HashMap<(Part, u32), Arc<Chunk>>,
-    /// The directory of each piece in runs of a list, by its key, with the
-    /// place of its first block among the list's.
-    placed: HashMap<i64, Vec<(usize, Arc<Directory>)>>,
-    /// Each such list's handle, by its key, and the run it is on.
-    handles: HashMap<i64, (i64, Blob<'a>)>,
+    /// The row of lengths read last, which the next posting's length is
+    /// nearly always in, found without a hash.
+    last: Option<((Part, u32), Arc<Chunk>)>,
+    /// The lists of pieces in runs, found by their key among a search's few
+    /// lists by a walk rather than a hash, which a block took twice.
+    keyed: Vec<Keyed<'a>>,
     bytes: Vec<u8>,
-    pairs: Vec<(u32, u32)>,
+}
+
+/// What a key's list reads its blocks in runs by: each piece's directory,
+/// with the place of its first block among the list's, and the list's
+/// handle with the run it is on.
+struct Keyed<'a> {
+    key: i64,
+    placed: Vec<(usize, Arc<Directory>)>,
+    handle: Option<(i64, Blob<'a>)>,
 }
 
 impl Fetch for Source<'_> {
-    fn block(&mut self, list: &List, index: usize) -> Result<Vec<Posting>> {
+    fn block(&mut self, list: &List, index: usize, out: &mut Vec<Posting>) -> Result<()> {
         let within =
             |error: Error| error.within(format!("key {}: block at document {}", list.key, list.first_of(index)));
-        if let Some((first, directory)) = self.placed_at(list.key, index) {
-            return self.packed_block(list.key, list.part, (&directory, index - first)).map_err(within);
+        if let Some(placed) = self.placed_at(list.key, index) {
+            return self.packed_block(placed, out).map_err(within);
         }
-        let pairs = legacy::block(self.connection, list.key, list.first_of(index));
-        pairs.and_then(|pairs| self.lengthened(list.part, pairs.into_iter())).map_err(within)
+        let pairs = legacy::block(self.connection, list.key, list.first_of(index)).map_err(within)?;
+        out.clear();
+        out.extend(pairs.into_iter().map(|(doc, tf)| Posting { doc, tf, len: 0 }));
+        self.leave_gone(out);
+        Ok(())
+    }
+
+    fn lengths(&mut self, part: Part, mut postings: &mut [Posting]) -> Result<()> {
+        while let Some(first) = postings.first() {
+            let chunk = first.doc / NORMS;
+            let lengths = self.chunk(part, chunk)?;
+            let (these, rest) = postings.split_at_mut(postings.partition_point(|posting| posting.doc / NORMS == chunk));
+            for posting in these {
+                posting.len = lengths.length(posting.doc);
+            }
+            postings = rest;
+        }
+        Ok(())
     }
 }
+
+/// Where a block of a piece in runs is: its list's place among the keyed,
+/// its piece's among the list's, and its own in the piece.
+type Placed = (usize, usize, usize);
 
 impl<'a> Source<'a> {
     fn new(connection: &'a Connection, asked: &'a Asked<'a>, moment: Moment, stats: &'a Stats) -> Source<'a> {
@@ -930,75 +959,76 @@ impl<'a> Source<'a> {
             moment,
             gone: &stats.gone.docs,
             chunks: HashMap::new(),
-            placed: HashMap::new(),
-            handles: HashMap::new(),
+            last: None,
+            keyed: Vec::new(),
             bytes: Vec::new(),
-            pairs: Vec::new(),
         }
     }
 
     /// Keeps a piece's directory, its first block at `first` among its key's list's.
     fn place(&mut self, key: i64, first: usize, directory: &Arc<Directory>) {
-        self.placed.entry(key).or_default().push((first, Arc::clone(directory)));
-    }
-
-    /// The piece in runs that holds block `index` of a key's list, with the
-    /// place of its first block.
-    fn placed_at(&self, key: i64, index: usize) -> Option<(usize, Arc<Directory>)> {
-        let pieces = self.placed.get(&key)?;
-        let (first, directory) = &pieces[pieces.partition_point(|(first, _)| *first <= index).checked_sub(1)?];
-        (index < first + directory.blocks.len()).then(|| (*first, Arc::clone(directory)))
-    }
-
-    /// A block of a run, its bytes read at their place through its list's
-    /// handle, which moves from run to run rather than a statement a block:
-    /// search-fast measured 12 % of p99 so.
-    fn packed_block(&mut self, key: i64, part: Part, (directory, index): (&Directory, usize)) -> Result<Vec<Posting>> {
-        let failed = |error| sql_error("read a run", error);
-        let run = directory.runs[directory.run_of(index)].id;
-        let handle = match self.handles.entry(key) {
-            Entry::Occupied(held) => {
-                let held = held.into_mut();
-                if held.0 != run {
-                    held.1.reopen(run).map_err(failed)?;
-                    held.0 = run;
-                }
-                &held.1
-            }
-            Entry::Vacant(free) => {
-                let connection: &'a Connection = self.connection;
-                &free.insert((run, connection.blob_open(MAIN_DB, RUNS, BLOCKS, run, true).map_err(failed)?)).1
+        let at = match self.keyed.iter().position(|keyed| keyed.key == key) {
+            Some(at) => at,
+            None => {
+                self.keyed.push(Keyed { key, placed: Vec::new(), handle: None });
+                self.keyed.len() - 1
             }
         };
+        self.keyed[at].placed.push((first, Arc::clone(directory)));
+    }
+
+    /// Where block `index` of a key's list is, when a piece in runs holds it.
+    fn placed_at(&self, key: i64, index: usize) -> Option<Placed> {
+        let at = self.keyed.iter().position(|keyed| keyed.key == key)?;
+        let pieces = &self.keyed[at].placed;
+        let piece = pieces.partition_point(|(first, _)| *first <= index).checked_sub(1)?;
+        let (first, directory) = &pieces[piece];
+        (index < first + directory.blocks.len()).then_some((at, piece, index - first))
+    }
+
+    /// A block of a run onto `out`, its bytes read at their place through its
+    /// list's handle, which moves from run to run rather than a statement a
+    /// block: search-fast measured 12 % of p99 so.
+    fn packed_block(&mut self, (at, piece, index): Placed, out: &mut Vec<Posting>) -> Result<()> {
+        let failed = |error| sql_error("read a run", error);
+        let connection = self.connection;
+        let keyed = &mut self.keyed[at];
+        let directory = &keyed.placed[piece].1;
+        let run = directory.runs[directory.run_of(index)].id;
+        let handle = match keyed.handle.take() {
+            Some((on, mut handle)) if on != run => {
+                handle.reopen(run).map_err(failed)?;
+                handle
+            }
+            Some((_, handle)) => handle,
+            None => connection.blob_open(MAIN_DB, RUNS, BLOCKS, run, true).map_err(failed)?,
+        };
+        let handle = &keyed.handle.insert((run, handle)).1;
         let lying = directory.bytes_of(index, handle.len());
         self.bytes.resize(lying.len(), 0);
         handle.read_at_exact(&mut self.bytes, lying.start).map_err(failed)?;
-        packed::unpack(&self.bytes, directory.blocks[index].first, &mut self.pairs)?;
-        let pairs = std::mem::take(&mut self.pairs);
-        let postings = self.lengthened(part, pairs.iter().copied());
-        self.pairs = pairs;
-        postings
+        packed::unpack(&self.bytes, directory.blocks[index].first, out)?;
+        self.leave_gone(out);
+        Ok(())
     }
 
-    /// Documents and their frequencies as postings, those gone left out, each
-    /// with its length.
-    fn lengthened(&mut self, part: Part, pairs: impl Iterator<Item = (u32, u32)>) -> Result<Vec<Posting>> {
-        let mut postings = Vec::with_capacity(super::postings::BLOCK);
-        let mut chunk: Option<(u32, Arc<Chunk>)> = None;
-        for (doc, tf) in pairs {
-            if self.gone.contains(&doc) {
-                continue;
-            }
-            if chunk.as_ref().is_none_or(|(at, _)| *at != doc / NORMS) {
-                chunk = Some((doc / NORMS, self.chunk(part, doc / NORMS)?));
-            }
-            let len = chunk.as_ref().map_or(0, |(_, lengths)| lengths.length(doc));
-            postings.push(Posting { doc, tf, len });
+    /// Leaves out of a block's postings those of documents gone.
+    fn leave_gone(&self, postings: &mut Vec<Posting>) {
+        if !self.gone.is_empty() {
+            postings.retain(|posting| !self.gone.contains(&posting.doc));
         }
-        Ok(postings)
     }
 
-    fn chunk(&mut self, part: Part, chunk: u32) -> Result<Arc<Chunk>> {
+    /// The row of `part`'s lengths that holds `chunk`.
+    fn chunk(&mut self, part: Part, chunk: u32) -> Result<&Chunk> {
+        let last = match self.last.take() {
+            Some(last) if last.0 == (part, chunk) => last,
+            _ => ((part, chunk), self.read_chunk(part, chunk)?),
+        };
+        Ok(&self.last.insert(last).1)
+    }
+
+    fn read_chunk(&mut self, part: Part, chunk: u32) -> Result<Arc<Chunk>> {
         if let Some(read) = self.chunks.get(&(part, chunk)) {
             return Ok(Arc::clone(read));
         }

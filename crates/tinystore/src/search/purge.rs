@@ -219,8 +219,7 @@ fn take_out_of_run(
             continue;
         }
         packed::unpack(&bytes[lying], block.first, &mut held).map_err(|error| error.within(format!("run {run}")))?;
-        let left: Vec<Posting> =
-            held.iter().filter(|(doc, _)| !gone.contains(doc)).map(|&(doc, tf)| Posting { doc, tf, len: 0 }).collect();
+        let left: Vec<Posting> = held.iter().filter(|posting| !gone.contains(&posting.doc)).copied().collect();
         taken += (held.len() - left.len()) as i64;
         if let (Some(first), Some(last)) = (left.first(), left.last()) {
             packed::pack(&left, &mut written);
