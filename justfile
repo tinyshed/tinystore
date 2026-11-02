@@ -40,15 +40,23 @@ test:
     cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport
 
 # run clippy, a warning failing it, on the workspace and on the library built with each engine alone, the
-# console alone, the wire alone, its client alone and beside metrics and records, the async API alone and beside each
-# engine, and every engine with async and without the wire; CI lints on each platform, since cfg hides one's code from another
+# console alone, config's loader alone, the wire alone, its client alone and beside metrics and records, the async API
+# alone and beside each engine, and every engine with async and without the wire; CI lints on each platform, since cfg
+# hides one's code from another
 # contract: STORE-07
-lint: && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "system") (lint-alone "search") (lint-alone "wire") (lint-alone "client") (lint-alone "metrics,client") (lint-alone "records,client") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "sql,search") (lint-alone "wire,search") (lint-alone "kv,replication") (lint-alone "kv,replication,replication-tls") (lint-alone "async") (lint-alone "kv,async") (lint-alone "config,async") (lint-alone "locks,async") (lint-alone "channels,async") (lint-alone "jobs,async") (lint-alone "sql,async") (lint-alone "blobs,async") (lint-alone "records,async") (lint-alone "metrics,async") (lint-alone "search,async") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async")
+lint: no-sqlite && (lint-alone "console") (lint-alone "typos") (lint-alone "kv") (lint-alone "config-load") (lint-alone "config") (lint-alone "locks") (lint-alone "channels") (lint-alone "jobs") (lint-alone "sql") (lint-alone "blobs") (lint-alone "records") (lint-alone "metrics") (lint-alone "system") (lint-alone "search") (lint-alone "wire") (lint-alone "client") (lint-alone "metrics,client") (lint-alone "records,client") (lint-alone "kv,backup") (lint-alone "kv,channels") (lint-alone "sql,search") (lint-alone "wire,search") (lint-alone "kv,replication") (lint-alone "kv,replication,replication-tls") (lint-alone "async") (lint-alone "kv,async") (lint-alone "config,async") (lint-alone "locks,async") (lint-alone "channels,async") (lint-alone "jobs,async") (lint-alone "sql,async") (lint-alone "blobs,async") (lint-alone "records,async") (lint-alone "metrics,async") (lint-alone "search,async") (lint-alone "kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async")
     cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # run clippy on the library built with these features alone
 lint-alone features:
     cargo clippy -p tinystore --no-default-features --features {{features}} --all-targets --locked -- -D warnings
+
+# fail when a program that only logs, or only loads its settings, would link SQLite: rusqlite in the console's tree
+# or config-load's; test and $(...) read alike in PowerShell and in sh, and Windows finds test and grep on Git's PATH
+# contract: STORE-07, CFG-12
+no-sqlite:
+    test -z "$(cargo tree -p tinystore --no-default-features --features console -e normal --prefix none --locked | grep rusqlite)"
+    test -z "$(cargo tree -p tinystore --no-default-features --features config-load -e normal --prefix none --locked | grep rusqlite)"
 
 # format the code
 fmt:
@@ -142,7 +150,7 @@ sdk-check:
 
 # lint and test every crate in a Linux container, for a host that is not Linux
 test-linux:
-    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels sql,search wire,search kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked --features tinystore/async && cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport'
+    docker run --rm -v "{{justfile_directory()}}:/src" {{rust_caches}} -w /src {{rust_image}} sh -c 'cargo clippy --workspace --all-targets --locked -- -D warnings && for features in console typos kv config-load config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels sql,search wire,search kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do cargo clippy -p tinystore --no-default-features --features $features --all-targets --locked -- -D warnings || exit 1; done && cargo test --workspace --locked --features tinystore/async && cargo test -p tinystore --lib --locked --features replication-tls -- replication::link_tests::nodes_linked replication::transport'
 
 # lint the GitHub workflows
 lint-actions:

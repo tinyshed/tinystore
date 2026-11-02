@@ -49,6 +49,14 @@ Each engine is a cargo feature, all of them on by default: `kv`, `config`,
 `console` beside them. A program that turns the defaults off links only the
 engines it names.
 
+A program that only reads its settings, with `config::load`, asks for
+`config-load` alone. It links no store and no SQLite, so it needs neither
+the flags above nor a C compiler:
+
+```toml
+tinystore = { version = "0.6", default-features = false, features = ["config-load"] }
+```
+
 - [Your first store](https://tinyshed.org/tinystore/docs/handbook/start/first-store): a first program, step by step
 - [The guides](https://tinyshed.org/tinystore/docs): every engine, page by page, in Rust, TypeScript, Python and Go
 - [The `tinystore` command](https://crates.io/crates/tinystore-cli): a store's directory served to other processes, and read while it runs

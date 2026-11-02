@@ -58,7 +58,7 @@ pub(crate) struct Kv {
     /// The configs open in this process, a hub each, which every handle of
     /// one name shares.
     #[cfg(feature = "config")]
-    configs: Mutex<HashMap<String, Weak<super::config::Hub>>>,
+    configs: Mutex<HashMap<String, Weak<crate::config::Hub>>>,
     _claim: Option<Claim>,
 }
 
@@ -227,7 +227,7 @@ impl Kv {
     }
 
     #[cfg(feature = "config")]
-    pub(crate) fn configs(&self) -> &Mutex<HashMap<String, Weak<super::config::Hub>>> {
+    pub(crate) fn configs(&self) -> &Mutex<HashMap<String, Weak<crate::config::Hub>>> {
         &self.configs
     }
 

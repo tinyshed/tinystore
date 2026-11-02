@@ -244,7 +244,7 @@ class Origin:
     """when a change was made, in UTC"""
 
     def __str__(self) -> str:
-        # the core's text: crates/tinystore/src/kv/config/explain.rs, Origin's Display
+        # the core's text: crates/tinystore/src/config/explain.rs, Origin's Display
         match self.kind:
             case "declaration":
                 return "the declaration"

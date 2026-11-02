@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-const VECTORS: &str = include_str!("../../../../../testdata/config/env.json");
+const VECTORS: &str = include_str!("../../../../testdata/config/env.json");
 
 fn setting(kind: Kind, rules: Rules) -> Setting {
     Setting { kind, rules, default: None, required: false, live: false, secret: false }

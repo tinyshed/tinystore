@@ -20,7 +20,7 @@
 //! A bound the store's options set, as its memory or `max_series`, is named
 //! the same way and is not here.
 
-#[cfg(feature = "store")]
+#[cfg(any(feature = "store", feature = "config-load"))]
 use crate::Error;
 
 /// A bound by its name, which a `limit` error's `limit` fact gives, and the
@@ -34,14 +34,14 @@ pub struct Limit {
 impl Limit {
     /// The `limit` error of a call that wanted `wanted` of this bound, said
     /// as `what` says it, with the three facts every SDK reads.
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "config-load"))]
     pub(crate) fn refuse(self, wanted: u64, what: impl Into<String>) -> Error {
         self.run_out(what).naming("wanted", wanted.to_string())
     }
 
     /// The `limit` error of a bound that has run out, as a counter that cannot
     /// move once more: its name and its bound, with no number wanted.
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "config-load"))]
     pub(crate) fn run_out(self, what: impl Into<String>) -> Error {
         Error::limit(what).naming("limit", self.name).naming("bound", self.bound.to_string())
     }
@@ -52,7 +52,7 @@ impl Limit {
 pub const VALUE_BYTES: Limit = Limit { name: "value bytes", bound: 1 << 20 };
 
 /// A live setting's change, as JSON.
-#[cfg(feature = "config")]
+#[cfg(feature = "config-load")]
 pub const SETTING_BYTES: Limit = Limit { name: "setting bytes", bound: 16 << 10 };
 /// Every change a config keeps, together.
 #[cfg(feature = "config")]

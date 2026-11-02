@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::kv::config::{Config, Given, Origin, Sent};
+use crate::config::{Config, Given, Origin, Sent};
 use crate::kv::fixture::{Fixture, fixture};
 use crate::{Clock, Error, ErrorKind};
 

@@ -37,9 +37,11 @@
 //! ```
 //!
 //! A program that keeps no live setting reads its settings with
-//! [`load`], with no store and nothing written to disk.
+//! [`load`], with no store and nothing written to disk. The `config-load`
+//! feature builds `load` alone, with no store and no SQLite; `config` adds
+//! `store.config` and the live settings.
 
-#[cfg(any(test, feature = "wire", feature = "records"))]
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
 mod data;
 mod declaration;
 mod env;
@@ -49,8 +51,12 @@ mod handle;
 mod hub;
 mod layers;
 mod marks;
+#[cfg(not(feature = "config"))]
+mod no_store;
 mod resolve;
 mod rules;
+#[cfg(feature = "config")]
+mod store;
 
 use std::fmt;
 
@@ -61,12 +67,24 @@ pub use env::Env;
 pub use explain::{Explained, Given, Line, Origin};
 pub use files::File;
 pub use handle::{Config, IfVersion, Snapshot, Watching};
-pub(crate) use hub::Hub;
 use layers::Layer;
 pub use marks::{Entries, Live, Required, Secret};
 use resolve::Validate;
+// The store a config opens in, and kv.db, which keeps its changes there:
+// `config-load` alone builds neither, and loads every config without them.
+#[cfg(not(feature = "config"))]
+use no_store::{Keeper, Store};
+#[cfg(feature = "config")]
+use {crate::Store, store::Keeper};
+// What kv keeps of the configs open, and what the wire, the CLI and a store's logger open.
+#[cfg(feature = "config")]
+pub(crate) use hub::Hub;
+#[cfg(all(feature = "config", any(test, feature = "wire", feature = "records")))]
+pub(crate) use store::Sent;
+#[cfg(all(feature = "config", feature = "client"))]
+pub(crate) use store::names;
 
-use crate::{Result, Store};
+use crate::Result;
 
 /// A config being opened: its name, its declaration, and its layers in the
 /// order the program writes them, each declaring again what came before.
@@ -80,26 +98,6 @@ pub struct ConfigBuilder<T> {
     layers: Vec<Layer>,
     validate: Option<Validate<T>>,
     strict: bool,
-}
-
-impl Store {
-    /// The program's settings as one typed value. `declaration` is every
-    /// setting with its default, a `serde` struct whose fields may be marked
-    /// `Secret`, `Required` or `Live`; the layers the builder adds go over it
-    /// in the order written.
-    pub fn config<T>(&self, name: &str, declaration: T) -> ConfigBuilder<T>
-    where
-        T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
-    {
-        ConfigBuilder {
-            store: Some(self.clone()),
-            name: name.to_owned(),
-            declaration,
-            layers: Vec::new(),
-            validate: None,
-            strict: false,
-        }
-    }
 }
 
 /// A program's settings read once from its declaration, its files and the
@@ -174,68 +172,6 @@ where
     }
 }
 
-/// A config as a program's SDK opens it over the wire, and a store's logger
-/// its own: its declaration and its layers as data, as `data` reads them.
-#[cfg(any(test, feature = "wire", feature = "records"))]
-pub(crate) struct Sent<'a> {
-    pub(crate) name: &'a str,
-    pub(crate) declaration: &'a serde_json::Value,
-    pub(crate) layers: &'a serde_json::Value,
-    pub(crate) strict: bool,
-    /// Whether kv.db keeps the declaration: not for a connection that may
-    /// only read.
-    pub(crate) remember: bool,
-}
-
-#[cfg(any(test, feature = "wire", feature = "records"))]
-impl Store {
-    /// Opens the config an SDK sent, its value given back as data.
-    pub(crate) fn config_sent(&self, sent: &Sent<'_>) -> Result<Config<serde_json::Value>> {
-        let within = |why: String| crate::Error::invalid(why).within(format!("config {}", sent.name));
-        let declaration = data::declaration(sent.declaration).map_err(within)?;
-        let layers = data::layers(sent.layers).map_err(within)?;
-        handle::open_with(handle::Opening {
-            store: Some(self.clone()),
-            name: sent.name.to_owned(),
-            declaration,
-            layers,
-            validate: None,
-            strict: sent.strict,
-            view: resolve::View::Data,
-            remember: sent.remember,
-            kept: false,
-        })
-    }
-
-    /// The config `name` as the store keeps it, for a command: the last
-    /// declaration a program opened it with and the changes kv.db keeps,
-    /// with no layer of the program's own, its required settings left out;
-    /// nothing is remembered. None when no program opened it here.
-    #[cfg(feature = "wire")]
-    pub(crate) fn config_kept(&self, name: &str) -> Result<Option<Config<serde_json::Value>>> {
-        let within = |why: String| crate::Error::corrupt(why).within(format!("config {name}"));
-        let Some(text) = handle::kept_declaration(self, name)? else { return Ok(None) };
-        let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|error| within(format!("its kept declaration: {error}")))?;
-        let declaration = data::declaration(&value).map_err(within)?;
-        let opened = handle::open_with(handle::Opening {
-            store: Some(self.clone()),
-            name: name.to_owned(),
-            declaration,
-            layers: Vec::new(),
-            validate: None,
-            strict: false,
-            view: resolve::View::Data,
-            remember: false,
-            kept: true,
-        });
-        opened.map(Some)
-    }
-}
-
-#[cfg(feature = "client")]
-pub(crate) use hub::names;
-
 impl<T> fmt::Debug for ConfigBuilder<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConfigBuilder")
@@ -246,6 +182,6 @@ impl<T> fmt::Debug for ConfigBuilder<T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "config"))]
 #[path = "config_tests.rs"]
 mod tests;

@@ -36,7 +36,7 @@ pub struct Env {
 enum Dotenv {
     Path(PathBuf),
     #[cfg_attr(
-        not(any(test, feature = "wire", feature = "records")),
+        not(all(feature = "config", any(test, feature = "wire", feature = "records"))),
         expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
     )]
     Sent {
@@ -76,7 +76,7 @@ impl Env {
     /// What a program's SDK read where the program runs: its variables, the
     /// texts of the files their `NAME_FILE` name, and its `.env` files.
     #[cfg_attr(
-        not(any(test, feature = "wire", feature = "records")),
+        not(all(feature = "config", any(test, feature = "wire", feature = "records"))),
         expect(dead_code, reason = "only an SDK over the wire and a store's logger send it")
     )]
     pub(super) fn sent(mut self, variables: Vec<(String, String)>, files: Texts, dotenv: Vec<(String, String)>) -> Env {

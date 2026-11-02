@@ -59,7 +59,7 @@ export const rustSources: Record<string, { modules: string[]; dirs: string[]; ai
 	},
 	config: {
 		modules: ['config', 'aio::config'],
-		dirs: ['kv/config/'],
+		dirs: ['config/'],
 		aio: ['aio/config.rs', 'aio/config/'],
 	},
 	records: {
@@ -424,7 +424,7 @@ class Reader {
 		return current
 	}
 
-	// `pub use kv::config;` at the root is the module config
+	// `pub use kv::locks;` at the root is the module locks
 	#throughUse(entry: Entry): Entry | undefined {
 		if (!('use' in entry.inner)) {
 			return entry

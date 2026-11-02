@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::*;
-use crate::kv::config::marks::{Live, Required, Secret, marked};
+use crate::config::marks::{Live, Required, Secret, marked};
 
 #[derive(Serialize, Deserialize, Default)]
 struct Settings {

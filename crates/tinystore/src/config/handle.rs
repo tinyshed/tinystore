@@ -12,24 +12,23 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::ConfigBuilder;
 use super::declaration::{Declaration, Kind, Setting, holds_secret, masked, unmarked};
-#[cfg(any(test, feature = "wire"))]
+#[cfg(all(feature = "config", any(test, feature = "wire")))]
 use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Given, Line, Origin};
 use super::hub::{Change, Follower, Hub, Kept};
-#[cfg(feature = "async")]
-use super::hub::{Hook, Unpublished};
 use super::layers::{Base, Layer, Stacked, set, shown_value};
 use super::marks::marked;
 use super::resolve::{Making, Resolved, Validate, View};
 use super::rules::{self, described};
+#[cfg(all(feature = "config", feature = "async"))]
+use super::store::{Hook, Unpublished};
+use super::{ConfigBuilder, Store};
 use crate::clock::from_unix_millis;
-use crate::kv::engine::Kv;
-use crate::kv::scope::check_name;
 use crate::limits::SETTING_BYTES;
 use crate::sync::lock;
-use crate::{Error, ErrorKind, Result, Store};
+use crate::text::check_name;
+use crate::{Error, ErrorKind, Result};
 
 /// The tries a change makes while others race it before it gives up.
 const ATTEMPTS: usize = 8;
@@ -141,7 +140,7 @@ where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
 {
     let within = |error: Error| error.within(format!("config {}", builder.name));
-    check_name(&builder.name).map_err(within)?;
+    check_name("the", &builder.name).map_err(within)?;
     let declaration = declared(&builder.declaration).map_err(within)?;
     if builder.store.is_none() {
         refuse_live(&declaration).map_err(within)?;
@@ -163,17 +162,6 @@ fn refuse_live(declaration: &Declaration) -> Result<()> {
     }
 }
 
-/// The declaration kv.db keeps of the config `name`, the last a program
-/// opened it with; none when no program opened it, or the store has no kv.db
-/// yet, which a store opened beside would otherwise try to make.
-#[cfg(feature = "wire")]
-pub(super) fn kept_declaration(store: &Store, name: &str) -> Result<Option<String>> {
-    if !store.dir().join("kv.db").exists() {
-        return Ok(None);
-    }
-    Ok(Hub::of(&Kv::of(store)?, name)?.remembered())
-}
-
 /// Opens a config: its layers read, its value made and checked, then the
 /// changes kept in kv.db applied.
 pub(super) fn open_with<T>(opening: Opening<T>) -> Result<Config<T>>
@@ -182,14 +170,14 @@ where
 {
     let shown = format!("config {}", opening.name);
     let within = |error: Error| error.within(&shown);
-    check_name(&opening.name).map_err(within)?;
+    check_name("the", &opening.name).map_err(within)?;
     let making = Making { declaration: &opening.declaration, validate: opening.validate.as_ref(), view: opening.view };
     let base = Base::read(&opening.declaration, &opening.layers, !opening.kept)
         .map_err(|problems| within(refused(problems)))?;
     let (value, tree) = making.layered(&base).map_err(|problems| within(refused(problems)))?;
     let hub = match &opening.store {
-        Some(store) => Hub::of(&Kv::of(store).map_err(within)?, &opening.name).map_err(within)?,
-        None => Hub::detached(&opening.name),
+        Some(store) => Hub::of(store, &opening.name).map_err(within)?,
+        None => Hub::detached(),
     };
     let layered = (Arc::new(value), tree);
     let kept = hub.kept();
@@ -313,7 +301,7 @@ where
     }
 
     /// Whether it was loaded without a store, with no change to keep.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "config", feature = "async"))]
     pub(crate) fn detached(&self) -> bool {
         self.inner.hub.keeps_nothing()
     }
@@ -322,7 +310,7 @@ where
     /// text is, by the setting's kind: `2048` an integer, `30s` a span, `a,b`
     /// a list. A path the declaration has no setting at is refused, naming
     /// its nearest.
-    #[cfg(feature = "client")]
+    #[cfg(all(feature = "config", feature = "client"))]
     pub(crate) fn value_of_text(&self, path: &str, text: &str) -> Result<Value> {
         let declared = self.inner.declaration.settings();
         let Some(setting) = self.inner.declaration.setting(path) else {
@@ -336,7 +324,7 @@ where
     /// Changes the live settings `changes` names, a partial value in the
     /// declaration's shape, while the config is still at `version`: what a
     /// program's SDK sends once its own `validate` took the value they make.
-    #[cfg(any(test, feature = "wire"))]
+    #[cfg(all(feature = "config", any(test, feature = "wire")))]
     pub(crate) fn update_data(&self, version: i64, changes: &Value) -> Result<()> {
         let within = |error: Error| error.within(format!("config {}", self.inner.name));
         let mut leaves = Vec::new();
@@ -389,7 +377,7 @@ pub(crate) type Proposal = (i64, Vec<(String, Value)>);
 /// What the async API's handle of a config awaits: each try of a change made
 /// on the polling thread by [`Config::proposal`], its commit submitted to
 /// kv.db's writer, and what it wrote handed back to be published there.
-#[cfg(feature = "async")]
+#[cfg(all(feature = "config", feature = "async"))]
 impl<T> Config<T>
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
@@ -551,7 +539,7 @@ where
     }
 
     /// The settings a partial value names, each with its value checked.
-    #[cfg(any(test, feature = "wire"))]
+    #[cfg(all(feature = "config", any(test, feature = "wire")))]
     fn flatten(&self, group: &Group, changes: &Value, path: &str, leaves: &mut Vec<(String, Value)>) -> Result<()> {
         let Value::Object(map) = changes else {
             let at = if path.is_empty() { "a change" } else { path };

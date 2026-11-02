@@ -105,6 +105,7 @@ What has cost time before, so that it does not again:
 | `crates/tinystore/`                 | the library: the runtime, the SQLite adapter, every engine, the wire, as modules behind features                                                                                                                                                         |
 | `crates/tinystore/src/sqlite/`      | the SQLite every engine stands on; no engine vocabulary                                                                                                                                                                                                  |
 | `crates/tinystore/src/kv/`          | kv: buckets, counters, rate limits, quotas, `once`, transactions, locks and semaphores                                                                                                                                                                   |
+| `crates/tinystore/src/config/`      | config: a program's settings from its declaration, files and the environment, with no store; `store.rs`, with `config`, keeps the live ones' changes in kv.db                                                                                            |
 | `crates/tinystore/src/jobs/`        | jobs: queues, ids, repeats and cron, schedules, limits, workers, claims, steps                                                                                                                                                                           |
 | `crates/tinystore/src/sql/`         | sql: the application's databases, their migrations, reads, writes, batches and transactions                                                                                                                                                              |
 | `crates/tinystore/src/search/`      | search: indexes, their words and postings, segments and their merges, vectors, their codes and clusters, filters, searches, the purge of the gone                                                                                                        |
@@ -151,15 +152,18 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   the SQLite under it; `config` turns on kv, whose file keeps its changes,
   and `locks` kv too, whose file keeps their epoch;
   `console`, a logger's lines printed, turns on neither,
-  so a program that only logs links no SQLite. `typos`, the words nearest a
-  misspelt one, stands on no store; `config` and `search` turn it on, and
-  the command line uses it through config. `wire`, the protocol's session
+  so a program that only logs links no SQLite, and nor does one that only
+  loads its settings with `config-load`, `config::load` alone, which
+  `config` turns on; `just no-sqlite` fails when either links rusqlite.
+  `typos`, the words nearest a misspelt one, stands on no store;
+  `config-load` and `search` turn it on, and the command line uses it
+  through config. `wire`, the protocol's session
   and the pipe that the server, the FFI and every SDK speak, is a default
   feature that turns on kv, and a Rust program that calls the engines
   directly leaves it out. `client`, the protocol's client side, which the
   command line writes through a server with, turns on the wire, and like
   `fuzzing` promises nothing to a program. `just lint` builds the library with each engine,
-  the console, the wire and its client alone, the client beside metrics and records,
+  the console, config's loader, the wire and its client alone, the client beside metrics and records,
   `async` alone and beside each engine, and every engine with `async` and
   without the wire. An
   engine adds its calls to `Store` from its own module
@@ -174,6 +178,9 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
+  Config stands at the root, since `config::load` opens no store, and only its
+  `store.rs` names kv, whose file keeps the live settings' changes and whose
+  engine keeps the configs open in the process.
 - **`unsafe` lives in eight places**: `sqlite::memory`, `sqlite::mutex`,
   `space`, which asks the system for the disk's free space,
   `console::terminal`, which asks a Windows console to read colours,

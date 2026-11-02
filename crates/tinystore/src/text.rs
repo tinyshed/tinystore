@@ -10,6 +10,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 /// bucket, a queue, a database, a stream or an index is named.
 #[cfg(any(
     feature = "kv",
+    feature = "config-load",
     feature = "jobs",
     feature = "sql",
     feature = "blobs",
@@ -30,6 +31,7 @@ pub(crate) fn is_name(name: &str) -> bool {
 /// `focusroom.rooms` is offered as `focusroom_rooms`.
 #[cfg(any(
     feature = "kv",
+    feature = "config-load",
     feature = "jobs",
     feature = "sql",
     feature = "blobs",
@@ -49,6 +51,7 @@ pub(crate) fn check_name(what: &str, name: &str) -> crate::Result<()> {
 /// dropped: a name, unless nothing of it is left.
 #[cfg(any(
     feature = "kv",
+    feature = "config-load",
     feature = "jobs",
     feature = "sql",
     feature = "blobs",
@@ -88,7 +91,7 @@ pub(crate) fn span(span: std::time::Duration) -> String {
 /// written in camel case: a capital after a small letter or a digit, or a
 /// capital before a small letter after capitals, as `passwordHash` and
 /// `APIKey` split.
-#[cfg(any(feature = "config", feature = "console"))]
+#[cfg(any(feature = "config-load", feature = "console"))]
 pub(crate) fn starts_word(chars: &[char], at: usize) -> bool {
     if !chars[at].is_uppercase() {
         return false;

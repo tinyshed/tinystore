@@ -87,6 +87,7 @@ These contracts are what does not.
 - **CFG-09** `explain` MUST give each setting every value it was given, newest first, each with where it came from as data the same in every language: the declaration, a layer by its place, a file by its path, a variable with the `.env` file or the `NAME_FILE` file its text came from, or a change with its version and time; a line's `from` and `over` MUST be that data as text, and a secret's value MUST be `***` in it too.
 - **CFG-10** A config loaded without a store MUST read the same layers, rules and secrets as one opened from a store, write nothing to disk, and refuse a live setting when it opens, naming it.
 - **CFG-11** A map of entries MUST take each entry field by field: a later layer MUST merge into an entry an earlier one made rather than replace it, a variable named by the map, the entry's key and the field, or its `NAME_FILE`, MUST give that one field of an entry an earlier layer made, every field MUST keep its default, rules, `required` and `secret` in every entry and never be live, and two keys one variable would name MUST be refused.
+- **CFG-12** A program that only loads its settings, with the `config-load` feature alone, MUST link no store and no SQLite.
 
 ### Locks
 

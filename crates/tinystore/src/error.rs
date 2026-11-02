@@ -209,7 +209,7 @@ impl Error {
     }
 
     /// The same error with one fact more, which a program reads by its name.
-    #[cfg(feature = "store")]
+    #[cfg(any(feature = "store", feature = "config-load"))]
     pub(crate) fn naming(mut self, name: impl Into<Cow<'static, str>>, value: impl Into<String>) -> Self {
         self.facts.push((name.into(), value.into()));
         self

@@ -50,9 +50,10 @@ const rootSets = ['console', 'kv', 'wire']
 /** The engines whose async calls have a module of their own in aio/, each linted beside its engine. */
 const aioEngines = new Set(['kv', 'config', 'locks', 'channels', 'jobs', 'sql', 'blobs', 'records', 'metrics', 'search'])
 
-/** The features a file of the library belongs to: its area, and kv's config and locks as their own. */
+/** The features a file of the library belongs to: its area, kv's locks as their own, and config's loader alone. */
 function featuresOf(part: string[]): string[] {
-	if (part[0] === 'kv' && (part[1] === 'config' || part[1] === 'locks')) return [part[0], part[1]]
+	if (part[0] === 'kv' && part[1] === 'locks') return [part[0], part[1]]
+	if (part[0] === 'config') return ['config-load', 'config']
 	if (part[0] === 'metrics' && part[1] === 'system.rs') return [part[0], 'system']
 	// aio/ is linted with async's own set, and an engine's aio/kv.rs or aio/kv/ beside its engine
 	if (part[0] === 'aio') {

@@ -20,8 +20,6 @@ mod batch;
 mod bucket;
 mod buffer;
 mod cells;
-#[cfg(feature = "config")]
-pub mod config;
 mod counters;
 mod encrypted;
 mod engine;
@@ -61,6 +59,9 @@ pub(crate) use {
     once::{Hand, Waiter, hand, rows as once_rows},
     path::MAX_PATH as MAX_KEY,
 };
+// What keeps a config's live settings: kv.db, its versions and the configs open in the process.
+#[cfg(feature = "config")]
+pub(crate) use engine::{Kv, next_version};
 // The tries of an update, which the async API awaits.
 #[cfg(feature = "async")]
 pub(crate) use bucket::{Proposed, UPDATE_ATTEMPTS, kept};

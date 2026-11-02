@@ -19,8 +19,11 @@ default = ["kv", "config", "locks", "channels", "jobs", "sql", "blobs", "records
 # stands on the store, its directory and SQLite; the console alone does not.
 store = ["dep:rusqlite"]
 kv = ["store", "dep:chacha20poly1305", "dep:sha2"]
-# a program's settings, kept in kv.db, and the parsers of the files that give them
-config = ["kv", "dep:toml", "dep:yaml-rust2", "typos"]
+# a program's settings read from its declaration, its files and the environment,
+# with no store: config::load, and the parsers of the files that give them
+config-load = ["dep:toml", "dep:yaml-rust2", "typos"]
+# the same settings opened from a store, store.config, the live ones' changes kept in kv.db
+config = ["config-load", "kv"]
 # locks and semaphores in the memory of the store's process, their fences
 # from an epoch kept in kv.db
 locks = ["kv"]

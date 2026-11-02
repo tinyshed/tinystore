@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::kv::config::declaration::{Declaration, Keys};
+use crate::config::declaration::{Declaration, Keys};
 
-const VECTORS: &str = include_str!("../../../../../testdata/config/env.json");
+const VECTORS: &str = include_str!("../../../../testdata/config/env.json");
 
 fn vectors() -> Value {
     serde_json::from_str(VECTORS).unwrap()

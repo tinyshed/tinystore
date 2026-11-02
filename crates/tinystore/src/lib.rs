@@ -19,6 +19,8 @@ pub mod channels;
 mod clock;
 #[cfg(any(feature = "records", feature = "metrics", feature = "search", feature = "backup"))]
 mod compress;
+#[cfg(feature = "config-load")]
+pub mod config;
 #[cfg(feature = "console")]
 pub mod console;
 #[cfg(any(feature = "kv", feature = "blobs", feature = "backup", feature = "replication"))]
@@ -38,8 +40,6 @@ pub mod kv;
 pub mod limits;
 #[cfg(all(feature = "records", feature = "config"))]
 mod log_config;
-#[cfg(feature = "config")]
-pub use kv::config;
 #[cfg(feature = "locks")]
 pub use kv::locks;
 #[cfg(feature = "store")]
@@ -70,7 +70,7 @@ pub mod sql;
 pub(crate) mod sqlite;
 #[cfg(feature = "store")]
 mod store;
-#[cfg(feature = "store")]
+#[cfg(any(feature = "store", feature = "config-load"))]
 mod sync;
 #[cfg(all(test, any(feature = "channels", feature = "locks", feature = "jobs")))]
 mod testing;

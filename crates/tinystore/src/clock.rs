@@ -81,7 +81,7 @@ pub fn unix_nanos(time: SystemTime) -> i64 {
 /// The time `millis` milliseconds after the Unix epoch; before it when negative.
 /// A time outside the years 1601 to 9999 is held at their edge: `SystemTime`
 /// panics past what the platform represents, and Windows' begins at 1601.
-#[cfg(any(feature = "kv", feature = "jobs", feature = "blobs", feature = "metrics"))]
+#[cfg(any(feature = "kv", feature = "config-load", feature = "jobs", feature = "blobs", feature = "metrics"))]
 pub(crate) fn from_unix_millis(millis: i64) -> SystemTime {
     const LATEST: Duration = Duration::from_secs(253_402_300_799);
     const EARLIEST: Duration = Duration::from_secs(11_644_473_600);
@@ -113,7 +113,7 @@ pub(crate) fn millis(span: Duration) -> i64 {
 
 /// The year, month and day `days` after 1970-01-01, by Howard Hinnant's
 /// `civil_from_days`, its years counted in eras of 400.
-#[cfg(any(feature = "config", feature = "records", feature = "metrics"))]
+#[cfg(any(feature = "config-load", feature = "records", feature = "metrics"))]
 pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);

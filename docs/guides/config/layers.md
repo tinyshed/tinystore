@@ -305,6 +305,21 @@ let agent = tinystore::config::load("agent", Agent::default())
 let hub = agent.get().hub.clone();
 ```
 
+If your program only loads its settings, turn off the default features and
+ask for `config-load` alone. The program then links no store and no SQLite,
+and it builds without a C compiler, so a static Linux binary needs no
+`musl-gcc`:
+
+```toml
+[dependencies]
+tinystore = { version = "0.6", default-features = false, features = ["config-load"] }
+```
+
+`config-load` has everything that `load` reads: files, the environment,
+`_FILE` variables, secrets, required settings, entries, rules and `explain`.
+The `config` feature, which is on by default, adds `store.config` and live
+settings to it.
+
 - A loaded config has no live settings, because only a store keeps a change.
   A `Live` field is refused when it opens, and the error names the field.
 - `update` fails with an invalid error, since no setting is live, and

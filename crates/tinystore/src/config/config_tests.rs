@@ -198,7 +198,7 @@ fn a_secret_prints_as_stars_wherever_it_goes_and_no_change_keeps_one() {
     }
     let error = refused(config.update(|settings| settings.db.url = Secret::new("other".to_owned())));
     assert!(error.to_string().contains("db.url is a secret, which only a layer gives"), "{error}");
-    let kept: String = crate::kv::engine::Kv::of(&f.store)
+    let kept: String = crate::kv::Kv::of(&f.store)
         .unwrap()
         .file()
         .read(|connection| {
@@ -256,7 +256,7 @@ fn a_secret_a_map_or_a_list_holds_inside_prints_as_stars_in_explain_and_no_chang
     let host = |password: &str| Instance { host: "h".to_owned(), password: Secret::new(password.to_owned()) };
     let error = refused(config.update(|sites| drop(sites.mirrors.insert("kazan".to_owned(), host("kept?")))));
     assert!(error.to_string().contains("mirrors holds a secret, which only a layer gives"), "{error}");
-    let changes: i64 = crate::kv::engine::Kv::of(&f.store)
+    let changes: i64 = crate::kv::Kv::of(&f.store)
         .unwrap()
         .file()
         .read(|connection| {
@@ -406,7 +406,7 @@ fn entries_the_declaration_gives_open_with_no_layer_and_no_change_or_mark_makes_
     assert_eq!(config.get().instance["local"].settings.password.reveal(), "dev-only");
     let error = refused(config.update(|dashbin| drop(dashbin.instance.insert("x".to_owned(), Site::default()))));
     assert!(error.to_string().contains("instance is not live: the layers give its entries"), "{error}");
-    let kept: String = crate::kv::engine::Kv::of(&f.store)
+    let kept: String = crate::kv::Kv::of(&f.store)
         .unwrap()
         .file()
         .read(|connection| {
@@ -718,7 +718,7 @@ fn what_a_config_keeps_of_its_changes_is_bounded_and_a_path_too() {
 fn the_store_keeps_the_last_declaration_a_config_was_opened_with() {
     let f = fixture();
     let config = open(&f, &[]);
-    let kv = crate::kv::engine::Kv::of(&f.store).unwrap();
+    let kv = crate::kv::Kv::of(&f.store).unwrap();
     let kept: String = kv
         .file()
         .read(|connection| {

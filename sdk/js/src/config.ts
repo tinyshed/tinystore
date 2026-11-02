@@ -36,7 +36,7 @@ const layerMark = '~layer'
 const attempts = 8
 
 // The declaration as the core reads it: docs/guides/config/README.md, and
-// crates/tinystore/src/kv/config/data.rs, which reads this JSON.
+// crates/tinystore/src/config/data.rs, which reads this JSON.
 type Kind =
 	| 'text'
 	| 'integer'
@@ -897,7 +897,7 @@ function originOf(sent: SentOrigin): ExplainOrigin {
 	}
 }
 
-/** The text the core's `from` says: crates/tinystore/src/kv/config/explain.rs, Origin's Display. */
+/** The text the core's `from` says: crates/tinystore/src/config/explain.rs, Origin's Display. */
 function originText(origin: ExplainOrigin): string {
 	switch (origin.kind) {
 		case 'declaration':
