@@ -1,5 +1,6 @@
 //! A config as a program opens, reads, changes and watches one.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -214,6 +215,55 @@ fn a_secret_prints_as_stars_wherever_it_goes_and_no_change_keeps_one() {
     );
     let error = refused(f.store.config("other", Settings::default()).file(yaml).open());
     assert!(error.to_string().contains("db.url: a secret is text") && !error.to_string().contains("12345"), "{error}");
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Sites {
+    instance: BTreeMap<String, Instance>,
+    backups: Vec<Instance>,
+    mirrors: Live<BTreeMap<String, Instance>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Instance {
+    host: String,
+    password: Secret<String>,
+}
+
+// contract: CFG-06, CFG-09, SEC-05
+#[test]
+fn a_secret_a_map_or_a_list_holds_inside_prints_as_stars_in_explain_and_no_change_keeps_it() {
+    let f = fixture();
+    let toml = file(&f, "sites.toml", "[instance.aimee]\nhost = \"10.0.0.1\"\npassword = \"of-the-file\"\n");
+    let variables = [
+        ("APP_INSTANCE", r#"{"aimee":{"host":"10.0.0.2","password":"of-the-env"}}"#),
+        ("APP_BACKUPS", r#"[{"host":"b","password":"of-a-list"}]"#),
+    ];
+    let config = f.store.config("sites", Sites::default()).file(toml.as_path()).env(env(&variables)).open().unwrap();
+    assert_eq!(config.get().instance["aimee"].password.reveal(), "of-the-env");
+    let explained = config.explain();
+    let printed = format!("{explained}{explained:?}");
+    for secret in ["of-the-file", "of-the-env", "of-a-list"] {
+        assert!(!printed.contains(secret), "{printed}");
+    }
+    let instance = explained.settings.iter().find(|line| line.path == "instance").unwrap();
+    let file_said = format!(r#"{{"aimee":{{"host":"10.0.0.1","password":"***"}}}} from {}"#, toml.display());
+    assert_eq!(instance.value, r#"{"aimee":{"host":"10.0.0.2","password":"***"}}"#, "the rest stays as it was given");
+    assert_eq!(instance.over, [file_said, "{} from the declaration".to_owned()]);
+
+    let host = |password: &str| Instance { host: "h".to_owned(), password: Secret::new(password.to_owned()) };
+    let error = refused(config.update(|sites| drop(sites.mirrors.insert("kazan".to_owned(), host("kept?")))));
+    assert!(error.to_string().contains("mirrors holds a secret, which only a layer gives"), "{error}");
+    let changes: i64 = crate::kv::engine::Kv::of(&f.store)
+        .unwrap()
+        .file()
+        .read(|connection| {
+            Ok(connection.query_row("select count(*) from _tinystore_kv_config_changes", [], |row| row.get(0)).unwrap())
+        })
+        .unwrap();
+    assert_eq!(changes, 0, "a change that holds a secret keeps nothing");
 }
 
 // contract: CFG-02

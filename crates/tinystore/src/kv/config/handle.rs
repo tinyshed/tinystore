@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::ConfigBuilder;
-use super::declaration::{Declaration, Kind, Setting, unmarked};
+use super::declaration::{Declaration, Kind, Setting, holds_secret, masked, unmarked};
 #[cfg(any(test, feature = "wire"))]
 use super::declaration::{Group, Node, joined, shown};
 use super::explain::{Explained, Given, Line, Origin};
@@ -484,15 +484,20 @@ where
         let before = self.snapshot();
         let mut after = (*before.value).clone();
         change(&mut after);
-        let (before_tree, after_tree) = (plain(&*before.value)?, plain(&after)?);
+        let read = marked(&after).map_err(|error| Error::invalid(error.to_string()))?;
+        let (before_tree, after_tree) = (plain(&*before.value)?, unmarked(&read));
         let mut leaves = Vec::new();
         for (path, setting) in self.declaration.settings() {
             let (was, is) = (at(&before_tree, &path), at(&after_tree, &path));
             if was == is {
                 continue;
             }
-            let value = is.cloned().unwrap_or(Value::Null);
-            leaves.push((path.clone(), self.checked(&path, setting, &value)?));
+            let value = self.checked(&path, setting, &is.cloned().unwrap_or(Value::Null))?;
+            // a map's or a list's value is kept whole, so a secret its type holds inside would be kept too
+            if at(&read, &path).is_some_and(holds_secret) {
+                return Err(Error::invalid(format!("{path} holds a secret, which only a layer gives")));
+            }
+            leaves.push((path.clone(), value));
         }
         Ok(leaves)
     }
@@ -571,7 +576,8 @@ where
                 let from = Origin::Change { version: change.version, at: from_unix_millis(change.at) };
                 stack.push(Stacked { value: change.value.clone(), from });
             }
-            if let Some(line) = line(path, setting, stack) {
+            let shown = |value: &Value| self.shown(&path, setting, &resolved.tree, value);
+            if let Some(line) = line(path.clone(), stack, shown) {
                 settings.push(line);
             }
         }
@@ -583,6 +589,27 @@ where
             resolved.foreign.iter().map(|path| format!("{path}: a change of a setting this program does not declare")),
         );
         Explained { settings, notes }
+    }
+
+    /// A value the setting at `path` was given, as `explain` shows it: a
+    /// secret as `***`, and a secret that a map, a list or any value holds
+    /// inside as the program's type reads it, with `tree` the rest of the
+    /// settings.
+    fn shown(&self, path: &str, setting: &Setting, tree: &Value, value: &Value) -> String {
+        let nests = matches!(setting.kind, Kind::Object | Kind::List(_) | Kind::Any);
+        if setting.secret {
+            return "***".to_owned();
+        }
+        if !nests || self.view != View::Rust {
+            return shown_value(value, setting.kind == Kind::Duration);
+        }
+        let mut probe = tree.clone();
+        set(&mut probe, path, value.clone());
+        match self.making().built(&probe).map(|built| marked(&built)) {
+            Ok(Ok(read)) => at(&read, path).map_or_else(|| value.to_string(), |read| masked(value, read).to_string()),
+            // a value that does not read as the program's type cannot say where its secrets are
+            _ => "***".to_owned(),
+        }
     }
 
     fn deliver(&self) {
@@ -648,12 +675,9 @@ where
     }
 }
 
-/// A setting's line of `explain`, from its values oldest first: each shown
-/// as `explain` shows a value, and its `from` and `over` that data as text.
-fn line(path: String, setting: &Setting, stack: Vec<Stacked>) -> Option<Line> {
-    let shown = |value: &Value| {
-        if setting.secret { "***".to_owned() } else { shown_value(value, setting.kind == Kind::Duration) }
-    };
+/// A setting's line of `explain`, from its values oldest first: each as
+/// `shown` shows it, and its `from` and `over` that data as text.
+fn line(path: String, stack: Vec<Stacked>, shown: impl Fn(&Value) -> String) -> Option<Line> {
     let given: Vec<Given> =
         stack.into_iter().rev().map(|stacked| Given { value: shown(&stacked.value), from: stacked.from }).collect();
     let (own, over) = given.split_first()?;
