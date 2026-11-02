@@ -4,11 +4,11 @@
 //! (`marks::marked`); an SDK's comes over the wire as data, which `data`
 //! reads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
-use super::marks::{LIVE, REQUIRED, SECRET, SECRET_REQUIRED};
+use super::marks::{ENTRIES, ENTRIES_GIVEN, ENTRIES_ITEM, LIVE, REQUIRED, SECRET, SECRET_REQUIRED};
 
 /// The longest path of a setting, its keys joined by dots.
 pub(super) const MOST_PATH: usize = 256;
@@ -16,10 +16,26 @@ pub(super) const MOST_PATH: usize = 256;
 /// The settings and groups of a group, by key.
 pub(crate) type Group = BTreeMap<String, Node>;
 
+/// The keys of the entries the declaration and the layers made, by the path
+/// of their map.
+pub(crate) type Keys = BTreeMap<String, BTreeSet<String>>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Node {
     Group(Group),
     Setting(Setting),
+    Entries(Entries),
+}
+
+/// A map of named entries, each the group `item` declares, whose fields are
+/// settings of their own: `instance.aimee.settings.password`. A layer gives
+/// an entry field by field, over what the layers before it gave the entry.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Entries {
+    pub(crate) item: Group,
+    /// The entries the declaration gives, by key, each as the config keeps
+    /// a value.
+    pub(crate) given: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -86,13 +102,18 @@ impl Declaration {
         }
     }
 
-    /// The node at a path of keys joined by dots, `limits.rps`.
+    /// The node at a path of keys joined by dots, `limits.rps`, or a field of
+    /// an entry, `instance.aimee.settings.password`, whichever entry it is.
     pub(crate) fn node(&self, path: &str) -> Option<&Node> {
         let mut keys = path.split('.');
         let mut node = self.root.get(keys.next()?)?;
-        for key in keys {
-            let Node::Group(group) = node else { return None };
-            node = group.get(key)?;
+        while let Some(key) = keys.next() {
+            node = match node {
+                Node::Group(group) => group.get(key)?,
+                // `key` names the entry, and the next key its field
+                Node::Entries(entries) => entries.item.get(keys.next()?)?,
+                Node::Setting(_) => return None,
+            };
         }
         Some(node)
     }
@@ -106,15 +127,28 @@ impl Declaration {
     pub(crate) fn setting(&self, path: &str) -> Option<&Setting> {
         match self.node(path)? {
             Node::Setting(setting) => Some(setting),
-            Node::Group(_) => None,
+            Node::Group(_) | Node::Entries(_) => None,
         }
     }
 
-    /// Every setting and its path, in the order of their keys.
+    /// Every setting and its path, in the order of their keys; no entry's.
     pub(crate) fn settings(&self) -> Vec<(String, &Setting)> {
+        self.settings_of(&Keys::new())
+    }
+
+    /// Every setting and its path, in the order of their keys, the fields of
+    /// each entry `keys` names among them.
+    pub(crate) fn settings_of(&self, keys: &Keys) -> Vec<(String, &Setting)> {
         let mut settings = Vec::new();
-        collect(&self.root, "", &mut settings);
+        collect(&self.root, "", keys, &mut settings);
         settings
+    }
+
+    /// Every map of entries and its path.
+    pub(crate) fn entries(&self) -> Vec<(String, &Entries)> {
+        let mut found = Vec::new();
+        entries_in(&self.root, "", &mut found);
+        found
     }
 }
 
@@ -123,10 +157,29 @@ fn group_json(group: &Group) -> Value {
         let value = match node {
             Node::Group(inner) => json!({ "group": group_json(inner) }),
             Node::Setting(setting) => setting_json(setting),
+            Node::Entries(entries) => entries_json(entries),
         };
         (key.clone(), value)
     });
     Value::Object(entries.collect())
+}
+
+/// A map of entries as a map given whole, for an older release, which
+/// leaves out what it does not know: its entries' group, and the entries the
+/// declaration gives, without their secrets, which the store never keeps.
+fn entries_json(entries: &Entries) -> Value {
+    let given = entries.given.iter().map(|(key, entry)| (key.clone(), without_secrets(&entries.item, entry)));
+    json!({ "kind": "object", "default": Value::Object(given.collect()), "entries": group_json(&entries.item) })
+}
+
+fn without_secrets(group: &Group, value: &Value) -> Value {
+    let Value::Object(map) = value else { return value.clone() };
+    let kept = map.iter().filter_map(|(key, inner)| match group.get(key) {
+        Some(Node::Setting(setting)) if setting.secret => None,
+        Some(Node::Group(fields)) => Some((key.clone(), without_secrets(fields, inner))),
+        _ => Some((key.clone(), inner.clone())),
+    });
+    Value::Object(kept.collect())
 }
 
 fn setting_json(setting: &Setting) -> Value {
@@ -181,21 +234,52 @@ fn rules_json(rules: &Rules, map: &mut Map<String, Value>) {
 
 /// Where a group stands, which says which marks its settings may carry: a
 /// field of a list's item is neither live nor a secret, since a list is one
-/// setting.
+/// setting; a field of an entry may be a secret, and is never live, since
+/// only the layers make an entry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Place {
     Root,
     Item,
+    Entry,
 }
 
-fn collect<'a>(group: &'a Group, path: &str, settings: &mut Vec<(String, &'a Setting)>) {
+fn collect<'a>(group: &'a Group, path: &str, keys: &Keys, settings: &mut Vec<(String, &'a Setting)>) {
     for (key, node) in group {
         let at = joined(path, key);
         match node {
-            Node::Group(inner) => collect(inner, &at, settings),
+            Node::Group(inner) => collect(inner, &at, keys, settings),
             Node::Setting(setting) => settings.push((at, setting)),
+            Node::Entries(entries) => {
+                for entry in keys.get(&at).into_iter().flatten() {
+                    collect(&entries.item, &joined(&at, entry), keys, settings);
+                }
+            }
         }
     }
+}
+
+fn entries_in<'a>(group: &'a Group, path: &str, found: &mut Vec<(String, &'a Entries)>) {
+    for (key, node) in group {
+        match node {
+            Node::Group(inner) => entries_in(inner, &joined(path, key), found),
+            Node::Entries(entries) => found.push((joined(path, key), entries)),
+            Node::Setting(_) => {}
+        }
+    }
+}
+
+/// The path of the entry `key` names in the map at `path`: a key that is not
+/// empty and has no dot, which would read as a field, and a path of at most
+/// `MOST_PATH` bytes.
+pub(crate) fn entry_path(path: &str, key: &str) -> Result<String, String> {
+    let at = joined(path, key);
+    if key.is_empty() || key.contains('.') {
+        return Err(format!("{path}: {key:?}: an entry's key is not empty and has no dot"));
+    }
+    if at.len() > MOST_PATH {
+        return Err(format!("{at}: a path past the {MOST_PATH} bytes a setting's takes"));
+    }
+    Ok(at)
 }
 
 /// The path of the setting `key` names in the group at `path`, as a
@@ -238,6 +322,9 @@ fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, St
     for (key, value) in map {
         let at = declared_path(path, key)?;
         let node = match value {
+            Value::Object(inner) if mark(inner).is_some_and(|(mark, _)| mark == ENTRIES) => {
+                Node::Entries(marked_entries(&inner[ENTRIES], &at, place)?)
+            }
             Value::Object(inner) if is_group(inner) => Node::Group(group(inner, &at, place)?),
             _ => Node::Setting(setting(value, &at, place)?),
         };
@@ -246,15 +333,55 @@ fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, St
     Ok(settings)
 }
 
+/// A map of entries as `Entries` writes it while the core reads: the default
+/// of its item, which declares each entry's fields, and the entries the
+/// declaration gives.
+fn marked_entries(value: &Value, path: &str, place: Place) -> Result<Entries, String> {
+    if place != Place::Root {
+        return Err(format!("{path}: entries stand among settings, not in an entry or a list's item"));
+    }
+    let item = match value.get(ENTRIES_ITEM) {
+        Some(Value::Object(item)) if is_group(item) => group(item, &declared_path(path, "*")?, Place::Entry)?,
+        _ => return Err(format!("{path}: an entry is a struct of settings; a map of values is a BTreeMap")),
+    };
+    let mut given = Map::new();
+    for (key, entry) in value.get(ENTRIES_GIVEN).and_then(Value::as_object).into_iter().flatten() {
+        entry_path(path, key)?;
+        given.insert(key.clone(), given_value(entry).unwrap_or_default());
+    }
+    Ok(Entries { item, given })
+}
+
+/// A value with its marks taken off, as `unmarked`, and without what a mark
+/// says is required, `Secret::default()` and `Required`, which a layer gives:
+/// a declaration's value of it is never counted as given.
+fn given_value(value: &Value) -> Option<Value> {
+    let Value::Object(map) = value else { return Some(unmarked(value)) };
+    match mark(map) {
+        Some((REQUIRED | SECRET_REQUIRED, _)) => None,
+        Some((_, inner)) => given_value(inner),
+        None if duration_millis(map).is_some() => Some(unmarked(value)),
+        None => Some(Value::Object(
+            map.iter().filter_map(|(key, inner)| Some((key.clone(), given_value(inner)?))).collect(),
+        )),
+    }
+}
+
 /// A struct's fields, not a map of any keys, a span or a mark.
 fn is_group(map: &Map<String, Value>) -> bool {
     !map.is_empty() && mark(map).is_none() && duration_millis(map).is_none()
 }
 
-/// The key and the value of a mark, when `map` is one.
+/// The key and the value of a mark, when `map` is one: of a map of entries,
+/// its entries, without its item's default.
 fn mark(map: &Map<String, Value>) -> Option<(&str, &Value)> {
+    static NO_ENTRIES: Value = Value::Null;
     let (key, value) = map.iter().next()?;
-    (map.len() == 1 && key.starts_with('\0')).then_some((key.as_str(), value))
+    if map.len() != 1 || !key.starts_with('\0') {
+        return None;
+    }
+    let held = if key == ENTRIES { value.get(ENTRIES_GIVEN).unwrap_or(&NO_ENTRIES) } else { value };
+    Some((key.as_str(), held))
 }
 
 /// The marks a setting carries, read from the outermost in.
@@ -272,7 +399,9 @@ impl Marks {
     fn take(&mut self, key: &str, path: &str, place: Place) -> Result<(), String> {
         let refused = |why: &str| Err(format!("{path}: {why}"));
         match key {
+            ENTRIES => return refused("entries take no mark: each of their fields carries its own"),
             LIVE if place == Place::Item => return refused("a list's item has no live field: the list is one setting"),
+            LIVE if place == Place::Entry => return refused("an entry's field is not live: the layers give it"),
             LIVE if self.seen > 0 => return refused("live is the outermost mark"),
             LIVE => self.live = true,
             REQUIRED if self.required => return refused("required twice"),
@@ -307,7 +436,7 @@ fn setting(value: &Value, path: &str, place: Place) -> Result<Setting, String> {
     }
     let default = match place {
         _ if marks.required => None,
-        Place::Root => Some(unmarked(value)),
+        Place::Root | Place::Entry => Some(unmarked(value)),
         Place::Item => None,
     };
     Ok(Setting {

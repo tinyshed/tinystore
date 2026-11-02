@@ -135,6 +135,14 @@ func Validate[T any](check func(T) error) ConfigOption
 
 Validate checks the whole value at open and before a change is kept: a change it refuses keeps nothing. What relates two settings, a format or a pattern, is its; T is the config's.
 
+## Entries
+
+```go
+type Entries[T any] map[string]T
+```
+
+Entries is a map of named entries, each a T struct whose fields are settings of their own, with their own tags: a file gives an entry field by field, and APP\_INSTANCE\_AIMEE\_PASSWORD, or its \_FILE, one field of the entry aimee that a layer before it made. A field a layer leaves out is its zero value, as a list's item's is, and one tagged required is one every entry is given. A map is one setting, given whole.
+
 ## EnvOption
 
 ```go

@@ -466,3 +466,73 @@ func TestAStoreClosedAsItsConfigBeginsToFollowLetsGoOfWhatServedItAtOnce(t *test
 		}
 	})
 }
+
+type postgres struct {
+	Host     string           `json:"host"`
+	Port     int              `json:"port"`
+	Password tinystore.Secret `json:"password" config:"required"`
+	Timeout  time.Duration    `json:"timeout"`
+}
+
+type site struct {
+	Plugin   string   `json:"plugin"`
+	Settings postgres `json:"settings"`
+}
+
+type dashbin struct {
+	Instance tinystore.Entries[site] `json:"instance"`
+}
+
+// contract: CFG-11, CFG-06
+func TestAnEntryTakesEachFieldFromTheLayersAndAVariableOneFieldOfAnEntryALayerMade(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		dir := t.TempDir()
+		toml, secretFile := filepath.Join(dir, "dashbin.toml"), filepath.Join(dir, "pg")
+		ways.Must(0, os.WriteFile(toml, []byte("[instance.aimee]\nplugin = \"postgres\"\n[instance.aimee.settings]\nhost = \"127.0.0.1\"\nport = 15432\n"), 0o600))
+		ways.Must(0, os.WriteFile(secretFile, []byte("of-a-file\n"), 0o600))
+		local := site{Plugin: "postgres", Settings: postgres{Host: "localhost", Password: tinystore.NewSecret("dev-only")}}
+		declared := dashbin{Instance: tinystore.Entries[site]{"local": local}}
+		config := ways.Must(tinystore.OpenConfig(ctx, store, "dashbin", declared,
+			tinystore.File(toml),
+			tinystore.Env("APP", tinystore.EnvFrom(map[string]string{
+				"APP_INSTANCE_AIMEE_SETTINGS_PASSWORD":      "of-a-variable",
+				"APP_INSTANCE_KAZAN_SETTINGS_PASSWORD_FILE": secretFile,
+				"APP_INSTANCE": `{"aimee":{"settings":{"port":6432}},"kazan":{"settings":{"host":"10.0.0.9"}}}`,
+			})),
+		))
+		aimee := config.Get().Instance["aimee"]
+		if aimee.Plugin != "postgres" || aimee.Settings.Host != "127.0.0.1" || aimee.Settings.Port != 6432 {
+			t.Fatalf("aimee %+v", aimee)
+		}
+		if aimee.Settings.Password.Reveal() != "of-a-variable" || config.Get().Instance["kazan"].Settings.Password.Reveal() != "of-a-file" {
+			t.Fatal("a password an entry's variable gives")
+		}
+		if config.Get().Instance["local"].Settings.Password.Reveal() != "dev-only" {
+			t.Fatal("an entry the declaration gives")
+		}
+		lines := map[string]tinystore.Line{}
+		for _, line := range config.Explain() {
+			lines[line.Path] = line
+		}
+		if lines["instance.aimee.settings.password"].Value != "***" || lines["instance.aimee.settings.port"].From != "APP_INSTANCE" {
+			t.Fatalf("aimee's lines %+v %+v", lines["instance.aimee.settings.password"], lines["instance.aimee.settings.port"])
+		}
+		if over := "15432 from " + toml + ", 0 from the declaration"; lines["instance.aimee.settings.port"].Over != over {
+			t.Fatalf("over %q", lines["instance.aimee.settings.port"].Over)
+		}
+		if shown := fmt.Sprintf("%+v %v", config.Get(), config.Explain()); strings.Contains(shown, "of-a-") {
+			t.Fatalf("a secret printed: %s", shown)
+		}
+		type texts struct {
+			Instance tinystore.Entries[string] `json:"instance"`
+		}
+		_, err := tinystore.OpenConfig(ctx, store, "texts", texts{})
+		says(t, err, "an entry is a struct of settings")
+		type whole struct {
+			Instance map[string]site `json:"instance"`
+		}
+		_, err = tinystore.OpenConfig(ctx, store, "whole", whole{})
+		says(t, err, "instance: a map is given whole, and explain would print the secret")
+	})
+}

@@ -6,7 +6,8 @@
 //! ```text
 //! declaration  { "port": { "kind": "integer", "default": 8080, "min": 1 },
 //!                "db": { "group": { "url": { "kind": "text", "secret": true, "required": true } } },
-//!                "hosts": { "kind": { "list": { "kind": "text" } }, "default": [], "max": 20 } }
+//!                "hosts": { "kind": { "list": { "kind": "text" } }, "default": [], "max": 20 },
+//!                "instance": { "kind": "object", "default": {}, "entries": { "host": { "kind": "text", "default": "" } } } }
 //! layers       [ { "object": { "port": 80 }, "place": 2 },
 //!                { "file": { "name": "app.yaml", "text": "port: 9000\n", "optional": false } },
 //!                { "env": { "prefix": "APP", "vars": { "port": "PORT" }, "variables": { "PORT": "3000" },
@@ -15,9 +16,10 @@
 
 use serde_json::{Map, Value};
 
-use super::declaration::{Declaration, Group, Item, Kind, Node, Place, Rules, Setting, declared_path, shown};
+use super::declaration::{Declaration, Entries, Group, Item, Kind, Node, Place, Rules, Setting, declared_path, shown};
 use super::env::Env;
 use super::files::File;
+use super::files::{Walked, walk_entries};
 use super::layers::Layer;
 use super::rules;
 
@@ -33,14 +35,38 @@ fn group(map: &Map<String, Value>, path: &str, place: Place) -> Result<Group, St
     for (key, value) in map {
         let at = declared_path(path, key)?;
         let node = value.as_object().ok_or_else(|| format!("{at}: {} is no setting", shown(value)))?;
-        let node = match node.get("group") {
-            Some(Value::Object(inner)) => Node::Group(group(inner, &at, place)?),
-            Some(other) => return Err(format!("{at}: a group of {} is no map", shown(other))),
-            None => Node::Setting(setting(node, &at, place)?),
+        let node = match (node.get("group"), node.get("entries")) {
+            (Some(Value::Object(inner)), _) => Node::Group(group(inner, &at, place)?),
+            (Some(other), _) => return Err(format!("{at}: a group of {} is no map", shown(other))),
+            (None, Some(Value::Object(item))) => Node::Entries(entries(node, item, &at, place)?),
+            (None, Some(other)) => return Err(format!("{at}: an entry of {} is no map", shown(other))),
+            (None, None) => Node::Setting(setting(node, &at, place)?),
         };
         settings.insert(key.clone(), node);
     }
     Ok(settings)
+}
+
+/// A map of entries: its `kind` and `default` are what an older release
+/// reads it as, a map given whole, and `default` the entries the declaration
+/// gives, each walked as a file's entry is.
+fn entries(map: &Map<String, Value>, item: &Map<String, Value>, path: &str, place: Place) -> Result<Entries, String> {
+    if place != Place::Root {
+        return Err(format!("{path}: entries stand among settings, not in an entry or a list's item"));
+    }
+    let item = group(item, &declared_path(path, "*")?, Place::Entry)?;
+    let given = match map.get("default") {
+        None => Map::new(),
+        Some(Value::Object(given)) => given.clone(),
+        Some(other) => return Err(format!("{path}: entries of {} are no map", shown(other))),
+    };
+    let entries = Entries { item, given };
+    let mut walked = Walked::default();
+    walk_entries(&entries, &entries.given, path, &mut walked);
+    match walked.problems.into_iter().next() {
+        Some(problem) => Err(format!("its default: {problem}")),
+        None => Ok(entries),
+    }
 }
 
 fn setting(map: &Map<String, Value>, path: &str, place: Place) -> Result<Setting, String> {
@@ -55,8 +81,9 @@ fn setting(map: &Map<String, Value>, path: &str, place: Place) -> Result<Setting
         () if place == Place::Item && (live || secret) => {
             return Err(refused("a list's item has no live or secret field"));
         }
+        () if place == Place::Entry && live => return Err(refused("an entry's field is not live: the layers give it")),
         () if required && map.contains_key("default") => return Err(refused("a required setting has no default")),
-        () if place == Place::Root && !required && !map.contains_key("default") => {
+        () if place != Place::Item && !required && !map.contains_key("default") => {
             return Err(refused("a setting has a default, or is required"));
         }
         () => {}

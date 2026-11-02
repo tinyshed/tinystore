@@ -63,7 +63,7 @@ pub use files::File;
 pub use handle::{Config, IfVersion, Snapshot, Watching};
 pub(crate) use hub::Hub;
 use layers::Layer;
-pub use marks::{Live, Required, Secret};
+pub use marks::{Entries, Live, Required, Secret};
 use resolve::Validate;
 
 use crate::{Result, Store};

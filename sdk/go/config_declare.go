@@ -39,11 +39,13 @@ const (
 	kindList     kind = "list"
 	kindGroup    kind = "group"
 	kindSecret   kind = "secret"
+	kindEntries  kind = "entries"
 )
 
 var (
 	durationType = reflect.TypeFor[time.Duration]()
 	secretType   = reflect.TypeFor[Secret]()
+	entriesType  = reflect.TypeFor[entriesMap]()
 )
 
 // setting is a node of a declaration: a group's settings by their fields,
@@ -54,7 +56,7 @@ type setting struct {
 	kind  kind
 	typ   reflect.Type
 	group []*setting // a group's, or a list item's group's
-	item  *setting   // a list's
+	item  *setting   // a list's, or a map of entries' entry
 }
 
 // declared is a declaration as the core reads it and what reads its values back.
@@ -157,6 +159,11 @@ type marks struct {
 	itemsMax       *float64
 }
 
+// any is whether the tag says anything.
+func (m marks) any() bool {
+	return m.live || m.required || m.min != nil || m.max != nil || m.oneOf != nil || m.itemsMin != nil || m.itemsMax != nil
+}
+
 func readMarks(tag, path string, spans bool) (marks, error) {
 	var m marks
 	if tag == "" {
@@ -221,6 +228,13 @@ func declareSetting(field reflect.StructField, given reflect.Value, path string,
 		return nil, nil, err
 	}
 	node := &setting{typ: t}
+	if t.Implements(entriesType) {
+		if item || m.any() {
+			return nil, nil, core.Errorf(core.Invalid, "%s: entries take no mark and stand among settings, not in a list's item", path)
+		}
+		data, err := declareEntries(node, given, path)
+		return node, data, err
+	}
 	if t.Kind() == reflect.Struct && t != secretType {
 		if m.live || m.min != nil || m.max != nil || m.oneOf != nil || m.itemsMin != nil || m.itemsMax != nil {
 			return nil, nil, core.Errorf(core.Invalid, "%s: a group takes no rule; its settings do", path)
@@ -304,6 +318,49 @@ func describe(node *setting, data map[string]any, t reflect.Type, m marks, path 
 	return nil
 }
 
+// declareEntries reads a map of entries: what an older release reads as a
+// map given whole, its entries' group beside it, and the entries the
+// defaults give, a required field's zero value left out, since a
+// declaration's value of it is never counted as given.
+func declareEntries(node *setting, given reflect.Value, path string) (map[string]any, error) {
+	t := node.typ.Elem()
+	if t.Kind() != reflect.Struct || t == secretType || t == durationType {
+		return nil, core.Errorf(core.Invalid, "%s: an entry is a struct of settings; a map of values is a map", path)
+	}
+	node.kind = kindEntries
+	node.item = &setting{kind: kindGroup, typ: t}
+	group, err := declareGroup(node.item, reflect.Value{}, path+".*", true)
+	if err != nil {
+		return nil, err
+	}
+	defaults := map[string]any{}
+	if given.IsValid() {
+		for _, key := range given.MapKeys() {
+			defaults[key.String()] = givenEntry(node.item, group, given.MapIndex(key))
+		}
+	}
+	return map[string]any{"kind": kindObject, "default": defaults, "entries": group}, nil
+}
+
+// givenEntry is an entry the defaults give, without the zero value of a
+// field a layer must give.
+func givenEntry(group *setting, data map[string]any, v reflect.Value) map[string]any {
+	out := map[string]any{}
+	for _, inner := range group.group {
+		field := v.FieldByIndex(inner.index)
+		described, _ := data[inner.key].(map[string]any)
+		switch {
+		case inner.kind == kindGroup:
+			nested, _ := described["group"].(map[string]any)
+			out[inner.key] = givenEntry(inner, nested, field)
+		case described["required"] == true && field.IsZero():
+		default:
+			out[inner.key] = wireOf(inner, field)
+		}
+	}
+	return out
+}
+
 type itemOf struct {
 	node *setting
 	data map[string]any
@@ -338,6 +395,9 @@ func kindOf(t reflect.Type, path string) (kind, error) {
 	case reflect.String:
 		return kindText, nil
 	case reflect.Map:
+		if holdsSecret(t.Elem(), map[reflect.Type]bool{}) {
+			return "", core.Errorf(core.Invalid, "%s: a map is given whole, and explain would print the secret its %s holds: declare it tinystore.Entries", path, t.Elem())
+		}
 		if t.Key().Kind() == reflect.String {
 			return kindObject, nil
 		}
@@ -349,6 +409,28 @@ func kindOf(t reflect.Type, path string) (kind, error) {
 		return "", core.Errorf(core.Invalid, "%s: %s: a setting has one type; one a layer may leave out has a default", path, t)
 	}
 	return "", core.Errorf(core.Invalid, "%s: %s is no type a config keeps", path, t)
+}
+
+// holdsSecret is whether a value of t holds a Secret anywhere inside.
+func holdsSecret(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if t == secretType {
+		return true
+	}
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return holdsSecret(t.Elem(), seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if holdsSecret(t.Field(i).Type, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // implied is the range a sized or unsigned integer holds, which a value
@@ -390,6 +472,12 @@ func wireOf(node *setting, v reflect.Value) any {
 		out := map[string]any{}
 		for _, inner := range node.group {
 			out[inner.key] = wireOf(inner, v.FieldByIndex(inner.index))
+		}
+		return out
+	case kindEntries:
+		out := map[string]any{}
+		for _, key := range v.MapKeys() {
+			out[key.String()] = wireOf(node.item, v.MapIndex(key))
 		}
 		return out
 	case kindDuration:
@@ -452,6 +540,18 @@ func read(node *setting, value any, v reflect.Value) error {
 	case kindSecret:
 		text, _ := value.(string)
 		v.Set(reflect.ValueOf(Secret{text: text}))
+		return nil
+	case kindEntries:
+		each, _ := value.(map[string]any)
+		entries := reflect.MakeMapWithSize(v.Type(), len(each))
+		for key, entry := range each {
+			one := reflect.New(node.item.typ).Elem()
+			if err := read(node.item, entry, one); err != nil {
+				return err
+			}
+			entries.SetMapIndex(reflect.ValueOf(key).Convert(v.Type().Key()), one)
+		}
+		v.Set(entries)
 		return nil
 	case kindDuration:
 		ms, err := integer(value)

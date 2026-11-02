@@ -190,6 +190,106 @@ A duration is written `'1h30m'`, `'250ms'`, of `w`, `d`, `h`, `m`, `s` and
 index. What relates two settings, `min` below `max`, is
 [`validate`](explain.md)'s.
 
+## Entries
+
+Use entries for a map of named groups of settings, such as the databases a
+program reads, each under a name the operator picks. Each field of an entry
+is a setting of its own. A file gives an entry field by field, a variable
+gives one field of one entry, and every field keeps its default, its rules
+and its marks in every entry.
+
+```ts
+const site = { plugin: 'postgres', settings: { host: 'localhost', port: 5432, password: secret(String) } }
+const config = await store.config('dashbin', [{ instance: entries(site) }, file('dashbin.toml'), env('DASHBIN')])
+const password = config.value.instance.aimee?.settings.password.reveal()
+```
+
+```python
+@dataclass
+class Postgres:
+    host: str = "localhost"
+    port: int = 5432
+    password: Secret = secret()
+
+
+@dataclass
+class Site:
+    plugin: str = "postgres"
+    settings: Postgres = field(default_factory=Postgres)
+
+
+@dataclass
+class Dashbin:
+    instance: Entries[Site] = entries()
+
+
+config = await store.config("dashbin", [Dashbin, file("dashbin.toml"), env("DASHBIN")])
+password = config.value.instance["aimee"].settings.password.reveal()
+```
+
+```go
+type Postgres struct {
+	Host     string           `json:"host"`
+	Port     int              `json:"port"`
+	Password tinystore.Secret `json:"password" config:"required"`
+}
+
+type Site struct {
+	Plugin   string   `json:"plugin"`
+	Settings Postgres `json:"settings"`
+}
+
+type Dashbin struct {
+	Instance tinystore.Entries[Site] `json:"instance"`
+}
+
+config, err := tinystore.OpenConfig(ctx, store, "dashbin", Dashbin{},
+	tinystore.File("dashbin.toml"), tinystore.Env("DASHBIN"))
+password := config.Get().Instance["aimee"].Settings.Password.Reveal()
+```
+
+```rust
+#[derive(Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct Dashbin {
+    instance: Entries<Site>, // Site and its Postgres are serde structs with a Default, the password a Secret<String>
+}
+
+let config = store.config("dashbin", Dashbin::default()).file("dashbin.toml").env("DASHBIN").open()?;
+let password = config.get().instance["aimee"].settings.password.reveal();
+```
+
+```toml title="dashbin.toml"
+[instance.aimee.settings]
+host = "127.0.0.1"
+port = 15432
+```
+
+```sh
+DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE=/run/secrets/aimee
+```
+
+- A field's variable is the map's variable, then the entry's key, then the
+  field's path, in upper snake case: `instance.site-3.settings.password` is
+  `DASHBIN_INSTANCE_SITE_3_SETTINGS_PASSWORD`, and `_FILE` reads it from a
+  file.
+- A variable gives a field of an entry that an earlier layer made. A
+  variable for an entry that no layer made is reported once at open and in
+  `explain`, like any variable that names no setting.
+- Two keys that would share a variable, `site-3` and `site_3`, are
+  `invalid` once the environment is read. A key holds no dot.
+- A later layer merges into an entry field by field, and so does the map's
+  own variable given as JSON, `DASHBIN_INSTANCE='{"aimee": …}'`. No layer
+  removes an entry.
+- A field that no layer gives takes its default, or in Go its zero value.
+  A required field or a secret has to be given for every entry. A field of an
+  entry is never live.
+- `explain` gives each field of each entry its own line:
+  `instance.aimee.settings.password  ***  DASHBIN_INSTANCE_AIMEE_SETTINGS_PASSWORD_FILE, /run/secrets/aimee`.
+- A map of plain values, `{}` in TypeScript, a `dict` in Python, a `map` in
+  Go or a `BTreeMap` in Rust, is one setting, and a later layer replaces it
+  whole.
+
 ## Without a store
 
 A Rust program that only reads its settings at start, such as an agent that

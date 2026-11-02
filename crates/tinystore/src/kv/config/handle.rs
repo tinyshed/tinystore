@@ -499,6 +499,11 @@ where
             }
             leaves.push((path.clone(), value));
         }
+        for (path, _) in self.declaration.entries() {
+            if at(&before_tree, &path) != at(&after_tree, &path) {
+                return Err(Error::invalid(format!("{path} is not live: the layers give its entries")));
+            }
+        }
         Ok(leaves)
     }
 
@@ -557,6 +562,9 @@ where
             match group.get(key) {
                 None => return Err(Error::invalid(format!("{at}: no such setting"))),
                 Some(Node::Group(inner)) => self.flatten(inner, value, &at, leaves)?,
+                Some(Node::Entries(_)) => {
+                    return Err(Error::invalid(format!("{at} is not live: the layers give its entries")));
+                }
                 Some(Node::Setting(setting)) => {
                     let checked = self.checked(&at, setting, value)?;
                     leaves.push((at, checked));
@@ -570,7 +578,7 @@ where
         let current = lock(&self.current);
         let resolved = &current.resolved;
         let mut settings = Vec::new();
-        for (path, setting) in self.declaration.settings() {
+        for (path, setting) in self.declaration.settings_of(&self.base.entries) {
             let mut stack = self.base.stacks.get(&path).cloned().unwrap_or_default();
             if let Some(change) = resolved.applied.get(&path) {
                 let from = Origin::Change { version: change.version, at: from_unix_millis(change.at) };

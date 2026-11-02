@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -20,9 +21,10 @@ import (
 // layersData is the layers as the core reads them, in the order written.
 func layersData(d *declared, layers []layer) ([]any, error) {
 	paths := settingPaths(d.root, "")
+	maps := entryMaps(d.root, "")
 	out := make([]any, 0, len(layers))
 	for _, each := range layers {
-		data, err := each.data(paths)
+		data, err := each.data(paths, maps)
 		if err != nil {
 			return nil, err
 		}
@@ -31,7 +33,24 @@ func layersData(d *declared, layers []layer) ([]any, error) {
 	return out, nil
 }
 
-// settingPaths is every setting's path, as the core names its variable.
+// entryMaps is every map of entries' path, whose entries' variables begin
+// with its own.
+func entryMaps(group *setting, path string) []string {
+	var found []string
+	for _, node := range group.group {
+		at := joinPath(path, node.key)
+		switch node.kind {
+		case kindGroup:
+			found = append(found, entryMaps(node, at)...)
+		case kindEntries:
+			found = append(found, at)
+		}
+	}
+	return found
+}
+
+// settingPaths is every setting's path, as the core names its variable, and
+// every map of entries'.
 func settingPaths(group *setting, path string) []string {
 	var found []string
 	for _, node := range group.group {
@@ -45,7 +64,7 @@ func settingPaths(group *setting, path string) []string {
 	return found
 }
 
-func (f fileLayer) data([]string) (map[string]any, error) {
+func (f fileLayer) data([]string, []string) (map[string]any, error) {
 	file := map[string]any{"name": f.path, "optional": f.optional}
 	text, found, err := readText(f.path)
 	if err != nil {
@@ -72,7 +91,7 @@ func readText(path string) (string, bool, error) {
 // data is what the environment gives, read here: the variables of every
 // setting and those with the prefix, never the rest of the process's, the
 // files their NAME_FILE names, and the .env files' text.
-func (e envLayer) data(paths []string) (map[string]any, error) {
+func (e envLayer) data(paths, maps []string) (map[string]any, error) {
 	key := func(name string) string {
 		if runtime.GOOS == "windows" {
 			return strings.ToUpper(name)
@@ -87,11 +106,18 @@ func (e envLayer) data(paths []string) (map[string]any, error) {
 		}
 		wanted[key(name)], wanted[key(name+"_FILE")] = true, true
 	}
-	start := key(e.prefix + "_")
+	// an entry's field is named by its key, so its map's variable is what it begins with
+	var starts []string
+	for _, path := range maps {
+		starts = append(starts, key(envName(e.prefix, path)+"_"))
+	}
+	if e.prefix != "" {
+		starts = append(starts, key(e.prefix+"_"))
+	}
 	variables := map[string]string{}
 	for name, value := range e.environment() {
 		k := key(name)
-		if wanted[k] || e.prefix != "" && strings.HasPrefix(k, start) {
+		if wanted[k] || slices.ContainsFunc(starts, func(start string) bool { return strings.HasPrefix(k, start) }) {
 			variables[k] = value
 		}
 	}

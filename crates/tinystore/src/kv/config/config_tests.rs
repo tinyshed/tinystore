@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::kv::fixture::{Fixture, fixture};
@@ -264,6 +264,181 @@ fn a_secret_a_map_or_a_list_holds_inside_prints_as_stars_in_explain_and_no_chang
         })
         .unwrap();
     assert_eq!(changes, 0, "a change that holds a secret keeps nothing");
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Dashbin {
+    instance: Entries<Site>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Site {
+    plugin: String,
+    settings: Postgres,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct Postgres {
+    host: String,
+    port: u16,
+    user: String,
+    password: Secret<String>,
+    timeout: Duration,
+}
+
+impl Default for Site {
+    fn default() -> Self {
+        Site { plugin: "postgres".to_owned(), settings: Postgres::default() }
+    }
+}
+
+impl Default for Postgres {
+    fn default() -> Self {
+        let (host, user) = ("localhost".to_owned(), String::new());
+        Postgres { host, port: 5432, user, password: Secret::default(), timeout: Duration::from_secs(30) }
+    }
+}
+
+const SITES: &str = r#"
+[instance.aimee.settings]
+host = "127.0.0.1"
+port = 15432
+user = "dashbin_ro"
+
+[instance.site-3.settings]
+host = "10.0.0.3"
+"#;
+
+fn dashbin(f: &Fixture, toml: &std::path::Path, variables: &[(&str, &str)]) -> Result<Config<Dashbin>> {
+    f.store.config("dashbin", Dashbin::default()).file(toml).env(env(variables)).open()
+}
+
+// contract: CFG-11, CFG-06, CFG-09
+#[test]
+fn an_entry_takes_each_field_from_the_layers_and_a_variable_one_field_of_an_entry_a_file_made() {
+    let f = fixture();
+    let toml = file(&f, "dashbin.toml", SITES);
+    let secret = file(&f, "pg", "of-a-file\n").display().to_string();
+    let variables = [
+        ("APP_INSTANCE_AIMEE_SETTINGS_PASSWORD", "of-a-variable"),
+        ("APP_INSTANCE_SITE_3_SETTINGS_PASSWORD_FILE", secret.as_str()),
+        ("APP_INSTANCE", r#"{"aimee":{"settings":{"port":6432}}}"#),
+    ];
+    let config = dashbin(&f, &toml, &variables).unwrap();
+    let (aimee, site) = (&config.get().instance["aimee"], &config.get().instance["site-3"]);
+    let shown =
+        |site: &Site| (site.plugin.clone(), site.settings.host.clone(), site.settings.port, site.settings.user.clone());
+    assert_eq!(
+        shown(aimee),
+        ("postgres".into(), "127.0.0.1".into(), 6432, "dashbin_ro".into()),
+        "merged field by field"
+    );
+    assert_eq!(
+        (aimee.settings.password.reveal().as_str(), aimee.settings.timeout),
+        ("of-a-variable", Duration::from_secs(30))
+    );
+    assert_eq!((site.settings.host.as_str(), site.settings.port), ("10.0.0.3", 5432));
+    assert_eq!(site.settings.password.reveal(), "of-a-file");
+
+    let given = |path: &str| config.explain().settings.into_iter().find(|line| line.path == path).unwrap().given;
+    let toml_origin = Origin::File { path: toml.display().to_string() };
+    assert_eq!(
+        given("instance.aimee.settings.port"),
+        [
+            gave("6432", env_origin("APP_INSTANCE", None, None)),
+            gave("15432", toml_origin),
+            gave("5432", Origin::Declaration)
+        ]
+    );
+    assert_eq!(
+        given("instance.aimee.settings.password"),
+        [gave("***", env_origin("APP_INSTANCE_AIMEE_SETTINGS_PASSWORD", None, None))]
+    );
+    let from_file = env_origin("APP_INSTANCE_SITE_3_SETTINGS_PASSWORD_FILE", None, Some(&secret));
+    assert_eq!(given("instance.site-3.settings.password"), [gave("***", from_file)]);
+    let printed = config.explain().to_string();
+    assert!(!printed.contains("of-a-variable") && !printed.contains("of-a-file"), "{printed}");
+}
+
+// contract: CFG-11, CFG-03
+#[test]
+fn each_entry_is_given_its_required_fields_and_a_variable_of_an_entry_no_layer_made_is_said() {
+    let f = fixture();
+    let toml = file(&f, "dashbin.toml", SITES);
+    let error = refused(dashbin(&f, &toml, &[("APP_INSTANCE_AIMEE_SETTINGS_PASSWORD", "p")])).to_string();
+    let missing = "instance.site-3.settings.password is required: instance.site-3.settings.password in";
+    assert!(error.contains(missing) && error.contains("set APP_INSTANCE_SITE_3_SETTINGS_PASSWORD"), "{error}");
+    assert!(!error.contains("instance.aimee.settings.password"), "{error}");
+
+    let variables = [
+        ("APP_INSTANCE_AIMEE_SETTINGS_PASSWORD", "p"),
+        ("APP_INSTANCE_SITE_3_SETTINGS_PASSWORD", "p"),
+        ("APP_INSTANCE_KAZAN_SETTINGS_PASSWORD", "p"),
+    ];
+    let notes = dashbin(&f, &toml, &variables).unwrap().explain().notes;
+    let unmade = "APP_INSTANCE_KAZAN_SETTINGS_PASSWORD: a variable with the prefix that names no setting";
+    assert!(notes.iter().any(|note| note.starts_with(unmade)), "{notes:?}");
+
+    let twice = file(&f, "twice.toml", "[instance.site-3]\nplugin = \"a\"\n[instance.site_3]\nplugin = \"b\"\n");
+    let error = refused(dashbin(&f, &twice, &[])).to_string();
+    assert!(error.contains("would give both instance.site-3.settings.host and instance.site_3"), "{error}");
+    let dotted = file(&f, "dotted.toml", "[instance.\"db.example\"]\nplugin = \"a\"\n");
+    let error = refused(dashbin(&f, &dotted, &[])).to_string();
+    assert!(error.contains(r#"instance: "db.example": an entry's key is not empty and has no dot"#), "{error}");
+    let misspelt = file(&f, "misspelt.toml", "[instance.aimee]\nplugn = \"a\"\n");
+    let error = refused(dashbin(&f, &misspelt, &[])).to_string();
+    assert!(error.contains("instance.aimee.plugn: no such setting; did you mean instance.aimee.plugin?"), "{error}");
+}
+
+// contract: CFG-11, CFG-02, CFG-06
+#[test]
+fn entries_the_declaration_gives_open_with_no_layer_and_no_change_or_mark_makes_an_entry_live() {
+    let f = fixture();
+    let local = Site {
+        settings: Postgres { password: Secret::new("dev-only".to_owned()), ..Postgres::default() },
+        ..Site::default()
+    };
+    let declared = Dashbin { instance: Entries::from_iter([("local", local)]) };
+    let config = f.store.config("dashbin", declared).open().unwrap();
+    assert_eq!(config.get().instance["local"].settings.password.reveal(), "dev-only");
+    let error = refused(config.update(|dashbin| drop(dashbin.instance.insert("x".to_owned(), Site::default()))));
+    assert!(error.to_string().contains("instance is not live: the layers give its entries"), "{error}");
+    let kept: String = crate::kv::engine::Kv::of(&f.store)
+        .unwrap()
+        .file()
+        .read(|connection| {
+            Ok(connection.query_row("select declaration from _tinystore_kv_configs", [], |row| row.get(0)).unwrap())
+        })
+        .unwrap();
+    assert!(!kept.contains("dev-only"), "a secret an entry gives is not kept: {kept}");
+    let kept: Value = serde_json::from_str(&kept).unwrap();
+    assert_eq!(kept["instance"]["kind"], "object", "an older release reads a map given whole: {kept}");
+
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Marked {
+        instance: Live<Entries<Site>>,
+    }
+    let error = refused(f.store.config("marked", Marked::default()).open()).to_string();
+    assert!(error.contains("instance: entries take no mark: each of their fields carries its own"), "{error}");
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Texts {
+        instance: Entries<String>,
+    }
+    let error = refused(f.store.config("texts", Texts::default()).open()).to_string();
+    assert!(error.contains("instance: an entry is a struct of settings; a map of values is a BTreeMap"), "{error}");
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Pool {
+        size: Live<u32>,
+    }
+    #[derive(Clone, Default, Serialize, Deserialize)]
+    struct Pools {
+        pool: Entries<Pool>,
+    }
+    let error = refused(f.store.config("pools", Pools::default()).open()).to_string();
+    assert!(error.contains("pool.*.size: an entry's field is not live: the layers give it"), "{error}");
 }
 
 // contract: CFG-02

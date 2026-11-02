@@ -62,6 +62,8 @@ interface Described extends Rules {
 	required?: boolean
 	live?: boolean
 	secret?: boolean
+	/** of a map of entries, each entry's group; its kind is 'object', as an older release reads it */
+	entries?: Group
 }
 
 /**
@@ -82,6 +84,15 @@ export interface Setting<
 	readonly '~live'?: Live
 	readonly '~given'?: Given
 	readonly '~secret'?: IsSecret
+}
+
+/**
+ * A map of named entries, as `entries` declares one: each entry the group
+ * `G`, read as its settings are.
+ */
+export interface Entries<G> extends Setting<Readonly<Record<string, Value<G>>>> {
+	/** what an object in code gives each entry; nothing at run time */
+	readonly '~entries': G
 }
 
 /** A setting's text that prints as *** wherever it goes; `reveal` gives it. */
@@ -153,15 +164,17 @@ export type Changes<D> = {
 
 /** An object in code over the declaration: any of its settings, at any depth, a secret as text. */
 export type Overlay<D> = {
-	readonly [K in keyof D]?: D[K] extends Setting<infer V, boolean, boolean, boolean>
-		? V extends Secret
-			? string
-			: V
-		: D[K] extends readonly unknown[]
-			? Value<D[K]>
-			: D[K] extends object
-				? Overlay<D[K]>
-				: Value<D[K]>
+	readonly [K in keyof D]?: D[K] extends Entries<infer G>
+		? Readonly<Record<string, Overlay<G>>>
+		: D[K] extends Setting<infer V, boolean, boolean, boolean>
+			? V extends Secret
+				? string
+				: V
+			: D[K] extends readonly unknown[]
+				? Value<D[K]>
+				: D[K] extends object
+					? Overlay<D[K]>
+					: Value<D[K]>
 }
 
 /** A file a config reads: TOML, YAML or JSON by its extension. */
@@ -299,6 +312,11 @@ export interface DurationBounds {
 	max?: DurationText | undefined
 }
 
+/** The entries a map of entries' declaration gives, each as an object in code gives one. */
+export interface EntriesOptions<G> {
+	default?: Readonly<Record<string, Overlay<G>>> | undefined
+}
+
 /** A list's default and how many items it holds at least and at most. */
 export interface ListOptions<V> extends Bounds {
 	default?: readonly V[] | undefined
@@ -361,6 +379,7 @@ export function required(
 	if (inner === undefined) {
 		throw new InvalidError('required takes String, Number, Boolean, or a rule without its default')
 	}
+	refuseEntries(inner)
 	if (inner.secret === true) {
 		throw new InvalidError('a secret is required already: secret(String)')
 	}
@@ -385,6 +404,7 @@ export function live(given: unknown): Setting<unknown, true> {
 		throw new InvalidError('a mark goes on a setting, not on a group: mark each of its settings')
 	}
 	const inner = describedOf(given) ?? declaredValue(given, 'live')
+	refuseEntries(inner)
 	if (inner.secret === true) {
 		throw new InvalidError('a secret is never live')
 	}
@@ -474,6 +494,7 @@ function itemOf(item: unknown): Item {
 	}
 	const inner = describedOf(item)
 	if (inner !== undefined) {
+		refuseEntries(inner)
 		if (inner.live === true || inner.secret === true) {
 			throw new InvalidError("a list's items are neither live nor secret: the list is one setting")
 		}
@@ -484,6 +505,34 @@ function itemOf(item: unknown): Item {
 		return { group: declaredGroup(item, '[]') }
 	}
 	throw new InvalidError(`a list of ${String(item)}: of String, Number, Boolean, a rule or a group`)
+}
+
+/**
+ * A map of named entries, each the group `item` declares, whose fields are
+ * settings of their own, with their own marks: a file gives an entry field
+ * by field, and `APP_INSTANCE_AIMEE_PASSWORD`, or its `_FILE`, one field of
+ * the entry `aimee` that a layer before it made. A map written as a value,
+ * `{}`, is one setting, given whole.
+ */
+export function entries<G extends object>(item: G, options: EntriesOptions<G> = {}): Entries<G> {
+	if (!isPlainObject(item) || describedOf(item) !== undefined || Object.keys(item).length === 0) {
+		throw new InvalidError(
+			'an entry is a group of settings: entries({ host: String, password: secret(String) })',
+		)
+	}
+	const described = {
+		kind: 'object' as const,
+		default: options.default ?? {},
+		entries: declaredGroup(item, '*'),
+	}
+	return setting(described) as unknown as Entries<G>
+}
+
+/** A mark around a map of entries, which marks none of them. */
+function refuseEntries(inner: Described): void {
+	if (inner.entries !== undefined) {
+		throw new InvalidError('entries take no mark: each of their fields carries its own')
+	}
 }
 
 /** A file a config reads: TOML, YAML or JSON by its extension, a relative path the program's. */
@@ -586,11 +635,19 @@ function plainItem(first: unknown): Item {
 	}
 }
 
-/** Every setting's path, as the core names its variable. */
+/** Every setting's path, as the core names its variable, and every map of entries'. */
 function paths(group: Group, path: string): string[] {
 	return Object.entries(group).flatMap(([key, node]) => {
 		const at = path === '' ? key : `${path}.${key}`
 		return 'group' in node ? paths(node.group, at) : [at]
+	})
+}
+
+/** Every map of entries' path, whose entries' variables begin with its own. */
+function entryMaps(group: Group, path: string): string[] {
+	return Object.entries(group).flatMap(([key, node]) => {
+		const at = path === '' ? key : `${path}.${key}`
+		return 'group' in node ? entryMaps(node.group, at) : node.entries === undefined ? [] : [at]
 	})
 }
 
@@ -671,11 +728,15 @@ async function envData(layer: EnvLayer, declared: Group): Promise<object> {
 	const key = (name: string) => (windows ? name.toUpperCase() : name)
 	const named = paths(declared, '').map(path => layer.vars[path] ?? envName(layer.prefix, path))
 	const wanted = new Set(named.flatMap(name => [key(name), key(`${name}_FILE`)]))
-	const start = key(`${layer.prefix}_`)
+	// an entry's field is named by its key, so its map's variable is what it begins with
+	const starts = entryMaps(declared, '').map(path => key(`${envName(layer.prefix, path)}_`))
+	if (layer.prefix !== '') {
+		starts.push(key(`${layer.prefix}_`))
+	}
 	const variables: Record<string, string> = {}
 	for (const [name, value] of Object.entries(layer.from ?? process.env)) {
 		const k = key(name)
-		if (value !== undefined && (wanted.has(k) || (layer.prefix !== '' && k.startsWith(start)))) {
+		if (value !== undefined && (wanted.has(k) || starts.some(start => k.startsWith(start)))) {
 			variables[k] = value
 		}
 	}
@@ -722,6 +783,11 @@ function viewed(group: Group, value: unknown): unknown {
 }
 
 function viewedSetting(described: Described, value: unknown): unknown {
+	const item = described.entries
+	if (item !== undefined) {
+		const each = Object.entries(isPlainObject(value) ? value : {})
+		return Object.freeze(Object.fromEntries(each.map(([key, entry]) => [key, viewed(item, entry)])))
+	}
 	if (described.secret === true) {
 		return new Secret(typeof value === 'string' ? value : '')
 	}

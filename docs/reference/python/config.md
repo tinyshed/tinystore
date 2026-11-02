@@ -54,6 +54,27 @@ A setting that prints as *** wherever it goes and only a layer gives: ``url: Sec
 
 ``secret()`` must be given; ``secret("")`` is empty unless a layer gives it.
 
+## Entries
+
+```python
+class Entries[T](dict[str, T]):
+    ...
+```
+
+A map of named entries, each a ``T`` dataclass whose fields are settings of their own, with their own marks.
+
+A file gives an entry field by field, and ``APP_INSTANCE_AIMEE_PASSWORD``, or
+its ``_FILE``, one field of the entry ``aimee`` that a layer before it made.
+A ``dict`` is one setting, given whole: ``instance: Entries[Site] = entries()``.
+
+## entries
+
+```python
+def entries[T](given: Mapping[str, T] | None = None, /) -> Entries[T]: ...
+```
+
+A map of entries' default: none, or the entries the declaration gives, ``{"local": Site(...)}``.
+
 ## Range
 
 ```python

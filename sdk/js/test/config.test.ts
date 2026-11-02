@@ -15,6 +15,7 @@ import { parseDotenv } from '../src/dotenv.ts'
 import {
 	ConflictError,
 	duration,
+	entries,
 	env,
 	file,
 	InvalidError,
@@ -149,6 +150,62 @@ for (const way of ways) {
 			})
 			expect(lines.level?.from).toBe('layer 2')
 			expect(lines['db.url']?.value).toBe('***')
+		})
+
+		// contract: CFG-11, CFG-06
+		test('an entry takes each field from the layers, and a variable one field of an entry a layer made', async () => {
+			const toml = join(dir, 'dashbin.toml')
+			writeFileSync(toml, '[instance.aimee.settings]\nhost = "127.0.0.1"\nport = 15432\n')
+			const secretFile = join(dir, 'pg')
+			writeFileSync(secretFile, 'of-a-file\n')
+			const site = {
+				plugin: 'postgres',
+				settings: {
+					host: 'localhost',
+					port: int(5432),
+					password: secret(String),
+					timeout: duration('30s'),
+				},
+			}
+			const config = await store.config('dashbin', [
+				{ instance: entries(site, { default: { local: { settings: { password: 'dev-only' } } } }) },
+				file(toml),
+				{ instance: { kazan: { settings: { host: '10.0.0.9' } } } },
+				env('APP', {
+					from: {
+						APP_INSTANCE_AIMEE_SETTINGS_PASSWORD: 'of-a-variable',
+						APP_INSTANCE_KAZAN_SETTINGS_PASSWORD_FILE: secretFile,
+						APP_INSTANCE: '{"aimee":{"settings":{"port":6432}}}',
+					},
+				}),
+			])
+			const aimee = config.value.instance.aimee
+			const shown = [
+				aimee?.plugin,
+				aimee?.settings.host,
+				aimee?.settings.port,
+				aimee?.settings.timeout,
+			]
+			expect(shown).toEqual(['postgres', '127.0.0.1', 6432, '30s'])
+			expect(aimee?.settings.password.reveal()).toBe('of-a-variable')
+			expect(config.value.instance.kazan?.settings.password.reveal()).toBe('of-a-file')
+			expect(config.value.instance.local?.settings.password.reveal()).toBe('dev-only')
+			expect(JSON.stringify(config.value)).not.toContain('of-a-variable')
+			const lines = Object.fromEntries(config.explain().map(line => [line.path, line]))
+			expect(lines['instance.aimee.settings.password']?.value).toBe('***')
+			expect(lines['instance.aimee.settings.port']?.from).toBe('APP_INSTANCE')
+			expect(lines['instance.aimee.settings.port']?.over).toBe(
+				`15432 from ${toml}, 5432 from the declaration`,
+			)
+			expect(lines['instance.kazan.settings.host']?.from).toBe('layer 3')
+			expect(JSON.stringify(config.explain())).not.toContain('of-a-file')
+
+			const refused = await caught(
+				store.config('dashbin-live', [{ instance: entries({ size: live(1) }) }]),
+			)
+			expect(refused).toBeInstanceOf(InvalidError)
+			expect(String(refused)).toContain("instance.*.size: an entry's field is not live")
+			expect(() => required(entries(site) as never)).toThrow('entries take no mark')
 		})
 
 		// contract: CFG-09, CFG-06

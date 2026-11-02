@@ -91,10 +91,13 @@ let pool = connect(config.get().db.url.reveal())?;
 - An error about a secret names its variable and never quotes its text.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
-- In Rust a `Secret` inside a map or a list, such as the password of each
-  `BTreeMap<String, Instance>` entry, prints as `***` in `explain` too, the
-  rest of the entry as it was given. A live map or list that holds one
-  refuses a change, which would keep the secret.
+- A secret in each entry of a map is declared as a field of
+  [entries](layers.md#entries), and is given and printed like any other
+  secret. In Rust a `Secret` inside a plain `BTreeMap` or `Vec` prints as
+  `***` in `explain` too, the rest of the value as it was given, and a live
+  map or list that holds one refuses a change, which would keep the secret.
+  In Go a plain map whose values hold a `tinystore.Secret` is refused when
+  the config opens.
 
 Hiding a secret from print keeps it out of logs and screenshots. It is not
 access control: who may read the config at all is the server's tokens'

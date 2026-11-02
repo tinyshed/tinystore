@@ -35,6 +35,19 @@ func (Secret) MarshalText() ([]byte, error)       { return []byte("***"), nil }
 func (Secret) LogValue() slog.Value               { return slog.StringValue("***") }
 func (s *Secret) UnmarshalJSON(text []byte) error { return json.Unmarshal(text, &s.text) }
 
+// Entries is a map of named entries, each a T struct whose fields are
+// settings of their own, with their own tags: a file gives an entry field by
+// field, and APP_INSTANCE_AIMEE_PASSWORD, or its _FILE, one field of the
+// entry aimee that a layer before it made. A field a layer leaves out is its
+// zero value, as a list's item's is, and one tagged required is one every
+// entry is given. A map is one setting, given whole.
+type Entries[T any] map[string]T
+
+func (Entries[T]) entries() {}
+
+// entriesMap is what every Entries is, whatever its T.
+type entriesMap interface{ entries() }
+
 // ConfigOption is a layer of a config after its declaration, or how it opens.
 type ConfigOption interface{ config(*configOptions) }
 
@@ -46,7 +59,7 @@ type configOptions struct {
 
 // layer is a file or the environment, read when the config opens.
 type layer interface {
-	data(paths []string) (map[string]any, error)
+	data(paths, maps []string) (map[string]any, error)
 }
 
 type fileLayer struct {

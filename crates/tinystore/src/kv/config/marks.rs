@@ -1,5 +1,6 @@
 //! The marks a Rust declaration puts on its settings, as types: a secret, a
-//! setting with no default, a setting that changes while the program runs.
+//! setting with no default, a setting that changes while the program runs,
+//! and a map of entries whose fields are settings of their own.
 //!
 //! A mark serializes as its value, and a secret as `***`, wherever the
 //! program sends it. While the core reads a declaration, or compares two
@@ -8,6 +9,7 @@
 //! derive and need no derive of their own.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
@@ -20,6 +22,11 @@ pub(super) const SECRET: &str = "\0tinystore:secret";
 pub(super) const SECRET_REQUIRED: &str = "\0tinystore:secret required";
 pub(super) const REQUIRED: &str = "\0tinystore:required";
 pub(super) const LIVE: &str = "\0tinystore:live";
+pub(super) const ENTRIES: &str = "\0tinystore:entries";
+/// The keys inside a map of entries' mark: its item's default, which
+/// declares each entry's fields, and its entries.
+pub(super) const ENTRIES_ITEM: &str = "item";
+pub(super) const ENTRIES_GIVEN: &str = "entries";
 
 thread_local! {
     static READING: Cell<bool> = const { Cell::new(false) };
@@ -181,6 +188,98 @@ macro_rules! transparent {
 
 transparent!(Required, REQUIRED);
 transparent!(Live, LIVE);
+
+/// A map of named entries, each a `T` whose fields are settings of their own,
+/// with their own marks: a file gives an entry field by field, and
+/// `APP_INSTANCE_AIMEE_PASSWORD`, or its `_FILE`, one field of the entry
+/// `aimee` that a layer before it made. A `BTreeMap` is one setting, given
+/// whole. It reads as the map: `config.get().instance["aimee"]`.
+///
+/// `T::default()` declares an entry's fields, so a field a layer leaves out
+/// takes its default there, and a `Secret::default()` field is one every
+/// entry must be given.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Entries<T>(BTreeMap<String, T>);
+
+impl<T> Entries<T> {
+    pub fn new() -> Self {
+        Entries(BTreeMap::new())
+    }
+
+    pub fn into_inner(self) -> BTreeMap<String, T> {
+        self.0
+    }
+}
+
+impl<T> Default for Entries<T> {
+    fn default() -> Self {
+        Entries::new()
+    }
+}
+
+impl<T> From<BTreeMap<String, T>> for Entries<T> {
+    fn from(entries: BTreeMap<String, T>) -> Self {
+        Entries(entries)
+    }
+}
+
+impl<K: Into<String>, T> FromIterator<(K, T)> for Entries<T> {
+    fn from_iter<I: IntoIterator<Item = (K, T)>>(entries: I) -> Self {
+        Entries(entries.into_iter().map(|(key, entry)| (key.into(), entry)).collect())
+    }
+}
+
+impl<T> Deref for Entries<T> {
+    type Target = BTreeMap<String, T>;
+
+    fn deref(&self) -> &BTreeMap<String, T> {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Entries<T> {
+    fn deref_mut(&mut self) -> &mut BTreeMap<String, T> {
+        &mut self.0
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Entries<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T: Serialize + Default> Serialize for Entries<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if !READING.get() {
+            return self.0.serialize(serializer);
+        }
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry(ENTRIES, &Declared { item: T::default(), entries: &self.0 })?;
+        map.end()
+    }
+}
+
+/// What a map of entries says of itself while the core reads it.
+struct Declared<'a, T> {
+    item: T,
+    entries: &'a BTreeMap<String, T>,
+}
+
+impl<T: Serialize> Serialize for Declared<'_, T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry(ENTRIES_ITEM, &self.item)?;
+        map.serialize_entry(ENTRIES_GIVEN, self.entries)?;
+        map.end()
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Entries<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        BTreeMap::deserialize(deserializer).map(Entries)
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -12,7 +12,22 @@ from .backup import Backup
 from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
 from .channels import Channel, Message, Missed, Subscription, TxChannel
 from .clock import Clock
-from .config import Config, Explained, Given, Items, Line, Origin, Range, Secret, env, file, live, secret
+from .config import (
+    Config,
+    Entries,
+    Explained,
+    Given,
+    Items,
+    Line,
+    Origin,
+    Range,
+    Secret,
+    entries,
+    env,
+    file,
+    live,
+    secret,
+)
 from .errors import (
     CallCancelledError,
     ClosedError,
@@ -118,6 +133,7 @@ __all__ = [
     "Damage",
     "Database",
     "Done",
+    "Entries",
     "Entry",
     "Event",
     "EventPage",
@@ -218,6 +234,7 @@ __all__ = [
     "Worker",
     "bounds",
     "connect",
+    "entries",
     "env",
     "exponential_buckets",
     "file",

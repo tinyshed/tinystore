@@ -206,3 +206,56 @@ fn a_connection_that_may_only_read_keeps_no_declaration() {
     f.store.config_sent(&sent).unwrap();
     assert_eq!(f.rows("_tinystore_kv_configs"), 0);
 }
+
+/// A map of entries as the SDKs write it: what an older release reads as a
+/// map given whole, its entries' group beside it.
+fn sites() -> Value {
+    json!({
+        "instance": {
+            "kind": "object",
+            "entries": {
+                "plugin": { "kind": "text", "default": "postgres" },
+                "settings": { "group": {
+                    "host": { "kind": "text", "default": "localhost" },
+                    "password": { "kind": "text", "secret": true, "required": true },
+                    "timeout": { "kind": "duration", "default": "30s" }
+                } }
+            },
+            "default": { "local": { "settings": { "password": "dev-only" } } }
+        }
+    })
+}
+
+// contract: CFG-11
+#[test]
+fn entries_sent_as_data_take_each_field_from_the_layers_and_kv_keeps_them_without_secrets() {
+    let f = fixture();
+    let declared = sites();
+    let toml = "[instance.aimee.settings]\nhost = \"127.0.0.1\"\n";
+    let layers = json!([
+        { "file": { "name": "dashbin.toml", "text": toml, "optional": false } },
+        { "env": { "prefix": "APP", "variables": { "APP_INSTANCE_AIMEE_SETTINGS_PASSWORD": "s3cret" } } }
+    ]);
+    let sent = Sent { name: "dashbin", declaration: &declared, layers: &layers, strict: false, remember: true };
+    let config = f.store.config_sent(&sent).unwrap();
+    let aimee =
+        json!({ "plugin": "postgres", "settings": { "host": "127.0.0.1", "password": "s3cret", "timeout": 30_000 } });
+    assert_eq!(config.get()["instance"]["aimee"], aimee);
+    assert_eq!(config.get()["instance"]["local"]["settings"]["password"], "dev-only");
+    let password = config.explain().settings.into_iter().find(|line| line.path == "instance.aimee.settings.password");
+    assert_eq!(password.unwrap().value, "***");
+
+    let read = declaration(&declared).unwrap();
+    let kept = read.to_json();
+    assert_eq!(kept["instance"]["default"], json!({ "local": { "settings": {} } }), "no secret is kept");
+    let again = declaration(&kept).unwrap();
+    assert!(again.setting("instance.kazan.settings.password").is_some_and(|setting| setting.secret));
+    assert_eq!(again.setting("instance.kazan.plugin"), read.setting("instance.kazan.plugin"));
+
+    let refused = |instance: Value| declaration(&json!({ "instance": instance })).unwrap_err();
+    let live = json!({ "kind": "object", "entries": { "size": { "kind": "integer", "default": 1, "live": true } } });
+    assert_eq!(refused(live), "instance.*.size: an entry's field is not live: the layers give it");
+    let item =
+        json!({ "kind": { "list": { "group": { "inner": { "kind": "object", "entries": {} } } } }, "default": [] });
+    assert_eq!(refused(item), "instance[].inner: entries stand among settings, not in an entry or a list's item");
+}

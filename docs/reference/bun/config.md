@@ -20,6 +20,18 @@ secret, one a layer must give, or one that may change while the program
 runs. `V` is what the program reads it as, `Live` whether it may change,
 and `Given` whether it has a default or is required, as a declaration needs.
 
+## Entries
+
+```ts
+interface Entries<G> extends Setting<Readonly<Record<string, Value<G>>>> {
+    /** what an object in code gives each entry; nothing at run time */
+    readonly '~entries': G
+}
+```
+
+A map of named entries, as `entries` declares one: each entry the group
+`G`, read as its settings are.
+
 ## Secret
 
 ```ts
@@ -72,7 +84,7 @@ The live settings a change may name, each as the program reads it, at any depth.
 
 ```ts
 type Overlay<D> = {
-    readonly [K in keyof D]?: D[K] extends Setting<infer V, boolean, boolean, boolean> ? V extends Secret ? string : V : D[K] extends readonly unknown[] ? Value<D[K]> : D[K] extends object ? Overlay<D[K]> : Value<D[K]>
+    readonly [K in keyof D]?: D[K] extends Entries<infer G> ? Readonly<Record<string, Overlay<G>>> : D[K] extends Setting<infer V, boolean, boolean, boolean> ? V extends Secret ? string : V : D[K] extends readonly unknown[] ? Value<D[K]> : D[K] extends object ? Overlay<D[K]> : Value<D[K]>
 }
 ```
 
@@ -258,6 +270,16 @@ interface DurationBounds {
 
 The bounds of a duration, each a duration's text.
 
+## EntriesOptions
+
+```ts
+interface EntriesOptions<G> {
+    default?: Readonly<Record<string, Overlay<G>>> | undefined
+}
+```
+
+The entries a map of entries' declaration gives, each as an object in code gives one.
+
 ## secret
 
 ```ts
@@ -326,6 +348,18 @@ function list<G extends object>(item: G, options?: ListOptions<Value<G>>): Setti
 A list: of `String`, `Number` or `Boolean`, of a rule, or of groups, each
 item checked; its `min` and `max` count its items. A list written as a
 value, `['localhost']`, needs no `list`.
+
+## entries
+
+```ts
+function entries<G extends object>(item: G, options?: EntriesOptions<G>): Entries<G>
+```
+
+A map of named entries, each the group `item` declares, whose fields are
+settings of their own, with their own marks: a file gives an entry field
+by field, and `APP_INSTANCE_AIMEE_PASSWORD`, or its `_FILE`, one field of
+the entry `aimee` that a layer before it made. A map written as a value,
+`{}`, is one setting, given whole.
 
 ## file
 

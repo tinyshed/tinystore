@@ -127,6 +127,21 @@ def secret(default: str | None = None, /) -> Secret:
     return cast("Secret", _Mark(_REQUIRED if default is None else default, live=False, secret=True))
 
 
+class Entries[T](dict[str, T]):
+    """A map of named entries, each a ``T`` dataclass whose fields are settings of their own, with their own marks.
+
+    A file gives an entry field by field, and ``APP_INSTANCE_AIMEE_PASSWORD``, or
+    its ``_FILE``, one field of the entry ``aimee`` that a layer before it made.
+    A ``dict`` is one setting, given whole: ``instance: Entries[Site] = entries()``.
+    """
+
+
+def entries[T](given: Mapping[str, T] | None = None, /) -> Entries[T]:
+    """A map of entries' default: none, or the entries the declaration gives, ``{"local": Site(...)}``."""
+    defaults = dict(given or {})
+    return dataclasses.field(default_factory=lambda: Entries(defaults))
+
+
 @dataclass(frozen=True, slots=True)
 class Range:
     """The bounds of a number or a span: ``Annotated[int, Range(1, 65535)]``."""
@@ -360,6 +375,10 @@ def _node(hint: Any, default: Any, path: str) -> tuple[dict[str, Any], _Reader]:
     mark = default if isinstance(default, _Mark) else None
     given = default if mark is None else mark.default
     base, rules = _unannotated(hint, path)
+    if base is Entries or typing.get_origin(base) is Entries:
+        if mark is not None:
+            raise InvalidError(f"{path}: entries take no mark: each of their fields carries its own")
+        return _entries(base, {} if given is _REQUIRED else given, path)
     if dataclasses.is_dataclass(base) and isinstance(base, type) and mark is None:
         declared = _declared(base, path, None if given is _REQUIRED else given)
         return {"group": declared.group}, declared.read
@@ -379,6 +398,40 @@ def _node(hint: Any, default: Any, path: str) -> tuple[dict[str, Any], _Reader]:
     if is_secret:
         described["secret"] = True
     return described, read
+
+
+def _entries(base: Any, given: Any, path: str) -> tuple[dict[str, Any], _Reader]:
+    """A map of entries: what an older release reads as a map given whole, its entries' group beside it."""
+    args = typing.get_args(base)
+    item = args[0] if args else None
+    if not (dataclasses.is_dataclass(item) and isinstance(item, type)):
+        raise InvalidError(f"{path}: an entry is a dataclass of settings; a map of values is a dict")
+    declared = _declared(item, f"{path}.*")
+    default = {str(key): _given_json(entry, f"{path}.{key}") for key, entry in cast("Mapping[Any, Any]", given).items()}
+
+    def read(value: Any) -> Any:
+        each = cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+        return Entries({key: declared.read(entry) for key, entry in each.items()})
+
+    return {"kind": "object", "default": default, "entries": declared.group}, read
+
+
+def _given_json(value: Any, path: str) -> Any:
+    """An entry the declaration gives, as JSON writes it: a mark its default, a secret its text.
+
+    A field a layer must give is left out: its declaration's value is never counted as given.
+    """
+    if isinstance(value, _Mark):
+        return None if value.default is _REQUIRED else _given_json(value.default, path)
+    if isinstance(value, Secret):
+        return value.reveal()
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        fields = (
+            (each.name, _given_json(getattr(value, each.name), f"{path}.{each.name}"))
+            for each in dataclasses.fields(value)
+        )
+        return {name: inner for name, inner in fields if inner is not None}
+    return _json_of(value, path)
 
 
 def _unannotated(hint: Any, path: str) -> tuple[Any, dict[str, Any]]:
@@ -493,11 +546,20 @@ def _json_of(value: Any, path: str) -> Any:
 
 
 def _paths(group: Mapping[str, Any], path: str) -> list[str]:
-    """Every setting's path, as the core names its variable."""
+    """Every setting's path, as the core names its variable, and every map of entries'."""
     found: list[str] = []
     for key, node in group.items():
         at = key if path == "" else f"{path}.{key}"
         found.extend(_paths(node["group"], at) if "group" in node else [at])
+    return found
+
+
+def _entry_maps(group: Mapping[str, Any], path: str) -> list[str]:
+    """Every map of entries' path, whose entries' variables begin with its own."""
+    found: list[str] = []
+    for key, node in group.items():
+        at = key if path == "" else f"{path}.{key}"
+        found.extend(_entry_maps(node["group"], at) if "group" in node else [at] if "entries" in node else [])
     return found
 
 
@@ -558,11 +620,14 @@ def _env_data(layer: EnvLayer, declared: Mapping[str, Any]) -> dict[str, Any]:
 
     named = [layer.vars.get(path) or env_name(layer.prefix, path) for path in _paths(declared, "")]
     wanted = {key(each) for name in named for each in (name, f"{name}_FILE")}
-    start = key(f"{layer.prefix}_")
+    # an entry's field is named by its key, so its map's variable is what it begins with
+    starts = [key(f"{env_name(layer.prefix, path)}_") for path in _entry_maps(declared, "")]
+    if layer.prefix != "":
+        starts.append(key(f"{layer.prefix}_"))
     variables: dict[str, str] = {}
     for name, value in (os.environ if layer.from_ is None else layer.from_).items():
         k = key(name)
-        if value is not None and (k in wanted or (layer.prefix != "" and k.startswith(start))):  # pyright: ignore[reportUnnecessaryComparison]
+        if value is not None and (k in wanted or any(k.startswith(start) for start in starts)):  # pyright: ignore[reportUnnecessaryComparison]
             variables[k] = value
     dotenv = [{"name": name, "text": text} for name in layer.files if (text := _read_text(name)) is not None]
     files: dict[str, str] = {}

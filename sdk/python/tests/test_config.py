@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 import pytest
 
 import tinystore
-from tinystore import Given, Items, Origin, Range, Secret, env, file, live, secret
+from tinystore import Entries, Given, Items, Origin, Range, Secret, entries, env, file, live, secret
 from tinystore._time import ms, spelled
 from tinystore.config import env_name
 from ways import until
@@ -186,6 +186,63 @@ async def test_a_rule_of_one_value_is_the_cores_and_a_refusal_names_the_layer_th
     config = await opening({"APP_TIMEOUT": "1m30s", "APP_ORIGINS": "a.com, b.com"})
     assert config.value.timeout == timedelta(minutes=1, seconds=30)
     assert config.value.origins == ["a.com", "b.com"]
+
+
+@dataclass
+class Postgres:
+    host: str = "localhost"
+    port: int = 5432
+    password: Secret = secret()  # noqa: RUF009
+    timeout: timedelta = timedelta(seconds=30)
+
+
+@dataclass
+class Site:
+    plugin: str = "postgres"
+    settings: Postgres = field(default_factory=Postgres)
+
+
+@dataclass
+class Dashbin:
+    instance: Entries[Site] = entries({"local": Site(settings=Postgres(password=Secret("dev-only")))})  # noqa: RUF009
+
+
+# contract: CFG-11, CFG-06
+async def test_an_entry_takes_each_field_from_the_layers_and_a_variable_one_field_of_an_entry_a_layer_made(
+    store: tinystore.Store, directory: Path
+) -> None:
+    toml = directory / "dashbin.toml"
+    toml.write_text('[instance.aimee.settings]\nhost = "127.0.0.1"\nport = 15432\n')
+    secret_file = directory / "pg"
+    secret_file.write_text("of-a-file\n")
+    variables = {
+        "APP_INSTANCE_AIMEE_SETTINGS_PASSWORD": "of-a-variable",
+        "APP_INSTANCE_KAZAN_SETTINGS_PASSWORD_FILE": str(secret_file),
+        "APP_INSTANCE": '{"aimee":{"settings":{"port":6432}}}',
+    }
+    kazan = {"instance": {"kazan": {"settings": {"host": "10.0.0.9"}}}}
+    config = await store.config("dashbin", [Dashbin, file(toml), kazan, env("APP", from_=variables)])
+    aimee = config.value.instance["aimee"]
+    shown = (aimee.plugin, aimee.settings.host, aimee.settings.port, aimee.settings.timeout)
+    assert shown == ("postgres", "127.0.0.1", 6432, timedelta(seconds=30))
+    assert aimee.settings.password.reveal() == "of-a-variable"
+    assert config.value.instance["kazan"].settings.password.reveal() == "of-a-file"
+    assert config.value.instance["local"].settings.password.reveal() == "dev-only"
+    assert isinstance(config.value.instance, Entries)
+    lines = {line.path: line for line in config.explain()}
+    assert lines["instance.aimee.settings.password"].value == "***"
+    assert lines["instance.aimee.settings.port"].from_ == "APP_INSTANCE"
+    assert lines["instance.aimee.settings.port"].over == f"15432 from {toml}, 5432 from the declaration"
+    assert lines["instance.kazan.settings.host"].from_ == "layer 3"
+    assert "of-a-variable" not in repr(config.value)
+    assert "of-a-file" not in repr(list(config.explain()))
+
+    @dataclass
+    class Texts:
+        instance: Entries[str] = entries()  # noqa: RUF009
+
+    with pytest.raises(tinystore.InvalidError, match="an entry is a dataclass of settings"):
+        await store.config("texts", [Texts])
 
 
 @dataclass(kw_only=True)

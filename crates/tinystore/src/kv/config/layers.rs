@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::declaration::Declaration;
+use super::declaration::{Declaration, Keys, joined};
 use super::env::{self, Env};
 use super::explain::Origin;
-use super::files::{self, File};
+use super::files::{self, File, Walked};
 use super::rules::spelled;
 
 /// An object in code, a file or the environment, in the order the program
@@ -41,6 +41,9 @@ pub(super) struct Stacked {
 pub(super) struct Base {
     /// Each setting's values by its path, oldest first.
     pub(super) stacks: BTreeMap<String, Vec<Stacked>>,
+    /// The keys of the entries the declaration and the layers made, by the
+    /// path of their map, every map of the declaration among them.
+    pub(super) entries: Keys,
     /// The optional files that were absent.
     pub(super) absent: Vec<String>,
     /// The variables with the prefix that name no setting.
@@ -61,32 +64,64 @@ impl Base {
                 setting.default.iter().map(|value| Stacked { value: value.clone(), from: Origin::Declaration });
             base.stacks.insert(path, defaults.collect());
         }
-        let mut problems = Vec::new();
+        let mut problems = base.declared_entries(declaration);
         for layer in layers {
             if let Err(found) = base.take(layer, declaration) {
                 problems.extend(found);
             }
         }
+        base.entry_defaults(declaration);
         if required {
             problems.extend(base.missing(declaration, layers));
         } else {
             let given = |path: &String| base.stacks.get(path).is_some_and(|stack| !stack.is_empty());
-            let settings = declaration.settings().into_iter();
+            let settings = declaration.settings_of(&base.entries).into_iter();
             base.left_out =
                 settings.filter(|(path, setting)| setting.required && !given(path)).map(|(path, _)| path).collect();
         }
         if problems.is_empty() { Ok(base) } else { Err(problems) }
     }
 
+    /// The entries the declaration gives, each field it gives one of the
+    /// declaration's values.
+    fn declared_entries(&mut self, declaration: &Declaration) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (path, entries) in declaration.entries() {
+            self.entries.entry(path.clone()).or_default();
+            let mut walked = Walked::default();
+            files::walk_entries(entries, &entries.given, &path, &mut walked);
+            problems.extend(walked.problems.into_iter().map(|problem| format!("the declaration: {problem}")));
+            self.made(walked.entries);
+            for (path, value) in walked.given {
+                self.push(path, Stacked { value, from: Origin::Declaration });
+            }
+        }
+        problems
+    }
+
+    /// Each entry's fields that the declaration did not give: their defaults,
+    /// under what the layers gave them.
+    fn entry_defaults(&mut self, declaration: &Declaration) {
+        for (path, setting) in declaration.settings_of(&self.entries) {
+            let Some(default) = &setting.default else { continue };
+            let stack = self.stacks.entry(path).or_default();
+            if stack.first().is_none_or(|first| first.from != Origin::Declaration) {
+                stack.insert(0, Stacked { value: default.clone(), from: Origin::Declaration });
+            }
+        }
+    }
+
     fn take(&mut self, layer: &Layer, declaration: &Declaration) -> Result<(), Vec<String>> {
         match layer {
             Layer::Object { place, value } => {
-                let (mut given, mut problems) = (Vec::new(), Vec::new());
-                files::walk(&declaration.root, value, "", &mut given, &mut problems);
-                if !problems.is_empty() {
-                    return Err(problems.into_iter().map(|problem| format!("layer {place}: {problem}")).collect());
+                let mut walked = Walked::default();
+                files::walk(&declaration.root, value, "", &mut walked);
+                if !walked.problems.is_empty() {
+                    let problems = walked.problems.into_iter();
+                    return Err(problems.map(|problem| format!("layer {place}: {problem}")).collect());
                 }
-                for (path, value) in given {
+                self.made(walked.entries);
+                for (path, value) in walked.given {
                     self.push(path, Stacked { value, from: Origin::Layer { place: *place } });
                 }
             }
@@ -95,19 +130,28 @@ impl Base {
                 if read.absent {
                     self.absent.push(file.shown());
                 }
+                self.made(read.entries);
                 for (path, value) in read.given {
                     self.push(path, Stacked { value, from: Origin::File { path: file.shown() } });
                 }
             }
             Layer::Env(env) => {
-                let read = env::read(env, declaration)?;
+                let read = env::read(env, declaration, &self.entries)?;
                 self.unused.extend(read.unused);
+                self.made(read.entries);
                 for (path, value, from) in read.given {
                     self.push(path, Stacked { value, from });
                 }
             }
         }
         Ok(())
+    }
+
+    /// Takes the entries a layer made, each by the path of its map and its key.
+    fn made(&mut self, entries: Vec<(String, String)>) {
+        for (path, key) in entries {
+            self.entries.entry(path).or_default().insert(key);
+        }
     }
 
     fn push(&mut self, path: String, stacked: Stacked) {
@@ -119,7 +163,7 @@ impl Base {
     /// region in app.yaml`.
     fn missing(&self, declaration: &Declaration, layers: &[Layer]) -> Vec<String> {
         let mut missing = Vec::new();
-        for (path, setting) in declaration.settings() {
+        for (path, setting) in declaration.settings_of(&self.entries) {
             let value = self.stacks.get(&path).and_then(|stack| stack.last()).map(|stacked| &stacked.value);
             if setting.required && value.is_none_or(|value| value == "") {
                 missing.push(format!("{path} is required: {}", givers(&path, layers)));
@@ -128,9 +172,16 @@ impl Base {
         missing
     }
 
-    /// The value the layers make: each setting's last value, in its group.
+    /// The value the layers make: each setting's last value, in its group,
+    /// and every map of entries and entry, though no field of it was given.
     pub(super) fn tree(&self) -> Value {
         let mut tree = Value::Object(Map::new());
+        for (path, keys) in &self.entries {
+            set(&mut tree, path, Value::Object(Map::new()));
+            for key in keys {
+                set(&mut tree, &joined(path, key), Value::Object(Map::new()));
+            }
+        }
         for (path, stack) in &self.stacks {
             if let Some(stacked) = stack.last() {
                 set(&mut tree, path, stacked.value.clone());

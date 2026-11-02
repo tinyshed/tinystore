@@ -292,6 +292,36 @@ pub struct Watching { /* private fields */ }
 
 A watch of a config, which stops when it is dropped.
 
+## Entries
+
+```rust
+pub struct Entries<T>(_)
+
+impl Deref<Target = BTreeMap<String, T>>
+```
+
+A map of named entries, each a `T` whose fields are settings of their own,
+with their own marks: a file gives an entry field by field, and
+`APP_INSTANCE_AIMEE_PASSWORD`, or its `_FILE`, one field of the entry
+`aimee` that a layer before it made. A `BTreeMap` is one setting, given
+whole. It reads as the map: `config.get().instance["aimee"]`.
+
+`T::default()` declares an entry's fields, so a field a layer leaves out
+takes its default there, and a `Secret::default()` field is one every
+entry must be given.
+
+### Entries.new
+
+```rust
+pub fn new() -> Self
+```
+
+### Entries.into_inner
+
+```rust
+pub fn into_inner(self) -> BTreeMap<String, T>
+```
+
 ## Live
 
 ```rust

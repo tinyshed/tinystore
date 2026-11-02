@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::declaration::{Declaration, Setting, did_you_mean, meant};
+use super::declaration::{Declaration, Keys, Kind, Node, Rules, Setting, did_you_mean, meant};
 use super::explain::Origin;
+use super::files::{Walked, walk_entries};
 use super::rules;
 
 /// The longest text a config takes from a variable.
@@ -99,11 +100,12 @@ impl From<&str> for Env {
 }
 
 /// What the environment gave: each setting's value by its path, with the
-/// variable and where its text came from, and the variables with the prefix
-/// that name no setting.
+/// variable and where its text came from, the entries a map's variable made,
+/// and the variables with the prefix that name no setting.
 #[derive(Debug, Default)]
 pub(super) struct Read {
     pub(super) given: Vec<(String, Value, Origin)>,
+    pub(super) entries: Vec<(String, String)>,
     pub(super) unused: Vec<Unused>,
 }
 
@@ -128,12 +130,38 @@ pub(super) type Texts = HashMap<String, String>;
 /// A variable's text and the `.env` file it came from, if one did.
 type Variables = HashMap<String, (String, Option<String>)>;
 
-/// What `env` gives the settings of `declaration`, or every problem with it.
-pub(super) fn read(env: &Env, declaration: &Declaration) -> Result<Read, Vec<String>> {
+/// What `env` gives the settings of `declaration`, the fields of the entries
+/// `keys` names among them, or every problem with it.
+///
+/// A map of entries' own variable, `APP_INSTANCE` as JSON, is read first, so
+/// that a field's variable, `APP_INSTANCE_AIMEE_PASSWORD`, also reaches an
+/// entry it made.
+pub(super) fn read(env: &Env, declaration: &Declaration, keys: &Keys) -> Result<Read, Vec<String>> {
     let variables = variables(env)?;
-    let names = names(env, declaration)?;
     let mut read = Read::default();
     let mut problems = Vec::new();
+    let mut keys = keys.clone();
+    let mut maps = Vec::new();
+    for (path, entries) in declaration.entries() {
+        let name = env.name_of(&path);
+        match variable(env, &variables, &name, &WHOLE_MAP) {
+            Ok(None) => {}
+            Ok(Some((Value::Object(map), from))) => {
+                let mut walked = Walked::default();
+                walk_entries(entries, &map, &path, &mut walked);
+                problems.extend(walked.problems.into_iter().map(|problem| format!("{from}: {problem}")));
+                read.given.extend(walked.given.into_iter().map(|(path, value)| (path, value, from.clone())));
+                for (path, key) in walked.entries {
+                    keys.entry(path.clone()).or_default().insert(key.clone());
+                    read.entries.push((path, key));
+                }
+            }
+            Ok(Some(_)) => problems.push(format!("{name}: a map of entries is given as JSON")),
+            Err(problem) => problems.push(problem),
+        }
+        maps.push(name);
+    }
+    let names = names(env, declaration, &keys)?;
     for (path, (name, setting)) in &names {
         match variable(env, &variables, name, setting) {
             Ok(None) => {}
@@ -141,9 +169,20 @@ pub(super) fn read(env: &Env, declaration: &Declaration) -> Result<Read, Vec<Str
             Err(problem) => problems.push(problem),
         }
     }
-    read.unused = unused(env, &variables, &names);
+    read.unused = unused(env, &variables, &names, &maps);
     if problems.is_empty() { Ok(read) } else { Err(problems) }
 }
+
+/// What a map of entries' own variable is read as: a map given as JSON, whose
+/// text is never quoted, since it may hold an entry's secret.
+static WHOLE_MAP: Setting = Setting {
+    kind: Kind::Object,
+    rules: Rules { min: None, max: None, one_of: None },
+    default: None,
+    required: false,
+    live: false,
+    secret: true,
+};
 
 /// A variable's text as its setting keeps it; the text of a secret is never
 /// quoted.
@@ -154,15 +193,20 @@ fn parsed(setting: &Setting, text: &str) -> Result<Value, String> {
     rules::parse(setting, text).map_err(|why| if setting.secret { "its text does not read".to_owned() } else { why })
 }
 
-/// Every setting's variable by the setting's path, each named once.
-fn names<'a>(env: &Env, declaration: &'a Declaration) -> Result<BTreeMap<String, (String, &'a Setting)>, Vec<String>> {
+/// Every setting's variable by the setting's path, each named once: two
+/// entries whose keys are one variable's, `site-3` and `site_3`, are refused.
+fn names<'a>(
+    env: &Env,
+    declaration: &'a Declaration,
+    keys: &Keys,
+) -> Result<BTreeMap<String, (String, &'a Setting)>, Vec<String>> {
     let mut problems = Vec::new();
     let mut names = BTreeMap::new();
-    for (path, setting) in declaration.settings() {
+    for (path, setting) in declaration.settings_of(keys) {
         names.insert(path.clone(), (env.name_of(&path), setting));
     }
     for (path, _) in &env.names {
-        if declaration.setting(path).is_none() {
+        if declaration.setting(path).is_none() && !matches!(declaration.node(path), Some(Node::Entries(_))) {
             let near = meant(path, declaration.settings().into_iter().map(|(path, _)| path));
             problems.push(format!("a variable is named for {path}, which is no setting{}", did_you_mean(near)));
         }
@@ -303,13 +347,19 @@ fn without_newline(mut text: String) -> String {
 }
 
 /// The variables with the prefix that name no setting: a misspelt name is
-/// said, not ignored.
-fn unused(env: &Env, variables: &Variables, names: &BTreeMap<String, (String, &Setting)>) -> Vec<Unused> {
+/// said, not ignored, and so is a field of an entry no layer before made.
+fn unused(
+    env: &Env,
+    variables: &Variables,
+    names: &BTreeMap<String, (String, &Setting)>,
+    maps: &[String],
+) -> Vec<Unused> {
     if env.prefix.is_empty() {
         return Vec::new();
     }
     let start = key(&format!("{}_", env.prefix));
-    let read: Vec<String> = names.values().flat_map(|(name, _)| [key(name), key(&format!("{name}_FILE"))]).collect();
+    let named = names.values().map(|(name, _)| name).chain(maps);
+    let read: Vec<String> = named.flat_map(|name| [key(name), key(&format!("{name}_FILE"))]).collect();
     let mut unused: Vec<String> = variables
         .iter()
         .filter(|(name, _)| name.starts_with(&start) && !read.contains(name))

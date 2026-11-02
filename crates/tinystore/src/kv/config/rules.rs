@@ -96,6 +96,8 @@ fn check_group(group: &Group, map: &Map<String, Value>, path: &str) -> Result<Va
                 Some(default) => default.clone(),
                 None => continue,
             },
+            // a declaration refuses entries in a list's item
+            (Node::Entries(_), _) => return Err(format!(".{at}: a list's item holds no entries")),
         };
         checked.insert(key.clone(), value);
     }

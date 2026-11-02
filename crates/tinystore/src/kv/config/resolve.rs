@@ -172,6 +172,11 @@ fn view_group(group: &Group, tree: &mut Value) {
         match node {
             Node::Group(inner) => view_group(inner, value),
             Node::Setting(setting) => view_kind(&setting.kind, value),
+            Node::Entries(entries) => {
+                if let Value::Object(each) = value {
+                    each.values_mut().for_each(|entry| view_group(&entries.item, entry));
+                }
+            }
         }
     }
 }

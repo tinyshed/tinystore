@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use yaml_rust2::{Yaml, YamlLoader};
 
-use super::declaration::{Declaration, Group, Node, did_you_mean, joined, meant, shown};
+use super::declaration::{Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, meant, shown};
 use super::rules;
 
 /// The largest file a config reads.
@@ -78,10 +78,12 @@ impl From<PathBuf> for File {
     }
 }
 
-/// What a file gave: each setting's value by its path, or that it was absent.
+/// What a file gave: each setting's value by its path and the entries it
+/// made, or that it was absent.
 #[derive(Debug, Default)]
 pub(super) struct Read {
     pub(super) given: Vec<(String, Value)>,
+    pub(super) entries: Vec<(String, String)>,
     pub(super) absent: bool,
 }
 
@@ -99,10 +101,13 @@ pub(super) fn read(file: &File, declaration: &Declaration) -> Result<Read, Vec<S
         Err(why) => return Err(vec![format!("{name}: {why}")]),
     };
     let tree = parse(&file.path, &text).map_err(|why| vec![format!("{name}: {why}")])?;
-    let (mut given, mut problems) = (Vec::new(), Vec::new());
-    walk(&declaration.root, &tree, "", &mut given, &mut problems);
-    let problems: Vec<String> = problems.into_iter().map(|problem| format!("{name}: {problem}")).collect();
-    if problems.is_empty() { Ok(Read { given, absent: false }) } else { Err(problems) }
+    let mut walked = Walked::default();
+    walk(&declaration.root, &tree, "", &mut walked);
+    let problems: Vec<String> = walked.problems.into_iter().map(|problem| format!("{name}: {problem}")).collect();
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    Ok(Read { given: walked.given, entries: walked.entries, absent: false })
 }
 
 fn past_size(size: u64) -> String {
@@ -265,32 +270,58 @@ fn closes(bytes: &[u8], mut at: usize) -> bool {
     false
 }
 
-/// What a file's tree gives each setting, and what it gives that no setting
+/// What a layer's tree gave: each setting's value by its path, each entry it
+/// made by the path of its map and its key, and what no setting takes.
+#[derive(Debug, Default)]
+pub(super) struct Walked {
+    pub(super) given: Vec<(String, Value)>,
+    pub(super) entries: Vec<(String, String)>,
+    pub(super) problems: Vec<String>,
+}
+
+/// What a layer's tree gives each setting, and what it gives that no setting
 /// takes. A null declares nothing, as an empty YAML key does.
-pub(super) fn walk(
-    group: &Group,
-    tree: &Map<String, Value>,
-    path: &str,
-    given: &mut Vec<(String, Value)>,
-    problems: &mut Vec<String>,
-) {
+pub(super) fn walk(group: &Group, tree: &Map<String, Value>, path: &str, walked: &mut Walked) {
     for (key, value) in tree {
         let at = joined(path, key);
         match (group.get(key), value) {
             (_, Value::Null) => {}
             (None, _) => {
                 let near = meant(key, group.keys()).map(|near| joined(path, &near));
-                problems.push(format!("{at}: no such setting{}", did_you_mean(near)));
+                walked.problems.push(format!("{at}: no such setting{}", did_you_mean(near)));
             }
-            (Some(Node::Group(inner)), Value::Object(map)) => walk(inner, map, &at, given, problems),
-            (Some(Node::Group(_)), other) => {
-                problems.push(format!("{at}: {} is not a group of settings", shown(other)))
+            (Some(Node::Group(inner)), Value::Object(map)) => walk(inner, map, &at, walked),
+            (Some(Node::Entries(entries)), Value::Object(map)) => walk_entries(entries, map, &at, walked),
+            (Some(Node::Group(_) | Node::Entries(_)), other) => {
+                walked.problems.push(format!("{at}: {} is not a group of settings", shown(other)));
             }
             (Some(Node::Setting(setting)), value) => match rules::check(setting, value) {
-                Ok(value) => given.push((at, value)),
-                Err(_) if setting.secret => problems.push(format!("{at}: a secret is text")),
-                Err(why) => problems.push(format!("{at}: {why}")),
+                Ok(value) => walked.given.push((at, value)),
+                Err(_) if setting.secret => walked.problems.push(format!("{at}: a secret is text")),
+                Err(why) => walked.problems.push(format!("{at}: {why}")),
             },
+        }
+    }
+}
+
+/// What a map of entries gives each field of each entry it names, over what
+/// came before: an entry a later layer names again is merged, not replaced.
+pub(super) fn walk_entries(entries: &Entries, map: &Map<String, Value>, path: &str, walked: &mut Walked) {
+    for (key, value) in map {
+        let at = match entry_path(path, key) {
+            Ok(at) => at,
+            Err(why) => {
+                walked.problems.push(why);
+                continue;
+            }
+        };
+        match value {
+            Value::Null => {}
+            Value::Object(fields) => {
+                walked.entries.push((path.to_owned(), key.clone()));
+                walk(&entries.item, fields, &at, walked);
+            }
+            other => walked.problems.push(format!("{at}: {} is not a group of settings", shown(other))),
         }
     }
 }
