@@ -1,6 +1,6 @@
 -- a segment: the postings of an index's documents from first to past,
 -- every key's in one piece. A set writes the newest segment, level 0, while
--- it holds fewer than a thousand documents; merges join eight of a level
+-- it holds fewer than a thousand documents; merges join ten of a level
 -- into one of the next. folded: its pieces' counts are in the keys' own;
 -- merge: the segment a merge under way writes this one's keys into;
 -- through: of a segment a merge writes, the last key it holds, null once

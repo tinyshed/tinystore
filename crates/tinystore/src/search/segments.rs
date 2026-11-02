@@ -36,8 +36,10 @@ use crate::{Error, Result};
 /// rather than opening another: a set of fewer, one row of a table at a
 /// time, appends to it.
 pub(crate) const OPEN_DOCS: u64 = 1000;
-/// Segments of a level a merge joins into one of the next.
-pub(crate) const MERGE_AT: usize = 8;
+/// Segments of a level a merge joins into one of the next: ten, as many as
+/// a tier of Lucene's holds, built MS MARCO's 8.8 million passages in 293 s
+/// where eight took 304, two merges of four million passages each fewer.
+pub(crate) const MERGE_AT: usize = 10;
 /// The level from which a segment's counts are in its keys' rows.
 pub(crate) const FOLDED_FROM: i64 = 2;
 /// The level of the segment a store's lists of a release before 0002 are

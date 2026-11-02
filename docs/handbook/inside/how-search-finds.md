@@ -64,7 +64,7 @@ score or the order of a tie.
 A document set is visible to the next search at once (contract SRCH-04),
 because a set writes its postings into the newest segment, which searches
 read like any other. The newest segment takes documents until it holds a
-thousand; then the next set starts another. Background work merges eight
+thousand; then the next set starts another. Background work merges ten
 segments of a size into one of the next, a few thousand words per commit, so
 a posting is written again only once per size and a search reads a handful
 of segments. A deleted document is marked gone; merges leave it out, and
