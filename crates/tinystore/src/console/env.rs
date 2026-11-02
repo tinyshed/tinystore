@@ -6,7 +6,7 @@
 //!
 //! And whether a console shows colours: a terminal, without `NO_COLOR` or a
 //! `TERM` of `dumb`; `FORCE_COLOR` other than 0 makes a pipe pretty and
-//! coloured, and `NO_COLOR` still wins.
+//! coloured, and `NO_COLOR` still wins. The command line keeps the same rule.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
@@ -125,10 +125,10 @@ pub(crate) fn first_said(name: &str, value: &str) -> bool {
 /// one:
 ///
 /// ```text
-/// NO_COLOR=1       off
+/// NO_COLOR=1       off, any value but an empty one
 /// TERM=dumb        off
-/// FORCE_COLOR=1    on, a pipe or a file too
-/// a terminal       on
+/// FORCE_COLOR=1    on, a pipe or a file too, any value but 0
+/// a terminal       on, unless a Windows console refuses escape sequences
 /// anything else    off
 /// ```
 pub(crate) fn colors(terminal: bool, lookup: fn(&str) -> Option<String>) -> bool {
@@ -136,7 +136,9 @@ pub(crate) fn colors(terminal: bool, lookup: fn(&str) -> Option<String>) -> bool
     if set("NO_COLOR").is_some() || lookup("TERM").as_deref() == Some("dumb") {
         return false;
     }
-    forced(lookup) || terminal
+    // asked even when forced, so that a forced terminal shows colours too
+    let shown = terminal && super::terminal::reads_escapes();
+    forced(lookup) || shown
 }
 
 /// Whether `FORCE_COLOR` asks for colours: set, and not 0.
@@ -175,6 +177,7 @@ mod tests {
         matches!(name, "FORCE_COLOR" | "NO_COLOR").then(|| "1".to_owned())
     }
 
+    // contract: LOG-11
     #[test]
     fn colours_need_a_terminal_without_no_color_and_force_color_colours_a_pipe() {
         let cases: [(bool, Lookup, bool); 7] = [

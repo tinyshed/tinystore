@@ -104,7 +104,7 @@ export type {
 	SemaphoreOptions,
 	Tried,
 } from './locks.ts'
-export { type ConsoleOut, type Logger, type LoggerOptions, logger } from './logger.ts'
+export { type ConsoleOut, colors, type Logger, type LoggerOptions, logger } from './logger.ts'
 export {
 	type Aggregate,
 	type AggregatePage,

@@ -1231,6 +1231,24 @@ pub const SECRETS: &[&str]
 The usual names of secrets, which `redact` takes to hide them. It hides a
 counter named like one too, `token_count` among them.
 
+## colors
+
+```rust
+pub fn colors(stream: &impl IsTerminal) -> bool
+```
+
+Whether `stream` shows colours, by the rule every logger keeps, in Rust,
+Bun, Python and Go, and the command line too, so that a program's own
+words and the log lines printed beside them are coloured alike: off under
+`NO_COLOR` or a `TERM` of `dumb`, on where `FORCE_COLOR` is other than 0,
+a pipe or a file too, and otherwise on a terminal alone. On Windows it
+asks the console to read the escape sequences colours are written with,
+and says no where a console refuses.
+
+```rust
+let painted = tinystore::console::colors(&std::io::stdout());
+```
+
 ## logger
 
 ```rust

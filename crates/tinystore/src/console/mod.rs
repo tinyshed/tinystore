@@ -90,6 +90,7 @@ pub(crate) mod fixture;
 mod layer;
 mod line;
 mod redact;
+mod terminal;
 
 pub use layer::{Layer, Replace};
 pub use line::Time;
@@ -104,6 +105,21 @@ pub(crate) use layer::Declared;
 pub(crate) use layer::{Console, Keep, Told, own_line};
 #[allow(unused_imports, reason = "a store's logger takes them; the console alone has none")]
 pub(crate) use line::{Line, object_pairs, quoted};
+
+/// Whether `stream` shows colours, by the rule every logger keeps, in Rust,
+/// Bun, Python and Go, and the command line too, so that a program's own
+/// words and the log lines printed beside them are coloured alike: off under
+/// `NO_COLOR` or a `TERM` of `dumb`, on where `FORCE_COLOR` is other than 0,
+/// a pipe or a file too, and otherwise on a terminal alone. On Windows it
+/// asks the console to read the escape sequences colours are written with,
+/// and says no where a console refuses.
+///
+/// ```no_run
+/// let painted = tinystore::console::colors(&std::io::stdout());
+/// ```
+pub fn colors(stream: &impl std::io::IsTerminal) -> bool {
+    env::colors(stream.is_terminal(), layer::real)
+}
 
 /// A logger of the console alone, its lines printed and kept nowhere: the
 /// same calls, the same options but a store's, and the same lines as a

@@ -493,6 +493,20 @@ const log = logger('app', { redact: ['password'] })
 const db = log.with({ module: 'db' })   // passed to what needs it
 ```
 
+## colors
+
+```ts
+function colors(stream: Pick<ConsoleOut, 'isTTY'>): boolean
+```
+
+Whether a stream shows colours, by the rule every logger keeps, in Bun,
+Python, Go and Rust, and the command line too, so that a program's own
+words and the log lines printed beside them are coloured alike: off under
+NO_COLOR or a TERM of dumb, on where FORCE_COLOR is other than 0, a pipe or
+a file too, and otherwise on a terminal alone.
+
+`const painted = colors(process.stdout)`
+
 ## Logger
 
 ```ts

@@ -134,8 +134,46 @@ goes over its own option in the code:
 - The environment never turns on a console the code turned off.
 - A value none of them can mean is ignored, and said once.
 
-Colours need a terminal, and neither `NO_COLOR` nor `TERM=dumb`.
-`FORCE_COLOR` makes a pipe pretty and coloured; `NO_COLOR` still wins.
+## Colours
+
+Every logger decides colours by one rule, in every language, and so does the
+`tinystore` command line:
+
+| Environment                         | Colours           |
+|-------------------------------------|-------------------|
+| `NO_COLOR` set to anything but `""` | off               |
+| `TERM=dumb`                         | off               |
+| `FORCE_COLOR` other than `0`        | on, in a pipe too |
+| none of them, on a terminal         | on                |
+| none of them, in a pipe or a file   | off               |
+
+`FORCE_COLOR` also makes a pipe's lines pretty, for an IDE's run console. On
+Windows, colours on a terminal ask the console to read escape sequences
+first, and stay off where an old console refuses.
+
+A program that colours its own words asks the same rule, so that they and
+the log lines beside them are coloured alike (contract LOG-11):
+
+```ts
+import { colors } from '@tinyshed/tinystore'
+
+const painted = colors(process.stdout)
+```
+
+```python
+import sys
+import tinystore
+
+painted = tinystore.colors(sys.stdout)
+```
+
+```go
+painted := console.Colors(os.Stdout)
+```
+
+```rust
+let painted = tinystore::console::colors(&std::io::stdout());
+```
 
 ## A console without a store
 

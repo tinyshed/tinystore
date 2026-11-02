@@ -229,3 +229,16 @@ def test_a_level_whose_part_is_neither_store_nor_console_or_names_no_level_is_re
     for wrong in ({"default": "info"}, {"console": "loud"}):
         with pytest.raises(tinystore.InvalidError):
             new_store_logger(append, "api", LoggerOptions(level=wrong, env=False))  # type: ignore[arg-type]
+
+
+# contract: LOG-11
+@pytest.mark.parametrize(
+    ("force", "no_color", "term", "coloured"),
+    [("", "", "", False), ("1", "", "", True), ("1", "", "dumb", False), ("1", "0", "", False)],
+)
+def test_colors_keeps_the_rule_every_logger_keeps(
+    monkeypatch: pytest.MonkeyPatch, force: str, no_color: str, term: str, coloured: bool
+) -> None:
+    for name, value in (("FORCE_COLOR", force), ("NO_COLOR", no_color), ("TERM", term)):
+        monkeypatch.setenv(name, value)
+    assert tinystore.colors(io.StringIO()) is coloured

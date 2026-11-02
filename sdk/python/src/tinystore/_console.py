@@ -405,6 +405,23 @@ def forced() -> bool:
     return _forced()
 
 
+def colors(stream: TextIO) -> bool:
+    """Whether stream shows colours, by the rule every logger and the command line keep.
+
+    The same rule in Python, Bun, Go and Rust, so that a program's own words
+    and the log lines printed beside them are coloured alike: off under
+    NO_COLOR or a TERM of dumb, on where FORCE_COLOR is other than 0, a pipe
+    or a file too, and otherwise on a terminal alone. On Windows it asks the
+    console to read the escape sequences colours are written with.
+
+    `painted = tinystore.colors(sys.stdout)`
+    """
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    # asked even when forced, so that a forced terminal shows colours too
+    return (_is_terminal(stream) and _enable_colours(stream)) or _forced()
+
+
 class Printer:
     """How a logger prints its lines: pretty on a terminal and one JSON object a line otherwise, unless told.
 
@@ -443,14 +460,12 @@ class Printer:
         if not self.pretty():
             out.write(json_line(line))
         else:
-            colour = (_is_terminal(out) or _forced()) and self._colour(out)
-            out.write(pretty_line(line, colour, time=self._time, hide_stream=self._hide_stream))
+            out.write(pretty_line(line, self._colour(out), time=self._time, hide_stream=self._hide_stream))
         out.flush()
 
     def _colour(self, out: TextIO) -> bool:
         if self._colours is None:
-            allowed = not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
-            self._colours = allowed and (_enable_colours(out) or _forced())
+            self._colours = colors(out)
         return self._colours
 
 

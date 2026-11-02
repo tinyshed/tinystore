@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,32 @@ import (
 type writeTo struct{ io.Writer }
 
 func (w writeTo) Apply(s *logline.Settings) { s.To, s.Zone = w.Writer, time.UTC }
+
+// contract: LOG-11
+func TestColorsKeepsTheRuleEveryLoggerKeeps(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	cases := []struct {
+		force, noColor, term string
+		want                 bool
+	}{
+		{"", "", "", false},
+		{"1", "", "", true},
+		{"1", "", "dumb", false},
+		{"1", "0", "", false},
+	}
+	for _, c := range cases {
+		t.Setenv("FORCE_COLOR", c.force)
+		t.Setenv("NO_COLOR", c.noColor)
+		t.Setenv("TERM", c.term)
+		if got := Colors(file); got != c.want {
+			t.Errorf("FORCE_COLOR=%q NO_COLOR=%q TERM=%q: colours %v", c.force, c.noColor, c.term, got)
+		}
+	}
+}
 
 func TestToWritesTheConsoleWhereItIsTold(t *testing.T) {
 	t.Setenv("FORCE_COLOR", "")

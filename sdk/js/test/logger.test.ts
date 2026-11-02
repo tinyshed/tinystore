@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { env } from '../src/config.ts'
 import type { ConsoleLine } from '../src/console.ts'
 import { InvalidError } from '../src/errors.ts'
-import { logger, newLogger, newStoreLogger } from '../src/logger.ts'
+import { colors, logger, newLogger, newStoreLogger } from '../src/logger.ts'
 import type { StoreLoggerOptions } from '../src/records.ts'
 
 /** An append that holds each write until let go, and keeps how many lines each carried. */
@@ -110,6 +110,23 @@ describe('FORCE_COLOR', () => {
 
 		expect((await logged({ FORCE_COLOR: '0' })).startsWith('{')).toBe(true)
 	})
+})
+
+// contract: LOG-11
+test('colors keeps the rule every logger keeps', () => {
+	const pipe = { isTTY: false }
+	const cases: [Record<string, string>, boolean][] = [
+		[{ FORCE_COLOR: '', NO_COLOR: '', TERM: '' }, false],
+		[{ FORCE_COLOR: '1', NO_COLOR: '', TERM: '' }, true],
+		[{ FORCE_COLOR: '1', NO_COLOR: '', TERM: 'dumb' }, false],
+		[{ FORCE_COLOR: '1', NO_COLOR: '0', TERM: '' }, false],
+	]
+	for (const [env, coloured] of cases) {
+		withEnv(env, () => expect([env, colors(pipe)]).toEqual([env, coloured]))
+	}
+	withEnv({ FORCE_COLOR: '', NO_COLOR: '', TERM: '' }, () =>
+		expect(colors({ isTTY: true })).toBe(true),
+	)
 })
 
 /** Runs fn with these variables set, and puts back what was there. */

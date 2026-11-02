@@ -368,6 +368,22 @@ function forceColor(): boolean {
 	return force !== undefined && force !== '' && force !== '0'
 }
 
+/**
+ * Whether a stream shows colours, by the rule every logger keeps, in Bun,
+ * Python, Go and Rust, and the command line too, so that a program's own
+ * words and the log lines printed beside them are coloured alike: off under
+ * NO_COLOR or a TERM of dumb, on where FORCE_COLOR is other than 0, a pipe or
+ * a file too, and otherwise on a terminal alone.
+ *
+ * `const painted = colors(process.stdout)`
+ */
+export function colors(stream: Pick<ConsoleOut, 'isTTY'>): boolean {
+	if (process.env.NO_COLOR || process.env.TERM === 'dumb') {
+		return false
+	}
+	return forceColor() || stream.isTTY === true
+}
+
 /** Whether a console told no format prints pretty lines: on a terminal, or where FORCE_COLOR asks. */
 function prettyUntold(options: Pick<LoggerOptions, 'to'>, out: ConsoleOut | undefined): boolean {
 	const stream: ConsoleOut = out ?? options.to ?? process.stderr
@@ -384,19 +400,13 @@ function printer(
 		return undefined
 	}
 	const stream: ConsoleOut = out ?? options.to ?? process.stderr
-	const forced = out === undefined && forceColor()
-	const terminal = stream.isTTY === true
 	const pretty =
 		options.console === 'pretty' || (options.console === undefined && prettyUntold(options, out))
 	if (!pretty) {
 		return line => void stream.write(jsonLine(line))
 	}
-	const color =
-		(forced || (terminal && out === undefined)) &&
-		!process.env.NO_COLOR &&
-		process.env.TERM !== 'dumb'
 	const look: Look = {
-		color,
+		color: out === undefined && colors(stream),
 		utc: out?.utc === true,
 		time: options.time,
 		hideStream: options.hideStream,

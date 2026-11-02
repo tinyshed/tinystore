@@ -90,7 +90,8 @@ waits for no server (contract CLI-07).
   and `mcp` read a directory beside the process that serves it, without its
   lock and without writing a byte (contract CLI-01).
 - **A terminal gets colour and words, a pipe gets plain lines, a script asks
-  `--json`.** Colour only on a terminal, never under `NO_COLOR`.
+  `--json`.** Colour by the rule every logger keeps: on a terminal, or where
+  `FORCE_COLOR` asks, never under `NO_COLOR` or `TERM=dumb`.
 - **A mistake names the next command.** A misspelt command or flag is told
   the nearest one, `did you mean backup?` (contract CLI-02), and exits 2; a
   failure while running exits 1.

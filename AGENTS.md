@@ -174,15 +174,16 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   batch, whose write goes through `engine::LentWrite`; `log_config.rs`, a store's logger
   reading the config `log`; and `replication/forward.rs`, which runs the
   writes another node passed on through kv's, sql's, search's, jobs' and blobs' handles.
-- **`unsafe` lives in seven places**: `sqlite::memory`, `sqlite::mutex`,
-  `space`, which asks the system for the disk's free space, `crates/ffi`,
-  the command line's `owner_only`, which gives what a Windows server
+- **`unsafe` lives in eight places**: `sqlite::memory`, `sqlite::mutex`,
+  `space`, which asks the system for the disk's free space,
+  `console::terminal`, which asks a Windows console to read colours,
+  `crates/ffi`, the command line's `owner_only`, which gives what a Windows server
   keeps to its user, `server\`, `SERVE` and the pipe, a DACL of that user's
   alone, its `own_handles`, which keeps a command's stdio from the sidecar
   it starts on Windows, since std's `inherit_handles` is not stable, and the
   test `metrics_memory`, whose allocator counts the heap an
   ingest holds against what it reserves. The workspace denies
-  `unsafe_code` everywhere else, each of the seven allows it at its module's
+  `unsafe_code` everywhere else, each of the eight allows it at its module's
   top, and clippy's `undocumented_unsafe_blocks` makes every block carry a
   `SAFETY:` comment saying what it relies on.
 - **A dependency is a decision**, and every program linking TinyStore pays for

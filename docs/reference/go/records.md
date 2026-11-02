@@ -664,6 +664,16 @@ var Secrets = logline.Secrets
 
 Secrets is what Redact takes to hide the usual secrets. It hides a counter named like one too, token\_count among them.
 
+## console.Colors
+
+```go
+func Colors(f *os.File) bool
+```
+
+Colors says whether f shows colours, by the rule every logger keeps, in Go, Bun, Python and Rust, and the command line too, so that a program's own words and the log lines printed beside them are coloured alike: off under NO\_COLOR or a TERM of dumb, on where FORCE\_COLOR is other than 0, a pipe or a file too, and otherwise on a terminal alone. On Windows it asks the console to read the escape sequences colours are written with.
+
+	painted := console.Colors(os.Stdout)
+
 ## console.NewHandler
 
 ```go

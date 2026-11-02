@@ -15,12 +15,25 @@ import (
 	"os"
 
 	"tinyshed.org/tinystore/internal/logline"
+	"tinyshed.org/tinystore/internal/term"
 )
 
 // NewHandler writes a logger's lines to standard error, and keeps none.
 func NewHandler(stream string, options ...Option) slog.Handler {
 	told := logline.Read(options)
 	return logline.NewHandler(stream, nil, told.Settings, told.Ignored)
+}
+
+// Colors says whether f shows colours, by the rule every logger keeps, in Go,
+// Bun, Python and Rust, and the command line too, so that a program's own
+// words and the log lines printed beside them are coloured alike: off under
+// NO_COLOR or a TERM of dumb, on where FORCE_COLOR is other than 0, a pipe or a
+// file too, and otherwise on a terminal alone. On Windows it asks the console
+// to read the escape sequences colours are written with.
+//
+//	painted := console.Colors(os.Stdout)
+func Colors(f *os.File) bool {
+	return term.Colors(f)
 }
 
 // Option changes a logger's lines: on the console, and in the store when the

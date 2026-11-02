@@ -24,58 +24,31 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
 use tracing_subscriber::registry::LookupSpan;
 
-/// Whether a terminal's lines are coloured, by the conventions every tool
-/// keeps, and whether there is a terminal at all.
-///
-/// | `NO_COLOR` | `FORCE_COLOR` or `CLICOLOR_FORCE` | `TERM=dumb` | a terminal | colours |
-/// |------------|-----------------------------------|-------------|------------|---------|
-/// | set        | any                               | any         | any        | no      |
-/// | unset      | set                               | any         | any        | yes     |
-/// | unset      | unset                             | yes         | any        | no      |
-/// | unset      | unset                             | no          | yes        | yes     |
+/// Whether a stream's lines are coloured, by the rule TinyStore's loggers
+/// keep, so that a command's words and the log lines beside them agree, and
+/// whether there is a terminal at all.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Terminal {
-    no_color: bool,
-    force_color: bool,
-    dumb: bool,
+    colours: bool,
     /// Whether the stream is a terminal a person reads.
     pub(crate) terminal: bool,
 }
 
 impl Terminal {
     pub(crate) fn of_stderr() -> Terminal {
-        Self::of(io::stderr().is_terminal())
+        Self::of(&io::stderr())
     }
 
     pub(crate) fn of_stdout() -> Terminal {
-        Self::of(io::stdout().is_terminal())
+        Self::of(&io::stdout())
     }
 
-    fn of(terminal: bool) -> Terminal {
-        let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty() && value != "0");
-        Terminal {
-            no_color: set("NO_COLOR"),
-            force_color: set("FORCE_COLOR") || set("CLICOLOR_FORCE"),
-            dumb: std::env::var_os("TERM").is_some_and(|term| term == "dumb"),
-            terminal,
-        }
+    fn of(stream: &impl IsTerminal) -> Terminal {
+        Terminal { colours: tinystore::console::colors(stream), terminal: stream.is_terminal() }
     }
 
     pub(crate) fn colours(self) -> bool {
-        !self.no_color && (self.force_color || (!self.dumb && self.terminal)) && enable_ansi()
-    }
-}
-
-/// A Windows console shows ANSI colours once a program asks it to; elsewhere
-/// a terminal does.
-fn enable_ansi() -> bool {
-    #[cfg(windows)]
-    {
-        nu_ansi_term::enable_ansi_support().is_ok()
-    }
-    #[cfg(not(windows))]
-    {
-        true
+        self.colours
     }
 }
 
@@ -357,16 +330,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-
-    #[test]
-    fn a_terminal_shows_colours_unless_someone_said_otherwise() {
-        let terminal = |no_color, force_color, dumb, terminal| Terminal { no_color, force_color, dumb, terminal };
-        assert!(terminal(false, false, false, true).colours());
-        assert!(!terminal(false, false, false, false).colours(), "a pipe or a file");
-        assert!(!terminal(true, true, false, true).colours(), "NO_COLOR wins");
-        assert!(terminal(false, true, true, false).colours(), "FORCE_COLOR, through a pipe too");
-        assert!(!terminal(false, false, true, true).colours(), "TERM=dumb");
-    }
 
     /// What `lines` print of the events `log` logs.
     fn printed(lines: Lines, log: impl FnOnce()) -> String {

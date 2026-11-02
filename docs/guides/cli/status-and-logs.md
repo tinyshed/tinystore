@@ -130,8 +130,9 @@ tinystore logs ./data --since 1h --level error --json | jq -r '.msg' | sort | un
 ```
 
 A terminal gets colour and words, a pipe gets plain lines, and `--json` gives
-what a script parses. Colour appears only on a terminal, never under
-`NO_COLOR`.
+what a script parses. Colour follows the rule every logger keeps: on a
+terminal, or in a pipe where `FORCE_COLOR` asks, and never under `NO_COLOR` or
+`TERM=dumb` ([colours](../records/console.md#colours)).
 
 ## See also
 

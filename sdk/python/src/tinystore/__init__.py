@@ -8,6 +8,7 @@
 """
 
 from . import bounds
+from ._console import colors
 from .backup import Backup
 from .blobs import FileBytes, FileInfo, FilePage, Files, StoredFile, Upload, Usage
 from .channels import Channel, Message, Missed, Subscription, TxChannel
@@ -233,6 +234,7 @@ __all__ = [
     "WindowUse",
     "Worker",
     "bounds",
+    "colors",
     "connect",
     "entries",
     "env",

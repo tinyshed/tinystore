@@ -172,6 +172,7 @@ These contracts are what does not.
 - **LOG-08** A store's logger's `level` MUST set what it keeps and what it prints, one level both and `{ store, console }` each apart, a part left out as `level` left out: no `store` part keeps every level, and no `console` part prints what is kept. The `console` part MUST change only what is printed: every line at the `store` level MUST be kept with the same fields and context whatever the `console` part, and an event, which has no level, MUST be printed and kept.
 - **LOG-09** A field given no value, `undefined` in TypeScript or what a `replace` drops (`undefined` in TypeScript, `None` in Rust, an empty `slog.Attr` in Go), MUST be left out of the console line and of what is kept, in a logger's fields and context and in an appended event's, and `null` MUST stay `null`; Python's `None`, which a Python `replace` cannot drop a field with, and Go's `nil` are values and stay `null`, and a Rust field's `None` stays what `tracing` and serde make of it.
 - **LOG-10** A key a nested `with` gives again (`bind` in Python, a span inside another in Rust) MUST replace the outer one's value where that stood, once, on the console, in what is kept and for a filter.
+- **LOG-11** Whether a stream shows colours MUST follow one rule in every logger, in every language, in the command line and in `colors`: off under a `NO_COLOR` of any value but an empty one or a `TERM` of `dumb`; otherwise on where `FORCE_COLOR` is other than `0`, a pipe or a file too, and on a terminal alone without it.
 
 ### Metrics
 
