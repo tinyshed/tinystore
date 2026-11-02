@@ -1,6 +1,7 @@
 //! `tinystore metrics`: a store's series from a shell. `names`, `read` and
-//! `aggregate` read beside whoever holds the directory; `ingest` and
-//! `delete` write through the server that holds it, or a sidecar they start.
+//! `aggregate` read beside whoever holds the directory; `ingest`, `replace`
+//! and `delete` write through the server that holds it, or a sidecar they
+//! start.
 //!
 //! ```text
 //! tinystore metrics ./data names
@@ -9,6 +10,7 @@
 //! curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 //! ping … | awk '…' | tinystore metrics ./data ingest -f --kind ping_lost_total=counter
 //! tinystore metrics ./data delete ping_rtt_ms target=poland
+//! printf '2026-11-02T00:00Z 900\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z
 //! ```
 
 use std::collections::BTreeSet;
@@ -27,11 +29,12 @@ use crate::reach;
 use crate::window::{self, Window};
 use crate::{following, help};
 
-const VERBS: [Verb; 5] = [
+const VERBS: [Verb; 6] = [
     Verb { word: "names", command: &help::METRICS_NAMES, run: names },
     Verb { word: "read", command: &help::METRICS_READ, run: read },
     Verb { word: "aggregate", command: &help::METRICS_AGGREGATE, run: aggregate },
     Verb { word: "ingest", command: &help::METRICS_INGEST, run: ingest },
+    Verb { word: "replace", command: &help::METRICS_REPLACE, run: replace },
     Verb { word: "delete", command: &help::METRICS_DELETE, run: delete },
 ];
 
@@ -358,6 +361,53 @@ fn delete(asked: Asked) -> Done {
     let (name, asked_labels) = (name.clone(), labels.clone());
     let found = reach::write(&dir, "metrics delete", move |client| client.delete_series(&name, &asked_labels))?;
     if found { outln!("deleted {shown}") } else { outln!("{} holds no series {shown}", dir.display()) }
+}
+
+/// Replaces a gauge's samples of `--from` up to `--to` with those on stdin,
+/// a time and a value a line, read to its end.
+fn replace(asked: Asked) -> Done {
+    let (dir, rest) = asked.placed("metrics", "replace", false)?;
+    let Some((name, pairs)) = rest.split_first() else {
+        return Err(wrong("replace takes a gauge's name and its labels: replace revenue shop=msk --from 2026-11-01"));
+    };
+    let from = asked.value("--from").ok_or_else(|| wrong("replace takes where its range starts: --from 2026-11-01"))?;
+    let from = window::time(from).map_err(wrong)?;
+    let to = asked.value("--to").map(window::time).transpose().map_err(wrong)?.unwrap_or_else(SystemTime::now);
+    let labels = labels(pairs)?;
+    reach::store_at(&dir)?;
+    if std::io::stdin().is_terminal() {
+        return Err(wrong(
+            "it reads a sample a line on stdin, its time and its value, and stdin is a terminal\n  printf \
+             '2026-11-02T00:00Z 900\\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z",
+        ));
+    }
+    let mut text = String::new();
+    let read = std::io::stdin().take(ONE_TEXT as u64 + 1).read_to_string(&mut text);
+    read.map_err(|error| failed(format!("stdin: {error}")))?;
+    let mut series = labels.iter().fold(Series::gauge(name), |series, (label, value)| series.label(label, value));
+    let shown = series.to_string();
+    series.extend(samples_of(&text)?);
+    let samples = series.samples().len() as u64;
+    reach::write(&dir, "metrics replace", move |client| client.replace(&series, from..to))?;
+    let (from, to) = (window::utc(from), window::utc(to));
+    outln!("replaced {shown} from {from} to {to} with {}", counted(samples, "sample"))
+}
+
+/// The samples of a text, a line each that is neither empty nor a comment:
+/// a time as `--from` takes one, then its value, `2026-11-02T00:00Z 900`.
+fn samples_of(text: &str) -> Result<Vec<(SystemTime, f64)>, Refused> {
+    let lines = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty() && !line.starts_with('#'));
+    lines
+        .map(|(index, line)| {
+            let unread = |why: String| wrong(format!("line {}, `{}`: {why}", index + 1, line.trim()));
+            let (at, value) = line
+                .trim()
+                .rsplit_once(char::is_whitespace)
+                .ok_or_else(|| unread("a time and a value, as 2026-11-02T00:00Z 900".to_owned()))?;
+            let value = value.parse::<f64>().map_err(|_| unread(format!("the value {value}: a number")))?;
+            Ok((window::time(at.trim()).map_err(unread)?, value))
+        })
+        .collect()
 }
 
 fn query_of(metrics: &Metrics, name: &str, asked: &Asked, window: Window) -> Result<Query, Refused> {

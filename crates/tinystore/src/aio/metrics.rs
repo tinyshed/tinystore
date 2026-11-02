@@ -36,6 +36,7 @@
 //! | A call                              | Runs                                            | Dropped once polled |
 //! |-------------------------------------|-------------------------------------------------|---------------------|
 //! | `ingest` and [`Prometheus::ingest`] | on the store's pool, its memory on no thread    | runs to its end     |
+//! | `replace`                           | on the store's pool, its memory on no thread    | runs to its end     |
 //! | `describe`, `delete`, `flush`       | blocking, on the store's pool                   | runs to its end     |
 //! | a [`Query`]'s four calls            | checked in the first poll, then on the pool     | stops               |
 //! | a [`List`]'s `page`, `damaged`      | on the store's pool                             | stops               |
@@ -55,6 +56,7 @@
 
 use std::fmt;
 use std::future::Future;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -76,6 +78,8 @@ pub use page::{AggregatePage, All, SeriesPage};
 /// What an awaited ingest names in its errors, as its blocking twin names
 /// its wait for memory.
 const INGEST: &str = "metrics: an ingest";
+/// What an awaited replace names in its errors.
+const REPLACE: &str = "metrics: a replace";
 
 impl super::Store {
     /// The store's metrics, as [`crate::Store::metrics`] gives them: a plain
@@ -126,6 +130,23 @@ impl Metrics {
         run::holding(&self.pool, self.blocking.memory(), INGEST.to_owned(), move || {
             let checked = stats.check(&series)?;
             Ok((checked.holds(), move |held| stats.ingest_checked(checked, held)))
+        })
+    }
+
+    /// Replaces a gauge's samples of `range` with the series' own, as
+    /// [`crate::metrics::Metrics::replace`] does. What the range holds is read
+    /// on a thread of the store's pool and the memory its write holds awaited
+    /// on no thread; the write then runs blocking on a thread of the pool,
+    /// which waits there for maintenance's pass to end and for the commit.
+    pub fn replace(
+        &self,
+        series: &Series,
+        range: Range<SystemTime>,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        let (stats, series) = (self.blocking.clone(), series.clone());
+        run::holding(&self.pool, self.blocking.memory(), REPLACE.to_owned(), move || {
+            let replacing = stats.prepare_replace(&series, range)?;
+            Ok((replacing.holds(), move |held| stats.replace_prepared(replacing, held)))
         })
     }
 

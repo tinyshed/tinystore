@@ -67,6 +67,7 @@ mod registry;
 #[cfg(feature = "wire")]
 mod remote;
 mod repeat;
+mod replace;
 mod residuals;
 mod retention;
 mod series;

@@ -33,9 +33,17 @@ pub(super) struct Budget {
     planning: bool,
     /// The first bound a plan found passed, and what was wanted of it there.
     passed: Option<(&'static Limit, usize)>,
+    /// A replace's budget, spent on what the range it replaces holds, whose
+    /// refusal asks for a shorter range.
+    replacing: bool,
 }
 
 impl Budget {
+    /// The budget of a gauge's `replace`, bounded as a query is.
+    pub(super) fn replacing() -> Budget {
+        Budget { replacing: true, ..Budget::default() }
+    }
+
     /// The budget of `explain`, which notes the bound a call would stop at
     /// rather than stop there.
     pub(super) fn planning() -> Budget {
@@ -119,11 +127,15 @@ impl Budget {
                 return Ok(wanted);
             }
         }
-        let refused = format!(
-            "a query past {} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page at a \
-             time with `limit`",
-            bound.bound, bound.name
-        );
+        let refused = if self.replacing {
+            format!("a replace past {} {}: replace a shorter range, in several calls", bound.bound, bound.name)
+        } else {
+            format!(
+                "a query past {} {}: ask for less, a shorter range, a wider `every`, fewer series, or a page at a \
+                 time with `limit`",
+                bound.bound, bound.name
+            )
+        };
         Err(bound.refuse(wanted as u64, refused))
     }
 }
@@ -156,5 +168,18 @@ mod tests {
         assert_eq!(error.fact("limit"), Some("bytes read"));
         assert_eq!(plan.passed().map(|passed| passed.0), Some("samples decoded"), "the first bound passed stays");
         assert_eq!(Budget::default().passed(), None);
+    }
+
+    // contract: ERR-05, MET-19
+    #[test]
+    fn a_replace_past_a_bound_of_a_query_asks_for_a_shorter_range() {
+        let mut replacing = Budget::replacing();
+        replacing.take_decoded(most(&DECODED)).unwrap();
+        let error = replacing.take_decoded(1).unwrap_err();
+        let facts = (error.fact("limit"), error.fact("wanted"), error.fact("bound"));
+        assert_eq!(facts, (Some("samples decoded"), Some("1048577"), Some("1048576")));
+        assert!(error.to_string().contains("a replace past 1048576 samples decoded: replace a shorter range"));
+        let error = replacing.take_bytes(most(&BYTES) + 1).unwrap_err();
+        assert_eq!((error.kind(), error.fact("limit")), (crate::ErrorKind::Limit, Some("bytes read")));
     }
 }

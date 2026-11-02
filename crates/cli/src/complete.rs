@@ -157,8 +157,10 @@ fn named(group: &str, verb: &str, given: &[String], dir: &Path) -> Vec<String> {
         ("events", _, 0) => names().streams,
         ("config", _, 0) => names().configs,
         ("config", "update" | "reset", _) => settings_of(dir, &given[0], verb == "update"),
-        ("metrics", "read" | "aggregate" | "delete", 0) => names().metrics,
-        ("metrics", "delete", _) => labels_of(dir, &given[0]).into_iter().map(|label| format!("{label}=")).collect(),
+        ("metrics", "read" | "aggregate" | "replace" | "delete", 0) => names().metrics,
+        ("metrics", "replace" | "delete", _) => {
+            labels_of(dir, &given[0]).into_iter().map(|label| format!("{label}=")).collect()
+        }
         _ => Vec::new(),
     }
 }

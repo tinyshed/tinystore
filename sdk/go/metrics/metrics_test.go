@@ -67,6 +67,42 @@ func TestASeriesComesBackBitForBit(t *testing.T) {
 	})
 }
 
+// contract: MET-19
+func TestAGaugesStretchIsReplacedWholeAndACountersIsRefused(t *testing.T) {
+	ways.Each(t, func(t *testing.T, store *tinystore.Store) {
+		ctx := context.Background()
+		today := time.Now().UTC().Truncate(24 * time.Hour)
+		var days []time.Time
+		for back := 5; back >= 0; back-- {
+			days = append(days, today.AddDate(0, 0, -back))
+		}
+		labels := metrics.Labels{"shop": "msk"}
+		written := metrics.Series{Name: "revenue", Kind: metrics.KindGauge, Labels: labels}
+		for _, at := range days {
+			written.Samples = append(written.Samples, metrics.Sample{At: at, Value: 1000})
+		}
+		ways.Must(0, metrics.Ingest(ctx, store, written))
+		corrected := metrics.Series{Name: "revenue", Kind: metrics.KindGauge, Labels: labels,
+			Samples: []metrics.Sample{{At: days[2], Value: 1000}, {At: days[4], Value: 900}}}
+		for range 2 {
+			ways.Must(0, metrics.Replace(ctx, store, corrected, days[2], days[5]))
+		}
+		read := ways.Must(metrics.Read(ctx, store, metrics.Query{Name: "revenue", Since: 7 * 24 * time.Hour})).Series
+		want := []metrics.Sample{{At: days[0], Value: 1000}, {At: days[1], Value: 1000}, {At: days[2], Value: 1000},
+			{At: days[4], Value: 900}, {At: days[5], Value: 1000}}
+		if len(read) != 1 || len(read[0].Samples) != len(want) {
+			t.Fatalf("read %+v", read)
+		}
+		for i, sample := range read[0].Samples {
+			if !sample.At.Equal(want[i].At) || sample.Value != want[i].Value {
+				t.Fatalf("sample %d: %v %v, want %v %v", i, sample.At, sample.Value, want[i].At, want[i].Value)
+			}
+		}
+		counter := metrics.Series{Name: "orders_total", Kind: metrics.KindCounter}
+		is(t, metrics.Replace(ctx, store, counter, days[2], days[5]), tinystore.ErrInvalid)
+	})
+}
+
 // contract: MET-17
 func TestAReadAndAnAggregateGivenLimitComeInPagesThatWalkOn(t *testing.T) {
 	ways.Each(t, func(t *testing.T, store *tinystore.Store) {

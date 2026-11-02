@@ -31,7 +31,8 @@ const DROP_PAYLOAD: &str = "delete from payloads where id = ?1";
 const DROP_GROUP: &str = "delete from groups where id = ?1";
 /// A name whose newest time was the series' finds it again among its other
 /// series, a walk of them that only a delete of the newest series makes.
-const RENEW_NEWEST: &str = "update names set newest = (select max(max_seen) from series_state where name = ?1)
+pub(super) const RENEW_NEWEST: &str =
+    "update names set newest = (select max(max_seen) from series_state where name = ?1)
     where id = ?1 and newest = ?2 and not exists (select 1 from series_state where name = ?1 and max_seen = ?2)";
 
 /// What a delete found.

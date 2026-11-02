@@ -145,19 +145,32 @@ fn publish_series(tx: &Tx<'_>, zstd: &mut Zstd, series: &Staged) -> Result<u64> 
     }
     let expired = expire_behind(tx, zstd, candidate)?;
     let (mut group, merged) = merge_before(tx, zstd, series.group.clone())?;
-    let lasting = group.blocks.len() == MOST_BLOCKS;
-    group.clock = clock::hold(tx, &clock::encode(&times_of(&group)), lasting)?;
-    give_payloads(tx, &mut group)?;
+    give_clock_and_payloads(tx, &mut group)?;
     for (row, clock) in merged {
         execute(tx, DROP_GROUP, params![row], "remove a group merged into the next")?;
         clock::let_go(tx, clock)?;
     }
-    let directory = group.encode(zstd)?;
-    let row = params![group.series, group.start, group.end, group.clock, directory];
-    let insert = if lasting { INSERT_LASTING_GROUP } else { INSERT_GROWING_GROUP };
-    execute(tx, insert, row, "write a group")?;
+    insert_group(tx, zstd, &group)?;
     seal(tx, zstd, series)?;
     Ok(expired)
+}
+
+/// Holds a new group's clock and gives its new blocks their payloads, before
+/// the groups it takes the place of go: a clock it shares with one of them
+/// is held on rather than written again.
+pub(super) fn give_clock_and_payloads(tx: &Tx<'_>, group: &mut Group) -> Result<()> {
+    let lasting = group.blocks.len() == MOST_BLOCKS;
+    group.clock = clock::hold(tx, &clock::encode(&times_of(group)), lasting)?;
+    give_payloads(tx, group)
+}
+
+/// Writes a group whose clock is held, after every row when it holds the
+/// most blocks and before every row while it may still take in another.
+pub(super) fn insert_group(tx: &Tx<'_>, zstd: &mut Zstd, group: &Group) -> Result<()> {
+    let directory = group.encode(zstd)?;
+    let row = params![group.series, group.start, group.end, group.clock, directory];
+    let insert = if group.blocks.len() == MOST_BLOCKS { INSERT_LASTING_GROUP } else { INSERT_GROWING_GROUP };
+    execute(tx, insert, row, "write a group").map(drop)
 }
 
 /// Expires the samples the head held before its cutoff, which packing left

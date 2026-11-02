@@ -179,7 +179,7 @@ These contracts are what does not.
 
 - **MET-01** A sample MUST be kept bit for bit — `-0`, NaN payloads and infinities included — through every codec, file and restart.
 - **MET-02** A series MUST be its name and its labels; names and labels beginning `tinystore_` or `__` are the store's and MUST be refused from a program.
-- **MET-03** An ingest MUST be applied whole; a late sample behind what is sealed MUST be refused, never reopen a block (MET-16).
+- **MET-03** An ingest MUST be applied whole; a late sample behind what is sealed MUST be refused, never reopen a block (MET-16): a gauge's `replace` is the one call that rewrites what is sealed (MET-19).
 - **MET-04** An aggregate MUST be exact and rounded once, across blocks, counter resets and retention; buckets of any width, or of a calendar in a time zone, MUST add up to the range, and a rate MUST count the seconds its bucket has.
 - **MET-05** A bucket the range, the clock or retention cut MUST say `partial`; a step across a whole empty bucket MUST say `gap`; no other bucket says either.
 - **MET-06** A summary MUST answer only for a whole block inside one bucket and the range; anything else MUST be decoded.
@@ -195,6 +195,7 @@ These contracts are what does not.
 - **MET-16** An ingest sent again MUST change nothing, packed or not: a sample behind what its series has packed that is bit for bit the one packed at its time MUST be taken as nothing, and any other MUST refuse the ingest whole, naming the sample's time, `at`, and the time its series has packed before, `packed`.
 - **MET-17** A read or an aggregate given `limit` MUST answer a page that stopped before passing `limit` or any bound of a query, with `next` unless it is the last, each `next` past the `after` it went on from; the pages `next` leads to MUST give, for data unchanged between them, exactly the samples or the buckets one call without `limit` gives, each once and in order; a page MUST NOT split a bucket nor make one `partial`, and a bucket that alone passes a bound MUST be `limit`; a cursor MUST be refused with another query.
 - **MET-18** An aggregate of series a program holds MUST answer, bucket for bucket, what a query of the same samples in a store answers for the same range and buckets.
+- **MET-19** A gauge's `replace` of a range MUST leave the range holding exactly the samples given, each bit for bit, whether the store had packed the range or not, in one write that a read sees whole or not at all; an aggregate over the range MUST answer what a read of its samples gives; the same samples sent again MUST change nothing; a counter's or a histogram's MUST be refused `invalid`, a sample outside the range `invalid`, a range outside what the name keeps `too_old` or `too_new`, and what the range holds MUST be bounded as a query is.
 
 ### Search
 
@@ -289,7 +290,7 @@ The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
 - **NOT-05** A `node promote` made while the old home still writes — during a network split — may lose the commits the old home took after the promotion; the new home counts them as lost and the old one is fenced once it hears of it.
 - **NOT-06** `committed_locally` means no copy held the write: a failover may lose it.
 - **NOT-07** `LoseAtMost` counters may lose up to their interval at a crash.
-- **NOT-08** A metrics sample behind its series' sealed frontier is refused, not stored, unless it is bit for bit the sample packed at its time (MET-16).
+- **NOT-08** An ingest's metrics sample behind its series' sealed frontier is refused, not stored, unless it is bit for bit the sample packed at its time (MET-16); a gauge's samples behind it change only through `replace` (MET-19), and a counter's never.
 - **NOT-09** A log line that finds its buffer full is dropped and counted, never waited for.
 - **NOT-10** A search with `recall` may miss some of the exact best; without it a vector search is exact.
 - **NOT-11** Nothing before `v0.1.0` is compatible: formats, schemas and the protocol change without migration.

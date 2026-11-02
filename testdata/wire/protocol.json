@@ -3343,6 +3343,51 @@
     },
     {
       "fields": {
+        "from": {
+          "int": "1790000000000"
+        },
+        "series": {
+          "fields": {
+            "keep": {
+              "uint": "1500"
+            },
+            "kind": {
+              "str": "kind"
+            },
+            "labels": {
+              "names": {
+                "a": {
+                  "str": "labels"
+                }
+              }
+            },
+            "name": {
+              "str": "name"
+            },
+            "times": {
+              "bin": "01ff"
+            },
+            "values": {
+              "bin": "01ff"
+            }
+          }
+        },
+        "to": {
+          "int": "1790000000000"
+        }
+      },
+      "hex": "83018601a46e616d6502a46b696e640381a161a66c6162656c7304c40201ff05c40201ff06cd05dc02cf000001a0c4506c0003cf000001a0c4506c00",
+      "message": "metrics.Replace",
+      "name": "metrics.Replace with every field"
+    },
+    {
+      "fields": {},
+      "hex": "80",
+      "message": "metrics.Replace",
+      "name": "metrics.Replace with no field"
+    },
+    {
+      "fields": {
         "at": {
           "int": "1790000000000"
         },
@@ -6154,6 +6199,7 @@
     "metrics.latest": 1538,
     "metrics.names": 1541,
     "metrics.read": 1537,
+    "metrics.replace": 1553,
     "metrics.uploadPrometheus": 1552,
     "records.aggregate": 1286,
     "records.append": 1282,

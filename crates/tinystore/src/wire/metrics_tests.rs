@@ -9,7 +9,8 @@ use crate::wire::protocol::{
     Empty, Hello, MetricsAck, MetricsAggregateAsked, MetricsAggregates, MetricsBatch, MetricsChange, MetricsCondition,
     MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExposition, MetricsIngest, MetricsInstrument,
     MetricsLatest, MetricsNameAsked, MetricsNamePage, MetricsNewSeries, MetricsPageAsked, MetricsPiece, MetricsQuery,
-    MetricsRead, MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload, method,
+    MetricsRead, MetricsReplace, MetricsSeriesNamed, MetricsSession, MetricsSet, MetricsTextPage, MetricsUpload,
+    method,
 };
 use crate::{Options, Store, unix_millis};
 
@@ -392,6 +393,39 @@ fn a_text_an_exporter_serves_is_read_by_the_core_and_one_it_cannot_read_writes_n
     assert_eq!(refused.code, "invalid");
     assert!(refused.message.starts_with("metrics: line 2, "), "{}", refused.message);
     assert!(read(&mut client, "down").is_empty(), "a refused text writes nothing");
+}
+
+// contract: MET-19
+#[test]
+fn a_gauges_stretch_is_replaced_over_the_wire_behind_what_is_packed_and_a_counters_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(&dir);
+    let mut client = client(&store, 1 << 20);
+    let start = now() - 3 * 3_600_000;
+    let samples: Vec<(i64, f64)> = (0..720).map(|n| (start + n * 15_000, n as f64)).collect();
+    ingest(&mut client, vec![series("revenue", "gauge", &[("shop", "msk")], &samples)]);
+    ingest(&mut client, vec![series("orders_total", "counter", &[], &samples)]);
+    crate::metrics::maintain(&store).unwrap();
+    let (from, to) = (samples[10].0, samples[20].0);
+    let corrected = series("revenue", "gauge", &[("shop", "msk")], &[(samples[12].0, -0.0), (samples[15].0 + 1, 7.5)]);
+    let asked = MetricsReplace { series: corrected, from, to };
+    client.call::<Empty>(method::METRICS_REPLACE, &asked).unwrap();
+    let hours = MetricsQuery { since: Some(4 * 3_600_000), ..named("revenue") };
+    let parts: Vec<MetricsRead> = downloaded(&mut client, method::METRICS_READ, &hours);
+    let read: Vec<(i64, u64)> = parts
+        .iter()
+        .flat_map(|part| &part.series)
+        .flat_map(|piece| piece.times.as_chunks::<8>().0.iter().zip(piece.values.as_chunks::<8>().0))
+        .map(|(at, value)| (i64::from_le_bytes(*at), u64::from_le_bytes(*value)))
+        .collect();
+    let mut expected: Vec<(i64, u64)> = samples.iter().map(|(at, value)| (*at, value.to_bits())).collect();
+    expected.retain(|(at, _)| *at < from || *at >= to);
+    expected.splice(10..10, [(samples[12].0, (-0.0_f64).to_bits()), (samples[15].0 + 1, 7.5_f64.to_bits())]);
+    assert_eq!(read, expected);
+    let counter = MetricsReplace { series: series("orders_total", "counter", &[], &[]), from, to };
+    assert_eq!(client.call::<Empty>(method::METRICS_REPLACE, &counter).unwrap_err().code, "invalid");
+    let mut reader = Client::admitted(&store, Capability::Read);
+    assert_eq!(reader.call::<Empty>(method::METRICS_REPLACE, &asked).unwrap_err().code, "permission");
 }
 
 #[test]

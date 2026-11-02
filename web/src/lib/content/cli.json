@@ -679,6 +679,28 @@
       "takes": "<dir> ingest"
     },
     {
+      "does": "replace a gauge's samples of a range with those on stdin",
+      "examples": [
+        "printf '2026-11-01T00:00Z 1000\\n2026-11-02T00:00Z 900\\n' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z"
+      ],
+      "flags": [
+        {
+          "means": "from a time: 14:30 today, 2026-10-25T03:00, or one with its offset",
+          "name": "--from",
+          "value": "<time>"
+        },
+        {
+          "means": "up to a time, now by default",
+          "name": "--to",
+          "value": "<time>"
+        }
+      ],
+      "group": "Write",
+      "more": "Stdin holds a sample a line, its time and its value. Once it ends, the range from --from up to --to holds exactly those samples, in one write: a time given takes its value, one not there is added, and one not given goes, whether the store packed it or not. Only a gauge's range is replaced. It writes through the server that holds the directory, or starts one.",
+      "name": "metrics replace",
+      "takes": "<dir> replace <name> [label=value]..."
+    },
+    {
       "does": "delete one series, named by all its labels",
       "examples": [
         "tinystore metrics ./data delete ping_rtt_ms target=poland"

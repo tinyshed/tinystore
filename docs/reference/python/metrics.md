@@ -169,6 +169,24 @@ async def ingest(series: Series | Sequence[Series]) -> None: ...
 
 Writes series and their samples, every one or none: a refused series names itself.
 
+### Metrics.replace
+
+```python
+async def replace(series: Series, *, from_: datetime, to: datetime) -> None: ...
+```
+
+Replaces a gauge's samples from ``from_`` to ``to``, ``to`` excluded, with the series' own.
+
+Whether the store had packed them or not: a time given takes its value, a time not there
+before is added, and a time the series does not give goes. One write: a read sees the range
+as it was or as it is now, never half, and the same samples sent again write nothing. A
+counter's or a histogram's is an InvalidError:
+
+    # the last three days read again from the shop's database, a refund taken off yesterday
+    samples = [(day(3), 1000), (day(2), 1000), (day(1), 900)]
+    corrected = Series(name="revenue", kind="gauge", labels={"shop": "msk"}, samples=samples)
+    await store.metrics.replace(corrected, from_=day(3), to=day(0))
+
 ### Metrics.ingest_prometheus
 
 ```python

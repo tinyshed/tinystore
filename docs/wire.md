@@ -756,6 +756,7 @@ handle.
 | `0x060e` | metrics.instruments      | write | `metrics.Session`        | exchange `metrics.Ack` for `metrics.Batch`               |
 | `0x060f` | metrics.ingestPrometheus | write | `metrics.Exposition`     | `Empty`                                                  |
 | `0x0610` | metrics.uploadPrometheus | write | `metrics.Upload`         | exchange `Empty` for `metrics.Piece`                     |
+| `0x0611` | metrics.replace          | write | `metrics.Replace`        | `Empty`                                                  |
 <!-- end of what `just protocol` writes -->
 
 Its messages are in `protocol/metrics.wire`. A read, the newest samples and an

@@ -281,6 +281,18 @@ impl<S: Read + Write> Client<S> {
         self.call(method::METRICS_DESCRIBE, &described).map(drop)
     }
 
+    /// Replaces a gauge's samples of `range` with the series' own, as
+    /// `Metrics::replace` does.
+    #[cfg(feature = "metrics")]
+    pub fn replace(
+        &mut self,
+        series: &crate::metrics::Series,
+        range: std::ops::Range<std::time::SystemTime>,
+    ) -> Result<()> {
+        let (from, to) = (crate::unix_millis(range.start), crate::unix_millis(range.end));
+        self.call(method::METRICS_REPLACE, &wire::MetricsReplace { series: new_series(series), from, to }).map(drop)
+    }
+
     /// Deletes the series of `name` whose labels are `labels`, exactly, as
     /// `Metrics::delete` does: whether the store held it.
     #[cfg(feature = "metrics")]

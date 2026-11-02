@@ -105,7 +105,9 @@ bucket's edge cuts.
   up to a watermark that trails its newest sample. A sample behind the
   watermark is refused, never allowed to reopen a block, unless it is bit
   for bit the sample already packed at its time: that is an ingest sent
-  again, and it changes nothing.
+  again, and it changes nothing. A gauge's `replace` is the one call that
+  changes packed samples. In one transaction it rebuilds the blocks that its
+  range reaches, with new summaries, and the frontier stays where it was.
 - **Retention clips a read before a summary is used**, so a block that is
   half expired is decoded, not answered from a summary that still counts the
   expired half.

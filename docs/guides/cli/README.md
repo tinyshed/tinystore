@@ -44,7 +44,7 @@ tinystore kv ./data set flags beta on --ttl 1h
 |         | `files <dir> put <set> <path> <f>`    | write a local file; `delete <set> <path>` deletes one             |
 |         | `config <dir> update <cfg> <p=v>`     | change a config's live settings; `reset`, and `explain` beside    |
 |         | `channels <dir> publish <ch> <json>`  | hand a message to whoever listens; `subscribe <ch>` listens       |
-|         | `metrics <dir> ingest`                | the Prometheus text on stdin, or a stream with `-f`               |
+|         | `metrics <dir> ingest`                | Prometheus text on stdin, a stream with `-f`; `replace` a range   |
 |         | `events <dir> append <stream>`        | an event, or each line of a program's output                      |
 | Run     | `serve <dir>`                         | share the store with programs here and elsewhere                  |
 |         | `stop <dir>`                          | stop the server of a directory, its work finished                 |
@@ -117,7 +117,7 @@ waits for no server (contract CLI-07).
 | [channels](channels.md)                | a message published, a channel listened to                |
 | [lock](lock.md)                        | a command run while it holds a key                        |
 | [config](config.md)                    | a config explained, its live settings changed             |
-| [metrics](metrics.md)                  | names, samples and aggregates, ingest and delete          |
+| [metrics](metrics.md)                  | names, samples and aggregates, ingest, replace and delete |
 | [events](events.md)                    | an event or a program's output appended, a stream listed  |
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte        |
 | [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness           |

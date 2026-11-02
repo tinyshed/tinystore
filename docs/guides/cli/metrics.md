@@ -3,8 +3,9 @@
 `tinystore metrics` reads and writes a store's metrics from a shell, with no
 SDK. `names`, `read` and `aggregate` read beside the program or server that
 holds the directory. `ingest` writes the Prometheus text that an exporter
-serves, or that a script keeps printing, and `delete` removes a series; both
-write through the server that holds the directory, or start one.
+serves, or that a script keeps printing. `replace` corrects a gauge's samples
+over a range, and `delete` removes a series. All three write through the
+server that holds the directory, or start one.
 
 ```sh
 tinystore metrics ./data names
@@ -12,6 +13,8 @@ tinystore metrics ./data read ping_rtt_ms --where target=poland --since 1h
 tinystore metrics ./data aggregate ping_rtt_ms --since 1h --every 10m --op max --by target
 curl -s localhost:9100/metrics | tinystore metrics ./data ingest --label instance=web-1
 ping … | awk '…' | tinystore metrics ./data ingest -f
+printf '2026-11-02T00:00Z 900
+' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-02T00:00Z --to 2026-11-03T00:00Z
 tinystore metrics ./data delete ping_rtt_ms target=poland
 ```
 
@@ -165,6 +168,26 @@ tinystore metrics ingest: ping_rtt_ms came with no # TYPE, so it is a gauge; --k
   text ends with `# EOF`, so it has to be read whole, without `-f`.
 - Restarting the same stream is safe only when its lines carry their own
   times. A line without one gets a new time when it is read again.
+
+## Correct a gauge's range
+
+```sh
+printf '2026-11-01T00:00Z 1000
+2026-11-02T00:00Z 900
+' | tinystore metrics ./data replace revenue shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z
+```
+
+```text
+replaced revenue{shop="msk"} from 2026-11-01T00:00:00Z to 2026-11-03T00:00:00Z with 2 samples
+```
+
+`replace` reads one sample per line on stdin: its time, as `--from` takes
+one, then its value. When stdin ends, the range from `--from` up to `--to`
+holds exactly those samples, as the SDKs' `replace` leaves it. A time on
+stdin takes its value, a time that wasn't there is added, and a time that
+isn't on stdin is deleted, even after the store packed it. `--to` is now
+unless you give it. Only a gauge can be replaced, and a line that can't be
+read fails the command before anything is written.
 
 ## Delete a series
 

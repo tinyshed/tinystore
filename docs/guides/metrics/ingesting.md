@@ -75,7 +75,9 @@ millisecond.
 - After that, a sample with a new value behind what its series has packed
   fails with a too old error, and the whole call fails with it. A packed
   counter's increase would change otherwise (NOT-08). The same sample sent
-  again is accepted, as [the next section](#an-ingest-sent-again) shows.
+  again is accepted, as [the next section](#an-ingest-sent-again) shows. To
+  change a gauge's packed samples, use
+  [`replace`](#correcting-a-gauge-after-the-fact).
 - A series that comes back after a day away sends its backlog: what it has
   packed follows its own newest sample, not the clock.
 - A time is taken from as long ago as its name keeps to ten minutes ahead of
@@ -118,8 +120,74 @@ stats.ingest(&[revenue])?; // the step's next attempt: nothing changes
   `at`, and the time before which its series is packed, `packed`. To write
   the rest, send that series again without its samples before `packed`.
 - A sample older than its name keeps is too old, sent again or not.
-- A value that changed after the fact, such as yesterday's revenue after a
-  refund, can't replace a packed sample.
+- `ingest` can't change a value after the fact, such as yesterday's revenue
+  after a refund. For a gauge, `replace` can, as the next section shows.
+
+## Correcting a gauge after the fact
+
+Some numbers change after you write them. A refund lowers yesterday's
+revenue, and a late order raises it. A collector that reads the last few
+days again can't `ingest` the new values once the store has packed them.
+`replace` swaps every sample of a range for the samples you give:
+
+```ts
+const day = (back: number) => new Date(Date.UTC(2026, 10, 3 - back)) // midnight, `back` days before 3 November
+// the last three days, read again from the shop's database: a refund took 100 off yesterday
+const revenue = { name: 'revenue', kind: 'gauge', labels: { shop: 'msk' }, samples: [[day(3), 1000], [day(2), 1000], [day(1), 900]] } as const
+await store.metrics.replace(revenue, { from: day(3), to: day(0) })
+await store.metrics.replace(revenue, { from: day(3), to: day(0) }) // the next run reads the same: nothing changes
+```
+
+```python
+def day(back: int) -> datetime:  # midnight, `back` days before 3 November
+    return datetime(2026, 11, 3, tzinfo=UTC) - timedelta(days=back)
+
+# the last three days, read again from the shop's database: a refund took 100 off yesterday
+samples = [(day(3), 1000), (day(2), 1000), (day(1), 900)]
+revenue = Series(name="revenue", kind="gauge", labels={"shop": "msk"}, samples=samples)
+await store.metrics.replace(revenue, from_=day(3), to=day(0))
+await store.metrics.replace(revenue, from_=day(3), to=day(0))  # the next run reads the same: nothing changes
+```
+
+```go
+day := func(back int) time.Time { return time.Date(2026, 11, 3-back, 0, 0, 0, 0, time.UTC) } // midnight, back days before 3 November
+// the last three days, read again from the shop's database: a refund took 100 off yesterday
+revenue := metrics.Series{Name: "revenue", Kind: metrics.KindGauge, Labels: metrics.Labels{"shop": "msk"},
+	Samples: []metrics.Sample{{At: day(3), Value: 1000}, {At: day(2), Value: 1000}, {At: day(1), Value: 900}}}
+err := metrics.Replace(ctx, store, revenue, day(3), day(0))
+err = metrics.Replace(ctx, store, revenue, day(3), day(0)) // the next run reads the same: nothing changes
+```
+
+```rust
+let stats = store.metrics()?;
+let day = |back: u64| UNIX_EPOCH + Duration::from_secs(1_793_664_000 - back * 86_400); // midnight, `back` days before 3 November
+// the last three days, read again from the shop's database: a refund took 100 off yesterday
+let revenue = Series::gauge("revenue").label("shop", "msk");
+let revenue = revenue.sample(day(3), 1000.0).sample(day(2), 1000.0).sample(day(1), 900.0);
+stats.replace(&revenue, day(3)..day(0))?;
+stats.replace(&revenue, day(3)..day(0))?; // the next run reads the same: nothing changes
+```
+
+- The range starts at `from` and ends before `to`. After the call, it holds
+  exactly the samples you gave. A time you give takes its value, a time that
+  wasn't there is added, and a time you leave out is deleted. A sample
+  outside the range fails with an invalid error.
+- `replace` is one write. A read or an aggregate sees the range as it was or
+  as it is now, never half of each. An aggregate over the range answers from
+  the new samples, exactly as a read of them adds up.
+- The same samples sent again change nothing and write nothing, so a
+  collector can read the last few days again on every run.
+- Only a gauge can be replaced. A counter's increase is added up across what
+  the store packed, so a counter or a histogram fails with an invalid error.
+- A series that doesn't exist yet is written. A series that a replace leaves
+  without samples is deleted, as if its samples had expired.
+- The range must start inside what the name keeps and end at most ten minutes
+  ahead of the store's clock. Otherwise the call fails with a too old or too
+  new error.
+- One call takes as many samples as one `ingest`, 10,000. What the range
+  already holds is bounded as a [query](reading.md) is. Past either bound,
+  the call fails with a limit error, so replace a long range in several
+  calls.
 
 ## A name's `keep`
 
@@ -228,6 +296,7 @@ limit error (`LimitError`, `ErrLimit`) before the store keeps any of it.
 | What              | Limit                                                                      |
 |-------------------|----------------------------------------------------------------------------|
 | one `ingest`      | 10,000 samples or 4 MiB                                                    |
+| one `replace`     | 10,000 samples or 4 MiB, and its range read within a query's bounds        |
 | one text          | 100,000 samples or 32 MiB, and 32 MiB of text from Bun, Node, Python or Go |
 | a series          | 128 labels with its name, 16 KiB; a label's value 4 KiB                    |
 | a sample's time   | from `keep` ago to ten minutes ahead                                       |

@@ -109,6 +109,9 @@ methods: dict[str, int] = {
     # is written, every series or none. A cancel or a lost connection leaves
     # nothing written and lets go of what came.
     "metrics.uploadPrometheus": 0x0610,
+    # A gauge's range replaced in one write: a read sees it as it was or as it
+    # is, never half; the same samples sent again write nothing.
+    "metrics.replace": 0x0611,
     "records.open": 0x0501,
     "records.append": 0x0502,
     "records.list": 0x0503,
@@ -5582,6 +5585,57 @@ MetricsIngest = Message(
 )
 
 
+def _write_metrics_replace(w: Writer, v: Mapping[str, Any]) -> None:
+    head = w.open_map()
+    n = 0
+    if (x := v.get("series")) is not None:
+        w.uint(1)
+        MetricsNewSeries.write(w, x)
+        n += 1
+    if (x := v.get("from")) is not None:
+        w.uint(2)
+        w.int(x)
+        n += 1
+    if (x := v.get("to")) is not None:
+        w.uint(3)
+        w.int(x)
+        n += 1
+    w.close_map(head, n)
+
+
+def _read_metrics_replace(r: Reader) -> dict[str, Any]:
+    read: dict[str, Any] = {}
+    seen: set[int] = set()
+    for _ in range(r.map()):
+        match r.field(seen):
+            case 1:
+                read["series"] = MetricsNewSeries.read(r)
+            case 2:
+                read["from"] = r.int()
+            case 3:
+                read["to"] = r.int()
+            case _:
+                r.skip()
+    r.leave()
+    return read
+
+
+# A gauge's samples of from to to, packed or not, replaced by the series'
+# own: a time given takes its value, a time not there before is added, and a
+# time the series does not give goes.
+MetricsReplace = Message(
+    "metrics.Replace",
+    {
+        "series": (1, MetricsNewSeries),
+        "from": (2, int_),
+        # excluded
+        "to": (3, int_),
+    },
+    _write_metrics_replace,
+    _read_metrics_replace,
+)
+
+
 def _write_metrics_exposition(w: Writer, v: Mapping[str, Any]) -> None:
     head = w.open_map()
     n = 0
@@ -10353,6 +10407,7 @@ messages: dict[str, Message] = {
     "metrics.Exceeds": MetricsExceeds,
     "metrics.NewSeries": MetricsNewSeries,
     "metrics.Ingest": MetricsIngest,
+    "metrics.Replace": MetricsReplace,
     "metrics.Exposition": MetricsExposition,
     "metrics.Upload": MetricsUpload,
     "metrics.Piece": MetricsPiece,

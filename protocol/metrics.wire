@@ -122,6 +122,15 @@ message metrics.Ingest {
   1 series: [metrics.NewSeries]
 }
 
+# A gauge's samples of from to to, packed or not, replaced by the series'
+# own: a time given takes its value, a time not there before is added, and a
+# time the series does not give goes.
+message metrics.Replace {
+  1 series: metrics.NewSeries
+  2 from: time
+  3 to: time            # excluded
+}
+
 # A text an exporter serves, in Prometheus' format or OpenMetrics', whose
 # series the store writes every one or none, each with labels beside its own.
 message metrics.Exposition {
@@ -295,3 +304,6 @@ write 0x060f metrics.ingestPrometheus(metrics.Exposition) -> Empty
 # is written, every series or none. A cancel or a lost connection leaves
 # nothing written and lets go of what came.
 write 0x0610 metrics.uploadPrometheus(metrics.Upload)     -> exchange Empty for metrics.Piece
+# A gauge's range replaced in one write: a read sees it as it was or as it
+# is, never half; the same samples sent again write nothing.
+write 0x0611 metrics.replace(metrics.Replace)             -> Empty

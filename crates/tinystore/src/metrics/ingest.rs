@@ -16,7 +16,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::buckets::{bound_of, le};
 use super::codec::Point;
@@ -331,7 +331,7 @@ fn within_window(series: &Gathered, keep: Duration, now: i64) -> Result<()> {
 
 /// Points in the order of their times, of a time given twice the one given
 /// last; a run already in order is kept as it is.
-fn ordered(mut points: Vec<Point>) -> Vec<Point> {
+pub(super) fn ordered(mut points: Vec<Point>) -> Vec<Point> {
     if points.windows(2).all(|pair| pair[0].at < pair[1].at) {
         return points;
     }
@@ -351,15 +351,15 @@ fn ordered(mut points: Vec<Point>) -> Vec<Point> {
 /// oldest sample and the newest time it has seen, whether it was ready, when
 /// it is due, why it stopped, and its head.
 pub(super) struct State {
-    sealed_before: Option<i64>,
-    version: i64,
+    pub(super) sealed_before: Option<i64>,
+    pub(super) version: i64,
     oldest: i64,
     pub(super) max_seen: i64,
     ready: bool,
     due: Option<i64>,
-    failure: Option<String>,
-    extent: Extent,
-    head: Option<Vec<u8>>,
+    pub(super) failure: Option<String>,
+    pub(super) extent: Extent,
+    pub(super) head: Option<Vec<u8>>,
 }
 
 const STATE: &str = "select s.sealed_before, s.version, s.max_seen, s.ready, s.due, s.failed_at, s.failure,
@@ -384,13 +384,13 @@ const SAVING: &str = "write a series' state";
 /// before it moves it.
 const SET_OLDEST: &str = "update series_state set oldest = ?2 where series_id = ?1";
 /// A name's newest sample, which a write past it moves.
-const SET_NEWEST: &str = "update names set newest = ?2 where id = ?1 and (newest is null or newest < ?2)";
+pub(super) const SET_NEWEST: &str = "update names set newest = ?2 where id = ?1 and (newest is null or newest < ?2)";
 const SAVE_HEAD: &str =
     "insert into heads (series_id, body) values (?1, ?2) on conflict (series_id) do update set body = excluded.body";
 
 impl State {
-    pub(super) fn read(tx: &Tx<'_>, id: i64) -> Result<State> {
-        let state = tx.prepare_cached(STATE).and_then(|mut select| {
+    pub(super) fn read(connection: &Connection, id: i64) -> Result<State> {
+        let state = connection.prepare_cached(STATE).and_then(|mut select| {
             select
                 .query_row(params![id], |row| {
                     let failed: Option<i64> = row.get(5)?;

@@ -75,6 +75,27 @@ func Ingest(ctx context.Context, store *tinystore.Store, series ...Series) error
 	return err
 }
 
+// Replace replaces a gauge's samples from from to to, to excluded, with the
+// series' own, whether the store had packed them or not: a time given takes
+// its value, a time not there before is added, and a time the series does not
+// give goes. It is one write: a read sees the range as it was or as it is now,
+// never half, and the same samples sent again write nothing. A counter's or a
+// histogram's is an Invalid error.
+//
+//	// the last three days read again from the shop's database, a refund taken off yesterday
+//	corrected := metrics.Series{Name: "revenue", Kind: metrics.KindGauge, Labels: metrics.Labels{"shop": "msk"},
+//		Samples: []metrics.Sample{{At: day(3), Value: 1000}, {At: day(2), Value: 1000}, {At: day(1), Value: 900}}}
+//	err := metrics.Replace(ctx, store, corrected, day(3), day(0))
+func Replace(ctx context.Context, store *tinystore.Store, series Series, from, to time.Time) error {
+	written, err := newSeries(series)
+	if err != nil {
+		return err
+	}
+	message := wire.MetricsReplace{Series: written, From: from.UnixMilli(), To: to.UnixMilli()}
+	_, err = linkOf(store).Call(ctx, core.Writing, wire.MethodMetricsReplace, wire.Encode(&message))
+	return err
+}
+
 // IngestPrometheus reads the text an exporter serves, in Prometheus' format
 // or OpenMetrics', and writes its series, every one or none: a counter as a
 // counter, a histogram's _bucket series as KindHistogram. It is told Labels

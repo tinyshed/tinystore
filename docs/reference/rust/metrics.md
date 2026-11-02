@@ -1394,6 +1394,37 @@ pub fn recorder(&self) -> Recorder
 A recorder for the `metrics` crate, whose macros then count into
 these metrics.
 
+### Metrics.replace
+
+```rust
+pub fn replace(&self, series: &Series, range: Range<SystemTime>) -> Result<()>
+```
+
+Replaces a gauge's samples of `range`, `[from, to)`, with the series'
+own, whether the store had packed them or not: a time given takes its
+value, a time not there before is added, and a time of the range the
+series does not give goes. It is one write: a read sees the range as it
+was or as it is now, never half, and an aggregate over it answers from
+the samples given. Sent again with the same samples, it writes nothing.
+
+```rust
+use tinystore::metrics::Series;
+let store = tinystore::Store::open("data", Default::default())?;
+let stats = store.metrics()?;
+let (now, day) = (SystemTime::now(), Duration::from_hours(24));
+// the last three days read again from the shop's database, a refund taken off yesterday
+let revenue = Series::gauge("revenue").label("shop", "msk");
+let corrected = revenue.sample(now - 3 * day, 1000.0).sample(now - 2 * day, 1000.0).sample(now - day, 900.0);
+stats.replace(&corrected, now - 3 * day..now)?;
+```
+
+Only a gauge's: a counter's or a histogram's is `invalid`, since its
+increase is added across what the store packed. A sample outside the
+range is `invalid`, a range that begins before what the name keeps
+`too old`, and one that ends more than ten minutes ahead of the store's
+clock `too new`. It takes as many samples as one `ingest`, and what the
+range holds is bounded as a query is: past either is `limit`.
+
 ### Metrics.ingest
 
 ```rust
@@ -1495,6 +1526,22 @@ the call is made, and checked on a thread of the store's pool; the
 store's memory their write holds is awaited on no thread, and the
 write runs blocking on a thread of the pool, which waits there for
 the commit.
+
+### aio::metrics::Metrics.replace
+
+```rust
+pub fn replace(
+    &self,
+    series: &Series,
+    range: Range<SystemTime>,
+) -> impl Future<Output = Result<()>> + Send + 'static
+```
+
+Replaces a gauge's samples of `range` with the series' own, as
+`crate::metrics::Metrics::replace` does. What the range holds is read
+on a thread of the store's pool and the memory its write holds awaited
+on no thread; the write then runs blocking on a thread of the pool,
+which waits there for maintenance's pass to end and for the commit.
 
 ### aio::metrics::Metrics.query
 

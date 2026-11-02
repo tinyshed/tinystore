@@ -148,7 +148,7 @@ fn settle_kind(tx: &Tx<'_>, batch: &Batch) -> Result<()> {
     }
 }
 
-fn kind_refused(asked: Kind, kept: Option<&str>) -> Error {
+pub(super) fn kind_refused(asked: Kind, kept: Option<&str>) -> Error {
     let kept = kept.unwrap_or("none");
     Error::invalid(format!("a {asked}, where the name's series are {kept}s: a name has one kind while it has series"))
 }

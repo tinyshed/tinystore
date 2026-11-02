@@ -63,10 +63,13 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
   repeated after a lost connection counts once.
 - An ingest sent again changes nothing, even after the store packed its
   samples (MET-16).
+- A gauge's past changes only through `replace`, which swaps a range of
+  samples in one write. A read sees the old range or the new one, never half
+  of each (MET-19).
 - An aggregate of series that you hold in memory, in Rust, gives what a query
   of the same samples in a store gives (MET-18).
-- Not promised: a sample with a new value behind its series' sealed frontier
-  is refused (NOT-08).
+- Not promised: `ingest` refuses a sample with a new value behind what its
+  series has packed, and a counter's packed samples never change (NOT-08).
 
 ## In these guides
 
@@ -75,7 +78,7 @@ let p95 = stats.query().name("http_request_ms").since(Duration::from_hours(1)).e
 | [Instruments](instruments.md)              | counters, gauges, gauge functions, timers, histograms      |
 | [Reading](reading.md)                      | `read`, pages of a long range, `latest`, names, labels     |
 | [Aggregates](aggregates.md)                | `op`, `every`, `by`, percentiles, gaps and partial buckets |
-| [Ingesting](ingesting.md)                  | samples from elsewhere, `keep`, Prometheus exporters' text |
+| [Ingesting](ingesting.md)                  | samples from elsewhere, `replace`, `keep`, exporters' text |
 | [The store's own metrics](self-metrics.md) | `selfMetrics` and the `tinystore_` series                  |
 | [The metrics crate](metrics-crate.md)      | Rust's `metrics` macros recorded into the store            |
 
@@ -119,6 +122,7 @@ you add `.await`:
 | Blocking Rust                                            | Async Rust                                                      |
 |----------------------------------------------------------|-----------------------------------------------------------------|
 | `stats.ingest(&series)?`                                 | `stats.ingest(&series).await?`                                  |
+| `stats.replace(&series, from..to)?`                      | `stats.replace(&series, from..to).await?`                       |
 | `stats.prometheus().ingest(&body)?`                      | `stats.prometheus().ingest(&body).await?`                       |
 | `query.read()?`, `aggregate`, `latest`, `explain`        | `query.read().await?`, `aggregate`, `latest`, `explain`         |
 | `stats.names().page()?`, `label_names`, `label_values`   | `stats.names().page().await?`, `label_names`, `label_values`    |

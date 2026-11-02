@@ -6550,6 +6550,68 @@ impl Message for MetricsIngest {
     }
 }
 
+/// A gauge's samples of from to to, packed or not, replaced by the series'
+/// own: a time given takes its value, a time not there before is added, and a
+/// time the series does not give goes.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MetricsReplace {
+    pub(crate) series: MetricsNewSeries,
+    /// Unix milliseconds.
+    pub(crate) from: i64,
+    /// Excluded. Unix milliseconds.
+    pub(crate) to: i64,
+}
+
+#[cfg(feature = "metrics")]
+impl Message for MetricsReplace {
+    const NAME: &'static str = "metrics.Replace";
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, Failure> {
+        let mut message = Self::default();
+        let mut seen = 0;
+        for _ in 0..codec::fields(r, Self::NAME)? {
+            match codec::field(r, Self::NAME, &mut seen)? {
+                1 => message.series = MetricsNewSeries::read(r)?,
+                2 => message.from = codec::int(r, "from")?,
+                3 => message.to = codec::int(r, "to")?,
+                number => return Err(codec::unknown(number, Self::NAME)),
+            }
+        }
+        Ok(message)
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        let mut map = Map::open(out);
+        if !self.series.is_zero() {
+            map.field(out, 1);
+            codec::write_message(out, &self.series);
+        }
+        if self.from != 0 {
+            map.field(out, 2);
+            codec::write_int(out, &self.from);
+        }
+        if self.to != 0 {
+            map.field(out, 3);
+            codec::write_int(out, &self.to);
+        }
+        map.close(out);
+    }
+
+    fn size(&self) -> usize {
+        3
+            + 1 + self.series.size()
+            + 10
+            + 10
+    }
+
+    fn is_zero(&self) -> bool {
+        self.series.is_zero()
+            && self.from == 0
+            && self.to == 0
+    }
+}
+
 /// A text an exporter serves, in Prometheus' format or OpenMetrics', whose
 /// series the store writes every one or none, each with labels beside its own.
 #[cfg(feature = "metrics")]
@@ -11672,6 +11734,10 @@ pub(crate) mod method {
     /// nothing written and lets go of what came.
     #[cfg(feature = "metrics")]
     pub(crate) const METRICS_UPLOAD_PROMETHEUS: u16 = 0x0610;
+    /// A gauge's range replaced in one write: a read sees it as it was or as it
+    /// is, never half; the same samples sent again write nothing.
+    #[cfg(feature = "metrics")]
+    pub(crate) const METRICS_REPLACE: u16 = 0x0611;
     #[cfg(feature = "records")]
     pub(crate) const RECORDS_OPEN: u16 = 0x0501;
     #[cfg(feature = "records")]
@@ -11904,6 +11970,8 @@ pub(crate) mod method {
             METRICS_INGEST_PROMETHEUS => Some(Access::Write),
             #[cfg(feature = "metrics")]
             METRICS_UPLOAD_PROMETHEUS => Some(Access::Write),
+            #[cfg(feature = "metrics")]
+            METRICS_REPLACE => Some(Access::Write),
             #[cfg(feature = "records")]
             RECORDS_OPEN => Some(Access::Read),
             #[cfg(feature = "records")]
@@ -12129,6 +12197,8 @@ pub(crate) const METHODS: &[(&str, u16, &str)] = &[
     ("metrics.ingestPrometheus", 0x060f, "call"),
     #[cfg(feature = "metrics")]
     ("metrics.uploadPrometheus", 0x0610, "exchange"),
+    #[cfg(feature = "metrics")]
+    ("metrics.replace", 0x0611, "call"),
     #[cfg(feature = "records")]
     ("records.open", 0x0501, "call"),
     #[cfg(feature = "records")]
@@ -12384,6 +12454,8 @@ pub(crate) fn rewrite(name: &str, body: &[u8]) -> Option<Result<(Vec<u8>, usize)
         "metrics.NewSeries" => MetricsNewSeries::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Ingest" => MetricsIngest::decode(body).map(|message| (message.encode(), message.size())),
+        #[cfg(feature = "metrics")]
+        "metrics.Replace" => MetricsReplace::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]
         "metrics.Exposition" => MetricsExposition::decode(body).map(|message| (message.encode(), message.size())),
         #[cfg(feature = "metrics")]

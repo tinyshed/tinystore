@@ -42,6 +42,7 @@ from ._wire.protocol import (
     MetricsPlan,
     MetricsQuery,
     MetricsRead,
+    MetricsReplace,
     MetricsSeriesNamed,
     MetricsTextPage,
     MetricsUpload,
@@ -355,6 +356,28 @@ class Metrics:
         given = [series] if isinstance(series, Series) else list(series)
         body = MetricsIngest.encode(series=[_new_series(each) for each in given])
         await self._link.run("write", lambda c: c.session.call(methods["metrics.ingest"], body))
+
+    async def replace(self, series: Series, *, from_: datetime, to: datetime) -> None:
+        """Replaces a gauge's samples from ``from_`` to ``to``, ``to`` excluded, with the series' own.
+
+        Whether the store had packed them or not: a time given takes its value, a time not there
+        before is added, and a time the series does not give goes. One write: a read sees the range
+        as it was or as it is now, never half, and the same samples sent again write nothing. A
+        counter's or a histogram's is an InvalidError::
+
+            # the last three days read again from the shop's database, a refund taken off yesterday
+            samples = [(day(3), 1000), (day(2), 1000), (day(1), 900)]
+            corrected = Series(name="revenue", kind="gauge", labels={"shop": "msk"}, samples=samples)
+            await store.metrics.replace(corrected, from_=day(3), to=day(0))
+        """
+        body = MetricsReplace.encode(
+            {
+                "series": _new_series(series),
+                "from": unix_ms(from_, "a replace's from_"),
+                "to": unix_ms(to, "a replace's to"),
+            }
+        )
+        await self._link.run("write", lambda c: c.session.call(methods["metrics.replace"], body))
 
     async def ingest_prometheus(
         self,

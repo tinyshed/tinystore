@@ -34,7 +34,7 @@ use crate::{Error, ErrorKind, Result};
 const BATCH_SERIES: usize = 8;
 const BATCH_BYTES: usize = 1 << 20;
 /// What an entry may add once its payload's id is given: the longest varint.
-const PAYLOAD_ID: usize = 9;
+pub(super) const PAYLOAD_ID: usize = 9;
 
 /// A series' head as packing read it: its version, and the prefix it packs,
 /// which publication checks no write reached since.
@@ -249,16 +249,7 @@ fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
         if !blocks.is_empty() && clock_bytes + times.steps.len() + 32 > clock::MOST_BYTES {
             break;
         }
-        let (body, hint) = values::encode(zstd, run, &times, scale)?;
-        let body = body.unwrap_or_default();
-        let block = Block {
-            first: run[0].value,
-            summary: summarize(run, candidate.kind),
-            body_len: body.len(),
-            payload: 0,
-            body,
-            times,
-        };
+        let (block, hint) = block_of(zstd, run, times, candidate.kind, scale)?;
         // its payload's id is given at publication: room for the longest
         let entry = entry_len(&block) + if block.body_len > INLINE { PAYLOAD_ID } else { 0 };
         if !blocks.is_empty() && entry_bytes + entry > MOST_ENTRIES {
@@ -281,9 +272,20 @@ fn encode(zstd: &mut Zstd, mut candidate: Candidate) -> Result<Staged> {
     Ok(Staged { candidate, group, scale, left })
 }
 
+/// A run's block, its summary and its values encoded, and the hint of the
+/// grid's scale the next block tries; its payload's id is given when it is
+/// written.
+pub(super) fn block_of(zstd: &mut Zstd, run: &[Point], times: Times, kind: Kind, scale: i64) -> Result<(Block, i64)> {
+    let (body, hint) = values::encode(zstd, run, &times, scale)?;
+    let body = body.unwrap_or_default();
+    let block =
+        Block { first: run[0].value, summary: summarize(run, kind), body_len: body.len(), payload: 0, body, times };
+    Ok((block, hint))
+}
+
 /// The runs of a prefix that blocks take: a unit's samples, every 320 when
 /// it holds more.
-fn cut(points: &[Point], unit: i64) -> impl Iterator<Item = &[Point]> {
+pub(super) fn cut(points: &[Point], unit: i64) -> impl Iterator<Item = &[Point]> {
     points
         .chunk_by(move |a, b| unit_start(a.at, unit) == unit_start(b.at, unit))
         .flat_map(|units| units.chunks(MOST_SAMPLES))

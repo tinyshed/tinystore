@@ -63,6 +63,19 @@ OpenGaugeFunc is a gauge whose value read gives every 15 seconds and at Flush, o
 
 	err = metrics.OpenGaugeFunc(store, "queue_depth", emails.Depth, metrics.Labels{"queue": "emails"})
 
+## Replace
+
+```go
+func Replace(ctx context.Context, store *tinystore.Store, series Series, from, to time.Time) error
+```
+
+Replace replaces a gauge's samples from from to to, to excluded, with the series' own, whether the store had packed them or not: a time given takes its value, a time not there before is added, and a time the series does not give goes. It is one write: a read sees the range as it was or as it is now, never half, and the same samples sent again write nothing. A counter's or a histogram's is an Invalid error.
+
+	// the last three days read again from the shop's database, a refund taken off yesterday
+	corrected := metrics.Series{Name: "revenue", Kind: metrics.KindGauge, Labels: metrics.Labels{"shop": "msk"},
+		Samples: []metrics.Sample{{At: day(3), Value: 1000}, {At: day(2), Value: 1000}, {At: day(1), Value: 900}}}
+	err := metrics.Replace(ctx, store, corrected, day(3), day(0))
+
 ## AggregatePage
 
 ```go

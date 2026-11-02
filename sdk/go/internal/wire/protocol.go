@@ -100,22 +100,25 @@ const (
 	// is written, every series or none. A cancel or a lost connection leaves
 	// nothing written and lets go of what came.
 	MethodMetricsUploadPrometheus = 0x0610
-	MethodRecordsOpen             = 0x0501
-	MethodRecordsAppend           = 0x0502
-	MethodRecordsList             = 0x0503
-	MethodRecordsCount            = 0x0504
-	MethodRecordsTop              = 0x0505
-	MethodRecordsAggregate        = 0x0506
-	MethodRecordsStreams          = 0x0507
-	MethodRecordsFieldNames       = 0x0508
-	MethodRecordsPoll             = 0x0509
-	MethodRecordsTail             = 0x050a
-	MethodRecordsLines            = 0x050b
-	MethodRecordsDamaged          = 0x050c
-	MethodRecordsDrop             = 0x050d
-	MethodSearchOpen              = 0x0b01
-	MethodSearchSet               = 0x0b02
-	MethodSearchSetMany           = 0x0b03
+	// A gauge's range replaced in one write: a read sees it as it was or as it
+	// is, never half; the same samples sent again write nothing.
+	MethodMetricsReplace    = 0x0611
+	MethodRecordsOpen       = 0x0501
+	MethodRecordsAppend     = 0x0502
+	MethodRecordsList       = 0x0503
+	MethodRecordsCount      = 0x0504
+	MethodRecordsTop        = 0x0505
+	MethodRecordsAggregate  = 0x0506
+	MethodRecordsStreams    = 0x0507
+	MethodRecordsFieldNames = 0x0508
+	MethodRecordsPoll       = 0x0509
+	MethodRecordsTail       = 0x050a
+	MethodRecordsLines      = 0x050b
+	MethodRecordsDamaged    = 0x050c
+	MethodRecordsDrop       = 0x050d
+	MethodSearchOpen        = 0x0b01
+	MethodSearchSet         = 0x0b02
+	MethodSearchSetMany     = 0x0b03
 	// Answers whether the index held the document.
 	MethodSearchDelete = 0x0b04
 	MethodSearchGet    = 0x0b05
@@ -220,6 +223,7 @@ var methodNames = []struct {
 	{"metrics.instruments", MethodMetricsInstruments},
 	{"metrics.ingestPrometheus", MethodMetricsIngestPrometheus},
 	{"metrics.uploadPrometheus", MethodMetricsUploadPrometheus},
+	{"metrics.replace", MethodMetricsReplace},
 	{"records.open", MethodRecordsOpen},
 	{"records.append", MethodRecordsAppend},
 	{"records.list", MethodRecordsList},
@@ -461,6 +465,8 @@ func NewMessage(name string) Message {
 		return &MetricsNewSeries{}
 	case "metrics.Ingest":
 		return &MetricsIngest{}
+	case "metrics.Replace":
+		return &MetricsReplace{}
 	case "metrics.Exposition":
 		return &MetricsExposition{}
 	case "metrics.Upload":
@@ -7583,6 +7589,64 @@ func (m *MetricsIngest) Read(r *Reader) {
 // IsZero says whether MetricsIngest writes as no field at all.
 func (m MetricsIngest) IsZero() bool {
 	return len(m.Series) == 0
+}
+
+// MetricsReplace is the schema's metrics.Replace.
+//
+// A gauge's samples of from to to, packed or not, replaced by the series'
+// own: a time given takes its value, a time not there before is added, and a
+// time the series does not give goes.
+type MetricsReplace struct {
+	Series MetricsNewSeries `wire:"1,series"`
+	From   int64            `wire:"2,from"`
+	// excluded
+	To int64 `wire:"3,to"`
+}
+
+func (m MetricsReplace) Write(w *Writer) {
+	head := w.OpenMap()
+	n := 0
+	if !m.Series.IsZero() {
+		w.Uint(1)
+		m.Series.Write(w)
+		n++
+	}
+	if m.From != 0 {
+		w.Uint(2)
+		w.Int(m.From)
+		n++
+	}
+	if m.To != 0 {
+		w.Uint(3)
+		w.Int(m.To)
+		n++
+	}
+	w.CloseMap(head, n)
+}
+
+func (m *MetricsReplace) Read(r *Reader) {
+	*m = MetricsReplace{}
+	var seen Seen
+	for n := r.Map(); n > 0; n-- {
+		switch r.Field(&seen) {
+		case 1:
+			m.Series.Read(r)
+		case 2:
+			m.From = r.Int()
+		case 3:
+			m.To = r.Int()
+		default:
+			r.Skip()
+		}
+	}
+	r.Leave()
+}
+
+// IsZero says whether MetricsReplace writes as no field at all.
+func (m MetricsReplace) IsZero() bool {
+	return m.Series.IsZero() &&
+		m.From == 0 &&
+		m.To == 0
 }
 
 // MetricsExposition is the schema's metrics.Exposition.

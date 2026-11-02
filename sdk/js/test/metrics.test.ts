@@ -126,6 +126,39 @@ for (const way of ways) {
 			])
 		})
 
+		// contract: MET-19
+		test("a gauge's stretch is replaced whole, sent again changes nothing, and a counter's is refused", async () => {
+			const day = 86_400_000
+			const today = Math.floor(Date.now() / day) * day
+			const days = [5, 4, 3, 2, 1, 0].map(back => today - back * day)
+			const labels = { shop: 'msk' }
+			await store.metrics.ingest({
+				name: 'revenue',
+				kind: 'gauge',
+				labels,
+				samples: days.map(at => [at, 1000] as const),
+			})
+			const corrected = {
+				name: 'revenue',
+				kind: 'gauge',
+				labels,
+				samples: [
+					[days[2]!, 1000],
+					[new Date(days[4]!), 900],
+				],
+			} as const
+			const range = { from: new Date(days[2]!), to: days[5]! }
+			await store.metrics.replace(corrected, range)
+			await store.metrics.replace(corrected, range)
+			const {
+				series: [revenue],
+			} = await store.metrics.read({ name: 'revenue', since: '7d' })
+			expect(Array.from(revenue?.times ?? [])).toEqual(days.filter((_, i) => i !== 3))
+			expect(Array.from(revenue?.values ?? [])).toEqual([1000, 1000, 1000, 900, 1000])
+			const counter = { name: 'orders_total', kind: 'counter', samples: [] } as const
+			expect(await caught(store.metrics.replace(counter, range))).toBeInstanceOf(InvalidError)
+		})
+
 		// contract: MET-17
 		test('a read and an aggregate given limit come in pages that walk on to the whole answer', async () => {
 			const at = Date.now() - 600_000

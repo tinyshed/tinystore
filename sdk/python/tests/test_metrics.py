@@ -55,6 +55,22 @@ async def test_a_series_comes_back_bit_for_bit_its_samples_as_two_columns(store:
     ]
 
 
+# contract: MET-19
+async def test_a_gauges_stretch_is_replaced_whole_and_a_counters_is_refused(store: tinystore.Store) -> None:
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    days = [today - timedelta(days=back) for back in [5, 4, 3, 2, 1, 0]]
+    labels = {"shop": "msk"}
+    await store.metrics.ingest(Series(name="revenue", kind="gauge", labels=labels, samples=[(at, 1000) for at in days]))
+    corrected = Series(name="revenue", kind="gauge", labels=labels, samples=[(days[2], 1000), (days[4], 900)])
+    for _ in range(2):
+        await store.metrics.replace(corrected, from_=days[2], to=days[5])
+    [revenue] = (await store.metrics.read(name="revenue", since="7d")).series
+    assert list(revenue.times or []) == [int(at.timestamp() * 1000) for at in [*days[:3], *days[4:]]]
+    assert list(revenue.values or []) == [1000, 1000, 1000, 900, 1000]
+    with pytest.raises(tinystore.InvalidError, match="gauge"):
+        await store.metrics.replace(Series(name="orders_total", kind="counter", samples=[]), from_=days[2], to=days[5])
+
+
 # contract: MET-17
 async def test_a_read_and_an_aggregate_given_limit_come_in_pages_that_walk_on(store: tinystore.Store) -> None:
     at = now_ms() - 600_000

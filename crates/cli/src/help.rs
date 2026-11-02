@@ -510,6 +510,21 @@ pub(crate) const METRICS_DELETE: Command = Command {
            the directory, or starts one.",
 };
 
+pub(crate) const METRICS_REPLACE: Command = Command {
+    name: "metrics replace",
+    takes: "<dir> replace <name> [label=value]...",
+    does: "replace a gauge's samples of a range with those on stdin",
+    flags: &[FROM, TO],
+    examples: &[
+        "printf '2026-11-01T00:00Z 1000\\n2026-11-02T00:00Z 900\\n' | tinystore metrics ./data replace revenue \
+         shop=msk --from 2026-11-01T00:00Z --to 2026-11-03T00:00Z",
+    ],
+    more: "Stdin holds a sample a line, its time and its value. Once it ends, the range from --from up to --to \
+           holds exactly those samples, in one write: a time given takes its value, one not there is added, and \
+           one not given goes, whether the store packed it or not. Only a gauge's range is replaced. It writes \
+           through the server that holds the directory, or starts one.",
+};
+
 pub(crate) const EVENTS_LIST: Command = Command {
     name: "events list",
     takes: "[dir] list <stream>",
@@ -648,6 +663,7 @@ pub(crate) const GROUPS: [(&str, &[&Command]); 5] = [
             &CONFIG_UPDATE,
             &CONFIG_RESET,
             &METRICS_INGEST,
+            &METRICS_REPLACE,
             &METRICS_DELETE,
             &EVENTS_APPEND,
         ],

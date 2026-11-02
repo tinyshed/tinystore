@@ -127,6 +127,11 @@ export const methods = {
 	 * nothing written and lets go of what came.
 	 */
 	'metrics.uploadPrometheus': 0x0610,
+	/**
+	 * A gauge's range replaced in one write: a read sees it as it was or as it
+	 * is, never half; the same samples sent again write nothing.
+	 */
+	'metrics.replace': 0x0611,
 	'records.open': 0x0501,
 	'records.append': 0x0502,
 	'records.list': 0x0503,
@@ -6857,6 +6862,65 @@ export const MetricsIngest = message(
 			}
 			r.leave()
 			return { series: $series }
+		},
+	},
+)
+
+/**
+ * A gauge's samples of from to to, packed or not, replaced by the series'
+ * own: a time given takes its value, a time not there before is added, and a
+ * time the series does not give goes.
+ */
+export const MetricsReplace = message(
+	'metrics.Replace',
+	{
+		series: [1, MetricsNewSeries],
+		from: [2, int],
+		/** excluded */
+		to: [3, int],
+	},
+	{
+		write(w, v) {
+			const head = w.openMap()
+			let n = 0
+			if (v.series !== undefined) {
+				w.field(1)
+				MetricsNewSeries.write(w, v.series)
+				n++
+			}
+			if (v.from !== undefined) {
+				w.field(2)
+				w.int(v.from)
+				n++
+			}
+			if (v.to !== undefined) {
+				w.field(3)
+				w.int(v.to)
+				n++
+			}
+			w.closeMap(head, n)
+		},
+		read(r) {
+			let $series: Read<typeof MetricsNewSeries.fields> | undefined
+			let $from: number | undefined
+			let $to: number | undefined
+			for (let n = r.message(); n > 0; n--) {
+				switch (r.field()) {
+					case 1:
+						$series = MetricsNewSeries.read(r)
+						break
+					case 2:
+						$from = r.int()
+						break
+					case 3:
+						$to = r.int()
+						break
+					default:
+						r.skip()
+				}
+			}
+			r.leave()
+			return { series: $series, from: $from, to: $to }
 		},
 	},
 )

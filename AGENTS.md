@@ -47,7 +47,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 | config         | typed settings in layers, secrets, live settings kept in kv.db                                     | [config](docs/guides/config/README.md)               |
 | records        | streams of events and logs packed into blocks, reads, aggregates, a tail, other programs' lines    | [records](docs/guides/records/README.md)             |
 | console        | a logger's lines printed as every SDK prints them, a `tracing` layer without a store               | [console](docs/guides/records/console.md)            |
-| metrics        | series, instruments, aggregates, ingest, the store's own metrics, the `metrics` crate's recorder   | [metrics](docs/guides/metrics/README.md)             |
+| metrics        | series, instruments, aggregates, ingest and a gauge's replace, its own, the `metrics` recorder     | [metrics](docs/guides/metrics/README.md)             |
 | backup         | one checked zip of every engine while it runs, and its restore                                     | [backup](docs/guides/backup/README.md)               |
 | replication    | nodes, a home a file, copies, writes passed home, moves, promotion, a witness                      | [nodes](docs/handbook/nodes/copies.md)               |
 | wire           | frames, MessagePack, credit, every engine's calls, written from `protocol/*.wire`                  | [wire](docs/wire.md)                                 |
@@ -390,7 +390,10 @@ selection.** `sealed_before` is stored per series and only sealing moves it,
 inside the transaction that wrote the block. What is packed is what is strictly
 before the watermark, not what a `limit` returned. Ingest never moves
 `sealed_before`: it refuses what is behind it, keeps the rest, and moves
-`max_seen_ts` once at the end of a batch.
+`max_seen_ts` once at the end of a batch. A gauge's `replace` is the one call
+that rewrites what is behind it, and leaves `sealed_before` where it was: in
+one transaction its stretch's part behind it is made again as blocks and its
+part after goes into the head (`replace.rs`).
 
 **What may be sealed trails the series; silence need not seal anything.** A
 counter's increase cannot be added across two blocks overlapping in time, so
@@ -422,7 +425,12 @@ Codec bodies, group directories and schema histories have their own versions
 and golden readers.
 
 **Merging directories must not relocate payloads**: a directory keeps explicit
-payload ids, and values and summaries are neither decoded nor recomputed.
+payload ids, and values and summaries are neither decoded nor recomputed. A
+gauge's `replace` keeps the entries and payloads of the blocks outside its
+stretch; the blocks its stretch reaches are decoded and cut again, each new
+block with a summary built from its samples and a payload of a fresh id, the
+old payloads removed, and the groups it touched are written again, their
+clocks held and let go.
 
 ## Measurements
 

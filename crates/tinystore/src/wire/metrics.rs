@@ -23,7 +23,8 @@ use super::protocol::{
     MetricsCondition, MetricsDamage, MetricsDamages, MetricsDeleted, MetricsDescription, MetricsExceeds,
     MetricsExposition, MetricsGroup, MetricsIngest, MetricsLatest, MetricsName, MetricsNameAsked, MetricsNamePage,
     MetricsNewSeries, MetricsNewest, MetricsPageAsked, MetricsPiece, MetricsPlan, MetricsQuery, MetricsRead,
-    MetricsRefused, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload, method,
+    MetricsRefused, MetricsReplace, MetricsSeries, MetricsSeriesNamed, MetricsSession, MetricsTextPage, MetricsUpload,
+    method,
 };
 use super::{Link, Route};
 use crate::clock::from_unix_millis;
@@ -151,6 +152,7 @@ pub(crate) fn call(store: &Store, called: u16, body: &[u8], max_body: usize) -> 
         method::METRICS_INGEST_PROMETHEUS => ingest_prometheus(&metrics, MetricsExposition::decode(body)?),
         method::METRICS_DESCRIBE => describe(&metrics, MetricsDescription::decode(body)?),
         method::METRICS_DELETE => delete(&metrics, MetricsSeriesNamed::decode(body)?),
+        method::METRICS_REPLACE => replace(&metrics, MetricsReplace::decode(body)?),
         method::METRICS_FLUSH => metrics.flush().map(|()| Empty {}.encode()).map_err(Failure::from),
         _ => Err(Failure::unimplemented(format!("method {called:#06x}"))),
     }
@@ -410,6 +412,12 @@ fn series_of(given: MetricsNewSeries) -> Result<Series, Failure> {
         series = series.keep(Duration::from_millis(keep));
     }
     Ok(series)
+}
+
+fn replace(metrics: &Metrics, asked: MetricsReplace) -> Answered {
+    let series = series_of(asked.series)?;
+    metrics.replace(&series, from_unix_millis(asked.from)..from_unix_millis(asked.to))?;
+    Ok(Empty {}.encode())
 }
 
 fn describe(metrics: &Metrics, described: MetricsDescription) -> Answered {

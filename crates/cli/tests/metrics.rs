@@ -257,6 +257,56 @@ fn a_series_is_deleted_by_its_exact_labels_through_a_server() {
     assert_eq!(targets(&data), ["finland", "sweden"]);
 }
 
+/// `metrics replace` of sweden's `ping_rtt_ms` over a range, `text` on its
+/// stdin.
+fn replace(dir: &Path, range: [SystemTime; 2], text: &str) -> Output {
+    let [from, to] = range.map(|at| jiff::Timestamp::try_from(at).unwrap().to_string());
+    let mut command = Command::new(BINARY)
+        .arg("metrics")
+        .arg(dir)
+        .args(["replace", "ping_rtt_ms", "target=sweden", "--from", &from, "--to", &to])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    command.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+    command.wait_with_output().unwrap()
+}
+
+/// Sweden's samples of `ping_rtt_ms`, once its server let the store go.
+fn sweden(dir: &Path) -> Vec<(SystemTime, f64)> {
+    let store = opened(dir);
+    let query = store.metrics().unwrap().query().name("ping_rtt_ms").filter("target", "sweden");
+    let read = query.since(Duration::from_secs(3600)).read().unwrap().series;
+    store.close().unwrap();
+    read[0].samples().iter().map(|sample| (sample.at, sample.value)).collect()
+}
+
+// contract: CLI-05, MET-19
+#[test]
+fn a_gauges_range_is_replaced_with_the_samples_on_stdin_through_a_server() {
+    let dirs = tempfile::tempdir().unwrap();
+    let data = dirs.path().join("data");
+    filled(&data);
+    let before = sweden(&data);
+    let range = [before[10].0, before[20].0];
+    let stamp = |at: SystemTime| jiff::Timestamp::try_from(at).unwrap().to_string();
+    let added = before[15].0 + Duration::from_millis(500);
+    let text = format!("{} 99\n# a comment\n\n{}  98.5\n", stamp(before[12].0), stamp(added));
+    let replaced = replace(&data, range, &text);
+    assert!(replaced.status.success(), "{}", said(&replaced));
+    assert!(said(&replaced).contains(r#"replaced ping_rtt_ms{target="sweden"} from "#), "{}", said(&replaced));
+    assert!(said(&replaced).contains("with 2 samples"), "{}", said(&replaced));
+    let unread = replace(&data, range, "yesterday 1\n");
+    assert!(!unread.status.success() && said(&unread).contains("line 1, `yesterday 1`"), "{}", said(&unread));
+    stop(&data);
+    let mut expected: Vec<(SystemTime, f64)> = before[..10].to_vec();
+    expected.extend([(before[12].0, 99.0), (added, 98.5)]);
+    expected.extend(&before[20..]);
+    assert_eq!(sweden(&data), expected);
+}
+
 // contract: CLI-05
 #[test]
 fn a_text_past_one_message_is_written_whole() {

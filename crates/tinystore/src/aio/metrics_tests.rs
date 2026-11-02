@@ -93,6 +93,23 @@ async fn every_awaited_call_answers_as_its_blocking_twin_on_the_same_store() {
     f.store.close().unwrap();
 }
 
+// contract: MET-19
+#[tokio::test]
+async fn an_awaited_replace_writes_what_its_blocking_twin_writes_and_fails_as_it_does() {
+    let f = fixture();
+    let (_store, stats) = awaited(&f);
+    let now = f.now();
+    let cpu = |value: f64| Series::gauge("cpu").sample(now - 2 * MINUTE, value).sample(now - MINUTE, value + 1.0);
+    stats.ingest(&[cpu(0.25)]).await.unwrap();
+    stats.replace(&cpu(7.0), now - 2 * MINUTE..now).await.unwrap();
+    let read = stats.query().name("cpu").since(HOUR).read().await.unwrap().series;
+    assert_eq!(bits(&read[0]), bits(&cpu(7.0)));
+    let refused = stats.replace(&Series::counter("cpu"), now - MINUTE..now).await.unwrap_err();
+    let twin = stats.blocking().replace(&Series::counter("cpu"), now - MINUTE..now).unwrap_err();
+    assert_eq!((refused.kind(), refused.to_string()), (twin.kind(), twin.to_string()));
+    f.store.close().unwrap();
+}
+
 #[tokio::test]
 async fn an_awaited_call_fails_as_its_blocking_twin_does() {
     let f = fixture();

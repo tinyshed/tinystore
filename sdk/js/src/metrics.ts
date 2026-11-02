@@ -39,6 +39,7 @@ import {
 	MetricsPlan,
 	MetricsQuery,
 	MetricsRead,
+	MetricsReplace,
 	MetricsSeriesNamed,
 	MetricsTextPage,
 	MetricsUpload,
@@ -336,6 +337,30 @@ export class Metrics {
 		const body = MetricsIngest.encode({ series: given.map(newSeries) })
 		await this.#link.run('write', connection =>
 			connection.session.call(methods['metrics.ingest'], body),
+		)
+	}
+
+	/**
+	 * Replaces a gauge's samples from `from` to `to`, `to` excluded, with the series' own,
+	 * whether the store had packed them or not: a time given takes its value, a time not there
+	 * before is added, and a time the series does not give goes. One write: a read sees the
+	 * range as it was or as it is now, never half, and the same samples sent again write
+	 * nothing. A counter's or a histogram's is an InvalidError.
+	 *
+	 *     // the last three days read again from the shop's database, a refund taken off yesterday
+	 *     await store.metrics.replace(
+	 *       { name: 'revenue', kind: 'gauge', labels: { shop: 'msk' }, samples: [[day(3), 1000], [day(2), 1000], [day(1), 900]] },
+	 *       { from: day(3), to: day(0) },
+	 *     )
+	 */
+	async replace(series: SeriesInput, range: { from: Time; to: Time }): Promise<void> {
+		const body = MetricsReplace.encode({
+			series: newSeries(series),
+			from: unixMs(range.from),
+			to: unixMs(range.to),
+		})
+		await this.#link.run('write', connection =>
+			connection.session.call(methods['metrics.replace'], body),
 		)
 	}
 
