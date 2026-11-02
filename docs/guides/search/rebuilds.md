@@ -149,9 +149,17 @@ let indexes = tinystore::search::list(&store)?;
 store.drop_index("products")?;
 ```
 
-An index no program opens any more is kept until it is dropped, since another
-version of the program may open it again. A handle of a dropped index is
-refused from then on, and opening the name again makes a new, empty index.
+An index no program opens any more is kept until it is dropped, because
+another version of the program may open it again. A handle of a dropped
+index is refused from then on, and opening the name again makes a new, empty
+index.
+
+Background work removes a dropped index's rows, and `search.db` gives their
+pages back to the disk once they have stayed free for ten minutes, 4 MiB
+every ten seconds. A `search.db` that a release before 0.5.1 made gives its
+pages back only after one vacuum of the whole file, which maintenance runs
+while the file holds at most 8 MiB of data, as [SQLite as TinyStore runs it](../../handbook/inside/sqlite.md#free-pages-given-back-to-the-disk)
+explains.
 
 Beside a running server, the command line lists and drops them too:
 

@@ -4,6 +4,8 @@ What changed in each version of TinyStore, with code in every language. One
 version covers the Rust crates, the Bun and Node, Python and Go SDKs, the
 command line and the server image.
 
+- **[TinyStore 0.5.1](v0.5.1.md)** · 2 November 2026\n  Search keeps its postings in segments: an import of millions of documents
+  in minutes, faster searches, and a dropped index's pages back to the disk.
 - **[TinyStore 0.5.0](v0.5.0.md)** · 1 November 2026\
   Every word as a prefix, the other keyboard layout, where each hit matched,
   a bucket's `update`, limits by name and `status --names`.

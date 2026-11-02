@@ -149,10 +149,19 @@ that creates the table again and fills it with
 | You need                                                     | Use                                                                     |
 |--------------------------------------------------------------|-------------------------------------------------------------------------|
 | snippets, highlights, phrases, `NEAR`, a query language      | FTS5                                                                    |
+| the best ten of millions of documents in milliseconds        | [Search](../search/README.md)                                           |
 | typos forgiven, Russian stems, Chinese and Japanese words    | [Search](../search/README.md)                                           |
 | vectors from your model, alone or with words                 | [Search](../search/README.md)                                           |
 | filters that keep each user to their own rows before ranking | [Search](../search/README.md)                                           |
 | the index in the same file and commit as the rows            | either: FTS5's triggers, or [a table's index](../search/table-index.md) |
+
+FTS5 ranks by scoring every document that matches. On MS MARCO's 8.8 million
+passages, `order by rank limit 10` took about four seconds per query, where
+the Search engine takes a few milliseconds, as the
+[search-msmarco-timing](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-msmarco-timing-2026-11-01.md) and
+[search-tinystore-queries](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-tinystore-queries-2026-11-02.md)
+research rounds measured on one machine. A query whose words are rare costs
+FTS5 little.
 
 ## Places with R*Tree
 

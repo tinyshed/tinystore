@@ -840,9 +840,9 @@ pub fn maintain(store: &Store) -> Result<Maintenance>
 ```
 
 Runs the store's search maintenance now, as a store opened without
-background work has to: every head packed and the documents gone purged,
-in search.db and in each database a table's index was opened in, and a
-table's rows read the first time.
+background work has to: each index's segments merged into one and the
+documents gone purged, in search.db and in each database a table's index
+was opened in, and a table's rows read the first time.
 
 ## aio::search::list
 

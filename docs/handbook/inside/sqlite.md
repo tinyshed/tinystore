@@ -139,11 +139,14 @@ one commit.
 When rows are deleted, SQLite keeps the pages they leave empty inside the
 file and fills them with the next writes. It gives pages back to the disk
 only in a file made with `auto_vacuum = incremental`, and only when asked.
-`records.db` and `metrics.db` are made that way, because packing removes the
-rows that logs were first written as, and expiry removes whole blocks.
+`records.db`, `metrics.db` and `search.db` are made that way. Packing
+removes the rows that logs were first written as, expiry removes whole
+blocks, and a dropped index, a purge or a rebuild frees the pages of an
+index.
 
 Their maintenance gives back the pages that stayed free for ten minutes, at
-most 4 MiB in a pass, which runs every minute. A stream that keeps writing
+most 4 MiB in a pass, which runs every minute for records and metrics and
+every ten seconds for search. A stream that keeps writing
 fills its free pages again before then, so a live file does not shrink and
 grow every minute. A stream that stopped, or a shorter `keep`, starts giving
 its pages back ten to twenty minutes later, 4 MiB a minute.
@@ -154,8 +157,9 @@ or expiry shrinks a metric's head, the engine deletes the row and inserts it
 again. Otherwise the heads would keep the pages they grew into during a bulk
 load, which held thousands of samples per series before the first pass.
 
-A file written by TinyStore 0.1.0 was made without the setting, and only a
-`vacuum` of the whole file can add it. A vacuum holds the file's writer while
+A file written by TinyStore 0.1.0 was made without the setting, and so was a
+`search.db` written before 0.5.1. Only a `vacuum` of the whole file can add
+it. A vacuum holds the file's writer while
 it rewrites the file. Maintenance vacuums such a file once, while it holds at
 most 8 MiB of data. A larger one keeps its free pages for its next writes, as
 0.1.0 did. A node never vacuums a file it logs, since its log would take the

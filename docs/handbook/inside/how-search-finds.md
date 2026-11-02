@@ -37,8 +37,10 @@ Each block stores the gaps between its documents and their frequencies in as
 few bits as its largest needs, and a word's blocks lie one after another in
 rows of about 32 KiB. The directory has a fixed width, so a search reads it
 without decoding, and it reads a block at its place in its row without
-running a query for it. On MS MARCO's passages, research measured this
-layout at about 2 bytes a posting.
+running a query for it. An index of MS MARCO's 8.8 million passages takes
+1.9 bytes per posting in its pages, as the
+[search-tinystore](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-tinystore-2026-11-02.md) research round
+measured it.
 
 The postings live in segments, as in Lucene and SQLite's FTS5. A segment
 holds every word's postings for a run of documents, all next to each other
@@ -55,9 +57,23 @@ possible scores of the blocks the search's words have there. A window whose
 best possible total cannot beat the tenth best score found so far is skipped
 without reading a posting.
 
+Inside a window, the words whose blocks can't lift a document past the tenth
+best on their own are passive. The other words add up their postings, and a
+passive word is read only for the documents they found, the word that can
+add most first, and only while it can still change the result. A document
+length is read only for a posting that is scored, and most postings never
+are.
+
 The answer is the same as scoring every document (contract SRCH-01). Scores
 are kept in whole points, so merging or cleaning up the index never changes a
 score or the order of a tie.
+
+On MS MARCO's 8.8 million passages, one query at a time, a search took
+3.3–3.5 ms at the median and 21–23 ms at the 99th percentile. Tantivy took
+2.3–2.5 ms and 27–30 ms in the same run, and Lucene 1.7–1.9 ms and 12–13 ms.
+The run used 1,097 of MS MARCO's queries, warm, on a Ryzen 7 7700 in a WSL2
+container with 2 CPUs, and the
+[report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-tinystore-queries-2026-11-02.md) has every number.
 
 ## New documents and old ones
 
@@ -65,11 +81,24 @@ A document set is visible to the next search at once (contract SRCH-04),
 because a set writes its postings into the newest segment, which searches
 read like any other. The newest segment takes documents until it holds a
 thousand; then the next set starts another. Background work merges ten
-segments of a size into one of the next, a few thousand words per commit, so
-a posting is written again only once per size and a search reads a handful
-of segments. A deleted document is marked gone; merges leave it out, and
-once the gone documents pass half a percent of the index, they are purged
-from the rest.
+segments of a size into one of the next size, a few thousand words per
+commit:
+
+```mermaid
+flowchart TB
+  set([setMany<br>up to 1,000 documents]) --> open[newest segment<br>under 1,000]
+  open -->|ten of them| small[segment of<br>10,000]
+  small -->|ten of them| large[segment of<br>100,000]
+  large -->|ten of them| larger[segment of<br>1,000,000]
+```
+
+So a posting is written again only once per size, and a search reads a
+handful of segments. An index of MS MARCO that background work left in 22
+segments answered at the median in 1.03 to 1.13 times the time of the same
+index merged into one, in the [report](https://github.com/tinyshed/research/blob/main/tinystore/reports/search-tinystore-queries-2026-11-02.md)
+above. A deleted document is marked gone. Merges leave it out, and once the
+gone documents pass half a percent of the index, they are purged from the
+rest.
 
 A misspelt word that matches nothing is read as the nearest word the index
 holds, one letter off from five letters and two from nine, and `corrected`
