@@ -28,6 +28,11 @@
 //! capture hands to a node's log, and a copy, whose applier copies frames
 //! only once their position is synced, run their own checkpoints, never these.
 //!
+//! A file may ask later, at up to `Config::checkpoint_at` frames while they
+//! are fewer than an eighth of its pages, so that a page many commits write
+//! again is copied once for several: a file that grows by bulk writes, as
+//! search.db's sets of a thousand passages of some 2,000 frames each.
+//!
 //! Reads that never stop would keep the WAL growing past [`HARD`] for good:
 //! a read begun before the last commit holds a snapshot of the frames before
 //! it, and a passive checkpoint copies no further, so it never copies all of
@@ -65,6 +70,7 @@ const RESTART_WAIT: Duration = Duration::from_millis(100);
 
 const CHECKPOINT: &str = own!("pragma wal_checkpoint(passive)");
 const RESTART: &str = own!("pragma wal_checkpoint(restart)");
+const PAGES: &str = own!("pragma page_count");
 
 /// Where a file's checkpoints run, and whether one is due.
 pub(crate) struct Checkpoints {
@@ -127,9 +133,19 @@ impl Checkpoints {
         }
         // the WAL started over since a restart last waited in vain
         self.restart_from.store(0, Ordering::Relaxed);
-        if end >= SOFT {
+        if end >= SOFT && end >= self.later_bound(writer) {
             self.due.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// The frames at which this file asks for a checkpoint: [`SOFT`], or up
+    /// to its own bound while they are fewer than an eighth of its pages.
+    fn later_bound(&self, writer: &Connection) -> u32 {
+        if self.config.checkpoint_at <= SOFT {
+            return SOFT;
+        }
+        let pages: u32 = writer.query_row(PAGES, [], |row| row.get(0)).unwrap_or(0);
+        (pages / 8).clamp(SOFT, self.config.checkpoint_at)
     }
 
     /// Restarts the WAL `end` frames long on the writer, or, while a read

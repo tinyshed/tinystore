@@ -17,8 +17,8 @@
 use std::ops::Range;
 
 use rust_stemmers::{Algorithm, Stemmer};
-use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfkc_quick};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The analysis an index's words were read with. A release that reads text
@@ -114,8 +114,19 @@ impl Folding {
 
     /// Appends `text` to `out` as [`normalize`] reads it, a mark at its start
     /// taken off or kept by the letter that ended the piece folded before.
+    /// Text Unicode's quick check finds in NFKC already, as nearly all text
+    /// is in any script, is not composed again: composing took a fifth of
+    /// the analysis of MS MARCO's passages.
     fn fold(&mut self, text: &str, out: &mut String) {
-        for c in text.nfkc().flat_map(char::to_lowercase) {
+        if is_nfkc_quick(text.chars()) == IsNormalized::Yes {
+            self.fold_chars(text.chars(), out);
+        } else {
+            self.fold_chars(text.nfkc(), out);
+        }
+    }
+
+    fn fold_chars(&mut self, text: impl Iterator<Item = char>, out: &mut String) {
+        for c in text.flat_map(char::to_lowercase) {
             if is_combining_mark(c) {
                 if !(matches!(self.base, Script::Latin | Script::Cyrillic) || self.greek) {
                     out.push(c);
@@ -212,11 +223,80 @@ fn cut(text: &str) -> Vec<Range<usize>> {
 /// Words by Unicode's rules that hold a letter or a digit. A word that holds
 /// what is neither a letter, a mark nor a digit, `can't`, is read without it
 /// by [`words_of`], so that no word holds what the index splits on.
+///
+/// The rules break at every space unless what follows joins it, as a mark
+/// does, so the text is read a piece between spaces at a time: a piece of
+/// letters and digits the rules join, as most words are in any script
+/// written with spaces, is one word, and only another piece, `can't` or
+/// `3.14`, is read by the rules. Reading every letter by them took a third
+/// of the analysis of MS MARCO's passages. A text where a piece begins with
+/// what joins the space before it is read whole by the rules.
 fn spaced(text: &str, within: Range<usize>, found: &mut Vec<Range<usize>>) {
+    let piece = &text[within.clone()];
+    if piece.split(' ').any(|part| part.chars().next().is_some_and(joins_a_space)) {
+        return by_the_rules(text, within, found);
+    }
+    let mut at = within.start;
+    for part in piece.split(' ') {
+        if !part.is_empty() && part.chars().all(in_a_word) {
+            found.push(at..at + part.len());
+        } else if !part.is_empty() {
+            by_the_rules(text, at..at + part.len(), found);
+        }
+        at += part.len() + 1;
+    }
+}
+
+/// [`spaced`] by Unicode's rules alone.
+fn by_the_rules(text: &str, within: Range<usize>, found: &mut Vec<Range<usize>>) {
     for (at, word) in text[within.clone()].unicode_word_indices() {
         if word.chars().any(|c| c.is_alphanumeric()) {
             found.push(within.start + at..within.start + at + word.len());
         }
+    }
+}
+
+/// Code points below this the rules are asked about once each, at the
+/// first text read; others are left to the rules every time.
+const ASKED_BELOW: u32 = 0x3000;
+const IN_A_WORD: u8 = 1;
+const JOINS_A_SPACE: u8 = 2;
+
+/// What the rules say of each code point below [`ASKED_BELOW`].
+static ASKED: std::sync::LazyLock<Vec<u8>> =
+    std::sync::LazyLock::new(|| (0..ASKED_BELOW).map(|code| char::from_u32(code).map_or(0, ask)).collect());
+
+fn ask(c: char) -> u8 {
+    let alone = |text: &str| {
+        let mut words = text.unicode_word_indices();
+        matches!((words.next(), words.next()), (Some((0, word)), None) if word == text)
+    };
+    let joined = c.is_alphanumeric()
+        && !is_combining_mark(c)
+        && script(c) != Script::Unspaced
+        && alone(&c.to_string())
+        && ["a", "1", "я"].iter().all(|side| alone(&format!("{side}{c}{side}")) && alone(&format!("{c}{side}")));
+    let spaced = format!(" {c}");
+    let joins = spaced.split_word_bound_indices().next().is_some_and(|(_, first)| first != " ");
+    (u8::from(joined) * IN_A_WORD) | (u8::from(joins) * JOINS_A_SPACE)
+}
+
+/// Whether the rules join `c` into one word with the letters and digits on
+/// either side of it.
+fn in_a_word(c: char) -> bool {
+    match c as u32 {
+        _ if c.is_ascii() => c.is_ascii_alphanumeric(),
+        code if code < ASKED_BELOW => ASKED[code as usize] & IN_A_WORD != 0,
+        _ => false,
+    }
+}
+
+/// Whether the rules join `c` to a space before it, or may: a mark does.
+fn joins_a_space(c: char) -> bool {
+    match c as u32 {
+        _ if c.is_ascii() => false,
+        code if code < ASKED_BELOW => ASKED[code as usize] & JOINS_A_SPACE != 0,
+        _ => !c.is_alphanumeric(),
     }
 }
 
@@ -298,8 +378,44 @@ mod tests {
         "a", "Z", "e", "и", "к", "ω", " ", ",", "'", "-", "\n", "\r", "4", "\u{301}", "\u{306}", "\u{307}", "\u{308}",
         "\u{200d}", "ﬁ", "ﬃ", "ﬆ", "İ", "ё", "Ё", "Ａ", "ｂ", "é", "Å", "\u{212b}", "ǅ", "ẞ", "ß", "ά", "\u{2126}",
         "ŉ", "ǰ", "½", "㎏", "Ⅻ", "\u{1100}", "\u{1161}", "\u{11a8}", "가", "世", "界", "タ", "ส", "\u{e31}", "क",
-        "\u{94d}", "ष", "\u{b47}", "\u{b3e}", "👍", "🏽", "🇷", "🇺",
+        "\u{94d}", "ष", "\u{b47}", "\u{b3e}", "👍", "🏽", "🇷", "🇺", "Я", "й", "ї", "Ґ", "ά", "ŉ", "ة", "ـ", "\u{5d0}",
+        "\u{5b8}", "\u{651}", "x", "Q", "7", ".", ":", "_",
     ];
+
+    #[test]
+    fn a_piece_between_spaces_is_cut_as_the_rules_cut_the_text_whole() {
+        let mut random = crate::search::fixture::Random::new(47);
+        let alphabet: Vec<&str> = TRICKY.iter().copied().chain([" ", " ", " ", "«", "»", "—", "'", "3", "q"]).collect();
+        for round in 0..40_000 {
+            let length = random.below(24);
+            let text: String = (0..length).map(|_| alphabet[random.below(alphabet.len() as u64) as usize]).collect();
+            let (mut fast, mut whole) = (Vec::new(), Vec::new());
+            spaced(&text, 0..text.len(), &mut fast);
+            by_the_rules(&text, 0..text.len(), &mut whole);
+            assert_eq!(fast, whole, "round {round}: {text:?}");
+        }
+        for code in 0..ASKED_BELOW {
+            let Some(c) = char::from_u32(code) else { continue };
+            for text in [format!("x{c}x y"), format!("{c}я {c}"), format!("1{c} {c}1"), format!(" {c}a b{c}")] {
+                let (mut fast, mut whole) = (Vec::new(), Vec::new());
+                spaced(&text, 0..text.len(), &mut fast);
+                by_the_rules(&text, 0..text.len(), &mut whole);
+                assert_eq!(fast, whole, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_the_quick_check_passes_folds_as_it_does_composed_again() {
+        let mut random = crate::search::fixture::Random::new(46);
+        for round in 0..20_000 {
+            let length = random.below(16);
+            let text: String = (0..length).map(|_| TRICKY[random.below(TRICKY.len() as u64) as usize]).collect();
+            let mut composed = String::new();
+            Folding::new().fold_chars(text.nfkc(), &mut composed);
+            assert_eq!(normalize(&text), composed, "round {round}: {text:?}");
+        }
+    }
 
     #[test]
     fn random_text_folds_a_grapheme_at_a_time_as_it_folds_whole_and_each_word_reads_back() {

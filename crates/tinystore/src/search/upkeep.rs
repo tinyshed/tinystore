@@ -13,8 +13,8 @@ use super::merge;
 use super::open::{Data, OpenIndex};
 use super::purge;
 use super::score::Part;
-use crate::Result;
 use crate::sync::lock;
+use crate::{Error, Result};
 
 /// How long a dictionary of an index's words serves after they change
 /// before background work builds it again.
@@ -28,12 +28,41 @@ impl Search {
     /// folded, as a store without background work asks. Says how many
     /// postings it merged.
     pub(crate) fn merge(&self, data: &Data, everything: bool) -> Result<u64> {
+        let id = data.id;
         let mut merged = 0;
         loop {
-            let step = self.file.transaction(|tx| merge::step(tx, data.id, merge::STEP_PIECES, everything))?;
-            merged += step.postings;
-            if step.done {
-                return Ok(merged);
+            let merge = match self.file.read(|connection| merge::under_way_in(connection, id))? {
+                Some(merge) => merge,
+                None => match self.file.transaction(|tx| merge::begun(tx, id, everything))? {
+                    Some(merge) => merge,
+                    None => return Ok(merged),
+                },
+            };
+            merged += self.merge_steps(id, merge)?;
+        }
+    }
+
+    /// Steps `merge` to its end: each packed in a snapshot, so that sets wait
+    /// only for its commit, and each after the first packed on a thread of
+    /// this call's beside the commit of the one before, so that packing and
+    /// writing take a processor each.
+    fn merge_steps(&self, id: i64, mut merge: merge::Merge) -> Result<u64> {
+        let mut merged = 0;
+        let mut stepped = self.file.read(|connection| merge.pack(connection, id, merge::STEP_PIECES))?;
+        loop {
+            let next = merge.after(&stepped);
+            let (written, packed) = std::thread::scope(|scope| {
+                let packing = next.as_ref().map(|next| {
+                    scope.spawn(|| self.file.read(|connection| next.pack(connection, id, merge::STEP_PIECES)))
+                });
+                let written = self.file.transaction(|tx| merge.write(tx, id, stepped));
+                (written, packing.map(|packing| packing.join()))
+            });
+            merged += written?;
+            match (next, packed) {
+                (Some(next), Some(Ok(packed))) => (merge, stepped) = (next, packed?),
+                (_, Some(Err(_))) => return Err(Error::internal("a merge's step panicked as it packed")),
+                _ => return Ok(merged),
             }
         }
     }
@@ -52,7 +81,11 @@ impl Search {
         }
         let Some(purge) = under_way.as_mut() else { return Ok(0) };
         loop {
-            let at = self.file.transaction(|tx| purge.step(tx, id, purge::STEP_KEYS))?;
+            // a step may drop the rows of keys no document holds, whose ids sets keep
+            let at = self.file.transaction(|tx| {
+                lock(&data.kept.known).clear();
+                purge.step(tx, id, purge::STEP_KEYS)
+            })?;
             if purge.advance(at) {
                 break;
             }

@@ -5,8 +5,14 @@
 //! them from the old ones in one commit, and the old segments go once the
 //! last key has moved.
 //!
-//! A step first gives every document set since the last step its lengths
-//! in `norms`: a posting in a block finds its length there, and a
+//! A step reads and packs its pieces in a snapshot, and takes the writer
+//! only to write what it packed: the segments a merge joins change no more
+//! once it begins, since sets write a newer one and the purge and merges
+//! of an index run one after another. Packing under the writer held sets
+//! waiting a third of a build of MS MARCO's first million passages.
+//!
+//! A step's commit first gives every document set since the last its
+//! lengths in `norms`: a posting in a block finds its length there, and a
 //! document's lengths are written once and never change. A merged piece
 //! leaves out the documents gone, and its blocks are packed anew, each
 //! bounded at its part's average now; a merge to a folded level adds its
@@ -50,8 +56,12 @@ const NOTE_LISTS: &str = "update _tinystore_search_indexes set lists_version = l
 /// Pieces a step reads of each segment it merges at most, unless one key
 /// holds more.
 pub(crate) const STEP_PIECES: usize = 4096;
+/// The bytes of runs a step packs before it ends, past the key that
+/// reaches them: what a step holds in memory till its commit.
+const STEP_BYTES: usize = 16 << 20;
 
 /// What a step of merging did.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Merged {
     pub(crate) postings: u64,
@@ -59,36 +69,50 @@ pub(crate) struct Merged {
     pub(crate) done: bool,
 }
 
-/// Merges a step of an index's segments: the merge under way, else the
-/// oldest `MERGE_AT` of the lowest level that holds as many, else, when
-/// `all` asks, every segment into one folded, once there are two or one not
-/// folded. Reads `most` pieces of each segment at most.
+/// Merges a step of an index's segments in one transaction, as tests step
+/// them: the merge under way, else the oldest `MERGE_AT` of the lowest
+/// level that holds as many, else, when `all` asks, every segment into one
+/// folded, once there are two or one not folded. Reads `most` pieces of
+/// each segment at most.
+#[cfg(test)]
 pub(crate) fn step(tx: &Tx<'_>, index: i64, most: usize, all: bool) -> Result<Merged> {
-    norm(tx, index)?;
-    let segments = segments::of_index(tx, index)?;
-    let merge = match under_way(&segments) {
-        Some(merge) => merge,
-        None => match due(&segments, all) {
-            Some((inputs, level)) => begin(tx, index, inputs, level)?,
-            None => return Ok(Merged { done: true, ..Merged::default() }),
-        },
-    };
-    let postings = merge.step(tx, index, most)?;
-    note_lists(tx, index)?;
+    let Some(merge) = begun(tx, index, all)? else { return Ok(Merged { done: true, ..Merged::default() }) };
+    let stepped = merge.pack(tx, index, most)?;
+    let postings = merge.write(tx, index, stepped)?;
     Ok(Merged { postings, done: false })
 }
 
+/// The merge under way in an index, if one is.
+pub(crate) fn under_way_in(connection: &Connection, index: i64) -> Result<Option<Merge>> {
+    Ok(under_way(&segments::of_index(connection, index)?))
+}
+
+/// The merge under way, or a due one begun; none when none is due.
+pub(crate) fn begun(tx: &Tx<'_>, index: i64, all: bool) -> Result<Option<Merge>> {
+    let segments = segments::of_index(tx, index)?;
+    if let Some(merge) = under_way(&segments) {
+        return Ok(Some(merge));
+    }
+    match due(&segments, all) {
+        Some((inputs, level)) => begin(tx, index, inputs, level).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// A merge: the segments it joins, in their documents' order, and the one
-/// it writes.
-struct Merge {
+/// it writes, and the id of the output's next run when a step packed beside
+/// the commit of the one before knows it before that commit.
+#[derive(Clone)]
+pub(crate) struct Merge {
     inputs: Vec<Segment>,
     output: Segment,
+    next_run: Option<i64>,
 }
 
 fn under_way(segments: &[Segment]) -> Option<Merge> {
     let output = *segments.iter().find(|segment| segment.through.is_some())?;
     let inputs = segments.iter().filter(|segment| segment.merge == Some(output.id)).copied().collect();
-    Some(Merge { inputs, output })
+    Some(Merge { inputs, output, next_run: None })
 }
 
 /// The segments a merge is due to join and the level it writes: `MERGE_AT`
@@ -126,7 +150,7 @@ fn begin(tx: &Tx<'_>, index: i64, inputs: Vec<Segment>, level: i64) -> Result<Me
     for input in &inputs {
         execute(tx, JOIN_MERGE, (input.id, output.id), "begin a merge")?;
     }
-    Ok(Merge { inputs, output })
+    Ok(Merge { inputs, output, next_run: None })
 }
 
 /// A piece's row as a merge reads it: its key, its count and its bytes.
@@ -134,41 +158,103 @@ type Row = (i64, i64, PieceBytes);
 /// Pieces by their key, each with its input's place.
 type Keyed = BTreeMap<i64, Vec<(usize, Row)>>;
 
+/// What a step packed of its keys, in a snapshot, for its commit to write:
+/// they run up to `upto`, `i64::MAX` once the last of every input is among them.
+pub(crate) struct Stepped {
+    through: i64,
+    upto: i64,
+    keys: Vec<Moved>,
+    next_run: i64,
+}
+
+/// A key's piece of the output as a step packed it.
+struct Moved {
+    key: i64,
+    count: i64,
+    written: Option<Written>,
+    runs: Vec<(i64, Vec<u8>)>,
+    /// What folding the inputs' counts, or leaving documents gone out, adds
+    /// to the key's row.
+    folding: i64,
+    /// The inputs' runs it was read from, given back at the commit.
+    read: Vec<i64>,
+}
+
 impl Merge {
-    /// Moves the next keys of the inputs into the output: those up to the
-    /// least last key of an input that has more than `most` left. Says how
-    /// many postings it wrote.
-    fn step(&self, tx: &Tx<'_>, index: i64, most: usize) -> Result<u64> {
+    /// Packs the next keys of the inputs as the output's: those up to the
+    /// least last key of an input that has more than `most` left, or to the
+    /// key whose runs pass `STEP_BYTES`.
+    pub(crate) fn pack(&self, connection: &Connection, index: i64, most: usize) -> Result<Stepped> {
         let through = self.output.through.unwrap_or(0);
-        let (keys, upto) = self.next_keys(tx, through, most)?;
-        // dropped before the output is written, which takes their pages again
-        for input in &self.inputs {
-            execute(tx, DROP_PIECES, (input.id, through, upto), "drop merged pieces")?;
-        }
-        let gone = gone(tx, index)?;
+        let (keys, mut upto) = self.next_keys(connection, through, most)?;
+        let gone = gone(connection, index)?;
         let mut reading = Reading::of(index);
-        let mut next_run = next_run(tx, &self.output)?;
-        let mut moved = 0;
+        let mut next_run = match self.next_run {
+            Some(next_run) => next_run,
+            None => next_run(connection, &self.output)?,
+        };
+        let (mut moved, mut bytes) = (Vec::with_capacity(keys.len()), 0);
         for (key, rows) in keys {
             let within = |error: Error| error.within(format!("key {key}"));
-            let (count, next) = self.merge_key(tx, (key, rows), (&gone, &mut reading), next_run).map_err(within)?;
-            next_run = next;
-            moved += count;
+            let packed = self.merge_key(connection, (key, rows), (&gone, &mut reading), next_run).map_err(within)?;
+            next_run = packed.1;
+            bytes += packed.0.runs.iter().map(|(_, run)| run.len()).sum::<usize>();
+            moved.push(packed.0);
+            if bytes >= STEP_BYTES {
+                upto = key;
+                break;
+            }
         }
-        if upto == i64::MAX {
+        Ok(Stepped { through, upto, keys: moved, next_run })
+    }
+
+    /// The merge as it stands once `stepped` commits, for its next step to be
+    /// packed beside that commit; none when `stepped` ends it.
+    pub(crate) fn after(&self, stepped: &Stepped) -> Option<Merge> {
+        let output = Segment { through: Some(stepped.upto), ..self.output };
+        (stepped.upto != i64::MAX).then(|| Merge { output, next_run: Some(stepped.next_run), ..self.clone() })
+    }
+
+    /// Writes what a step packed: the inputs' pieces and runs it read
+    /// dropped first, so that the output takes their pages, then the
+    /// output's, and the keys' counts. Says how many postings it wrote; none
+    /// when another step went on from where this one began.
+    pub(crate) fn write(&self, tx: &Tx<'_>, index: i64, stepped: Stepped) -> Result<u64> {
+        let now = segments::of_index(tx, index)?.into_iter().find(|segment| segment.id == self.output.id);
+        if now.and_then(|output| output.through) != Some(stepped.through) {
+            return Ok(0);
+        }
+        norm(tx, index)?;
+        for input in &self.inputs {
+            execute(tx, DROP_PIECES, (input.id, stepped.through, stepped.upto), "drop merged pieces")?;
+        }
+        let mut postings = 0;
+        for moved in stepped.keys {
+            moved.read.iter().try_for_each(|run| drop_run(tx, *run))?;
+            moved.runs.iter().try_for_each(|(id, run)| write_run(tx, *id, run))?;
+            if let Some(written) = &moved.written {
+                segments::write_piece(tx, (&self.output, moved.key), moved.count, written)?;
+            }
+            if moved.folding != 0 {
+                execute(tx, COUNT_KEY, (moved.key, moved.folding), "count a key's documents")?;
+            }
+            postings += moved.count as u64;
+        }
+        if stepped.upto == i64::MAX {
             self.finish(tx)?;
         } else {
-            execute(tx, WRITE_THROUGH, (self.output.id, upto), "write how far a merge went")?;
+            execute(tx, WRITE_THROUGH, (self.output.id, stepped.upto), "write how far a merge went")?;
         }
-        Ok(moved)
+        note_lists(tx, index)?;
+        Ok(postings)
     }
 
     /// The pieces of each key past `through` up to the last a step takes,
     /// each with its input's place; and that key, or `i64::MAX` once every
     /// input's last piece is among them.
-    fn next_keys(&self, tx: &Tx<'_>, through: i64, most: usize) -> Result<(Keyed, i64)> {
+    fn next_keys(&self, connection: &Connection, through: i64, most: usize) -> Result<(Keyed, i64)> {
         let failed = |error| sql_error("read a segment's pieces", error);
-        let mut select = tx.prepare_cached(READ_PIECES_AFTER).map_err(failed)?;
+        let mut select = connection.prepare_cached(READ_PIECES_AFTER).map_err(failed)?;
         let mut upto = i64::MAX;
         let mut read = Vec::with_capacity(self.inputs.len());
         for input in &self.inputs {
@@ -192,19 +278,19 @@ impl Merge {
         Ok((keys, upto))
     }
 
-    /// Writes a key's pieces of the inputs as one of the output, those gone
-    /// left out, and counts what folding or leaving them out changes in its
-    /// row. Says how many postings it wrote, and the output's next run.
+    /// Packs a key's pieces of the inputs as one of the output, those gone
+    /// left out, with what folding or leaving them out changes in its row;
+    /// and the output's next run.
     fn merge_key(
         &self,
-        tx: &Tx<'_>,
+        connection: &Connection,
         (key, rows): (i64, Vec<(usize, Row)>),
         (gone, reading): (&HashSet<u32>, &mut Reading),
         next_run: i64,
-    ) -> Result<(u64, i64)> {
-        let (part, average) = reading.averages.of_key(tx, key)?;
+    ) -> Result<(Moved, i64)> {
+        let (part, average) = reading.averages.of_key(connection, key)?;
         let mut writer = Writer::new(self.output, average, next_run);
-        let (mut counted, mut unfolded) = (0, 0);
+        let (mut counted, mut unfolded, mut read) = (0, 0, Vec::new());
         for (place, (_, count, bytes)) in rows {
             let input = &self.inputs[place];
             counted += count;
@@ -212,24 +298,16 @@ impl Merge {
                 unfolded += count;
             }
             let piece = segments::piece_of(input, bytes)?;
-            each_posting(tx, &piece, (part, &mut reading.lengths), &mut |posting| {
-                if gone.contains(&posting.doc) { Ok(()) } else { writer.push(tx, posting) }
+            each_posting(connection, &piece, (part, &mut reading.lengths), &mut |posting| {
+                if !gone.is_empty() && gone.contains(&posting.doc) { Ok(()) } else { writer.push(posting) }
             })?;
-            // its runs given back as it is read, so that what the step writes
-            // next takes their pages and a merge needs no room for two copies
             if let Piece::Packed(directory, _) = &piece {
-                directory.runs.iter().try_for_each(|run| drop_run(tx, run.id))?;
+                read.extend(directory.runs.iter().map(|run| run.id));
             }
         }
-        let (count, written, next_run) = writer.finish(tx)?;
-        if let Some(written) = written {
-            segments::write_piece(tx, (&self.output, key), count, &written)?;
-        }
+        let (count, written, runs, next_run) = writer.finish()?;
         let folding = if self.output.folded { unfolded } else { counted - count };
-        if folding != 0 {
-            execute(tx, COUNT_KEY, (key, folding), "count a key's documents")?;
-        }
-        Ok((count as u64, next_run))
+        Ok((Moved { key, count, written, runs, folding, read }, next_run))
     }
 
     /// Ends the merge: the inputs go, rows and runs, and the output is whole.
@@ -299,10 +377,9 @@ pub(super) fn documents(connection: &Connection, piece: &Piece) -> Result<Vec<u3
     Ok(docs)
 }
 
-/// A key's piece as a merge or upkeep writes it into a segment: its
-/// postings held till a block's are, then packed, a run of blocks a row
-/// till it holds 32 KiB. A piece of no more than a short one's postings
-/// keeps them.
+/// A key's piece as a merge or upkeep packs it for a segment: its
+/// postings held till a block's are, then packed, a run of blocks till it
+/// holds 32 KiB. A piece of no more than a short one's postings keeps them.
 pub(super) struct Writer {
     segment: Segment,
     average: u16,
@@ -311,30 +388,35 @@ pub(super) struct Writer {
     held: Vec<Posting>,
     directory: Directory,
     run: Vec<u8>,
+    runs: Vec<(i64, Vec<u8>)>,
     best: Vec<Posting>,
 }
+
+/// A piece packed: how many postings it holds, how it is written, none
+/// when it holds none, its runs, and the segment's next run.
+pub(super) type Finished = (i64, Option<Written>, Vec<(i64, Vec<u8>)>, i64);
 
 impl Writer {
     /// A writer of a piece in `segment`, its blocks bounded at `average`,
     /// its runs numbered from `next_run`.
     pub(super) fn new(segment: Segment, average: u16, next_run: i64) -> Writer {
-        let directory = Directory::default();
-        let (held, run, best) = (Vec::with_capacity(BLOCK), Vec::new(), Vec::new());
-        Writer { segment, average, next_run, count: 0, held, directory, run, best }
+        let (directory, held) = (Directory::default(), Vec::with_capacity(BLOCK));
+        let (run, runs, best) = (Vec::new(), Vec::new(), Vec::new());
+        Writer { segment, average, next_run, count: 0, held, directory, run, runs, best }
     }
 
     /// Takes the next posting, after every one before.
-    pub(super) fn push(&mut self, connection: &Connection, posting: Posting) -> Result<()> {
+    pub(super) fn push(&mut self, posting: Posting) -> Result<()> {
         self.count += 1;
         self.held.push(posting);
-        if self.held.len() == BLOCK { self.block(connection) } else { Ok(()) }
+        if self.held.len() == BLOCK { self.block() } else { Ok(()) }
     }
 
     /// Packs the held postings as the next block, in the last run or in a
     /// new one once it holds 32 KiB.
-    fn block(&mut self, connection: &Connection) -> Result<()> {
+    fn block(&mut self) -> Result<()> {
         if self.directory.runs.is_empty() || self.run.len() >= RUN_BYTES {
-            self.next_run(connection)?;
+            self.next_run()?;
         }
         let at = u16::try_from(self.run.len()).map_err(|_| Error::internal("a block starts past its run's place"))?;
         let (first, last) = (self.held[0].doc, self.held[self.held.len() - 1].doc);
@@ -346,39 +428,36 @@ impl Writer {
         Ok(())
     }
 
-    /// Writes the last run and begins the next.
-    fn next_run(&mut self, connection: &Connection) -> Result<()> {
-        self.write_run(connection)?;
+    /// Ends the last run and begins the next.
+    fn next_run(&mut self) -> Result<()> {
+        self.end_run();
         if !self.segment.runs().contains(&self.next_run) {
             return Err(Error::limit(format!("segment {}: past the runs its ids can name", self.segment.id)));
         }
         let first_block = self.directory.blocks.len() as u32;
         self.directory.runs.push(Run { id: self.next_run, first_block });
         self.next_run += 1;
-        self.run.clear();
         Ok(())
     }
 
-    fn write_run(&self, connection: &Connection) -> Result<()> {
-        match self.directory.runs.last() {
-            Some(run) => execute(connection, WRITE_RUN, (run.id, &self.run), "write a run").map(drop),
-            None => Ok(()),
+    fn end_run(&mut self) {
+        if let Some(run) = self.directory.runs.last() {
+            self.runs.push((run.id, std::mem::take(&mut self.run)));
         }
     }
 
-    /// Ends the piece: how many postings it holds, how it is written, none
-    /// when it holds none, and the segment's next run.
-    pub(super) fn finish(mut self, connection: &Connection) -> Result<(i64, Option<Written>, i64)> {
+    /// Ends the piece.
+    pub(super) fn finish(mut self) -> Result<Finished> {
         if self.count as usize <= INLINE {
             let written = (self.count > 0).then(|| Written::Short(std::mem::take(&mut self.held)));
-            return Ok((self.count, written, self.next_run));
+            return Ok((self.count, written, Vec::new(), self.next_run));
         }
         if !self.held.is_empty() {
-            self.block(connection)?;
+            self.block()?;
         }
-        self.write_run(connection)?;
+        self.end_run();
         let best = if self.directory.blocks.len() >= BEST_AT { encode_best(&self.best) } else { Vec::new() };
-        Ok((self.count, Some(Written::Packed(self.directory, best)), self.next_run))
+        Ok((self.count, Some(Written::Packed(self.directory, best)), self.runs, self.next_run))
     }
 }
 
@@ -504,30 +583,41 @@ impl Averages {
     }
 }
 
-/// The lengths of documents in their parts, a row of `norms` read once.
+/// The lengths of documents in their parts, a row of `norms` read once,
+/// the row of the last document asked for at hand: a piece's documents come
+/// in order, and looking each up by its row cost a merge a tenth of its time.
 pub(super) struct Lengths {
     index: i64,
     rows: HashMap<(u32, u32), Vec<u16>>,
+    at: ((u32, u32), Vec<u16>),
 }
 
 impl Lengths {
     pub(super) fn new(index: i64) -> Lengths {
-        Lengths { index, rows: HashMap::new() }
+        Lengths { index, rows: HashMap::new(), at: ((u32::MAX, u32::MAX), Vec::new()) }
     }
 
     /// A document's length in `part`: 0 where no document of its row has
     /// words in the part, as a filter's part has none.
     pub(super) fn of(&mut self, connection: &Connection, part: u32, doc: u32) -> Result<u32> {
-        let chunk = doc / NORMS;
-        if !self.rows.contains_key(&(part, chunk)) {
-            let failed = |error| sql_error("read lengths", error);
-            let bytes: Option<Vec<u8>> = connection
-                .prepare_cached(READ_NORMS)
-                .and_then(|mut select| select.query_row((self.index, part, chunk), |row| row.get(0)).optional())
-                .map_err(failed)?;
-            self.rows.insert((part, chunk), lengths_of(&bytes.unwrap_or_default()));
+        let row = (part, doc / NORMS);
+        if self.at.0 != row {
+            let lengths = match self.rows.remove(&row) {
+                Some(lengths) => lengths,
+                None => self.read(connection, row)?,
+            };
+            let (left, kept) = std::mem::replace(&mut self.at, (row, lengths));
+            self.rows.insert(left, kept);
         }
-        let row = &self.rows[&(part, chunk)];
-        Ok(u32::from(row.get((doc % NORMS) as usize).copied().unwrap_or(0)))
+        Ok(u32::from(self.at.1.get((doc % NORMS) as usize).copied().unwrap_or(0)))
+    }
+
+    fn read(&self, connection: &Connection, (part, chunk): (u32, u32)) -> Result<Vec<u16>> {
+        let failed = |error| sql_error("read lengths", error);
+        let bytes: Option<Vec<u8>> = connection
+            .prepare_cached(READ_NORMS)
+            .and_then(|mut select| select.query_row((self.index, part, chunk), |row| row.get(0)).optional())
+            .map_err(failed)?;
+        Ok(lengths_of(&bytes.unwrap_or_default()))
     }
 }

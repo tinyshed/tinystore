@@ -196,15 +196,16 @@ fn convert(tx: &Tx<'_>, index: i64, key: i64) -> Result<usize> {
         Listed::Legacy(_) => {
             for (_, pairs) in blocks(tx, key)? {
                 for (doc, tf) in pairs {
-                    writer.push(tx, Posting { doc, tf, len: reading.lengths.of(tx, part, doc)? })?;
+                    writer.push(Posting { doc, tf, len: reading.lengths.of(tx, part, doc)? })?;
                 }
             }
         }
-        Listed::Short(postings) => postings.into_iter().try_for_each(|posting| writer.push(tx, posting))?,
+        Listed::Short(postings) => postings.into_iter().try_for_each(|posting| writer.push(posting))?,
         Listed::Packed(..) | Listed::Nothing => {}
     }
-    head(tx, index, key)?.into_iter().try_for_each(|posting| writer.push(tx, posting))?;
-    let (count, written, _) = writer.finish(tx)?;
+    head(tx, index, key)?.into_iter().try_for_each(|posting| writer.push(posting))?;
+    let (count, written, runs, _) = writer.finish()?;
+    runs.iter().try_for_each(|(id, run)| merge::write_run(tx, *id, run))?;
     if let Some(written) = written {
         segments::write_piece(tx, (&base, key), count, &written)?;
     }

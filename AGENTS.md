@@ -311,7 +311,10 @@ inside the commit that leaves the WAL 1000 frames long, two syncs every queued
 write waits for. A file's writer keeps none: past 1000 frames the next caller
 through the file that holds no turn runs one, PASSIVE, on a connection of its
 own, and the writer checkpoints itself only at 32,000, which writes that never
-pause reach. A file a capture logs and a copy run their own, never these.
+pause reach. A file written in bulk may ask later, up to its own bound while
+the WAL is under an eighth of the file: search.db's is 16,000, so that a page
+many sets write again is copied once for several. A file a capture logs and a
+copy run their own, never these.
 
 **A backup is one moment of every file.** For an instant a commit waits at
 the store's gate before it takes its writer, a transaction under way goes on,

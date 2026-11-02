@@ -13,6 +13,10 @@ pub(crate) struct Config {
     pub(crate) incremental_vacuum: bool,
     /// The page cache of the writer and of each reader, in KiB.
     pub(crate) cache_kib: u32,
+    /// The WAL's frames at which a commit asks for a checkpoint off the
+    /// writer's turn at most, while the WAL is shorter than an eighth of the
+    /// file: see `checkpoint`.
+    pub(crate) checkpoint_at: u32,
     /// Readers open at once at most. One stays open; the others close once
     /// unused for `reader_idle`.
     pub(crate) readers: usize,
@@ -57,6 +61,7 @@ impl Default for Config {
             page_size: 4096,
             incremental_vacuum: false,
             cache_kib: 1024,
+            checkpoint_at: super::checkpoint::SOFT,
             readers: readers_of_this_machine(),
             reader_idle: Duration::from_secs(60),
             reader_patience: Duration::from_secs(10),

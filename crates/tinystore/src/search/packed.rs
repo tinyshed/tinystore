@@ -204,13 +204,17 @@ pub(crate) const BEST: usize = 10;
 pub(crate) const BEST_AT: usize = 2;
 
 /// `best` with `fresh` among them, the `BEST` that saturate most at
-/// `average`, the earlier document first of equals.
-pub(crate) fn best_of(mut best: Vec<Posting>, fresh: &[Posting], average: u16) -> Vec<Posting> {
-    best.extend_from_slice(fresh);
+/// `average`, the earlier document first of equals. Each posting's
+/// saturation is reckoned once, and a fresh one below the tenth best is
+/// passed over unsorted: a merge calls this for every block it packs.
+pub(crate) fn best_of(best: Vec<Posting>, fresh: &[Posting], average: u16) -> Vec<Posting> {
     let saturates = |posting: &Posting| saturated(posting.tf, posting.len, f64::from(average));
-    best.sort_by(|a, b| saturates(b).total_cmp(&saturates(a)).then(a.doc.cmp(&b.doc)));
-    best.truncate(BEST);
-    best
+    let mut scored: Vec<(f64, Posting)> = best.iter().map(|posting| (saturates(posting), *posting)).collect();
+    let least = if scored.len() >= BEST { scored.iter().map(|(at, _)| *at).fold(f64::INFINITY, f64::min) } else { 0.0 };
+    scored.extend(fresh.iter().map(|posting| (saturates(posting), *posting)).filter(|(at, _)| *at >= least));
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.doc.cmp(&b.1.doc)));
+    scored.truncate(BEST);
+    scored.into_iter().map(|(_, posting)| posting).collect()
 }
 
 /// A key's best in their documents' order, as a short list keeps its

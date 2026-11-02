@@ -1305,6 +1305,13 @@ fn a_crash_between_steps_of_merging_or_purging_leaves_the_last_commit() {
     }
 }
 
+/// search.db's bytes once its WAL is copied into it.
+fn checkpointed(dir: &Path) -> u64 {
+    let connection = rusqlite::Connection::open(dir.join("search.db")).unwrap();
+    connection.query_row("pragma wal_checkpoint(truncate)", [], |_| Ok(())).unwrap();
+    sizes(dir).0
+}
+
 fn sizes(dir: &Path) -> (u64, u64) {
     let size = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |metadata| metadata.len());
     (size("search.db"), size("search.db-wal"))
@@ -1338,7 +1345,9 @@ fn through_a_long_mix_the_file_stays_near_a_fresh_build_of_the_same_documents() 
         rebuilt.set(id, &doc.value).unwrap();
     }
     maintain(&fresh.store).unwrap();
-    let ((mixed, mixed_log), (built, _)) = (sizes(fixture.dir.path()), sizes(fresh.dir.path()));
+    let ((_, mixed_log), (_, _)) = (sizes(fixture.dir.path()), sizes(fresh.dir.path()));
+    // search.db checkpoints after 16,000 frames: its pages are measured in the file
+    let (mixed, built) = (checkpointed(fixture.dir.path()), checkpointed(fresh.dir.path()));
     // what the last merges and rebuilds freed stays free a while, and upkeep
     // gives it back then, as it does a dropped index's pages
     let used = mixed - pages(fixture.dir.path()).1.unsigned_abs() * 4096;

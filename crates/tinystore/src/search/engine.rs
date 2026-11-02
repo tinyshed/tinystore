@@ -42,6 +42,13 @@ pub(crate) const FILE: &str = "search.db";
 /// Steps of writing a release's lists again into base segments a pass of
 /// maintenance takes at most: about eight million postings.
 const CONVERT_STEPS: usize = 16;
+/// The WAL's frames at which a commit of a large search.db asks for a
+/// checkpoint at most: a set of a thousand passages writes some 2,000
+/// frames, and a checkpoint after each copied the keys' pages every set
+/// rewrites again each time; one after 16,000, 64 MiB, copies them once for
+/// several. A build of MS MARCO's first million passages took 51 s rather
+/// than 58 so, and wrote 6.8 GB rather than 8.1.
+const CHECKPOINT_AT: u32 = 16_000;
 /// What a pass gives back at most of the pages the file holds free: a page
 /// given back writes a few, so a pass's commit stays a few MiB.
 const GIVE_BACK: usize = 4 << 20;
@@ -142,7 +149,11 @@ impl Search {
         store.engine(|store| {
             let claim = store.claim(FILE)?;
             // A dropped index, a purge and a rebuild free pages the file gives back.
-            let config = Config { incremental_vacuum: true, ..Config::committing(store.durability()) };
+            let config = Config {
+                incremental_vacuum: true,
+                checkpoint_at: CHECKPOINT_AT,
+                ..Config::committing(store.durability())
+            };
             let file = Arc::new(store.open_file(claim.name(), config)?);
             Search::start(store, file, None, Some(claim))
         })
@@ -370,7 +381,9 @@ impl Search {
             return Ok(());
         }
         let bytes = prepared.iter().map(Prepared::bytes).sum();
-        self.file.write(bytes, move |tx| write::set_all(tx, prepared.iter()))?;
+        let known = Arc::clone(&current.serving.kept.known);
+        let learned = self.file.write(bytes, move |tx| write::set_knowing(tx, prepared.iter(), &known))?;
+        lock(&current.serving.kept.known).learn(learned);
         drop(current);
         self.count_sets(open, count);
         Ok(())
@@ -409,13 +422,16 @@ impl Search {
         }
         let bytes = prepared.iter().map(Prepared::bytes).sum();
         let search = Arc::clone(self);
-        let write = move |tx: &Tx<'_>| write::set_all(tx, prepared.iter());
+        let known = Arc::clone(&held.current().serving.kept.known);
+        let learning = Arc::clone(&known);
+        let write = move |tx: &Tx<'_>| write::set_knowing(tx, prepared.iter(), &known);
         self.file.submit(bytes, write, move |written| {
             let open = Arc::clone(held.open());
             drop(held);
-            if written.is_ok() {
+            let written = written.map(|learned| {
                 search.count_sets(&open, count);
-            }
+                lock(&learning).learn(learned);
+            });
             done(written);
         });
         // a change waiting for the set may now take the lead that its submit handed to the pool
@@ -721,7 +737,11 @@ impl Search {
         let id = open.id();
         let mut purge = self.file.read(|connection| super::purge::begin(connection, id))?;
         loop {
-            let at = self.file.transaction(|tx| purge.step(tx, id, most_keys))?;
+            let known = &open.current().serving.kept.known;
+            let at = self.file.transaction(|tx| {
+                lock(known).clear();
+                purge.step(tx, id, most_keys)
+            })?;
             after();
             if purge.advance(at) {
                 return Ok(());

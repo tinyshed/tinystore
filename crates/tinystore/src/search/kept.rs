@@ -26,6 +26,7 @@ use super::packed::Directory;
 use super::postings::Posting;
 use super::score::Part;
 use super::segments::{self, Piece, Segment};
+use super::write::Known;
 use crate::sqlite::sql_error;
 use crate::sync::lock;
 use crate::{Error, Memory, Reservation, Result};
@@ -39,6 +40,8 @@ const READ_GONE: &str = "select doc from _tinystore_search_gone where index_id =
 
 #[derive(Default)]
 pub(crate) struct Kept {
+    /// What sets keep of the keys' ids, which only a purge's commit makes wrong.
+    pub(super) known: Arc<Mutex<Known>>,
     norms: Mutex<HashMap<(Part, u32), Arc<Chunk>>>,
     gone: Mutex<Option<Arc<Gone>>>,
     lists: Mutex<Lists>,
@@ -146,6 +149,7 @@ impl Kept {
     #[cfg(feature = "sql")]
     pub(crate) fn committed(&self) -> Kept {
         Kept {
+            known: Arc::default(),
             norms: Mutex::new(lock(&self.norms).clone()),
             gone: Mutex::default(),
             lists: Mutex::default(),

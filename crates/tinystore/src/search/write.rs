@@ -14,7 +14,8 @@
 //! pieces' counts, how many words each part has. Merges and purges move
 //! postings and counts and change no sum, so they change no score.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -27,6 +28,7 @@ use super::settings::Settings;
 use super::vectors::{self, Vector};
 use crate::limits::Limit;
 use crate::sqlite::{Tx, sql_error};
+use crate::sync::lock;
 use crate::{Error, Result};
 
 const FIND_DOC: &str = "select doc, keys, lengths from _tinystore_search_docs where index_id = ?1 and id = ?2";
@@ -108,6 +110,58 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
     set_all(tx, std::iter::once(document))
 }
 
+/// Keys' ids by their part and term, as committed sets found or made them,
+/// so that a set reads the keys' rows only for the words it has not met
+/// lately: a set of a thousand passages looked up some 12,000 keys, a fifth
+/// of its time.
+#[derive(Debug, Default)]
+pub(crate) struct Known {
+    parts: HashMap<Part, HashMap<String, i64>>,
+    held: usize,
+    /// Grows at every clear, so that keys a set read before one are not
+    /// learned after it.
+    era: u64,
+}
+
+/// Keys a [`Known`] holds at most, some 5 MiB; past them it starts over.
+const MOST_KNOWN: usize = 1 << 16;
+
+/// The keys a set read from their rows or made, to learn once it commits.
+#[derive(Debug)]
+pub(crate) struct Learned {
+    era: u64,
+    keys: Vec<(Part, String, i64)>,
+}
+
+impl Known {
+    fn get(&self, part: Part, term: &str) -> Option<i64> {
+        self.parts.get(&part)?.get(term).copied()
+    }
+
+    /// Forgets every key: a purge drops the rows of keys no document holds,
+    /// and an id kept would name a key that is gone.
+    pub(crate) fn clear(&mut self) {
+        self.parts.clear();
+        self.held = 0;
+        self.era += 1;
+    }
+
+    /// Learns the keys a set committed with, unless a clear came between.
+    pub(crate) fn learn(&mut self, learned: Learned) {
+        if learned.era != self.era {
+            return;
+        }
+        if self.held + learned.keys.len() > MOST_KNOWN {
+            self.clear();
+        }
+        for (part, term, key) in learned.keys {
+            if self.parts.entry(part).or_default().insert(term, key).is_none() {
+                self.held += 1;
+            }
+        }
+    }
+}
+
 /// Sets documents of one index in their order, each replacing the one of its
 /// id. What they change is written once for them all rather than once a
 /// document: a key's piece once however many of them hold it, the index's
@@ -115,8 +169,21 @@ pub(crate) fn set(tx: &Tx<'_>, document: &Prepared) -> Result<()> {
 /// segment in the order of its keys, many a statement. A set of 1,000
 /// passages of 50 words wrote some 80 statements a document before.
 pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepared> + Clone) -> Result<()> {
-    let Some(index) = documents.clone().next().map(|document| document.index) else { return Ok(()) };
-    let (keys, new_words) = join_keys(tx, index, documents.clone())?;
+    set_knowing(tx, documents, &Mutex::default()).map(drop)
+}
+
+/// [`set_all`], each key's id taken from `known` where it holds it; says
+/// the keys read from their rows or made, for `known` to learn once the
+/// set commits.
+pub(crate) fn set_knowing<'p>(
+    tx: &Tx<'_>,
+    documents: impl Iterator<Item = &'p Prepared> + Clone,
+    known: &Mutex<Known>,
+) -> Result<Learned> {
+    let Some(index) = documents.clone().next().map(|document| document.index) else {
+        return Ok(Learned { era: lock(known).era, keys: Vec::new() });
+    };
+    let (keys, new_words, learned) = join_keys(tx, index, documents.clone(), known)?;
     let mut postings = Vec::new();
     let first = next_doc(tx, index)?;
     let mut next = first;
@@ -144,26 +211,46 @@ pub(crate) fn set_all<'p>(tx: &Tx<'_>, documents: impl Iterator<Item = &'p Prepa
         execute(tx, ADD_TOKENS, (index, part.0, len), "count a part's words")?;
     }
     let counted = (index, next, count, i64::from(new_words), vectors);
-    execute(tx, JOIN_INDEX, counted, "count documents").map(drop)
+    execute(tx, JOIN_INDEX, counted, "count documents")?;
+    Ok(learned)
 }
 
 /// Keys' ids by their part and term.
 type Keys<'p> = HashMap<(Part, &'p str), i64>;
 
-/// The id of every key `documents` hold, in the order of the keys' index,
-/// a key kept for each word none held before; and whether any is a word as
-/// written that no key was kept for.
-fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Prepared>) -> Result<(Keys<'p>, bool)> {
-    let mut held: BTreeSet<(Part, &str)> = BTreeSet::new();
+/// The id of every key `documents` hold: those `known` holds from it, the
+/// others read from their rows in the order of the keys' index, a key kept
+/// for each word none held before; whether any is a word as written that no
+/// key was kept for; and the keys read from their rows or made.
+fn join_keys<'p>(
+    tx: &Tx<'_>,
+    index: i64,
+    documents: impl Iterator<Item = &'p Prepared>,
+    known: &Mutex<Known>,
+) -> Result<(Keys<'p>, bool, Learned)> {
+    let known = lock(known);
+    let mut keys: Keys<'p> = HashMap::new();
+    let mut unknown: Vec<(Part, &str)> = Vec::new();
     for document in documents {
-        held.extend(document.analyzed.terms.iter().map(|(part, term, _)| (*part, term.as_str())));
+        for (part, term, _) in &document.analyzed.terms {
+            let term = term.as_str();
+            if keys.contains_key(&(*part, term)) {
+                continue;
+            }
+            match known.get(*part, term) {
+                Some(key) => drop(keys.insert((*part, term), key)),
+                None => unknown.push((*part, term)),
+            }
+        }
     }
+    unknown.sort_unstable();
+    unknown.dedup();
     let failed = |error| sql_error("write a key", error);
     let mut find = tx.prepare_cached(FIND_KEY).map_err(failed)?;
     let mut keep_new = tx.prepare_cached(NEW_KEY).map_err(failed)?;
-    let mut keys = HashMap::with_capacity(held.len());
+    let mut learned = Learned { era: known.era, keys: Vec::with_capacity(unknown.len()) };
     let mut new_words = false;
-    for (part, term) in held {
+    for (part, term) in unknown {
         let key = match find.query_row((index, part.0, term), |row| row.get::<_, i64>(0)).optional().map_err(failed)? {
             Some(key) => key,
             None => {
@@ -173,8 +260,9 @@ fn join_keys<'p>(tx: &Tx<'_>, index: i64, documents: impl Iterator<Item = &'p Pr
             }
         };
         keys.insert((part, term), key);
+        learned.keys.push((part, term.to_owned(), key));
     }
-    Ok((keys, new_words))
+    Ok((keys, new_words, learned))
 }
 
 fn next_doc(tx: &Tx<'_>, index: i64) -> Result<i64> {
