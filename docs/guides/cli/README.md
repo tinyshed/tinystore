@@ -122,6 +122,7 @@ waits for no server (contract CLI-07).
 | [Backup and restore](backup.md)        | the zip, the key, a restore that checks every byte        |
 | [Nodes](nodes.md)                      | `node status`, `promote`, `demote`, the witness           |
 | [AI agents](mcp.md)                    | `tinystore mcp`, its tools that read and those that write |
+| [Your own MCP server](mcp-server.md)   | a Rust program's own tools, marks, `--write`, store tools |
 
 In the Handbook, [Your first store](../../handbook/start/first-store.md#look-inside)
 looks inside a store, and [Running it](../../handbook/production/running-it.md)

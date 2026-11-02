@@ -53,6 +53,7 @@ research's submodule is pinned to `v0.1.0-rc.5`.
 | wire           | frames, MessagePack, credit, every engine's calls, written from `protocol/*.wire`                  | [wire](docs/wire.md)                                 |
 | pipe and FFI   | a connection in memory to the core in this process, four C functions, PyO3's and napi-rs' modules  | [one core](docs/handbook/inside/one-core.md)         |
 | server         | `tinystore`: `serve` over stdio, a socket, a pipe, TCP and TLS, and every command beside it        | [cli](docs/guides/cli/README.md)                     |
+| mcp            | a Rust program's MCP server: tools marked read, write or remove, `--write`, the store's read tools | [own MCP server](docs/guides/cli/mcp-server.md)      |
 | SDKs           | Bun and Node, Python and Go, each through the core in process, a child, a sidecar or a server      | [one directory](docs/handbook/start/directory.md)    |
 | async API      | `tinystore::aio`: `aio::Store`, its `tx` and `close`, and every engine's handles, awaited          | [Rust with async](docs/handbook/start/rust-async.md) |
 | release        | seven targets, npm, PyPI, crates.io, GHCR, the GitHub release and the Go SDK's tag                 | the `release` skill                                  |
@@ -120,6 +121,7 @@ What has cost time before, so that it does not again:
 | `crates/tinystore/src/wire/`        | the protocol's bytes and the session that answers them                                                                                                                                                                                                   |
 | `crates/tinystore/src/aio/`         | the async API: `aio::Store`, `run`'s helpers an engine's awaited calls are built on, and a module an engine                                                                                                                                              |
 | `crates/tinystore/src/pipe.rs`      | the connection in memory the FFI carries                                                                                                                                                                                                                 |
+| `crates/tinystore/src/mcp/`         | a program's MCP server on stdin and stdout, its tools and their marks, the allow list, the store's read tools, and the reads and JSON they share with the command line                                                                                   |
 | `crates/ffi/`                       | the C ABI: `cdylib` for Bun, `staticlib` for cgo; with `python`, the Python SDK's `tinystore._core`; with `node`, Node's `tinystore.node`                                                                                                                |
 | `crates/cli/`                       | `tinystore`: `serve` on tokio, the commands that read a store beside it, backups, nodes and the witness, and their help                                                                                                                                  |
 | `fuzz/`                             | the fuzz targets, built on nightly through cargo-fuzz and run by hand                                                                                                                                                                                    |
@@ -162,10 +164,14 @@ runtime, and its tests of `aio` take tokio as a dev-dependency.
   feature that turns on kv, and a Rust program that calls the engines
   directly leaves it out. `client`, the protocol's client side, which the
   command line writes through a server with, turns on the wire, and like
-  `fuzzing` promises nothing to a program. `just lint` builds the library with each engine,
+  `fuzzing` promises nothing to a program. `mcp`, a program's own MCP server
+  and tinystore's read tools on its store, each engine's where that engine is
+  on, turns on `typos` alone; `tinystore mcp` runs on it, and the reads and
+  JSON its tools share with the commands' `--json` are its hidden modules,
+  which promise a program nothing. `just lint` builds the library with each engine,
   the console, config's loader, the wire and its client alone, the client beside metrics and records,
-  `async` alone and beside each engine, and every engine with `async` and
-  without the wire. An
+  `async` alone and beside each engine, `mcp` alone and beside each engine it
+  serves, and every engine with `async` and without the wire. An
   engine adds its calls to `Store` from its own module
   (`impl Store { pub fn bucket… }`): the store's own code names no engine.
 - **Engines never import each other.** They use the root, `engine`,

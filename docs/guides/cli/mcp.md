@@ -86,5 +86,7 @@ tinystore mcp ./data --write all               # every tool below
 ## See also
 
 - [The command line](README.md).
+- [Your own MCP server](mcp-server.md): the same server, tools and `--write`
+  in your Rust program, with these tools mounted on your store.
 - [Let an AI agent read the store](../../handbook/production/running-it.md#let-an-ai-agent-read-the-store)
   in the Handbook.

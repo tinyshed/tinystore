@@ -19,6 +19,9 @@ use nu_ansi_term::Color;
 use crate::help::{self, Command};
 use crate::lines::{Terminal, paint};
 
+// a span as `--since` and `--idle` take one, read as the store's MCP tools read it
+pub(crate) use tinystore::mcp::given::span;
+
 /// A command's words in order and the flags it was given, each once for
 /// every time it was given.
 #[derive(Debug, Default)]
@@ -271,27 +274,6 @@ pub(crate) fn json_given(given: &str, what: &str) -> Result<String, Refused> {
     Ok(value.to_string())
 }
 
-/// A span as `--since` and `--idle` take it: a number and its unit.
-///
-/// ```text
-/// 30000ms → 30 s     30s → 30 s     5m → 300 s     2d → 172,800 s
-/// ```
-pub(crate) fn span(text: &str) -> Result<std::time::Duration, String> {
-    let digits = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
-    let (number, unit) = text.split_at(digits);
-    let number: u64 = number.parse().map_err(|_| format!("the span {text}: a number and a unit, as 30s"))?;
-    let millis = match unit {
-        "ms" => 1,
-        "s" => 1_000,
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        "" if number == 0 => 0,
-        _ => return Err(format!("the span {text}: a unit of ms, s, m, h or d")),
-    };
-    Ok(std::time::Duration::from_millis(number.saturating_mul(millis)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,12 +303,5 @@ mod tests {
         assert_eq!(asked("").dir_or_here(0).unwrap().0, PathBuf::from("."));
         assert_eq!(asked("--dir d").dir_or_here(0).unwrap().0, PathBuf::from("d"));
         assert!(asked("").dir_needed("stop").is_err());
-    }
-
-    #[test]
-    fn spans_read_as_people_write_them() {
-        assert_eq!(span("30000ms").unwrap(), std::time::Duration::from_secs(30));
-        assert_eq!(span("2d").unwrap(), std::time::Duration::from_secs(172_800));
-        assert!(span("30").is_err(), "a unit");
     }
 }

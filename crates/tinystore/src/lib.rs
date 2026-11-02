@@ -40,6 +40,8 @@ pub mod kv;
 pub mod limits;
 #[cfg(all(feature = "records", feature = "config"))]
 mod log_config;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "locks")]
 pub use kv::locks;
 #[cfg(feature = "store")]

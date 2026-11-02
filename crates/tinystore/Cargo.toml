@@ -63,6 +63,10 @@ async = ["store", "dep:futures-core"]
 # the words nearest a misspelt one, which config names for a key it does
 # not know and the command line for a command; it stands on no store
 typos = ["dep:fst", "dep:levenshtein_automata"]
+# a program's own MCP server on stdin and stdout, its tools marked as reading,
+# writing or removing and a write offered only as its allow list names it, and
+# tinystore's read tools on its store for the engines built beside it
+mcp = ["typos"]
 # the bodies of the fuzz targets in fuzz/, which reach decoders the library
 # keeps to itself
 fuzzing = ["records", "metrics"]

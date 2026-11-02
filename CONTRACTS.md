@@ -271,6 +271,15 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-07** Tab completion MUST make no store and write nothing, and MUST offer nothing rather than fail.
 - **CLI-08** `lock hold` MUST run its command only once it holds the key, MUST stop the command once the lease is lost, and MUST let the key go and end with the command's exit once it ends.
 
+### MCP
+
+The server `tinystore mcp` runs, and a program's own through the `mcp` feature.
+
+- **MCP-01** A tool that writes or removes MUST be offered only when the server's allow list names it or says `all`, and a call of one it does not name MUST be refused as the tool's error, running nothing.
+- **MCP-02** Every tool MUST carry its mark: one that reads `readOnlyHint` true; one that writes `readOnlyHint` false and `destructiveHint` false; one that removes or replaces `destructiveHint` true.
+- **MCP-03** An allow list that names no tool that writes MUST be refused, with the nearest name of one, before the server answers anything.
+- **MCP-04** TinyStore's tools on a store MUST write nothing to it, a name it does not hold included, and a call MUST see what was committed before it.
+
 ## 10. What TinyStore does not promise
 
 - **NOT-01** No write is atomic across two files, unless the program joined them (DUR-06).

@@ -53,12 +53,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # the library built with each engine alone, the console alone, config's loader alone, the wire alone,
-      # the async API alone and beside each engine, and every engine with async and without the wire: a
-      # program links what it opens and nothing else
+      # the async API alone and beside each engine, MCP alone and beside each engine it serves, and every
+      # engine with async and without the wire: a program links what it opens and nothing else
       - name: Lint the library's features alone
         shell: bash
         run: |
-          for features in console kv config-load config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do
+          for features in console kv config-load config locks channels jobs sql blobs records metrics system search wire kv,backup kv,channels kv,replication kv,replication,replication-tls async kv,async config,async locks,async channels,async jobs,async sql,async blobs,async records,async metrics,async search,async mcp mcp,records mcp,kv mcp,jobs mcp,sql mcp,search kv,config,locks,channels,jobs,sql,blobs,records,metrics,search,backup,replication,async; do
             cargo clippy -p tinystore --no-default-features --features "$features" --all-targets --locked -- -D warnings
           done
 

@@ -211,6 +211,7 @@ and the voice: .agents/skills/docs/SKILL.md.
 - [Backup and restore](guides/cli/backup.md)
 - [Nodes](guides/cli/nodes.md)
 - [AI agents](guides/cli/mcp.md)
+- [Your own MCP server](guides/cli/mcp-server.md)
 
 ## Reference
 

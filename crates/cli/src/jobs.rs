@@ -11,10 +11,10 @@
 
 use std::process::ExitCode;
 
-use serde_json::{Value, json};
+use serde_json::json;
 use tinystore::Store;
 use tinystore::client::NewJob;
-use tinystore::jobs::{Filter, Job, Page, State};
+use tinystore::mcp::jobs::{Listing, listed, state_word};
 
 use crate::asked::{self, Asked, Done, Verb, failed, wrong};
 use crate::window::{self};
@@ -112,7 +112,7 @@ fn list(asked: Asked) -> Done {
     let page = listed(&store, &listing, asked.count("--limit", PAGE)?, asked.value("--after")).map_err(failed)?;
     if asked.has("--json") {
         for job in &page.jobs {
-            outln!("{}", shown(job))?;
+            outln!("{}", tinystore::mcp::jobs::json(job))?;
         }
         return page.next.map_or(Ok(()), |next| outln!("{}", json!({ "next": next })));
     }
@@ -135,71 +135,4 @@ fn list(asked: Asked) -> Done {
         asked::say("jobs list", format!("more jobs; --after {next} reads on"));
     }
     Ok(())
-}
-
-/// The queue `list` and the MCP's `jobs_list` read, and which of its jobs.
-pub(crate) struct Listing<'a> {
-    pub(crate) queue: &'a str,
-    pub(crate) database: Option<&'a str>,
-    pub(crate) prefix: Option<&'a str>,
-    pub(crate) state: Option<&'a str>,
-}
-
-/// A page of the queue's jobs that have ids, read beside whoever holds the
-/// store.
-pub(crate) fn listed(
-    store: &Store,
-    listing: &Listing,
-    limit: usize,
-    after: Option<&str>,
-) -> Result<Page<Value>, String> {
-    let opened = match listing.database {
-        Some(database) => {
-            crate::sql::opened(store, database).map_err(|refused| refused.to_string())?.queue(listing.queue)
-        }
-        None if !store.dir().join("jobs.db").exists() => {
-            return Err(crate::on_disk::none_kept(store.dir(), "jobs.db", "queue"));
-        }
-        None => store.queue::<Value>(listing.queue),
-    };
-    let opened = opened.open().map_err(|error| error.to_string())?;
-    let mut filter = Filter::prefix(listing.prefix.unwrap_or_default()).limit(limit);
-    if let Some(after) = after {
-        filter = filter.after(after);
-    }
-    if let Some(state) = listing.state {
-        filter = filter.state(match state {
-            "scheduled" => State::Scheduled,
-            "waiting" => State::Waiting,
-            "running" => State::Running,
-            "done" => State::Done,
-            "failed" => State::Failed,
-            other => return Err(format!("no state {other}: scheduled, waiting, running, done or failed")),
-        });
-    }
-    opened.list(&filter).map_err(|error| error.to_string())
-}
-
-/// A job as JSON: its time whole and UTC.
-pub(crate) fn shown(job: &Job<Value>) -> Value {
-    json!({
-        "id": job.id,
-        "state": state_word(job.state),
-        "at": window::utc(job.at),
-        "attempt": job.attempt,
-        "error": job.error,
-        "group": job.group,
-        "value": job.value,
-    })
-}
-
-fn state_word(state: State) -> &'static str {
-    match state {
-        State::Scheduled => "scheduled",
-        State::Waiting => "waiting",
-        State::Running => "running",
-        State::Done => "done",
-        State::Failed => "failed",
-        _ => "cancelled",
-    }
 }

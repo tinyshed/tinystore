@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+pub(crate) use tinystore::mcp::given::databases;
+
 /// One engine's file of a store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StoreFile {
@@ -38,34 +40,6 @@ pub(crate) fn of(store: &Path) -> Vec<StoreFile> {
         add(name, file, size_of(&store.join(file)));
     }
     files
-}
-
-/// The application's databases by name, `sql/<name>.db`, in order.
-pub(crate) fn databases(store: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(store.join("sql")) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().to_str()?.strip_suffix(".db").map(str::to_owned))
-        .collect();
-    names.sort();
-    names
-}
-
-/// Why the store holds no `file` to read a bucket or a queue from: none was
-/// kept yet, or one was opened from a database, whose file keeps it.
-pub(crate) fn none_kept(store: &Path, file: &str, kept: &str) -> String {
-    let databases = databases(store);
-    if databases.is_empty() {
-        return format!("{} holds no {file}: no program has kept a {kept} yet", store.display());
-    }
-    format!(
-        "{} holds no {file}: a {kept} a program opened from a database is kept in it, read with its database, \
-         one of {}",
-        store.display(),
-        databases.join(", ")
-    )
 }
 
 /// A SQLite file's bytes with its WAL's; none when there is no file.

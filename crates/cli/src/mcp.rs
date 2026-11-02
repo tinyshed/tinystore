@@ -1,29 +1,22 @@
-//! `tinystore mcp`: the Model Context Protocol on stdin and stdout, a JSON-RPC
-//! message a line, with tools that read a store, beside the program or
-//! server that holds it, and the tools that write that `--write` names. Each
-//! call opens the store again, so it sees what was committed since the last.
+//! `tinystore mcp`: the library's MCP server on stdin and stdout, with
+//! `status`, the store's tools that read it beside the program or server
+//! that holds it, and the tools that write that `--write` names. Each call
+//! opens the store again, so it sees what was committed since the last.
 //!
 //! ```text
 //! claude mcp add tinystore -- tinystore mcp ./data
 //! claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add
 //! ```
 
-use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use serde_json::{Value, json};
-use tinystore::Store;
+use serde_json::json;
+use tinystore::ErrorKind;
+use tinystore::mcp::{self, Server, Tool};
 
-use crate::asked::{self, Asked, Done, wrong};
+use crate::asked::{self, Asked, Done, failed, wrong};
 use crate::help;
-use crate::jobs::Listing;
-use crate::kv::Reading;
-
-/// The protocol's version this server speaks when a client names none.
-const PROTOCOL: &str = "2025-06-18";
-/// What a list answers at most, so that an answer fits an agent's context.
-const MOST: usize = 200;
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
     asked::run(&help::MCP, args, serve)
@@ -35,260 +28,59 @@ fn serve(asked: Asked) -> Done {
         return Err(wrong(format!("one directory, not {} too", rest.join(" "))));
     }
     let dir = std::path::absolute(&dir).unwrap_or(dir);
-    let writes = crate::mcp_writes::allowed(asked.value("--write"))?;
-    let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line.map_err(asked::failed)?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(answer) = answer(&dir, &writes, &line) else { continue };
-        writeln!(stdout, "{answer}").and_then(|()| stdout.flush()).map_err(asked::unwritten)?;
+    match server(&dir, asked.value("--write")).serve() {
+        Ok(()) => Ok(()),
+        // an allow list that names no tool that writes: the flag is wrong
+        Err(error) if error.kind() == ErrorKind::Invalid => Err(wrong(error.what())),
+        Err(error) => Err(failed(error)),
     }
-    Ok(())
 }
 
-/// The answer to one message; none to a notification. `writes` are the
-/// tools that write it offers.
-fn answer(dir: &Path, writes: &[&str], line: &str) -> Option<Value> {
-    let message: Value = match serde_json::from_str(line) {
-        Ok(message) => message,
-        Err(error) => return Some(failure(Value::Null, -32700, &format!("not JSON: {error}"))),
-    };
-    let id = message.get("id").cloned()?;
-    let params = message.get("params").cloned().unwrap_or(Value::Null);
-    let result = match message.get("method").and_then(Value::as_str) {
-        Some("initialize") => {
-            let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL);
-            json!({
-                "protocolVersion": version,
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "tinystore", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": instructions(dir, writes),
-            })
-        }
-        Some("ping") => json!({}),
-        Some("tools/list") => json!({ "tools": tools(writes) }),
-        Some("tools/call") => call(dir, writes, &params),
-        Some(other) => return Some(failure(id, -32601, &format!("no method {other}"))),
-        None => return Some(failure(id, -32600, "a request names its method")),
-    };
-    Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
-}
-
-fn failure(id: Value, code: i64, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
-}
-
-/// What the agent is told it may do with the store.
-fn instructions(dir: &Path, writes: &[&str]) -> String {
+/// The server of the store in `dir`: what it holds, the tools that read it,
+/// and those that write which `write` names.
+fn server(dir: &Path, write: Option<&str>) -> Server {
     let reads = "its status, logs, kv values, jobs, SQL databases and search indexes";
-    match writes {
-        [] => format!("Read the TinyStore store in {}: {reads}. Nothing here writes.", dir.display()),
-        writes => format!(
-            "Read the TinyStore store in {}: {reads}; and write to it with {} alone, each a change the program sees.",
-            dir.display(),
-            writes.join(", ")
-        ),
-    }
+    mcp::server("tinystore", env!("CARGO_PKG_VERSION"))
+        .instructions(&format!("Read the TinyStore store in {}: {reads}.", dir.display()))
+        .tool(status(dir))
+        .tools(mcp::read_tools_in(dir))
+        .tools(crate::mcp_writes::tools(dir))
+        .allow(write)
 }
 
-/// The tools, each with what it takes: those that read, then those that
-/// write that `writes` names.
-fn tools(writes: &[&str]) -> Value {
-    Value::Array([store_tools(), data_tools(), crate::mcp_writes::tools(writes)].concat())
-}
-
-fn described(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
-    json!({
-        "name": name,
-        "description": description,
-        "inputSchema": { "type": "object", "properties": properties, "required": required },
-        "annotations": { "readOnlyHint": true, "openWorldHint": false },
-    })
-}
-
-fn text(description: &str) -> Value {
-    json!({ "type": "string", "description": description })
-}
-
-/// A bucket's or a queue's database: a program that opened one from a
-/// database keeps it in that database's file, not in kv.db or jobs.db.
-fn database() -> Value {
-    text("the database the program opened it from, as app, when it is kept there rather than in kv.db or jobs.db")
-}
-
-fn count(description: &str) -> Value {
-    json!({ "type": "integer", "description": description })
-}
-
-/// The tools that say how the store stands and what it logged.
-fn store_tools() -> Vec<Value> {
-    vec![
-        described(
-            "status",
-            "What the store holds: its files and their sizes, the server that serves it, and how its node stands.",
-            json!({}),
-            &[],
-        ),
-        described(
-            "logs",
-            "The application's latest log lines and events, newest last.",
-            json!({
-                "since": text("only lines from this long ago, as 30s, 15m, 1h or 2d"),
-                "level": text("trace, debug, info, warn or error, and above"),
-                "grep": text("only lines that hold this text, in any case"),
-                "stream": text("one stream, as api"),
-                "limit": count("how many of the last lines; 50 by default, 200 at most"),
-            }),
-            &[],
-        ),
-    ]
-}
-
-/// The tools that read what the application keeps.
-fn data_tools() -> Vec<Value> {
-    vec![
-        described(
-            "kv_get",
-            "One value of a kv bucket by its key.",
-            json!({ "bucket": text("the bucket"), "key": text("the key"), "database": database() }),
-            &["bucket", "key"],
-        ),
-        described(
-            "kv_list",
-            "A kv bucket's keys and values, in key order.",
-            json!({
-                "bucket": text("the bucket"),
-                "branch": text("the keys under this branch, as 42 or 42/devices"),
-                "database": database(),
-                "limit": count("200 at most"),
-            }),
-            &["bucket"],
-        ),
-        described(
-            "jobs_list",
-            "A queue's jobs that have ids, in the order of their ids, with their state, attempts and last error; \
-             or, with state failed and no prefix, its failed jobs, the last failed first.",
-            json!({
-                "queue": text("the queue"),
-                "prefix": text("the jobs whose ids start with it"),
-                "state": text("scheduled, waiting, running, done or failed"),
-                "database": database(),
-                "limit": count("200 at most"),
-            }),
-            &["queue"],
-        ),
-        described(
-            "sql_query",
-            "Rows of a read-only SQL query on one of the application's databases, sql/<database>.db.",
-            json!({
-                "database": text("the database, as app"),
-                "query": text("one statement that reads, as select count(*) from users"),
-            }),
-            &["database", "query"],
-        ),
-        described("search_list", "The store's search indexes, with their documents.", json!({}), &[]),
-    ]
-}
-
-/// A tool's answer: its text, or what went wrong as the tool's own error.
-fn call(dir: &Path, writes: &[&str], params: &Value) -> Value {
-    let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-    let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-    let answered =
-        crate::mcp_writes::call(dir, writes, name, &arguments).unwrap_or_else(|| tool(dir, name, &arguments));
-    match answered {
-        Ok(answer) => json!({ "content": [{ "type": "text", "text": answer.to_string() }] }),
-        Err(why) => json!({ "content": [{ "type": "text", "text": why }], "isError": true }),
-    }
-}
-
-fn tool(dir: &Path, name: &str, arguments: &Value) -> Result<Value, String> {
-    let text = |key: &str| arguments.get(key).and_then(Value::as_str);
-    let needed = |key: &str| text(key).ok_or_else(|| format!("{name} takes {key}"));
-    let limit = |default: usize| {
-        arguments.get("limit").and_then(Value::as_u64).map_or(default, |limit| limit as usize).min(MOST)
-    };
-    if name == "status" {
-        return crate::status::json_of(dir).map_err(|refused| refused.to_string());
-    }
-    let store = Store::open_beside(dir).map_err(|error| error.to_string())?;
-    match name {
-        "logs" => logs(&store, text("since"), text("level"), text("grep"), text("stream"), limit(50)),
-        "kv_get" => {
-            let (bucket, key) = (needed("bucket")?, needed("key")?);
-            let reading = Reading { bucket, database: text("database"), key: Some(key), branch: None };
-            let found = crate::kv::entries(&store, &reading, 1)?;
-            found.into_iter().next().ok_or_else(|| format!("kv bucket {bucket}: no key {key}"))
-        }
-        "kv_list" => {
-            let reading =
-                Reading { bucket: needed("bucket")?, database: text("database"), key: None, branch: text("branch") };
-            Ok(Value::Array(crate::kv::entries(&store, &reading, limit(MOST))?))
-        }
-        "jobs_list" => {
-            let listing = Listing {
-                queue: needed("queue")?,
-                database: text("database"),
-                prefix: text("prefix"),
-                state: text("state"),
-            };
-            let page = crate::jobs::listed(&store, &listing, limit(MOST), None)?;
-            Ok(Value::Array(page.jobs.iter().map(crate::jobs::shown).collect()))
-        }
-        "sql_query" => crate::sql::rows_json(&store, needed("database")?, needed("query")?, MOST),
-        "search_list" => {
-            let listed = tinystore::search::list(&store).map_err(|error| error.to_string())?;
-            let shown: Vec<Value> = listed
-                .iter()
-                .map(|index| json!({ "name": index.name, "documents": index.documents, "vectors": index.vectors }))
-                .collect();
-            Ok(Value::Array(shown))
-        }
-        other => Err(format!("no tool {other}")),
-    }
-}
-
-fn logs(
-    store: &Store,
-    since: Option<&str>,
-    level: Option<&str>,
-    grep: Option<&str>,
-    stream: Option<&str>,
-    limit: usize,
-) -> Result<Value, String> {
-    let events = store.all_events().map_err(|error| error.to_string())?;
-    let mut list = events.list().newest().limit(limit);
-    if let Some(since) = since {
-        list = list.since(asked::span(since)?);
-    }
-    if let Some(level) = level {
-        let level = crate::logs::level_named(level)
-            .ok_or_else(|| format!("no level {level}: trace, debug, info, warn or error"))?;
-        list = list.min_level(level);
-    }
-    if let Some(grep) = grep {
-        list = list.search(grep);
-    }
-    if let Some(stream) = stream {
-        list = list.streams([stream]);
-    }
-    let mut page = list.page().map_err(|error| error.to_string())?.events;
-    page.reverse();
-    let lines: Vec<Value> =
-        page.iter().map(|event| serde_json::from_str(&crate::logs::json(event)).unwrap_or(Value::Null)).collect();
-    Ok(Value::Array(lines))
+/// What the store holds, read from its directory and its server, which no
+/// tool of the library reads: a program asks its own store.
+fn status(dir: &Path) -> Tool {
+    let dir = dir.to_owned();
+    let does = "What the store holds: its files and their sizes, the server that serves it, and how its node stands.";
+    let takes = json!({ "type": "object", "properties": {}, "required": [] });
+    Tool::reads(
+        "status",
+        does,
+        takes,
+        move |_| Ok(crate::status::json_of(&dir).map_err(|refused| refused.to_string())?),
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use serde_json::Value;
+    use tinystore::{Options, Store};
+
     use super::*;
-    use tinystore::Options;
+
+    /// What `tinystore mcp` on `dir` answers to `message`, if anything.
+    fn answered(dir: &Path, message: &Value) -> Option<Value> {
+        let mut output = Vec::new();
+        server(dir, None).serve_on(Cursor::new(format!("{message}\n")), &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        output.lines().next().map(|line| serde_json::from_str(line).unwrap())
+    }
 
     fn asked(dir: &Path, message: Value) -> Value {
-        answer(dir, &[], &message.to_string()).unwrap()
+        answered(dir, &message).unwrap()
     }
 
     #[test]
@@ -298,10 +90,7 @@ mod tests {
         store.bucket::<serde_json::Value>("sessions").open().unwrap().set("42", &json!({ "user": 42 })).unwrap();
         let started = asked(dir.path(), json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }));
         assert_eq!(started["result"]["serverInfo"]["name"], "tinystore");
-        assert!(
-            answer(dir.path(), &[], &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string())
-                .is_none()
-        );
+        assert!(answered(dir.path(), &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).is_none());
         let listed = asked(dir.path(), json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
         assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 7);
         let called = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",

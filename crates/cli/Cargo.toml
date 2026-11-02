@@ -17,8 +17,10 @@ name = "tinystore"
 path = "src/main.rs"
 
 [dependencies]
-# client: the protocol's messages a command that writes sends its server
-tinystore = { workspace = true, features = ["client"] }
+# client: the protocol's messages a command that writes sends its server;
+# mcp: the server `tinystore mcp` runs, and the reads its tools share with the
+# commands
+tinystore = { workspace = true, features = ["client", "mcp"] }
 # the server's sockets and pipes, and a private child's stdout as a file; the
 # library itself runs no async runtime
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "io-util", "io-std", "fs", "macros", "signal", "sync", "time"] }

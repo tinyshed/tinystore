@@ -13,13 +13,11 @@
 //! statement that writes needs `--write`, and runs on the store this command
 //! holds when no one else does, or through the server that holds it.
 
-use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
 
 use nu_ansi_term::Style;
-use serde::Deserialize;
-use serde::de::{self, Deserializer, MapAccess, Visitor};
+use tinystore::mcp::sql::Row;
 use tinystore::sql::Database;
 use tinystore::{ErrorKind, Options, Store};
 
@@ -135,25 +133,14 @@ fn held(dir: &Path) -> Result<Store, asked::Refused> {
 
 /// A database as it is, without migrations: one the store does not hold is
 /// named, rather than made.
-pub(crate) fn opened(store: &Store, database: &str) -> Result<Database, asked::Refused> {
-    database_held(store.dir(), database)?;
-    Ok(store.database(database).open()?)
+fn opened(store: &Store, database: &str) -> Result<Database, asked::Refused> {
+    tinystore::mcp::sql::opened(store, database).map_err(failed)
 }
 
 /// Refuses a database the store does not hold, naming the nearest it does:
 /// opening one makes it, so a typo would otherwise make an empty one.
 pub(crate) fn database_held(dir: &Path, database: &str) -> Result<(), asked::Refused> {
-    if dir.join("sql").join(format!("{database}.db")).exists() {
-        return Ok(());
-    }
-    let known = on_disk::databases(dir);
-    let names: Vec<&str> = known.iter().map(String::as_str).collect();
-    let held = if known.is_empty() { "none".to_owned() } else { known.join(", ") };
-    Err(failed(format!(
-        "{} holds no database {database}{}; it holds {held}",
-        dir.display(),
-        crate::meant(database, &names)
-    )))
+    tinystore::mcp::given::database_held(dir, database).map_err(failed)
 }
 
 fn apply(asked: Asked) -> Done {
@@ -235,32 +222,11 @@ fn tables(asked: Asked) -> Done {
     }
 }
 
-/// A read-only query's rows as JSON, `most` at most, for the MCP's tool.
-pub(crate) fn rows_json(
-    store: &Store,
-    database: &str,
-    statement: &str,
-    most: usize,
-) -> Result<serde_json::Value, String> {
-    let db = opened(store, database).map_err(|refused| refused.to_string())?;
-    let rows: Vec<Row> = db.all(statement).map_err(|error| error.to_string())?;
-    let shown: Vec<serde_json::Value> = rows
-        .iter()
-        .take(most)
-        .map(|row| {
-            serde_json::Value::Object(row.0.iter().map(|(column, cell)| (column.clone(), cell.json())).collect())
-        })
-        .collect();
-    Ok(serde_json::Value::Array(shown))
-}
-
 /// Prints rows as a table a person reads, or one JSON object a row.
 fn print_rows(rows: &[Row], json: bool) -> Done {
     if json {
         for row in rows {
-            let object: serde_json::Map<String, serde_json::Value> =
-                row.0.iter().map(|(column, cell)| (column.clone(), cell.json())).collect();
-            outln!("{}", serde_json::Value::Object(object))?;
+            outln!("{}", row.json())?;
         }
         return Ok(());
     }
@@ -294,169 +260,4 @@ fn print_rows(rows: &[Row], json: bool) -> Done {
         outln!("{}", paint(colours, Style::new().dimmed(), format!("{} rows", rows.len())))?;
     }
     Ok(())
-}
-
-/// A row by its columns in their order.
-struct Row(Vec<(String, Cell)>);
-
-impl<'de> Deserialize<'de> for Row {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Row, D::Error> {
-        deserializer.deserialize_map(Columns)
-    }
-}
-
-struct Columns;
-
-impl<'de> Visitor<'de> for Columns {
-    type Value = Row;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a row")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut columns: A) -> Result<Row, A::Error> {
-        let mut row = Vec::new();
-        while let Some((column, cell)) = columns.next_entry::<String, Cell>()? {
-            row.push((column, cell));
-        }
-        Ok(Row(row))
-    }
-}
-
-/// A value as SQLite keeps it.
-#[derive(Debug, PartialEq)]
-enum Cell {
-    Null,
-    Integer(i64),
-    Real(f64),
-    Text(String),
-    Blob(Vec<u8>),
-}
-
-impl Cell {
-    fn json(&self) -> serde_json::Value {
-        match self {
-            Cell::Null => serde_json::Value::Null,
-            Cell::Integer(integer) => (*integer).into(),
-            Cell::Real(real) => serde_json::Number::from_f64(*real).map_or(serde_json::Value::Null, Into::into),
-            Cell::Text(text) => text.clone().into(),
-            Cell::Blob(bytes) => crate::local::hex(bytes).into(),
-        }
-    }
-}
-
-impl fmt::Display for Cell {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Cell::Null => f.write_str("null"),
-            Cell::Integer(integer) => write!(f, "{integer}"),
-            Cell::Real(real) => write!(f, "{real}"),
-            Cell::Text(text) => f.write_str(&text.replace('\n', "⏎")),
-            Cell::Blob(bytes) => {
-                let hex = crate::local::hex(&bytes[..bytes.len().min(16)]);
-                let more = if bytes.len() > 16 { "…" } else { "" };
-                write!(f, "x'{hex}{more}' ({} bytes)", bytes.len())
-            }
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Cell {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Cell, D::Error> {
-        deserializer.deserialize_any(Cells)
-    }
-}
-
-struct Cells;
-
-impl Visitor<'_> for Cells {
-    type Value = Cell;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a value")
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Cell, E> {
-        Ok(Cell::Null)
-    }
-
-    fn visit_none<E: de::Error>(self) -> Result<Cell, E> {
-        Ok(Cell::Null)
-    }
-
-    fn visit_i64<E: de::Error>(self, integer: i64) -> Result<Cell, E> {
-        Ok(Cell::Integer(integer))
-    }
-
-    fn visit_u64<E: de::Error>(self, integer: u64) -> Result<Cell, E> {
-        Ok(i64::try_from(integer).map_or(Cell::Real(integer as f64), Cell::Integer))
-    }
-
-    fn visit_f64<E: de::Error>(self, real: f64) -> Result<Cell, E> {
-        Ok(Cell::Real(real))
-    }
-
-    fn visit_str<E: de::Error>(self, text: &str) -> Result<Cell, E> {
-        Ok(Cell::Text(text.to_owned()))
-    }
-
-    fn visit_string<E: de::Error>(self, text: String) -> Result<Cell, E> {
-        Ok(Cell::Text(text))
-    }
-
-    fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<Cell, E> {
-        Ok(Cell::Blob(bytes.to_vec()))
-    }
-
-    fn visit_byte_buf<E: de::Error>(self, bytes: Vec<u8>) -> Result<Cell, E> {
-        Ok(Cell::Blob(bytes))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn store_with_users() -> (tempfile::TempDir, Store) {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), Options { background: false, ..Options::default() }).unwrap();
-        let db = store
-            .database("app")
-            .migrations([(
-                "0001_users.sql",
-                "create table users (id integer primary key, email text, avatar blob, score real)",
-            )])
-            .open()
-            .unwrap();
-        db.exec(
-            "insert into users (email, avatar, score) values ('ada@example.com', x'0102', 1.5), (null, null, null)",
-        )
-        .unwrap();
-        (dir, store)
-    }
-
-    #[test]
-    fn a_rows_columns_keep_their_order_and_their_values_their_kinds() {
-        let (dir, _holder) = store_with_users();
-        let beside = Store::open_beside(dir.path()).unwrap();
-        let rows: Vec<Row> =
-            opened(&beside, "app").unwrap().all("select id, email, avatar, score from users order by id").unwrap();
-        let columns: Vec<&str> = rows[0].0.iter().map(|(column, _)| column.as_str()).collect();
-        assert_eq!(columns, ["id", "email", "avatar", "score"]);
-        let cells: Vec<&Cell> = rows[0].0.iter().map(|(_, cell)| cell).collect();
-        assert_eq!(
-            cells,
-            [&Cell::Integer(1), &Cell::Text("ada@example.com".to_owned()), &Cell::Blob(vec![1, 2]), &Cell::Real(1.5)]
-        );
-        assert_eq!(rows[1].0[1].1, Cell::Null);
-        assert_eq!(Cell::Blob(vec![1, 2]).to_string(), "x'0102' (2 bytes)");
-    }
-
-    #[test]
-    fn a_database_the_store_does_not_hold_is_named_with_those_it_does() {
-        let (dir, _holder) = store_with_users();
-        let beside = Store::open_beside(dir.path()).unwrap();
-        let Err(asked::Refused::Failed(why)) = opened(&beside, "ap") else { panic!("opened") };
-        assert!(why.contains("holds no database ap") && why.contains("it holds app"), "{why}");
-    }
 }

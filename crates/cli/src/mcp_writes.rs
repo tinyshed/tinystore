@@ -1,9 +1,10 @@
-//! The tools of `tinystore mcp` that write, offered only as `--write` names
-//! them, a tool an operation, each marked as writing and, where it removes
-//! something, destructive: an agent's host asks its person for each tool as
-//! it would for any other, and a flag alone is no boundary for an agent that
-//! also has a shell. Each writes through the server that holds the
-//! directory, or a sidecar it starts, as the command line's writes do.
+//! The tools of `tinystore mcp` that write, a tool an operation, each marked
+//! as writing and, where it removes or replaces something, as removing: the
+//! library's server offers one only as `--write` names it, and an agent's
+//! host asks its person for each as it would for any other tool. A flag alone
+//! is no boundary for an agent that also has a shell. Each writes through the
+//! server that holds the directory, or a sidecar it starts, as the command
+//! line's writes do.
 //!
 //! ```text
 //! claude mcp add tinystore -- tinystore mcp ./data --write kv_set,jobs_add
@@ -13,11 +14,13 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 use tinystore::client::{Event, KvValue, NewJob};
+use tinystore::mcp::Tool;
 
 use crate::asked::{self, Refused, wrong};
 use crate::reach;
 
-/// Each tool that writes, what it does, and whether it removes something.
+/// Each tool that writes, what it does, and whether it removes or replaces
+/// something.
 const TOOLS: [(&str, &str, bool); 11] = [
     ("kv_set", "Sets a kv bucket's key to a value: text unless `as` says int or json.", false),
     ("kv_delete", "Deletes a kv bucket's key.", true),
@@ -32,41 +35,19 @@ const TOOLS: [(&str, &str, bool); 11] = [
     ("sql_exec", "Runs one SQL statement that writes on one of the application's databases.", true),
 ];
 
-/// The tools `--write` names: `all`, or their names with commas between.
-pub(crate) fn allowed(given: Option<&str>) -> Result<Vec<&'static str>, Refused> {
-    let names: Vec<&'static str> = TOOLS.iter().map(|(name, ..)| *name).collect();
-    match given {
-        None => Ok(Vec::new()),
-        Some("all") => Ok(names),
-        Some(list) => list
-            .split(',')
-            .map(|word| {
-                let word = word.trim();
-                names.iter().find(|name| **name == word).copied().ok_or_else(|| {
-                    wrong(format!(
-                        "--write {word}: no tool that writes{}; all, or {}",
-                        crate::meant(word, &names),
-                        names.join(", ")
-                    ))
-                })
-            })
-            .collect(),
-    }
-}
-
-/// The tools of `allowed`, each with what it takes and its marks.
-pub(crate) fn tools(allowed: &[&str]) -> Vec<Value> {
+/// The tools that write to the store in `dir`, each with what it takes and
+/// its mark.
+pub(crate) fn tools(dir: &Path) -> Vec<Tool> {
     TOOLS
         .iter()
-        .filter(|(name, ..)| allowed.contains(name))
-        .map(|(name, does, destructive)| {
+        .map(|&(name, does, removes)| {
             let (properties, required) = inputs(name);
-            json!({
-                "name": name,
-                "description": does,
-                "inputSchema": { "type": "object", "properties": properties, "required": required },
-                "annotations": { "readOnlyHint": false, "destructiveHint": destructive, "openWorldHint": false },
-            })
+            let takes = json!({ "type": "object", "properties": properties, "required": required });
+            let dir = dir.to_owned();
+            let write = move |given: &Value| {
+                written(&dir, name, &Arguments(given)).map_err(|refused| refused.to_string().into())
+            };
+            if removes { Tool::removes(name, does, takes, write) } else { Tool::writes(name, does, takes, write) }
         })
         .collect()
 }
@@ -188,18 +169,6 @@ fn config_inputs(name: &str) -> (Value, Vec<&'static str>) {
     let changes = "each live setting's path and its value, as {\"model.max_tokens\": \"2048\"}: text is read by \
                    the setting's kind, other JSON taken as it is";
     (json!({ "config": text("the config"), "changes": object(changes) }), vec!["config", "changes"])
-}
-
-/// A tool's answer when it is one that writes and `allowed` names it; none
-/// for any other.
-pub(crate) fn call(dir: &Path, allowed: &[&str], name: &str, arguments: &Value) -> Option<Result<Value, String>> {
-    if !TOOLS.iter().any(|(tool, ..)| *tool == name) {
-        return None;
-    }
-    if !allowed.contains(&name) {
-        return Some(Err(format!("{name} writes, and tinystore mcp was not started with --write {name}")));
-    }
-    Some(written(dir, name, &Arguments(arguments)).map_err(|refused| refused.to_string()))
 }
 
 /// A tool's arguments, each read as what it should be.
