@@ -314,7 +314,7 @@ where
     pub(crate) fn value_of_text(&self, path: &str, text: &str) -> Result<Value> {
         let declared = self.inner.declaration.settings();
         let Some(setting) = self.inner.declaration.setting(path) else {
-            let near = super::declaration::meant(path, declared.iter().map(|(path, _)| path));
+            let near = crate::typos::meant(path, declared.iter().map(|(path, _)| path));
             let hint = super::declaration::did_you_mean(near);
             return Err(Error::invalid(format!("config {}: no setting {path}{hint}", self.inner.name)));
         };

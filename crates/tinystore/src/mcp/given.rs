@@ -26,18 +26,10 @@ pub fn span(text: &str) -> Result<Duration, String> {
     Ok(Duration::from_millis(number.saturating_mul(millis)))
 }
 
-/// What follows a refusal of a name that may be misspelt: the nearest of
-/// `names`, one edit away for three to six letters and two for more, as the
-/// command line reads a command. It is only said: no word is read as another.
-pub(crate) fn meant(given: &str, names: &[&str]) -> String {
-    let edits = match given.chars().count() {
-        0..3 => 0,
-        3..7 => 1,
-        _ => 2,
-    };
-    crate::typos::Dictionary::new(names)
-        .nearest(given, edits)
-        .map_or_else(String::new, |near| format!("; did you mean {}?", near.word))
+/// What follows a refusal of a name that may be misspelt, a command's, a
+/// flag's, a tool's or a database's: the nearest of `names`, or nothing.
+pub fn meant(given: &str, names: &[&str]) -> String {
+    crate::typos::meant(given, names).map_or_else(String::new, |near| format!("; did you mean {near}?"))
 }
 
 /// The application's databases by name, `sql/<name>.db`, in order.

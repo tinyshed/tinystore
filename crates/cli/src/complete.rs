@@ -61,7 +61,7 @@ fn shown(before: &[String], current: &str) -> Vec<String> {
         candidates(before, current).into_iter().partition(|word| word.starts_with('@'));
     let mut starting: Vec<String> = words.iter().filter(|word| word.starts_with(current)).cloned().collect();
     if starting.is_empty() {
-        let edits = crate::typo_edits(current);
+        let edits = usize::from(tinystore::typos::name_edits(current));
         starting = words.into_iter().filter(|word| edits > 0 && typo_of(current, word, edits)).collect();
     }
     starting.into_iter().chain(asked).collect()

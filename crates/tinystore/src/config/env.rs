@@ -8,10 +8,11 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::declaration::{Declaration, Keys, Kind, Node, Rules, Setting, did_you_mean, meant};
+use super::declaration::{Declaration, Keys, Kind, Node, Rules, Setting, did_you_mean};
 use super::explain::Origin;
 use super::files::{Walked, walk_entries};
 use super::rules;
+use crate::typos::meant;
 
 /// The longest text a config takes from a variable.
 const MOST_BYTES: usize = 16 << 10;

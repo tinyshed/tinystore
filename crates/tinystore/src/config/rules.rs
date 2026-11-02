@@ -4,7 +4,8 @@
 
 use serde_json::{Map, Number, Value};
 
-use super::declaration::{Group, Item, Kind, Node, Rules, Setting, did_you_mean, joined, meant, shown};
+use super::declaration::{Group, Item, Kind, Node, Rules, Setting, did_you_mean, joined, shown};
+use crate::typos::meant;
 
 /// The units of a span, longest first, as the SDKs spell one: `1h30m`, `250ms`.
 const UNITS: [(&str, u64); 6] =

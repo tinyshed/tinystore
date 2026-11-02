@@ -1,10 +1,11 @@
 //! The words nearest a misspelt one: a dictionary of words in an FST, read
 //! through a Levenshtein automaton that counts two letters swapped as one
-//! edit. It applies no rule of its own: each caller says how many edits it
-//! looks across, since search reads a word of five letters with one and the
-//! command line a command of three. Config, the command line and search use
-//! it, none of them importing another, and a suggestion it gives changes
-//! nothing by itself.
+//! edit. A dictionary's caller says how many edits it looks across, since
+//! search reads a document's word of five letters with one; a name a person
+//! may have misspelt, a config's key, a search's filter, a command or a
+//! tool, is read by one rule, [`meant`]. Config, the command line, MCP and
+//! search use it, none of them importing another, and a suggestion it gives
+//! changes nothing by itself.
 //!
 //! ```
 //! use tinystore::typos::{Dictionary, Near};
@@ -93,6 +94,28 @@ impl Dictionary {
     pub fn nearest(&self, word: &str, edits: u8) -> Option<Near> {
         self.within(word, edits).into_iter().next()
     }
+}
+
+/// The edits a misspelt name may hold: none in a name of fewer than three
+/// letters, where every short name is near another, one up to six and two
+/// past.
+pub fn name_edits(name: &str) -> u8 {
+    match name.chars().count() {
+        0..3 => 0,
+        3..7 => 1,
+        _ => MOST_EDITS,
+    }
+}
+
+/// The name a person may have meant by `given`, among `names`, within
+/// [`name_edits`] of it. It is only said: no name is read as another.
+///
+/// ```
+/// assert_eq!(tinystore::typos::meant("bakup", ["serve", "backup"]), Some("backup".to_owned()));
+/// assert_eq!(tinystore::typos::meant("ap", ["app"]), None);
+/// ```
+pub fn meant<S: AsRef<str>>(given: &str, names: impl IntoIterator<Item = S>) -> Option<String> {
+    Dictionary::new(names).nearest(given, name_edits(given)).map(|near| near.word)
 }
 
 fn distance(dfa: &DFA, bytes: &[u8]) -> u8 {

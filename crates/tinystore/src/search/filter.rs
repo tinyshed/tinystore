@@ -42,6 +42,7 @@ use super::segments;
 use super::settings::Settings;
 use crate::limits::{FILTER_CONDITIONS, FILTER_TEXT, FILTER_VALUES};
 use crate::sqlite::sql_error;
+use crate::typos::meant;
 use crate::{Error, Result};
 
 const FIND_KEY: &str = "select id from _tinystore_search_keys where index_id = ?1 and part = ?2 and term = ?3";
@@ -472,18 +473,6 @@ impl Reader<'_> {
         docs.retain(|doc| !self.gone.contains(doc));
         Ok(docs)
     }
-}
-
-/// The filter a person may have meant by `given`, among `paths`: one edit
-/// away for a name of three to six letters, two for a longer one, as
-/// config's keys are suggested. It is only said.
-fn meant<'p>(given: &str, paths: impl IntoIterator<Item = &'p str>) -> Option<String> {
-    let edits = match given.chars().count() {
-        0..3 => 0,
-        3..7 => 1,
-        _ => 2,
-    };
-    crate::typos::Dictionary::new(paths).nearest(given, edits).map(|near| near.word)
 }
 
 /// The documents of either list, each once, in order.

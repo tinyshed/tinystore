@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 use yaml_rust2::{Yaml, YamlLoader};
 
-use super::declaration::{Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, meant, shown};
+use super::declaration::{Declaration, Entries, Group, Node, did_you_mean, entry_path, joined, shown};
 use super::rules;
+use crate::typos::meant;
 
 /// The largest file a config reads.
 const MOST_BYTES: u64 = 1 << 20;
