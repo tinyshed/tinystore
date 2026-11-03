@@ -62,13 +62,20 @@ fn a_config_opened_as_kv_db_keeps_it_takes_the_declaration_kept_there_and_change
     assert!(none.code == "not_found" && none.message.contains("keeps no declaration"), "{none:?}");
     let required = json!({ "kind": "text", "required": true });
     let live = json!({ "kind": "integer", "default": 100, "live": true });
-    let declared = json!({ "region": required, "limits": { "group": { "rps": live } } }).to_string();
+    let token = json!({ "kind": "text", "secret": true, "default": "dev-only" });
+    let declared = json!({ "region": required, "token": token, "limits": { "group": { "rps": live } } }).to_string();
     let layers = json!([{ "env": { "prefix": "APP", "variables": { "APP_REGION": "eu" } } }]).to_string();
     let program = ConfigOpen { name: "app".to_owned(), declaration: declared, layers, strict: false, kept: false };
     client.call::<ConfigValue>(method::CONFIG_OPEN, &program).unwrap();
     let opened: ConfigValue = client.call(method::CONFIG_OPEN, &kept).unwrap();
     assert_eq!(value(&opened).get("region"), None, "the program's environment is its own");
     assert!(opened.notes.iter().any(|note| note.starts_with("region: required")), "{:?}", opened.notes);
+    let token = opened.lines.iter().find(|line| line.path == "token").unwrap();
+    assert_eq!(
+        (token.value.as_str(), value(&opened)["token"].clone()),
+        ("unset", Value::Null),
+        "its default is not kept"
+    );
     let changes = json!({ "limits": { "rps": 250 } }).to_string();
     let update = ConfigUpdate { handle: opened.handle, version: opened.version, changes };
     let changed: ConfigValue = client.call(method::CONFIG_UPDATE, &update).unwrap();

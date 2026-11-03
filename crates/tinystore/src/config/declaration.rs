@@ -232,7 +232,7 @@ impl Declaration {
     }
 
     /// The declaration as JSON, as kv.db keeps it: each setting with its
-    /// kind, rules, default and marks, a secret's default left out.
+    /// kind, rules, default and marks, a secret's default kept as none.
     pub(crate) fn to_json(&self) -> Value {
         group_json(&self.root)
     }
@@ -339,8 +339,11 @@ fn setting_json(setting: &Setting) -> Value {
     let mut map = Map::new();
     map.insert("kind".to_owned(), kind_json(&setting.kind));
     rules_json(&setting.rules, &mut map);
-    if let Some(default) = setting.default.as_ref().filter(|_| !setting.secret) {
-        map.insert("default".to_owned(), default.clone());
+    // A secret's default is never kept, and a setting with none would not
+    // read back, so it is kept as one with no value.
+    let kept = |default: &Value| if setting.secret { Value::Null } else { default.clone() };
+    if let Some(default) = &setting.default {
+        map.insert("default".to_owned(), kept(default));
     }
     for (mark, on) in [("required", setting.required), ("live", setting.live), ("secret", setting.secret)] {
         if on {
