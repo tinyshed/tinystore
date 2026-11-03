@@ -29,7 +29,11 @@ type Json = any
  * that they read apart from the blocking `Bucket` beside them.
  */
 export const rustSources: Record<string, { modules: string[]; dirs: string[]; aio: string[] }> = {
-	store: { modules: ['', 'aio', 'limits'], dirs: ['store.rs', 'transaction.rs'], aio: ['aio/store.rs'] },
+	store: {
+		modules: ['', 'aio', 'limits'],
+		dirs: ['store.rs', 'transaction.rs'],
+		aio: ['aio/store.rs'],
+	},
 	sql: { modules: ['sql', 'aio::sql'], dirs: ['sql/'], aio: ['aio/sql.rs', 'aio/sql/'] },
 	kv: {
 		modules: ['kv', 'aio::kv'],
