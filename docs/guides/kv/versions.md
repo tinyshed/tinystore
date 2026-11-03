@@ -87,7 +87,7 @@ let next = settings.update("home", |current| {
 nothing when the key is not there. It writes what your function returns at
 the version it read, or creates the key. If another write came first,
 `update` reads the key again and calls your function again, so no change is
-lost. It returns the value that it wrote (contract KV-14).
+lost (contract KV-14). It returns the value that it wrote.
 
 > [!WARNING]
 > **Your function can run more than once**
@@ -95,7 +95,7 @@ lost. It returns the value that it wrote (contract KV-14).
 > in it. Send an email or call another service after `update` returns.
 
 A key that is there keeps its expiry. A key that `update` creates gets the
-bucket's `ttl` or `idle`, the same as with `set` and `create`.
+bucket's [default term](expiry.md#the-three-kinds-of-term).
 
 ## Leave the value as it is
 
@@ -147,8 +147,8 @@ let pinned = courses.update(student_id, |pinned| {
 
 ## When other writes keep coming first
 
-`update` tries 8 times. If another write came first every time, it fails with
-a conflict error (`ConflictError` in Bun and Python, `tinystore.ErrConflict` in
+If another write came first every time `update` tried, it fails with a
+conflict error (`ConflictError` in Bun and Python, `tinystore.ErrConflict` in
 Go, `ErrorKind::Conflict` in Rust) and writes nothing:
 
 ```text
@@ -177,9 +177,8 @@ key, for example by user.
 ## Async Rust
 
 With the `async` feature, `update` and a key's call in `aio` take the same
-arguments, and you await them. In Bun, Node and Python every call is already
-awaited, and in Go a call blocks its goroutine, so this section shows only
-Rust.
+arguments, and you await them. See
+[Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use tinystore::Options;

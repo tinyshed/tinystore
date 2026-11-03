@@ -148,20 +148,14 @@ if let [own, under, ..] = rps.given.as_slice()
 - A newer server may send a `kind` that your SDK does not know. The SDK keeps
   it as it was sent, and its text is the kind, so give a `switch` on `kind` a
   default case.
-- `at` is a `Date` in TypeScript, a `datetime` in UTC in Python, a
-  `time.Time` in Go and a `SystemTime` in Rust.
 - The first item's `from`, as text, is the line's `from`:
   `String(given[0].from)`, `str(given[0].from_)`, `Given[0].From.String()` and
   `given[0].from.to_string()`.
 - In TypeScript, `console.table` and a spread such as `{ ...line }` leave
   `given` out, so the table keeps its four columns, and `JSON.stringify` keeps
   it. Python's `print(line)` leaves it out too.
-
-> [!NOTE]
-> **A server before 0.1.1 sends no `given`**
-> An SDK from 0.1.1 that reaches an older sidecar, child or server gets an
-> empty `given`. Check its length before you read `given[0]`, as the code
-> above does, or Go panics and TypeScript reads `undefined`.
+- A server older than 0.1.1 sends no `given`, so the SDK's is empty. Check
+  its length before you read `given[0]`, as the code above does.
 
 ## What was read and not used
 
@@ -219,12 +213,10 @@ let config = store
   variable or file. What relates two settings, or a format, a URL, an email,
   is `validate`'s.
 
-At open, kept changes are applied in the order they were made: each that
-leaves the value valid stays, and each that does not is ignored and said, so
-a release with a stricter `validate` still starts, unless the config is
-`strict`.
+At open, a kept change that `validate` now refuses is ignored and said, as
+[A change that no longer fits](live.md#a-change-that-no-longer-fits) shows.
 
-`validate` runs in the program that makes a change, since it is the
+`validate` runs in the program that makes a change, because it is the
 program's code. Another program's change it refuses leaves the value before
 it, says so, and `explain` lists it.
 
@@ -240,12 +232,9 @@ config app: app.toml: prot: no such setting; did you mean port?; APP_PORT: "eigh
 and one a change:
 
 ```text
-config app: port is not live: invalid
 config app: limits.rps: "fast" is not a number: invalid
 config app: changed since the version the change was made on: conflict
 ```
-
-An error about a secret names its variable and never its text.
 
 ## See also
 

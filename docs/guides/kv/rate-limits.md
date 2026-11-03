@@ -59,6 +59,8 @@ refused request may try again as `retryAt / retry_at / RetryAt / retry_at`.
 - The limit's times live in memory and reach `kv.db` every second. A crash
   can let at most one burst more through, which is the trade for a check that
   costs no disk write.
+- On a node that copies `kv.db`, `allow` and `reset` ask the file's home and
+  wait for its answer. `peek` reads the node's copy.
 
 ## Rate limit or quota
 
@@ -69,7 +71,7 @@ refused request may try again as `retryAt / retry_at / RetryAt / retry_at`.
 | at most 5 in any 60 s, counted back from now | neither: no sliding window is built        |
 
 - A rate limit has no window: a key earns back one use every `1/rate`, up to
-  `burst`. After a crash it may let one burst more through.
+  `burst`.
 - A quota's window starts at a key's first use and resets a span later, and
   it is written on every `allow`, so a crash hands out no use.
 - A quota of `'5/1m'` is the nearest to "5 a minute": 5 pass in each window,
@@ -79,8 +81,7 @@ refused request may try again as `retryAt / retry_at / RetryAt / retry_at`.
 ## Async Rust
 
 With the `async` feature, `aio`'s rate limits decide the same way, and you
-await each call. In Bun, Node and Python every call is already awaited, and
-in Go a call blocks its goroutine, so this section shows only Rust.
+await each call. See [Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use std::time::Duration;
@@ -99,13 +100,7 @@ if !answer.ok {
 A rate limit keeps its times in memory, so `allow`, `allow_n`, `peek` and
 `reset` answer in their future's first poll. When memory does not hold a key
 yet, the call reads it from `kv.db` first, on the store's threads if the read
-would wait. Once its future was polled, an `allow` or a `reset` takes effect
-even if you drop the future (contract DUR-11).
-
-On a node that copies `kv.db`, `allow`, `allow_n` and `reset` ask the file's
-home and wait for its answer on a thread that TinyStore starts for the call.
-`peek` reads the node's copy. Either way, the thread that polls the call
-never waits.
+would wait.
 
 ## See also
 

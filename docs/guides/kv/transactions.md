@@ -108,8 +108,7 @@ values one at a time, or read them before the transaction deletes them.
 ## Async Rust
 
 With the `async` feature, `aio::Store::tx` runs the same transaction, and you
-await it. In Bun, Node and Python every call is already awaited, and in Go a
-call blocks its goroutine, so this section shows only Rust.
+await it.
 
 ```rust
 use tinystore::Options;
@@ -134,13 +133,11 @@ let placed = store
     .await?;
 ```
 
-The closure is blocking, and it runs on one of the store's threads, never on
-your executor's thread. `tx.with` takes an `aio` bucket or counters as it takes
-blocking ones, and the calls inside are the blocking ones. Once polled, the
-transaction runs to its end, even if you drop its future. An awaited call
-inside the closure, through a `block_on`, fails with an invalid error
-(`ErrorKind::Invalid`) instead of waiting for the writer that the
-transaction holds.
+`tx.with` takes an `aio` bucket or counters as it takes blocking ones, and the
+calls inside are the blocking ones. The closure is blocking and runs on the
+store's threads: [Transactions](../../handbook/start/rust-async.md#transactions)
+in Rust with async says why, and what a dropped future and a `block_on` inside
+it do.
 
 ## See also
 

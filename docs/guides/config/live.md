@@ -65,34 +65,10 @@ what the program reads on every use.
 A kept change is the strongest layer on purpose: `live(100)` lets whoever
 runs the program, through an admin page of yours, outrank the
 code, the files and the environment. A deploy that sets `APP_LIMITS_RPS`
-does not undo it, as [`explain`](explain.md) shows in each language:
+does not undo it, as [`explain`](explain.md) shows:
 
-```text for=bun
-┌───┬──────────────┬───────┬──────────────────────────────────────────────┬────────────────────────────────────────────────────┐
-│   │ path         │ value │ from                                         │ over                                               │
-├───┼──────────────┼───────┼──────────────────────────────────────────────┼────────────────────────────────────────────────────┤
-│ 0 │ limits.burst │ 50    │ the declaration                              │                                                    │
-│ 1 │ limits.rps   │ 200   │ a change, version 1, 2026-10-24 09:34:52 UTC │ 1000 from APP_LIMITS_RPS, 100 from the declaration │
-│ 2 │ port         │ 8080  │ the declaration                              │                                                    │
-└───┴──────────────┴───────┴──────────────────────────────────────────────┴────────────────────────────────────────────────────┘
-```
-
-```text for=python
-Line(path='limits.burst', value='50', from_='the declaration', over='')
-Line(path='limits.rps', value='200', from_='a change, version 1, 2026-10-24 09:34:55 UTC', over='1000 from APP_LIMITS_RPS, 100 from the declaration')
-Line(path='port', value='8080', from_='the declaration', over='')
-```
-
-```text for=go
-limits.burst  50  the declaration
-limits.rps  200  a change, version 1, 2026-10-24 09:35:00 UTC  over 1000 from APP_LIMITS_RPS, 100 from the declaration
-port  8080  the declaration
-```
-
-```text for=rust
-limits.burst  50    the declaration
+```text
 limits.rps    200   a change, version 1, 2026-10-24 09:35:00 UTC  over 1000 from APP_LIMITS_RPS, 100 from the declaration
-port          8080  the declaration
 ```
 
 `reset` removes the change and lets the layers give the setting again.
@@ -145,8 +121,10 @@ secret, of another type or refused by `validate`, is ignored, not removed:
 - `explain` lists it with why;
 - it applies again once it fits, and `reset` of its path removes it.
 
-So a stricter release still starts. `strict: true` fails the open instead,
-for a config whose defaults are worse than not starting.
+At open, the kept changes apply in the order they were made, and each one
+that no longer fits is skipped. So a stricter release still starts (contract
+CFG-07). `strict: true` fails the open instead, for a config whose defaults
+are worse than not starting.
 
 ## Several programs, one config
 
@@ -164,7 +142,7 @@ A kept change of a setting a program does not declare may be another
 program's: it is neither applied nor warned about, and `explain` lists it
 apart.
 
-## Limits
+## Limits and defaults
 
 | What                               | Limit          |
 |------------------------------------|----------------|

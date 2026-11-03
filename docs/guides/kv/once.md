@@ -43,8 +43,8 @@ let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id))
 | `fn` throws                   | keeps nothing: the next `run` runs again                               |
 | `fn`'s answer is over 1 MiB   | returns it to this run and the runs that waited, and keeps nothing     |
 
-A run of the same key inside its own run is `invalid`, because it would wait
-for itself (contract KV-11).
+A run of the same key inside its own run, awaited or blocking, is `invalid`,
+because it would wait for itself.
 
 ## A memo
 
@@ -71,11 +71,10 @@ let data = panels.run(&format!("dashboard:{id}"), || compute_panels(&id))?;
 Ten users who open the dashboard in the same second share one computation,
 and the next 30 seconds answer from what it kept.
 
-Each kept answer is a write to `kv.db`, synced like any other, and a value
-there holds at most 1 MiB: a larger answer still reaches the users who waited
-for it, but the next run computes it again. A run waits for the one under way
-however long it takes, so a memo of a slow query that callers may give up on
-belongs in the program's memory.
+Each kept answer is a write to `kv.db`, synced like any other. An answer over
+1 MiB still reaches the users who waited for it, but the next run computes it
+again. A run waits for the one under way however long it takes, so a memo of
+a slow query that callers may give up on belongs in the program's memory.
 
 ## What it does not promise
 
@@ -89,9 +88,8 @@ error to throw.
 ## Async Rust
 
 With the `async` feature, `aio`'s `once` takes an async function: the closure
-gives a future, and `run` awaits it. In Bun, Node and Python every call is
-already awaited, and in Go a call blocks its goroutine, so this section shows
-only Rust.
+gives a future, and `run` awaits it. See
+[Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use std::time::Duration;
@@ -105,8 +103,7 @@ let charges = store.once::<Receipt>("charges").keep(Duration::from_hours(24)).op
 let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id)).await?;
 ```
 
-A run that waits for the run under way holds no thread: the engine wakes it
-when that run ends, in this process or through its server. The runs of the
+A run that waits for the run under way holds no thread. The runs of the
 blocking API and of `aio` wait for one another.
 
 On a node that copies `kv.db` from its home, a run claims its key at the
@@ -122,10 +119,12 @@ If you drop the future of a run:
 - after its function answered, the answer is kept all the same, and the key is
   let go after it is written.
 
-A run of a key inside its own run, awaited or blocking, fails with an invalid
-error (`ErrorKind::Invalid`) instead of waiting for itself. The future of
-`run` can borrow what its function uses. It is `'static`, as `tokio::spawn`
-needs, when the key, the closure and its future are.
+## Limits and defaults
+
+| What          | Value              |
+|---------------|--------------------|
+| `keep`        | 1 day unless given |
+| a kept answer | 1 MiB at most      |
 
 ## See also
 

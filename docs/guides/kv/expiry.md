@@ -81,8 +81,7 @@ a dashboard that reads sessions does not keep them alive either.
 ## Async Rust
 
 With the `async` feature, `aio`'s buckets expire their keys the same way.
-In Bun, Node and Python every call is already awaited, and in Go a call
-blocks its goroutine, so this section shows only Rust.
+See [Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use std::time::Duration;
@@ -98,8 +97,7 @@ let session = sessions.get(digest(&token)).await?; // lives another 30 days from
 A read of an idle key usually answers in its future's first poll. When the
 key has less than a minute left, the read renews it before it answers, as in
 blocking Rust (contract KV-07). That read runs on the store's threads,
-because the renewal is a write, and it never waits on the thread that polls
-it.
+because the renewal is a write.
 
 ## Limits and defaults
 
@@ -107,7 +105,6 @@ it.
 |-----------------------|-----------------------------------------|
 | a bucket's term       | none: keys never expire                 |
 | an idle key's renewal | once a thirtieth of its span has passed |
-| when a row is deleted | in the background, after it expired     |
 
 ## See also
 

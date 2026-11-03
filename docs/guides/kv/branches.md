@@ -78,8 +78,7 @@ version and when it expires. Two keys of a bucket of targets, one set with a
 ## Async Rust
 
 With the `async` feature, `aio`'s buckets read pages the same way, and you
-await them. In Bun, Node and Python every call is already awaited, and in Go
-a call blocks its goroutine, so this section shows only Rust.
+await them. See [Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use futures::StreamExt; // or tokio_stream::StreamExt
@@ -97,11 +96,9 @@ while let Some(entry) = all.next().await {
 }
 ```
 
-`list` and each page of `all` run on the store's threads, never on the thread
-that polls them. `all` reads the next page only when you have used up the one
-before, and it holds no snapshot between pages. If you drop the stream, the
-page it is reading stops, and it reads no more. When the store closes, the
-stream returns a closed error (`ErrorKind::Closed`) and then ends.
+`all` reads the next page only when you have used up the one before. When the
+store closes, the stream returns a closed error (`ErrorKind::Closed`) and then
+ends.
 
 ## See also
 

@@ -39,7 +39,8 @@ step "A wakes and saves too. The database keeps the largest fence, 8, so it refu
 A fence is a 128-bit number, too large for an SQLite integer. Written as 40
 zero-padded digits, it compares as text in the same order:
 
-```sql title="migrations/0004_summary_fence.sql"
+```sql title="migrations/0004_summaries.sql"
+alter table chats add column summary text;
 alter table chats add column summary_fence text not null default '';
 ```
 
@@ -107,7 +108,7 @@ The check and the write are one statement, so nothing can come between them.
 
 A fence is two numbers compared in order: the store's epoch in the high 64
 bits, a count in the low. The count grows with every lease the store gives
-while it is open; the epoch is written to kv.db each time the store opens,
+while it is open. The epoch is written to kv.db each time the store opens,
 as the larger of the time in milliseconds and the epoch before it plus one.
 
 | Between                                       | A later lease's fence is larger                                                    |
@@ -116,8 +117,7 @@ as the larger of the time in milliseconds and the epoch before it plus one.
 | a store and itself after a crash or a restart | always (contract LOCK-02)                                                          |
 | a store and one restored from a backup        | only while the restoring machine's clock is past the epochs given since the backup |
 
-A semaphore's leases have no fence: three valid holders at once would refuse
-each other.
+A semaphore's leases have [no fence](semaphores.md#no-fences).
 
 ## Fences outside the store
 

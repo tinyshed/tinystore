@@ -142,9 +142,8 @@ let moved = passwords.reseal()?; // 120
 > [!CAUTION]
 > **Lose the key and the values are gone**
 > Nothing recovers them. Keep a copy of the key apart from the data. A backup
-> leaves the key out unless asked, and says so with `keyLeftOut`. A backup
-> takes the sealing key only, so it also says `keyLeftOut` while a value is
-> sealed with an older key.
+> leaves the key out unless asked: see
+> [The encryption key](../backup/encryption-key.md).
 
 ## See also
 

@@ -120,17 +120,11 @@ instance.aimee.settings.port      5432         the declaration
 
 `chosenBy / chosen_by / "chosenBy" / "chosenBy"` declares a group whose
 settings are those of one of several groups. A text setting beside it, here
-`plugin`, chooses the group by its name. The chosen group's settings behave
-like the settings of any group:
-
-- A setting that no layer gives takes its default, and a required setting or
-  a secret has to be given.
-- A secret is `***` in `explain`, in the logs and in errors.
-- Each setting has its own variable, the group's path and the setting's key
-  in upper snake case: `DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT`. Its `_FILE`
-  variable reads it from a file.
-- A key that the chosen group does not have is refused with the nearest
-  name, so a key of another plugin's group is refused too.
+`plugin`, chooses the group by its name. The chosen group's settings follow
+the rules of any group: defaults, required settings, secrets, and a variable
+per setting with its `_FILE`, such as `DASHBIN_INSTANCE_AIMEE_SETTINGS_PORT`.
+A key that the chosen group does not have is refused with the nearest name,
+so a key of another plugin's group is refused too.
 
 ```text
 config dashbin: dashbin.toml: instance.aimee.settings.hots: no such setting; did you mean instance.aimee.settings.host?
@@ -196,9 +190,7 @@ take, and `OpenConfigJSON` in Go.
 
 A declaration that means nothing, such as a setting with neither a default
 nor `required`, is refused when it is read, and the error names the setting.
-Write `"default": null` for a setting that has no value until a layer gives
-one, such as a password that a database on trust authentication doesn't
-need: its value is `null`, and `explain` says it is `unset`.
+Give it a default, `required`, or `"default": null` for no value.
 
 The value is data too. A Rust program gets a `serde_json::Value`, in which a
 duration is written as serde writes a `Duration`, so a chosen group's value

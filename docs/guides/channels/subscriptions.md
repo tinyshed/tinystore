@@ -67,7 +67,7 @@ sub.stop();
   until you call `stop()` or the store closes, as a queue's worker does.
 - The store's `close` stops every subscription and ends every `each` loop
   before the connection closes. In Bun, Node and Python a loop fails
-  `closed`; in Go it ends.
+  `closed`, and in Go it ends.
 
 ## Branches
 
@@ -144,8 +144,8 @@ its own message subscribes first.
 | `reconnect` | the connection to the server dropped and the SDK subscribed again | absent: a loss was possible, not proven |
 
 - A publisher never waits for a subscriber (contract CHAN-02). Each branch
-  someone listens to keeps its newest messages in a log, 1,024 or 4 MiB, and
-  each subscriber reads it at its own place. One that falls behind the log's
+  someone listens to keeps its newest messages in a log, and each subscriber
+  reads it at its own place. One that falls behind the log's
   oldest message loses what it skipped, and its next call is `onMissed`.
 - Two misses before the next call are one, their counts added.
 - Without `onMissed`, the store's log says it, a line a minute.
@@ -184,13 +184,12 @@ reload(chat_id); // after subscribing, never before
 ## Through a server
 
 Every process connected to one store shares its channels: a message published
-by a worker in a sidecar reaches a web process's subscription. Messages travel
-in batches within the client's credit, and a connection's pending output is
-bounded, 8 MiB, so one slow subscription cannot starve the rest of its
-connection. A token that may write publishes and subscribes; a read token
-subscribes.
+by a worker in a sidecar reaches a web process's subscription. A connection's
+pending output is bounded, so one slow subscription cannot starve the rest of
+its connection. A token that may write publishes and subscribes, and a read
+token only subscribes.
 
-## Limits
+## Limits and defaults
 
 | What                     | Limit                            |
 |--------------------------|----------------------------------|

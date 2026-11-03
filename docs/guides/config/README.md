@@ -84,9 +84,9 @@ declares a chat's settings and turns its replies off live.
 ## Async Rust
 
 With the `async` feature, a Rust program opens the same config from
-`tinystore::aio::Store`, and its changes and its watch are awaited. This
-section shows only Rust, because in Bun, Node and Python every call is
-already awaited, and in Go a call blocks its goroutine, which costs little.
+`tinystore::aio::Store`, and its changes and its watch are awaited.
+[Rust with async](../../handbook/start/rust-async.md) explains where the work
+runs and what dropping a future does.
 
 ```rust
 use futures::StreamExt; // next() on a Stream
@@ -115,16 +115,10 @@ while let Some(settings) = watching.next().await {
   handle's `validate` and the blocking watchers (`config.blocking().watch`)
   run on your executor's thread, or on the store's threads if you dropped the
   future. A retry after a conflict also runs your closure in a later poll.
-- Once its future is polled, a change commits even if you drop the future.
-  A future that you drop before its first poll changes nothing.
-- `watch()` returns a `Stream`, and it starts watching when you call it. If
-  your loop falls behind, it gets the newest settings, never every version
-  between. When the store closes, the stream returns a closed error
-  (`ErrorKind::Closed`) and then ends.
+- `watch()` returns a `Stream`, and it starts watching when you call it. When
+  the store closes, the stream returns a closed error (`ErrorKind::Closed`)
+  and then ends.
 - A watch with a callback is the blocking handle's: `config.blocking().watch(…)`.
-
-[Rust with async](../../handbook/start/rust-async.md) explains where the work
-runs and what dropping a future does.
 
 ## Reference
 

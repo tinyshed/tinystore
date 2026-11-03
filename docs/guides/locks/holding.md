@@ -60,15 +60,14 @@ let tried: Option<Receipt> = invoices.try_hold(&invoice.id, |lease| work(lease))
 | `tryHold` | runs the function | `{ acquired: false }`, the function not run  |
 
 `hold` answers what the function answered. `wait` is ten seconds unless
-given; a program that would wait as long as it takes says so with a longer
+given. A program that would wait as long as it takes says so with a longer
 one.
 
 ## One key, one holder
 
-A key has one holder at a time, given to waiters in the order they came
-(contract LOCK-01). The key is any text or number: an invoice's id, a chat's.
-Keys of one lock are independent: holding invoice 42 never makes invoice 43
-wait.
+A key has one holder at a time (contract LOCK-01). The key is any text or
+number: an invoice's id, a chat's. Keys of one lock are independent: holding
+invoice 42 never makes invoice 43 wait.
 
 ```text
 lock invoices: key "9": held past the hold's wait: in use
@@ -82,7 +81,7 @@ lock invoices: key "9": held past the hold's wait: in use
 | a hold of the same key               | the inner call would wait for the outer, which never lets go                                        |
 
 Both fail at once, naming the lock and the key, rather than waiting until
-`wait`.
+`wait` (contract LOCK-04).
 
 A program that holds two keys at once names them in one order: a transfer
 holding `a` then `b`, and another holding `b` then `a`, wait for each other
@@ -110,25 +109,27 @@ invoices, err := locks.OpenLock(store, "invoices", locks.TTL(10*time.Second), lo
 let invoices = store.lock("invoices").max_hold(Duration::from_secs(120)).open()?;
 ```
 
-Past it the store revokes the lease and gives the key to the next in line.
-The function's signal aborts, and `hold` fails `lost` once the function ends:
+Past it, the store revokes the lease, gives the key to the next in line, and
+`hold` fails `lost` (contract LOCK-03):
 
 ```text
 lock invoices: key "m": the lease was lost: it was revoked at its maxHold
 ```
 
-`maxHold` is off unless given, since only the program knows how long its work
-may take.
+[When a lease is lost](leases.md#when-a-lease-is-lost) says how your function
+hears it.
+
+`maxHold` is off unless given, because only the program knows how long its
+work may take.
 
 ## Locks live in memory
 
-A store's locks live in the memory of the process that holds it. Every
-holder is a thread of that process or a client of its server, so that
-process sees every lease and every waiter. Giving and letting go a key is a
-change in memory: no write, no sync. A store that opens again holds no lease.
-
-Locks order the holders of one store; they do not coordinate two stores on
-two machines (NOT-03).
+A store's locks live in the memory of the process that holds it, so they
+order the holders of one store and do not coordinate two stores on two
+machines (NOT-03). Every holder is a thread of that process or a client of
+its server, so that process sees every lease and every waiter. Giving and
+letting go a key is a change in memory: no write, no sync. A store that opens
+again holds no lease.
 
 ## Errors
 

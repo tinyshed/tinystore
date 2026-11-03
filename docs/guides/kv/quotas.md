@@ -78,8 +78,7 @@ Each window's `used`, `limit`, `left` and
 ## Async Rust
 
 With the `async` feature, `aio`'s quotas count the same way, and you await
-each call. In Bun, Node and Python every call is already awaited, and in Go a
-call blocks its goroutine, so this section shows only Rust.
+each call. See [Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use std::time::Duration;
@@ -100,10 +99,8 @@ if !used.ok {
 messages.refund(user_id).await?;
 ```
 
-`allow`, `allow_n`, `refund`, `refund_n` and `reset` are writes. Each one is
-queued at the writer of `kv.db` in its future's first poll, and once polled it
-commits even if you drop the future. `peek` is a read, answered in the first
-poll when a reader is idle.
+`allow`, `allow_n`, `refund`, `refund_n` and `reset` are writes, and `peek`
+is a point read.
 
 ## See also
 

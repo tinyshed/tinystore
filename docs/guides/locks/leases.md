@@ -66,9 +66,10 @@ summaries.hold(chat_id, |lease| {
 - A program that froze stops renewing, since renewals come from its own
   process: its key goes to the next in line within `ttl`.
 
-`ttl` is 10 seconds unless given, from 1 second to an hour. Short enough that
-a crashed holder's key returns soon; long enough that a garbage collection
-pause or a slow network does not lose a lease that is still working.
+Choose a `ttl` short enough that a crashed holder's key returns soon, and long
+enough that a garbage collection pause or a slow network does not lose a lease
+that is still working. A Rust program that holds the store in its own process
+sets none, because its holders cannot die apart from the store.
 
 ## When a lease is lost
 
@@ -99,13 +100,24 @@ the store ends it and treats the request as a new one, with a new fence. The
 lease's own id, 128 random bits only its holder learns, is what renewing and
 letting go name: a fence, which a holder hands to others, proves nothing.
 
-A connection admitted to write may hold keys; one that only reads may not.
+Holding a key is a write, so a `read` token's hold fails `permission`
+(contract SEC-01).
 
 ## A store that restarts
 
 A store that opens again holds no lease. A client that held one through its
-server learns at its next renewal that it lost it, and its next fence, from a
-new epoch, is larger than every fence before the restart (contract LOCK-02).
+server learns at its next renewal that it lost it.
+[Fences](fences.md#what-a-fence-promises) says why its next fence is still
+larger.
+
+## Limits and defaults
+
+| What                                                         | Value                   |
+|--------------------------------------------------------------|-------------------------|
+| `ttl` in Bun, Node, Python and Go                            | 10 seconds unless given |
+| `--ttl` of [`tinystore lock hold`](../cli/lock.md#the-lease) | 30 seconds unless given |
+| any `ttl`                                                    | 1 second to 1 hour      |
+| a renewal                                                    | every third of `ttl`    |
 
 ## See also
 

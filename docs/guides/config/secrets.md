@@ -89,15 +89,10 @@ let pool = connect(config.get().db.url.reveal())?;
 - A secret is never kept in the store, so a [live change](live.md) cannot
   set it: only a file, a variable or its `_FILE` gives it.
 - A file that is committed beside the code can be
-  [marked to refuse secrets](layers.md#keep-secrets-out-of-a-committed-file):
-  a secret it gives fails the config, and the error names the variable that
-  gives the secret instead.
+  [marked to refuse secrets](layers.md#keep-secrets-out-of-a-committed-file).
 - An error about a secret names its variable and never quotes its text.
 - A secret is text. It cannot be `live`: a value an admin page could set and
   read back is not a secret.
-- A secret may have [no value](#settings-with-no-value), such as the password
-  of a database that takes none: it is `null` until a layer gives it, and the
-  value a layer gives is a secret like any other.
 - A secret in each entry of a map is declared as a field of
   [entries](layers.md#entries), and is given and printed like any other
   secret. In Rust a `Secret` inside a plain `BTreeMap` or `Vec` prints as
@@ -140,8 +135,6 @@ config app: region is required: region in app.toml, or set APP_REGION: invalid
 - An empty text counts as missing.
 - The value a declaration gives is never counted as given: Go's zero value
   and Rust's `Default` do not satisfy `required`.
-- Every problem of an open is listed in one error, so a deploy that lacks
-  three variables fails once, naming all three.
 
 | Language   | Required                                        | A secret                                          |
 |------------|-------------------------------------------------|---------------------------------------------------|
@@ -213,14 +206,6 @@ let password = config.get().password.as_ref().map(|password| password.reveal().c
 - In a [declaration as data](runtime.md#a-declaration-as-data),
   `"default": null` declares a setting with no value, of any kind:
   `{ "kind": "text", "secret": true, "default": null }`.
-
-| Language   | No value                                                                    |
-|------------|-----------------------------------------------------------------------------|
-| TypeScript | `optional(String)`, `optional(secret(String))`, `optional(int({ min: 1 }))` |
-| Python     | `str \| None = None`, `Secret \| None = None`                               |
-| Go         | a pointer: `*string`, `*tinystore.Secret`, `*int`                           |
-| Rust       | `Option<T>`, and `Option<Secret<String>>` for a secret                      |
-| As data    | `"default": null`                                                           |
 
 In Rust, `Secret<Option<String>>` is refused when the config opens: write
 `Option<Secret<String>>`.

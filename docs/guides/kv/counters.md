@@ -57,14 +57,15 @@ views.add("/notes", 1)?;
   should not reset on a clock's edge is a [rate limit](rate-limits.md).
 - A sum past what an int64 holds is `limit`, and changes nothing.
 - On a node that copies the file from its home, an add of counters without
-  `flushEvery` answers at once and is counted once at the home, however often
-  it is sent (contract REPL-12).
+  `flushEvery` answers at once, with the copy's count and the adds still
+  queued. The home counts it once, however often it is sent (contract
+  REPL-12). An add with `flushEvery`, and every `delete` and `clear`, passes
+  on to the home and waits for its answer.
 
 ## Async Rust
 
 With the `async` feature, `aio`'s counters add up the same way, and you
-await each call. In Bun, Node and Python every call is already awaited, and
-in Go a call blocks its goroutine, so this section shows only Rust.
+await each call. See [Rust with async](../../handbook/start/rust-async.md).
 
 ```rust
 use std::time::Duration;
@@ -88,17 +89,7 @@ The builder decides where a call runs, never the call:
 
 `get` answers from memory, or reads `kv.db` in the first poll when a reader is
 idle. Once its future was polled, an `add` or a `delete` takes effect even if
-you drop the future, in memory or in `kv.db` (contract DUR-11).
-
-On a node that copies `kv.db` from its home:
-
-- An `add` of the default counters is queued on that node and answers at
-  once, with the copy's count and the adds still queued. The home counts it
-  once, however often it is sent (contract REPL-12).
-- `get` reads the node's copy.
-- An `add` with `flush_every`, and every `delete` and `clear`, passes on to
-  the home and waits for its answer. It waits on a thread that TinyStore
-  starts for the call, not on the store's threads.
+you drop the future, in memory or in `kv.db`.
 
 ## See also
 

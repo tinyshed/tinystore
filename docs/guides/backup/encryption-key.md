@@ -39,11 +39,10 @@ tinystore backup ./data backups/full.zip --include app.json --include-encryption
 - A store that seals values says so of a backup without the key:
   `keyLeftOut` in the answer and in the manifest. A store that seals nothing
   answers `false`, since nothing is missing.
-- The zip itself is not encrypted. What the engines keep in the clear, rows,
+- The zip itself is not encrypted, even with `includeEncryptionKey`, which
+  puts the key in the zip as it is. What the engines keep in the clear, rows,
   events, samples, files, is in the clear in it: keep a backup as safely as the
   store's directory, or encrypt it where you keep it.
-- `includeEncryptionKey` puts the key in the zip as it is. It does not
-  encrypt the zip with it.
 - A backup takes the key that seals, never the
   [older keys](../kv/encrypted.md#older-keys). While a value is sealed with an
   older key, a backup with the key still says `keyLeftOut`. Call `reseal` on
@@ -65,18 +64,9 @@ A backup without the key restores like any other, and says what is missing:
 
 Put the key back as `encryption.key` in the restored directory, or open the
 store with `encryptionKeyFile` naming where you keep it. Until then, every
-other bucket, table and file reads; an encrypted bucket's reads fail and say
-the key is missing.
-
-If the key is lost, put a new one there instead (`openssl rand -hex 32`). The
-old values stay in their buckets and fail to read, naming the key that sealed
-them, and new values are sealed with the new key. If the old key turns up
-later, give it to the store as an older key, and its values open again.
-
-> [!CAUTION]
-> **A lost key loses the values**
-> Nothing recovers a sealed value without its key. Keep a copy of the key
-> apart from the backups that leave it out, and test a restore with it.
+other bucket, table and file reads, and opening an encrypted bucket fails with
+an `io` error that names the missing key. If the key is lost for good, put a
+new one there, as [Older keys](../kv/encrypted.md#older-keys) shows.
 
 ## The program's own files
 

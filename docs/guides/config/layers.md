@@ -105,7 +105,7 @@ rps = 1000
 - A key the declaration does not have is `invalid`, with the nearest name:
   `app.toml: prot: no such setting; did you mean port?`. A typo never silently
   does nothing.
-- A file is read when the config opens, 1 MiB at most.
+- A file is read when the config opens.
 
 ## Keep secrets out of a committed file
 
@@ -168,9 +168,9 @@ config dashbin: dashbin.toml: db.password: a secret is not read from dashbin.tom
   `false`, a list as `a,b,c` or JSON, a map as JSON, text as it is.
 - `vars` gives a setting a variable of its own in place of the prefixed one,
   such as the `PORT` and `DATABASE_URL` platforms set.
-- A variable with the prefix that names no setting is said once at open and
-  listed by `explain`: `APP_PROT=9000` is reported with `did you mean
-  APP_PORT?`, never ignored.
+- A variable with the prefix that names no setting is said once at open, with
+  the nearest name, and [`explain`](explain.md#what-was-read-and-not-used)
+  lists it.
 - `files: ['.env']` reads `.env` files for the variables the process lacks;
   one that does not exist is skipped.
 - `from: { APP_PORT: '9000' }` reads these variables in place of the
@@ -366,7 +366,7 @@ and it builds without a C compiler, so a static Linux binary needs no
 
 ```toml
 [dependencies]
-tinystore = { version = "0.6", default-features = false, features = ["config-load"] }
+tinystore = { version = "0.7", default-features = false, features = ["config-load"] }
 ```
 
 `config-load` has everything that `load` reads: files, the environment,
@@ -382,7 +382,7 @@ settings to it.
 - Only Rust has it so far. Bun, Node, Python and Go reach the config engine
   through a store, so they open one to read their settings.
 
-## Limits
+## Limits and defaults
 
 | What              | Limit                      |
 |-------------------|----------------------------|
