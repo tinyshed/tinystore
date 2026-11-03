@@ -44,7 +44,7 @@ let receipt = charges.run(&idempotency_key, || stripe.charge(&order, &order.id))
 | `fn`'s answer is over 1 MiB   | returns it to this run and the runs that waited, and keeps nothing     |
 
 A run of the same key inside its own run, awaited or blocking, is `invalid`,
-because it would wait for itself.
+because it would wait for itself (contract DUR-07).
 
 ## A memo
 

@@ -39,7 +39,7 @@ These contracts are what does not.
 - **DUR-04** A write whose caller left before its turn MUST write nothing; one that has started MUST finish with its group. An awaited write's turn is its future's first poll, or its read's finding that it writes (DUR-11), so one dropped after it still commits.
 - **DUR-05** A write whose outcome cannot be established MUST answer `outcome_unknown`, never success and never an ordinary failure.
 - **DUR-06** Atomicity MUST hold within one file. A write across two files is not atomic, unless the program opened one engine inside another's file (`db.bucket`, `db.queue`, `db.files`, `db.search_index`), which then commits with that file's rows; a database's file MUST NOT name bytes that are not there, whether its transaction commits, rolls back or its process dies.
-- **DUR-07** A call on a file from inside that file's own transaction, on the same thread, MUST fail `invalid` rather than wait for itself or miss what the transaction wrote.
+- **DUR-07** A call on a file from inside that file's own transaction, on the same thread, MUST fail `invalid` rather than wait for itself or miss what the transaction wrote; so MUST a `once` run of a key from inside a run of that key, blocking or awaited, rather than wait for itself, while a run of another key inside it goes on.
 - **DUR-08** A reader MUST see one consistent snapshot: every commit whole, and each item once, while packing, merging or expiry go on.
 - **DUR-09** Maintenance — packing, merging, purging, expiry — MUST NOT change an answer, and a crash between its steps MUST leave the last commit and go on from it.
 - **DUR-10** A long read or transaction MUST NOT fail a grouped write behind it.
@@ -273,7 +273,7 @@ These hold for a node, `Options::node`; a store alone keeps no log.
 - **CLI-02** A misspelt command, flag or setting MUST be told the nearest one.
 - **CLI-03** `stop` MUST return once `SERVE` is gone, and fail when no server runs.
 - **CLI-04** A command whose reader closes stdout, as `| head` does, MUST end quietly with exit 0, and MUST NOT panic.
-- **CLI-05** A command that writes MUST write through the server that holds the directory, or a sidecar it starts, and MUST refuse a directory that a program holds inside its own process, or that holds no store, making nothing in it.
+- **CLI-05** A command that writes MUST write through the server that holds the directory, or a sidecar it starts, and MUST refuse a directory that a program holds inside its own process, or that holds no store, making nothing in it. `sql --write` MAY open a store that no program holds itself, and `migrate`, `search drop`, `node promote` and `node demote`, which open it themselves, MUST refuse a directory that a program or a server holds.
 - **CLI-06** `metrics ingest -f` MUST write a stream's lines while the stream is still open, a batch at most a second after its first line, and MUST skip a line it cannot read, or one the store refuses, saying its number, ending 1 once the stream ends.
 - **CLI-07** Tab completion MUST make no store and write nothing, and MUST offer nothing rather than fail.
 - **CLI-08** `lock hold` MUST run its command only once it holds the key, MUST stop the command once the lease is lost, and MUST let the key go and end with the command's exit once it ends.
